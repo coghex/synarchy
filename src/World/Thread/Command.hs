@@ -10,6 +10,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Control.Concurrent.MVar (putMVar)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -126,4 +127,39 @@ handleWorldCommand env logger (WorldSetFluidTile pageId gx gy fluidType)
   = handleWorldSetFluidTileCommand env logger pageId gx gy fluidType
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
+handleWorldCommand env _ (WorldApplyFluids batch)
+  = handleApplyFluidsCommand env batch
+
+-- | Sim → World: apply the sim's fluid writebacks to the visible
+--   world's tile data. The world thread is the SOLE writer of
+--   'wsTilesRef'; the sim only produces these batches. Acks the batch's
+--   MVar (if any) after applying — the dump's fast-settle waits on it.
+handleApplyFluidsCommand ∷ EngineEnv → FluidWritebackBatch → IO ()
+handleApplyFluidsCommand env (FluidWritebackBatch writebacks mAck) = do
+    when (not (null writebacks)) $ do
+        mgr ← readIORef (worldManagerRef env)
+        forM_ (wmVisible mgr) $ \pageId →
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → pure ()
+                Just ws → do
+                    atomicModifyIORef' (wsTilesRef ws) $ \wtd →
+                        (foldl' applyOneWriteback wtd writebacks, ())
+                    writeIORef (wsQuadCacheRef ws)     Nothing
+                    writeIORef (wsZoomQuadCacheRef ws) Nothing
+                    writeIORef (wsBgQuadCacheRef ws)   Nothing
+    forM_ mAck (`putMVar` ())
+
+-- | Overwrite one chunk's sim-owned fields (fluid + terrain surface +
+--   render surface + side decos), preserving everything else.
+applyOneWriteback ∷ WorldTileData → FluidWriteback → WorldTileData
+applyOneWriteback wtd fw =
+    case lookupChunk (fwCoord fw) wtd of
+        Nothing → wtd
+        Just lc →
+            let lc' = lc { lcFluidMap          = fwFluid fw
+                         , lcTerrainSurfaceMap = fwTerrain fw
+                         , lcSurfaceMap        = fwSurf fw
+                         , lcSideDeco          = fwSideDeco fw
+                         }
+            in wtd { wtdChunks = HM.insert (fwCoord fw) lc' (wtdChunks wtd) }
 

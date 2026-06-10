@@ -44,7 +44,7 @@ mkState chunks = SimState
     , ssTickRate    = 100000
     , ssDirtyChunks = HS.empty
     , ssPaused      = False
-    , ssTilesRef    = Nothing
+    , ssWorldActive = True
     }
 
 -- | Sum of active-fluid volume across all chunks.

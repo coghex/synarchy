@@ -5,16 +5,16 @@ module Sim.Command.Types
 
 import UPrelude
 import Control.Concurrent.MVar (MVar)
-import Data.IORef (IORef)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..))
 import World.Fluid.Internal (FluidMap)
-import World.Tile.Types (WorldTileData(..))
 
 data SimCommand
-    = SimActivateWorld !(IORef WorldTileData)
-        -- ^ Set the active world tile data ref (called on WorldShow)
+    = SimActivateWorld
+        -- ^ A world became visible (WorldShow): start simulating. The
+        --   sim no longer holds the tile ref — it emits 'WorldApplyFluids'
+        --   to the world thread, the sole writer of 'wsTilesRef'.
     | SimDeactivateWorld
         -- ^ Clear the active world (called on WorldHide/WorldDestroy)
     | SimChunkLoaded !ChunkCoord !FluidMap !(VU.Vector Int)
@@ -30,12 +30,13 @@ data SimCommand
     | SimFastSettleAll !(MVar ())
         -- ^ Synchronously run all settle ticks (no sleeping) until all
         --   chunks have scsSettleTicks == 0 and no chunks are active.
-        --   Then writes the result back to wsTilesRef, sets ssPaused,
-        --   and signals the MVar. Used by dump mode to get a stable
-        --   simulation state without waiting for the live sim loop.
+        --   Then emits a 'WorldApplyFluids' batch with an ack and waits
+        --   for the world thread to apply it, sets ssPaused, and signals
+        --   the MVar. Used by dump mode to get a stable simulation state
+        --   without waiting for the live sim loop.
 
 instance Show SimCommand where
-    show (SimActivateWorld _)     = "SimActivateWorld"
+    show SimActivateWorld         = "SimActivateWorld"
     show SimDeactivateWorld       = "SimDeactivateWorld"
     show (SimChunkLoaded cc _ _)  = "SimChunkLoaded " <> show cc
     show (SimChunkUnloaded cc)    = "SimChunkUnloaded " <> show cc

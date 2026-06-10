@@ -49,10 +49,12 @@ handleWorldShowCommand env logger pageId = do
     logDebug logger CatWorld $
         "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
 
-    -- Activate world in sim thread
+    -- Activate world in sim thread. The sim no longer holds the tile
+    -- ref — it emits WorldApplyFluids back to the world thread (the sole
+    -- writer of wsTilesRef) — so this is just an "is active" signal.
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
-            Q.writeQueue (simQueue env) (SimActivateWorld (wsTilesRef worldState))
+        Just _worldState →
+            Q.writeQueue (simQueue env) SimActivateWorld
         Nothing → pure ()
 
 handleWorldHideCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()

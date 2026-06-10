@@ -2,17 +2,43 @@
 module World.Command.Types
     ( WorldTextureType(..)
     , WorldCommand(..)
+    , FluidWriteback(..)
+    , FluidWritebackBatch(..)
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
+import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Save.Types (SaveData(..))
 import World.Texture.Types (WorldTextureType(..))
-import World.Fluid.Types (FluidType(..))
+import World.Fluid.Types (FluidType(..), FluidCell(..))
+
+-- | One chunk's simulated fluid result, produced by the sim thread and
+--   applied to 'wsTilesRef' by the WORLD thread (the sole writer). The
+--   sim derives all four fields so the world handler is a dumb inserter.
+data FluidWriteback = FluidWriteback
+    { fwCoord    ∷ !ChunkCoord
+    , fwFluid    ∷ !(V.Vector (Maybe FluidCell))
+    , fwTerrain  ∷ !(VU.Vector Int)
+    , fwSurf     ∷ !(VU.Vector Int)
+    , fwSideDeco ∷ !(VU.Vector Word8)
+    }
+
+-- | A batch of fluid writebacks plus an optional ack 'MVar', signalled
+--   once the world thread has applied the batch. Runtime ticks pass
+--   'Nothing' (fire-and-forget); the dump's synchronous fast-settle
+--   passes 'Just' and waits on it so the write lands before it reads.
+data FluidWritebackBatch = FluidWritebackBatch ![FluidWriteback] !(Maybe (MVar ()))
+instance Show FluidWritebackBatch where
+    show (FluidWritebackBatch ws _) =
+        "FluidWritebackBatch(" <> show (length ws) <> ")"
 
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int
@@ -62,4 +88,8 @@ data WorldCommand
         --   surfaceZ + 1 on the given column. Idempotent; replaces any
         --   existing fluid cell. Currently a debug-tool affordance.
     | WorldDestroy !WorldPageId
+    | WorldApplyFluids !FluidWritebackBatch
+        -- ^ Sim → World: apply the sim's settled/active fluid results to
+        --   the visible world's 'wsTilesRef'. The world thread is the
+        --   SOLE writer of 'wsTilesRef'; the sim never touches it.
     deriving (Show)

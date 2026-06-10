@@ -10,9 +10,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
+import Data.IORef (IORef, readIORef, writeIORef, newIORef)
+import Data.Maybe (mapMaybe, isJust)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, catch, finally)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
@@ -21,8 +22,8 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..)
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
-import World.Tile.Types (WorldTileData(..), lookupChunk)
-import World.State.Types (WorldManager(..), WorldState(..))
+import World.Command.Types (WorldCommand(..), FluidWriteback(..)
+                           , FluidWritebackBatch(..))
 import Sim.Command.Types (SimCommand(..))
 import Sim.State.Types (SimState(..), SimChunkState(..), emptySimState)
 import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, activeToFluidCell)
@@ -68,7 +69,7 @@ simLoop env stateRef simStateRef = do
                 ss ← readIORef simStateRef
 
                 if ssPaused ss ∨ HM.null (ssChunks ss)
-                                ∨ ssTilesRef ss ≡ Nothing
+                                ∨ not (ssWorldActive ss)
                     then do
                         threadDelay (ssTickRate ss)
                         simLoop env stateRef simStateRef
@@ -76,7 +77,7 @@ simLoop env stateRef simStateRef = do
                         ss' ← settleNewChunks ss
                         let ss''   = simulateFluidTick ss'
                             ss'''  = simulateActiveTick ss''
-                        writeDirtyFluids env ss'''
+                        emitDirtyFluids env ss''' Nothing
                         let ss'''' = ss''' { ssDirtyChunks = HS.empty }
                         writeIORef simStateRef ss''''
 
@@ -101,12 +102,12 @@ handleSimCommand ∷ EngineEnv → LoggerState → IORef SimState → SimCommand
 handleSimCommand env logger simStateRef cmd = do
     ss ← readIORef simStateRef
     case cmd of
-        SimActivateWorld tilesRef → do
+        SimActivateWorld → do
             -- Re-trigger settle so existing chunks get simulated now that writeback is possible
             let reSettled = HM.map (\scs →
                     scs { scsSettleTicks = 24 }) (ssChunks ss)
             writeIORef simStateRef $
-                ss { ssTilesRef = Just tilesRef
+                ss { ssWorldActive = True
                    , ssChunks = reSettled }
             logDebug logger CatWorld "Sim: world activated"
 
@@ -167,58 +168,31 @@ handleSimCommand env logger simStateRef cmd = do
             writeIORef simStateRef $ ss { ssPaused = False }
 
         SimFastSettleAll done → do
-            -- Re-sync scsFluid from wsTilesRef BEFORE settling. The
-            -- world thread's seal/strip passes modify lcFluidMap after
-            -- SimChunkLoaded was sent (where scsFluid was first cached),
-            -- so the cached scsFluid is stale by the time we settle.
-            -- Without this resync, our writeDirtyFluids below would
-            -- overwrite the seal's work with stale pre-seal data.
-            ssSynced ← syncFluidsFromWorld ss
-            -- Run sim ticks synchronously (no sleeping) until all
-            -- chunks are settled and inactive, then write back.
-            -- Capped at maxIterations as a safety net.
-            -- Explicitly unpause for the fast-settle — the dump path
-            -- pauses the sim before chunks load but simulateFluidTick
-            -- is a no-op when paused.
+            -- No wsTilesRef re-sync needed: the world sends the FINAL
+            -- fluid in SimChunkLoaded (the old post-load seal that this
+            -- guarded against was removed), so scsFluid is already fresh.
+            -- Run sim ticks synchronously (no sleeping) until all chunks
+            -- are settled and inactive. Capped at maxIterations as a
+            -- safety net. Explicitly unpause — the dump path pauses the
+            -- sim before chunks load but simulateFluidTick is a no-op
+            -- when paused.
             let maxIterations = 500 ∷ Int
-                ssUnpaused = ssSynced { ssPaused = False }
+                ssUnpaused = ss { ssPaused = False }
                 ssSettled = fastSettleAll maxIterations ssUnpaused
-                -- Mark every chunk as dirty so writeDirtyFluids
-                -- pushes the settled state back to wsTilesRef.
+                -- Mark every chunk dirty so the whole settled state is
+                -- emitted to the world thread.
                 allCoords = HS.fromList (HM.keys (ssChunks ssSettled))
                 ssDirty = ssSettled { ssDirtyChunks = allCoords
                                     , ssPaused = True }
-            writeIORef simStateRef ssDirty
-            writeDirtyFluids env ssDirty
-            -- Reset dirty after writing so we don't re-write next tick
-            writeIORef simStateRef $ ssDirty { ssDirtyChunks = HS.empty }
+            writeIORef simStateRef (ssDirty { ssDirtyChunks = HS.empty })
+            -- Emit to the world thread (sole writer) and WAIT for it to
+            -- apply before signalling done — the dump reads wsTilesRef
+            -- immediately after.
+            ack ← newEmptyMVar
+            emitDirtyFluids env ssDirty (Just ack)
+            takeMVar ack
             putMVar done ()
             logDebug logger CatWorld "Sim: fast-settled and paused"
-
--- | Re-read fluid maps from wsTilesRef into scsFluid for every chunk.
---   The world thread's per-batch and final seal/strip passes modify
---   lcFluidMap after SimChunkLoaded was processed, so the cached
---   scsFluid in passive (non-active) chunks is stale. This sync
---   reconciles them before settling so writeDirtyFluids doesn't
---   clobber the seal's work.
---
---   Active chunks are left alone — their authoritative state lives
---   in scsActiveFluid, not lcFluidMap.
-syncFluidsFromWorld ∷ SimState → IO SimState
-syncFluidsFromWorld ss =
-    case ssTilesRef ss of
-        Nothing → return ss
-        Just tilesRef → do
-            wtd ← readIORef tilesRef
-            let updatedChunks = HM.mapWithKey (\cc scs →
-                    if scsActive scs
-                    then scs
-                    else case lookupChunk cc wtd of
-                        Just lc → scs { scsFluid    = lcFluidMap lc
-                                      , scsGenFluid = lcFluidMap lc }
-                        Nothing → scs
-                    ) (ssChunks ss)
-            return ss { ssChunks = updatedChunks }
 
 -- | Run all sim ticks synchronously without sleeping. Stops when no
 --   chunks have settle ticks remaining and no chunks are active, or
@@ -302,48 +276,37 @@ settleNewChunks ss = do
                     ) (ssChunks ss')
             return $ ss' { ssChunks = decremented }
 
--- | Write dirty fluid maps back to the shared WorldTileData,
---   update surface maps, and invalidate render caches.
-writeDirtyFluids ∷ EngineEnv → SimState → IO ()
-writeDirtyFluids env ss = do
+-- | Emit the dirty chunks' fluid results to the WORLD thread (the sole
+--   writer of 'wsTilesRef') as a 'WorldApplyFluids' batch — the sim
+--   never touches 'wsTilesRef' itself. With 'Just' ack, the world
+--   signals it after applying (the synchronous fast-settle waits on it).
+emitDirtyFluids ∷ EngineEnv → SimState → Maybe (MVar ()) → IO ()
+emitDirtyFluids env ss mAck = do
     let dirty = ssDirtyChunks ss
-    case ssTilesRef ss of
-        Nothing → return ()
-        Just tilesRef →
-            when (not (HS.null dirty)) $ do
-                -- Update fluid maps and recompute surface maps
-                atomicModifyIORef' tilesRef $ \wtd →
-                    let wtd' = HS.foldl' (\w cc →
-                            case (HM.lookup cc (ssChunks ss), lookupChunk cc w) of
-                                (Just scs, Just lc) →
-                                    let newFluid = if scsActive scs
-                                            then deriveFluidMap scs
-                                            else scsFluid scs
-                                        newTerrain = scsTerrain scs
-                                        -- River fluid renders as a flat plane:
-                                        -- surface comes directly from the fluid,
-                                        -- hiding any minor terrain protrusions
-                                        -- in the carved channel. Must match the
-                                        -- rule in World/Generate/Chunk.hs and
-                                        -- World/Thread/ChunkLoading.hs.
-                                        newSurfMap = VU.imap (\idx terrZ →
-                                            case newFluid V.! idx of
-                                                Just fc | fcType fc ≡ River → fcSurface fc
-                                                Just fc → max terrZ (fcSurface fc)
-                                                Nothing → terrZ
-                                            ) newTerrain
-                                        newSideDeco = scsSideDeco scs
-                                        lc' = lc { lcFluidMap            = newFluid
-                                                 , lcTerrainSurfaceMap   = newTerrain
-                                                 , lcSurfaceMap          = newSurfMap
-                                                 , lcSideDeco            = newSideDeco
-                                                 }
-                                    in w { wtdChunks = HM.insert cc lc' (wtdChunks w) }
-                                _ → w
-                            ) wtd dirty
-                    in (wtd', ())
-
-                invalidateRenderCaches env
+        writebacks = mapMaybe (\cc →
+            case HM.lookup cc (ssChunks ss) of
+                Nothing  → Nothing
+                Just scs →
+                    let newFluid = if scsActive scs
+                            then deriveFluidMap scs
+                            else scsFluid scs
+                        newTerrain = scsTerrain scs
+                        -- River fluid renders as a flat plane: surface
+                        -- comes directly from the fluid; other fluid sits
+                        -- at max(terrain, surface). Must match the rule in
+                        -- World/Generate/Chunk.hs and ChunkLoading.hs.
+                        newSurf = VU.imap (\idx terrZ →
+                            case newFluid V.! idx of
+                                Just fc | fcType fc ≡ River → fcSurface fc
+                                Just fc → max terrZ (fcSurface fc)
+                                Nothing → terrZ
+                            ) newTerrain
+                    in Just (FluidWriteback cc newFluid newTerrain newSurf
+                                            (scsSideDeco scs))
+            ) (HS.toList dirty)
+    when (not (null writebacks) ∨ isJust mAck) $
+        Q.writeQueue (worldQueue env)
+            (WorldApplyFluids (FluidWritebackBatch writebacks mAck))
 
 deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)
 deriveFluidMap scs =
@@ -353,14 +316,3 @@ deriveFluidMap scs =
             Nothing  → Nothing
             Just afc → activeToFluidCell (terrV VU.! idx) afc
         ) (scsActiveFluid scs)
-
-invalidateRenderCaches ∷ EngineEnv → IO ()
-invalidateRenderCaches env = do
-    mgr ← readIORef (worldManagerRef env)
-    forM_ (wmVisible mgr) $ \pageId →
-        case lookup pageId (wmWorlds mgr) of
-            Nothing → pure ()
-            Just ws → do
-                writeIORef (wsQuadCacheRef ws) Nothing
-                writeIORef (wsZoomQuadCacheRef ws) Nothing
-                writeIORef (wsBgQuadCacheRef ws) Nothing

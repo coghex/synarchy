@@ -6,14 +6,12 @@ module Sim.State.Types
     ) where
 
 import UPrelude
-import Data.IORef (IORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..))
 import World.Fluid.Internal (FluidMap)
-import World.Tile.Types (WorldTileData(..))
 import Sim.Fluid.Types (ActiveFluidCell(..))
 
 data SimState = SimState
@@ -21,8 +19,10 @@ data SimState = SimState
     , ssTickRate    ∷ !Int              -- ^ Microseconds between ticks (default 100000)
     , ssDirtyChunks ∷ !(HS.HashSet ChunkCoord)  -- ^ Chunks modified this tick
     , ssPaused     ∷ !Bool
-    , ssTilesRef   ∷ !(Maybe (IORef WorldTileData))
-        -- ^ Ref to the active world's tile data (set on SimActivateWorld)
+    , ssWorldActive ∷ !Bool
+        -- ^ True between SimActivateWorld and SimDeactivateWorld. The sim
+        --   never holds the world's tile ref — it emits 'WorldApplyFluids'
+        --   to the world thread, the sole writer of 'wsTilesRef'.
     }
 
 data SimChunkState = SimChunkState
@@ -42,5 +42,5 @@ emptySimState = SimState
     , ssTickRate    = 100000  -- 10 Hz
     , ssDirtyChunks = HS.empty
     , ssPaused     = False
-    , ssTilesRef   = Nothing
+    , ssWorldActive = False
     }
