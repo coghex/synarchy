@@ -1262,7 +1262,15 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
         surfF  ← VU.unsafeFreeze surfM
         pure (isRf, compF, widthF, surfF)
 
--- | Per-tile carve delta in z. Water surface is the centre's pre-carve
+-- | Per-tile carve delta in z — the FINAL channel-bed fit, the second
+--   of the two-stage hydrology (see the note at the 'identifyWorldRivers'
+--   call in Timeline.hs). This is NOT the geological river carve: that
+--   happens per-age in 'reconcileHydrology' and shapes the valley over
+--   time. This runs once on the settled terrain, given the finalized
+--   river path/width/surface, and only tops the bed up to channel depth
+--   — a bounded fit, not a re-carve.
+--
+--   Per-tile carve delta in z. Water surface is the centre's pre-carve
 --   elevation; post-carve terrain at a river tile is
 --   @min(preCarve, surface − depthFromRadius)@. The delta lowers the
 --   terrain enough to ensure water visible at every river tile and

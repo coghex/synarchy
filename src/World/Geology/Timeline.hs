@@ -226,6 +226,19 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
 
         worldTerrain = stitchWorldTerrain worldSize borderedCache
 
+        -- TWO-STAGE HYDROLOGY (intentional, not redundant). Above, the
+        -- per-age loop already ran 'simulateHydrology'/'reconcileHydrology'
+        -- to carve GEOLOGICAL HISTORY into the evolving grid — migrating
+        -- rivers, widening valleys, terraces (the foundation for layered
+        -- valleys). Below, the global identifiers run on the now-SETTLED
+        -- 'worldTerrain' as the final PLACEMENT authority and emit a
+        -- compose-time channel-bed fit ('wrCarveDelta', see
+        -- 'computeCarveDelta'). The two are distinct STAGES on distinct
+        -- inputs: the final fit needs the finalized path/width/surface
+        -- that only exist now, and the geological carve can't be dropped
+        -- without losing valley evolution. They don't double-carve — the
+        -- delta is a bounded top-up to channel depth on terrain the
+        -- per-age erosion already shaped.
         finalLakes0 = identifyWorldLakes worldSize oceanMap worldTerrain
 
         -- The seabed pass (below) supersedes the flat seaLevel−1
