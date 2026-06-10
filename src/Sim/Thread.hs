@@ -143,8 +143,19 @@ handleSimCommand env logger simStateRef cmd = do
                         activated = activateChunk (scs { scsTerrain = terrV'
                                                        , scsSettleTicks = 24
                                                        })
-                    writeIORef simStateRef $
-                        ss { ssChunks = HM.insert coord activated (ssChunks ss) }
+                        -- Activate the 4 cardinal neighbours too, so dammed
+                        -- water can spill across the chunk seam: the seam
+                        -- exchange pass (Sim.Fluid.Active.reconcileSeams)
+                        -- needs both sides active to have a grid to transfer
+                        -- into. HM.adjust is a no-op for unloaded neighbours;
+                        -- activateChunk is idempotent for already-active ones.
+                        ChunkCoord cx cy = coord
+                        nbrCoords = [ ChunkCoord (cx + 1) cy, ChunkCoord (cx - 1) cy
+                                    , ChunkCoord cx (cy + 1), ChunkCoord cx (cy - 1) ]
+                        withSelf = HM.insert coord activated (ssChunks ss)
+                        withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m)
+                                          withSelf nbrCoords
+                    writeIORef simStateRef $ ss { ssChunks = withNbrs }
 
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }

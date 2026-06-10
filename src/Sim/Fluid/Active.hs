@@ -13,7 +13,7 @@ import qualified Data.Vector.Unboxed.Mutable as MVU
 import Data.Maybe (mapMaybe)
 import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
-import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef)
+import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
 import Data.Bits ((.&.), (.|.), shiftL)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..), FluidCell(..))
@@ -33,7 +33,8 @@ simulateActiveTick ss
             activeChunks = HM.filter scsActive chunks
         in if HM.null activeChunks
            then ss
-           else let results = HM.mapWithKey (simulateActiveChunk chunks) activeChunks
+           else let results = reconcileSeams
+                                 (HM.mapWithKey (simulateActiveChunk chunks) activeChunks)
                     dirty = HM.foldlWithKey' (\acc cc (_, changed) →
                         if changed then HS.insert cc acc else acc
                         ) (ssDirtyChunks ss) results
@@ -100,20 +101,146 @@ simulateActiveChunk allChunks coord scs =
             pure (result, decoResult, ch)
 
         -- Also derive passive FluidMap for writeback
-        newFluid = V.imap (\idx mafc →
-            case mafc of
-                Nothing  → Nothing
-                Just afc | afcVolume afc ≡ 0 → Nothing
-                         | otherwise →
-                    let terrZ = terrainV VU.! idx
-                    in Just (FluidCell (afcType afc)
-                                (volumeToSurface terrZ (afcVolume afc)))
-            ) newActive
+        newFluid = deriveFluidMap terrainV newActive
 
     in (scs { scsActiveFluid = newActive
             , scsFluid       = newFluid
             , scsSideDeco    = newDeco
             }, changed)
+
+-- | Derive the passive fluid map (surfaces) from an active-volume grid.
+deriveFluidMap ∷ VU.Vector Int → V.Vector (Maybe ActiveFluidCell)
+               → V.Vector (Maybe FluidCell)
+deriveFluidMap terrainV active =
+    V.imap (\idx mafc →
+        case mafc of
+            Nothing  → Nothing
+            Just afc | afcVolume afc ≡ 0 → Nothing
+                     | otherwise →
+                Just (FluidCell (afcType afc)
+                        (volumeToSurface (terrainV VU.! idx) (afcVolume afc)))
+        ) active
+
+-- * Seam exchange: cross-chunk fluid transfer
+--
+-- The per-chunk phases above only move fluid WITHIN a chunk — an edge
+-- cell has no in-chunk neighbour past the boundary, so dammed water
+-- piles into a 1-tile lip at chunk seams. This pass transfers fluid
+-- across the shared edge of every pair of adjacent ACTIVE chunks.
+
+-- | Net seam flow from cell A to cell B (negative = B → A), using the
+--   SAME rules as the in-chunk phases so seam physics matches the
+--   interior: lateral volume-equalisation at equal terrain (with the
+--   >1 guard that stops 1-unit oscillation), gravity by surface drop at
+--   unequal terrain. Dry (Nothing) cells count as volume 0 at terrain.
+seamFlow ∷ Int → Maybe ActiveFluidCell → Int → Maybe ActiveFluidCell → Int
+seamFlow terrA mca terrB mcb =
+    let volA = maybe 0 (fromIntegral . afcVolume) mca ∷ Int
+        volB = maybe 0 (fromIntegral . afcVolume) mcb ∷ Int
+    in if terrA ≡ terrB
+       then let diff = volA - volB                       -- lateral (phaseLateral)
+            in if diff > 1 ∧ volA > 0      then max 1 (diff `div` 4)
+               else if diff < (-1) ∧ volB > 0 then negate (max 1 ((negate diff) `div` 4))
+               else 0
+       else if terrB < terrA ∧ volA > 0                  -- gravity A → lower B
+       then let surfDiff = volumeToSurface terrA (fromIntegral volA)
+                         - volumeToSurface terrB (fromIntegral volB)
+            in if surfDiff > 0
+               then max 1 (min volA (surfDiff * volumePerLevel `div` 4)) else 0
+       else if terrA < terrB ∧ volB > 0                  -- gravity B → lower A
+       then let surfDiff = volumeToSurface terrB (fromIntegral volB)
+                         - volumeToSurface terrA (fromIntegral volA)
+            in if surfDiff > 0
+               then negate (max 1 (min volB (surfDiff * volumePerLevel `div` 4))) else 0
+       else 0
+
+-- | Apply a signed seam flow (positive = mA[ia] → mB[ib]) live, bounded
+--   by the source's CURRENT volume — so two seams meeting at a corner
+--   cell can't over-drain it. Volume-conserving.
+moveSeam ∷ MV.MVector s (Maybe ActiveFluidCell) → Int
+         → MV.MVector s (Maybe ActiveFluidCell) → Int → Int → ST s ()
+moveSeam mA ia mB ib flow
+    | flow > 0  = transferCell mA ia mB ib flow
+    | flow < 0  = transferCell mB ib mA ia (negate flow)
+    | otherwise = pure ()
+
+transferCell ∷ MV.MVector s (Maybe ActiveFluidCell) → Int
+             → MV.MVector s (Maybe ActiveFluidCell) → Int → Int → ST s ()
+transferCell mSrc iSrc mDst iDst amt = do
+    msrc ← MV.read mSrc iSrc
+    case msrc of
+        Nothing → pure ()
+        Just s → do
+            let actual = min amt (fromIntegral (afcVolume s)) ∷ Int
+            when (actual > 0) $ do
+                MV.write mSrc iSrc (Just s
+                    { afcVolume = afcVolume s - fromIntegral actual })
+                mdst ← MV.read mDst iDst
+                case mdst of
+                    Nothing → MV.write mDst iDst (Just ActiveFluidCell
+                        { afcType = afcType s
+                        , afcVolume = fromIntegral actual
+                        , afcFlowDir = 0 })
+                    Just d → MV.write mDst iDst (Just d
+                        { afcVolume = afcVolume d + fromIntegral actual })
+
+-- | (selfIdx, neighbourIdx) along the +X seam: this chunk's right column
+--   (lx = chunkSize-1) facing the East neighbour's left column (lx = 0).
+eastEdgePairs ∷ [(Int, Int)]
+eastEdgePairs =
+    [ (ly * chunkSize + (chunkSize - 1), ly * chunkSize) | ly ← [0 .. chunkSize - 1] ]
+
+-- | (selfIdx, neighbourIdx) along the +Y seam: this chunk's bottom row
+--   (ly = chunkSize-1) facing the South neighbour's top row (ly = 0).
+southEdgePairs ∷ [(Int, Int)]
+southEdgePairs =
+    [ ((chunkSize - 1) * chunkSize + lx, lx) | lx ← [0 .. chunkSize - 1] ]
+
+-- | Exchange fluid across the seams of adjacent active chunks. Each
+--   shared edge is processed once (via the +X / +Y neighbour), live in
+--   ST so corner cells stay conserved; both chunks in any transfer are
+--   re-derived and flagged changed (so they stay active + re-render).
+reconcileSeams ∷ HM.HashMap ChunkCoord (SimChunkState, Bool)
+               → HM.HashMap ChunkCoord (SimChunkState, Bool)
+reconcileSeams results
+    | HM.size results < 2 = results
+    | otherwise =
+        let (grids', touched) = runST $ do
+                mgrids ← traverse (\(scs, _) → V.thaw (scsActiveFluid scs)) results
+                touchedRef ← newSTRef HS.empty
+                forM_ (HM.toList results) $ \(coord, (scsA, _)) → do
+                    let ChunkCoord cx cy = coord
+                    forM_ [ (ChunkCoord (cx + 1) cy, eastEdgePairs)
+                          , (ChunkCoord cx (cy + 1), southEdgePairs) ] $ \(nbr, pairs) →
+                        case HM.lookup nbr results of
+                            Nothing → pure ()
+                            Just (scsB, _) → do
+                                let mA = mgrids HM.! coord
+                                    mB = mgrids HM.! nbr
+                                    terrA = scsTerrain scsA
+                                    terrB = scsTerrain scsB
+                                anyRef ← newSTRef False
+                                forM_ pairs $ \(ia, ib) → do
+                                    ca ← MV.read mA ia
+                                    cb ← MV.read mB ib
+                                    let flow = seamFlow (terrA VU.! ia) ca
+                                                        (terrB VU.! ib) cb
+                                    when (flow ≠ 0) $ do
+                                        moveSeam mA ia mB ib flow
+                                        writeSTRef anyRef True
+                                didMove ← readSTRef anyRef
+                                when didMove $ modifySTRef' touchedRef
+                                    (HS.insert coord . HS.insert nbr)
+                frozen ← traverse V.freeze mgrids
+                t ← readSTRef touchedRef
+                pure (frozen, t)
+        in HM.mapWithKey (\coord (scs, changed) →
+            if HS.member coord touched
+            then let active' = grids' HM.! coord
+                 in (scs { scsActiveFluid = active'
+                         , scsFluid = deriveFluidMap (scsTerrain scs) active' }, True)
+            else (scs, changed)
+            ) results
 
 -- * Phase A: Gravity — downhill flow
 

@@ -34,6 +34,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.Hashable (Hashable(..))
 import World.Base (GeoFeatureId(..), GeoCoord(..))
+import World.Chunk.Types (chunkSize)
 import World.Region.Types (RegionCoord(..), RegionalData(..)
                           , emptyRegionalData, regionSize)
 import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
@@ -107,10 +108,20 @@ geoDateYears ∷ GeoDate → Float
 geoDateYears (GeoDate my) = my
 
 -- | Convert global tile coords to region coords.
+--
+--   PRECONDITION: @gx@/@gy@ must be canonical in-domain coords
+--   (@[-worldTiles\/2, worldTiles\/2)@). This does NOT wrap: an
+--   out-of-domain coord yields a 'RegionCoord' outside
+--   @[0, regionsPerSide)@, which misses the temperature map and makes
+--   'lookupRegionTemp' return its 15°C default. Today the sole caller
+--   (glacier source candidates) is always in-domain. The world wraps in
+--   U-space (@u = gx - gy@, see @RiverTrace.rewrapPath@), so any future
+--   caller passing wrap-crossing coords (e.g. glacier flow tiles) must
+--   canonicalise in U FIRST — a plain @gx@/@gy@ modulo would be wrong.
 globalToRegion ∷ Int → Int → Int → RegionCoord
 globalToRegion worldSize gx gy =
-    let chunkX = gx `div` 16
-        chunkY = gy `div` 16
+    let chunkX = gx `div` chunkSize
+        chunkY = gy `div` chunkSize
         -- Offset so that negative coords map correctly
         halfChunks = worldSize `div` 2
         rx = (chunkX + halfChunks) `div` regionSize
