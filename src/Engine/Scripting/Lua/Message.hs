@@ -20,6 +20,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM)
 import Engine.Core.Monad
 import Engine.Core.State
+import Engine.Core.Types (ecHeadless)
 import Engine.Core.Resource (locally)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..)
@@ -61,28 +62,39 @@ processLuaMessages = do
             [("count", T.pack $ show $ length messages)]
     
     forM_ messages handleLuaMessage
-    handleWorldPreview
-    handleZoomAtlasUpload
+    whenGraphical handleWorldPreview
+    whenGraphical handleZoomAtlasUpload
+
+-- | Run a GPU-touching action only in graphical mode; skip it when
+--   headless (no device). Lets the single 'handleLuaMessage' serve both
+--   the graphical loop and the headless/dump loop — the scene-graph and
+--   pure-IORef cases run in both; only GPU operations are gated. (Before
+--   this, a separate 'handleLuaMessageHeadless' duplicated every
+--   scene-graph case and had already drifted from this one.)
+whenGraphical ∷ EngineM ε σ () → EngineM ε σ ()
+whenGraphical act = do
+    env ← ask
+    if ecHeadless (engineConfig env) then pure () else act
 
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
 handleLuaMessage msg = do
     case msg of
-        LuaSetWindowMode mode → do
+        LuaSetWindowMode mode → whenGraphical $ do
             logDebugM CatLua $ "Setting window mode: " <> T.pack (show mode)
             handleSetWindowMode mode
 
-        LuaSetResolution w h → do
+        LuaSetResolution w h → whenGraphical $ do
             logDebugSM CatLua "Setting resolution"
                 [("width", T.pack $ show w)
                 ,("height", T.pack $ show h)]
             handleSetResolution w h
 
-        LuaSetVSync enabled → do
+        LuaSetVSync enabled → whenGraphical $ do
             logDebugSM CatLua "Setting VSync"
                 [("enabled", if enabled then "true" else "false")]
             handleSetVSync enabled
 
-        LuaSetMSAA msaa → do
+        LuaSetMSAA msaa → whenGraphical $ do
             logDebugSM CatLua "Setting MSAA"
                 [("samples", T.pack $ show msaa)]
             handleSetMSAA msaa
@@ -97,7 +109,7 @@ handleLuaMessage msg = do
                 [("enabled", if enabled then "true" else "false")]
             handleSetPixelSnap enabled
 
-        LuaSetTextureFilter tf → do
+        LuaSetTextureFilter tf → whenGraphical $ do
             logInfoM CatTexture $ "Texture filter changed to: " <> textureFilterToText tf
             env ← ask
             liftIO $ writeIORef (textureFilterRef env) tf
@@ -110,14 +122,14 @@ handleLuaMessage msg = do
                     logInfoM CatTexture "All texture samplers updated live"
                 _ → pure ()
 
-        LuaLoadFontRequest handle path size → do
+        LuaLoadFontRequest handle path size → whenGraphical $ do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
                 ,("size", T.pack $ show size)
                 ,("handle", T.pack (show handle))]
             handleLoadFont handle path size
-        
-        LuaLoadTextureRequest handle path → do
+
+        LuaLoadTextureRequest handle path → whenGraphical $ do
             logDebugSM CatLua "Loading texture"
                 [("path", T.pack path)
                 ,("handle", T.pack (show handle))]

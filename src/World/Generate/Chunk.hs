@@ -578,12 +578,15 @@ smoothIslandColumns terr fluid = runST $ do
                                   modifySTRef' changedRef (+1)
                             _ → pure ()
             readSTRef changedRef
-        loop n
-            | n ≤ 0 = pure ()
-            | otherwise = do
-                changes ← pass
-                if changes > 0 then loop (n - 1) else pure ()
-    loop 8
+        -- Converge fully (no arbitrary cap). Each pass only turns
+        -- Nothing→Lake — strictly monotonic — so the dry-tile count
+        -- decreases every productive pass and the loop must terminate at
+        -- the fixpoint (≤ area passes; 1-2 in practice). A cap could only
+        -- truncate a long cascade, never prevent a runaway (there is none).
+        loop = do
+            changes ← pass
+            if changes > 0 then loop else pure ()
+    loop
     finalTerr  ← VU.unsafeFreeze mTerr
     finalFluid ← V.unsafeFreeze mFluid
     pure (finalTerr, finalFluid)

@@ -36,7 +36,8 @@ import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Callback (setupCallbacks)
 import Engine.Input.Thread (startInputThread)
 import Engine.Loop (mainLoop)
-import Engine.Loop.Headless (headlessLoop, processLuaMessagesHeadless)
+import Engine.Loop.Headless (headlessLoop)
+import Engine.Scripting.Lua.Message (processLuaMessages)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
 import World.Thread (startWorldThread)
@@ -275,7 +276,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
       engineAction = do
         liftIO $ writeIORef (lifecycleRef env') EngineRunning
         liftIO $ threadDelay 500000
-        processLuaMessagesHeadless
+        processLuaMessages
 
         -- Pause the sim thread BEFORE any chunks load. This prevents
         -- the sim from racing with the world thread's per-batch seal
