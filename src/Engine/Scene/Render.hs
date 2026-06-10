@@ -54,33 +54,30 @@ updateSceneForRender = do
     case smActiveScene updatedSceneMgr of
         Just sceneId → case Map.lookup sceneId (smSceneGraphs updatedSceneMgr) of
             Just graph → do
-                let nodeCount = length $ sgNodes graph
+                let nodeCount = Map.size $ sgNodes graph
                 logDebugSM CatRender "Processing scene graph"
                     [("sceneId", T.pack $ show sceneId)
                     ,("nodes", T.pack $ show nodeCount)]
-                
-                let updatedGraph = updateWorldTransforms graph
-                textRenderBatches ← collectTextBatches updatedGraph screenW screenH
-                
+
+                textRenderBatches ← collectTextBatches graph screenW screenH
+
                 logDebugSM CatRender "Collected text batches"
                     [("textBatches", T.pack $ show $ V.length textRenderBatches)]
-                
+
                 let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
-                    simpleBatches = convertToTextBatches textRenderBatches
                     finalBatchMgr = buildLayeredBatches updatedBatchMgr
                     spriteBatches = getCurrentBatches updatedSceneMgr
                     spriteCount = V.sum $ V.map (V.length . rbVertices) spriteBatches
                     drawCallCount = V.length spriteBatches + V.length textRenderBatches
-                
+
                 logDebugSM CatScene "Batch generation complete"
                     [("spriteBatches", T.pack $ show $ V.length spriteBatches)
                     ,("spriteVertices", T.pack $ show spriteCount)
                     ,("textBatches", T.pack $ show $ V.length textRenderBatches)
                     ,("totalDrawCalls", T.pack $ show drawCallCount)]
-                
-                let finalSceneMgr = updatedSceneMgr 
-                                        { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr)
-                                        , smBatchManager = finalBatchMgr }
+
+                let finalSceneMgr = updatedSceneMgr
+                                        { smBatchManager = finalBatchMgr }
                 modify $ \s → s { sceneManager = finalSceneMgr }
             Nothing → do
                 logDebugM CatScene "No scene graph found for active scene"

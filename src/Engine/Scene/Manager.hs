@@ -54,15 +54,13 @@ updateSceneManager viewWidth viewHeight manager =
         Just activeId → case Map.lookup activeId (smScenes manager) of
             Nothing → pure manager
             Just scene → do
-                let graph = fromMaybe createEmptySceneGraph $ 
+                let graph = fromMaybe createEmptySceneGraph $
                            Map.lookup activeId (smSceneGraphs manager)
-                    updatedGraph = updateWorldTransforms graph
-                visibleObjects ← collectVisibleObjects updatedGraph 
+                visibleObjects ← collectVisibleObjects graph
                                    (sceneCamera scene) viewWidth viewHeight
                 let updatedBatches = updateBatches visibleObjects (smBatchManager manager)
                 pure $ manager
-                    { smSceneGraphs = Map.insert activeId updatedGraph (smSceneGraphs manager)
-                    , smBatchManager = updatedBatches
+                    { smBatchManager = updatedBatches
                     , smDirtyScenes = Set.delete activeId (smDirtyScenes manager)
                     }
 

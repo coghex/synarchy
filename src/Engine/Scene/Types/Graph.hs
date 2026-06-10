@@ -6,23 +6,19 @@ module Engine.Scene.Types.Graph
 
 import UPrelude
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import Engine.Scene.Base (ObjectId)
-import Engine.Scene.Types.Node (SceneNode, WorldTransform)
+import Engine.Scene.Types.Node (SceneNode)
 
+-- | Flat registry of scene nodes. Nodes are positioned absolutely via
+--   their own 'Transform2D'; rotation/scale are applied at vertex
+--   generation ("Engine.Scene.Batch.Vertex"). There is deliberately no
+--   parent\/child hierarchy or cached world-transform layer — the
+--   original matrix scaffolding was never consumed by the render path.
 data SceneGraph = SceneGraph
-    { sgNodes         ∷ Map.Map ObjectId SceneNode
-    , sgRootNodes     ∷ Set.Set ObjectId
-    , sgWorldTrans    ∷ Map.Map ObjectId WorldTransform
-    , sgDirtyNodes    ∷ Set.Set ObjectId
-    , sgNextId        ∷ Word32
+    { sgNodes ∷ Map.Map ObjectId SceneNode
     } deriving (Show)
 
 createEmptySceneGraph ∷ SceneGraph
 createEmptySceneGraph = SceneGraph
     { sgNodes = Map.empty
-    , sgRootNodes = Set.empty
-    , sgWorldTrans = Map.empty
-    , sgDirtyNodes = Set.empty
-    , sgNextId = 1
     }

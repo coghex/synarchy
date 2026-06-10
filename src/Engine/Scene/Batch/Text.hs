@@ -12,7 +12,7 @@ import qualified Data.List as List
 import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Scene.Base (ObjectId, NodeType(..), LayerId(..), Transform2D(..))
-import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
+import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
 import Engine.Scene.Types.Batch (TextRenderBatch(..), TextBatch(..))
 import Engine.Asset.Handle (FontHandle)
@@ -44,9 +44,9 @@ collectTextBatches graph screenW screenH = do
       Just atlas → do
           logDebugM CatFont $ "Font cache hit: Found font " <> T.pack (show fontHandle)
           allInstances ← fmap V.concat $ forM nodes $ \node → do
-              case (nodeText node, Map.lookup (nodeId node) (sgWorldTrans graph)) of
-                  (Just text, Just worldTrans) → do
-                      let (x,y) = wtPosition worldTrans
+              case nodeText node of
+                  Just text → do
+                      let (x,y) = position (nodeTransform node)
                           Vec4 r g b a = nodeColor node
                           color = (r, g, b, a)
                           size = case nodeFontSize node of
@@ -57,12 +57,9 @@ collectTextBatches graph screenW screenH = do
                                       then layoutTextUI atlas size x y text color
                                       else layoutText atlas size x y screenW screenH text color
                       return instances
-                  (Nothing, _) → do
+                  Nothing → do
                       logDebugM CatFont $ "      No text for node "
                                         <> T.pack (show (nodeId node))
-                      return V.empty
-                  (_, Nothing) → do
-                      logDebugM CatFont $ "      No world transform for node"
                       return V.empty
           logDebugM CatFont $ "Text layout generated " <> T.pack (show $ V.length allInstances) <> " vertices"
           return $ Just $ TextRenderBatch

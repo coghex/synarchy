@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scene.Batch.Sprite
-  ( collectSpriteBatches
-  , collectVisibleObjects
+  ( collectVisibleObjects
   , nodeToDrawable
   ) where
 
@@ -11,8 +10,8 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
 import Data.IORef (readIORef)
-import Engine.Scene.Base (ObjectId, NodeType(..), LayerId)
-import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
+import Engine.Scene.Base (ObjectId, NodeType(..), LayerId, Transform2D(..))
+import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
 import Engine.Scene.Types.Batch (DrawableObject(..))
 import Engine.Scene.Batch.Visibility (isNodeVisible, isUILayer)
@@ -26,24 +25,6 @@ import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 
-collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
-collectSpriteBatches graph camera viewWidth viewHeight = do
-    env ← ask
-    texSystem ← liftIO $ readIORef (textureSystemRef env)
-    fmSlotW   ← liftIO $ readIORef (defaultFaceMapSlotRef env)
-    let fmSlot = fromIntegral fmSlotW ∷ Float
-        allNodes = Map.elems (sgNodes graph)
-        spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
-        visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleSprites
-    
-    logDebugSM CatScene "Sprite batch generation"
-        [("totalSprites", T.pack $ show $ length spriteNodes)
-        ,("visibleSprites", T.pack $ show $ length visibleSprites)
-        ,("drawableObjects", T.pack $ show $ length drawableObjs)]
-    
-    pure $ V.fromList drawableObjs
-
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do
     env ← ask
@@ -53,26 +34,25 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
         allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleNodes = filter (\n → isUILayer (nodeLayer n) ∨ isNodeVisible camera viewWidth viewHeight n) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleNodes
-    
+        drawableObjs = mapMaybe (nodeToDrawable texSystem fmSlot) visibleNodes
+
     logDebugSM CatScene "Visible object culling"
         [("totalObjects", T.pack $ show $ length spriteNodes)
         ,("visibleObjects", T.pack $ show $ length visibleNodes)]
-    
+
     pure $ V.fromList drawableObjs
 
-nodeToDrawable ∷ SceneGraph → Maybe BindlessTextureSystem → Float → SceneNode → Maybe DrawableObject
-nodeToDrawable graph bts fmSlot node = do
+nodeToDrawable ∷ Maybe BindlessTextureSystem → Float → SceneNode → Maybe DrawableObject
+nodeToDrawable bts fmSlot node = do
     guard (nodeType node ≡ SpriteObject)
     textureHandle ← nodeTexture node
-    worldTrans ← Map.lookup (nodeId node) (sgWorldTrans graph)
-    
+
     let atlasId = case bts of
                     Just bts' → fromIntegral $ getTextureSlotIndex textureHandle bts'
                     Nothing   → 0
-    
-    let (v0,v1,v2,v3) = generateQuadVertices node worldTrans atlasId fmSlot
-        
+
+    let (v0,v1,v2,v3) = generateQuadVertices node atlasId fmSlot
+
     return DrawableObject
         { doId = nodeId node
         , doTexture = textureHandle
@@ -80,6 +60,6 @@ nodeToDrawable graph bts fmSlot node = do
         , doV1 = v1
         , doV2 = v2
         , doV3 = v3
-        , doZIndex = wtZIndex worldTrans
+        , doZIndex = zIndex (nodeTransform node)
         , doLayer = nodeLayer node
         }
