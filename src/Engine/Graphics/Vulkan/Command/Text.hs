@@ -105,35 +105,46 @@ uploadTextInstances device tib batches = do
 
 -- | Render text batches using the shared instance buffer.
 --   Each batch draws with a firstInstance offset into the single buffer.
-renderTextBatches ∷ CommandBuffer → Device → PhysicalDevice
+--   The quad + instance vertex buffers are shared by every batch and
+--   bound once; descriptor sets are rebound only when the font changes.
+renderTextBatches ∷ CommandBuffer
                   → Buffer → PipelineLayout → DescriptorSet
                   → TextInstanceBuffer
                   → V.Vector (TextRenderBatch, (Word32, Word32))
                   → EngineM ε σ ()
-renderTextBatches cmdBuf device pDevice quadBuffer layout uniformSet tib batchesWithOffsets = do
+renderTextBatches cmdBuf quadBuffer layout uniformSet tib batchesWithOffsets = do
     env ← ask
     cache ← liftIO $ readIORef (fontCacheRef env)
 
-    V.forM_ batchesWithOffsets $ \(trb, (firstInstance, instanceCount)) →
-        when (instanceCount > 0) $
-            case Map.lookup (trbFont trb) (fcFonts cache) of
-                Nothing →
-                    logWarnM CatFont $ "Font handle not found: "
-                                     <> T.pack (show (trbFont trb))
-                Just atlas →
-                    case faDescriptorSet atlas of
-                        Nothing →
+    -- All-empty batches mean tib may be the zero placeholder — binding
+    -- it would be invalid, and there is nothing to draw anyway.
+    let anyDraw = V.any (\(_, (_, c)) → c > 0) batchesWithOffsets
+    when anyDraw $ do
+        cmdBindVertexBuffers cmdBuf 0
+            (V.fromList [quadBuffer, tibBuffer tib])
+            (V.fromList [0, 0])
+
+        _ ← V.foldM
+            (\boundFont (trb, (firstInstance, instanceCount)) →
+                if instanceCount ≡ 0 then pure boundFont
+                else case Map.lookup (trbFont trb) (fcFonts cache) of
+                    Nothing → do
+                        logWarnM CatFont $ "Font handle not found: "
+                                         <> T.pack (show (trbFont trb))
+                        pure boundFont
+                    Just atlas → case faDescriptorSet atlas of
+                        Nothing → do
                             logWarnM CatFont "Font atlas has no descriptor set"
+                            pure boundFont
                         Just descSet → do
-                            cmdBindVertexBuffers cmdBuf 0
-                                (V.fromList [quadBuffer, tibBuffer tib])
-                                (V.fromList [0, 0])
-
-                            cmdBindDescriptorSets cmdBuf
-                                PIPELINE_BIND_POINT_GRAPHICS
-                                layout
-                                0
-                                (V.fromList [uniformSet, descSet])
-                                V.empty
-
+                            when (boundFont ≢ Just (trbFont trb)) $
+                                cmdBindDescriptorSets cmdBuf
+                                    PIPELINE_BIND_POINT_GRAPHICS
+                                    layout
+                                    0
+                                    (V.fromList [uniformSet, descSet])
+                                    V.empty
                             cmdDraw cmdBuf 6 instanceCount 0 firstInstance
+                            pure (Just (trbFont trb)))
+            Nothing batchesWithOffsets
+        pure ()

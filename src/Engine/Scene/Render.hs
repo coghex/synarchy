@@ -25,6 +25,7 @@ import Engine.Graphics.Window.Types
 import Engine.Graphics.Font.Data
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
+import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
 import Vulkan.Zero
 
@@ -220,5 +221,5 @@ getWorldSceneQuads ∷ EngineM ε σ (V.Vector SortableQuad)
 getWorldSceneQuads = do
     sceneMgr ← gets sceneManager
     let bm = smBatchManager sceneMgr
-        worldObjs = V.filter (\obj → doLayer obj < LayerId 10) (bmVisibleObjs bm)
+        worldObjs = V.filter (\obj → doLayer obj < uiLayerThreshold) (bmVisibleObjs bm)
     pure $ V.map drawableToQuad worldObjs

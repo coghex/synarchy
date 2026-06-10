@@ -15,6 +15,7 @@ import Engine.Scene.Base (ObjectId, NodeType(..), LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
 import Engine.Scene.Types.Batch (TextRenderBatch(..), TextBatch(..))
+import Engine.Scene.Batch.Visibility (isUILayer)
 import Engine.Asset.Handle (FontHandle)
 import Engine.Graphics.Font.Data (FontCache(..), FontAtlas, fcFonts)
 import Engine.Graphics.Font.Draw (layoutText, layoutTextUI)
@@ -52,7 +53,7 @@ collectTextBatches graph screenW screenH = do
                           size = case nodeFontSize node of
                                         Nothing → 32
                                         Just s → s
-                          isUI = let (LayerId l) = layerId in l ≥ 10
+                          isUI = isUILayer layerId
                       let instances = if isUI
                                       then layoutTextUI atlas size x y text color
                                       else layoutText atlas size x y screenW screenH text color

@@ -143,12 +143,12 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
     
     forM_ (Map.toAscList worldLayers) $ \(_, items) →
         renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer
-                         items vertexOffsetRef device pDevice False
+                         items vertexOffsetRef False
                          tib drawInfos batchIdxRef
 
     forM_ (Map.toAscList uiLayers) $ \(_, items) →
         renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer
-                         items vertexOffsetRef device pDevice True
+                         items vertexOffsetRef True
                          tib drawInfos batchIdxRef
 
     logDebugM CatRender "Ending render pass"
@@ -158,13 +158,13 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
 -- | Render items in a single layer
 renderLayerItems ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
                  → DescriptorSet → SceneDynamicBuffer → V.Vector RenderItem
-                 → IORef Word32 → Device → PhysicalDevice → Bool
+                 → IORef Word32 → Bool
                  → TextInstanceBuffer
                  → V.Vector (Word32, Word32)
                  → IORef Int
                  → EngineM ε σ ()
 renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer items
-                 vertexOffsetRef device pDevice isUI
+                 vertexOffsetRef isUI
                  tib drawInfos batchIdxRef = do
     let spriteBatches = V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing) items
     
@@ -194,6 +194,6 @@ renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer items
                     slicedInfos = V.zip textItems (V.slice startIdx n drawInfos)
                 liftIO $ writeIORef batchIdxRef (startIdx + n)
 
-                renderTextBatches cmdBuf device pDevice quadBuffer layout
+                renderTextBatches cmdBuf quadBuffer layout
                                   uniformSet tib slicedInfos
             _ → pure ()

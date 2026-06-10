@@ -8,6 +8,7 @@ import UPrelude
 import Engine.Scene.Base (LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Graphics.Camera (Camera2D(..))
+import World.Grid (uiLayerThreshold)
 
 isNodeVisible ∷ Camera2D → Float → Float → SceneNode → Bool
 isNodeVisible camera viewWidth viewHeight node =
@@ -43,6 +44,6 @@ isNodeVisible camera viewWidth viewHeight node =
         in not (nodeRight < left ∨ nodeLeft > right ∨
                 nodeTop < bottom ∨ nodeBottom > top)
 
--- | UI layers (>= 10) bypass frustum culling.
+-- | UI layers bypass frustum culling.
 isUILayer ∷ LayerId → Bool
-isUILayer (LayerId l) = l ≥ 10
+isUILayer lid = lid ≥ uiLayerThreshold
