@@ -73,7 +73,6 @@ data AssetConfig = AssetConfig
 data AtlasMetadata = AtlasMetadata
   { amDimensions    ∷ (Word32, Word32)  -- ^ Width and height in pixels
   , amFormat        ∷ Format
-  , amMipLevels     ∷ Word32
   , amSubTextures   ∷ Map.Map Text SubTextureInfo
   } deriving (Show)
 

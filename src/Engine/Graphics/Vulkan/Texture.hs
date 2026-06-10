@@ -35,7 +35,7 @@ data ImageLayoutTransition = Undef_TransDst
                           | Undef_ColorAtt
 
 createTextureImageView ∷ PhysicalDevice → Device → CommandPool
-                      → Queue → FilePath → EngineM ε σ (VulkanImage, ImageView, Word32)
+                      → Queue → FilePath → EngineM ε σ (VulkanImage, ImageView)
 createTextureImageView pdev dev cmdPool cmdQueue path = do
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
@@ -45,14 +45,11 @@ createTextureImageView pdev dev cmdPool cmdQueue path = do
   let (imageDataForeignPtr, imageDataLen)
         = Vec.unsafeToForeignPtr0 imageData
       bufSize = fromIntegral imageDataLen
-      mipLevels = (floor ∘ logBase (2 ∷ Float)
-                ∘ fromIntegral $ max imageWidth imageHeight) + 1
   image ← createVulkanImage dev pdev
     (fromIntegral imageWidth, fromIntegral imageHeight)
     FORMAT_R8G8B8A8_UNORM
     IMAGE_TILING_OPTIMAL
-    (IMAGE_USAGE_TRANSFER_SRC_BIT
-    ⌄ IMAGE_USAGE_TRANSFER_DST_BIT
+    (IMAGE_USAGE_TRANSFER_DST_BIT
     ⌄ IMAGE_USAGE_SAMPLED_BIT)
     MEMORY_PROPERTY_DEVICE_LOCAL_BIT
   
@@ -69,25 +66,25 @@ createTextureImageView pdev dev cmdPool cmdQueue path = do
     
     runCommandsOnce dev cmdPool cmdQueue $ \cmdBuf → do
       transitionImageLayout image FORMAT_R8G8B8A8_UNORM
-        Undef_TransDst mipLevels cmdBuf
+        Undef_TransDst 1 cmdBuf
       copyBufferToImage cmdBuf stagingBuf image
         (fromIntegral imageWidth) (fromIntegral imageHeight)
       transitionImageLayout image FORMAT_R8G8B8A8_UNORM
-        TransDst_ShaderRO mipLevels cmdBuf
-  
+        TransDst_ShaderRO 1 cmdBuf
+
   imageView ← createVulkanImageView dev image
     FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
-  return (image, imageView, mipLevels)
+  return (image, imageView)
 
 -- | Create a texture image view with cleanup action
 createTextureImageView' ∷ PhysicalDevice → Device → CommandPool
-                       → Queue → FilePath 
-                       → EngineM ε σ ((VulkanImage, ImageView, Word32)
+                       → Queue → FilePath
+                       → EngineM ε σ ((VulkanImage, ImageView)
                                       , IO ())
 createTextureImageView' pdev dev cmdPool cmdQueue path = do
   logDebugSM CatTexture "Loading texture image"
     [("path", T.pack path)]
-  
+
   let maxTimeout = maxBound ∷ Word64
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
@@ -98,22 +95,18 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
 
   let (imageDataForeignPtr, imageDataLen) = Vec.unsafeToForeignPtr0 imageData
       bufSize = fromIntegral imageDataLen
-      mipLevels = (floor ∘ logBase (2 ∷ Float)
-                ∘ fromIntegral $ max imageWidth imageHeight) + 1
-  
+
   logDebugSM CatTexture "Texture image loaded"
     [("width", T.pack $ show imageWidth)
     ,("height", T.pack $ show imageHeight)
-    ,("format", "RGBA8")
-    ,("mip_levels", T.pack $ show mipLevels)]
+    ,("format", "RGBA8")]
 
   logDebugM CatTexture "Creating Vulkan image"
   (vulkanImage@(VulkanImage image imagedata), imageCleanup) ← createVulkanImage' dev pdev
     (fromIntegral imageWidth, fromIntegral imageHeight)
     FORMAT_R8G8B8A8_UNORM
     IMAGE_TILING_OPTIMAL
-    (IMAGE_USAGE_TRANSFER_SRC_BIT
-    ⌄ IMAGE_USAGE_TRANSFER_DST_BIT
+    (IMAGE_USAGE_TRANSFER_DST_BIT
     ⌄ IMAGE_USAGE_SAMPLED_BIT)
     MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
@@ -150,11 +143,11 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     beginCommandBuffer cmdBuf commandInfo
     
     transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
-        Undef_TransDst mipLevels cmdBuf
+        Undef_TransDst 1 cmdBuf
     copyBufferToImage cmdBuf stagingBuf vulkanImage
         (fromIntegral imageWidth) (fromIntegral imageHeight)
     transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
-        TransDst_ShaderRO mipLevels cmdBuf
+        TransDst_ShaderRO 1 cmdBuf
 
     endCommandBuffer cmdBuf
 
@@ -175,7 +168,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
         viewCleanup
         imageCleanup
 
-  pure ((vulkanImage, imageView, mipLevels), cleanup)
+  pure ((vulkanImage, imageView), cleanup)
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
                      → Word32 → CommandBuffer → EngineM ε σ ()

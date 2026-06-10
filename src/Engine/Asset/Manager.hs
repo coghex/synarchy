@@ -238,7 +238,7 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
         Just queues → pure $ graphicsQueue queues
           
       -- Create the texture image, view and sampler
-      ((vulkanImage@(VulkanImage image imageMemory), imageView, mipLevels), imageCleanup) ←
+      ((vulkanImage@(VulkanImage image imageMemory), imageView), imageCleanup) ←
         createTextureImageView' pDevice device cmdPool cmdQueue path
         
       env ← ask
@@ -273,7 +273,7 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             { taId = nextId
             , taName = name
             , taPath = T.pack path
-            , taMetadata = AtlasMetadata (0, 0) Vk.FORMAT_R8G8B8A8_UNORM mipLevels Map.empty
+            , taMetadata = AtlasMetadata (0, 0) Vk.FORMAT_R8G8B8A8_UNORM Map.empty
             , taStatus = AssetLoaded
             , taInfo = Just $ TextureInfo
                 { tiImage = image
@@ -291,7 +291,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
         [("name", name)
         ,("asset_id", T.pack $ show nextId)
         ,("handle", T.pack $ show texHandle)
-        ,("mip_levels", T.pack $ show mipLevels)
         ,("bindless_slot", maybe "none" (T.pack . show) bindlessSlot)]
 
       liftIO $ updateTextureState texHandle (AssetReady nextId []) pool

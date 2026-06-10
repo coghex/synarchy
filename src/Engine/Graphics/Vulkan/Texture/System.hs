@@ -53,7 +53,7 @@ loadTexture ∷ Device → PhysicalDevice → CommandPool → Queue
   → TextureHandle → FilePath → Filter → BindlessTextureSystem
   → EngineM ε σ (Word32, BindlessTextureSystem)
 loadTexture dev pdev cmdPool queue texHandle path _filterMode system = do
-    (vulkanImage, imageView, _mipLevels) ←
+    (vulkanImage, imageView) ←
       createTextureImageView pdev dev cmdPool queue path
 
     -- Atlases share the bindless system's single texture sampler — they
