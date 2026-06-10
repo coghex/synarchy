@@ -14,7 +14,6 @@ import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Asset.Handle
 import Engine.Scene.Base (ObjectId)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
-import Engine.Graphics.Vulkan.Types.Texture (TextureData, TextureArrayState)
 
 -- | Central registry of every loaded texture, font, and shader, plus the
 --   'IORef' counters used for atomic handle\/ID generation
@@ -131,8 +130,4 @@ data ShaderProgram = ShaderProgram
   , spModules      ∷ V.Vector ShaderModule
   , spRefCount     ∷ Word32
   , spCleanup      ∷ Maybe (IO ())      -- ^ Destroy shader modules on unload
-  }
-data TextureArrayManager = TextureArrayManager
-  { tamArrays     ∷ Map.Map Text TextureArrayState
-  , tamTextureMap ∷ Map.Map AssetId Text
   }

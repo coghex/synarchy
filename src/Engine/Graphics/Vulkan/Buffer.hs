@@ -4,7 +4,6 @@ module Engine.Graphics.Vulkan.Buffer
   , findMemoryType
     -- Buffer operations that need Command
   , copyBuffer
-  , createStagingBuffer
   , createUniformBuffer
   , updateUniformBuffer
   ) where
@@ -35,20 +34,6 @@ copyBuffer device cmdPool cmdQueue srcBuffer dstBuffer size =
           }
     cmdCopyBuffer cmdBuf srcBuffer dstBuffer 
       $ V.singleton copyRegion
-
--- | Create a staging buffer and fill it with data
-createStagingBuffer ∷ Device → PhysicalDevice → DeviceSize 
-                   → [Word32] → EngineM ε σ (DeviceMemory, Buffer)
-createStagingBuffer device pDevice bufferSize data' = do
-  (mem, buf) ← createVulkanBuffer device pDevice bufferSize
-      BUFFER_USAGE_TRANSFER_SRC_BIT
-      (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
-  
-  dataPtr ← mapMemory device mem 0 bufferSize zero
-  liftIO $ pokeArray (castPtr dataPtr) data'
-  unmapMemory device mem
-  
-  pure (mem, buf)
 
 -- | Create a uniform buffer
 createUniformBuffer ∷ Device → PhysicalDevice → DeviceSize 

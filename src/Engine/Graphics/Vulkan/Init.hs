@@ -16,6 +16,7 @@ import Linear (M44, identity)
 import Engine.Asset.Handle
 import Engine.Core.Defaults
 import Engine.Core.Monad
+import Engine.Core.Resource (allocResource)
 import Engine.Core.State
 import Engine.Core.Error.Exception
 import Engine.Core.Log (LogCategory(..))
@@ -35,7 +36,8 @@ import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Framebuffer (createVulkanFramebuffers)
-import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
+import Engine.Graphics.Vulkan.Instance (createVulkanInstance
+                                        , destroyVulkanInstance)
 import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
@@ -64,7 +66,10 @@ initializeVulkan window = do
   let Window glfwWin = window
   
   logDebugM CatVulkan "Creating Vulkan instance"
-  (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
+  -- Registered for destruction at engine unwind: the messenger and
+  -- instance are destroyed after the device and surface (LIFO).
+  (vkInstance, _debugMessenger) ← allocResource destroyVulkanInstance $
+    createVulkanInstance defaultGraphicsConfig
   logDebugM CatVulkan "Vulkan instance created successfully"
   
   logDebugM CatVulkan "Creating window surface"
@@ -99,11 +104,11 @@ initializeVulkan window = do
   logDebugSM CatVulkan "Creating swapchain"
     [("vsync", if vsyncEnabled then "enabled" else "disabled")]
   logDebugM CatGraphics "Creating swapchain"
-  swapInfo ← createVulkanSwapchain physicalDevice device queues surface vsyncEnabled
+  fbSize ← GLFW.getFramebufferSize glfwWin
+  swapInfo ← createVulkanSwapchain physicalDevice device queues surface
+               vsyncEnabled fbSize
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
-  
-  support ← querySwapchainSupport physicalDevice surface
 
   let msaaInt = vcMSAA videoConfig
       requestedSamples = msaaToSampleCount msaaInt

@@ -16,7 +16,7 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Engine.Core.Error.Exception (ExceptionType(..), InitError(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM, logInfoSM)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types
@@ -42,8 +42,13 @@ createVulkanDevice ∷ Instance
                    → EngineM ε σ (Device, DevQueues)
 createVulkanDevice inst physicalDevice surface = do
   logDebugM CatVulkan "Finding queue families"
-  indices ← findQueueFamilies physicalDevice surface
-  
+  -- pickPhysicalDevice only selects devices whose probe succeeded, so
+  -- Nothing here is an invariant violation, not a selection failure.
+  indices ← findQueueFamilies physicalDevice surface ⌦ \case
+    Just ix → pure ix
+    Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
+                "Selected device has no graphics/present queue family"
+
   logDebugSM CatVulkan "Queue families found"
     [("graphics_family", T.pack $ show $ graphicsFamily indices)
     ,("present_family", T.pack $ show $ presentFamily indices)]
@@ -60,10 +65,17 @@ createVulkanDevice inst physicalDevice surface = do
   logDebugSM CatVulkan "Creating device queues"
     [("queue_count", T.pack $ show $ length uniqueFamilies)]
   
-  let deviceExtensions = [ KHR_SWAPCHAIN_EXTENSION_NAME
-                        , KHR_PORTABILITY_SUBSET_EXTENSION_NAME  -- Required for macOS
-                        ]
-  
+  -- VK_KHR_portability_subset only exists on non-conformant
+  -- implementations (MoltenVK); the spec requires enabling it iff the
+  -- device advertises it. Enabling it unconditionally fails device
+  -- creation with EXTENSION_NOT_PRESENT on Linux.
+  (_, availableDevExts) ← liftIO $
+    enumerateDeviceExtensionProperties physicalDevice Nothing
+  let availableDevExtNames = map extensionName $ V.toList availableDevExts
+      deviceExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME]
+        <> [KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+           | KHR_PORTABILITY_SUBSET_EXTENSION_NAME `elem` availableDevExtNames]
+
   logDebugSM CatVulkan "Enabled device extensions"
     [("extensions", T.pack $ show $ map (\bs → BS.take 30 bs) deviceExtensions)]
   
@@ -126,9 +138,15 @@ pickPhysicalDevice inst surface = do
   if fst bestDevice ≡ 0
     then logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find a suitable GPU"
-    else return $ snd bestDevice
+    else do
+      PhysicalDeviceProperties { deviceName = chosenName }
+        ← liftIO $ getPhysicalDeviceProperties (snd bestDevice)
+      logInfoSM CatVulkan "Selected physical device"
+        [("device", T.pack $ show chosenName)
+        ,("score", T.pack $ show $ fst bestDevice)]
+      return $ snd bestDevice
 
--- | Rate a physical device's suitability (higher is better)
+-- | Rate a physical device's suitability (higher is better, 0 = unusable)
 rateDevice ∷ SurfaceKHR → PhysicalDevice → EngineM ε σ Int
 rateDevice surface device = do
   props ← liftIO $ getPhysicalDeviceProperties device
@@ -139,47 +157,41 @@ rateDevice surface device = do
         PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → 1000
         PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU → 100
         _                                   → 10
-  
-  if isDeviceSuitable device queueFamilies extensionsSupported
-    then return baseScore
-    else return 0
+      score = if isJust queueFamilies ∧ extensionsSupported
+              then baseScore
+              else 0
+      PhysicalDeviceProperties { deviceName = dname } = props
 
--- | Find required queue family indices
-findQueueFamilies ∷ PhysicalDevice → SurfaceKHR → EngineM ε σ QueueFamilyIndices
+  logDebugSM CatVulkan "Rated physical device"
+    [("device", T.pack $ show dname)
+    ,("score", T.pack $ show score)]
+  return score
+
+-- | Find required queue family indices. Total: Nothing means the device
+--   has no graphics queue family or no family that can present to the
+--   surface — rateDevice scores such devices 0 so pickPhysicalDevice can
+--   skip them instead of aborting startup (hybrid-GPU laptops routinely
+--   expose a device with no present support on any family).
+findQueueFamilies ∷ PhysicalDevice → SurfaceKHR
+  → EngineM ε σ (Maybe QueueFamilyIndices)
 findQueueFamilies device surface = do
   props ← liftIO $ getPhysicalDeviceQueueFamilyProperties device
 
-  let graphicsIdx = V.findIndex 
-        (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT ≢ zeroBits) 
-        props
-  
-  case graphicsIdx of
-    Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
-                           "Could not find graphics queue family"
-    Just gIdx → do
-      presentSupport ← V.generateM (V.length props) $ \i → 
-        liftIO $ getPhysicalDeviceSurfaceSupportKHR device 
-          (fromIntegral i) surface
-      
-      let presentIdx = V.findIndex id presentSupport
-      
-      case presentIdx of
-        Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
-                           "Could not find present queue family"
-        Just pIdx → return $ QueueFamilyIndices
-          { graphicsFamily = fromIntegral gIdx
-          , presentFamily = fromIntegral pIdx
-          }
+  presentSupport ← V.generateM (V.length props) $ \i →
+    liftIO $ getPhysicalDeviceSurfaceSupportKHR device
+      (fromIntegral i) surface
 
--- | Check if a device is suitable for our needs
-isDeviceSuitable ∷ PhysicalDevice 
-                 → QueueFamilyIndices 
-                 → Bool  -- ^ Extension support
-                 → Bool
-isDeviceSuitable device indices extensionsSupported =
-  graphicsFamily indices ≥ 0 ∧
-  presentFamily indices ≥ 0 ∧
-  extensionsSupported
+  let graphicsIdx = V.findIndex
+        (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT ≢ zeroBits)
+        props
+      presentIdx = V.findIndex id presentSupport
+
+  pure $ case (graphicsIdx, presentIdx) of
+    (Just gIdx, Just pIdx) → Just $ QueueFamilyIndices
+      { graphicsFamily = fromIntegral gIdx
+      , presentFamily  = fromIntegral pIdx
+      }
+    _ → Nothing
 
 -- | Check if device supports required extensions
 checkDeviceExtensionSupport ∷ PhysicalDevice → EngineM ε σ Bool

@@ -12,7 +12,7 @@ import qualified Data.ByteString.UTF8 as BSU
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM, logWarnM)
 import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..)
                                    , InitError(..), catchEngine)
 import Engine.Core.Monad
@@ -34,70 +34,61 @@ import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 import Vulkan.Utils.Debug (debugCallbackPtr)
 import Vulkan.Zero
 
--- | Create Vulkan instance create info with proper portability support
-vulkanInstanceCreateInfo ∷ GraphicsConfig → EngineM ε σ (InstanceCreateInfo '[DebugUtilsMessengerCreateInfoEXT])
-vulkanInstanceCreateInfo config = do
-  glfwExts ← GLFW.getRequiredInstanceExtensions
-  (_count, exts) ← liftIO $ enumerateInstanceExtensionProperties Nothing
-  let availableExts = map extensionName $ V.toList exts
-  (_count, layers) ← liftIO $ enumerateInstanceLayerProperties
-  let availableLayers = map (\LayerProperties{layerName = ln} → ln) $ V.toList layers
-  let baseExts = if gcDebugMode config
-                 then [EXT_DEBUG_UTILS_EXTENSION_NAME]
-                 else []
-  let requiredExts = baseExts <> glfwExts
-      missingExts = filter (not ∘ (`elem` availableExts)) requiredExts
-  unless (null missingExts) $
-    logAndThrowM CatInit (ExInit ExtensionNotSupported) $
-      "Required extensions not available: " <> T.pack (show missingExts)
-  let needsPortability = KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME `elem` availableExts
-      portabilityExts  = if needsPortability 
-                        then [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
-                        else []
-  let finalExts = V.fromList $ requiredExts <> portabilityExts
-  let validationLayer = "VK_LAYER_KHRONOS_validation"
-      layers' = if gcDebugMode config then
-                  if validationLayer `elem` availableLayers
-                    then V.fromList [validationLayer]
-                    else V.empty
-                else V.empty
-  let flags = if needsPortability 
-              then INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
-              else zero
-  pure $ zero
-    { applicationInfo = Just $ zero 
-        { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
-        , engineName     = Just "Synarchy Engine"
-        , apiVersion     = API_VERSION_1_0
-        }
-    , enabledLayerNames     = layers'
-    , enabledExtensionNames = finalExts
-    , flags                 = flags
-    }
-    ::& debugUtilsMessengerCreateInfo
-    :& ()
-
--- | Create and initialize Vulkan instance with optional debug messenger
+-- | Create and initialize Vulkan instance with optional debug messenger.
+--   Optional extensions (portability enumeration, layer settings, debug
+--   utils) and the validation layer are enabled only when the platform
+--   actually offers them — enabling an absent extension fails instance
+--   creation with EXTENSION_NOT_PRESENT (e.g. the MoltenVK-only ones on
+--   Linux). Only the GLFW surface extensions are hard requirements.
 createVulkanInstance ∷ GraphicsConfig → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
 createVulkanInstance config = do
   logDebugM CatVulkan "Initializing Vulkan instance"
-  
+
   glfwExts ← GLFW.getRequiredInstanceExtensions
+  (_, exts) ← liftIO $ enumerateInstanceExtensionProperties Nothing
+  let availableExts = map extensionName $ V.toList exts
+  (_, layers) ← liftIO enumerateInstanceLayerProperties
+  let availableLayers = map (\LayerProperties{layerName = ln} → ln) $ V.toList layers
 
-  logDebugSM CatVulkan "Instance extensions"
-    [("glfw_extensions", T.pack $ show $ map (\bs → BSU.toString bs) glfwExts)
-    ,("debug_mode", T.pack $ show $ gcDebugMode config)]
-  
-  let baseExtensions = if gcDebugMode config 
-                      then [EXT_DEBUG_UTILS_EXTENSION_NAME]
-                      else []
-      allExtensions = baseExtensions 
-                     <> glfwExts
-                     <> [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
-                     <> [KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME]  -- Required for macOS
-                     <> [EXT_LAYER_SETTINGS_EXTENSION_NAME]  -- for moltenvk config
+  let missingExts = filter (not ∘ (`elem` availableExts)) glfwExts
+  unless (null missingExts) $
+    logAndThrowM CatInit (ExInit ExtensionNotSupported) $
+      "Required extensions not available: " <> T.pack (show missingExts)
 
-  logDebugM CatVulkan "Creating Vulkan instance with MoltenVK configuration"
+  let hasPortability   = KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME `elem` availableExts
+      hasLayerSettings = EXT_LAYER_SETTINGS_EXTENSION_NAME `elem` availableExts
+      hasProps2        = KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME `elem` availableExts
+      hasDebugUtils    = EXT_DEBUG_UTILS_EXTENSION_NAME `elem` availableExts
+      debugEnabled     = gcDebugMode config ∧ hasDebugUtils
+
+      validationLayer  = "VK_LAYER_KHRONOS_validation"
+      validationEnabled = gcDebugMode config ∧ validationLayer `elem` availableLayers
+      layers' = if validationEnabled then V.singleton validationLayer else V.empty
+
+      allExtensions = glfwExts
+        <> [EXT_DEBUG_UTILS_EXTENSION_NAME            | debugEnabled]
+        <> [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME | hasPortability]
+        <> [KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME | hasProps2]
+        <> [EXT_LAYER_SETTINGS_EXTENSION_NAME          | hasLayerSettings]
+
+      flags = if hasPortability
+              then INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+              else zero
+
+  when (gcDebugMode config ∧ not validationEnabled) $
+    logWarnM CatVulkan
+      "Debug mode: VK_LAYER_KHRONOS_validation not installed, validation disabled"
+  when (gcDebugMode config ∧ not hasDebugUtils) $
+    logWarnM CatVulkan
+      "Debug mode: VK_EXT_debug_utils not available, debug messenger disabled"
+
+  logDebugSM CatVulkan "Instance configuration"
+    [("glfw_extensions", T.pack $ show $ map BSU.toString glfwExts)
+    ,("debug_mode", T.pack $ show $ gcDebugMode config)
+    ,("validation", T.pack $ show validationEnabled)
+    ,("portability", T.pack $ show hasPortability)
+    ,("layer_settings", T.pack $ show hasLayerSettings)]
+
   inst ← liftIO $ with (1 ∷ Word32) $ \valuePtr → do
     let moltenVkSetting = LayerSettingEXT
           { layerName = "MoltenVK"
@@ -106,29 +97,36 @@ createVulkanInstance config = do
           , valueCount = 1
           , values = castPtr valuePtr
           }
-        
+
         layerSettingsInfo = LayerSettingsCreateInfoEXT
           { settings = V.singleton moltenVkSetting
           }
 
-        instCreateInfo = zero 
-          { applicationInfo = Just $ zero 
+        baseCreateInfo = zero
+          { applicationInfo = Just $ zero
               { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
               , engineName     = Just "Synarchy Engine"
               , apiVersion     = API_VERSION_1_2
               }
+          , enabledLayerNames     = layers'
           , enabledExtensionNames = V.fromList allExtensions
-          , flags = INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
-          }
-          ::& layerSettingsInfo
-          :& debugUtilsMessengerCreateInfo
-          :& ()
-    
-    createInstance instCreateInfo Nothing
-  
+          , flags = flags
+          } ∷ InstanceCreateInfo '[]
+
+    -- The pNext chain is type-indexed, so each shape is its own branch.
+    -- Both structs require their extension to be enabled (spec VUs).
+    case (hasLayerSettings, debugEnabled) of
+      (True, True)   → createInstance
+        (baseCreateInfo ::& layerSettingsInfo :& debugUtilsMessengerCreateInfo :& ()) Nothing
+      (True, False)  → createInstance
+        (baseCreateInfo ::& layerSettingsInfo :& ()) Nothing
+      (False, True)  → createInstance
+        (baseCreateInfo ::& debugUtilsMessengerCreateInfo :& ()) Nothing
+      (False, False) → createInstance baseCreateInfo Nothing
+
   logDebugM CatVulkan "Vulkan instance created successfully"
-  
-  dbgMessenger ← if gcDebugMode config
+
+  dbgMessenger ← if debugEnabled
     then do
       logDebugM CatVulkan "Creating debug messenger"
       messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
@@ -147,31 +145,10 @@ destroyVulkanInstance (inst, mbMessenger) = do
     Nothing → return ()
   liftIO $ destroyInstance inst Nothing
 
--- | Initialize Vulkan with resource cleanup registration
-initVulkan ∷ GraphicsConfig → EngineM ε σ Instance
-initVulkan config = do
-  (inst, _) ← allocResource destroyVulkanInstance $ createVulkanInstance config
-    `catchEngine` \err → logAndThrowM CatInit (ExInit VulkanInitFailed) $
-      "Failed to initialize Vulkan: " <> T.pack (show err)
-  return inst
-
 getAvailableExtensions ∷ EngineM ε σ [BS.ByteString]
 getAvailableExtensions = do
   (_, exts) ← liftIO $ enumerateInstanceExtensionProperties Nothing
   return $ map extensionName $ V.toList exts
-
-getAvailableLayers ∷ EngineM ε σ [BS.ByteString]
-getAvailableLayers = do
-  (_, layers) ← liftIO $ enumerateInstanceLayerProperties
-  return $ map (\LayerProperties{layerName = ln} → ln) $ V.toList layers
-
-filterExtensions ∷ [BS.ByteString] → [BS.ByteString] → EngineM ε σ [BS.ByteString]
-filterExtensions available required = do
-  let missing = filter (not ∘ (`elem` available)) required
-  unless (null missing) $
-    logAndThrowM CatInit (ExInit ExtensionNotSupported) $
-      "Required extensions not available: " <> T.pack (show missing)
-  return required
 
 -- | Debug messenger info for validation layers
 debugUtilsMessengerCreateInfo ∷ DebugUtilsMessengerCreateInfoEXT

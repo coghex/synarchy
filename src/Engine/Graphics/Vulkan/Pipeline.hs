@@ -14,7 +14,6 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Texture
-import Engine.Graphics.Vulkan.Shader
 import Engine.Graphics.Vulkan.Vertex
 import Vulkan.Core10
 import Vulkan.Zero

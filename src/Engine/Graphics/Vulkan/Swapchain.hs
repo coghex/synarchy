@@ -3,9 +3,6 @@ module Engine.Graphics.Vulkan.Swapchain
   ( createVulkanSwapchain
   , createSwapchainImageViews
   , querySwapchainSupport
-  , acquireVulkanImage
-  , submitQueue
-  , waitIdle
   ) where
 
 import UPrelude
@@ -17,11 +14,9 @@ import Engine.Core.Resource (allocResource)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM)
 import Engine.Graphics.Types
-import Engine.Graphics.Vulkan.Sync
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero
-import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_surface as Surf
 import Vulkan.Extensions.VK_KHR_swapchain as Swap
 
@@ -44,10 +39,12 @@ querySwapchainSupport pdev surface = do
   
   pure $ SwapchainSupportDetails caps fmts modes
 
--- | Creates a new swapchain
+-- | Creates a new swapchain. The framebuffer size is only consulted
+--   when the surface reports the 0xFFFFFFFF "application chooses"
+--   extent sentinel (e.g. Wayland).
 createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR → Bool
-  → EngineM ε σ SwapchainInfo
-createVulkanSwapchain pdev dev queues surface vsyncEnabled = do
+  → (Int, Int) → EngineM ε σ SwapchainInfo
+createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   logDebugM CatSwapchain "Creating swapchain"
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
   let ssd = SwapchainSupportDetails{..}
@@ -56,8 +53,11 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled = do
       maxImg     = Surf.maxImageCount capabilities
       imageCount = if maxImg > 0 then min desired maxImg else desired
   spMode ← chooseSwapPresentMode ssd vsyncEnabled
-  let sExtent = chooseSwapExtent ssd
-      (sharing, qfi) = if (graphicsQueue queues ≠ presentQueue queues)
+  let sExtent = chooseSwapExtent ssd fbSize
+      -- Sharing is decided by queue FAMILY, not queue handle — two
+      -- distinct queues from the same family still allow EXCLUSIVE,
+      -- and CONCURRENT requires the family indices to be distinct.
+      (sharing, qfi) = if (graphicsFamIdx queues ≠ presentFamIdx queues)
                        then (SHARING_MODE_CONCURRENT
                            , V.fromList [ graphicsFamIdx queues
                                       , presentFamIdx queues])
@@ -169,45 +169,17 @@ chooseSwapPresentMode ssd vsyncEnabled = do
         [("mode", T.pack $ show preferred)]
       pure preferred
 
--- | Clamp swapchain extent to surface capabilities
-chooseSwapExtent ∷ SwapchainSupportDetails → Extent2D
-chooseSwapExtent SwapchainSupportDetails{..} = zero
-  { width  = ( max (minw) $ min (maxw) (curw) )
-  , height = ( max (minh) $ min (maxh) (curh) ) }
+-- | Clamp swapchain extent to surface capabilities. When currentExtent
+--   is the 0xFFFFFFFF sentinel the surface size is up to us, so the
+--   framebuffer size is clamped instead.
+chooseSwapExtent ∷ SwapchainSupportDetails → (Int, Int) → Extent2D
+chooseSwapExtent SwapchainSupportDetails{..} (fbW, fbH) = zero
+  { width  = ( max (minw) $ min (maxw) w )
+  , height = ( max (minh) $ min (maxh) h ) }
   where Extent2D{width=minw,height=minh} = minImageExtent capabilities
         Extent2D{width=maxw,height=maxh} = maxImageExtent capabilities
         Extent2D{width=curw,height=curh} = currentExtent  capabilities
+        (w, h) = if curw ≡ 0xFFFFFFFF
+                 then (fromIntegral fbW, fromIntegral fbH)
+                 else (curw, curh)
 
--- | Acquire next image from swapchain
-acquireVulkanImage ∷ Device → SwapchainKHR → Word64 → Semaphore
-  → EngineM ε σ Word32
-acquireVulkanImage dev swapchain maxBound imageAvailableSemaphore = do
-  res ← acquireNextImageKHR dev swapchain maxBound imageAvailableSemaphore zero
-  pure $ snd res
-
--- | Submit command buffers to queue and present
-submitQueue ∷ SwapchainKHR → Semaphore → Semaphore → Word32
-  → Queue → Queue → V.Vector CommandBuffer → EngineM ε σ ()
-submitQueue swapchain imageAvailableSemaphore renderFinishedSemaphore
-            imageIndex graphicsQueue presentQueue commandBuffers = do
-  let submitInfo = zero
-        { waitSemaphores = [imageAvailableSemaphore]
-        , waitDstStageMask = [PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT]
-        , commandBuffers = [ commandBufferHandle
-                           $ commandBuffers
-                           V.! fromIntegral imageIndex ]
-        , signalSemaphores = [renderFinishedSemaphore]
-        }
-      presentInfo = zero { waitSemaphores = [renderFinishedSemaphore]
-                        , swapchains = [swapchain]
-                        , imageIndices = [imageIndex]
-                        }
-  queueSubmit graphicsQueue [SomeStruct submitInfo] zero
-  _ ← queuePresentKHR presentQueue presentInfo
-  pure ()
-
--- | Wait for device and queue to be idle
-waitIdle ∷ Device → Queue → EngineM ε σ ()
-waitIdle dev gq = do
-  queueWaitIdle gq
-  deviceWaitIdle dev

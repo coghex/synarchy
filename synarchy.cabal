@@ -268,7 +268,6 @@ library
                      Engine.Graphics.Vulkan.Recreate
                      Engine.Graphics.Vulkan.Sampler.Types
                      Engine.Graphics.Vulkan.Sampler.Cache
-                     Engine.Graphics.Vulkan.Shader
                      Engine.Graphics.Vulkan.ShaderCode
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync

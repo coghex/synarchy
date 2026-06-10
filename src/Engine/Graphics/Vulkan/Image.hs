@@ -3,9 +3,6 @@ module Engine.Graphics.Vulkan.Image
   , createVulkanImage'
   , createVulkanImageView
   , createVulkanImageView'
-  , destroyVulkanImage
-  , destroyVulkanImageView
-  , createTextureImage
   , copyBufferToImage
   , VulkanImage(..)
   ) where
@@ -13,7 +10,6 @@ module Engine.Graphics.Vulkan.Image
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import qualified Data.ByteString as BS
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM)
@@ -148,32 +144,6 @@ createVulkanImageView' device (VulkanImage image _) format aspectFlags =
           , layerCount = 1
           }
       } Nothing
-
--- | Create a texture image from raw data
-createTextureImage ∷ Device
-                   → PhysicalDevice
-                   → Queue
-                   → CommandPool
-                   → BS.ByteString  -- ^ Raw image data
-                   → (Word32, Word32)  -- ^ Width and height
-                   → EngineM ε σ VulkanImage
-createTextureImage device pDevice graphicsQueue cmdPool imageData (width, height) = do
-  let imageSize = width * height * 4  -- RGBA format
-  image ← createVulkanImage device pDevice (width, height)
-            FORMAT_R8G8B8A8_SRGB
-            IMAGE_TILING_OPTIMAL
-            (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
-            MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-  pure image
-
-destroyVulkanImage ∷ Device → VulkanImage → EngineM ε σ ()
-destroyVulkanImage device VulkanImage{..} = do
-  destroyImage device viImage Nothing
-  freeMemory device viMemory Nothing
-
-destroyVulkanImageView ∷ Device → ImageView → EngineM ε σ ()
-destroyVulkanImageView device view =
-  liftIO $ destroyImageView device view Nothing
 
 findMemoryType ∷ PhysicalDevice → Word32 → MemoryPropertyFlags → EngineM ε σ Word32
 findMemoryType pdev typeFilter properties = do

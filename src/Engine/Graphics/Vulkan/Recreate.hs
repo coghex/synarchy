@@ -91,7 +91,10 @@ recreateAllResources pDevice device queues surface window = do
     videoConfig ← liftIO $ readIORef (videoConfigRef env)
     let vsyncEnabled = vcVSync videoConfig
         msaaInt      = vcMSAA videoConfig
-    swapInfo ← createVulkanSwapchain pDevice device queues surface vsyncEnabled
+        Window glfwWin = window
+    fbSize ← GLFW.getFramebufferSize glfwWin
+    swapInfo ← createVulkanSwapchain pDevice device queues surface
+                 vsyncEnabled fbSize
     modify $ \s → s { graphicsState = (graphicsState s) {
         swapchainInfo = Just swapInfo
     }}

@@ -67,7 +67,10 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
         (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-    copyBuffer device commandPool graphicsQueue stagingBuffer vertexBuffer vertSize
+    -- locally: frees the one-shot command buffer at scope exit instead
+    -- of retaining it until program exit.
+    locally $ copyBuffer device commandPool graphicsQueue
+                stagingBuffer vertexBuffer vertSize
     liftIO $ destroyBuffer device stagingBuffer Nothing
     liftIO $ freeMemory device stagingMemory Nothing
 

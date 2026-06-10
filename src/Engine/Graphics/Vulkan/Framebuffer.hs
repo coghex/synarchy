@@ -1,22 +1,17 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Framebuffer
   ( createVulkanFramebuffers
-  , destroyVulkanFramebuffers
-  , recordVulkanRenderCommands
   ) where
 
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Resource
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero
-import Vulkan.CStruct.Extends
 
 -- | Creates framebuffers for each swapchain image view.
 -- When msaaImageView is provided (Just), creates MSAA framebuffers with two attachments.
@@ -53,56 +48,3 @@ createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView = do
             }
       createFramebuffer dev fbInfo Nothing
 
-destroyVulkanFramebuffers ∷ Device → V.Vector Framebuffer → EngineM ε σ ()
-destroyVulkanFramebuffers device =
-  V.mapM_ (\fb → destroyFramebuffer device fb Nothing)
-
--- | Record render commands for a frame
-recordVulkanRenderCommands ∷ CommandBuffer
-                          → RenderPass
-                          → Framebuffer
-                          → Pipeline
-                          → PipelineLayout
-                          → Extent2D
-                          → DescriptorSet
-                          → V.Vector Buffer  -- ^ Vertex buffers
-                          → EngineM ε σ ()
-recordVulkanRenderCommands cmdBuffer renderPass framebuffer pipeline layout extent descSet vertexBuffers = do
-  let renderPassInfo = zero
-        { renderPass = renderPass
-        , framebuffer = framebuffer
-        , renderArea = zero
-            { offset = zero
-            , extent = extent
-            }
-        , clearValues = V.singleton zero  -- Uses default clear value (black)
-        }
-      
-  beginVulkanCommandBuffer cmdBuffer
-  
-  cmdBeginRenderPass cmdBuffer renderPassInfo SUBPASS_CONTENTS_INLINE
-  
-  cmdBindPipeline cmdBuffer PIPELINE_BIND_POINT_GRAPHICS pipeline
-  
-  cmdBindDescriptorSets cmdBuffer
-                       PIPELINE_BIND_POINT_GRAPHICS
-                       layout
-                       0  -- First set
-                       (V.singleton descSet)
-                       V.empty  -- No dynamic offsets
-  
-  when (not $ V.null vertexBuffers) $
-    cmdBindVertexBuffers cmdBuffer
-                        0  -- First binding
-                        vertexBuffers
-                        (V.singleton 0)  -- Offsets
-  
-  cmdDraw cmdBuffer
-         4  -- vertex count
-         1  -- instance count
-         0  -- first vertex
-         0  -- first instance
-  
-  cmdEndRenderPass cmdBuffer
-  
-  endVulkanCommandBuffer cmdBuffer

@@ -20,7 +20,7 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Image (createVulkanImage, VulkanImage(..), createVulkanImageView)
-import Engine.Graphics.Vulkan.Texture (TexturePoolState(..))
+import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, SamplerKind(..))
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
@@ -30,7 +30,7 @@ import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Resource (allocResource)
+import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Control.Monad (forM_, when, foldM, forM)
 
@@ -413,7 +413,10 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
         (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     
-    runCommandsOnce device cmdPool queue $ \cmdBuf → do
+    -- locally: the one-shot command buffer is freed when this scope
+    -- exits instead of accumulating until program exit (fonts can be
+    -- loaded at runtime).
+    locally $ runCommandsOnce device cmdPool queue $ \cmdBuf → do
         transitionImageLayout cmdBuf (viImage image) FORMAT_R8_UNORM
             IMAGE_LAYOUT_UNDEFINED IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
         
@@ -524,30 +527,4 @@ transitionImageLayout cmdBuf image format oldLayout newLayout = do
     
     cmdPipelineBarrier cmdBuf srcStage dstStage zero V.empty V.empty (V.singleton $ SomeStruct barrier)
 
-runCommandsOnce ∷ Device → CommandPool → Queue → (CommandBuffer → EngineM ε σ ()) → EngineM ε σ ()
-runCommandsOnce device cmdPool queue action = do
-    let allocInfo = zero
-          { commandPool = cmdPool
-          , level = COMMAND_BUFFER_LEVEL_PRIMARY
-          , commandBufferCount = 1
-          }
-    
-    cmdBuffers ← allocateCommandBuffers device allocInfo
-    let cmdBuffer = V.head cmdBuffers
-    
-    let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
-          { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
-    beginCommandBuffer cmdBuffer beginInfo
-    
-    action cmdBuffer
-    
-    endCommandBuffer cmdBuffer
-    
-    let submitInfo = zero 
-          { commandBuffers = V.singleton (commandBufferHandle cmdBuffer) 
-          }
-    queueSubmit queue (V.singleton $ SomeStruct submitInfo) zero
-    queueWaitIdle queue
-    
-    freeCommandBuffers device cmdPool cmdBuffers
 
