@@ -76,7 +76,10 @@ combatLoop env stateRef tick = do
             threadDelay 100000
             combatLoop env stateRef tick
         ThreadRunning → do
-            catch
+            -- One guarded tick per iteration; the recursive call lives
+            -- OUTSIDE the catch — inside it, each tick pushes a catch
+            -- frame that never pops (unbounded stack growth).
+            mNext ← catch
               (do
                 -- Honour the global pause toggle. Same gate the unit
                 -- thread uses around gameTime + movement: when paused
@@ -95,7 +98,7 @@ combatLoop env stateRef tick = do
                                     * fromIntegral woundsTickEvery))
                         pure next
                 threadDelay (floor (combatTickRate * 1000000 ∷ Double))
-                combatLoop env stateRef next
+                pure (Just next)
               )
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)
@@ -108,7 +111,11 @@ combatLoop env stateRef tick = do
                 -- that silently retries forever is corrupted gameplay
                 -- with no signal anyway.
                 writeIORef (lifecycleRef env) CleaningUp
+                pure Nothing
               )
+            case mNext of
+                Just n  → combatLoop env stateRef n
+                Nothing → pure ()
 
 -- | Drain the command queue and dispatch each command. Skeleton phase:
 --   we only log incoming commands. Real resolution lands in the next

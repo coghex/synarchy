@@ -168,7 +168,10 @@ runLuaLoop env ls stateRef debugQueue = do
             threadDelay 100000
             runLuaLoop env ls stateRef debugQueue
         ThreadRunning → do
-            catch
+            -- One guarded tick per iteration; the recursive call lives
+            -- OUTSIDE the catch — inside it, each tick pushes a catch
+            -- frame that never pops (unbounded stack growth).
+            ok ← catch
               (do
                 processDebugCommands (lbsLuaState ls) debugQueue
 
@@ -188,7 +191,7 @@ runLuaLoop env ls stateRef debugQueue = do
                   Just msg → do
                       processLuaMsg env ls stateRef msg
                       processLuaMsgs env ls stateRef
-                      runLuaLoop env ls stateRef debugQueue
+                      pure True
                   Nothing → do
                       currentTime' ← getCurrentTime
                       let currentSecs' = realToFrac $ utctDayTime currentTime'
@@ -201,7 +204,7 @@ runLuaLoop env ls stateRef debugQueue = do
                             return ()
                           atomically $ modifyTVar (lbsScripts ls) $
                             Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
-                      runLuaLoop env ls stateRef debugQueue
+                      pure True
               )
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)
@@ -217,7 +220,9 @@ runLuaLoop env ls stateRef debugQueue = do
                 drainDebug
                 Lua.close (lbsLuaState ls)
                 writeIORef (lifecycleRef env) CleaningUp
+                pure False
               )
+            when ok $ runLuaLoop env ls stateRef debugQueue
 
 -- | Process all pending debug commands from the TCP server.
 --   Each command is a line of Lua code. We execute it via

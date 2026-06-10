@@ -58,7 +58,10 @@ worldLoop env stateRef lastTimeRef = do
             threadDelay 100000
             worldLoop env stateRef lastTimeRef
         ThreadRunning → do
-            catch
+            -- One guarded tick per iteration; the recursive call lives
+            -- OUTSIDE the catch — inside it, each tick pushes a catch
+            -- frame that never pops (unbounded stack growth).
+            ok ← catch
               (do
                 now ← realToFrac ⊚ getPOSIXTime
                 lastTime ← readIORef lastTimeRef
@@ -79,16 +82,18 @@ worldLoop env stateRef lastTimeRef = do
                 -- Plain writeIORef is fine here: the value is an immutable
                 -- Vector built entirely before the write, so the reader
                 -- (Frame.hs) always sees either the old or the new vector,
-                -- never a torn pointer.  threadDelay below acts as a
-                -- memory barrier, ensuring visibility across cores.
+                -- never a torn pointer — at worst it draws one frame
+                -- against the previous vector.
                 writeIORef (worldQuadsRef env) allQuads
                 threadDelay 16666
-                worldLoop env stateRef lastTimeRef
+                pure True
               )
               (\(e ∷ SomeException) → do
                 logError logger CatWorld $ "World thread crashed: " <> T.pack (show e)
                 writeIORef (lifecycleRef env) CleaningUp
+                pure False
               )
+            when ok $ worldLoop env stateRef lastTimeRef
 
 -- | Drain all pending commands from the queue
 processAllCommands ∷ EngineEnv → LoggerState → IO ()

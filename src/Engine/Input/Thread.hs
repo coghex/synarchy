@@ -60,7 +60,10 @@ runInputLoop env stateRef = do
         threadDelay 100000  -- 100ms pause check
         runInputLoop env stateRef
     ThreadRunning → do
-        catch
+        -- One guarded tick per iteration; the recursive call lives
+        -- OUTSIDE the catch — inside it, each tick pushes a catch
+        -- frame that never pops (unbounded stack growth).
+        ok ← catch
           (do
             frameStart ← getCurrentTime
             let sharedInputRef = inputStateRef env
@@ -68,13 +71,15 @@ runInputLoop env stateRef = do
             newInpSt ← processInputs env inpSt
             writeIORef sharedInputRef newInpSt
             threadDelay 16666  -- ~60 FPS
-            runInputLoop env stateRef
+            pure True
           )
           (\(e ∷ SomeException) → do
             logger ← readIORef (loggerRef env)
             logError logger CatInput $ "Input thread crashed: " <> T.pack (show e)
             writeIORef (lifecycleRef env) CleaningUp
+            pure False
           )
+        when ok $ runInputLoop env stateRef
 
 processInputs ∷ EngineEnv → InputState → IO InputState
 processInputs env inpSt = do

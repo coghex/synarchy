@@ -61,7 +61,10 @@ simLoop env stateRef simStateRef = do
             threadDelay 100000
             simLoop env stateRef simStateRef
         ThreadRunning → do
-            catch
+            -- One guarded tick per iteration; the recursive call lives
+            -- OUTSIDE the catch — inside it, each tick pushes a catch
+            -- frame that never pops (unbounded stack growth).
+            ok ← catch
               (do
                 -- Process all pending commands
                 processSimCommands env logger simStateRef
@@ -72,7 +75,7 @@ simLoop env stateRef simStateRef = do
                                 ∨ not (ssWorldActive ss)
                     then do
                         threadDelay (ssTickRate ss)
-                        simLoop env stateRef simStateRef
+                        pure True
                     else do
                         ss' ← settleNewChunks ss
                         let ss''   = simulateFluidTick ss'
@@ -82,12 +85,14 @@ simLoop env stateRef simStateRef = do
                         writeIORef simStateRef ss''''
 
                         threadDelay (ssTickRate ss'''')
-                        simLoop env stateRef simStateRef
+                        pure True
               )
               (\(e ∷ SomeException) → do
                 logError logger CatWorld $ "Sim thread crashed: " <> T.pack (show e)
                 writeIORef (lifecycleRef env) CleaningUp
+                pure False
               )
+            when ok $ simLoop env stateRef simStateRef
 
 processSimCommands ∷ EngineEnv → LoggerState → IORef SimState → IO ()
 processSimCommands env logger simStateRef = do

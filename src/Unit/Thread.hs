@@ -63,7 +63,10 @@ unitLoop env stateRef lastTimeRef utsRef = do
             threadDelay 100000
             unitLoop env stateRef lastTimeRef utsRef
         ThreadRunning → do
-            catch
+            -- One guarded tick per iteration; the recursive call lives
+            -- OUTSIDE the catch — inside it, each tick pushes a catch
+            -- frame that never pops (unbounded stack growth).
+            ok ← catch
               (do
                 tickStart ← realToFrac ⊚ getPOSIXTime
                 lastTime ← readIORef lastTimeRef
@@ -82,13 +85,15 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 let elapsed = tickEnd - tickStart ∷ Double
                     sleepTime = max 0 (unitTickRate - elapsed)
                 threadDelay (floor (sleepTime * 1000000))
-                unitLoop env stateRef lastTimeRef utsRef
+                pure True
               )
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)
                 logError logger CatThread $ "Unit thread crashed: " <> T.pack (show e)
                 writeIORef (lifecycleRef env) CleaningUp
+                pure False
               )
+            when ok $ unitLoop env stateRef lastTimeRef utsRef
 
 -- | Copy sim-thread positions/facing into the render-visible UnitManager.
 --   Also drives unit animations: the resolved anim for (usPose, usState)

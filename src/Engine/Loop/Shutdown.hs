@@ -30,6 +30,11 @@ shutdownEngine (Window win) unitThreadState worldThreadState
     state ← gets graphicsState
     let device = vulkanDevice state
 
+    -- Vulkan teardown below runs BEFORE the worker threads stop. That
+    -- is safe only while Vulkan objects are touched exclusively by
+    -- this (main) thread — workers hand pixel data over via
+    -- IORefs/queues and must never call into Vulkan.
+
     -- Clear batch manager
     logDebugM CatSystem "Clearing batch manager..."
     modify $ \s → s { sceneManager = (sceneManager s) {

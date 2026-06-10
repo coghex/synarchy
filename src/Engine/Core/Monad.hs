@@ -43,8 +43,12 @@ instance Functor (EngineM ε σ) where
 
 instance Applicative (EngineM ε σ) where
   pure x = EngineM $ \_ → ($ Right x)
-  mf <*> mx = EngineM $ \e c → unEngineM mf e
-    $ \g → unEngineM mx e (c ∘ (g <*>))
+  -- (<*>) must agree with ap: when mf has failed, mx's effects must
+  -- not run — otherwise forM/mapM/traverse keep executing effects
+  -- past a throwError (results discarded, side effects not).
+  mf <*> mx = EngineM $ \e c → unEngineM mf e $ \case
+    Left ex → c (Left ex)
+    Right g → unEngineM mx e (c ∘ fmap g)
 
 instance Monad (EngineM ε σ) where
   return = pure
