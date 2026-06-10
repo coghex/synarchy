@@ -44,23 +44,73 @@ diamondRows = 48
 
 -- * Slope Computation (Post-Processing Pass)
 
+-- | How many tiles in from a chunk edge a column's slope can depend on
+--   a NEIGHBOURING chunk. The slope rule reads the immediate 4-neighbour
+--   (N/E/S/W) — see 'computeTileSlope' — so radius 1: only the 1-tile
+--   border of a chunk ever reads across a chunk boundary; interior
+--   columns read in-chunk data only. 'recomputeNeighborSlopes' uses this
+--   to re-slide just the boundary strip when a neighbour loads. Bump it
+--   if the slope rule ever grows a wider horizontal stencil (e.g. future
+--   underground slopes); the perimeter strip widens to match and the
+--   recompute stays correct.
+slopeStencilRadius ∷ Int
+slopeStencilRadius = 1
+
+-- | Column indices within 'slopeStencilRadius' of any chunk edge — the
+--   only columns whose slope can change when a neighbour loads. Computed
+--   once (constant for a given radius / chunk size).
+perimeterColumnSet ∷ HS.HashSet Int
+perimeterColumnSet = HS.fromList
+    [ ly * chunkSize + lx
+    | ly ← [0 .. chunkSize - 1]
+    , lx ← [0 .. chunkSize - 1]
+    , let r = slopeStencilRadius
+    , lx < r ∨ lx ≥ chunkSize - r ∨ ly < r ∨ ly ≥ chunkSize - r
+    ]
+
+-- | Recompute one column's surface slope; pass the column through
+--   unchanged if its surface z is outside the strata range.
+recomputeColumnSlope ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
+                     → V.Vector (Maybe FluidCell) → Chunk
+                     → (ChunkCoord → Maybe (VU.Vector Int))
+                     → Int → ColumnTiles → ColumnTiles
+recomputeColumnSlope seed coord surfMap registry fluidMap chunk neighborLookup idx col =
+    let lx = idx `mod` chunkSize
+        ly = idx `div` chunkSize
+        surfZ = surfMap VU.! idx
+        i = surfZ - ctStartZ col
+    in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+       then let newSlope = computeTileSlope seed coord lx ly
+                                            surfZ registry
+                                            surfMap fluidMap
+                                            chunk neighborLookup
+            in col { ctSlopes = ctSlopes col VU.// [(i, newSlope)] }
+       else col
+
+-- | Recompute every column's surface slope (initial chunk gen).
 computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                    → V.Vector (Maybe FluidCell) → Chunk
                    → (ChunkCoord → Maybe (VU.Vector Int)) → Chunk
 computeChunkSlopes seed coord surfMap registry fluidMap chunk neighborLookup =
+    V.imap (recomputeColumnSlope seed coord surfMap registry fluidMap
+                                 chunk neighborLookup) chunk
+
+-- | Recompute slopes for ONLY the given column indices; all other
+--   columns pass through untouched. Used by 'recomputeNeighborSlopes' to
+--   re-slide just the boundary strip when a neighbour loads. Interior
+--   columns can't change (their 4-neighbours are all in-chunk and their
+--   terrain is fixed at gen), so restricting to the perimeter is
+--   output-identical to a full recompute but O(perimeter) not O(area).
+computeChunkSlopesCols ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
+                       → V.Vector (Maybe FluidCell) → Chunk
+                       → (ChunkCoord → Maybe (VU.Vector Int))
+                       → HS.HashSet Int → Chunk
+computeChunkSlopesCols seed coord surfMap registry fluidMap chunk neighborLookup cols =
     V.imap (\idx col →
-        let lx = idx `mod` chunkSize
-            ly = idx `div` chunkSize
-            surfZ = surfMap VU.! idx
-            i = surfZ - ctStartZ col
-        in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
-           then let newSlope = computeTileSlope seed coord lx ly
-                                                surfZ registry
-                                                surfMap fluidMap
-                                                chunk neighborLookup
-                    slopes' = ctSlopes col VU.// [(i, newSlope)]
-                in col { ctSlopes = slopes' }
-           else col
+        if HS.member idx cols
+        then recomputeColumnSlope seed coord surfMap registry fluidMap
+                                  chunk neighborLookup idx col
+        else col
     ) chunk
 
 computeTileSlope ∷ Word64 → ChunkCoord
@@ -345,12 +395,17 @@ recomputeNeighborSlopes seed registry newCoords wtd =
         neighborLookup coord = case HM.lookup coord chunks of
             Just lc → Just (lcTerrainSurfaceMap lc)
             Nothing → Nothing
+        -- Only the boundary strip can change when a neighbour loads —
+        -- interior columns read in-chunk data only, so recomputing them
+        -- would reproduce their stored value. Restricting to the
+        -- perimeter is output-identical but skips ~the chunk interior.
         updatedChunks = foldl' (\acc coord →
             case HM.lookup coord acc of
                 Just lc →
-                    let newTiles = computeChunkSlopes seed coord
+                    let newTiles = computeChunkSlopesCols seed coord
                             (lcTerrainSurfaceMap lc) registry
                             (lcFluidMap lc) (lcTiles lc) neighborLookup
+                            perimeterColumnSet
                     in HM.insert coord (lc { lcTiles = newTiles }) acc
                 Nothing → acc
             ) chunks affected
