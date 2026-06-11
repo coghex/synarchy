@@ -9,6 +9,7 @@ import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
 import World.Geology.Types
+import World.Geology.Ore.Types (OreSheetParams(..), oreSheetThicknessAt)
 import World.Geology.Crater (applyCrater)
 import World.Geology.Volcano (applyVolcanicFeature, perturbDist)
 import World.Geology.Hash (smoothstepGeo, wrappedDeltaUV)
@@ -39,6 +40,14 @@ applyGeoEvent (RiverSegmentEvent rsc) worldSize gx gy baseElev _ =
 applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy baseElev _ =
     computeDeltaDeposit' (rdpLastSegment rdp) (rdpFlowRate rdp)
                          worldSize gx gy baseElev
+applyGeoEvent (OreSheetEvent os) _worldSize gx gy _baseElev _ =
+    -- True deposition: the sheet raises the surface by its sampled
+    -- thickness and the whole rise is new ore material, so the strata
+    -- replay writes an ore band that later periods bury or erode.
+    let delta = round (oreSheetThicknessAt os gx gy)
+    in if delta ≤ 0
+       then noModification
+       else GeoModification delta (Just (osMat os)) delta
 applyGeoEvent (LandslideEvent _)    _ _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ _ = noModification

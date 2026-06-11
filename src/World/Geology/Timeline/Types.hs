@@ -16,6 +16,7 @@ module World.Geology.Timeline.Types
     , bboxOverlapsChunk
     , tagEventsWithBBox
     , GeoEvent(..)
+    , OreSheetParams(..)
     , RiverSegmentCarve(..)
     , RiverDeltaParams(..)
     , FeatureShape(..)
@@ -56,6 +57,8 @@ import World.Fluid.Seabed.Types (SeabedTable, emptySeabedTable)
 import World.Fluid.OceanMask (WorldOceanMask, emptyWorldOceanMask)
 import World.Geology.Coastal.Types (CoastalTable, emptyCoastalTable)
 import World.Fluid.River.Types (WorldRivers, emptyWorldRivers)
+import World.Geology.Ore.Types
+    ( OreSheetParams(..), WorldOreDeposits, emptyWorldOreDeposits )
 import World.Hydrology.Types
     ( HydroFeature(..)
     , HydroEvolution(..)
@@ -136,8 +139,13 @@ data GeoTimeline = GeoTimeline
       --   'composeFluidMap' ORs this into its chunk-level ocean test
       --   so sub-sea tiles the coarse chunk-flood missed still render
       --   ocean (fixes whole chunks rendering dry inside a sea — the
-      --   sea-stops-at-a-chunk-boundary bug). Appended last
-      --   (positional schema; save v27).
+      --   sea-stops-at-a-chunk-boundary bug). Appended (positional
+      --   schema; save v27).
+    , gtOreDeposits ∷ !WorldOreDeposits
+      -- ^ Per-chunk ore-volume summary aggregated from the timeline's
+      --   'OreSheetEvent's at assembly. Read by the zoom-map info
+      --   panel and the Lua query surface. Appended last (positional
+      --   schema; save v30).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -154,6 +162,7 @@ emptyTimeline = GeoTimeline
     , gtCoastal = emptyCoastalTable
     , gtSeabed = emptySeabedTable
     , gtWorldOcean = emptyWorldOceanMask
+    , gtOreDeposits = emptyWorldOreDeposits
     }
 
 data EventBBox = EventBBox
@@ -196,6 +205,9 @@ data GeoEvent
     | HydroModify !GeoFeatureId !HydroEvolution
     | RiverSegmentEvent !RiverSegmentCarve
     | RiverDeltaEvent   !RiverDeltaParams
+    | OreSheetEvent     !OreSheetParams
+      -- ^ Flow-routed sedimentary ore deposit (appended last:
+      --   'Generic Serialize' is positional by constructor tag).
     deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 -- * Explode a river HydroEvent into per-segment events
@@ -290,6 +302,24 @@ eventBBox (RiverDeltaEvent rdp) ws =                               -- was _ws
         deltaRadius = round (min 40.0 (totalFlow * 12.0 + 8.0)) ∷ Int
     in EventBBox (mx - deltaRadius) (my - deltaRadius)
                  (mx + deltaRadius) (my + deltaRadius)
+
+-- Ore sheet: bbox of the raster window's four (u,v) corners mapped to
+-- (x,y), plus one spacing of margin for the bilinear taper. The
+-- window origin may be unwrapped (seam-straddling fans); the
+-- centre-relative wrap inside 'tileInBBoxWrapped' handles that.
+eventBBox (OreSheetEvent os) _ws =
+    let halfGrid = osGridW os `div` 2
+        s = osSpacing os
+        u0 = (osIX0 os - halfGrid) * s
+        u1 = (osIX0 os + osW os - 1 - halfGrid) * s
+        v0 = (osIY0 os - halfGrid) * s
+        v1 = (osIY0 os + osH os - 1 - halfGrid) * s
+        corners = [ ((u + v) `div` 2, (v - u) `div` 2)
+                  | u ← [u0, u1], v ← [v0, v1] ]
+        xs = map fst corners
+        ys = map snd corners
+    in EventBBox (minimum xs - s) (minimum ys - s)
+                 (maximum xs + s) (maximum ys + s)
 
 featureShapeBBox ∷ FeatureShape → Int → EventBBox
 featureShapeBBox (VolcanicShape vf) ws = volcanicFeatureBBox vf ws

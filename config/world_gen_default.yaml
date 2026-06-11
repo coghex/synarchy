@@ -25,6 +25,15 @@ world_gen:
   lava_pool_depth: 6      # Max lava head above a pool's landing floor, tiles (1-12)
   lava_pool_radius: 22    # Max pool footprint radius, tiles (8-48); area cap = pi*r^2
 
+  # --- Resource levers ---
+  # Multipliers on the sediment flux volcanic sources shed into flat
+  # ore sheets (purely mechanistic — no per-world minimum; low-volcanism
+  # seeds can roll ore-poor worlds).
+  resources:
+    ore_abundance: 1.0    # Global multiplier on all ore deposition (0.0-5.0)
+    iron_abundance: 1.0   # Iron-specific multiplier (0.0-5.0)
+    copper_abundance: 1.0 # Copper-specific multiplier (0.0-5.0)
+
   climate:
     iterations: 50        # Relaxation iterations per era
     coriolis_scale: 1.0   # Coriolis strength multiplier

@@ -102,12 +102,16 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 29  -- v29: wrap-seam worldgen fixes change terrain
-                         -- output (cross-seam events now apply in the
-                         -- chunk path; hydrology grid spacing divides
-                         -- the u-period at w128/256; river components
-                         -- labelled by plain adjacency so width wings
-                         -- survive the length cull)
+currentSaveVersion = 30  -- v30: ore deposition. GeoEvent gains the
+                         -- trailing OreSheetEvent constructor,
+                         -- GeoTimeline gains the trailing
+                         -- 'gtOreDeposits' table, WorldGenParams'
+                         -- manual Serialize gains 'wgpOreLevers', and
+                         -- sheet deposition changes terrain output.
+                         -- (v29: wrap-seam worldgen fixes — cross-seam
+                         -- events in the chunk path; grid spacing
+                         -- divides the u-period; river components by
+                         -- plain adjacency.)
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

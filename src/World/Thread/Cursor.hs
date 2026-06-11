@@ -15,6 +15,8 @@ import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Fluids (isOceanChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
+import World.Geology.Ore.Types (wodByChunk)
+import Data.List (sortOn)
 import World.Thread.Helpers (sendHudInfo, sendHudWeatherInfo)
 import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
@@ -73,6 +75,31 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
     materials ← readIORef (materialRegistryRef env)
     let mEntry = V.find (\e → zceChunkX e ≡ cx ∧ zceChunkY e ≡ cy) zoomCache
 
+    -- Resources: per-chunk ore summary from the global deposit table
+    -- (built once at timeline assembly). Volume is DEPOSITION HISTORY
+    -- in tile·z — erosion destroys most sheets over geologic time, so
+    -- it overstates surviving strata ore by ~2 orders of magnitude.
+    -- The buckets are a prospector's survey ranking, calibrated from
+    -- the w64 per-chunk distribution (max ~20-36k, p90 ~5-8k, median
+    -- ~1-2k; ore_report 2026-06-11): rich ≈ top decile.
+    let oreLines = case mParams of
+            Nothing → ""
+            Just params →
+                case HM.lookup coord
+                         (wodByChunk (gtOreDeposits (wgpGeoTimeline params))) of
+                    Nothing → ""
+                    Just entries → T.intercalate "\n"
+                        [ prettyMatName (mpName props) <> ": " <> richness vol
+                        | (mat, vol) ← sortOn (negate . snd) entries
+                        , vol > 0
+                        , let props = getMaterialProps materials (MaterialId mat)
+                        ]
+        richness v
+            | v ≥ 8000  = "rich"
+            | v ≥ 2000  = "moderate"
+            | otherwise = "traces"
+        prettyMatName = T.unwords . map T.toTitle . T.splitOn "_"
+
     let basicLines = T.unlines $ filter (not . T.null)
             [ "Chunk (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
             , case mEntry of
@@ -83,6 +110,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
                      <> (if zceIsOcean entry then "\nOcean" else "")
                      <> (if zceHasLava entry then "\nLava" else "")
                 Nothing → ""
+            , if T.null oreLines then "" else "Resources:\n" <> oreLines
             ]
 
     let advLines = T.unlines $ filter (not . T.null)

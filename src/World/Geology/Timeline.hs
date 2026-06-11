@@ -30,6 +30,8 @@ import World.Fluid.Lake.Identify (identifyWorldLakes, computeRenderedOcean)
 import World.Fluid.Seabed (identifySeabed)
 import World.Fluid.Seabed.Types (emptySeabedTable)
 import World.Fluid.OceanMask (buildWorldOceanMask, emptyWorldOceanMask)
+import World.Geology.Ore (buildOreSheets, buildOreDepositTable)
+import World.Geology.Ore.Types (OreLevers, emptyWorldOreDeposits)
 import World.Magma.Init (buildVolcanoCtx)
 import World.Magma.Pool (identifyLavaPools)
 import World.Fluid.Lake.Types (emptyWorldLakes, WorldLakes(..))
@@ -70,6 +72,7 @@ buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Floa
               → Int    -- ^ lava pool depth lever (config)
               → Int    -- ^ lava pool radius lever (config)
               → Int    -- ^ waterfall quantum lever (config)
+              → OreLevers -- ^ resource-abundance levers (config)
               → ( GeoTimeline, ClimateState, BorderedTerrainCache
                 , OceanMap, OceanDistMap )
                 -- ^ Ocean map + distances are returned (not recomputed
@@ -78,7 +81,7 @@ buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Floa
                 --   disagree and the deep floor keeps clay instead of
                 --   seabed muck.
 buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity
-              lavaPoolDepth lavaPoolRadius waterfallQuantum =
+              lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
 
@@ -91,6 +94,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , tbsClimateState = initClimateState worldSize
             , tbsErosionIntensity = erosionIntensity
             , tbsVolcanicActivity = volcanicActivity
+            , tbsOreLevers = oreLevers
             , tbsCoarseOcean = HS.empty
             }
 
@@ -180,6 +184,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtCoastal = emptyCoastalTable
             , gtSeabed = emptySeabedTable
             , gtWorldOcean = emptyWorldOceanMask
+            , gtOreDeposits = emptyWorldOreDeposits
             }
 
         -- Ocean map: which chunks are ocean-BFS-reachable from the
@@ -288,6 +293,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtCoastal = coastalTable
             , gtSeabed = seabedTable
             , gtWorldOcean = worldOceanMask
+            , gtOreDeposits = buildOreDepositTable worldSize periods
             }
 
     in (rawTimeline, tbsClimateState s2, borderedCache, oceanMap, oceanDist)
@@ -649,9 +655,20 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
             , pfActivity pf ≡ FActive
             ]
 
+        -- === ORE DEPOSITION ===
+        -- Sediment shed by this age's volcanic edifices, routed down
+        -- the age's drainage field and settled into flat sheets
+        -- (World.Geology.Ore). Runs on the SAME flowResult the rivers
+        -- use, so deposits follow river valleys downhill. True
+        -- deposition: the events raise terrain in the strata replay
+        -- and later ages bury them.
+        oreEvents = buildOreSheets ageSeed (tbsPeriodIdx tbs)
+                                   (tbsOreLevers tbs) worldSize duration
+                                   (tbsFeatures tbs_g1) elevGrid flowResult
+
         allEvents = meteorites <> hydroEvents
                  <> newGlacierEvents <> glacierEvolveEvents
-                 <> activeGlacierRecarve
+                 <> activeGlacierRecarve <> oreEvents
 
         -- === BIDIRECTIONAL CO2 SYNC ===
         -- CO2 rises from eruptions, decays from weathering.

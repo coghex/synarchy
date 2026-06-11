@@ -5,6 +5,7 @@ module World.Generate.Config
     , SunYaml(..)
     , MoonYaml(..)
     , ClimateYaml(..)
+    , ResourcesYaml(..)
     , loadWorldGenConfig
     , saveWorldGenYaml
     , defaultWorldGenConfig
@@ -18,6 +19,7 @@ import qualified Data.Aeson as Yaml (object)
 import qualified Data.Text as T
 import System.Directory (doesFileExist)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Geology.Ore.Types (OreLevers(..))
 import World.Time.Types
     ( CalendarConfig(..), defaultCalendarConfig
     , SunConfig(..), defaultSunConfig
@@ -49,6 +51,17 @@ data WorldGenConfig = WorldGenConfig
       --   stepped gorge is carved (tiles). Lower = more terraced
       --   cascades; higher = taller single waterfalls. Exposed in the
       --   create-world advanced tab.
+    , wgcResources ∷ !ResourcesYaml
+      -- ^ Resource-abundance levers (ore deposition flux multipliers).
+    } deriving (Show, Eq)
+
+-- | Resource-abundance levers. Purely mechanistic multipliers on the
+--   sediment flux volcanic sources shed into ore sheets — no per-world
+--   minimum is enforced (ore-poor seeds are accepted by design).
+data ResourcesYaml = ResourcesYaml
+    { ryOreAbundance    ∷ !Float  -- ^ Global multiplier on all ore flux
+    , ryIronAbundance   ∷ !Float  -- ^ Iron-specific multiplier
+    , ryCopperAbundance ∷ !Float  -- ^ Copper-specific multiplier
     } deriving (Show, Eq)
 
 data CalendarYaml = CalendarYaml
@@ -98,6 +111,14 @@ defaultWorldGenConfig = WorldGenConfig
     , wgcLavaPoolDepth    = 6
     , wgcLavaPoolRadius   = 22
     , wgcWaterfallQuantum = 12
+    , wgcResources        = defaultResourcesYaml
+    }
+
+defaultResourcesYaml ∷ ResourcesYaml
+defaultResourcesYaml = ResourcesYaml
+    { ryOreAbundance    = 1.0
+    , ryIronAbundance   = 1.0
+    , ryCopperAbundance = 1.0
     }
 
 defaultCalendarYaml ∷ CalendarYaml
@@ -171,6 +192,13 @@ instance FromJSON ClimateYaml where
         <*> v .:? "thc_threshold"    .!= clThcThreshold defaultClimateYaml
     parseJSON _ = fail "Expected an object for climate"
 
+instance FromJSON ResourcesYaml where
+    parseJSON (Yaml.Object v) = ResourcesYaml
+        <$> v .:? "ore_abundance"    .!= ryOreAbundance defaultResourcesYaml
+        <*> v .:? "iron_abundance"   .!= ryIronAbundance defaultResourcesYaml
+        <*> v .:? "copper_abundance" .!= ryCopperAbundance defaultResourcesYaml
+    parseJSON _ = fail "Expected an object for resources"
+
 instance FromJSON WorldGenConfig where
     parseJSON (Yaml.Object v) = do
         wgObj ← v .: "world_gen"
@@ -187,6 +215,7 @@ instance FromJSON WorldGenConfig where
             <*> wgObj .:? "lava_pool_depth" .!= wgcLavaPoolDepth defaultWorldGenConfig
             <*> wgObj .:? "lava_pool_radius" .!= wgcLavaPoolRadius defaultWorldGenConfig
             <*> wgObj .:? "waterfall_quantum" .!= wgcWaterfallQuantum defaultWorldGenConfig
+            <*> wgObj .:? "resources"   .!= wgcResources defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
 
 -- ToJSON instances
@@ -238,7 +267,15 @@ instance ToJSON WorldGenConfig where
             , "lava_pool_depth" .= wgcLavaPoolDepth cfg
             , "lava_pool_radius" .= wgcLavaPoolRadius cfg
             , "waterfall_quantum" .= wgcWaterfallQuantum cfg
+            , "resources" .= wgcResources cfg
             ]
+        ]
+
+instance ToJSON ResourcesYaml where
+    toJSON r = Yaml.object
+        [ "ore_abundance"    .= ryOreAbundance r
+        , "iron_abundance"   .= ryIronAbundance r
+        , "copper_abundance" .= ryCopperAbundance r
         ]
 
 -- | Load world gen config from YAML, falling back to defaults on error
@@ -293,6 +330,11 @@ paramsToConfig p = WorldGenConfig
     , wgcLavaPoolDepth    = wgpLavaPoolDepth p
     , wgcLavaPoolRadius   = wgpLavaPoolRadius p
     , wgcWaterfallQuantum = wgpWaterfallQuantum p
+    , wgcResources        = ResourcesYaml
+        { ryOreAbundance    = olGlobal (wgpOreLevers p)
+        , ryIronAbundance   = olIron (wgpOreLevers p)
+        , ryCopperAbundance = olCopper (wgpOreLevers p)
+        }
     }
 
 -- | Apply a YAML config to the default WorldGenParams.
@@ -336,4 +378,9 @@ applyConfigToParams cfg = defaultWorldGenParams
     , wgpLavaPoolDepth    = wgcLavaPoolDepth cfg
     , wgpLavaPoolRadius   = wgcLavaPoolRadius cfg
     , wgpWaterfallQuantum = wgcWaterfallQuantum cfg
+    , wgpOreLevers        = OreLevers
+        { olGlobal = ryOreAbundance (wgcResources cfg)
+        , olIron   = ryIronAbundance (wgcResources cfg)
+        , olCopper = ryCopperAbundance (wgcResources cfg)
+        }
     }

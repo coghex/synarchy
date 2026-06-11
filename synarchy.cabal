@@ -476,6 +476,8 @@ library
                      World.Generate.Config
                      World.Geology
                      World.Geology.Types
+                     World.Geology.Ore
+                     World.Geology.Ore.Types
                      World.Geology.Log
                      World.Geology.Hash
                      World.Geology.Crater

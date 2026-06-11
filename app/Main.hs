@@ -10,12 +10,15 @@ import Data.Char (toLower)
 import System.Environment (setEnv, getArgs)
 import System.Exit (exitFailure, ExitCode)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, isPrefixOf, sortBy)
+import Data.Ord (comparing)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Generate.Types (WorldGenParams(..))
+import World.Geology.Ore (oreMaterialIds)
+import World.Geology.Ore.Types (wodByChunk)
 import World.Geology.Timeline.Types (GeoTimeline(..))
 import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
 import World.Fluid.River.Types (WorldRivers(..), rivFlowRate)
@@ -61,11 +64,12 @@ data DumpLayers = DumpLayers
     , dlMaterial ∷ !Bool
     , dlFluid    ∷ !Bool
     , dlIce      ∷ !Bool
+    , dlOre      ∷ !Bool
     } deriving (Show)
 
 -- | All layers enabled (default when --dump has no =value).
 allLayers ∷ DumpLayers
-allLayers = DumpLayers True True True True
+allLayers = DumpLayers True True True True True
 
 -- | Parse --dump or --dump=layer1,layer2,... from args.
 --   Returns Nothing if --dump not present, Just layers otherwise.
@@ -80,6 +84,7 @@ parseDump (a:rest)
             , dlMaterial = "material" `elem` flags
             , dlFluid    = "fluid"    `elem` flags
             , dlIce      = "ice"      `elem` flags
+            , dlOre      = "ore"      `elem` flags
             }
     | otherwise = parseDump rest
 
@@ -384,6 +389,23 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                                 "dump: WorldRivers rivers=" ⧺ show nR
                                 ⧺ " chunks_touched=" ⧺ show nRC
                                 ⧺ " peak_flow=" ⧺ show peakFlow
+                            let wod = wodByChunk
+                                    (gtOreDeposits (wgpGeoTimeline p))
+                                chunkVols = sortBy (comparing negate)
+                                    [ sum (map snd es) | es ← HM.elems wod ]
+                                oreVol = sum chunkVols
+                                pick i = case drop i chunkVols of
+                                    (v:_) → v
+                                    []    → 0
+                            hPutStrLn stderr $
+                                "dump: OreDeposits chunks_touched="
+                                ⧺ show (HM.size wod)
+                                ⧺ " total_volume=" ⧺ show oreVol
+                                ⧺ " max_chunk=" ⧺ show (pick 0)
+                                ⧺ " p90_chunk="
+                                ⧺ show (pick (length chunkVols `div` 10))
+                                ⧺ " median_chunk="
+                                ⧺ show (pick (length chunkVols `div` 2))
                         Nothing → pure ()
                     BS.putStr json
                     hFlush stdout
@@ -500,11 +522,33 @@ dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2 =
                           ⧺ ",\"iceMode\":\"" ⧺ iceModeStr (icMode ic) ⧺ "\""
                   Nothing → ",\"iceSurf\":null,\"iceMode\":null"
               | otherwise = ""
+            -- Ore layer: scan the column's strata for ore materials.
+            -- Reports the topmost ore band: its material, its top z,
+            -- and how many cells of that material the column holds.
+            -- Only covers the stored strata range (ctStartZ up) —
+            -- which is the mineable band the report tool cares about.
+            oreFields
+              | dlOre layers =
+                  let col = lcTiles lc V.! idx
+                      mats = ctMats col
+                      isOre m = m `elem` oreMaterialIds
+                      topOreIdx = let go i | i < 0 = (-1)
+                                           | isOre (mats VU.! i) = i
+                                           | otherwise = go (i - 1)
+                                  in go (VU.length mats - 1)
+                  in if topOreIdx < 0
+                     then ",\"oreId\":null,\"oreTopZ\":null,\"oreCount\":0"
+                     else let oid = mats VU.! topOreIdx
+                              cnt = VU.length (VU.filter (≡ oid) mats)
+                          in ",\"oreId\":" ⧺ show oid
+                           ⧺ ",\"oreTopZ\":" ⧺ show (ctStartZ col + topOreIdx)
+                           ⧺ ",\"oreCount\":" ⧺ show cnt
+              | otherwise = ""
             zoneFields =
                   ",\"glacierZone\":" ⧺ boolStr (isGlacierZone worldSize gx gy)
                 ⧺ ",\"beyondGlacier\":" ⧺ boolStr (isBeyondGlacier worldSize gx gy)
         in base ⧺ terrainFields ⧺ matFields ⧺ fluidFields
-                ⧺ iceFields ⧺ zoneFields ⧺ "}"
+                ⧺ iceFields ⧺ oreFields ⧺ zoneFields ⧺ "}"
 
     fluidTypeStr Ocean = "ocean"
     fluidTypeStr Lake  = "lake"

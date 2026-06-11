@@ -21,6 +21,7 @@ import World.Time.Types
     , MoonConfig(..)
     , defaultMoonConfig
     )
+import World.Geology.Ore.Types (OreLevers, defaultOreLevers)
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Ocean.Types (OceanMap, OceanDistMap)
 import World.Flora.Types (FloraCatalog, emptyFloraCatalog)
@@ -55,6 +56,7 @@ data WorldGenParams = WorldGenParams
     , wgpLavaPoolDepth ∷ !Int             -- ^ Max lava head above a pool's landing floor (tiles)
     , wgpLavaPoolRadius ∷ !Int            -- ^ Max pool footprint radius (tiles)
     , wgpWaterfallQuantum ∷ !Int          -- ^ Max water-surface drop between adjacent river tiles before a stepped gorge is carved
+    , wgpOreLevers ∷ !OreLevers           -- ^ Resource-abundance levers for the ore deposition pass
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -83,6 +85,7 @@ instance Serialize WorldGenParams where
         put (wgpLavaPoolDepth p)
         put (wgpLavaPoolRadius p)
         put (wgpWaterfallQuantum p)
+        put (wgpOreLevers p)
     get = do
         seed       ← get
         ws         ← get
@@ -101,6 +104,7 @@ instance Serialize WorldGenParams where
         poolDepth  ← get
         poolRadius ← get
         waterfallQ ← get
+        oreLevers  ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -120,6 +124,7 @@ instance Serialize WorldGenParams where
             , wgpLavaPoolDepth    = poolDepth
             , wgpLavaPoolRadius   = poolRadius
             , wgpWaterfallQuantum = waterfallQ
+            , wgpOreLevers        = oreLevers
             , wgpVolcanoCtx       = vc
             }
 
@@ -147,6 +152,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpLavaPoolDepth = 6
     , wgpLavaPoolRadius = 22
     , wgpWaterfallQuantum = 12
+    , wgpOreLevers = defaultOreLevers
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

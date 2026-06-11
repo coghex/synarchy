@@ -108,6 +108,16 @@ worldGetGenDefaultsFn env = do
     Lua.pushnumber (Lua.Number (realToFrac (myPhaseOffset moon)))
     Lua.setfield (Lua.nth 2) "phase_offset"
     Lua.setfield (Lua.nth 2) "moon"
+    -- Resources sub-table
+    let res = wgcResources cfg
+    Lua.newtable
+    Lua.pushnumber (Lua.Number (realToFrac (ryOreAbundance res)))
+    Lua.setfield (Lua.nth 2) "ore_abundance"
+    Lua.pushnumber (Lua.Number (realToFrac (ryIronAbundance res)))
+    Lua.setfield (Lua.nth 2) "iron_abundance"
+    Lua.pushnumber (Lua.Number (realToFrac (ryCopperAbundance res)))
+    Lua.setfield (Lua.nth 2) "copper_abundance"
+    Lua.setfield (Lua.nth 2) "resources"
     -- Climate sub-table
     let cl = wgcClimate cfg
     Lua.newtable
@@ -184,6 +194,7 @@ worldSetGenConfigFn env = do
         oldSun = wgcSun oldCfg
         oldMoon = wgcMoon oldCfg
         oldCl  = wgcClimate oldCfg
+        oldRes = wgcResources oldCfg
 
     -- Top-level
     plateCount ← getIntField "plate_count" (wgcPlateCount oldCfg)
@@ -206,6 +217,11 @@ worldSetGenConfigFn env = do
     cyc  ← getSubInt   "moon" "cycle_days"   (myCycleDays oldMoon)
     poff ← getSubFloat "moon" "phase_offset" (myPhaseOffset oldMoon)
 
+    -- Resources
+    oreAb  ← getSubFloat "resources" "ore_abundance"    (ryOreAbundance oldRes)
+    ironAb ← getSubFloat "resources" "iron_abundance"   (ryIronAbundance oldRes)
+    copAb  ← getSubFloat "resources" "copper_abundance" (ryCopperAbundance oldRes)
+
     -- Climate
     iters  ← getSubInt   "climate" "iterations"       (clIterations oldCl)
     corio  ← getSubFloat "climate" "coriolis_scale"   (clCoriolisScale oldCl)
@@ -226,6 +242,7 @@ worldSetGenConfigFn env = do
             , wgcSun        = SunYaml tilt dayL
             , wgcMoon       = MoonYaml cyc poff
             , wgcClimate    = ClimateYaml iters corio wdrag therm orog evap albedo thc
+            , wgcResources  = ResourcesYaml oreAb ironAb copAb
             }
     Lua.liftIO $ writeIORef (worldGenConfigRef env) newCfg
     return 0

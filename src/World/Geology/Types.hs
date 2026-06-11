@@ -37,6 +37,7 @@ import World.Base (GeoFeatureId(..), GeoCoord(..))
 import World.Chunk.Types (chunkSize)
 import World.Region.Types (RegionCoord(..), RegionalData(..)
                           , emptyRegionalData, regionSize)
+import World.Geology.Ore.Types (OreLevers)
 import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
                                     , GeoScale(..), FeatureShape(..)
                                     , VolcanicFeature(..), SuperVolcanoParams(..)
@@ -270,6 +271,9 @@ data TimelineBuildState = TimelineBuildState
     , tbsClimateState ∷ !ClimateState
     , tbsErosionIntensity ∷ !Float
     , tbsVolcanicActivity ∷ !Float
+    , tbsOreLevers ∷ !OreLevers
+      -- ^ Resource-abundance config levers, threaded to the per-Age
+      --   ore deposition pass ('World.Geology.Ore.buildOreSheets').
     , tbsCoarseOcean ∷ !(HS.HashSet ClimateCoord)
       -- ^ Cached coarse ocean classification for climate updates.
       --   Refreshed at Era boundaries from the current ElevGrid;
