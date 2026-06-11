@@ -23,7 +23,8 @@ hud.fbH = 0
 hud.currentView = "none"  -- "zoomed_in", "zoomed_out", or "none"
 hud.worldId = "main_world" -- default overridden per-context
 
-hud.mapToggleId = nil
+hud.mapToggleId  = nil   -- map-mode toggle (bottom-right, zoom_page)
+hud.toolToggleId = nil   -- tool-mode toggle (bottom-left, world_page)
 
 -- Log icon (top-left HUD button). The slot icon shows the current
 -- log mode; expanded option strip shows the alternate mode.
@@ -143,6 +144,10 @@ function hud.createUI()
         if hud.mapToggleId then
             toggle.destroy(hud.mapToggleId)
             hud.mapToggleId = nil
+        end
+        if hud.toolToggleId then
+            toggle.destroy(hud.toolToggleId)
+            hud.toolToggleId = nil
         end
     end
     if hud.uiCreated and hud.info_page then
@@ -303,7 +308,7 @@ function hud.createUI()
     local toolAnchorX = s.margin
     local toolAnchorY = hud.fbH - s.margin - s.buttonSize
 
-    hud.mapToggleId = toggle.new({
+    hud.toolToggleId = toggle.new({
         name = "tool_mode_toggle",
         page = hud.world_page,
         items = {
@@ -365,7 +370,7 @@ function hud.createUI()
         selectDefaultTool = function()
             -- Default tool is at index 2 in the items list above
             -- (after tool_build at index 1).
-            toggle.select(hud.mapToggleId, 2)
+            toggle.select(hud.toolToggleId, 2)
         end,
     })
 
@@ -672,6 +677,10 @@ function hud.shutdown()
     if hud.mapToggleId then
         toggle.destroy(hud.mapToggleId)
         hud.mapToggleId = nil
+    end
+    if hud.toolToggleId then
+        toggle.destroy(hud.toolToggleId)
+        hud.toolToggleId = nil
     end
     if hud.logToggleId then
         toggle.destroy(hud.logToggleId)

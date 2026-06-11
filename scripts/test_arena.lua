@@ -152,7 +152,9 @@ function testArena.sendTextures(worldId)
         lavaHandle = engine.loadTexture("assets/textures/world/lava/lava.png")
         world.setTexture(worldId, "mat_tile_100", lavaHandle)
     end
-    for vegId = 1, 64 do
+    -- 17 types × 4 variants = IDs 1..68 (keep in sync with
+    -- world_view.sendTexturesToWorld / world_manager.sendVegTextures).
+    for vegId = 1, 68 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then
             world.setTexture(worldId, "veg_tile_" .. vegId, h)
@@ -235,18 +237,31 @@ end
 
 function testArena.onScroll(dx, dy)
     if not testArena.visible then return end
-    -- Forward to the same zoom logic world_view uses
+    -- Same velocity-based zoom as world_view.onScroll. The old direct
+    -- setZoom clamped to [0.1, 1.5], which predates the current zoom
+    -- scale (world_view boots at zoom 64) — one scroll notch would
+    -- have snapped the camera to 1.5.
+    local current = camera.getZoomVelocity()
     local zoom = camera.getZoom()
-    local newZoom = zoom - dy * 0.05
-    newZoom = math.max(0.1, math.min(1.5, newZoom))
-    camera.setZoom(newZoom)
+    local impulse = 0.4 * zoom
+    if dy > 0 then
+        camera.setZoomVelocity(current - impulse)
+    elseif dy < 0 then
+        camera.setZoomVelocity(current + impulse)
+    end
 end
 
 function testArena.onZSliceScroll(dx, dy)
     if not testArena.visible then return end
+    -- Match world_view: manual z-slice control disables auto tracking
+    -- (Home re-enables it there; arena has no rebind, F8 debug only).
+    camera.setZTracking(false)
     local zSlice = camera.getZSlice()
-    local newZ = zSlice + math.floor(dy)
-    camera.setZSlice(newZ)
+    if dy > 0 then
+        camera.setZSlice(zSlice + 1)
+    elseif dy < 0 then
+        camera.setZSlice(zSlice - 1)
+    end
 end
 
 function testArena.onKeyDown(key)

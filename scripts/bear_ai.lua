@@ -148,15 +148,21 @@ end
 
 local function bearRestUtility(uid, s, params)
     if unitAi.isGoalActive(s, "rest") then return 2.0 end
-    if not bearStanding(s) then return -math.huge end
     if unitAi.isGoalActive(s, "attack")
        or unitAi.isGoalActive(s, "retreat") then
         return -math.huge
     end
+    -- Recovery: combat stole the rest goal mid-cycle (commandAttack's
+    -- setGoal overwrites activeGoal). Once the fight ends, the bear is
+    -- still sitting/lying/sleeping — every other ambient candidate
+    -- requires standing, so without this branch no action can ever
+    -- fire again and the bear freezes. Resume the rest machine; it
+    -- stands the bear back up through the normal phase exits.
+    if s.restPhase or not bearStanding(s) then return 2.0 end
     -- Time-since-last-rest pressure.
     local since = engine.gameTime() - (s.lastRestAt or 0)
     local pressure = since / params.rest_interval - 0.5
-    return math.max(-math.huge, math.min(1.0, pressure))
+    return math.min(1.0, pressure)
 end
 
 local function advanceRestPhase(uid, s, params)

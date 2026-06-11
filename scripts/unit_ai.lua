@@ -411,7 +411,11 @@ local function wanderExecute(uid, s, params)
     local tx = info.gridX + math.cos(angle) * dist
     local ty = info.gridY + math.sin(angle) * dist
 
-    unit.moveTo(uid, tx, ty, params.wander_speed)
+    -- speed_frac_wander × max_speed. Computed inline because the
+    -- speedFor helper is declared further down the file (locals
+    -- aren't hoisted, so referencing it here would hit a nil global).
+    local maxSpd = unit.getMaxSpeed(uid) or 3.0
+    unit.moveTo(uid, tx, ty, maxSpd * (params.speed_frac_wander or 0.5))
 end
 
 -----------------------------------------------------------
@@ -707,7 +711,11 @@ local function drinkFromSourceExecute(uid, s, params)
     if s.sourcePhase == "drinking" then
         local hyd    = unit.getStat(uid, "hydration") or 0
         local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration") or 0
-        if maxHyd > 0 and hyd / maxHyd >= 0.95 then
+        -- maxHyd <= 0 means the stat went missing mid-drink (debug
+        -- edit, def change). Bail into the ascent rather than holding
+        -- the math.huge phase lock forever on a condition that can
+        -- never become true.
+        if maxHyd <= 0 or hyd / maxHyd >= 0.95 then
             s.sourcePhase = "ascending"
             unit.transitionTo(uid, "crouching", STRIDE_ASCEND)
         end
@@ -1501,11 +1509,14 @@ end
 local function notifyAlliesUtility(uid, s, params)
     if not isGoalActive(s, "notify_allies") then return -math.huge end
     -- Lock in once a phase is active: a half-done broadcast or walk
-    -- shouldn't be pre-empted by ambient utility (drink-from-canteen
-    -- still wins via the dire-thirst path when the unit is dying,
-    -- since that resets notifyPhase implicitly when activity changes
-    -- to drinking — see the activity short-circuit at top of tickOne).
-    if s.notifyPhase then return math.huge end
+    -- shouldn't be pre-empted by ambient utility or player commands.
+    -- The lock is FINITE (not math.huge) so dire needs still win:
+    -- drink/eat scale to ~10 as the meter empties, crossing 6.0 at
+    -- ~60% deficit — a genuinely thirsty notifier pauses to drink
+    -- and the phase state resumes afterwards. 6.0 also ties engage,
+    -- and combat candidates are earlier in the action list, so an
+    -- attacked notifier defends itself (ties go to list order).
+    if s.notifyPhase then return 6.0 end
     return params.goal_notify_weight
 end
 
@@ -1643,10 +1654,11 @@ end
 -- those materials. On first selection, the unit "claims" a delivery
 -- plan onto aiState[uid].deliveryClaim — a map {[type] = count} —
 -- so other acolytes computing utility see reduced remaining need and
--- only the minimum number of them commit. Lock-in: utility returns
--- math.huge while a claim is held so the walk-and-deliver sequence
--- isn't pre-empted by routine wander/follow_command. Dire needs
--- (drink/eat) are -math.huge above any cap, so they still interrupt.
+-- only the minimum number of them commit. Lock-in: utility returns a
+-- finite 6.0 while a claim is held so the walk-and-deliver sequence
+-- isn't pre-empted by routine wander/follow_command, while dire needs
+-- (drink/eat, ~10 when the meter is nearly empty) still interrupt;
+-- the claim persists through the interruption and delivery resumes.
 --
 -- Reservations from non-existent units are ignored (stale-claim
 -- self-heal) so a dying acolyte's lock doesn't strand materials.
@@ -1730,7 +1742,8 @@ end
 local function deliverUtility(uid, s, params)
     -- Locked in once claim is set. The lock survives across ticks so
     -- the walk-and-deliver sequence isn't yanked by ambient utility.
-    if s.deliveryClaim then return math.huge end
+    -- Finite (see header comment) so dire drink/eat still preempt.
+    if s.deliveryClaim then return 6.0 end
 
     local info = unit.getInfo(uid)
     if not info then return -math.huge end

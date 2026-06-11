@@ -501,6 +501,15 @@ function debugOverlay.tryClaimClick(button, x, y)
     return false
 end
 
+-- Clear the claim dedup when the physical button releases. Without
+-- this, lastClaim persisted across clicks, so a SECOND click at the
+-- exact same pixel (common: toggling the spawn list without moving
+-- the mouse) matched the stale claim — swallowed but never fired.
+-- onMouseUp is an engine broadcast and fires on every release.
+function debugOverlay.onMouseUp(button, x, y, downRoute)
+    debugOverlay.lastClaim = nil
+end
+
 -----------------------------------------------------------
 -- Input hooks
 -----------------------------------------------------------

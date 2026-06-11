@@ -1913,12 +1913,16 @@ end
 
 -- Stable hash of (uid, activeTab, items signature) so we only rebuild
 -- the list when something actually changed. Fill is included so a
--- depleting canteen redraws when its label needs to change.
+-- depleting canteen redraws when its label needs to change, and
+-- stackCount so consuming one item from a stack of identical rows
+-- (grouped list keeps the same single entry) updates the "×N" label,
+-- tab counts, and total-weight footer.
 local function computeInvKey(uid, activeTab, items)
     local parts = { tostring(uid or ""), activeTab or "" }
     for _, it in ipairs(items) do
         parts[#parts + 1] = it.defName .. "/" .. tostring(it.currentFill)
             .. "/" .. (it.equipped and "e" or "i")
+            .. "/" .. tostring(it.stackCount or 1)
     end
     return table.concat(parts, "|")
 end

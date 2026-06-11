@@ -114,6 +114,11 @@ local function destroyOwned()
     for _, id in ipairs(eventLog.ownedTabbars) do tabbar.destroy(id) end
     for _, id in ipairs(eventLog.ownedScrollbars) do scrollbar.destroy(id) end
     for _, id in ipairs(eventLog.ownedPanels)  do panel.destroy(id)  end
+    -- Row labels are owned by rowEntries (renderRows destroys + rebuilds
+    -- them per scroll); they are NOT in ownedLabels — see renderRows.
+    for _, entry in ipairs(eventLog.rowEntries) do
+        for _, lid in ipairs(entry.rowLabels or {}) do label.destroy(lid) end
+    end
     -- Click overlay boxes are raw UI elements (not wrapped); delete
     -- them directly. The same handles live as keys in rowClickBoxes.
     for handle, _ in pairs(eventLog.rowClickBoxes) do
@@ -413,7 +418,6 @@ renderRows = function()
             label.getElementHandle(emptyId),
             L.contentX, L.contentY + L.s.fontSize)
         UI.setZIndex(label.getElementHandle(emptyId), 504)
-        table.insert(eventLog.ownedLabels, emptyId)
         table.insert(eventLog.rowEntries, { rowLabels = { emptyId } })
         return
     end
@@ -474,7 +478,9 @@ renderRows = function()
                 label.getElementHandle(id),
                 x, rowY + L.s.fontSize)
             UI.setZIndex(label.getElementHandle(id), 504)
-            table.insert(eventLog.ownedLabels, id)
+            -- Tracked via rowLabels only: renderRows destroys these on
+            -- every re-render, so also appending to ownedLabels just
+            -- accumulated stale ids for the life of the panel.
             table.insert(rowLabels, id)
         end
 

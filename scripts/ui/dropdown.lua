@@ -233,6 +233,10 @@ function dropdown.new(params)
         scrollbarId = nil,
         scrollOffset = 0,
         needsScroll = false,
+        -- Stored so openList can stack the option list above the
+        -- display box; previously only applied via UI.setZIndex and
+        -- never kept, so dd.zIndex read back as nil there.
+        zIndex = params.zIndex,
     }
     
     if params.default then

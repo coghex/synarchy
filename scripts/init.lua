@@ -383,7 +383,7 @@ function game.onMouseDown(button, x, y)
                           -- single call replaces a manual setToolMode.
                           local toggle = require("scripts.ui.toggle")
                           toggle.applyOptionByName(
-                              hud.mapToggleId, "tool_info")
+                              hud.toolToggleId, "tool_info")
                           -- selectTile uses the direct tile-coord
                           -- select API — the cursor's pixel-hover state
                           -- has already moved to the menu, so the
@@ -498,6 +498,27 @@ end
 function game.shutdown()
     if debugScriptId then
         engine.killScript(debugScriptId)
+    end
+    if debugAnimPanelScriptId then
+        engine.killScript(debugAnimPanelScriptId)
+    end
+    if unitInfoV2ScriptId then
+        engine.killScript(unitInfoV2ScriptId)
+    end
+    if unitResourcesScriptId then
+        engine.killScript(unitResourcesScriptId)
+    end
+    if unitAiScriptId then
+        engine.killScript(unitAiScriptId)
+    end
+    if buildToolScriptId then
+        engine.killScript(buildToolScriptId)
+    end
+    if buildingSpawnScriptId then
+        engine.killScript(buildingSpawnScriptId)
+    end
+    if cargoInventoryPanelScriptId then
+        engine.killScript(cargoInventoryPanelScriptId)
     end
     if shellScriptId then
         engine.killScript(shellScriptId)

@@ -128,8 +128,12 @@ end
 local function closeOptions(grp)
     if not grp.openPopup then return end
 
+    -- Full delete, not removeFromPage: openOptions creates fresh
+    -- sprites every time, and removeFromPage only detaches (the
+    -- element handle stays alive in the page manager) — using it
+    -- here leaked one element per option per open/close cycle.
     for _, opt in ipairs(grp.openPopup.sprites) do
-        UI.removeFromPage(grp.page, opt.spriteId)
+        UI.deleteElement(opt.spriteId)
     end
 
     grp.openPopup = nil

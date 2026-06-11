@@ -21,6 +21,8 @@
 local dragSelect = package.loaded["scripts.unit_drag_select"] or {}
 package.loaded["scripts.unit_drag_select"] = dragSelect
 
+local hud = require("scripts.hud")
+
 dragSelect.state    = "idle"
 dragSelect.startX   = 0
 dragSelect.startY   = 0
@@ -131,7 +133,7 @@ function dragSelect.update(dt)
             -- select via hud.onMouseDown. Now that we know it was a
             -- drag, undo that so we don't leave a tile selected
             -- behind the box.
-            if world and world.clearWorldCursorSelect and hud and hud.worldId then
+            if world.clearWorldCursorSelect and hud.worldId then
                 world.clearWorldCursorSelect(hud.worldId)
             end
         end
