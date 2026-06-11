@@ -9,7 +9,6 @@ import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
-import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.Log (logDebug, logError, logWarn, logInfo, LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Thread
@@ -65,7 +64,6 @@ runInputLoop env stateRef = do
         -- frame that never pops (unbounded stack growth).
         ok ← catch
           (do
-            frameStart ← getCurrentTime
             let sharedInputRef = inputStateRef env
             inpSt ← readIORef sharedInputRef
             newInpSt ← processInputs env inpSt
@@ -190,9 +188,25 @@ processInput env inpSt event = case event of
                 logDebug logger CatInput "Action triggered: escape"
                 Q.writeQueue (luaQueue env) LuaUIEscape
 
-        return $ updateKeyState inpSt glfwKey keyState mods
+        -- While text input has focus, key PRESSES are not recorded in
+        -- inpKeyStates — the map only ever reflects game-mode input, so
+        -- pollers of it (camera arrow-pan, Lua isKeyDown/isActionDown)
+        -- can't react to keys typed into the shell or a textbox.
+        -- RELEASES are always recorded: a key held across a focus
+        -- change must still get its release, or it sticks "down".
+        let textFocused = case (shellMode, uiFocus) of
+              (TextInputMode _, _) → True
+              (_, Just _)          → True
+              _                    → False
+        return $ if textFocused ∧ keyState ≢ GLFW.KeyState'Released
+            then inpSt
+            else updateKeyState inpSt glfwKey keyState mods
 
     InputCharEvent c → do
+        -- Backtick is INTENTIONALLY untypeable in every text field:
+        -- it's the shell-toggle key (KeyGrave above), and letting the
+        -- char through would type a '`' into the shell or textbox the
+        -- press just toggled/defocused.
         when (c ≠ '`') $ do
           focusMgr ← readIORef (focusManagerRef env)
           uiFocus ← atomicModifyIORef' (uiManagerRef env) validateFocus
@@ -208,18 +222,25 @@ processInput env inpSt event = case event of
             (x, y) = pos
         logger ← readIORef (loggerRef env)
         
-        when (state ≡ GLFW.MouseButtonState'Pressed) $ do
+        -- Each press is routed exactly one way (ClickRoute): to the
+        -- game (LuaMouseDownEvent), to a UI element (LuaUIClickEvent /
+        -- right-click), or swallowed with no Lua event (tooltip lock,
+        -- minimized window). The route is recorded per button so the
+        -- matching release can hand it to Lua, and swallowed presses
+        -- are kept out of inpMouseBtns so button pollers (camera
+        -- middle-drag) don't react to clicks the tooltip ate.
+        mRoute ← if state ≢ GLFW.MouseButtonState'Pressed then return Nothing else fmap Just $ do
             logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
-            
+
             (winW, winH) ← readIORef (windowSizeRef env)
             (fbW, fbH) ← readIORef (framebufferSizeRef env)
-            
+
             let scaleX = fromIntegral fbW / fromIntegral winW
                 scaleY = fromIntegral fbH / fromIntegral winH
                 mouseX = realToFrac x * scaleX
                 mouseY = realToFrac y * scaleY
-            
+
             logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
 
             uiMgr ← readIORef (uiManagerRef env)
@@ -229,16 +250,20 @@ processInput env inpSt event = case event of
             -- division above yields NaN/Infinity coords. Drop the
             -- click rather than feed NaN into hit-tests and Lua
             -- camera math.
-            when (winW > 0 ∧ winH > 0) $ case btn of
+            if not (winW > 0 ∧ winH > 0) then return ClickSwallowed else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
               -- Falls through to a normal mouse-down event when nothing
               -- is shown, so other middle-click behavior (panning, etc.)
               -- still reaches Lua.
               GLFW.MouseButton'3 →
                 if isTooltipVisible uiMgr
-                  then atomicModifyIORef' (uiManagerRef env) $ \m →
-                           (toggleTooltipLock m, ())
-                  else Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                  then do
+                    atomicModifyIORef' (uiManagerRef env) $ \m →
+                        (toggleTooltipLock m, ())
+                    return ClickSwallowed
+                  else do
+                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                    return ClickGame
 
               -- All other buttons: if a tooltip is locked, intercept the
               -- click. Inside the locked box → swallow (the locked
@@ -251,7 +276,7 @@ processInput env inpSt event = case event of
                 let locked      = isTooltipLocked uiMgr
                     clickInside = locked ∧ isPointInLockedTooltip mousePos uiMgr
                 if clickInside
-                  then return ()
+                  then return ClickSwallowed
                   else do
                     when locked $
                         atomicModifyIORef' (uiManagerRef env) $ \m →
@@ -269,9 +294,11 @@ processInput env inpSt event = case event of
                                     (LuaUIClickEvent elemHandle callback)
                                 logDebug logger CatUI $
                                     "UI element left-clicked: " <> callback
+                                return ClickUI
                             Nothing → do
                                 Q.writeQueue lq LuaUIFocusLost
                                 Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                                return ClickGame
 
                       GLFW.MouseButton'2 →
                         case findRightClickableElementAt mousePos uiMgr' of
@@ -280,28 +307,50 @@ processInput env inpSt event = case event of
                                     (LuaUIRightClickEvent elemHandle callback)
                                 logDebug logger CatUI $
                                     "UI element right-clicked: " <> callback
-                            Nothing →
+                                return ClickUI
+                            Nothing → do
                                 Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                                return ClickGame
 
-                      _ → Q.writeQueue lq (LuaMouseDownEvent btn x y)
-        
+                      _ → do
+                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        return ClickGame
+
+        -- The release ALWAYS goes to Lua — UI widget drags (slider
+        -- knob, scrollbar tab) start from a LuaUIClickEvent and rely
+        -- on uiManager.onMouseUp to end them. The press's route rides
+        -- along so handlers wanting strict down/up pairing can filter
+        -- on "game".
         when (state ≡ GLFW.MouseButtonState'Released) $ do
             logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
-            Q.writeQueue lq (LuaMouseUpEvent btn x y)
-        
-        return $ updateMouseState inpSt btn pos state
+            let downRoute = Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt)
+            Q.writeQueue lq (LuaMouseUpEvent btn x y downRoute)
+
+        return $ case mRoute of
+            Just route → inpSt
+                { inpMousePos    = pos
+                , inpMouseRoutes = Map.insert btn route (inpMouseRoutes inpSt)
+                , inpMouseBtns   = if route ≡ ClickSwallowed
+                    then inpMouseBtns inpSt
+                    else Map.insert btn True (inpMouseBtns inpSt)
+                }
+            Nothing → inpSt
+                { inpMousePos  = pos
+                , inpMouseBtns = Map.insert btn False (inpMouseBtns inpSt)
+                }
     InputCursorMove x y → 
         return $ inpSt { inpMousePos = (x, y) }
     InputScrollEvent x y → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
         
-        let shiftHeld = case Map.lookup GLFW.Key'LeftShift (inpKeyStates inpSt) of
-                Just ks → keyPressed ks
-                Nothing → case Map.lookup GLFW.Key'RightShift (inpKeyStates inpSt) of
-                    Just ks → keyPressed ks
-                    Nothing → False
+        -- Check both shifts independently: released keys keep a map
+        -- entry with keyPressed=False, so a nested left-then-right
+        -- lookup would stop consulting RightShift after the first
+        -- LeftShift press of the session.
+        let shiftDown k = maybe False keyPressed (Map.lookup k (inpKeyStates inpSt))
+            shiftHeld = shiftDown GLFW.Key'LeftShift ∨ shiftDown GLFW.Key'RightShift
         
         if shiftHeld
         then do
@@ -325,8 +374,8 @@ processInput env inpSt event = case event of
                 Nothing → do
                     logDebug logger CatInput "Scroll: game scroll (camera zoom)"
                     Q.writeQueue (luaQueue env) (LuaScrollEvent x y)
-        
-        return $ updateScrollState inpSt x y
+
+        return inpSt
     InputWindowEvent winEv → do
         logger ← readIORef (loggerRef env)
         case winEv of
@@ -365,15 +414,6 @@ updateKeyState state key keyState mods = state
 updateWindowState ∷ InputState → WindowEvent → InputState
 updateWindowState state (WindowFocus focused) = state { inpWindowFocused = focused }
 updateWindowState state _ = state
-
-updateMouseState ∷ InputState → GLFW.MouseButton → (Double, Double) → GLFW.MouseButtonState → InputState
-updateMouseState state btn pos btnState = state
-    { inpMousePos = pos
-    , inpMouseBtns = Map.insert btn (btnState ≡ GLFW.MouseButtonState'Pressed) (inpMouseBtns state)
-    }
-
-updateScrollState ∷ InputState → Double → Double → InputState
-updateScrollState state x y = state { inpScrollDelta = (x, y) }
 
 isKeyDown ∷ GLFW.KeyState → Bool
 isKeyDown GLFW.KeyState'Pressed   = True

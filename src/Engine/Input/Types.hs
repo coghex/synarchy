@@ -5,14 +5,32 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
 
-data InputState = InputState 
+data InputState = InputState
     { inpKeyStates ∷ Map.Map GLFW.Key KeyState
     , inpMousePos  ∷ (Double, Double)    -- ^ Current mouse position
-    , inpMouseDelta ∷ (Double, Double)   -- ^ Mouse movement since last frame
     , inpMouseBtns ∷ Map.Map GLFW.MouseButton Bool
-    , inpScrollDelta ∷ (Double, Double)  -- ^ Scroll wheel delta
+    , inpMouseRoutes ∷ Map.Map GLFW.MouseButton ClickRoute
+      -- ^ Where each button's most recent press was routed, so the
+      --   matching release can tell Lua what its down did
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
     } deriving (Show, Eq)
+
+-- | Where the input thread routed a mouse press. onMouseUp always
+--   fires on physical release (UI widget drags that started from a
+--   LuaUIClickEvent depend on it to end); the route travels with the
+--   release as onMouseUp's 4th argument so handlers that want strict
+--   down/up pairing can filter on \"game\".
+data ClickRoute
+    = ClickGame      -- ^ Dispatched as LuaMouseDownEvent (game world)
+    | ClickUI        -- ^ A UI element ate it (LuaUIClickEvent / right-click)
+    | ClickSwallowed -- ^ Consumed with no Lua event (tooltip lock, minimized window)
+    deriving (Show, Eq)
+
+-- | Name handed to Lua as onMouseUp's 4th argument.
+clickRouteText ∷ ClickRoute → Text
+clickRouteText ClickGame      = "game"
+clickRouteText ClickUI        = "ui"
+clickRouteText ClickSwallowed = "swallowed"
 
 -- * Input events
 
@@ -127,9 +145,15 @@ fromGLFWKey GLFW.Key'LeftControl = KeyCtrl
 fromGLFWKey GLFW.Key'RightControl = KeyCtrl
 fromGLFWKey GLFW.Key'LeftAlt = KeyAlt
 fromGLFWKey GLFW.Key'RightAlt = KeyAlt
+fromGLFWKey GLFW.Key'LeftSuper = KeySuper
+fromGLFWKey GLFW.Key'RightSuper = KeySuper
+fromGLFWKey GLFW.Key'Home = KeyHome
+fromGLFWKey GLFW.Key'End = KeyEnd
 fromGLFWKey GLFW.Key'GraveAccent = KeyGrave
 fromGLFWKey GLFW.Key'Minus = KeyMinus
 fromGLFWKey GLFW.Key'Equal = KeyEqual
+fromGLFWKey GLFW.Key'Comma = KeyComma
+fromGLFWKey GLFW.Key'Period = KeyPeriod
 fromGLFWKey GLFW.Key'F1 = KeyF1
 fromGLFWKey GLFW.Key'F2 = KeyF2
 fromGLFWKey GLFW.Key'F3 = KeyF3
@@ -216,40 +240,28 @@ keyToText KeyHome = "Home"
 keyToText KeyEnd = "End"
 keyToText KeyUnknown = "Unknown"
 
+-- | Inverse of 'keyToText', built mechanically over the whole enum so
+--   the two can never drift. Every name 'keyToText' can hand to Lua is
+--   guaranteed to parse back. KeyUnknown is excluded — "Unknown" is
+--   not a bindable name.
 textToKey ∷ Text → Maybe Key
-textToKey "A" = Just KeyA
-textToKey "B" = Just KeyB
-textToKey "C" = Just KeyC
-textToKey "D" = Just KeyD
-textToKey "E" = Just KeyE
-textToKey "F" = Just KeyF
-textToKey "G" = Just KeyG
-textToKey "H" = Just KeyH
-textToKey "I" = Just KeyI
-textToKey "J" = Just KeyJ
-textToKey "K" = Just KeyK
-textToKey "L" = Just KeyL
-textToKey "M" = Just KeyM
-textToKey "N" = Just KeyN
-textToKey "O" = Just KeyO
-textToKey "P" = Just KeyP
-textToKey "Q" = Just KeyQ
-textToKey "R" = Just KeyR
-textToKey "S" = Just KeyS
-textToKey "T" = Just KeyT
-textToKey "U" = Just KeyU
-textToKey "V" = Just KeyV
-textToKey "W" = Just KeyW
-textToKey "X" = Just KeyX
-textToKey "Y" = Just KeyY
-textToKey "Z" = Just KeyZ
-textToKey "Space" = Just KeySpace
-textToKey "Enter" = Just KeyEnter
-textToKey "Escape" = Just KeyEscape
-textToKey "Tab" = Just KeyTab
-textToKey "Backspace" = Just KeyBackspace
-textToKey "Grave" = Just KeyGrave
-textToKey _ = Nothing
+textToKey t = Map.lookup t textToKeyMap
+
+textToKeyMap ∷ Map.Map Text Key
+textToKeyMap = Map.fromList
+    [ (keyToText k, k) | k ← [minBound .. maxBound], k ≢ KeyUnknown ]
+
+-- | All GLFW keys that map to a logical key — derived from
+--   'fromGLFWKey' so the inverse can't drift. Merged modifiers fan out
+--   to both sides (KeyShift → [LeftShift, RightShift], etc.).
+keyToGLFW ∷ Key → [GLFW.Key]
+keyToGLFW k = Map.findWithDefault [] k keyToGLFWMap
+
+keyToGLFWMap ∷ Map.Map Key [GLFW.Key]
+keyToGLFWMap = Map.fromListWith (flip (<>))
+    [ (fromGLFWKey g, [g])
+    | g ← [minBound .. maxBound]
+    , fromGLFWKey g ≢ KeyUnknown ]
 
 defaultKeyState ∷ KeyState
 defaultKeyState = KeyState
@@ -269,8 +281,7 @@ defaultInputState ∷ InputState
 defaultInputState = InputState
     { inpKeyStates = Map.empty
     , inpMousePos = (0.0, 0.0)
-    , inpMouseDelta = (0.0, 0.0)
     , inpMouseBtns = Map.empty
-    , inpScrollDelta = (0.0, 0.0)
+    , inpMouseRoutes = Map.empty
     , inpWindowFocused = True
     }

@@ -152,6 +152,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.Magma.Shape
                    Test.Headless.Sim.Seam
+                   Test.Headless.Input.KeyNames
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -169,6 +170,7 @@ test-suite synarchy-test-headless
     build-depends: base
                 , base-unicode-symbols
                 , containers
+                , GLFW-b
                 , hspec
                 , synarchy
                 , text

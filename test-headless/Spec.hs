@@ -17,6 +17,7 @@ import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
+import qualified Test.Headless.Input.KeyNames as InputKeyNames
 
 main ∷ IO ()
 main = hspec $ do
@@ -35,3 +36,4 @@ main = hspec $ do
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
+    describe "Input.KeyNames" InputKeyNames.spec

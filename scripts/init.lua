@@ -400,7 +400,15 @@ function game.onMouseDown(button, x, y)
     end
 end
 
-function game.onMouseUp(button, x, y)
+-- onMouseUp fires on EVERY physical release — unlike onMouseDown,
+-- which only fires for presses that reached the game world (UI
+-- elements and the tooltip lock eat theirs). UI widget drags (slider
+-- knob, scrollbar tab) start from a UI click callback and depend on
+-- the unconditional release to end. downRoute says where the matching
+-- press went: "game" (onMouseDown fired), "ui" (a UI element ate it),
+-- or "swallowed" (tooltip lock / minimized window). To pair strictly
+-- with onMouseDown, guard on downRoute == "game".
+function game.onMouseUp(button, x, y, downRoute)
 end
 
 function game.onKeyDown(key)

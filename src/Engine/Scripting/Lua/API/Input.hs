@@ -63,12 +63,14 @@ isMouseButtonDownFn backendState = do
     Just btn → do
       isDown ← Lua.liftIO $ do
         inputState ← readIORef (lbsInputState backendState)
-        let button = case btn of
-              1 → GLFW.MouseButton'1
-              2 → GLFW.MouseButton'2
-              3 → GLFW.MouseButton'3
-              _ → GLFW.MouseButton'1
-        return $ Map.findWithDefault False button (inpMouseBtns inputState)
+        let mButton = case btn of
+              1 → Just GLFW.MouseButton'1
+              2 → Just GLFW.MouseButton'2
+              3 → Just GLFW.MouseButton'3
+              _ → Nothing
+        return $ case mButton of
+          Just button → Map.findWithDefault False button (inpMouseBtns inputState)
+          Nothing     → False
       Lua.pushboolean isDown
     Nothing → Lua.pushboolean False
   return 1
@@ -95,25 +97,34 @@ getWorldCoordFn env backendState = do
   sy ← Lua.tonumber 2
   case (sx, sy) of
     (Just (Lua.Number screenX), Just (Lua.Number screenY)) → do
-      (worldX, worldY) ← Lua.liftIO $ do
-        inputState ← readIORef (lbsInputState backendState)
+      mCoord ← Lua.liftIO $ do
         camera ← readIORef (cameraRef env)
         (winW, winH) ← readIORef (windowSizeRef env)
         (fbW, fbH) ← readIORef (framebufferSizeRef env)
-        let aspect = fromIntegral fbW / fromIntegral fbH
-            zoom = realToFrac (camZoom camera)
-            viewWidth = zoom * aspect
-            viewHeight = zoom
-            normX = screenX / fromIntegral winW
-            normY = screenY / fromIntegral winH
-            viewX = (normX * 2.0 - 1.0) * viewWidth
-            viewY = (normY * 2.0 - 1.0) * viewHeight
-            (camX, camY) = camPosition camera
-            worldX' = viewX + realToFrac camX
-            worldY' = viewY + realToFrac camY
-        return (worldX', worldY')
-      Lua.pushnumber (Lua.Number worldX)
-      Lua.pushnumber (Lua.Number worldY)
+        -- Minimized window: sizes are 0 and the divisions below would
+        -- hand NaN to Lua camera math. Report "no coordinate" instead.
+        if winW ≤ 0 ∨ winH ≤ 0 ∨ fbH ≤ 0
+          then return Nothing
+          else do
+            let aspect = fromIntegral fbW / fromIntegral fbH
+                zoom = realToFrac (camZoom camera)
+                viewWidth = zoom * aspect
+                viewHeight = zoom
+                normX = screenX / fromIntegral winW
+                normY = screenY / fromIntegral winH
+                viewX = (normX * 2.0 - 1.0) * viewWidth
+                viewY = (normY * 2.0 - 1.0) * viewHeight
+                (camX, camY) = camPosition camera
+                worldX' = viewX + realToFrac camX
+                worldY' = viewY + realToFrac camY
+            return $ Just (worldX', worldY')
+      case mCoord of
+        Just (worldX, worldY) → do
+          Lua.pushnumber (Lua.Number worldX)
+          Lua.pushnumber (Lua.Number worldY)
+        Nothing → do
+          Lua.pushnil
+          Lua.pushnil
     _ → do
       Lua.pushnil
       Lua.pushnil

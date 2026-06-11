@@ -14,13 +14,13 @@ setupCallbacks window el queue = do
     GLFW.setKeyCallback window
         (Just $ keyCallback queue el)
     GLFW.setCharCallback window
-        (Just $ charCallback queue)
-    GLFW.setMouseButtonCallback window 
-        (Just $ mouseCallback queue)
-    GLFW.setCursorPosCallback window 
+        (Just $ charCallback queue el)
+    GLFW.setMouseButtonCallback window
+        (Just $ mouseCallback queue el)
+    GLFW.setCursorPosCallback window
         (Just $ cursorCallback queue)
-    GLFW.setScrollCallback window 
-        (Just $ scrollCallback queue)
+    GLFW.setScrollCallback window
+        (Just $ scrollCallback queue el)
     GLFW.setWindowSizeCallback window 
         (Just $ resizeCallback queue)
     GLFW.setFramebufferSizeCallback window
@@ -39,31 +39,37 @@ clearGLFWCallbacks window = do
     GLFW.setFramebufferSizeCallback window Nothing
     GLFW.setWindowFocusCallback window Nothing
 
+-- | Discard user-intent input (keys, chars, clicks, scroll) unless the
+--   engine is running, to prevent stale events queued during startup.
+--   Window-state callbacks (cursor position, resize, focus) stay
+--   ungated — they sync state, and dropping them would leave it stale.
+whenRunning ∷ IORef EngineLifecycle → IO () → IO ()
+whenRunning el act = do
+    lifecycle ← readIORef el
+    when (lifecycle ≡ EngineRunning) act
+
 keyCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
             → GLFW.Key → Int → GLFW.KeyState → GLFW.ModifierKeys → IO ()
-keyCallback queue el _win key _scancode keyState mods = do
-  -- Discard input during startup to prevent stale events
-  lifecycle ← readIORef el
-  case lifecycle of
-    EngineRunning → writeQueue queue $ InputKeyEvent key keyState mods
-    _             → return ()
+keyCallback queue el _win key _scancode keyState mods = whenRunning el $
+    writeQueue queue $ InputKeyEvent key keyState mods
 
-charCallback ∷ Queue InputEvent → GLFW.Window → Char → IO ()
-charCallback queue _win char = do
+charCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window → Char → IO ()
+charCallback queue el _win char = whenRunning el $
     writeQueue queue $ InputCharEvent char
 
-mouseCallback ∷ Queue InputEvent → GLFW.Window → GLFW.MouseButton
-              → GLFW.MouseButtonState → GLFW.ModifierKeys → IO ()
-mouseCallback queue _win btn state mods = do
-    (x, y) ← GLFW.getCursorPos _win
+mouseCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
+              → GLFW.MouseButton → GLFW.MouseButtonState → GLFW.ModifierKeys → IO ()
+mouseCallback queue el win btn state mods = whenRunning el $ do
+    (x, y) ← GLFW.getCursorPos win
     writeQueue queue $ InputMouseEvent btn (x, y) state
 
 cursorCallback ∷ Queue InputEvent → GLFW.Window → Double → Double → IO ()
 cursorCallback queue _win x y = do
     writeQueue queue $ InputCursorMove x y
 
-scrollCallback ∷ Queue InputEvent → GLFW.Window → Double → Double → IO ()
-scrollCallback queue _win x y =
+scrollCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
+               → Double → Double → IO ()
+scrollCallback queue el _win x y = whenRunning el $
     writeQueue queue $ InputScrollEvent x y
 
 resizeCallback ∷ Queue InputEvent → GLFW.Window → Int → Int → IO ()

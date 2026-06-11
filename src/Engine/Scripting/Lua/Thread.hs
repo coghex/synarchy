@@ -27,7 +27,7 @@ import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import World.State.Types (wmWorlds, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Event.Types (Event(..))
-import Engine.Input.Types (InputState, keyToText)
+import Engine.Input.Types (InputState, keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
@@ -507,14 +507,19 @@ processLuaMsg env ls stateRef msg = case msg of
           _                  → 0
     broadcastToModules ls "onMouseDown"
       [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
-  LuaMouseUpEvent button x y → do
+  LuaMouseUpEvent button x y downRoute → do
     let buttonNum = case button of
           GLFW.MouseButton'1 → 1
           GLFW.MouseButton'2 → 2
           GLFW.MouseButton'3 → 3
           _                  → 0
+    -- onMouseUp fires on every physical release (UI widget drags
+    -- depend on it); the 4th arg says where the matching press was
+    -- routed ("game"/"ui"/"swallowed") so handlers can pair with
+    -- onMouseDown by filtering on "game".
     broadcastToModules ls "onMouseUp"
-      [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
+      [ ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y
+      , ScriptString (clickRouteText downRoute) ]
   LuaScrollEvent dx dy → do
     broadcastToModules ls "onScroll"
       [ ScriptNumber (realToFrac dx)
