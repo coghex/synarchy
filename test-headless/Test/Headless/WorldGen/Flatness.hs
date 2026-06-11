@@ -26,6 +26,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
 import World.Types
 import World.Constants (seaLevel)
@@ -92,16 +93,16 @@ flatLandCounts lc =
             ]
     in (length (filter id landFlags), length landFlags)
 
-spec ∷ Spec
-spec = aroundAll withHeadlessEngine $ do
+spec ∷ SpecWith EngineEnv
+spec = do
 
     describe "Biome flatness invariants" $
-        forM_ [(42 ∷ Int, "flat42"), (7, "flat7")] $ \(seed, pid) →
+        forM_ [42 ∷ Int, 7] $ \seed →
             it ("wetland gating + plains existence hold (w64 seed "
                 ⧺ show seed ⧺ ")") $ \env → do
-                sendWorldCommand env
-                    (WorldInit (WorldPageId pid) (fromIntegral seed) 64 3)
-                ws ← waitForWorldInit env (WorldPageId pid) 120
+                -- Shared worlds: 42/64/3 is the canonical world, and
+                -- 7/64/3 is also read by BorderProbe.
+                ws ← sharedWorld env (fromIntegral seed) 64 3
                 tiles ← getWorldTileData ws
                 let chunks = HM.toList (wtdChunks tiles)
 

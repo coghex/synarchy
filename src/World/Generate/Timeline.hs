@@ -236,10 +236,18 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
     -- Filtered once per chunk, then per-row Y-band sweep + per-tile
     -- bbox-wrap check inside the ST loop. The Y-band sweep (audit
     -- #23) computes the active event subset once per row instead of
-    -- once per tile, since bbox Y extent is unaffected by u-axis
-    -- wrap. For chunks far from the cylindrical seam (the common
-    -- case) pre-wrap gy uniquely identifies the row; tileInBBoxWrapped
-    -- still does the final per-tile correctness check.
+    -- once per tile. The row filter MUST be wrap-aware: gy = (v−u)/2,
+    -- so wrapping u by ±w shifts a tile's effective Δy against the
+    -- bbox centre by ±w/2 — 'tileInBBoxWrapped' re-aliases the tile
+    -- relative to the bbox, and a prefilter on the pre-wrap gy alone
+    -- dropped every event whose bbox sat across the seam from the
+    -- chunk (half a crater simply missing at the wrap meridian, and
+    -- chunk-vs-fast parity broken there since the fast path has no
+    -- prefilter). 'rowMayHitBBox' therefore accepts a row if ANY
+    -- u-alias of it (Δy shifted by k·w/2, k ∈ {−1,0,1}) lands in the
+    -- bbox's Y band; tileInBBoxWrapped stays the exact per-tile
+    -- authority. Regression test:
+    -- Test.Headless.WorldGen.WrapSeam.
     applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY (elevVec, matVec) period =
         let -- River-carve events fire per-period (along with
         -- everything else). Carving channels each period — instead
@@ -259,6 +267,19 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
 
             ChunkCoord _ cy = coord
 
+            -- Wrap-aware Y-band test (see the block comment above).
+            -- Mirrors tileInBBoxWrapped's centre/half-extent integer
+            -- arithmetic, with +1 slack for the div-2 rounding, so it
+            -- is a strict superset of what the per-tile check accepts.
+            halfWTiles = (worldSize * chunkSize) `div` 2
+            rowMayHitBBox gy (_, bb) =
+                let bMidY  = (bbMinY bb + bbMaxY bb) `div` 2
+                    bHalfY = (bbMaxY bb - bbMinY bb) `div` 2
+                    d      = gy - bMidY
+                in abs d ≤ bHalfY + 1
+                 ∨ abs (d - halfWTiles) ≤ bHalfY + 1
+                 ∨ abs (d + halfWTiles) ≤ bHalfY + 1
+
             (postElev, postMat) =
                 if null relevantTagged
                 then (elevVec, matVec)
@@ -269,10 +290,10 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                         let ly = by - chunkBorder
                             gy = cy * chunkSize + ly
                             -- Y-band sweep: events whose bbox vertical
-                            -- extent includes this row's pre-wrap gy.
-                            activeAtRow = filter (\(_, bb) →
-                                bbMinY bb ≤ gy ∧ bbMaxY bb ≥ gy
-                                ) relevantTagged
+                            -- extent could include this row under any
+                            -- u-alias of the row's tiles.
+                            activeAtRow = filter (rowMayHitBBox gy)
+                                                 relevantTagged
                         forM_ [0 .. borderSize - 1] $ \bx → do
                             let idx  = by * borderSize + bx
                                 lx   = bx - chunkBorder

@@ -104,8 +104,24 @@ data ElevGrid = ElevGrid
 buildInitialElevGrid ∷ Word64 → Int → [TectonicPlate] → ElevGrid
 buildInitialElevGrid seed worldSize plates =
     let totalTiles = worldSize * 16
-        spacing = max baseSampleSpacing (totalTiles `div` maxGridDim)
-        gridW = min maxGridDim (max 4 (totalTiles `div` spacing))
+        -- The grid lives in (u, v) space and wraps ix as a torus, so
+        -- spacing must DIVIDE the world's u-period exactly: with the
+        -- old floor-division spacing, gridW capped at maxGridDim left
+        -- gridW·spacing < totalTiles — a never-sampled stripe at the
+        -- seam (128 tiles wide at worldSize 128, 256 at 256) where no
+        -- per-age rivers, lakes, or valley carving could originate,
+        -- and a torus wrap stitching flow across a phantom
+        -- discontinuity. Picking the smallest divisor of totalTiles
+        -- ≥ ceil(totalTiles / maxGridDim) restores exact coverage
+        -- (totalTiles = 16·worldSize, so divisors are dense). The
+        -- [..totalTiles] bound makes the search total; spacing =
+        -- totalTiles (gridW 1) is unreachable for any real world
+        -- size. Regression test: Test.Headless.WorldGen.WrapSeam.
+        minSpacing = max baseSampleSpacing
+                         ((totalTiles + maxGridDim - 1) `div` maxGridDim)
+        spacing = head ([ s | s ← [minSpacing .. totalTiles]
+                            , totalTiles `mod` s ≡ 0 ] ⧺ [totalTiles])
+        gridW = max 4 (totalTiles `div` spacing)
         halfGrid = gridW `div` 2
         totalSamples = gridW * gridW
         fromIdx idx = (idx `mod` gridW, idx `div` gridW)

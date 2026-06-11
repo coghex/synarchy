@@ -43,6 +43,8 @@
 module World.Fluid.River.Identify
     ( identifyWorldRivers
     , riverThreshold
+      -- * Exported for tests (Test.Headless.WorldGen.WrapSeam)
+    , labelRiverComponents
     ) where
 
 import UPrelude
@@ -127,12 +129,22 @@ dirNone  = 4
 
 -- | Apply a D4 direction to a tile index. The world wraps along the
 --   isometric u-axis (gx − gy), which the gx-grid here can't honour
---   exactly without a full coordinate rework. As a v1 approximation
---   we wrap east/west steps as a plain x-axis torus: stepping east
---   from the rightmost column lands at the leftmost column of the
---   same row. The lake identifier uses the same approach and lakes
---   render without visible breaks; this keeps rivers continuous at
---   the wrap edge instead of cutting off there.
+--   exactly without a full coordinate rework. East/west steps wrap as
+--   a plain x-axis torus: stepping east from the rightmost column
+--   lands at the leftmost column of the same row.
+--
+--   NOTE on what this wrap actually does: the grid's x-edge columns
+--   sit at the diamond world's glacier corners (the torus edge pairs
+--   tiles whose v differs by ~worldTiles, so at least one side is
+--   glacier/void in every pairing). The torus edges therefore connect
+--   real terrain to 'minBound' walls in practice and are no-ops for
+--   flow. Seam continuity does NOT come from this wrap — it comes
+--   from the stitched grid double-covering the seam region (every
+--   near-seam tile appears at both its canonical position and its
+--   u-alias, each with a full in-grid neighbourhood). The lake
+--   identifier ('World.Fluid.Lake.Identify') treats the x-edges as
+--   plain walls for the same reason — the two conventions are
+--   equivalent on real terrain.
 --
 --   N/S steps return 'Nothing' at the world's v-axis boundary
 --   (where 'isBeyondGlacier' would have cut terrain anyway).
@@ -600,12 +612,11 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         (isRiverTile, widthRadius, surfZ) =
             expandWidth worldTiles terrain dir flow isRiverCentre centreSurf
 
-        -- Step 2: label connected components (4-cardinal via D4 chain).
-        --   We walk every river tile and assign it a component id by
-        --   following dir to its sink (lake/ocean/edge); ties broken
-        --   by BFS-style component labelling.
+        -- Step 2: label connected components — plain 4-adjacency over
+        -- the widened river mask (wings included), so width wings stay
+        -- in their river's component through the length cull below.
         (rawCompId, rawNComps) = labelRiverComponents
-                                    worldTiles isRiverTile dir
+                                    worldTiles isRiverTile
 
         -- Step 2.5: cap the river count. Rank components by tile count
         -- (length) and keep only the top N (= 'targetRiverCount'
@@ -949,15 +960,24 @@ sortDescByKey n key = foldr insertDesc [] [0 .. n - 1]
         | otherwise               = y : insertDesc x rest
 
 -- | BFS label connected components of the river-tile mask. Edges are
---   D4: tile i is connected to tile j iff @dir[i]@ points to j OR
---   @dir[j]@ points to i, AND both are river tiles.
+--   plain 4-adjacency over river tiles (E/W wrapped to mirror
+--   'stepDir's torus).
+--
+--   The previous rule connected i ↔ j only when @dir[i]@ pointed at j
+--   or @dir[j]@ at i. That detached width-expansion wing tiles whose
+--   own steepest-descent dir points AWAY from their channel (downhill
+--   -side wings especially — 'expandWidth' admits terrain down to
+--   @centreS − 6@): they formed singleton or strip components, which
+--   'cullByLength' then either stripped (rivers silently lost bank
+--   tiles) or kept as bogus standalone "rivers" consuming
+--   'targetRiverCount' slots. Adjacent river tiles are one connected
+--   water body — label them together.
 labelRiverComponents
     ∷ Int                  -- ^ worldTiles
     → VU.Vector Bool       -- ^ isRiverTile
-    → VU.Vector Word8      -- ^ dir
     → (VU.Vector Int, Int)
        -- ^ (per-tile component id, component count)
-labelRiverComponents worldTiles isRiverTile dir =
+labelRiverComponents worldTiles isRiverTile =
     let nTiles = worldTiles * worldTiles
     in runST $ do
         ids ← VUM.replicate nTiles (-1 ∷ Int)
@@ -977,29 +997,12 @@ labelRiverComponents worldTiles isRiverTile dir =
                                 writeSTRef queue rs
                                 let bx = i `mod` worldTiles
                                     by = i `div` worldTiles
-                                    -- An edge i ↔ nIdx exists if either
-                                    -- dir[i] points to nIdx (outgoing)
-                                    -- or dir[nIdx] points to i (incoming).
-                                    -- 'incomingFrom' must only be evaluated
-                                    -- after the in-bounds guard, otherwise
-                                    -- a Strict-forced argument would access
-                                    -- 'dir VU.! (-1)'.
                                     tryEdge ok nIdx = when ok $ do
                                         seen ← VUM.read ids nIdx
                                         when (seen < 0
                                               ∧ isRiverTile VU.! nIdx) $ do
-                                            let outgoing =
-                                                  stepDir worldTiles i
-                                                          (dir VU.! i)
-                                                          ≡ Just nIdx
-                                                incoming = case
-                                                    stepDir worldTiles nIdx
-                                                            (dir VU.! nIdx) of
-                                                    Just j  → j ≡ i
-                                                    Nothing → False
-                                            when (outgoing ∨ incoming) $ do
-                                                VUM.write ids nIdx lbl
-                                                modifySTRef' queue (nIdx :)
+                                            VUM.write ids nIdx lbl
+                                            modifySTRef' queue (nIdx :)
                                 -- E/W wrap to mirror 'stepDir's torus.
                                 let west  = if bx > 0
                                             then i - 1

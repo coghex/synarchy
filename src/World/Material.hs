@@ -1,7 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 
 module World.Material
     ( -- * Core types
@@ -40,26 +37,13 @@ module World.Material
     ) where
 
 import UPrelude
-import GHC.Generics (Generic)
-import Data.Serialize (Serialize)
-import Control.DeepSeq (NFData(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.IORef as IORef
-import Data.Vector.Unboxed.Deriving (derivingUnbox)
-
--- * Material ID
-
-newtype MaterialId = MaterialId { unMaterialId ∷ Word8 }
-    deriving stock (Show, Eq, Ord)
-    deriving newtype (NFData)
-    deriving anyclass (Serialize)
-    deriving stock (Generic)
-
-derivingUnbox "MaterialId"
-    [t| MaterialId -> Word8 |]
-    [| unMaterialId |]
-    [| MaterialId |]
+-- MaterialId (+ its Unbox instance) lives in the NON-Strict
+-- World.Material.Id — see the note there for why the derivingUnbox
+-- splice must not be compiled under {-# LANGUAGE Strict #-}.
+import World.Material.Id (MaterialId(..))
 
 -- * Named Constants
 

@@ -982,7 +982,16 @@ QUALITY_THRESHOLDS = {
                                   # 5803 before the wt rework)
     "DESERT_SOIL_ON_SLOPE": 250,  # observed max 150 (seed 123 w128); 1.5× policy
     "FLAT_ISOLATED_WATER":   90,  # observed max 59 (seed 5050)
-    "FLOATING_WATER":       150,  # observed max 52
+    "FLOATING_WATER":       300,  # observed max 176 (seed 250) after the
+                                  # river-component labelling fix (save
+                                  # v29) keeps width wings: downhill-side
+                                  # bank tiles previously detached+culled
+                                  # now render, so rivers reach valley
+                                  # edges. Gap histogram is 1-5z bank
+                                  # steps (max 15) — the category's
+                                  # "often legitimate cliff" case, not a
+                                  # new artifact class. Recalibrated
+                                  # 2026-06-11 (was 150, obs max 52).
     "ISOLATED_FLUID":        90,  # observed max 74 (seed 2718; was 77
                                   # even with old constants)
     "LAKE_HOLE":             25,  # observed max 4

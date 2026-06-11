@@ -91,16 +91,15 @@ compareChunk registry params coord lc =
               else [])
        ]
 
-spec ∷ Spec
-spec = aroundAll withHeadlessEngine $ do
+spec ∷ SpecWith EngineEnv
+spec = do
 
     describe "Zoom terrain vs detail chunk parity" $
 
         it "terrain + fluid are bit-identical per tile (seed 1840733254 w64 plates 10)" $ \env → do
-            -- The user-reported coastal-discrepancy world.
-            sendWorldCommand env
-                (WorldInit (WorldPageId "zoompar") 1840733254 64 10)
-            ws ← waitForWorldInit env (WorldPageId "zoompar") 180
+            -- The user-reported coastal-discrepancy world (own params
+            -- — this specific repro is the point of the test).
+            ws ← sharedWorld env 1840733254 64 10
             -- Load a wide ring so the comparison includes coastline,
             -- not just the init region around the origin.
             queueChunks ws [ ChunkCoord cx cy

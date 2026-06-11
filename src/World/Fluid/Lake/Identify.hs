@@ -27,6 +27,20 @@
 --   per-chunk 'smoothIslandColumns' pass in 'World.Generate.Chunk'
 --   handles 1–5 z column artifacts the global flood inherently can't
 --   address (noise spikes that the timeline despike misses).
+--
+--   WRAP-SEAM CONVENTION: the flood, the ocean BFS, and component
+--   labelling all treat the grid's x-edges as plain walls (no torus
+--   wrap). This is sound because the square gx/gy grid's x-edge
+--   columns sit at the diamond world's glacier corners — a torus
+--   edge would pair tiles whose v differs by ~worldTiles, i.e. real
+--   terrain with glacier/void. Seam continuity comes instead from
+--   the grid DOUBLE-COVERING the seam region: every near-seam
+--   physical tile appears at both its canonical position and its
+--   u-alias, each with its full physical neighbourhood in-grid, and
+--   the per-chunk index stores entries under both (unwrapped) chunk
+--   keys. ('World.Fluid.River.Identify.stepDir' wraps E/W as an
+--   x-torus instead; on real terrain the two conventions are
+--   equivalent because those torus edges only reach void.)
 module World.Fluid.Lake.Identify
     ( identifyWorldLakes
     , computeWorldEdgeOcean

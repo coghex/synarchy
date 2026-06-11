@@ -28,14 +28,16 @@ import World.Types
 import World.Plate (elevationAtGlobal)
 import World.Generate (applyTimelineFast)
 
-spec ∷ Spec
-spec = aroundAll withHeadlessEngine $ do
+spec ∷ SpecWith EngineEnv
+spec = do
 
     describe "Chunk path vs fast path parity" $
 
         it "tile elevations agree within tolerance for sampled coords" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "parity") 42 64 5)
-            ws ← waitForWorldInit env (WorldPageId "parity") 180
+            -- Own (seed, size, plates) — the thresholds below were
+            -- calibrated on 42/64/5; don't converge this onto the
+            -- canonical 42/64/3 world without recalibrating.
+            ws ← sharedWorld env 42 64 5
             mParams ← getWorldGenParams ws
             tiles ← getWorldTileData ws
             registry ← readIORef (materialRegistryRef env)

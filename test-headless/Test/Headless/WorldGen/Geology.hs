@@ -1,20 +1,24 @@
 module Test.Headless.WorldGen.Geology (spec) where
 
+-- | Geology smoke tests — read-only, all against the shared canonical
+--   world (42/64/3). The timeline-periods check used to generate its
+--   own plates-5 world; any world has periods, so it shares too.
+
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
+import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
 import World.Types
 
-spec ∷ Spec
-spec = aroundAll withHeadlessEngine $ do
+spec ∷ SpecWith EngineEnv
+spec = do
 
     describe "Geological features" $ do
 
         it "generates a geological timeline with periods" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "geo") 42 64 5)
-            ws ← waitForWorldInit env (WorldPageId "geo") 180
+            ws ← sharedWorld env 42 64 3
             mParams ← getWorldGenParams ws
             case mParams of
                 Just params → do
@@ -23,16 +27,14 @@ spec = aroundAll withHeadlessEngine $ do
                 Nothing → expectationFailure "params should exist"
 
         it "chunk surface maps have valid dimensions" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "surf") 42 64 3)
-            ws ← waitForWorldInit env (WorldPageId "surf") 120
+            ws ← sharedWorld env 42 64 3
             tiles ← getWorldTileData ws
             let chunks = HM.elems (wtdChunks tiles)
             forM_ chunks $ \lc → do
                 VU.length (lcSurfaceMap lc) `shouldBe` (chunkSize * chunkSize)
 
         it "surface heights are within reasonable range" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "heights") 42 64 3)
-            ws ← waitForWorldInit env (WorldPageId "heights") 120
+            ws ← sharedWorld env 42 64 3
             tiles ← getWorldTileData ws
             let chunks = HM.elems (wtdChunks tiles)
             forM_ chunks $ \lc →

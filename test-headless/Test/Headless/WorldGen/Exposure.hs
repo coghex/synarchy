@@ -26,6 +26,8 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Engine.Core.State (EngineEnv)
+import System.Environment (lookupEnv)
 import Test.Headless.Harness
 import World.Types
 
@@ -107,31 +109,39 @@ reportViolations vs = expectationFailure $
     show (length vs) ⧺ " exposed positions lack a solid tile; first 10: "
     ⧺ show (take 10 vs)
 
-spec ∷ Spec
-spec = aroundAll withHeadlessEngine $ do
+spec ∷ SpecWith EngineEnv
+spec = do
 
     describe "Column exposure invariant" $ do
 
         it "holds across a w64 world (seed 42)" $ \env → do
-            sendWorldCommand env
-                (WorldInit (WorldPageId "expo64") 42 64 3)
-            ws ← waitForWorldInit env (WorldPageId "expo64") 120
+            ws ← sharedWorld env 42 64 3
             tiles ← getWorldTileData ws
             reportViolations (worldViolations (wtdChunks tiles))
 
+        -- FULL TIER ONLY: this is the single most expensive item in
+        -- the suite (~25 s — a dedicated w128 generation plus a 5×5
+        -- chunk ring). The w64 case above keeps the exposure
+        -- invariant pinned on every run; this one exercises the
+        -- basalt-cap + lava columns at the known volcano repro.
+        -- Run it (plus everything else) with SYNARCHY_FULL_TESTS=1
+        -- before calling a worldgen-output change done.
         it "holds around a volcano with lava + basalt caps (w128 seed 42)" $ \env → do
-            sendWorldCommand env
-                (WorldInit (WorldPageId "expo128") 42 128 3)
-            ws ← waitForWorldInit env (WorldPageId "expo128") 300
-            -- The seed-42 w128 volcano breaching a mountain lake sits
-            -- near tile (-78, 102) → chunk (-5, 6). Queue it plus a
-            -- ring so cross-chunk neighbours resolve.
-            queueChunks ws [ ChunkCoord cx cy
-                           | cx ← [-7 .. -3], cy ← [4 .. 8] ]
-            ok ← waitForChunksAt ws (ChunkCoord (-5) 6) 120
-            ok `shouldBe` True
-            -- Last queued coord — when it's in, the whole ring is.
-            okLast ← waitForChunksAt ws (ChunkCoord (-3) 8) 120
-            okLast `shouldBe` True
-            tiles ← getWorldTileData ws
-            reportViolations (worldViolations (wtdChunks tiles))
+            full ← lookupEnv "SYNARCHY_FULL_TESTS"
+            case full of
+              Nothing → pendingWith
+                  "full tier only — set SYNARCHY_FULL_TESTS=1 (w128 volcano world, ~25s)"
+              Just _ → do
+                ws ← sharedWorld env 42 128 3
+                -- The seed-42 w128 volcano breaching a mountain lake sits
+                -- near tile (-78, 102) → chunk (-5, 6). Queue it plus a
+                -- ring so cross-chunk neighbours resolve.
+                queueChunks ws [ ChunkCoord cx cy
+                               | cx ← [-7 .. -3], cy ← [4 .. 8] ]
+                ok ← waitForChunksAt ws (ChunkCoord (-5) 6) 120
+                ok `shouldBe` True
+                -- Last queued coord — when it's in, the whole ring is.
+                okLast ← waitForChunksAt ws (ChunkCoord (-3) 8) 120
+                okLast `shouldBe` True
+                tiles ← getWorldTileData ws
+                reportViolations (worldViolations (wtdChunks tiles))

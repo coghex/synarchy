@@ -131,7 +131,9 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            durationScale = fromIntegral duration / 5.0 ∷ Float
            scaleFactor = sqrt (max 0.1 worldScale)
 
-           -- Slope magnitude: max absolute difference to any neighbor
+           -- Slope magnitude: |neighbor average − elev| (NOT the max
+           -- per-neighbor difference — a tile in a uniform sloped
+           -- plane reads near zero here, by design).
            -- Used to modulate slope-sensitive erosion modes
            absDiff = abs diff
            slopeNorm = min 1.0 (absDiff / 30.0)  -- normalize: 30 tiles = max slope

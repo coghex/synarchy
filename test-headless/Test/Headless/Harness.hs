@@ -1,5 +1,6 @@
 module Test.Headless.Harness
   ( withHeadlessEngine
+  , sharedWorld
   , sendWorldCommand
   , waitForWorldInit
   , getWorldState
@@ -15,6 +16,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import Data.IORef (readIORef, writeIORef, modifyIORef', atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Thread (shutdownThread, ThreadState)
@@ -39,6 +41,36 @@ withHeadlessEngine action = bracket setup teardown (\(env, _) → action env)
         writeIORef (lifecycleRef env) CleaningUp
         mapM_ shutdownThread threads
         threadDelay 100000
+
+-- | Get (or lazily create) a world keyed by its generation params.
+--
+--   World generation is the entire cost of this suite (~8–12 s per
+--   w64 init; everything else is milliseconds), and most specs only
+--   READ the world — so specs that can use the same (seed, size,
+--   plateCount) share one generation instead of paying for their
+--   own. The engine's world manager is the cache; the page id is
+--   derived from the params so every caller converges on the same
+--   page. Works because Spec.hs boots ONE engine for all worldgen
+--   specs (a single top-level 'aroundAll withHeadlessEngine') and
+--   hspec runs items sequentially.
+--
+--   Rules for using a shared world:
+--     * read-only specs: share freely.
+--     * specs that mutate the page (destroy, edits) or need a world
+--       nobody else touches: do a private 'WorldInit' with a unique
+--       page id instead (see the destroy test).
+--     * queueing EXTRA chunks (Exposure) is fine — later readers
+--       just see more chunks.
+sharedWorld ∷ EngineEnv → Word64 → Int → Int → IO WorldState
+sharedWorld env seed size plateCount = do
+    let pid = WorldPageId $ T.pack $
+            "shared_" ⧺ show seed ⧺ "_" ⧺ show size ⧺ "_" ⧺ show plateCount
+    mWs ← getWorldState env pid
+    case mWs of
+        Just _ → waitForWorldInit env pid 300
+        Nothing → do
+            sendWorldCommand env (WorldInit pid seed size plateCount)
+            waitForWorldInit env pid 300
 
 -- | Send a command to the world thread
 sendWorldCommand ∷ EngineEnv → WorldCommand → IO ()

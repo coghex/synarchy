@@ -853,6 +853,20 @@ generateChunk registry catalog params coord =
         -- Reading post-carve elevations everywhere keeps strata,
         -- slope, and column construction consistent with what the
         -- owning chunk actually renders.
+        --
+        -- WRAP-SEAM INVARIANT (why the chunk key below is derived from
+        -- the UNWRAPPED gx/gy — "no u-wrap on the keys", same as
+        -- 'World.Geology.Coastal.Types'): the carve tables are built
+        -- from the stitched square grid, which DOUBLE-COVERS the seam
+        -- region — every near-seam physical tile appears at both its
+        -- canonical position and its u-alias, and the tables hold
+        -- entries under BOTH chunk keys with identical content. A
+        -- bordered lookup from a canonical chunk near the seam
+        -- therefore hits the alias entry directly; wrapping the key
+        -- would be redundant. The only unkeyed reach is a border that
+        -- exits the square grid entirely, which by the diamond
+        -- geometry is glacier-corner territory where no carve content
+        -- exists (lookup misses resolve to delta 0, correctly).
         carveAt gx gy =
             let cx = gx `div` chunkSize
                 cy = gy `div` chunkSize
@@ -992,11 +1006,12 @@ generateChunk registry catalog params coord =
         rawFluidMap = composeFluidMap params coord cappedTerrainMap
                                       interiorChannelMask magmaOverlay
 
-        -- Lava-water boundary shell: any lava tile 4-cardinally
-        -- adjacent to a water tile (Ocean/Lake/River) gets cleared
-        -- and the column-build below stamps matBasalt on top, so
-        -- lava and water never sit edge-to-edge. Interior lava is
-        -- preserved — only the contact rim becomes solid rock.
+        -- Lava-water boundary shell: any lava tile 8-adjacent to a
+        -- non-lava tile (water OR dry land — see 'lavaShellMask')
+        -- gets cleared and the column-build below stamps matBasalt
+        -- on top, so lava never sits edge-to-edge with water or
+        -- bare ground. Interior lava is preserved — only the
+        -- contact rim becomes solid rock.
         lavaShell = lavaShellMask params coord
                         (\lx ly → if inBorder lx ly
                                   then Just (finalElevVec VU.! toIndex lx ly)
@@ -1489,7 +1504,9 @@ generateZoomTerrain registry params mBorderedCache coord =
             in (despikedElev', finalMat')
 
         -- River + lake carves baked into the bordered region: see the
-        -- matching block in 'generateChunk' for the rationale.
+        -- matching block in 'generateChunk' for the rationale,
+        -- including the wrap-seam invariant for the unwrapped chunk
+        -- key (alias double-coverage of the carve tables).
         carveAt gx gy =
             let cx = gx `div` chunkSize
                 cy = gy `div` chunkSize

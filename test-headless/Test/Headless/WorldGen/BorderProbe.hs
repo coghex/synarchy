@@ -36,12 +36,14 @@ import World.Geology.Timeline.Types (GeoTimeline(..))
 import World.Fluid.River.Types (wrCarveDelta)
 import World.Fluid.Lake.Types (wlCarveDelta)
 
-spec ∷ Spec
-spec = aroundAll withHeadlessEngine $
+spec ∷ SpecWith EngineEnv
+spec =
     describe "Border divergence probe" $
         it "stage-by-stage A-window vs B-window at the seam" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "probe") 7 64 4)
-            ws ← waitForWorldInit env (WorldPageId "probe") 240
+            -- Window-position-independence is an invariant over any
+            -- world, so this shares 7/64/3 with the Flatness spec
+            -- (was a private 7/64/4 generation).
+            ws ← sharedWorld env 7 64 3
             mParams ← getWorldGenParams ws
             registry ← readIORef (materialRegistryRef env)
             case mParams of

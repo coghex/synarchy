@@ -138,7 +138,7 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
         result.notes.append(
             f"determinism status changed: was deterministic, now {len(set(hashes))} distinct outputs"
         )
-    elif not deterministic_baseline and deterministic_now:
+    elif not deterministic_baseline and deterministic_now and runs > 1:
         result.improvements.append(
             f"determinism status: was racy, now deterministic across {runs} runs"
         )
@@ -268,12 +268,22 @@ def format_details(r: CheckResult) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runs", type=int, default=3,
-                        help="Dump runs per seed for determinism check (default: 3)")
+    parser.add_argument("--runs", type=int, default=1,
+                        help="Dump runs per seed (default: 1). Pass 2+ to "
+                             "also re-check per-seed determinism; routine "
+                             "determinism coverage lives in the baseline "
+                             "capture (world_baseline.py) and the hspec "
+                             "determinism test, so the gate doesn't pay "
+                             "for it on every run.")
     parser.add_argument("--seeds-file", type=Path, default=SEEDS_FILE,
                         help=f"Seed config file (default: {SEEDS_FILE})")
     parser.add_argument("--seed", type=int,
                         help="Check only this specific seed")
+    parser.add_argument("--quick", action="store_true",
+                        help="Only run seeds tagged \"quick\": true in the "
+                             "seeds file (~6 seeds, <1 min) — the iteration "
+                             "tier. Run the full set before calling a "
+                             "worldgen change done.")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Always show per-seed details, even on PASS")
     args = parser.parse_args()
@@ -284,6 +294,13 @@ def main() -> int:
 
     config = json.loads(args.seeds_file.read_text())
     seeds = config["seeds"]
+
+    if args.quick:
+        seeds = [s for s in seeds if s.get("quick")]
+        if not seeds:
+            print("error: no seeds tagged \"quick\": true in seeds file",
+                  file=sys.stderr)
+            return 2
 
     if args.seed is not None:
         seeds = [s for s in seeds if s["seed"] == args.seed]
