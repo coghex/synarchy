@@ -297,9 +297,8 @@ handleSetWindowMode mode = do
 handleSetVSync ∷ Bool → EngineM ε σ ()
 handleSetVSync vsync = do
     env ← ask
-    liftIO $ do
-        oldConfig ← readIORef (videoConfigRef env)
-        writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsync }
+    liftIO $ atomicModifyIORef' (videoConfigRef env) $ \c →
+        (c { vcVSync = vsync }, ())
     
     state ← gets graphicsState
     case glfwWindow state of
@@ -312,9 +311,8 @@ handleSetVSync vsync = do
 handleSetMSAA ∷ Int → EngineM ε σ ()
 handleSetMSAA msaa = do
     env ← ask
-    liftIO $ do
-        oldConfig ← readIORef (videoConfigRef env)
-        writeIORef (videoConfigRef env) $ oldConfig { vcMSAA = msaa }
+    liftIO $ atomicModifyIORef' (videoConfigRef env) $ \c →
+        (c { vcMSAA = msaa }, ())
     
     state ← gets graphicsState
     case glfwWindow state of

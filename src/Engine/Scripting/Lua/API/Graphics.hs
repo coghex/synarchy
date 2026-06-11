@@ -23,7 +23,7 @@ import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 
@@ -45,7 +45,6 @@ loadTextureFn backendState = do
         handle ← generateTextureHandle pool
         updateTextureState handle
           (AssetLoading (T.unpack pathStr) [] 0.0) pool
-        writeIORef (lbsAssetPool backendState) pool
         Q.writeQueue lteq (LuaLoadTextureRequest handle (T.unpack pathStr))
         return handle
       let (TextureHandle n) = handle

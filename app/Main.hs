@@ -43,7 +43,7 @@ import Engine.Loop (mainLoop)
 import Engine.Loop.Headless (headlessLoop)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
-import Engine.Scripting.Lua.Backend (startLuaThread)
+import Engine.Scripting.Lua.Thread (startLuaThread)
 import World.Thread (startWorldThread)
 import World.Types
 import World.Plate (isGlacierZone, isBeyondGlacier, defaultPlatesFor)

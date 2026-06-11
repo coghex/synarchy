@@ -12,11 +12,3 @@ data ScriptValue
   | ScriptTable [(ScriptValue, ScriptValue)]
   | ScriptFunction Dynamic
   deriving (Show)
-
-data ScriptResult
-  = ScriptSuccess [ScriptValue]
-  | ScriptError T.Text
-  deriving (Show)
-
-newtype ScriptContext = ScriptContext Dynamic
-  deriving (Show)

@@ -112,10 +112,29 @@ setupShellSandbox lst = Lua.runWith lst $ do
         _ ← Lua.getglobal (Lua.Name name)
         Lua.setfield (-2) (Lua.Name name)
     
+    -- Shallow-copy the table so shell assignments (string.format = nil)
+    -- can't mutate the real global and break every loaded script. The
+    -- values (functions) are still shared; only the table is fresh.
     copyGlobalTable ∷ BS.ByteString → Lua.LuaE Lua.Exception ()
     copyGlobalTable name = do
-        _ ← Lua.getglobal (Lua.Name name)
-        Lua.setfield (-2) (Lua.Name name)
+        _ ← Lua.getglobal (Lua.Name name)        -- sandbox src
+        isTab ← Lua.istable (-1)
+        if not isTab
+            then Lua.pop 1
+            else do
+                Lua.newtable                     -- sandbox src dst
+                Lua.pushnil                      -- sandbox src dst nil
+                copyPairs
+                Lua.remove (-2)                  -- sandbox dst
+                Lua.setfield (-2) (Lua.Name name)
+      where
+        copyPairs = do
+            more ← Lua.next (-3)                 -- … src dst key value
+            when more $ do
+                Lua.pushvalue (-2)               -- … src dst key value key
+                Lua.insert (-2)                  -- … src dst key key value
+                Lua.rawset (-4)                  -- … src dst key
+                copyPairs
     
     copyFromTable ∷ BS.ByteString → BS.ByteString → Lua.LuaE Lua.Exception ()
     copyFromTable tableName funcName = do

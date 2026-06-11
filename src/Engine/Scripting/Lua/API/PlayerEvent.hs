@@ -236,7 +236,13 @@ readOverridesTable = do
                 Lua.pop 1  -- pop the outer-table copy
                 return acc
             else do
-                mk ← Lua.tostring (-2)
+                -- Check the key's type instead of converting it:
+                -- lua_tolstring on a numeric key mutates it in place,
+                -- and next() then errors with "invalid key to 'next'".
+                keyTy ← Lua.ltype (-2)
+                mk ← if keyTy ≡ Lua.TypeString
+                         then Lua.tostring (-2)
+                         else return Nothing
                 innerIsTab ← Lua.istable (-1)
                 if innerIsTab && mk /= Nothing
                     then do

@@ -21,7 +21,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 import Control.Monad.IO.Class (liftIO)
 
@@ -49,7 +49,6 @@ loadFontFn env backendState = do
             handle ← generateFontHandle pool
             updateFontState handle
               (AssetLoading pathStr [] 0.0) pool
-            writeIORef (lbsAssetPool backendState) pool
             Q.writeQueue lteq (LuaLoadFontRequest handle pathStr (fromIntegral sizeVal))
             return handle
       let (FontHandle n) = handle

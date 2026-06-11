@@ -16,7 +16,7 @@ import System.Timeout (timeout)
 import Control.Concurrent.MVar
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue
-import Control.Exception (SomeException, catch, bracket, finally)
+import Control.Exception (SomeException, try, onException, finally)
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 
@@ -26,7 +26,11 @@ data DebugCommand = DebugCommand
     }
 
 -- | Start the debug TCP server on the given port.
---   Returns a TQueue that the Lua thread polls for commands.
+--   Returns a TQueue that the Lua thread polls for commands, or the
+--   error text when the server could not start (port already in use,
+--   no address). Binding happens synchronously so a failure reaches
+--   the caller — previously it killed a forked thread silently while
+--   the engine logged "listening". Only the accept loop is forked.
 --
 --   @builtin@ is consulted on the per-connection client thread BEFORE a
 --   command is marshaled to the Lua thread: if it returns @Just resp@
@@ -36,37 +40,39 @@ data DebugCommand = DebugCommand
 --   monopolising the single Lua thread — they only poll world-state
 --   refs, so the client thread can run them while the Lua thread keeps
 --   serving other connections.
-startDebugServer ∷ Int → (Text → IO (Maybe Text)) → IO (TQueue DebugCommand)
+startDebugServer ∷ Int → (Text → IO (Maybe Text))
+                 → IO (Either Text (TQueue DebugCommand))
 startDebugServer port builtin = do
     cmdQueue ← atomically newTQueue
-    _ ← forkIO $ runServer port cmdQueue builtin
-    return cmdQueue
+    r ← try $ do
+        let hints = defaultHints
+                { addrFlags = [AI_PASSIVE]
+                , addrSocketType = Stream
+                }
+        addrs ← getAddrInfo (Just hints) (Just "127.0.0.1") (Just (show port))
+        addr ← case addrs of
+            (a:_) → return a
+            []    → ioError (userError "getAddrInfo returned no addresses")
+        sock ← openSocket addr
+        (do setSocketOption sock ReuseAddr 1
+            bind sock (addrAddress addr)
+            listen sock 4) `onException` close sock
+        return sock
+    case r of
+        Left (e ∷ SomeException) → return (Left (T.pack (show e)))
+        Right sock → do
+            -- Ready signal on stdout — agents can wait for this line
+            -- to know the debug console is accepting connections.
+            -- When port=0 (dump mode), write to stderr to keep stdout
+            -- clean for JSON output.
+            let readyHandle = if port ≡ 0 then stderr else stdout
+            hPutStrLn readyHandle ("READY port=" <> show port)
+            hFlush readyHandle
+            _ ← forkIO $ acceptLoop sock cmdQueue builtin `finally` close sock
+            return (Right cmdQueue)
 
 pollDebugCommand ∷ TQueue DebugCommand → IO (Maybe DebugCommand)
 pollDebugCommand = atomically . tryReadTQueue
-
-runServer ∷ Int → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
-runServer port cmdQueue builtin = do
-    let hints = defaultHints
-            { addrFlags = [AI_PASSIVE]
-            , addrSocketType = Stream
-            }
-    addrs ← getAddrInfo (Just hints) (Just "127.0.0.1") (Just (show port))
-    addr ← case addrs of
-        (a:_) → return a
-        []    → error "getAddrInfo returned no addresses"
-    bracket (openSocket addr) close $ \sock → do
-        setSocketOption sock ReuseAddr 1
-        bind sock (addrAddress addr)
-        listen sock 4
-        -- Ready signal on stdout — agents can wait for this line
-        -- to know the debug console is accepting connections.
-        -- When port=0 (dump mode), write to stderr to keep stdout
-        -- clean for JSON output.
-        let readyHandle = if port ≡ 0 then stderr else stdout
-        hPutStrLn readyHandle ("READY port=" <> show port)
-        hFlush readyHandle
-        acceptLoop sock cmdQueue builtin
 
 acceptLoop ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
 acceptLoop sock cmdQueue builtin = do

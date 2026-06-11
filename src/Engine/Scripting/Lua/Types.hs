@@ -105,7 +105,6 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaAssetLoaded Text Int Text
             | LuaArenaReady Text
             | LuaOpenArena
-            | LuaFocusGained Word32
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char
             | LuaTextBackspace Word32

@@ -1,5 +1,5 @@
 module Engine.Scripting.Lua.Script
-  ( loadScriptAsModule
+  ( loadModuleRef
   , callModuleFunction
   , callLuaFunction
   ) where
@@ -14,21 +14,35 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Control.Monad (forM_)
 
--- | Load a Lua script and return a reference to its module table
-loadScriptAsModule ∷ Lua.State → FilePath → IO (Maybe Lua.Reference)
-loadScriptAsModule lst path = Lua.runWith lst $ do
+-- | Run a script file and return a registry ref to its returned module
+--   table (invalid ref if the script returned no table), or the error
+--   message if the load failed. 'dofileTrace' is multret — a script may
+--   return zero, one, or many values — so the stack must be restored to
+--   its pre-load height instead of popping a fixed count: a bare
+--   @pop 1@ underflows on zero returns (or eats an enclosing C-call
+--   frame's arguments) and leaks extras on multiple returns.
+loadModuleRef ∷ FilePath → Lua.LuaE Lua.Exception (Either T.Text Lua.Reference)
+loadModuleRef path = do
+    top0 ← Lua.gettop
     status ← Lua.dofileTrace (Just path)
     case status of
         Lua.OK → do
-            isTable ← Lua.istable (-1)
-            if isTable
+            top1 ← Lua.gettop
+            ref ← if top1 > top0
                 then do
-                    ref ← Lua.ref Lua.registryindex
-                    return (Just ref)
-                else do
-                    Lua.pop 1
-                    return Nothing
-        _ → return Nothing
+                    isTable ← Lua.istable (-1)
+                    if isTable
+                        then Lua.ref Lua.registryindex
+                        else return invalidRef
+                else return invalidRef
+            Lua.settop top0
+            return (Right ref)
+        _ → do
+            err ← Lua.tostring (-1)
+            Lua.settop top0
+            return (Left (maybe "unknown error" TE.decodeUtf8 err))
+  where
+    invalidRef = Lua.Reference (fromIntegral Lua.refnil)
 
 -- | Call a function on a module table
 -- | Call a module function under 'pcall' so a Lua error in a callback

@@ -22,6 +22,19 @@ readQueue q = STM.atomically $ readTQueue (queueTQueue q)
 tryReadQueue ∷ Queue α → IO (Maybe α)
 tryReadQueue q = STM.atomically $ tryReadTQueue (queueTQueue q)
 
+-- | Read with a timeout (microseconds). Don't wrap 'readQueue' in
+--   'System.Timeout.timeout' instead: its exception can arrive after
+--   the STM dequeue commits, silently dropping the message. Here the
+--   dequeue and the timeout race inside a single transaction.
+readQueueTimeout ∷ Int → Queue α → IO (Maybe α)
+readQueueTimeout micros q = do
+    delayVar ← STM.registerDelay micros
+    STM.atomically $ STM.orElse
+        (Just ⊚ readTQueue (queueTQueue q))
+        (do timedOut ← STM.readTVar delayVar
+            STM.check timedOut
+            return Nothing)
+
 flushQueue ∷ Queue α → IO [α]
 flushQueue q = STM.atomically $ flushTQueue (queueTQueue q)
 

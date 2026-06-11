@@ -17,8 +17,8 @@ import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
-import Engine.Scripting.Lua.Script (callModuleFunction)
-import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
+import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
+import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules, nowSeconds)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), startDebugServer, pollDebugCommand)
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
@@ -40,14 +40,12 @@ import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, tryPutMVar)
-import Control.Concurrent.STM.TQueue (TQueue)
+import Control.Concurrent.STM.TQueue (TQueue, newTQueue)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch, finally)
 import Control.Monad (forM_, when)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
-import Data.Time.Clock (getCurrentTime, utctDayTime)
-import System.Timeout (timeout)
 
 startLuaThread ∷ EngineEnv → IO ThreadState
 startLuaThread env = do
@@ -69,26 +67,17 @@ startLuaThread env = do
             logDebug logger CatLua "Shell sandbox set up."
             
             let scriptPath = "scripts/init.lua"
-            currentTime ← getCurrentTime
-            let currentSecs = realToFrac $ utctDayTime currentTime
+            currentSecs ← nowSeconds
             
             initScriptId ← atomicModifyIORef' (lbsNextScriptId backendState)
                 (\n → (n + 1, n))
             
-            status ← Lua.runWith (lbsLuaState backendState) $ 
-                Lua.dofileTrace (Just scriptPath)
-            
-            case status of
-                Lua.OK → do
+            result ← Lua.runWith (lbsLuaState backendState) $
+                loadModuleRef scriptPath
+
+            case result of
+                Right modRef → do
                     logDebug logger CatLua $ "Lua script loaded: " <> T.pack scriptPath
-                    modRef ← Lua.runWith (lbsLuaState backendState) $ do
-                        isTable ← Lua.istable (-1)
-                        if isTable
-                            then Lua.ref Lua.registryindex
-                            else do
-                                Lua.pop 1
-                                return (Lua.Reference (fromIntegral Lua.refnil))
-                    
                     let initScript = LuaScript
                           { scriptId        = initScriptId
                           , scriptPath      = scriptPath
@@ -112,18 +101,25 @@ startLuaThread env = do
                     
                     logDebug logger CatLua "Lua module initialized"
 
-                _ → do
-                    errMsg ← Lua.runWith (lbsLuaState backendState) $ do
-                        err ← Lua.tostring (-1)
-                        Lua.pop 1
-                        return $ maybe "Unknown error" TE.decodeUtf8 err
+                Left errMsg →
                     logWarn logger CatLua $
-                        "Failed to load Lua script: " <> T.pack scriptPath 
+                        "Failed to load Lua script: " <> T.pack scriptPath
                         <> " - " <> errMsg
             
             let port = ecDebugPort (engineConfig env)
-            debugQueue ← startDebugServer port (debugBuiltin env)
-            logInfo logger CatLua $ "Debug server listening on port " <> T.pack (show port)
+            eDebugQueue ← startDebugServer port (debugBuiltin env)
+            debugQueue ← case eDebugQueue of
+                Right q → do
+                    logInfo logger CatLua $
+                        "Debug server listening on port " <> T.pack (show port)
+                    return q
+                Left err → do
+                    -- Engine keeps running without a console; the queue
+                    -- is inert (nothing ever feeds it).
+                    logWarn logger CatLua $
+                        "Debug server failed to start on port "
+                        <> T.pack (show port) <> ": " <> err
+                    atomically newTQueue
             tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue `finally` putMVar doneVar ()
             return tid
         ) 
@@ -175,26 +171,31 @@ runLuaLoop env ls stateRef debugQueue = do
               (do
                 processDebugCommands (lbsLuaState ls) debugQueue
 
-                currentTime ← getCurrentTime
-                let currentSecs = realToFrac $ utctDayTime currentTime
+                currentSecs ← nowSeconds
                 scriptsMap ← readTVarIO (lbsScripts ls)
                 let scripts = Map.elems scriptsMap
-                    nextWakeTimes = map scriptNextTick scripts
+                    -- Paused scripts never advance their nextTick;
+                    -- including them would pin sleeptime at the floor
+                    -- and busy-spin the loop at ~1 kHz.
+                    nextWakeTimes = map scriptNextTick
+                                        (filter (not ∘ scriptPaused) scripts)
                     nextWakeTime = if null nextWakeTimes
                                    then currentSecs + 1.0
                                    else minimum nextWakeTimes
                     sleeptime = max 0.001 (nextWakeTime - currentSecs)
                 let maxSleepMicros = min 16666 (floor (sleeptime * 1000000))
                     (_, etlq) = lbsMsgQueues ls
-                mMsg ← timeout maxSleepMicros (Q.readQueue etlq)
+                -- readQueueTimeout, NOT System.Timeout around readQueue:
+                -- the timeout exception can land after the STM dequeue
+                -- commits, silently dropping the message.
+                mMsg ← Q.readQueueTimeout maxSleepMicros etlq
                 case mMsg of
                   Just msg → do
                       processLuaMsg env ls stateRef msg
                       processLuaMsgs env ls stateRef
                       pure True
                   Nothing → do
-                      currentTime' ← getCurrentTime
-                      let currentSecs' = realToFrac $ utctDayTime currentTime'
+                      currentSecs' ← nowSeconds
                       scriptsMap' ← readTVarIO (lbsScripts ls)
                       forM_ (Map.toList scriptsMap') $ \(sid, script) → do
                         when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
@@ -674,7 +675,6 @@ processLuaMsg env ls stateRef msg = case msg of
       , buttonsToScriptValue buttons
       , coordsToScriptValue mCoords
       ]
-  _ → return ()
 
 -- | Build a Lua array @{ {label=..., action=...}, ... }@ from the
 --   button list carried by 'LuaShowPopup'. Lua-side popup module

@@ -16,8 +16,8 @@ module Engine.Scripting.Lua.API.Core
 import UPrelude
 import Engine.Scripting.Types (ScriptValue(..))
 import Engine.Scripting.Lua.Types
-import Engine.Scripting.Lua.Script (callModuleFunction)
-import Engine.Scripting.Lua.Util (isValidRef)
+import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
+import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logThreadInfo, logWarn, logDebug, LogCategory(..))
 import qualified HsLua as Lua
@@ -30,7 +30,7 @@ import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Monad (when, filterM, zipWithM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
-import Data.Time.Clock (getCurrentTime, utctDayTime)
+import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import System.Directory (listDirectory, doesDirectoryExist)
 import System.FilePath (takeExtension)
@@ -94,8 +94,7 @@ setTickIntervalFn env backendState = do
    interval ← Lua.tonumber 2
    case (scriptIdNum, interval) of
        (Just sid, Just (Lua.Number seconds)) → Lua.liftIO $ do
-           currentTime ← getCurrentTime
-           let currentSecs = realToFrac $ utctDayTime currentTime
+           currentSecs ← nowSeconds
            atomically $ modifyTVar (lbsScripts backendState) $
                Map.adjust (\s → s { scriptTickRate = seconds
                                   , scriptNextTick = currentSecs + seconds
@@ -139,26 +138,18 @@ loadScriptFn env backendState lst = do
                     sid ← atomicModifyIORef' (lbsNextScriptId backendState)
                         (\n → (n + 1, n))
 
-                    status ← Lua.runWith lst $ Lua.dofileTrace (Just $ T.unpack pathStr)
-                    case status of
-                        Lua.OK → do
+                    result ← Lua.runWith lst $ loadModuleRef (T.unpack pathStr)
+                    case result of
+                        Right modRef → do
                             let dropDir (('/'):xs) = T.pack xs
                                 dropDir (x:xs    ) = dropDir xs
                                 dropDir _          = ""
                             logDebug logger CatLua $ "loaded: "
                                                   <> (dropDir (T.unpack (pathStr)))
                             logDebug logger CatLua $ " with ID " <> T.pack (show sid)
-                            modRef ← Lua.runWith lst $ do
-                                isTable ← Lua.istable (-1)
-                                if isTable
-                                    then Lua.ref Lua.registryindex
-                                    else do
-                                        Lua.pop 1
-                                        return (Lua.Reference (fromIntegral Lua.refnil))
 
-                            currentTime ← getCurrentTime
-                            let currentSecs = realToFrac $ utctDayTime currentTime
-                                script = LuaScript
+                            currentSecs ← nowSeconds
+                            let script = LuaScript
                                     { scriptId        = sid
                                     , scriptPath      = T.unpack pathStr
                                     , scriptTickRate  = realToFrac rate
@@ -177,9 +168,9 @@ loadScriptFn env backendState lst = do
                                            <> T.pack (show sid)
 
                             return (Just sid)
-                        e → do
+                        Left errMsg → do
                             logWarn logger CatLua $ "Failed to load Lua script: " <> pathStr
-                                           <> ". Error code: " <> T.pack (show e)
+                                           <> " - " <> errMsg
                             return Nothing
             
             case scriptId of
@@ -224,10 +215,9 @@ resumeScriptFn backendState = do
     sidNum ← Lua.tointeger 1
     case sidNum of
         Just sid → Lua.liftIO $ do
-            currentTime ← getCurrentTime
-            let currentSecs = realToFrac $ utctDayTime currentTime
+            currentSecs ← nowSeconds
             atomically $ modifyTVar (lbsScripts backendState) $
-                Map.adjust (\s → s { scriptPaused = False, scriptNextTick = currentSecs }) 
+                Map.adjust (\s → s { scriptPaused = False, scriptNextTick = currentSecs })
                            (fromIntegral sid)
         _ → return ()
     return 0

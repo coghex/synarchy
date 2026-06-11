@@ -13,7 +13,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef', newIORef, IORef)
+import Data.IORef (readIORef, atomicModifyIORef', newIORef, IORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -138,7 +138,6 @@ loadAndRegister env backendState lteq name path = do
     pool ← readIORef (lbsAssetPool backendState)
     handle ← generateTextureHandle pool
     updateTextureState handle (AssetLoading path [] 0.0) pool
-    writeIORef (lbsAssetPool backendState) pool
     -- Register name → handle
     registerTextureName (textureNameRegistryRef env) name handle
     -- Queue for actual GPU loading on the engine thread

@@ -68,9 +68,9 @@ setVideoConfigFn env = do
             let wm = case windowModeFromText (TE.decodeUtf8 wmBS) of
                         Just mode → mode
                         Nothing   → Windowed
-            Lua.liftIO $ do
-                oldConfig ← readIORef (videoConfigRef env)
-                let newConfig = oldConfig
+            Lua.liftIO $
+                atomicModifyIORef' (videoConfigRef env) $ \oldConfig →
+                    (oldConfig
                       { vcWidth = fromIntegral w
                       , vcHeight = fromIntegral h
                       , vcWindowMode = wm
@@ -84,8 +84,7 @@ setVideoConfigFn env = do
                       , vcTextureFilter = case textureFilterFromText (TE.decodeUtf8 tf) of
                                           Just filter → filter
                                           Nothing     → vcTextureFilter oldConfig
-                      }
-                writeIORef (videoConfigRef env) newConfig
+                      }, ())
             Lua.pushboolean True
         _ → Lua.pushboolean False
     
@@ -127,10 +126,9 @@ setUIScaleFn env = do
     
     case scaleArg of
         Just scale → do
-            Lua.liftIO $ do
-                oldConfig ← readIORef (videoConfigRef env)
-                let newConfig = oldConfig { vcUIScale = realToFrac scale }
-                writeIORef (videoConfigRef env) newConfig
+            Lua.liftIO $
+                atomicModifyIORef' (videoConfigRef env) $ \c →
+                    (c { vcUIScale = realToFrac scale }, ())
             Lua.pushboolean True
         Nothing → Lua.pushboolean False
     return 1
@@ -140,12 +138,10 @@ setFrameLimitFn env = do
     frameLimitArg ← Lua.tointeger 1
     case frameLimitArg of
         Just fl → do
-            Lua.liftIO $ do
-                oldConfig ← readIORef (videoConfigRef env)
-                let newConfig = oldConfig { vcFrameLimit = if fl > 0 then
-                                                             Just (fromIntegral fl)
-                                                           else Nothing }
-                writeIORef (videoConfigRef env) newConfig
+            Lua.liftIO $
+                atomicModifyIORef' (videoConfigRef env) $ \c →
+                    (c { vcFrameLimit = if fl > 0 then Just (fromIntegral fl)
+                                                  else Nothing }, ())
             Lua.pushboolean True
         Nothing → Lua.pushboolean False
     return 1
@@ -158,12 +154,10 @@ setResolutionFn env = do
     case (widthArg, heightArg) of
         (Just w, Just h) → do
             Lua.liftIO $ do
-                oldConfig ← readIORef (videoConfigRef env)
-                let newConfig = oldConfig
-                      { vcWidth = fromIntegral w
-                      , vcHeight = fromIntegral h
-                      }
-                writeIORef (videoConfigRef env) newConfig
+                atomicModifyIORef' (videoConfigRef env) $ \c →
+                    (c { vcWidth = fromIntegral w
+                       , vcHeight = fromIntegral h
+                       }, ())
                 Q.writeQueue (luaToEngineQueue env)
                     (LuaSetResolution (fromIntegral w) (fromIntegral h))
             Lua.pushboolean True
@@ -181,8 +175,8 @@ setWindowModeFn env = do
                 Just wm → Lua.liftIO $ do
                     let lteq = luaToEngineQueue env
                     Q.writeQueue lteq (LuaSetWindowMode wm)
-                    oldConfig ← readIORef (videoConfigRef env)
-                    writeIORef (videoConfigRef env) $ oldConfig { vcWindowMode = wm }
+                    atomicModifyIORef' (videoConfigRef env) $ \c →
+                        (c { vcWindowMode = wm }, ())
                 Nothing → pure ()
         Nothing → pure ()
     
@@ -194,8 +188,8 @@ setVSyncFn env = do
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
             Q.writeQueue lteq (LuaSetVSync vsyncArg)
-            oldConfig ← readIORef (videoConfigRef env)
-            writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsyncArg }
+            atomicModifyIORef' (videoConfigRef env) $ \c →
+                (c { vcVSync = vsyncArg }, ())
     return 0
 
 setMSAAFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -207,8 +201,8 @@ setMSAAFn env = do
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
             Q.writeQueue lteq (LuaSetMSAA msaa)
-            oldConfig ← readIORef (videoConfigRef env)
-            writeIORef (videoConfigRef env) $ oldConfig { vcMSAA = msaa }
+            atomicModifyIORef' (videoConfigRef env) $ \c →
+                (c { vcMSAA = msaa }, ())
     return 0
 
 setBrightnessFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -220,8 +214,8 @@ setBrightnessFn env = do
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
             Q.writeQueue lteq (LuaSetBrightness brightness)
-            oldConfig ← readIORef (videoConfigRef env)
-            writeIORef (videoConfigRef env) $ oldConfig { vcBrightness = brightness }
+            atomicModifyIORef' (videoConfigRef env) $ \c →
+                (c { vcBrightness = brightness }, ())
     return 0
 
 setPixelSnapFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -229,8 +223,8 @@ setPixelSnapFn env = do
     enabled ← Lua.toboolean 1
     Lua.liftIO $ do
         writeIORef (pixelSnapRef env) enabled
-        oldConfig ← readIORef (videoConfigRef env)
-        writeIORef (videoConfigRef env) $ oldConfig { vcPixelSnap = enabled }
+        atomicModifyIORef' (videoConfigRef env) $ \c →
+            (c { vcPixelSnap = enabled }, ())
     return 0
 
 setTextureFilterFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -242,8 +236,8 @@ setTextureFilterFn env = do
             case textureFilterFromText filterText of
                 Just tf → Lua.liftIO $ do
                     writeIORef (textureFilterRef env) tf
-                    oldConfig ← readIORef (videoConfigRef env)
-                    writeIORef (videoConfigRef env) $ oldConfig { vcTextureFilter = tf }
+                    atomicModifyIORef' (videoConfigRef env) $ \c →
+                        (c { vcTextureFilter = tf }, ())
                     let lteq = luaToEngineQueue env
                     Q.writeQueue lteq (LuaSetTextureFilter tf)
                 Nothing → pure ()
@@ -267,9 +261,8 @@ setTooltipDwellMsFn env = do
             Just n  → max 0 (min 1000 (fromIntegral n))
             Nothing → 400
     Lua.liftIO $ do
-        oldConfig ← readIORef (videoConfigRef env)
-        writeIORef (videoConfigRef env) $
-            oldConfig { vcTooltipDwellMs = dwell }
+        atomicModifyIORef' (videoConfigRef env) $ \c →
+            (c { vcTooltipDwellMs = dwell }, ())
         atomicModifyIORef' (uiManagerRef env) $ \mgr →
             let tts = upmTooltip mgr
                 newStyle = (ttsStyle tts) { tsDwellMs = fromIntegral dwell }
@@ -293,9 +286,8 @@ setTooltipHintDelayMsFn env = do
             Just n  → max 0 (min 1000 (fromIntegral n))
             Nothing → 400
     Lua.liftIO $ do
-        oldConfig ← readIORef (videoConfigRef env)
-        writeIORef (videoConfigRef env) $
-            oldConfig { vcTooltipHintDelayMs = delay }
+        atomicModifyIORef' (videoConfigRef env) $ \c →
+            (c { vcTooltipHintDelayMs = delay }, ())
         atomicModifyIORef' (uiManagerRef env) $ \mgr →
             let tts = upmTooltip mgr
                 newStyle = (ttsStyle tts) { tsHintDelayMs = fromIntegral delay }
