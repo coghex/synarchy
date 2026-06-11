@@ -1268,6 +1268,10 @@ function uiManager.onSetWeatherInfo(text)
     if hud then hud.setWeatherInfo(text) end
 end
 
+function uiManager.onSetResourcesInfo(text)
+    if hud then hud.setResourcesInfo(text) end
+end
+
 function uiManager.onClearInfo()
     if hud then hud.clearInfo() end
 end

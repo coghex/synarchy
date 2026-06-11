@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Generate.Chunk
     ( generateChunk
+    , generateLoadedChunk
     , generateExposedColumn
     , generateZoomTerrain
     ) where
@@ -731,6 +732,29 @@ mkSurfaceMap terrain fluid =
       ) terrain
 
 -- * Chunk Generation
+
+-- | 'generateChunk' wrapped into a 'LoadedChunk'. The canonical
+--   tuple→record assembly — chunk loading and the zoom-map ore survey
+--   both go through here so the field mapping can't drift between
+--   call sites. Side decorations start empty (the loading pipeline
+--   computes them later; irrelevant for transient consumers).
+generateLoadedChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
+                    → ChunkCoord → LoadedChunk
+generateLoadedChunk registry catalog params coord =
+    let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) =
+            generateChunk registry catalog params coord
+    in LoadedChunk
+        { lcCoord      = coord
+        , lcTiles      = chunkTiles
+        , lcSurfaceMap = surfMap
+        , lcTerrainSurfaceMap = tMap
+        , lcFluidMap   = fluidMap
+        , lcIceMap     = iceMap
+        , lcFlora      = flora
+        , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+        , lcWaterTableMap = wtMap
+        , lcMagma      = magma
+        }
 
 -- | Generate a single chunk. Pure and deterministic.
 --   Returns (tiles, surfaceMap) where surfaceMap maps (lx,ly) -> surfaceZ.

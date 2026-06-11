@@ -2,6 +2,7 @@
 module World.Generate
     ( -- * Generation
       generateChunk
+    , generateLoadedChunk
       -- * Coordinate helpers
     , globalToChunk
     , chunkToGlobal
@@ -16,7 +17,7 @@ module World.Generate
     , ChunkCoord(..)
     ) where
 
-import World.Generate.Chunk (generateChunk)
+import World.Generate.Chunk (generateChunk, generateLoadedChunk)
 import World.Generate.Coordinates
     ( globalToChunk
     , chunkToGlobal

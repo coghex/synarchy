@@ -9,15 +9,19 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Fluids (isOceanChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
-import World.Geology.Ore.Types (wodByChunk)
-import Data.List (sortOn)
-import World.Thread.Helpers (sendHudInfo, sendHudWeatherInfo)
+import World.Edit.Apply (replayEdits)
+import World.Generate (generateLoadedChunk)
+import World.Generate.Types (isArenaParams)
+import World.Geology.Ore (chunkOreCounts)
+import World.Slope (patchEdgeStrata)
+import World.Thread.Helpers (sendHudInfo, sendHudWeatherInfo
+                            , sendHudResourcesInfo)
 import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
                            , OceanGrid(..), OceanCell(..)
@@ -43,7 +47,10 @@ pollCursorInfo env = do
 
                 when (curZoom ≢ oldZoom) $ do
                     case curZoom of
-                        Nothing → sendHudInfo env "" ""
+                        Nothing → do
+                            sendHudInfo env "" ""
+                            sendHudWeatherInfo env ""
+                            sendHudResourcesInfo env ""
                         Just (baseGX, baseGY) →
                             sendChunkInfo env worldState mParams baseGX baseGY
 
@@ -75,30 +82,58 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
     materials ← readIORef (materialRegistryRef env)
     let mEntry = V.find (\e → zceChunkX e ≡ cx ∧ zceChunkY e ≡ cy) zoomCache
 
-    -- Resources: per-chunk ore summary from the global deposit table
-    -- (built once at timeline assembly). Volume is DEPOSITION HISTORY
-    -- in tile·z — erosion destroys most sheets over geologic time, so
-    -- it overstates surviving strata ore by ~2 orders of magnitude.
-    -- The buckets are a prospector's survey ranking, calibrated from
-    -- the w64 per-chunk distribution (max ~20-36k, p90 ~5-8k, median
-    -- ~1-2k; ore_report 2026-06-11): rich ≈ top decile.
-    let oreLines = case mParams of
-            Nothing → ""
-            Just params →
-                case HM.lookup coord
-                         (wodByChunk (gtOreDeposits (wgpGeoTimeline params))) of
-                    Nothing → ""
-                    Just entries → T.intercalate "\n"
-                        [ prettyMatName (mpName props) <> ": " <> richness vol
-                        | (mat, vol) ← sortOn (negate . snd) entries
-                        , vol > 0
-                        , let props = getMaterialProps materials (MaterialId mat)
-                        ]
-        richness v
-            | v ≥ 8000  = "rich"
-            | v ≥ 2000  = "moderate"
-            | otherwise = "traces"
-        prettyMatName = T.unwords . map T.toTitle . T.splitOn "_"
+    -- Resources tab: per-ore SURVIVING inventory counted from the
+    -- chunk's strata via 'chunkOreCounts'. (The gtOreDeposits table is
+    -- deposition history — erosion destroys most sheets over geologic
+    -- time, so it overstates what's actually mineable by ~2 orders of
+    -- magnitude; the strata are the truth.)
+    --
+    -- Loaded chunks are counted directly (cheap, and they already
+    -- carry edits + edge patches). Unloaded chunks generate
+    -- transiently through the SAME pipeline chunk loading uses —
+    -- 'generateLoadedChunk', then 'replayEdits' (an evicted chunk
+    -- with player edits must not report pre-edit ore), then
+    -- 'patchEdgeStrata' against the currently loaded neighbors (so
+    -- the count matches what loading the chunk right now would give).
+    -- Transient results are memoized in 'wsOreSurveyRef' keyed by the
+    -- chunk's edit list, so reselection doesn't repeat the ~10–300 ms
+    -- generation and edits self-invalidate. Arena worlds (flat
+    -- chunks, no timeline) skip the transient path.
+    tileData ← readIORef (wsTilesRef worldState)
+    catalog ← readIORef (floraCatalogRef env)
+    edits ← readIORef (wsEditsRef worldState)
+    let prettyMatName = T.unwords . map T.toTitle . T.splitOn "_"
+        renderOreLines counts = T.intercalate "\n"
+            [ prettyMatName (mpName (getMaterialProps materials
+                                        (MaterialId oid)))
+                <> ": " <> T.pack (show nTiles) <> " tiles ("
+                <> T.pack (show nCells) <> " blocks)"
+            | (oid, nTiles, nCells) ← counts ]
+        chunkEdits = HM.lookupDefault [] coord edits
+    resourceText ← case lookupChunk coord tileData of
+        Just lc → pure (renderOreLines (chunkOreCounts (lcTiles lc)))
+        Nothing → case mParams of
+            Just params | not (isArenaParams params) → do
+                cacheMap ← readIORef (wsOreSurveyRef worldState)
+                case HM.lookup coord cacheMap of
+                    Just (cachedEdits, cachedText)
+                        | cachedEdits ≡ chunkEdits → pure cachedText
+                    _ → do
+                        let lc0 = generateLoadedChunk materials catalog
+                                                      params coord
+                            lc1 = replayEdits edits lc0
+                            tdTmp = patchEdgeStrata [coord]
+                                        (insertChunk lc1 tileData)
+                            tilesP = case lookupChunk coord tdTmp of
+                                Just lcP → lcTiles lcP
+                                Nothing  → lcTiles lc1
+                            txt = renderOreLines (chunkOreCounts tilesP)
+                        atomicModifyIORef' (wsOreSurveyRef worldState) $ \m →
+                            let m' = if HM.size m ≥ 256 then HM.empty else m
+                            in (HM.insert coord (chunkEdits, txt) m', ())
+                        pure txt
+            _ → pure ""
+    sendHudResourcesInfo env resourceText
 
     let basicLines = T.unlines $ filter (not . T.null)
             [ "Chunk (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
@@ -110,7 +145,6 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
                      <> (if zceIsOcean entry then "\nOcean" else "")
                      <> (if zceHasLava entry then "\nLava" else "")
                 Nothing → ""
-            , if T.null oreLines then "" else "Resources:\n" <> oreLines
             ]
 
     let advLines = T.unlines $ filter (not . T.null)

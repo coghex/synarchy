@@ -644,6 +644,10 @@ function hud.setWeatherInfo(text)
     infoPanel.setWeatherInfo(text)
 end
 
+function hud.setResourcesInfo(text)
+    infoPanel.setResourcesInfo(text)
+end
+
 function hud.clearInfo()
     infoPanel.clear()
 end

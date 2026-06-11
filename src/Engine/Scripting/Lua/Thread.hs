@@ -661,6 +661,8 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onSetInfoText" [ScriptString text1, ScriptString text2]
   LuaHudLogWeatherInfo text →
     broadcastToModules ls "onSetWeatherInfo" [ScriptString text]
+  LuaHudLogResourcesInfo text →
+    broadcastToModules ls "onSetResourcesInfo" [ScriptString text]
   LuaWorldPreviewReady handleInt →
     broadcastToModules ls "onWorldPreviewReady"
       [ScriptNumber (fromIntegral handleInt)]

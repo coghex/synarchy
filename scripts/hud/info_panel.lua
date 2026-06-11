@@ -45,7 +45,8 @@ local schemas = {
     tile = {
         { key = "basic",    name = "Basic" },
         { key = "advanced", name = "Advanced" },
-        -- "weather" appears dynamically when there's weather text.
+        -- "resources" and "weather" appear dynamically when they
+        -- have text (chunk selection on the zoom map pushes both).
     },
     unit = {
         { key = "status",    name = "Status" },
@@ -58,12 +59,13 @@ local schemas = {
         { key = "binfo", name = "Info" },
     },
 }
-local weatherTabDef = { key = "weather", name = "Weather" }
+local weatherTabDef   = { key = "weather",   name = "Weather" }
+local resourcesTabDef = { key = "resources", name = "Resources" }
 
 -- All tab keys we know about. Listed once so per-tab maps can be
 -- initialized with empty values for every key.
 local allKeys = {
-    "basic", "advanced", "weather",
+    "basic", "advanced", "weather", "resources",
     "status", "physical", "mental", "skills", "inventory",
     "binfo",
 }
@@ -77,7 +79,8 @@ infoPanel.activeSchema = "tile"
 infoPanel.activeTab  = "basic"
 infoPanel.visible    = false
 infoPanel.page       = nil
-infoPanel.weatherTabActive = false  -- whether the weather tab exists
+infoPanel.weatherTabActive   = false  -- whether the weather tab exists
+infoPanel.resourcesTabActive = false  -- whether the resources tab exists
 
 -- Per-tab text content (raw multi-line string). Initialized lazily
 -- so any tab key from `allKeys` is safe to write to.
@@ -138,9 +141,13 @@ local function hasContent()
             end
         end
     end
-    -- Tile schema's weather tab is dynamic; counts if active.
+    -- Tile schema's weather/resources tabs are dynamic; count if active.
     if infoPanel.activeSchema == "tile" and infoPanel.weatherTabActive
        and infoPanel.tabText.weather ~= "" then
+        return true
+    end
+    if infoPanel.activeSchema == "tile" and infoPanel.resourcesTabActive
+       and infoPanel.tabText.resources ~= "" then
         return true
     end
     return false
@@ -167,7 +174,10 @@ local function currentTabDefs()
     for _, def in ipairs(schemaDefs) do
         table.insert(defs, def)
     end
-    -- Weather is a special tile-schema add-on.
+    -- Resources and weather are special tile-schema add-ons.
+    if infoPanel.activeSchema == "tile" and infoPanel.resourcesTabActive then
+        table.insert(defs, resourcesTabDef)
+    end
     if infoPanel.activeSchema == "tile" and infoPanel.weatherTabActive then
         table.insert(defs, weatherTabDef)
     end
@@ -205,8 +215,9 @@ function infoPanel.create(params)
     infoPanel.page = page
     infoPanel.createParams = params
 
-    -- Decide whether to include weather tab
-    infoPanel.weatherTabActive = (infoPanel.tabText.weather ~= "")
+    -- Decide whether to include the dynamic tabs
+    infoPanel.weatherTabActive   = (infoPanel.tabText.weather ~= "")
+    infoPanel.resourcesTabActive = (infoPanel.tabText.resources ~= "")
 
     -- Panel dimensions
     local panelWidth  = math.floor(fbW * base.widthFrac)
@@ -392,16 +403,19 @@ function infoPanel.setText(tabKey, text)
     local oldText = infoPanel.tabText[tabKey]
     infoPanel.tabText[tabKey] = text
 
-    -- If the weather tab appeared or disappeared, we need a full rebuild
-    if tabKey == "weather" then
-        local wasActive = infoPanel.weatherTabActive
+    -- If a dynamic tab (weather/resources) appeared or disappeared,
+    -- we need a full rebuild of the tabbar.
+    local dynFlag = nil
+    if tabKey == "weather"   then dynFlag = "weatherTabActive"   end
+    if tabKey == "resources" then dynFlag = "resourcesTabActive" end
+    if dynFlag then
+        local wasActive = infoPanel[dynFlag]
         local shouldBeActive = (text ~= "")
         if wasActive ~= shouldBeActive then
-            -- Need to rebuild the tabbar to add/remove the weather tab.
-            -- But we can only do that if we have the create params.
-            -- Store a flag so the next createUI call picks it up.
-            infoPanel.weatherTabActive = shouldBeActive
-            -- For now, if we have a page, rebuild via the stored params
+            -- Need to rebuild the tabbar to add/remove the tab. But we
+            -- can only do that if we have the create params (stored on
+            -- the first createUI; the rebuild re-reads tabText).
+            infoPanel[dynFlag] = shouldBeActive
             if infoPanel.createParams then
                 infoPanel.create(infoPanel.createParams)
                 if hasContent() then
@@ -443,6 +457,12 @@ function infoPanel.setWeatherInfo(weatherText)
     infoPanel.setText("weather", weatherText or "")
 end
 
+-- Resources push (zoom-map chunk selection): per-ore surviving tile
+-- counts. Empty string removes the tab.
+function infoPanel.setResourcesInfo(resourcesText)
+    infoPanel.setText("resources", resourcesText or "")
+end
+
 -- Unit-info push: switches to the unit schema and writes the five
 -- per-tab strings at once. Any of them may be "" (the tab still
 -- exists but renders empty).
@@ -481,6 +501,8 @@ function infoPanel.useSchema(name)
     if infoPanel.activeSchema == "tile" then
         infoPanel.tabText.weather = ""
         infoPanel.weatherTabActive = false
+        infoPanel.tabText.resources = ""
+        infoPanel.resourcesTabActive = false
     end
 
     infoPanel.activeSchema = name

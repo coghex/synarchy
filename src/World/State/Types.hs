@@ -24,7 +24,7 @@ import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
-import World.Edit.Types (WorldEdits, emptyWorldEdits)
+import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 
 data WorldState = WorldState
     { wsTilesRef     ∷ IORef WorldTileData
@@ -52,6 +52,13 @@ data WorldState = WorldState
       --   doesn't lose them — chunks regenerate, edits replay onto the
       --   fresh chunk. Saved verbatim; restored before any chunk
       --   regeneration on load.
+    , wsOreSurveyRef ∷ IORef (HM.HashMap ChunkCoord ([WorldEdit], Text))
+      -- ^ Memo for the zoom-map Resources survey of UNLOADED chunks
+      --   (transient generation is ~10–300 ms; reselecting shouldn't
+      --   repeat it). Each entry stores the chunk's edit list at
+      --   compute time — a lookup only hits when the current edit
+      --   list is identical, so edits self-invalidate. Wholesale
+      --   flush at 256 entries. Loaded chunks never consult this.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -77,6 +84,7 @@ emptyWorldState = do
     wsLoadPhaseRef ← newIORef LoadIdle
     wsZoomAtlasRef ← newIORef Nothing
     wsEditsRef     ← newIORef emptyWorldEdits
+    wsOreSurveyRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
@@ -84,6 +92,7 @@ emptyWorldState = do
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
+                        wsOreSurveyRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

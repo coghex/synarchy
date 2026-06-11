@@ -27,14 +27,16 @@ module World.Geology.Ore
     ( buildOreSheets
     , buildOreDepositTable
     , oreMaterialIds
+    , chunkOreCounts
     ) where
 
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Chunk.Types (ChunkCoord(..), chunkSize, Chunk, ColumnTiles(..))
 import World.Geology.Hash (hashGeo, hashToFloatGeo)
 import World.Geology.Ore.Types
 import World.Geology.Timeline.Types
@@ -121,6 +123,24 @@ depositSpecs = [ironSpec, copperSpec]
 --   layer and report tooling to recognise ore cells in strata).
 oreMaterialIds ∷ [Word8]
 oreMaterialIds = map dsMat depositSpecs
+
+-- | Surviving ore inventory of one chunk's strata: for each ore
+--   material present, @(matId, columns containing it, total cells)@.
+--   This is the truth the Resources tab (and any future mining-yield
+--   or Lua query) should report — NOT 'buildOreDepositTable', whose
+--   volumes are deposition history and overstate what erosion left.
+chunkOreCounts ∷ Chunk → [(Word8, Int, Int)]
+chunkOreCounts tiles =
+    [ (oid, nTiles, nCells)
+    | oid ← oreMaterialIds
+    , let perCol = [ VU.length hits
+                   | col ← V.toList tiles
+                   , let hits = VU.filter (≡ oid) (ctMats col)
+                   , not (VU.null hits) ]
+          nTiles = length perCol
+          nCells = sum perCol
+    , nTiles > 0
+    ]
 
 -- | Size factor for line features (fissures, tubes): length·height.
 featureLineFactor ∷ GeoCoord → GeoCoord → Int → Float → Float

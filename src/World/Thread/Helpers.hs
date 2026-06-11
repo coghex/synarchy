@@ -3,6 +3,7 @@ module World.Thread.Helpers
     ( sendGenLog
     , sendHudInfo
     , sendHudWeatherInfo
+    , sendHudResourcesInfo
     , unWorldPageId
     ) where
 
@@ -25,6 +26,12 @@ sendHudInfo env msgbas msgadv = Q.writeQueue (luaQueue env)
 sendHudWeatherInfo ∷ EngineEnv → Text → IO ()
 sendHudWeatherInfo env weatherText = Q.writeQueue (luaQueue env)
                                             (LuaHudLogWeatherInfo weatherText)
+
+-- | Send resources info (zoom-chunk ore survey) to lua's HUD.
+--   Empty text removes the Resources tab.
+sendHudResourcesInfo ∷ EngineEnv → Text → IO ()
+sendHudResourcesInfo env resText = Q.writeQueue (luaQueue env)
+                                            (LuaHudLogResourcesInfo resText)
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

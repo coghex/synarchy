@@ -137,6 +137,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaWorldGenLog Text
             | LuaHudLogInfo Text Text
             | LuaHudLogWeatherInfo Text
+            | LuaHudLogResourcesInfo Text
             | LuaWorldPreviewReady Int
             | LuaShowPopup Text Text Float Float Float Float
                            [(Text, Text)] (Maybe (Int, Int))

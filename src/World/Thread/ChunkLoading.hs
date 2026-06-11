@@ -23,15 +23,14 @@ import qualified Data.HashSet as HS
 import World.Types
 import World.Chunk.Types (chunkSize)
 import World.Fluid.Types (FluidCell(..))
-import World.Generate (generateChunk, cameraChunkCoord)
+import World.Generate (generateLoadedChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
-import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes, patchEdgeStrata, chunkNeighbors)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
-import World.Generate.Types (WorldGenParams(..))
+import World.Generate.Types (WorldGenParams(..), isArenaParams)
 import World.Edit.Apply (replayEdits)
 import Sim.Command.Types (SimCommand(..))
 
@@ -85,27 +84,14 @@ updateChunkLoading env logger = do
                             let toGenerateSorted = sortOn (\(ChunkCoord cx cy) →
                                     abs (cx - ccx) + abs (cy - ccy)) toGenerate
                                 batch = take maxChunksPerTick toGenerateSorted
-                            let isArena = wgpGeoTimeline params
-                                            == emptyTimeline
-                                            && wgpSeed params == 0
+                            let isArena = isArenaParams params
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
-                                        else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) = generateChunk registry catalog params coord
-                                            in LoadedChunk
-                                                { lcCoord      = coord
-                                                , lcTiles      = chunkTiles
-                                                , lcSurfaceMap = surfMap
-                                                , lcTerrainSurfaceMap = tMap
-                                                , lcFluidMap   = fluidMap
-                                                , lcIceMap     = iceMap
-                                                , lcFlora      = flora
-                                                , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
-                                                , lcWaterTableMap = wtMap
-                                                , lcMagma      = magma
-                                                }) batch
+                                        else parMap rdeepseq
+                                            (generateLoadedChunk registry catalog params)
+                                            batch
                                 -- Replay player edits onto the fresh chunks
                                 -- before inserting. Chunks evicted earlier
                                 -- in this session and now coming back will
@@ -175,20 +161,9 @@ drainInitQueues env logger = do
                             (drop maxChunksPerTick q, take maxChunksPerTick q)
                         let seed = wgpSeed params
 
-                        let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) = generateChunk registry catalog params coord
-                                in LoadedChunk
-                                    { lcCoord      = coord
-                                    , lcTiles      = chunkTiles
-                                    , lcSurfaceMap = surfMap
-                                    , lcTerrainSurfaceMap = tMap
-                                    , lcFluidMap   = fluidMap
-                                    , lcIceMap     = iceMap
-                                    , lcFlora      = flora
-                                    , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
-                                    , lcWaterTableMap = wtMap
-                                    , lcMagma      = magma
-                                    }) batch
+                        let newChunks = parMap rdeepseq
+                                (generateLoadedChunk registry catalog params)
+                                batch
 
                         -- Replay player edits onto the fresh chunks
                         -- before inserting. On load, edits restored from

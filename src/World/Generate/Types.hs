@@ -3,6 +3,7 @@ module World.Generate.Types
     ( WorldGenParams(..)
     , defaultWorldGenParams
     , withVolcanoCtx
+    , isArenaParams
     ) where
 
 import UPrelude hiding (get)
@@ -155,6 +156,13 @@ defaultWorldGenParams = WorldGenParams
     , wgpOreLevers = defaultOreLevers
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
+
+-- | Arena (test) worlds: flat chunks, no geological timeline. The
+--   single authority for this predicate — chunk loading picks the
+--   flat generator from it and the ore survey skips transient
+--   generation on it.
+isArenaParams ∷ WorldGenParams → Bool
+isArenaParams p = wgpGeoTimeline p ≡ emptyTimeline ∧ wgpSeed p ≡ 0
 
 -- | Refresh @wgpVolcanoCtx@ from the params' seed / worldSize /
 --   plates / timeline. Called after the geological timeline is
