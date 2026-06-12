@@ -19,6 +19,12 @@ data CursorState = CursorState
     --   u-wrap boundary). Written every frame by renderWorldCursorQuads;
     --   read from Lua via world.getHoverTile().
     , worldHoverTile ∷ Maybe (Int, Int)
+    -- | Fractional grid position of the same hover point (item/unit
+    --   convention: tile k spans [k, k+1), center at k+0.5). Lets
+    --   sub-tile placements (ground-item spawn) land exactly under
+    --   the cursor instead of snapping to the tile center. Read from
+    --   Lua via world.getHoverPos().
+    , worldHoverPos ∷ Maybe (Float, Float)
     , worldCursorTexture ∷ Maybe TextureHandle
     , worldCursorBgTexture ∷ Maybe TextureHandle
     , worldHoverTexture ∷ Maybe TextureHandle
@@ -48,6 +54,7 @@ emptyCursorState =
         , zoomSelectNow = False
         , worldCursorPos = Nothing
         , worldHoverTile = Nothing
+        , worldHoverPos = Nothing
         , worldCursorTexture = Nothing
         , worldCursorBgTexture = Nothing
         , worldHoverTexture = Nothing

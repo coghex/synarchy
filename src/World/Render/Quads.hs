@@ -22,7 +22,8 @@ import World.Fluids (FluidCell(..), FluidType(..))
 import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
-import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight, worldToGrid)
+import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight
+                  , worldToGrid, worldToGridF)
 import World.Mine.Types (MineDesignation(..))
 import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
@@ -402,6 +403,29 @@ renderWorldCursorQuads env worldState tileAlpha = do
                         adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
                                        - tileHeight * 0.5
                         (gx, gy) = worldToGrid facing worldX adjustedWorldY
+                        -- Fractional position in the ITEM/unit
+                        -- convention (tile k spans [k, k+1), center
+                        -- k+0.5). An item's ground anchor at grid
+                        -- (gxF, gyF) renders at exactly
+                        --   y = (faF+fbF)·thdh − relZ·tileSideHeight
+                        --   x = (faF−fbF)·thw
+                        -- so the inverse is worldToGridF of the click
+                        -- with ONLY the relZ elevation shift — no
+                        -- −tileHeight/2 (that constant + rounding is
+                        -- the integer-TILE convention above; reusing
+                        -- it here put spawns half a sprite north).
+                        --
+                        -- NOT clamped into (gx, gy): the tile
+                        -- resolution above rounds in a space shifted
+                        -- ~0.17 tile from the true diamond edge, so
+                        -- near borders the hit tile and the exact
+                        -- position legitimately disagree — clamping
+                        -- produced a sawtooth drift (position dragged
+                        -- toward the stale tile, snapping at the
+                        -- flip). The position is exact on its own;
+                        -- consumers ground it per its OWN tile.
+                        hoverPos = worldToGridF facing worldX
+                            (worldY + fromIntegral relZ * tileSideHeight)
                         (chunkCoord, (lx, ly)) = globalToChunk gx gy
                     in case HM.lookup chunkCoord (wtdChunks tileData) of
                         Nothing → tryZ (z - 1)
@@ -415,7 +439,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
                                then tryZ (z - 1)
                                else if ctMats col VU.! i ≠ 0
                                     then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                                           Just xOff → Just (gx, gy, z, xOff)
+                                           Just xOff → Just (gx, gy, z, xOff, hoverPos)
                                            Nothing   → tryZ (z - 1)
                                     else tryZ (z - 1)
 
@@ -444,15 +468,19 @@ renderWorldCursorQuads env worldState tileAlpha = do
     --      matters for one-shot selections triggered from Lua: there's
     --      no continuous hover to pick the tile up on the next tick.
     let newHoverTile = case hoverResult of
-            Just (gx, gy, _, _) → Just (gx, gy)
-            Nothing             → Nothing
+            Just (gx, gy, _, _, _) → Just (gx, gy)
+            Nothing                → Nothing
+        newHoverPos = case hoverResult of
+            Just (_, _, _, _, hp) → Just hp
+            Nothing               → Nothing
     cs' ← atomicModifyIORef' (wsCursorRef worldState) $ \current →
         let mergedSelected = if worldSelectNow current
                 then case hoverResult of
-                    Just (gx, gy, z, _) → Just (gx, gy, z)
-                    Nothing             → worldSelectedTile current
+                    Just (gx, gy, z, _, _) → Just (gx, gy, z)
+                    Nothing                → worldSelectedTile current
                 else worldSelectedTile current
             merged = current { worldHoverTile    = newHoverTile
+                             , worldHoverPos     = newHoverPos
                              , worldSelectNow    = False
                              , worldSelectedTile = mergedSelected
                              }
@@ -478,7 +506,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
 
     -- Hover quads (bg + fg) — used by both info and mine tools.
     let hoverQuads = case hoverResult of
-            Just (gx, gy, hz, xOff) →
+            Just (gx, gy, hz, xOff, _) →
                 let fgQuad = case worldHoverTexture cs' of
                         Just tex → V.singleton $
                             worldCursorToQuad lookupSlot lookupFmSlot
@@ -530,7 +558,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
             lc ← HM.lookup chunkCoord (wtdChunks tileData)
             pure (lcSurfaceMap lc VU.! columnIndex lx ly)
         minePreviewQuads = case (mineAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hx, hy, _, _), Just tex)
+            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
                 let hx' = clampSide ax hx
                     hy' = clampSide ay hy

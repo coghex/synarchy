@@ -192,13 +192,20 @@ function game.onMouseDown(button, x, y)
         end
 
         -- Debug item-spawn mode: arms an item def; the click drops
-        -- the item onto the ground at the hover tile (float coords;
-        -- resting height derives from terrain at render).
+        -- the item onto the ground exactly under the cursor (float
+        -- coords from the fractional hover position; resting height
+        -- derives from terrain at render). Tile-center fallback
+        -- covers the no-hover edge case.
         if debugOverlay.armedItemDef then
-            local gx, gy = world.getHoverTile()
-            if gx and gy then
-                item.spawnGround(debugOverlay.armedItemDef,
-                                 gx + 0.5, gy + 0.5)
+            local hx, hy = world.getHoverPos()
+            if hx and hy then
+                item.spawnGround(debugOverlay.armedItemDef, hx, hy)
+            else
+                local gx, gy = world.getHoverTile()
+                if gx and gy then
+                    item.spawnGround(debugOverlay.armedItemDef,
+                                     gx + 0.5, gy + 0.5)
+                end
             end
             return
         end

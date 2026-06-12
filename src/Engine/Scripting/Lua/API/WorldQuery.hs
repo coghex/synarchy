@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldLoadChunksInRegionFn
     , worldWaitForChunksFn
     , worldGetHoverTileFn
+    , worldGetHoverPosFn
     ) where
 
 import UPrelude
@@ -430,6 +431,30 @@ worldGetHoverTileFn env = do
                 Just (gx, gy) → do
                     Lua.pushinteger (fromIntegral gx)
                     Lua.pushinteger (fromIntegral gy)
+                    return 2
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        [] → do
+            Lua.pushnil
+            return 1
+
+-- | world.getHoverPos() → x, y or nil
+--   Fractional grid position of the point under the mouse cursor
+--   (item/unit convention: tile k spans [k, k+1)). Same hit-test as
+--   getHoverTile; use this for sub-tile placements — ground-item
+--   spawn lands exactly where the player clicked instead of snapping
+--   to the tile center.
+worldGetHoverPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetHoverPosFn env = do
+    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+    case wmWorlds manager of
+        ((_, ws):_) → do
+            cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
+            case worldHoverPos cs of
+                Just (hx, hy) → do
+                    Lua.pushnumber (Lua.Number (realToFrac hx))
+                    Lua.pushnumber (Lua.Number (realToFrac hy))
                     return 2
                 Nothing → do
                     Lua.pushnil
