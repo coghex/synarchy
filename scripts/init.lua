@@ -89,6 +89,11 @@ function game.init(scriptId)
     buildingInfoPanelScriptId = engine.loadScript(
         "scripts/building_info_panel.lua", 0.1)
 
+    -- Ground-item info watcher: same pattern for items lying in the
+    -- world (selection outline is engine-side; this drives the panel).
+    itemInfoPanelScriptId = engine.loadScript(
+        "scripts/item_info_panel.lua", 0.1)
+
     -- Cargo inventory popup: floating tabbed list shown by
     -- right-click → "Contents" on a storage-capable building.
     -- 0.2s tick — only refreshes on content-hash change (deposits
@@ -186,6 +191,18 @@ function game.onMouseDown(button, x, y)
             return
         end
 
+        -- Debug item-spawn mode: arms an item def; the click drops
+        -- the item onto the ground at the hover tile (float coords;
+        -- resting height derives from terrain at render).
+        if debugOverlay.armedItemDef then
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                item.spawnGround(debugOverlay.armedItemDef,
+                                 gx + 0.5, gy + 0.5)
+            end
+            return
+        end
+
         -- Debug fluid-spawn mode: arms a kind ("water" / "lava"); the
         -- click places one tile of that fluid on top of the column.
         if debugOverlay.armedFluidType then
@@ -223,21 +240,36 @@ function game.onMouseDown(button, x, y)
                 unit.select(id)
             end
             -- Selecting a unit takes over the info panel — deselect
-            -- any building so the panel doesn't flicker between schemas.
+            -- any building/item so the panel doesn't flicker between
+            -- schemas.
             building.deselect()
+            item.deselect()
         else
-            -- No unit hit. Try a building.
-            local bid = building.hitTestAt(x, y)
-            if bid then
-                building.select(bid)
-                if not shift then unit.deselectAll() end
-            else
-                -- Click missed everything. With Shift held, keep the
-                -- current selection (so shift-dragging from empty
-                -- terrain can extend it). Otherwise deselect.
+            -- No unit hit. Try a ground item (click priority:
+            -- units > items > buildings — moving things win).
+            local gid = item.hitTestAt(x, y)
+            if gid then
+                item.select(gid)
                 if not shift then
                     unit.deselectAll()
                     building.deselect()
+                end
+            else
+                -- No item. Try a building.
+                local bid = building.hitTestAt(x, y)
+                if bid then
+                    building.select(bid)
+                    item.deselect()
+                    if not shift then unit.deselectAll() end
+                else
+                    -- Click missed everything. With Shift held, keep
+                    -- the current selection (so shift-dragging from
+                    -- empty terrain can extend it). Otherwise deselect.
+                    if not shift then
+                        unit.deselectAll()
+                        building.deselect()
+                        item.deselect()
+                    end
                 end
             end
         end
@@ -245,6 +277,10 @@ function game.onMouseDown(button, x, y)
         -- Right-click is a cancel for debug spawn mode (highest priority).
         if debugOverlay.armedDef then
             debugOverlay.clearArmed()
+            return
+        end
+        if debugOverlay.armedItemDef then
+            debugOverlay.clearArmedItem()
             return
         end
         -- Storage building right-click → "Contents" menu, regardless
@@ -345,6 +381,70 @@ function game.onMouseDown(button, x, y)
                 return
             end
         end
+        -- Right-click on a ground item → context menu. With units
+        -- selected: Info / Pick up / Move here. Without: just Info.
+        -- Pick up dispatches the NEAREST selected unit; capacity is
+        -- checked at the moment of pickup (it can change en route).
+        do
+            local gid = item.hitTestAt(x, y)
+            if gid then
+                local fbW, fbH = engine.getFramebufferSize()
+                local ww, wh   = engine.getWindowSize()
+                local mx, my   = x, y
+                if ww and wh and ww > 0 and wh > 0 then
+                    mx = x * (fbW / ww)
+                    my = y * (fbH / wh)
+                end
+                local contextMenu = require("scripts.ui.context_menu")
+                local menuItems = {
+                    { label = "Info",
+                      callback = function()
+                          item.select(gid)
+                          unit.deselectAll()
+                          building.deselect()
+                      end },
+                }
+                local selUids = unit.getSelected() or {}
+                if #selUids > 0 then
+                    local ipos = nil
+                    for _, g in ipairs(item.listGround() or {}) do
+                        if g.id == gid then ipos = g; break end
+                    end
+                    if ipos then
+                        local unitAi = require("scripts.unit_ai")
+                        table.insert(menuItems, {
+                            label = "Pick up",
+                            callback = function()
+                                local best, bestUid = math.huge, nil
+                                for _, uid in ipairs(selUids) do
+                                    local info = unit.getInfo(uid)
+                                    if info then
+                                        local d = (info.gridX - ipos.x) ^ 2
+                                                + (info.gridY - ipos.y) ^ 2
+                                        if d < best then
+                                            best, bestUid = d, uid
+                                        end
+                                    end
+                                end
+                                if bestUid then
+                                    unitAi.commandPickup(bestUid, gid)
+                                end
+                            end })
+                        table.insert(menuItems, {
+                            label = "Move here",
+                            callback = function()
+                                for _, uid in ipairs(selUids) do
+                                    unitAi.commandMove(uid, ipos.x,
+                                                       ipos.y, 2.0)
+                                end
+                            end })
+                    end
+                end
+                contextMenu.show(menuItems, mx, my)
+                return
+            end
+        end
+
         -- Right-click is a move order when units are selected.
         -- hud.onMouseDown also fires on right-click and clears the
         -- tile cursor — that's fine, it doesn't touch unit selection.

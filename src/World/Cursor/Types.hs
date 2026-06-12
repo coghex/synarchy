@@ -32,6 +32,10 @@ data CursorState = CursorState
     -- | Texture for committed mine-designation markers (set from Lua
     --   like the cursor textures; rendered over designated tiles).
     , mineDesignTexture ∷ Maybe TextureHandle
+    -- | Ground item selected in the world view (white outline +
+    --   info panel). Mutually exclusive with unit/building selection
+    --   (enforced by the Lua click routing).
+    , selectedGroundItem ∷ Maybe Int
     }
 
 emptyCursorState ∷ CursorState
@@ -52,4 +56,5 @@ emptyCursorState =
         , worldSelectNow = False
         , mineAnchor = Nothing
         , mineDesignTexture = Nothing
+        , selectedGroundItem = Nothing
         }

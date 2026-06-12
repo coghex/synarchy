@@ -77,6 +77,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             edits     ← readIORef (wsEditsRef worldState)
             -- v31 (mining) additions
             mineDesigs ← readIORef (wsMineDesignationsRef worldState)
+            -- v32 (ground items) additions
+            groundItems ← readIORef (wsGroundItemsRef worldState)
             -- v4 (Phase 3) additions
             bm        ← readIORef (buildingManagerRef env)
             let buildings = toBuildingSnapshot bm
@@ -129,6 +131,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdUnitSimStates = simStates
                             , sdLuaModules   = luaBlobs
                             , sdMineDesignations = mineDesigs
+                            , sdGroundItems  = groundItems
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -199,6 +202,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- progress). Markers render from the stored z, so this needs no
     -- chunk loading to be visible.
     writeIORef (wsMineDesignationsRef worldState) (sdMineDesignations saveData)
+    -- v32 (ground items): heights derive from terrain at render, so
+    -- restoration is position-only and needs no chunk loading.
+    writeIORef (wsGroundItemsRef worldState) (sdGroundItems saveData)
 
     -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)

@@ -58,6 +58,9 @@ local schemas = {
     building = {
         { key = "binfo", name = "Info" },
     },
+    grounditem = {
+        { key = "iteminfo", name = "Item" },
+    },
 }
 local weatherTabDef   = { key = "weather",   name = "Weather" }
 local resourcesTabDef = { key = "resources", name = "Resources" }
@@ -67,7 +70,7 @@ local resourcesTabDef = { key = "resources", name = "Resources" }
 local allKeys = {
     "basic", "advanced", "weather", "resources",
     "status", "physical", "mental", "skills", "inventory",
-    "binfo",
+    "binfo", "iteminfo",
 }
 
 -----------------------------------------------------------
@@ -481,6 +484,12 @@ end
 function infoPanel.setBuildingInfo(infoText)
     infoPanel.useSchema("building")
     infoPanel.setText("binfo", infoText or "")
+end
+
+-- Ground-item push: same single-tab pattern as buildings.
+function infoPanel.setGroundItemInfo(infoText)
+    infoPanel.useSchema("grounditem")
+    infoPanel.setText("iteminfo", infoText or "")
 end
 
 -- Swap the tab schema in-place. Rebuilds the tabbar and labels.

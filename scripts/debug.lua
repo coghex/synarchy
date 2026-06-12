@@ -46,6 +46,12 @@ debugOverlay.fluidEntries = {}
 debugOverlay.fluidListVisible = false
 debugOverlay.armedFluidType = nil
 debugOverlay.fluidKinds = { "water", "lava" }
+-- Item spawn mode. Same UX as unit spawn; armed value is an item def
+-- name passed to item.spawnGround at the hover tile.
+debugOverlay.itemButtonId = nil
+debugOverlay.itemEntries = {}
+debugOverlay.itemListVisible = false
+debugOverlay.armedItemDef = nil
 debugOverlay.debugFont = nil
 debugOverlay.visible = false
 debugOverlay.uiCreated = false
@@ -86,6 +92,13 @@ local function destroyFluidList()
     debugOverlay.fluidEntries = {}
 end
 
+local function destroyItemList()
+    for _, entry in ipairs(debugOverlay.itemEntries) do
+        if entry.id then label.destroy(entry.id) end
+    end
+    debugOverlay.itemEntries = {}
+end
+
 local function formatEntry(defName, isArmed)
     if isArmed then return "> " .. defName
     else            return "  " .. defName end
@@ -100,6 +113,11 @@ local function refreshEntries()
     for _, entry in ipairs(debugOverlay.fluidEntries) do
         local isArmed = (entry.kind == debugOverlay.armedFluidType)
         label.setText(entry.id, formatEntry(entry.kind, isArmed))
+        label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
+    end
+    for _, entry in ipairs(debugOverlay.itemEntries) do
+        local isArmed = (entry.defName == debugOverlay.armedItemDef)
+        label.setText(entry.id, formatEntry(entry.defName, isArmed))
         label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
     end
 end
@@ -127,6 +145,16 @@ local function fluidButtonY(s)
     y = y + (s.fontSize + s.rowSpacing)
     if debugOverlay.spawnListVisible then
         local listRows = math.max(1, #debugOverlay.spawnEntries)
+        y = y + listRows * (s.fontSize + s.rowSpacing)
+    end
+    return y
+end
+
+-- Item button sits below the fluid button (and its open list).
+local function itemButtonY(s)
+    local y = fluidButtonY(s) + (s.fontSize + s.rowSpacing)
+    if debugOverlay.fluidListVisible then
+        local listRows = math.max(1, #debugOverlay.fluidEntries)
         y = y + listRows * (s.fontSize + s.rowSpacing)
     end
     return y
@@ -195,6 +223,80 @@ local function rebuildClickableRects()
             end
             table.insert(debugOverlay.clickableRects, rect)
         end
+    end
+
+    -- Item button rect
+    local ibY = itemButtonY(s)
+    local ir = rowRect(s, ibY, "items")
+    ir.action = function()
+        if debugOverlay.itemListVisible or debugOverlay.armedItemDef then
+            debugOverlay.clearArmedItem()
+            debugOverlay.closeItemList()
+        else
+            debugOverlay.openItemList()
+        end
+    end
+    table.insert(debugOverlay.clickableRects, ir)
+
+    -- Item list entry rects (only if list is open)
+    if debugOverlay.itemListVisible then
+        local baseY = ibY + s.fontSize
+        for i, entry in ipairs(debugOverlay.itemEntries) do
+            if entry.defName then
+                local rowY = baseY + (i - 1) * (s.fontSize + s.rowSpacing)
+                local rect = rowRect(s, rowY,
+                                     formatEntry(entry.defName, false))
+                local def = entry.defName
+                rect.action = function()
+                    debugOverlay.setArmedItem(def)
+                end
+                table.insert(debugOverlay.clickableRects, rect)
+            end
+        end
+    end
+end
+
+local function buildItemList()
+    destroyItemList()
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local uiscale = scale.get()
+    local defs = item.listDefs() or {}
+    local baseY = itemButtonY(s) + s.fontSize
+
+    if #defs == 0 then
+        local lblId = label.new({
+            name     = "item_list_empty",
+            text     = "  (no items defined)",
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY,
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.itemEntries,
+            { id = lblId, defName = nil })
+        return
+    end
+
+    for i, def in ipairs(defs) do
+        local isArmed = (def.name == debugOverlay.armedItemDef)
+        local lblId = label.new({
+            name     = "item_entry_" .. def.name,
+            text     = formatEntry(def.name, isArmed),
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = isArmed and COLOR_BRIGHT or COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY + (i - 1) * (s.fontSize + s.rowSpacing),
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.itemEntries,
+            { id = lblId, defName = def.name })
     end
 end
 
@@ -282,8 +384,13 @@ function debugOverlay.createUI()
             label.destroy(debugOverlay.fluidButtonId)
             debugOverlay.fluidButtonId = nil
         end
+        if debugOverlay.itemButtonId then
+            label.destroy(debugOverlay.itemButtonId)
+            debugOverlay.itemButtonId = nil
+        end
         destroySpawnList()
         destroyFluidList()
+        destroyItemList()
     end
 
     local s = scale.applyAll(debugOverlay.baseSizes)
@@ -341,6 +448,25 @@ function debugOverlay.createUI()
         buildFluidList()
     end
 
+    -- Item button — below the fluid section, same shifting-layout
+    -- rule via itemButtonY.
+    debugOverlay.itemButtonId = label.new({
+        name     = "item_button",
+        text     = "items",
+        font     = debugOverlay.debugFont,
+        fontSize = debugOverlay.baseSizes.fontSize,
+        color    = COLOR_DIM,
+        page     = debugOverlay.page,
+        uiscale  = uiscale,
+        x        = s2.margin,
+        y        = itemButtonY(s2),
+        zIndex   = 1000,
+    })
+
+    if debugOverlay.itemListVisible then
+        buildItemList()
+    end
+
     debugOverlay.uiCreated = true
     rebuildClickableRects()
 end
@@ -365,8 +491,10 @@ function debugOverlay.hide()
     debugOverlay.visible = false
     debugOverlay.clearArmed()
     debugOverlay.clearArmedFluid()
+    debugOverlay.clearArmedItem()
     debugOverlay.closeSpawnList()
     debugOverlay.closeFluidList()
+    debugOverlay.closeItemList()
     debugOverlay.clickableRects = {}
     if debugOverlay.page then UI.hidePage(debugOverlay.page) end
 end
@@ -401,6 +529,20 @@ local function repositionFluidUI()
             end
         end
     end
+    -- Item section trails the fluid section.
+    local ibY = itemButtonY(s)
+    if debugOverlay.itemButtonId then
+        label.setPosition(debugOverlay.itemButtonId, s.margin, ibY)
+    end
+    if debugOverlay.itemListVisible then
+        local baseY = ibY + s.fontSize
+        for i, entry in ipairs(debugOverlay.itemEntries) do
+            if entry.id then
+                label.setPosition(entry.id, s.margin,
+                    baseY + (i - 1) * (s.fontSize + s.rowSpacing))
+            end
+        end
+    end
 end
 
 function debugOverlay.openSpawnList()
@@ -421,8 +563,9 @@ end
 
 function debugOverlay.setArmed(defName)
     debugOverlay.armedDef = defName
-    -- Mutually exclusive with fluid arming.
+    -- Mutually exclusive with the other arm modes.
     debugOverlay.armedFluidType = nil
+    debugOverlay.armedItemDef = nil
     refreshEntries()
 end
 
@@ -436,9 +579,9 @@ function debugOverlay.openFluidList()
     if debugOverlay.fluidListVisible then return end
     debugOverlay.fluidListVisible = true
     buildFluidList()
-    -- Spawn list moves around when fluid opens? No — fluid sits BELOW
-    -- spawn. Spawn list layout doesn't change. But we still need to
-    -- rebuild rects so fluid entries become clickable.
+    -- Spawn list sits ABOVE fluid so it doesn't move; the item
+    -- section below does (repositionFluidUI handles both sections).
+    repositionFluidUI()
     rebuildClickableRects()
 end
 
@@ -446,18 +589,48 @@ function debugOverlay.closeFluidList()
     if not debugOverlay.fluidListVisible then return end
     debugOverlay.fluidListVisible = false
     destroyFluidList()
+    repositionFluidUI()
     rebuildClickableRects()
 end
 
 function debugOverlay.setArmedFluid(kind)
     debugOverlay.armedFluidType = kind
     debugOverlay.armedDef = nil
+    debugOverlay.armedItemDef = nil
     refreshEntries()
 end
 
 function debugOverlay.clearArmedFluid()
     if debugOverlay.armedFluidType == nil then return end
     debugOverlay.armedFluidType = nil
+    refreshEntries()
+end
+
+function debugOverlay.openItemList()
+    if debugOverlay.itemListVisible then return end
+    debugOverlay.itemListVisible = true
+    buildItemList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.closeItemList()
+    if not debugOverlay.itemListVisible then return end
+    debugOverlay.itemListVisible = false
+    destroyItemList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.setArmedItem(defName)
+    debugOverlay.armedItemDef = defName
+    -- Mutually exclusive with the other arm modes.
+    debugOverlay.armedDef = nil
+    debugOverlay.armedFluidType = nil
+    refreshEntries()
+end
+
+function debugOverlay.clearArmedItem()
+    if debugOverlay.armedItemDef == nil then return end
+    debugOverlay.armedItemDef = nil
     refreshEntries()
 end
 
@@ -521,6 +694,9 @@ function debugOverlay.onKeyDown(key)
         if debugOverlay.armedFluidType then
             debugOverlay.clearArmedFluid()
         end
+        if debugOverlay.armedItemDef then
+            debugOverlay.clearArmedItem()
+        end
     end
 end
 
@@ -537,6 +713,7 @@ end
 function debugOverlay.shutdown()
     destroySpawnList()
     destroyFluidList()
+    destroyItemList()
     if debugOverlay.spawnButtonId then
         label.destroy(debugOverlay.spawnButtonId)
         debugOverlay.spawnButtonId = nil
@@ -544,6 +721,10 @@ function debugOverlay.shutdown()
     if debugOverlay.fluidButtonId then
         label.destroy(debugOverlay.fluidButtonId)
         debugOverlay.fluidButtonId = nil
+    end
+    if debugOverlay.itemButtonId then
+        label.destroy(debugOverlay.itemButtonId)
+        debugOverlay.itemButtonId = nil
     end
     if debugOverlay.fpsLabelId then
         label.destroy(debugOverlay.fpsLabelId)

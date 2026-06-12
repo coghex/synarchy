@@ -452,6 +452,7 @@ library
                      World.Render.Quads
                      World.Render.TileQuads
                      World.Render.FloraQuads
+                     World.Render.GroundItemQuads
                      World.Render.SideDecoQuads
                      World.Render.Textures
                      World.Render.Textures.Types
@@ -480,6 +481,7 @@ library
                      World.Geology.Ore.Types
                      World.Mine.Types
                      World.Mine.Apply
+                     Item.Ground
                      World.Geology.Log
                      World.Geology.Hash
                      World.Geology.Crater

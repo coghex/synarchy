@@ -52,6 +52,12 @@ units:
       # via diminishing-returns curve. Affects slip chance and climb
       # speed. Acolytes are not professional climbers — start low.
       climbing: { base: 10.0, range: 10.0 }
+      # Mining: scales dig speed (with strength) in the dig AI's
+      # world.digTile amount — factor = strength · (0.5 + mining/100),
+      # so level 50 ≈ baseline, level 0 digs at half rate. Gains XP
+      # per completed tile (dig_xp_per_tile in unit_ai params).
+      # Acolytes arrive as novice excavators — wide spread.
+      mining:  { base: 25.0, range: 30.0 }
 
     # 12-part humanoid body. Heights are metres above the foot,
     # calibrated for a 1.8m default body — taller spawns naturally

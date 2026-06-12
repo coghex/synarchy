@@ -669,6 +669,10 @@ function hud.setResourcesInfo(text)
     infoPanel.setResourcesInfo(text)
 end
 
+function hud.setGroundItemInfo(text)
+    infoPanel.setGroundItemInfo(text)
+end
+
 function hud.clearInfo()
     infoPanel.clear()
 end

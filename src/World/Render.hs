@@ -33,6 +33,7 @@ import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 
 import World.Render.Camera (cameraChanged, camEpsilon)
 import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
+import World.Render.GroundItemQuads (renderGroundItemQuads)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import Unit.Render (renderUnitQuads)
@@ -93,6 +94,19 @@ updateWorldTiles env = do
                     Nothing → return V.empty
             return $ V.concat cursorResults
 
+    -- Ground-item quads, also per-frame: resting height derives from
+    -- the CURRENT terrain each frame, so items drop with dug tiles
+    -- and sit on slopes without any re-grounding machinery.
+    groundItemQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            giResults ← forM (wmVisible worldManager) $ \pageId →
+                case lookup pageId (wmWorlds worldManager) of
+                    Just worldState →
+                        renderGroundItemQuads env worldState tileAlpha
+                    Nothing → return V.empty
+            return $ V.concat giResults
+
     -- Unit quads are generated every frame (cheap: handful of sprites)
     -- so they respond instantly to movement
     unitQuads ← if tileAlpha ≤ 0.001
@@ -144,6 +158,7 @@ updateWorldTiles env = do
                         Nothing → return ()
                 Nothing → return ()
 
-    let allQuads = tileQuads <> worldCursorQuads <> buildingQuads
+    let allQuads = tileQuads <> worldCursorQuads <> groundItemQuads
+                <> buildingQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
     return allQuads

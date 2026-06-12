@@ -26,6 +26,7 @@ import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, default
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import World.Mine.Types (MineDesignations)
+import Item.Ground (GroundItems, emptyGroundItems)
 
 data WorldState = WorldState
     { wsTilesRef     ∷ IORef WorldTileData
@@ -66,6 +67,10 @@ data WorldState = WorldState
       --   the world thread (WorldDesignateMine / dig commands), read
       --   by the render pass and the dig AI. Persisted in saves
       --   (sdMineDesignations, v31) including mid-dig corners.
+    , wsGroundItemsRef ∷ IORef GroundItems
+      -- ^ Items lying in the world (see Item.Ground — float x/y,
+      --   height derived from current terrain at render). Persisted
+      --   in saves (sdGroundItems, v32).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -93,6 +98,7 @@ emptyWorldState = do
     wsEditsRef     ← newIORef emptyWorldEdits
     wsOreSurveyRef ← newIORef HM.empty
     wsMineDesignationsRef ← newIORef HM.empty
+    wsGroundItemsRef ← newIORef emptyGroundItems
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
@@ -101,6 +107,7 @@ emptyWorldState = do
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsOreSurveyRef wsMineDesignationsRef
+                        wsGroundItemsRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

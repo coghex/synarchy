@@ -24,6 +24,7 @@ import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
+import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
@@ -103,12 +104,10 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 31  -- v31: mining. SaveData gains the trailing
-                         -- 'sdMineDesignations' field (designated
-                         -- tiles + corner dig progress).
-                         -- (v30: ore deposition — trailing
-                         -- OreSheetEvent constructor, gtOreDeposits
-                         -- table, wgpOreLevers, terrain output change.)
+currentSaveVersion = 32  -- v32: ground items — SaveData gains the
+                         -- trailing 'sdGroundItems' field.
+                         -- (v31: mining designations; v30: ore
+                         -- deposition + wgpOreLevers.)
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -187,6 +186,11 @@ data SaveData = SaveData
         -- ^ Mine designations incl. mid-dig corner progress. Restored
         --   straight into wsMineDesignationsRef; markers re-render
         --   from the stored z, so no chunk loading is required first.
+    -- v32 fields (ground items):
+    , sdGroundItems ∷ !GroundItems
+        -- ^ Items lying in the world. Full ItemInstances + float
+        --   positions; resting height derives from terrain at render,
+        --   so restoration needs no chunk loading either.
     } deriving (Show, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`

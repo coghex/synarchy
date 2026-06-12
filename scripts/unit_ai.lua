@@ -164,8 +164,16 @@ local config = {
         dig_walk_speed       = 1.5,
         dig_base_utility     = 2.0,
         dig_lock_utility     = 6.0,
-        dig_rate             = 0.5,   -- corner-units/sec at speed 1.0
-                                      -- (a tile holds 4.0 total)
+        dig_rate             = 0.5,   -- corner-units/sec at tool speed
+                                      -- 1.0 AND unit factor 1.0 (a
+                                      -- tile holds 4.0 total). Actual
+                                      -- rate = dig_rate · toolSpeed ·
+                                      -- strength · (0.5 + mining/100),
+                                      -- so a strength-1.0 / mining-50
+                                      -- unit is the baseline.
+        dig_xp_per_tile      = 1.0,   -- mining XP per completed tile
+                                      -- (diminishing returns via
+                                      -- applySkillXP: gain ∝ 1/level²)
         dig_equip_seconds    = 1.0,
         dig_claim_timeout    = 30.0,  -- stale-claim expiry (seconds)
         dig_tools = {
@@ -178,6 +186,13 @@ local config = {
                        equip_anim = "standing_to_holding_shovel",
                        work_anim  = "shoveling" },
         },
+        -- Ground-item pickup (player order via right-click → Pick up).
+        -- Above follow_command (1.0) so the explicit order wins, below
+        -- dire needs. Capacity is checked at the moment of pickup.
+        pickup_utility       = 1.5,
+        pickup_arrival_tiles = 1.2,
+        pickup_walk_speed    = 1.8,
+        pickup_timeout       = 30.0,
     },
     -- Species-specific config blocks (bear, future wildlife) are
     -- registered via unitAi.setConfig from their own AI scripts
@@ -2204,16 +2219,31 @@ local function releaseDigJob(s, uid)
     s.digPhase = nil
 end
 
+-- The designation vanished while we held the job — the tile
+-- completed (or was undesignated, rare). BOTH the utility check and
+-- the execute loop can be first to notice, depending on tick
+-- ordering, so completion lives in one helper: XP if we were
+-- actually working it, drop the tool visual, release the claim.
+local function digComplete(uid, s, params)
+    if s.digPhase == "digging" or s.digPhase == "equipping" then
+        unit.addXP(uid, "mining", params.dig_xp_per_tile or 0)
+    end
+    unit.clearAnimOverride(uid)
+    releaseDigJob(s, uid)
+end
+
 local function digUtility(uid, s, params)
     local wid = world.getActiveWorldId()
     if not wid then return -math.huge end
 
     -- Active job: finite lock-in so dire needs (thirst, combat)
-    -- still preempt. Released the moment the tile completes.
+    -- still preempt. Released the moment the tile completes — this
+    -- check runs BEFORE execute each tick, so completion is usually
+    -- detected here (digComplete grants the XP + clears visuals).
     if s.digJob then
         local z = world.getMineDesignationAt(wid, s.digJob.x, s.digJob.y)
         if z then return params.dig_lock_utility end
-        releaseDigJob(s, uid)
+        digComplete(uid, s, params)
     end
 
     local info = unit.getInfo(uid)
@@ -2374,8 +2404,7 @@ local function digExecute(uid, s, params)
             world.getMineDesignationAt(wid, job.x, job.y)
         if not z then
             -- Tile completed (or undesignated out from under us).
-            unit.clearAnimOverride(uid)
-            releaseDigJob(s, uid)
+            digComplete(uid, s, params)
             return
         end
         local corners = { c1, c2, c3, c4 }
@@ -2411,8 +2440,14 @@ local function digExecute(uid, s, params)
         unit.setAnimOverride(uid, toolCfg.work_anim)
         local dt = math.min(now - (s.lastDigAt or now), 2.0)
         s.lastDigAt = now
+        -- Personal factor: muscle moves material, technique wastes
+        -- less of the swing. strength ~1.0 baseline; mining skill 50
+        -- = 1.0×, 0 = 0.5×, 100 = 1.5×.
+        local strength = unit.getStat(uid, "strength") or 1.0
+        local mining   = unit.getSkill(uid, "mining") or 0.0
+        local unitFactor = strength * (0.5 + mining / 100.0)
         world.digTile(wid, job.x, job.y, info.gridX, info.gridY,
-                      params.dig_rate * speed * dt)
+                      params.dig_rate * speed * unitFactor * dt)
         return
     end
 end
@@ -2426,6 +2461,83 @@ local function digOnExit(uid, s, params)
     if s.digPhase == "digging" or s.digPhase == "equipping" then
         s.digPhase = "walking"
     end
+end
+
+-----------------------------------------------------------
+-- Action: pickup_ground
+--
+-- Player-ordered pickup of a ground item (right-click → Pick up;
+-- unitAi.commandPickup). Path to the item, then atomically move it
+-- into the inventory (item.pickupGround preserves the instance) with
+-- the engine pickup animation. If the unit is over carrying capacity
+-- when it ARRIVES (it can change en route), refuse and log.
+-----------------------------------------------------------
+local function pickupGroundEntry(gid)
+    for _, g in ipairs(item.listGround() or {}) do
+        if g.id == gid then return g end
+    end
+    return nil
+end
+
+local function pickupItemWeight(defName)
+    for _, d in ipairs(item.listDefs() or {}) do
+        if d.name == defName then return d.weight or 0 end
+    end
+    return 0
+end
+
+local function pickupUtility(uid, s, params)
+    local order = s.pickupOrder
+    if not order then return -math.huge end
+    if engine.gameTime() - order.issuedAt > (params.pickup_timeout or 30)
+       or not pickupGroundEntry(order.gid) then
+        -- Expired, or someone else took it.
+        s.pickupOrder = nil
+        return -math.huge
+    end
+    return params.pickup_utility
+end
+
+local function pickupExecute(uid, s, params)
+    local order = s.pickupOrder
+    if not order then return end
+    local g = pickupGroundEntry(order.gid)
+    local info = unit.getInfo(uid)
+    if not g or not info then
+        s.pickupOrder = nil
+        return
+    end
+
+    local d = distance(info.gridX, info.gridY, g.x, g.y)
+    if d > params.pickup_arrival_tiles then
+        unit.moveTo(uid, g.x, g.y, params.pickup_walk_speed)
+        return
+    end
+
+    unit.stop(uid)
+    -- Capacity check at the moment of truth ("walk, then refuse").
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    local w       = pickupItemWeight(g.defName)
+    if carried + w > maxW then
+        engine.logWarn("pickup_ground: unit " .. tostring(uid)
+            .. " over capacity (" .. string.format("%.1f", carried + w)
+            .. " > " .. string.format("%.1f", maxW)
+            .. " kg) — leaving " .. g.defName)
+        s.pickupOrder = nil
+        return
+    end
+
+    -- Engine pickup animation + the atomic ground→inventory move.
+    unit.pickup(uid)
+    item.pickupGround(uid, order.gid)
+    s.pickupOrder = nil
+end
+
+function unitAi.commandPickup(uid, gid)
+    local s = ensureState(uid)
+    s.pickupOrder = { gid = gid, issuedAt = engine.gameTime() }
+    s.nextActionAt = 0
 end
 
 local actions = {}
@@ -2508,6 +2620,8 @@ unitAi.registerActions("acolyte", {
       execute = storeMaterialsExecute },
     { name = "dig_designation", utility = digUtility,
       execute = digExecute, onExit = digOnExit },
+    { name = "pickup_ground", utility = pickupUtility,
+      execute = pickupExecute },
 })
 
 -- Load species satellite scripts. Each one defines its candidates

@@ -387,6 +387,19 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.setglobal (Lua.Name "substance")
 
   Lua.newtable
+  registerLuaFunction "listDefs"     (itemListDefsFn env)
+  registerLuaFunction "spawnGround"  (itemSpawnGroundFn env)
+  registerLuaFunction "listGround"   (itemListGroundFn env)
+  registerLuaFunction "removeGround" (itemRemoveGroundFn env)
+  registerLuaFunction "groundCount"  (itemGroundCountFn env)
+  registerLuaFunction "hitTestAt"    (itemHitTestAtFn env)
+  registerLuaFunction "select"       (itemSelectFn env)
+  registerLuaFunction "deselect"     (itemDeselectFn env)
+  registerLuaFunction "getSelected"  (itemGetSelectedFn env)
+  registerLuaFunction "pickupGround" (itemPickupGroundFn env)
+  Lua.setglobal (Lua.Name "item")
+
+  Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn env)
   registerLuaFunction "init" (worldInitFn env)
