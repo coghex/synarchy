@@ -59,6 +59,13 @@ data WorldState = WorldState
       --   compute time — a lookup only hits when the current edit
       --   list is identical, so edits self-invalidate. Wholesale
       --   flush at 256 entries. Loaded chunks never consult this.
+    , wsMineDesignationsRef ∷ IORef (HM.HashMap (Int, Int) Int)
+      -- ^ Mine-designation set: tile (gx, gy) → surface z captured at
+      --   designation time (so rendering needs no per-frame column
+      --   reads). Written by the world thread (WorldDesignateMine);
+      --   the future mining job system consumes entries from here.
+      --   Not yet persisted in saves — designations are session-only
+      --   until the job system lands.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -85,6 +92,7 @@ emptyWorldState = do
     wsZoomAtlasRef ← newIORef Nothing
     wsEditsRef     ← newIORef emptyWorldEdits
     wsOreSurveyRef ← newIORef HM.empty
+    wsMineDesignationsRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
@@ -92,7 +100,7 @@ emptyWorldState = do
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
-                        wsOreSurveyRef
+                        wsOreSurveyRef wsMineDesignationsRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

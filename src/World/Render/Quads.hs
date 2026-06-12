@@ -339,6 +339,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
 -- * World Cursor Quads (generated every frame, not cached)
 
+-- | Cap on the mine-tool preview rectangle's side length (the commit
+--   handler has its own, larger cap). Keeps a cross-map drag from
+--   generating tens of thousands of per-frame quads.
+maxMinePreviewSide ∷ Int
+maxMinePreviewSide = 64
+
 renderWorldCursorQuads ∷ EngineEnv → WorldState → Float → IO (V.Vector SortableQuad)
 renderWorldCursorQuads env worldState tileAlpha = do
     camera   ← readIORef (cameraRef env)
@@ -451,49 +457,104 @@ renderWorldCursorQuads env worldState tileAlpha = do
                              }
         in (merged, merged)
 
-    if toolMode ≠ InfoTool
-    then return V.empty
-    else do
-        -- Build hover quads (bg + fg)
-        let hoverQuads = case hoverResult of
-                Just (gx, gy, hz, xOff) →
-                    let fgQuad = case worldHoverTexture cs' of
-                            Just tex → V.singleton $
-                                worldCursorToQuad lookupSlot lookupFmSlot
-                                  textures facing gx gy hz zSlice effectiveDepth
-                                  tileAlpha xOff tex
-                            Nothing → V.empty
-                        bgQuad = case worldHoverBgTexture cs' of
-                            Just tex → V.singleton $
-                                worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                                    gx gy hz zSlice effectiveDepth tileAlpha xOff tex
-                            Nothing → V.empty
-                    in bgQuad <> fgQuad
-                _ → V.empty
+    -- Mine-designation markers: world annotations, visible in every
+    -- tool mode. Rendered from the surface z stored at designation
+    -- time — no per-frame column reads.
+    designations ← readIORef (wsMineDesignationsRef worldState)
+    let designQuads = case mineDesignTexture cs' of
+            Nothing → V.empty
+            Just tex
+                | HM.null designations → V.empty
+                | otherwise → V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing dgx dgy dz zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | ((dgx, dgy), dz) ← HM.toList designations
+                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
 
-        -- Build select quads (bg + fg)
-        let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs', worldCursorBgTexture cs') of
-                (Just (sgx, sgy, sz), _, _) →
-                    let (chunkCoord, _) = globalToChunk sgx sgy
-                    in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                        Just xOff →
-                            let fgQuad = case worldCursorTexture cs' of
-                                    Just tex → V.singleton $
-                                        worldCursorToQuad lookupSlot lookupFmSlot
-                                                          textures facing sgx sgy sz
-                                                          zSlice effectiveDepth
-                                                          tileAlpha xOff tex
-                                    Nothing → V.empty
-                                bgQuad = case worldCursorBgTexture cs' of
-                                    Just tex → V.singleton $
-                                        worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                                            sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
-                                    Nothing → V.empty
-                            in bgQuad <> fgQuad
+    -- Hover quads (bg + fg) — used by both info and mine tools.
+    let hoverQuads = case hoverResult of
+            Just (gx, gy, hz, xOff) →
+                let fgQuad = case worldHoverTexture cs' of
+                        Just tex → V.singleton $
+                            worldCursorToQuad lookupSlot lookupFmSlot
+                              textures facing gx gy hz zSlice effectiveDepth
+                              tileAlpha xOff tex
                         Nothing → V.empty
-                _ → V.empty
+                    bgQuad = case worldHoverBgTexture cs' of
+                        Just tex → V.singleton $
+                            worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                                gx gy hz zSlice effectiveDepth tileAlpha xOff tex
+                        Nothing → V.empty
+                in bgQuad <> fgQuad
+            _ → V.empty
 
-        return $ hoverQuads <> selectQuads
+    -- Select quads (bg + fg) — info tool only.
+    let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs', worldCursorBgTexture cs') of
+            (Just (sgx, sgy, sz), _, _) →
+                let (chunkCoord, _) = globalToChunk sgx sgy
+                in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                    Just xOff →
+                        let fgQuad = case worldCursorTexture cs' of
+                                Just tex → V.singleton $
+                                    worldCursorToQuad lookupSlot lookupFmSlot
+                                                      textures facing sgx sgy sz
+                                                      zSlice effectiveDepth
+                                                      tileAlpha xOff tex
+                                Nothing → V.empty
+                            bgQuad = case worldCursorBgTexture cs' of
+                                Just tex → V.singleton $
+                                    worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                                        sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
+                                Nothing → V.empty
+                        in bgQuad <> fgQuad
+                    Nothing → V.empty
+            _ → V.empty
+
+    -- Mine tool: anchored rectangle preview, anchor→hover (DF-style).
+    -- Drawn with the select-cursor texture so it reads as "about to be
+    -- designated". DESIGNATIONS ARE PER-Z-LEVEL: only tiles whose
+    -- surface z equals the ANCHOR tile's surface z are previewed
+    -- (matching WorldDesignateMine's filter), so sweeping across a
+    -- slope marks just the anchor's level. Tiles in unloaded chunks
+    -- are skipped, same as the commit.
+    let clampSide a b
+            | b ≥ a     = min b (a + maxMinePreviewSide - 1)
+            | otherwise = max b (a - maxMinePreviewSide + 1)
+        surfaceZAt gx gy = do
+            let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+            lc ← HM.lookup chunkCoord (wtdChunks tileData)
+            pure (lcSurfaceMap lc VU.! columnIndex lx ly)
+        minePreviewQuads = case (mineAnchor cs', hoverResult, worldCursorTexture cs') of
+            (Just (ax, ay), Just (hx, hy, _, _), Just tex)
+                | Just anchorZ ← surfaceZAt ax ay →
+                let hx' = clampSide ax hx
+                    hy' = clampSide ay hy
+                    xLo = min ax hx'
+                    xHi = max ax hx'
+                    yLo = min ay hy'
+                    yHi = max ay hy'
+                in V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing gx gy z zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
+                    , z ≡ anchorZ
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+            _ → V.empty
+
+    return $ case toolMode of
+        InfoTool → designQuads <> hoverQuads <> selectQuads
+        MineTool → designQuads <> hoverQuads <> minePreviewQuads
+        _        → designQuads
 
 -- | Find the topmost Z that has a non-zero material in a column.
 --   This is the actual rendered surface — no trusting surface maps.

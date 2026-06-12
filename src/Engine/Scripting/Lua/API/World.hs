@@ -30,6 +30,11 @@ module Engine.Scripting.Lua.API.World
     , worldSelectTileFn
     , worldSetWorldCursorSelectBgTextureFn
     , worldSetWorldCursorHoverBgTextureFn
+    , worldSetMineAnchorFn
+    , worldClearMineAnchorFn
+    , worldDesignateMineFn
+    , worldSetMineDesignateTextureFn
+    , worldGetMineDesignationCountFn
     , worldSetToolModeFn
     , worldGetToolModeFn
     , worldGetInitProgressFn
@@ -40,6 +45,7 @@ module Engine.Scripting.Lua.API.World
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -659,6 +665,89 @@ worldSetWorldCursorSelectBgTextureFn env = do
                 WorldSetWorldCursorSelectBgTexture pageId texHandle
         _ → pure ()
     return 0
+
+-- * Mine designation tool
+
+-- | world.setMineAnchor(pageId, gx, gy) — anchor the designation
+--   rectangle at the given tile (mine tool first click).
+worldSetMineAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetMineAnchorFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tonumber 2
+    gyArg     ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldSetMineAnchor pageId (round gx) (round gy)
+        _ → pure ()
+    return 0
+
+-- | world.clearMineAnchor(pageId) — cancel the pending rectangle.
+worldClearMineAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldClearMineAnchorFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $ WorldClearMineAnchor pageId
+        _ → pure ()
+    return 0
+
+-- | world.designateMine(pageId, x1, y1, x2, y2) — commit the
+--   rectangle (corners in either order; mine tool second click).
+worldDesignateMineFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldDesignateMineFn env = do
+    pageIdArg ← Lua.tostring 1
+    x1Arg ← Lua.tonumber 2
+    y1Arg ← Lua.tonumber 3
+    x2Arg ← Lua.tonumber 4
+    y2Arg ← Lua.tonumber 5
+    case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg) of
+        (Just pageIdBS, Just x1, Just y1, Just x2, Just y2) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldDesignateMine pageId (round x1) (round y1)
+                                          (round x2) (round y2)
+        _ → pure ()
+    return 0
+
+-- | world.setMineDesignateTexture(pageId, texHandle) — marker texture
+--   for committed designations.
+worldSetMineDesignateTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetMineDesignateTextureFn env = do
+    pageIdArg ← Lua.tostring 1
+    textureHandleArg ← Lua.tointeger 2
+    case (pageIdArg, textureHandleArg) of
+        (Just pageIdBS, Just handle) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                texHandle = TextureHandle (fromIntegral handle)
+            Q.writeQueue (worldQueue env) $
+                WorldSetMineDesignateTexture pageId texHandle
+        _ → pure ()
+    return 0
+
+-- | world.getMineDesignationCount(pageId) → n — number of designated
+--   tiles. Reads the ref directly (synchronous; for HUD readouts and
+--   headless tests).
+worldGetMineDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetMineDesignationCountFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws → do
+                    m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
+                    Lua.pushinteger (fromIntegral (HM.size m))
+                    return 1
+                Nothing → do
+                    Lua.pushinteger 0
+                    return 1
+        _ → do
+            Lua.pushinteger 0
+            return 1
 
 worldSetToolModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetToolModeFn env = do

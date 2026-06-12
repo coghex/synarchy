@@ -25,6 +25,13 @@ data CursorState = CursorState
     , worldHoverBgTexture ∷ Maybe TextureHandle
     , worldSelectedTile ∷ Maybe (Int, Int, Int)
     , worldSelectNow ∷ Bool
+    -- | Mine-designation tool: first-click anchor tile. While set,
+    --   the render pass previews the anchor→hover rectangle; the
+    --   second click commits it (WorldDesignateMine) and clears this.
+    , mineAnchor ∷ Maybe (Int, Int)
+    -- | Texture for committed mine-designation markers (set from Lua
+    --   like the cursor textures; rendered over designated tiles).
+    , mineDesignTexture ∷ Maybe TextureHandle
     }
 
 emptyCursorState ∷ CursorState
@@ -43,4 +50,6 @@ emptyCursorState =
         , worldHoverBgTexture = Nothing
         , worldSelectedTile = Nothing
         , worldSelectNow = False
+        , mineAnchor = Nothing
+        , mineDesignTexture = Nothing
         }

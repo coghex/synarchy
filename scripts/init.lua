@@ -158,6 +158,14 @@ function game.onMouseDown(button, x, y)
         return
     end
 
+    -- Mine tool claims clicks while the mine tool mode is active
+    -- (anchor / commit / cancel), so they don't fall through into
+    -- unit selection.
+    local mineTool = require("scripts.mine_tool")
+    if mineTool.handleMouseDown(button, x, y) then
+        return
+    end
+
     if button == MOUSE_LEFT then
         -- Debug spawn mode: if armed, this click is a spawn, not a
         -- selection. Spawn at the hovered tile and stay armed.
@@ -478,6 +486,11 @@ function game.onKeyDown(key)
     -- handler clears unit selection.
     local buildTool = require("scripts.build_tool")
     if buildTool.handleKeyDown(key) then
+        return
+    end
+    -- Mine tool's Esc cancels a pending designation anchor.
+    local mineTool = require("scripts.mine_tool")
+    if mineTool.handleKeyDown(key) then
         return
     end
     -- ESC clears any active unit selection.

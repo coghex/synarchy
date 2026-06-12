@@ -49,7 +49,11 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldSetWorldCursorSelectTextureCommand
                                    , handleWorldSetWorldCursorHoverTextureCommand
                                    , handleWorldSetWorldCursorSelectBgTextureCommand
-                                   , handleWorldSetWorldCursorHoverBgTextureCommand)
+                                   , handleWorldSetWorldCursorHoverBgTextureCommand
+                                   , handleWorldSetMineAnchorCommand
+                                   , handleWorldClearMineAnchorCommand
+                                   , handleWorldDesignateMineCommand
+                                   , handleWorldSetMineDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
@@ -109,6 +113,14 @@ handleWorldCommand env logger (WorldSetWorldCursorDeselect pageId)
   = handleWorldSetWorldCursorDeselectCommand env logger pageId
 handleWorldCommand env logger (WorldSelectTileByCoord pageId gx gy)
   = handleWorldSelectTileByCoordCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldSetMineAnchor pageId gx gy)
+  = handleWorldSetMineAnchorCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldClearMineAnchor pageId)
+  = handleWorldClearMineAnchorCommand env logger pageId
+handleWorldCommand env logger (WorldDesignateMine pageId gx1 gy1 gx2 gy2)
+  = handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2
+handleWorldCommand env logger (WorldSetMineDesignateTexture pageId texHandle)
+  = handleWorldSetMineDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorSelectTexture pageId texHandle)
   = handleWorldSetWorldCursorSelectTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorHoverTexture pageId texHandle)

@@ -68,6 +68,7 @@ hud.texToolMineSelected    = nil
 hud.texZoomSelect    = nil
 hud.texZoomHover     = nil
 hud.texWorldSelect   = nil
+hud.texMineDesignate = nil
 hud.texWorldSelectBg = nil
 hud.texWorldHover    = nil
 hud.texWorldHoverBg  = nil
@@ -120,6 +121,9 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texWorldSelectBg       = engine.loadTexture("assets/textures/hud/utility/world_select_bg.png")
     hud.texWorldHover          = engine.loadTexture("assets/textures/hud/utility/world_hover.png")
     hud.texWorldHoverBg        = engine.loadTexture("assets/textures/hud/utility/world_hover_bg.png")
+    -- Mine-designation marker: dedicated art so standing designations
+    -- read differently from the cursor/selection at a glance.
+    hud.texMineDesignate       = engine.loadTexture("assets/textures/hud/utility/mine_designate.png")
 
     -- Event-log toggle (top-left). Two states: default and selected
     -- (drawn while the event log panel is open). The combat-log
@@ -241,6 +245,9 @@ function hud.createUI()
         world.setWorldCursorSelectBgTexture(hud.worldId, hud.texWorldSelectBg)
         world.setWorldCursorHoverBgTexture(hud.worldId, hud.texWorldHoverBg)
     end
+    if hud.texMineDesignate then
+        world.setMineDesignateTexture(hud.worldId, hud.texMineDesignate)
+    end
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -312,10 +319,14 @@ function hud.createUI()
         name = "tool_mode_toggle",
         page = hud.world_page,
         items = {
-            -- Build tool sits above the default/info tool; replaces
-            -- the old `tool_mine` placeholder. Mine textures are still
-            -- loaded above so they stay available for a future mining
-            -- tool.
+            -- Stacked bottom-up: mine above build above default/info
+            -- (direction = "up" puts earlier items higher).
+            {
+                name        = "tool_mine",
+                texDefault  = hud.texToolMine,
+                texSelected = hud.texToolMineSelected,
+                tooltip     = "Mine tool",
+            },
             {
                 name        = "tool_build",
                 texDefault  = hud.texToolBuild,
@@ -335,7 +346,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 2,
+        selectedIndex = 3,
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -350,6 +361,9 @@ function hud.createUI()
             -- Route to the build tool so it can show/hide its picker.
             local buildTool = require("scripts.build_tool")
             buildTool.onToolMode(itemName)
+            -- Route to the mine tool so a pending anchor cancels.
+            local mineTool = require("scripts.mine_tool")
+            mineTool.onToolMode(itemName)
             -- Route to the tile editor so its popup can hide on
             -- non-info tools.
             local tileEditor = require("scripts.tile_editor")
@@ -368,11 +382,15 @@ function hud.createUI()
         menuFont   = hud.menuFont,
         buttonSize = hud.baseSizes.buttonSize,
         selectDefaultTool = function()
-            -- Default tool is at index 2 in the items list above
-            -- (after tool_build at index 1).
-            toggle.select(hud.toolToggleId, 2)
+            -- Default tool is at index 3 in the items list above
+            -- (after tool_mine at 1 and tool_build at 2).
+            toggle.select(hud.toolToggleId, 3)
         end,
     })
+
+    -- Mine tool: needs the hud reference for worldId / current view.
+    local mineToolMod = require("scripts.mine_tool")
+    mineToolMod.setup({ hud = hud })
 
     -- Tile editor lives on the same world_page as the build tool.
     -- It uses the same box texture set + menu font; worldId is used
@@ -458,6 +476,9 @@ function hud.show()
         world.setWorldCursorHoverTexture(hud.worldId, hud.texWorldHover)
         world.setWorldCursorSelectBgTexture(hud.worldId, hud.texWorldSelectBg)
         world.setWorldCursorHoverBgTexture(hud.worldId, hud.texWorldHoverBg)
+    end
+    if hud.texMineDesignate then
+        world.setMineDesignateTexture(hud.worldId, hud.texMineDesignate)
     end
 
     hud.visible = true

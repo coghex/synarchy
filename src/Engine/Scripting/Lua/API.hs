@@ -425,6 +425,13 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)
   registerLuaFunction "setToolMode" (worldSetToolModeFn env)
   registerLuaFunction "getToolMode" (worldGetToolModeFn env)
+  registerLuaFunction "setMineAnchor" (worldSetMineAnchorFn env)
+  registerLuaFunction "clearMineAnchor" (worldClearMineAnchorFn env)
+  registerLuaFunction "designateMine" (worldDesignateMineFn env)
+  registerLuaFunction "setMineDesignateTexture"
+    (worldSetMineDesignateTextureFn env)
+  registerLuaFunction "getMineDesignationCount"
+    (worldGetMineDesignationCountFn env)
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
   registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)

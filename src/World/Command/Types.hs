@@ -72,6 +72,19 @@ data WorldCommand
         --   continuous mouse-hover overwrites for one-shot selections
         --   (e.g. context-menu "Info" on a tile).
     | WorldSetToolMode WorldPageId ToolMode
+    | WorldSetMineAnchor WorldPageId Int Int
+        -- ^ Mine tool: first click anchors the designation rectangle
+        --   at (gx, gy). The render pass previews anchor→hover.
+    | WorldClearMineAnchor WorldPageId
+        -- ^ Mine tool: cancel the pending rectangle (right-click /
+        --   Escape / tool switch).
+    | WorldDesignateMine WorldPageId Int Int Int Int
+        -- ^ Mine tool: second click commits the rectangle
+        --   (gx1,gy1)–(gx2,gy2) (corners in either order). Tiles in
+        --   loaded chunks land in wsMineDesignationsRef with their
+        --   surface z; tiles in unloaded chunks are skipped.
+    | WorldSetMineDesignateTexture WorldPageId TextureHandle
+        -- ^ Texture for committed designation markers.
     | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
         -- ^ pageId, save-name, request-timestamp (ISO 8601 second
         --   precision), Lua-module blobs. The Lua side captures the

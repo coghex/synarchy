@@ -12,6 +12,10 @@ module World.Thread.Command.Cursor
     , handleWorldSetWorldCursorSelectBgTextureCommand
     , handleWorldSetWorldCursorHoverBgTextureCommand
     , handleWorldSelectTileByCoordCommand
+    , handleWorldSetMineAnchorCommand
+    , handleWorldClearMineAnchorCommand
+    , handleWorldDesignateMineCommand
+    , handleWorldSetMineDesignateTextureCommand
     ) where
 
 import UPrelude
@@ -172,6 +176,85 @@ handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId tid = do
             logWarn logger CatWorld $
                 "World not found for cursor hover texture update: "
                     <> unWorldPageId pageId
+
+-- * Mine designation tool
+
+handleWorldSetMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → IO ()
+handleWorldSetMineAnchorCommand env _logger pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { mineAnchor = Just (gx, gy) }, ())
+        Nothing → pure ()
+
+handleWorldClearMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
+handleWorldClearMineAnchorCommand env _logger pageId = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { mineAnchor = Nothing }, ())
+        Nothing → pure ()
+
+-- | Cap on the designation rectangle's side length. Guards against a
+--   misclick across the map turning into a 100k-tile designation.
+maxDesignateSide ∷ Int
+maxDesignateSide = 128
+
+-- | Commit a designation rectangle. DF-style: designations are
+--   PER-Z-LEVEL — (gx1, gy1) is the anchor corner, and only tiles
+--   whose surface z equals the anchor tile's surface z are taken, so
+--   a sweep across a slope marks just the anchor's level. Entries
+--   store that z (markers render from it, no per-frame column reads).
+--   Unloaded-chunk tiles are skipped — designate what you can see.
+--   Also clears the anchor so the Lua side can't desync from a
+--   dropped clear command.
+handleWorldDesignateMineCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Int → Int → IO ()
+handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing → pure ()
+        Just worldState → do
+            tileData ← readIORef (wsTilesRef worldState)
+            let surfaceZAt gx gy = do
+                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    lc ← lookupChunk coord tileData
+                    pure (lcSurfaceMap lc VU.! columnIndex lx ly)
+                xLo = min gx1 gx2
+                yLo = min gy1 gy2
+                xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
+                yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+                entries = case surfaceZAt gx1 gy1 of
+                    Nothing → []   -- anchor chunk unloaded: nothing
+                    Just anchorZ →
+                        [ ((gx, gy), z)
+                        | gx ← [xLo .. xHi]
+                        , gy ← [yLo .. yHi]
+                        , Just z ← [surfaceZAt gx gy]
+                        , z ≡ anchorZ
+                        ]
+            atomicModifyIORef' (wsMineDesignationsRef worldState) $ \m →
+                (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { mineAnchor = Nothing }, ())
+            logDebug logger CatWorld $
+                "Mine designation: +" <> T.pack (show (length entries))
+                <> " tiles (" <> T.pack (show xLo) <> ","
+                <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
+                <> "," <> T.pack (show yHi) <> ")"
+
+handleWorldSetMineDesignateTextureCommand ∷ EngineEnv → LoggerState
+    → WorldPageId → TextureHandle → IO ()
+handleWorldSetMineDesignateTextureCommand env _logger pageId tid = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { mineDesignTexture = Just tid }, ())
+        Nothing → pure ()
 
 -- | Directly select the column at (gx, gy) on the given world, using
 --   the loaded chunk's surface z. Used by the context-menu "Info" path
