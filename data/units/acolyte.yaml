@@ -122,12 +122,16 @@ units:
     # needs to actually SHOW them for debug-spawned units too, the
     # baseline lives on the def now. Adjust if you want bare debug
     # spawns again.
+    # drop_priority: if a weak roll's carrying_capacity can't fit the
+    # full loadout (worn gear + fill all count), the spawn check sheds
+    # the highest priority first — pick, then shovel. Everything else
+    # (survival kit, armor, weapons) always arrives.
     starting_inventory:
       - { item: "canteen_steel_2l", fill: 2.0 }
       - { item: "rations" }
       - { item: "rations" }
-      - { item: "pick_steel" }
-      - { item: "shovel_steel" }
+      - { item: "pick_steel",   drop_priority: 2 }
+      - { item: "shovel_steel", drop_priority: 1 }
       - { item: "axe_steel" }
       - { item: "radio" }
       # Construction materials live on the technomule (see

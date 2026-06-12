@@ -104,10 +104,18 @@ instance FromJSON UnitYamlBody where
 --   copies to grant. Each copy is a distinct ItemInstance (quality /
 --   condition are rolled per instance), so a count: 5 entry rolls
 --   five independent items rather than a stacked one.
+--
+--   drop_priority feeds the spawn-time capacity check: a unit whose
+--   full loadout (inventory + equipment + accessories, fill counted
+--   at 1 L = 1 kg) exceeds its rolled carrying_capacity sheds
+--   droppable entries in DESCENDING priority until it fits. 0 (the
+--   default) = never shed — armor, weapons, and survival kit always
+--   arrive. Acolytes mark the pick (2) and shovel (1).
 data UnitYamlInventoryEntry = UnitYamlInventoryEntry
     { uyieItem  ∷ !Text         -- ^ ItemDef name (e.g. "canteen_steel_2l")
     , uyieFill  ∷ !(Maybe Float) -- ^ initial fill in litres; nil = empty
     , uyieCount ∷ !Int           -- ^ number of copies; defaults to 1
+    , uyieDropPriority ∷ !Int    -- ^ capacity-shed order; 0 = never
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlInventoryEntry where
@@ -115,6 +123,7 @@ instance FromJSON UnitYamlInventoryEntry where
         ⊚ v .:  "item"
         ⊛ v .:? "fill"
         ⊛ v .:? "count" .!= 1
+        ⊛ v .:? "drop_priority" .!= 0
 
 -- | One permanent stat modifier every spawned unit of this type
 --   carries from birth — e.g. the technomule's "cybernetic

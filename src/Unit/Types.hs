@@ -194,10 +194,13 @@ data UnitDef = UnitDef
       --   Skills are continuous floats; XP is applied via a closed-
       --   form formula (see Unit.Stats.applySkillXP) — there's no
       --   per-level threshold to store.
-    , udStartingInventory ∷ ![(Text, Maybe Float)]
-      -- ^ ItemDef name + optional initial fill. Materialised into
-      --   `uiInventory` at spawn by looking each entry up in the
-      --   ItemManager; unknown names are dropped with a log warning.
+    , udStartingInventory ∷ ![(Text, Maybe Float, Int)]
+      -- ^ ItemDef name + optional initial fill + drop priority.
+      --   Materialised into `uiInventory` at spawn by looking each
+      --   entry up in the ItemManager; unknown names are dropped with
+      --   a log warning. Drop priority > 0 marks the item sheddable
+      --   by the spawn-time capacity check (highest sheds first);
+      --   0 = always granted.
     , udEquipmentClass ∷ !(Maybe Text)
       -- ^ Name of the EquipmentClass this unit type uses (e.g.
       --   "humanoid"). Nothing means the unit has no equipment UI

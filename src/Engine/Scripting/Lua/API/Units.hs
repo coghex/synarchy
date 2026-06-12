@@ -219,12 +219,13 @@ loadUnitYamlFn env backendState = do
                             | (sname, s) ← Map.toList (uydSkills def)
                             ]
 
-                    -- Expand each entry by its count so the rest of
-                    -- the spawn pipeline can stay (Text, Maybe Float).
-                    -- Each repetition becomes a distinct ItemInstance
-                    -- (quality / condition rolls fire per copy).
+                    -- Expand each entry by its count. Each repetition
+                    -- becomes a distinct ItemInstance (quality /
+                    -- condition rolls fire per copy); the drop
+                    -- priority rides along for the spawn-time
+                    -- capacity check.
                     let startingInv =
-                            [ (uyieItem e, uyieFill e)
+                            [ (uyieItem e, uyieFill e, uyieDropPriority e)
                             | e ← uydStartingInventory def
                             , _ ← [1 .. max 1 (uyieCount e)]
                             ]
@@ -1496,8 +1497,11 @@ unitWithdrawFromCargoFn env = do
             return 1
 
 -- | unit.getCarryingWeight(uid) → Float kg. Sum of def-declared
---   weight across loose inventory + equipped slot items + accessories.
---   Used by the auto-store AI utility (fill_fraction = this / cap).
+--   weight PLUS current fill (1 L = 1 kg — water density) across
+--   loose inventory + equipped slot items + accessories. Worn gear
+--   counts the same as carried gear by design: it's the same mass.
+--   Used by the auto-store AI utility (fill_fraction = this / cap)
+--   and the pickup/fetch capacity gates.
 unitGetCarryingWeightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetCarryingWeightFn env = do
     uidArg ← Lua.tointeger 1
@@ -1512,6 +1516,7 @@ unitGetCarryingWeightFn env = do
                 itemMgr ← readIORef (itemManagerRef env)
                 let weightOf it = maybe 0 idWeight
                                     (lookupItemDef (iiDefName it) itemMgr)
+                                + iiCurrentFill it
                 pure $ do
                     u ← HM.lookup uid (umInstances um)
                     let invW = sum (map weightOf (uiInventory u))

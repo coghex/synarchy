@@ -2633,9 +2633,11 @@ local function pickupExecute(uid, s, params)
 
     unit.stop(uid)
     -- Capacity check at the moment of truth ("walk, then refuse").
+    -- Fill counts: a full canteen on the ground weighs its contents
+    -- too (1 L = 1 kg, matching getCarryingWeight).
     local carried = unit.getCarryingWeight(uid) or 0
     local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
-    local w       = pickupItemWeight(g.defName)
+    local w       = pickupItemWeight(g.defName) + (g.fill or 0)
     if carried + w > maxW then
         engine.logWarn("pickup_ground: unit " .. tostring(uid)
             .. " over capacity (" .. string.format("%.1f", carried + w)

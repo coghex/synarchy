@@ -12,11 +12,11 @@ units:
     eager_stats: true
     stats:
       # Calibrated against the carrying-capacity formula
-      # (2.9 × (lean_mass × strength)^0.6): with the body block
-      # below (lean ≈ 87 kg) effective strength lands ≈ 9.9 and
-      # base capacity ≈ 165 kg. The "cybernetic enhancements"
-      # +50% modifier (below) lifts the total to ≈ 250 kg.
-      strength:     { base: 3.5, range: 0.5 }
+      # (3.2 × (lean_mass × strength)^0.6): with the body block
+      # below (lean ≈ 87 kg) effective strength lands ≈ 8.6 and
+      # base capacity ≈ 167 kg. The "cybernetic enhancements"
+      # +50% modifier (below) lifts the average total to ≈ 250 kg.
+      strength:     { base: 3.0, range: 0.5 }
       # Bred (and rebuilt) to haul all day.
       endurance:    { base: 3.0, range: 0.6 }
       reflexes:     { base: 0.8, range: 0.3 }

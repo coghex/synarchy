@@ -2,7 +2,7 @@ items:
   - name: "shovel_steel"
     display_name: "Steel Shovel"
     sprite: "assets/textures/items/shovel_steel.png"
-    weight: 2.0
+    weight: 1.5
     kind: weapon
     category: Tools
     make: acolyte

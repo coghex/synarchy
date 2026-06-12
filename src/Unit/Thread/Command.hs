@@ -16,7 +16,7 @@ import Data.List (foldl')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Unit.Anim (stateKey)
-import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
+import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
@@ -93,7 +93,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
             -- units that reference them).
             itemMgr ← readIORef (itemManagerRef env)
             logger  ← readIORef (loggerRef env)
-            initialInventory ← buildStartingInventory env logger itemMgr
+            taggedInventory ← buildStartingInventory env logger itemMgr
                                   (udStartingInventory def)
             -- Pre-equipped items declared by the unit def's
             -- starting_equipment. Resolved against the EquipmentClass
@@ -104,6 +104,22 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                                   (udStartingEquipment def)
             initialAccessories ← buildStartingAccessories env logger itemMgr
                                   (udStartingAccessories def)
+            -- Spawn-time capacity check. Armor / weapons / survival
+            -- kit always arrive; inventory entries with a drop
+            -- priority shed (highest first — pick before shovel)
+            -- until the loadout fits the rolled carrying_capacity.
+            -- Weights mirror getCarryingWeight: def weight + fill
+            -- (1 L = 1 kg), worn gear at full mass.
+            let itemW it = maybe 0 idWeight
+                               (lookupItemDef (iiDefName it) itemMgr)
+                         + iiCurrentFill it
+                fixedW = sum (map itemW (HM.elems initialEquipment))
+                       + sum (map itemW initialAccessories)
+            initialInventory ← case HM.lookup "carrying_capacity"
+                                              initialStats of
+                Nothing  → return (map fst taggedInventory)
+                Just cap → shedToCapacity logger uid itemW cap fixedW
+                                          taggedInventory
             let inst = UnitInstance
                     { uiDefName    = defName
                     , uiTexture    = udTexture def
@@ -674,12 +690,16 @@ recomputeBodyDerivedStats s =
                 -- more strength = more capacity, sub-linearly in both
                 -- so the product doesn't explode at the tails.
                 -- Calibration (acolyte body block): average roll
-                -- (lm ≈ 28.5, strength 1.0) → ~22 kg; an exceptional
+                -- (lm ≈ 28.5, strength 1.0) → ~23 kg; an exceptional
                 -- 2-sigma strongman (strength_base 1.4, lm ≈ 46)
-                -- → ~40 kg. Extrapolates to pack species: a mule-
-                -- sized body (lm ≈ 180, strength ≈ 4.7) → ~165 kg
-                -- base, before any percentage modifiers.
-                carryCap     = 2.9 * ((lm * strength) ** 0.6)
+                -- → ~41 kg. The weakest rolls (~11 kg) sit just under
+                -- the full starting kit (~12 kg) — by design, the
+                -- spawn-time capacity check sheds the pick/shovel
+                -- instead of flooring the formula. Extrapolates to
+                -- pack species: the technomule body (lm ≈ 87,
+                -- strength ≈ 8) → ~163 kg base, before its +50%
+                -- percentage modifier.
+                carryCap     = 3.2 * ((lm * strength) ** 0.6)
             in HM.insert "strength_base"     strBase
              $ HM.insert "strength"          strength
              $ HM.insert "max_hydration"     maxHydration
@@ -687,18 +707,65 @@ recomputeBodyDerivedStats s =
              $ HM.insert "carrying_capacity" carryCap s
         _ → s
 
+-- | Spawn-time capacity shed: drop tagged inventory items (priority
+--   descending, so the acolyte's pick goes before its shovel) until
+--   the total loadout — fixedW (worn equipment + accessories) plus
+--   the remaining inventory — fits the rolled carrying_capacity.
+--   Untagged items (priority 0) are never shed; if the loadout still
+--   doesn't fit after every sheddable item is gone, the unit spawns
+--   over capacity (the pickup/store gates simply refuse until it
+--   lightens) and we log it.
+shedToCapacity ∷ LoggerState → UnitId → (ItemInstance → Float)
+               → Float → Float → [(ItemInstance, Int)]
+               → IO [ItemInstance]
+shedToCapacity logger uid itemW cap fixedW = go
+  where
+    totalOf xs = fixedW + sum (map (itemW . fst) xs)
+    go xs
+        | totalOf xs ≤ cap = return (map fst xs)
+        | otherwise =
+            let prios = [ p | (_, p) ← xs, p > 0 ]
+            in case prios of
+                [] → do
+                    logWarn logger CatThread $
+                        "UnitSpawn " <> T.pack (show uid)
+                        <> ": loadout "
+                        <> T.pack (show (totalOf xs))
+                        <> " kg exceeds capacity "
+                        <> T.pack (show cap)
+                        <> " kg with nothing left to shed"
+                    return (map fst xs)
+                _  → do
+                    let top = maximum prios
+                        (name, rest) = removeFirstByPrio top xs
+                    logInfo logger CatThread $
+                        "UnitSpawn " <> T.pack (show uid)
+                        <> ": over capacity ("
+                        <> T.pack (show (totalOf xs)) <> " > "
+                        <> T.pack (show cap)
+                        <> " kg) — leaving " <> name <> " behind"
+                    go rest
+
+    removeFirstByPrio _ [] = ("?", [])
+    removeFirstByPrio p ((it, q) : rest)
+        | q ≡ p     = (iiDefName it, rest)
+        | otherwise = let (n, rest') = removeFirstByPrio p rest
+                      in (n, (it, q) : rest')
+
 -- | Resolve a unit def's starting_inventory into concrete ItemInstance
---   list. Unknown item names log a warning and are dropped. Fill is
---   clamped to the container's capacity; non-container items ignore
---   the fill arg and get 0. Quality + condition are rolled from the
---   def's spec (defaults to 100 when unset).
+--   list, each tagged with its capacity-shed drop priority. Unknown
+--   item names log a warning and are dropped. Fill is clamped to the
+--   container's capacity; non-container items ignore the fill arg and
+--   get 0. Quality + condition are rolled from the def's spec
+--   (defaults to 100 when unset).
 buildStartingInventory ∷ EngineEnv → LoggerState → ItemManager
-                       → [(Text, Maybe Float)] → IO [ItemInstance]
+                       → [(Text, Maybe Float, Int)]
+                       → IO [(ItemInstance, Int)]
 buildStartingInventory env logger itemMgr entries = do
     mInsts ← mapM resolve entries
     return [i | Just i ← mInsts]
   where
-    resolve (name, mFill) =
+    resolve (name, mFill, prio) =
         case lookupItemDef name itemMgr of
             Nothing → do
                 logWarn logger CatThread $
@@ -712,12 +779,15 @@ buildStartingInventory env logger itemMgr entries = do
                         (Just _,  Nothing) → 0
                 qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
                 cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
-                return $ Just ItemInstance
-                    { iiDefName     = name
-                    , iiCurrentFill = fill
-                    , iiQuality     = qual
-                    , iiCondition   = cond
-                    }
+                return $ Just
+                    ( ItemInstance
+                        { iiDefName     = name
+                        , iiCurrentFill = fill
+                        , iiQuality     = qual
+                        , iiCondition   = cond
+                        }
+                    , prio
+                    )
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
 --   map, validating each item's `idKind` against the slot's accepted

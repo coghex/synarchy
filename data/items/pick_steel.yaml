@@ -2,7 +2,7 @@ items:
   - name: "pick_steel"
     display_name: "Steel Pick"
     sprite: "assets/textures/items/pick_steel.png"
-    weight: 3.0
+    weight: 2.0
     kind: weapon
     category: Tools
     make: acolyte
