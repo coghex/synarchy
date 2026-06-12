@@ -642,6 +642,8 @@ local STAT_DEFS = {
         desc = "Blood volume in litres. Drained by bleeding wounds; below 30% triggers unconsciousness, ≤0 means death." },
     pain         = { icon = "pain",         name = "Pain",
         desc = "Accumulated pain from wounds (severity weighted by attack kind). High pain penalises hit chance and evasion." },
+    carrying_capacity = { icon = "weight",  name = "Carry Load",
+        desc = "Carried weight vs carrying capacity (from muscle mass and strength). Includes worn gear and container contents; over-capacity units refuse to pick anything else up." },
 
     -- Physical stats (rolled at spawn)
     strength     = { icon = "strength",     name = "Strength",
@@ -953,21 +955,14 @@ end
 -- ("Technogoggles + 0.85"). The number shown in the row is the base
 -- with the bonus in parens, so the tooltip title adds new info
 -- (the total) rather than just repeating what's already on screen.
-local function statValueTooltip(uid, statKey)
-    local base = unit.getStatBase(uid, statKey)
-    if base == nil then return nil end
-    local mods, _, _, effective = statModifierTotals(uid, statKey, base)
-    if #mods == 0 then
-        -- Nothing to explain; suppress the tooltip entirely so a
-        -- bonus-less stat doesn't show an empty popup.
-        return nil
-    end
+-- One hint line per modifier: "cybernetic enhancements +50%" for
+-- percentage mods, "Technogoggles +0.85" for flat deltas, both parts
+-- for mixed mods.
+local function modifierLines(mods)
     local lines = {}
     for _, m in ipairs(mods) do
         local pct = m.percent or 0
         if math.abs(pct) >= 0.0005 then
-            -- Percentage modifiers read as "cybernetic enhancements
-            -- +50%"; a mixed mod shows both parts.
             if math.abs(m.delta or 0) >= 0.005 then
                 lines[#lines + 1] = string.format("%s %+.2f %+d%%",
                     m.source or "?", m.delta, pct * 100)
@@ -980,9 +975,36 @@ local function statValueTooltip(uid, statKey)
                 m.source or "?", m.delta or 0)
         end
     end
+    return lines
+end
+
+local function statValueTooltip(uid, statKey)
+    local base = unit.getStatBase(uid, statKey)
+    if base == nil then return nil end
+    local mods, _, _, effective = statModifierTotals(uid, statKey, base)
+    if #mods == 0 then
+        -- Nothing to explain; suppress the tooltip entirely so a
+        -- bonus-less stat doesn't show an empty popup.
+        return nil
+    end
     return {
         text = string.format("%.2f", effective),
-        hint = table.concat(lines, "\n"),
+        hint = table.concat(modifierLines(mods), "\n"),
+    }
+end
+
+-- Carry-load value tooltip: the panel row already shows the effective
+-- total, so the tooltip shows where it came from — body-derived base
+-- with the modifier bonus in absolute terms: "167.0 (+83.5)".
+local function carryValueTooltip(uid)
+    local base = unit.getStatBase(uid, "carrying_capacity")
+    if base == nil then return nil end
+    local mods, _, _, effective =
+        statModifierTotals(uid, "carrying_capacity", base)
+    if #mods == 0 then return nil end
+    return {
+        text = string.format("%.1f (%+.1f)", base, effective - base),
+        hint = table.concat(modifierLines(mods), "\n"),
     }
 end
 
@@ -1148,9 +1170,20 @@ local function fmtPain(uid)
     return string.format("%.2f", p)
 end
 
+-- Carry row: carried weight / effective capacity. The value tooltip
+-- surfaces the capacity breakdown when modifiers are active — the
+-- technomule's "cybernetic enhancements +50%" shows here.
+local function fmtCarry(uid)
+    local cap = unit.getStat(uid, "carrying_capacity")
+    if not cap then return nil end
+    local carried = unit.getCarryingWeight(uid) or 0
+    return string.format("%.1f / %.1f kg", carried, cap)
+end
+
 -- Status panel: vitals most-likely-to-kill at the top, daily-need
 -- resources below. Blood goes first (death-relevant), pain second,
--- then the existing stamina/hunger/hydration trio.
+-- then the existing stamina/hunger/hydration trio, and the carry
+-- load last (informational, not a vital).
 local function buildStatusPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
         { key = "blood",     value = fmtBlood },
@@ -1158,6 +1191,9 @@ local function buildStatusPanel(rect, uid)
         { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end },
         { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end },
         { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end },
+        { key          = "carrying_capacity",
+          value        = fmtCarry,
+          valueTooltip = carryValueTooltip },
     })
 end
 

@@ -52,6 +52,15 @@ baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
 baseTileH ∷ Float
 baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
+-- | Ground-render scale for item sprites. Item textures are 32×32
+--   inventory icons drawn edge-to-edge; at raw pixel ratio they'd
+--   render a third of a tile wide — two thirds of an acolyte (48 px
+--   with padding). Halving reads as hand-tool-sized next to a unit.
+--   Applied in itemGeometry so rendering and click hit-testing stay
+--   in agreement.
+groundItemScale ∷ Float
+groundItemScale = 0.5
+
 -- | How far (0 or 1 z) each corner of a tile is lowered, from the
 --   slope-id edge mask (N=1, E=2, S=4, W=8 = slopes down that way).
 --   A corner is lowered when either adjacent edge slopes — the same
@@ -112,8 +121,8 @@ itemGeometry tileData im texSizes facing zSlice gi = do
         (texW, texH) = case HM.lookup texHandle texSizes of
             Just (w, h) → (fromIntegral w, fromIntegral h)
             Nothing     → (32.0, 32.0)
-        quadW = tileWidth  * (texW / baseTileW)
-        quadH = tileHeight * (texH / baseTileH)
+        quadW = tileWidth  * (texW / baseTileW) * groundItemScale
+        quadH = tileHeight * (texH / baseTileH) * groundItemScale
 
         relativeZ = tz - zSlice
         (rawX, rawY) = gridToScreen facing tx ty
@@ -126,8 +135,15 @@ itemGeometry tileData im texSizes facing zSlice gi = do
         subY = (offU + offV) * tileHalfDiamondHeight
 
         drawX = rawX + subX + (tileWidth - quadW) * 0.5
+        -- Bottom-anchor at the tile diamond center, lifted 2 sprite
+        -- PIXELS so flat items don't z-fight the tile top. The nudge
+        -- must be converted to world units like flora's baseRadius —
+        -- a bare "+ 2.0" here is two full screen-heights and
+        -- teleports every item far below its tile (the GUI-only
+        -- invisible-items bug, 2026-06-12).
+        nudge = 2.0 / baseTileH * tileHeight
         drawY = rawY - heightOffset + subY
-              + tileHalfDiamondHeight - quadH + 2.0
+              + tileHalfDiamondHeight - quadH + nudge
     pure (tz, texHandle, drawX, drawY, quadW, quadH, underwaterDepth)
 
 renderGroundItemQuads ∷ EngineEnv → WorldState → Float
@@ -145,10 +161,18 @@ renderGroundItemQuads env worldState tileAlpha = do
         cs       ← readIORef (wsCursorRef worldState)
         mBindless ← readIORef (textureSystemRef env)
         (fbW, fbH) ← readIORef (framebufferSizeRef env)
+        defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
 
         let lookupSlot texHandle = fromIntegral $ case mBindless of
                 Just bindless → getTextureSlotIndex texHandle bindless
                 Nothing       → 0
+            -- Neutral face-map slot. The world-layer shader masks
+            -- every quad by its face-map sample; passing raw slot 0
+            -- here samples whatever texture happens to live at
+            -- bindless index 0 and renders the item invisible (the
+            -- bug that hid all ground items in the GUI). Same value
+            -- units and flora pass.
+            defFmSlot = fromIntegral defFmSlotWord ∷ Float
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera
@@ -201,14 +225,14 @@ renderGroundItemQuads env worldState tileAlpha = do
                                 then renderFlagSelected else 0
                         slotF = fromIntegral (actualSlot ∷ Int)
                         v0 = Vertex (Vec2 drawX drawY)
-                                 (Vec2 0 0) tint slotF 0 flags
+                                 (Vec2 0 0) tint slotF defFmSlot flags
                         v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                                 (Vec2 1 0) tint slotF 0 flags
+                                 (Vec2 1 0) tint slotF defFmSlot flags
                         v2 = Vertex (Vec2 (drawX + quadW)
                                           (drawY + quadH))
-                                 (Vec2 1 1) tint slotF 0 flags
+                                 (Vec2 1 1) tint slotF defFmSlot flags
                         v3 = Vertex (Vec2 drawX (drawY + quadH))
-                                 (Vec2 0 1) tint slotF 0 flags
+                                 (Vec2 0 1) tint slotF defFmSlot flags
                     Just SortableQuad
                         { sqSortKey = sortKey
                         , sqV0 = v0, sqV1 = v1, sqV2 = v2, sqV3 = v3

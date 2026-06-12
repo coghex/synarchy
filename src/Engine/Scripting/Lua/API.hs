@@ -398,6 +398,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "deselect"     (itemDeselectFn env)
   registerLuaFunction "getSelected"  (itemGetSelectedFn env)
   registerLuaFunction "pickupGround" (itemPickupGroundFn env)
+  registerLuaFunction "debugQuads"   (itemDebugQuadsFn env)
   Lua.setglobal (Lua.Name "item")
 
   Lua.newtable
