@@ -910,16 +910,29 @@ end
 -- text values without recreating the labels.
 -----------------------------------------------------------
 
+-- Sum a stat's active modifiers into (deltaSum, percentSum) and the
+-- effective total: (base + deltaSum) * (1 + percentSum). Mirrors the
+-- engine's effectiveStat composition so the panel never disagrees
+-- with unit.getStat.
+local function statModifierTotals(uid, statName, base)
+    local mods = unit.getModifiers(uid, statName) or {}
+    local delta, percent = 0, 0
+    for _, m in ipairs(mods) do
+        delta   = delta   + (m.delta or 0)
+        percent = percent + (m.percent or 0)
+    end
+    return mods, delta, percent, (base + delta) * (1 + percent)
+end
+
 -- Format a stat as "base (+bonus)" when modifiers are active for that
--- stat, else just "base". Bonus = sum of modifier deltas. Reads
--- live each tick so accessory equip/unequip updates the display
--- without a panel rebuild.
+-- stat, else just "base". Bonus = effective - base, so percentage
+-- modifiers show up too. Reads live each tick so accessory
+-- equip/unequip updates the display without a panel rebuild.
 local function fmtStatLive(uid, statName)
     local base = unit.getStatBase(uid, statName)
     if base == nil then return nil end
-    local mods = unit.getModifiers(uid, statName) or {}
-    local bonus = 0
-    for _, m in ipairs(mods) do bonus = bonus + (m.delta or 0) end
+    local _, _, _, effective = statModifierTotals(uid, statName, base)
+    local bonus = effective - base
     if math.abs(bonus) < 0.005 then
         return string.format("%.2f", base)
     end
@@ -943,19 +956,29 @@ end
 local function statValueTooltip(uid, statKey)
     local base = unit.getStatBase(uid, statKey)
     if base == nil then return nil end
-    local mods = unit.getModifiers(uid, statKey) or {}
+    local mods, _, _, effective = statModifierTotals(uid, statKey, base)
     if #mods == 0 then
         -- Nothing to explain; suppress the tooltip entirely so a
         -- bonus-less stat doesn't show an empty popup.
         return nil
     end
-    local bonus = 0
-    for _, m in ipairs(mods) do bonus = bonus + (m.delta or 0) end
-    local effective = base + bonus
     local lines = {}
     for _, m in ipairs(mods) do
-        lines[#lines + 1] = string.format("%s %+.2f",
-            m.source or "?", m.delta or 0)
+        local pct = m.percent or 0
+        if math.abs(pct) >= 0.0005 then
+            -- Percentage modifiers read as "cybernetic enhancements
+            -- +50%"; a mixed mod shows both parts.
+            if math.abs(m.delta or 0) >= 0.005 then
+                lines[#lines + 1] = string.format("%s %+.2f %+d%%",
+                    m.source or "?", m.delta, pct * 100)
+            else
+                lines[#lines + 1] = string.format("%s %+d%%",
+                    m.source or "?", pct * 100)
+            end
+        else
+            lines[#lines + 1] = string.format("%s %+.2f",
+                m.source or "?", m.delta or 0)
+        end
     end
     return {
         text = string.format("%.2f", effective),

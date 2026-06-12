@@ -48,6 +48,7 @@ module Engine.Scripting.Lua.API.Units
     , unitPickupFn
     , unitRemoveItemFn
     , unitTransferItemToBuildingFn
+    , unitTransferItemToUnitFn
     , unitDepositToCargoFn
     , unitWithdrawFromCargoFn
     , unitGetCarryingWeightFn
@@ -92,6 +93,7 @@ import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStat(..), UnitYamlSkill(..),
                                UnitYamlBody(..), UnitYamlBodyAttr(..),
                                UnitYamlInventoryEntry(..),
+                               UnitYamlModifier(..),
                                UnitYamlBodyPart(..),
                                UnitYamlNaturalWeapon(..),
                                UnitYamlNaturalResistance(..),
@@ -255,6 +257,17 @@ loadUnitYamlFn env backendState = do
                                 , nwSlashEff             = uynwSlashEff nw
                                 , nwBluntEff             = uynwBluntEff nw
                                 }
+                        defMods =
+                            [ ( uymStat m
+                              , StatModifier
+                                  { smDelta   = uymDelta m
+                                  , smSource  = uymSource m
+                                  , smExpiry  = Nothing
+                                  , smPercent = uymPercent m
+                                  }
+                              )
+                            | m ← uydModifiers def
+                            ]
                         unitDef = UnitDef
                             { udName          = name
                             , udTexture       = handle
@@ -275,6 +288,7 @@ loadUnitYamlFn env backendState = do
                             , udBodyParts        = bodyParts
                             , udNaturalResistance = natRes
                             , udNaturalWeapon    = natWeapon
+                            , udModifiers        = defMods
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -1308,6 +1322,48 @@ unitTransferItemToBuildingFn env = do
             Lua.pushboolean False
             return 1
 
+-- | unit.transferItemToUnit(fromUid, toUid, defName) → bool. Atomic
+--   move of one ItemInstance from one unit's inventory to another's.
+--   Both units live in the same manager ref, so the pop and the push
+--   happen in a single atomicModifyIORef' — the item can never be
+--   duplicated or dropped by a thread interleaving. Quality /
+--   condition / currentFill are preserved exactly (this is how
+--   acolytes pull build materials off the technomule without
+--   re-rolling them). No capacity check here — the Lua caller gates
+--   on carrying capacity the same way pickup does.
+--   Returns false if either unit is missing or the source lacks a
+--   matching item; the transfer is all-or-nothing.
+unitTransferItemToUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTransferItemToUnitFn env = do
+    fromArg ← Lua.tointeger 1
+    toArg   ← Lua.tointeger 2
+    nameArg ← Lua.tostring 3
+    case (fromArg, toArg, nameArg) of
+        (Just nF, Just nT, Just nameBS) | nF ≠ nT → do
+            let fromUid = UnitId (fromIntegral nF)
+                toUid   = UnitId (fromIntegral nT)
+                defName = TE.decodeUtf8 nameBS
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case (HM.lookup fromUid (umInstances um),
+                      HM.lookup toUid   (umInstances um)) of
+                    (Just uF, Just uT) →
+                        case popFirstByName defName (uiInventory uF) of
+                            Nothing → (um, False)
+                            Just (item, newInv) →
+                                let uF' = uF { uiInventory = newInv }
+                                    uT' = uT { uiInventory =
+                                                 uiInventory uT ++ [item] }
+                                    insts = HM.insert toUid uT'
+                                          $ HM.insert fromUid uF'
+                                          $ umInstances um
+                                in (um { umInstances = insts }, True)
+                    _ → (um, False)
+            Lua.pushboolean ok
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
 -- | unit.depositToCargo(uid, bid, defName) → bool. Moves one matching
 --   ItemInstance from the unit's loose inventory into the building's
 --   biStorage. Capacity-checked (rejects if the new total weight
@@ -2252,13 +2308,15 @@ unitGetAllStatsFn env = do
                         Lua.rawset (-3)
                     return 1
 
--- | unit.addModifier(id, name, delta, source, durationSec) —
---   add or replace an additive modifier on a stat. Same @source@ on
+-- | unit.addModifier(id, name, delta, source, durationSec, percent) —
+--   add or replace a modifier on a stat. Same @source@ on
 --   the same @name@ overwrites the previous entry; different sources
 --   stack. @durationSec@ is optional (nil = permanent); when given it
 --   is added to the current gameTimeRef value to produce smExpiry,
 --   so modifier expiries survive save/load (gameTimeRef is restored
---   on load; POSIX wall-clock isn't).
+--   on load; POSIX wall-clock isn't). @percent@ is an optional
+--   fractional multiplier contribution (0.5 = +50%, applied as
+--   (base + Σdelta) × (1 + Σpercent)); nil/absent = 0 (additive only).
 --   Returns true on success, false if the unit doesn't exist.
 unitAddModifierFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitAddModifierFn env = do
@@ -2268,12 +2326,17 @@ unitAddModifierFn env = do
     srcArg    ← Lua.tostring 4
     -- 5 may be nil (permanent) or a number (duration seconds).
     durMaybe  ← Lua.tonumber 5
+    -- 6 may be nil (purely additive) or a fractional percent.
+    pctMaybe  ← Lua.tonumber 6
     case (idArg, nameArg, deltaArg, srcArg) of
         (Just n, Just nameBS, Just (Lua.Number d), Just srcBS) → do
             let uid   = UnitId (fromIntegral n)
                 name  = TE.decodeUtf8 nameBS
                 src   = TE.decodeUtf8 srcBS
                 delta = realToFrac d
+                pct   = case pctMaybe of
+                            Just (Lua.Number p) → realToFrac p
+                            _                   → 0
             ok ← Lua.liftIO $ do
                 expiry ← case durMaybe of
                     Just (Lua.Number dur) → do
@@ -2284,6 +2347,7 @@ unitAddModifierFn env = do
                         { smDelta  = delta
                         , smSource = src
                         , smExpiry = expiry
+                        , smPercent = pct
                         }
                 atomicModifyIORef' (unitManagerRef env) $ \um →
                     case HM.lookup uid (umInstances um) of
@@ -2344,7 +2408,7 @@ unitRemoveModifierFn env = do
             return 1
 
 -- | unit.getModifiers(id, name) — list every modifier on the named
---   stat as a Lua array of @{delta, source, expiry}@ tables. Expired
+--   stat as a Lua array of @{delta, percent, source, expiry}@ tables. Expired
 --   entries are NOT filtered — caller can compare expiry to os.time().
 --   nil if the unit doesn't exist; empty array if no modifiers.
 unitGetModifiersFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -2371,6 +2435,8 @@ unitGetModifiersFn env = do
                         Lua.newtable
                         Lua.pushnumber (Lua.Number (realToFrac (smDelta m)))
                         Lua.setfield (-2) "delta"
+                        Lua.pushnumber (Lua.Number (realToFrac (smPercent m)))
+                        Lua.setfield (-2) "percent"
                         Lua.pushstring (TE.encodeUtf8 (smSource m))
                         Lua.setfield (-2) "source"
                         case smExpiry m of

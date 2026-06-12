@@ -294,6 +294,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "pickup"       (unitPickupFn env)
   registerLuaFunction "removeItem"   (unitRemoveItemFn env)
   registerLuaFunction "transferItemToBuilding" (unitTransferItemToBuildingFn env)
+  registerLuaFunction "transferItemToUnit"     (unitTransferItemToUnitFn env)
   registerLuaFunction "depositToCargo"     (unitDepositToCargoFn env)
   registerLuaFunction "withdrawFromCargo"  (unitWithdrawFromCargoFn env)
   registerLuaFunction "getCarryingWeight"  (unitGetCarryingWeightFn env)

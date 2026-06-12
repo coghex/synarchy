@@ -7,8 +7,13 @@
 -- of each other when a portal opens with a starting party.
 --
 -- Per-def config:
---   unit_type      = string, name of the unit def to spawn.
---   count          = integer, total units to spawn.
+--   roster         = array of unit def names, spawned in order. The
+--                    index is derived from the engine-side remaining
+--                    countdown, so the order survives save/load.
+--   unit_type      = string fallback when roster is absent (all
+--                    spawns are this def).
+--   count          = integer, total units to spawn (defaults to
+--                    #roster when a roster is given).
 --   spawn_offset   = {x, y}, where the unit appears relative to the
 --                    building's anchor tile (in tile units).
 --   walk_to_offset = {x, y}, where the unit is then commanded to walk
@@ -37,8 +42,11 @@ package.loaded["scripts.building_spawn"] = buildingSpawn
 
 local config = {
     acolyte_portal = {
-        unit_type      = "acolyte",
-        count          = 5,
+        -- Five acolytes, then the technomule hauling the colony's
+        -- construction stock walks out last.
+        roster         = { "acolyte", "acolyte", "acolyte",
+                           "acolyte", "acolyte", "technomule" },
+        count          = 6,
         spawn_offset   = { x = 0.5, y = 0.5 },
         -- Items handed out to each spawned unit immediately after
         -- spawn, via unit.addItem. Empty now — the acolyte def's
@@ -153,10 +161,21 @@ local function tickOne(bid, info)
     local walkX  = info.gridX + params.walk_to_offset.x
     local walkY  = info.gridY + params.walk_to_offset.y
 
+    -- Pick this spawn's unit def from the roster by how far the
+    -- countdown has progressed (count - remaining spawns are already
+    -- out). Derived, not stored — survives save/load with the
+    -- engine-side biSpawnRemaining.
+    local total = params.count or (params.roster and #params.roster) or 0
+    local unitType = params.unit_type
+    if params.roster then
+        local idx = total - remaining + 1
+        unitType = params.roster[idx] or params.roster[#params.roster]
+    end
+
     -- Units produced by player-built portal buildings are player-
     -- controlled. Pass faction explicitly so the spawn-time-only
     -- faction system gets the right tag.
-    local newUid = unit.spawn(params.unit_type, spawnX, spawnY,
+    local newUid = unit.spawn(unitType, spawnX, spawnY,
                               nil, "player")
     if not newUid then
         engine.logWarn("BuildingSpawn: unit.spawn failed at "
@@ -187,7 +206,7 @@ local function tickOne(bid, info)
 
     engine.logInfo(string.format(
         "BuildingSpawn: portal=%d spawned %s id=%d at (%.2f, %.2f) -> walk to (%.2f, %.2f), remaining=%d",
-        bid, params.unit_type, newUid, spawnX, spawnY, walkX, walkY, newRemaining))
+        bid, unitType, newUid, spawnX, spawnY, walkX, walkY, newRemaining))
 end
 
 -----------------------------------------------------------

@@ -62,7 +62,10 @@ spec = do
             -- Distinct enough that no two adjacent values match exactly
             all (uncurry (≠)) (zip vs (drop 1 vs)) `shouldBe` True
 
-    let mkMod d s e = StatModifier { smDelta = d, smSource = s, smExpiry = e }
+    let mkMod d s e = StatModifier { smDelta = d, smSource = s
+                                   , smExpiry = e, smPercent = 0 }
+        mkPct p s e = StatModifier { smDelta = 0, smSource = s
+                                   , smExpiry = e, smPercent = p }
     describe "effectiveStat" $ do
         it "returns the base when no modifiers" $
             effectiveStat 0 5.0 [] `shouldBe` 5.0
@@ -92,6 +95,24 @@ spec = do
                 ,mkMod (-3) "expired2" (Just 99)
                 ,mkMod  1   "perma"    Nothing]
               `shouldBe` 9.0   -- 10 + (-2) + 1 = 9
+        it "applies a percentage modifier (+50%)" $
+            -- The technomule's "cybernetic enhancements".
+            effectiveStat 0 100.0 [mkPct 0.5 "cyber" Nothing]
+              `shouldBe` 150.0
+        it "applies deltas before percents: (base+Σd)×(1+Σp)" $
+            effectiveStat 0 10.0
+                [mkMod 2.0 "flat" Nothing, mkPct 0.5 "pct" Nothing]
+              `shouldBe` 18.0   -- (10+2)×1.5
+        it "sums percents from multiple sources into one multiplier" $
+            effectiveStat 0 10.0
+                [mkPct 0.5 "a" Nothing, mkPct 0.25 "b" Nothing]
+              `shouldBe` 17.5   -- 10×(1+0.75)
+        it "ignores an expired percentage modifier" $
+            effectiveStat 100 10.0 [mkPct 0.5 "old" (Just 50)]
+              `shouldBe` 10.0
+        it "clamps at 0 when a negative percent overshoots" $
+            effectiveStat 0 10.0 [mkPct (-1.5) "drain" Nothing]
+              `shouldBe` 0.0
 
     describe "applySkillXP" $ do
         let approx target v = abs (v - target) < 1e-4

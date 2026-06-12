@@ -51,17 +51,19 @@ boxMuller g0 =
 applySkillXP ∷ Float → Float → Float
 applySkillXP level xp = level + xp / max (level * level) 1e-4
 
--- | Effective stat value at time @now@ = base + sum of active modifier
---   deltas, clamped at zero. A modifier is active when it has no
---   expiry, OR its expiry is in the future (strictly: @now < expiry@,
---   so the modifier ends exactly at its expiry time).
+-- | Effective stat value at time @now@ =
+--   @(base + Σ active deltas) × (1 + Σ active percents)@, clamped at
+--   zero. A modifier is active when it has no expiry, OR its expiry
+--   is in the future (strictly: @now < expiry@, so the modifier ends
+--   exactly at its expiry time).
 --
 --   Pure — caller supplies @now@ so the function is testable without IO.
 effectiveStat ∷ Double → Float → [StatModifier] → Float
 effectiveStat now base mods =
-    let active = filter isActive mods
-        delta  = sum (smDelta <$> active)
-    in max 0 (base + delta)
+    let active  = filter isActive mods
+        delta   = sum (smDelta   <$> active)
+        percent = sum (smPercent <$> active)
+    in max 0 ((base + delta) * (1 + percent))
   where
     isActive m = case smExpiry m of
         Nothing → True

@@ -142,6 +142,13 @@ local config = {
         deliver_scan_range     = 30.0,
         deliver_walk_speed     = 1.6,
         deliver_utility        = 4.0,
+        -- Fetching from the technomule. Construction materials live
+        -- on the mule (technomule.yaml), so a deliverer whose own
+        -- inventory lacks claimed materials walks to the mule first
+        -- and takes the shortfall (unit.transferItemToUnit preserves
+        -- the instances). Capacity-gated per item like pickup.
+        mule_fetch_arrival     = 1.5,
+        mule_fetch_speed       = 1.6,
         -- Auto-store materials. Utility curve = base · fill³ where
         -- fill = carrying_weight / carrying_capacity. Below ~65 %
         -- full the action sits under wander (0.8); past that it
@@ -1716,6 +1723,34 @@ local function inventoryCountOf(uid, matType)
     return n
 end
 
+-- Item-def weight lookup for the fetch capacity gate. (pickup_ground
+-- has its own copy further down — locals are lexically scoped, so
+-- this section can't see it.)
+local function deliverItemWeight(defName)
+    for _, d in ipairs(item.listDefs() or {}) do
+        if d.name == defName then return d.weight or 0 end
+    end
+    return 0
+end
+
+-- Nearest technomule, or nil. The colony's construction stock rides
+-- on it; deliverers fetch their shortfall from here. No range limit —
+-- materials are worth the walk.
+local function findTechnomule(fromX, fromY)
+    local best, bestD = nil, math.huge
+    for _, otherUid in ipairs(unit.getAllIds() or {}) do
+        local info = unit.getInfo(otherUid)
+        if info and info.defName == "technomule" then
+            local d = distance(fromX, fromY, info.gridX, info.gridY)
+            if d < bestD then
+                best, bestD = { uid = otherUid, gridX = info.gridX,
+                                gridY = info.gridY }, d
+            end
+        end
+    end
+    return best
+end
+
 -- How many units of matType still need a deliverer, considering both
 -- engine-side delivered counts AND other live acolytes' active
 -- claims. excludeUid lets the caller drop their own claim from the
@@ -1743,18 +1778,30 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
            and not building.areMaterialsSatisfied(bid) then
             local need      = building.getMaterialNeed(bid) or {}
             local delivered = building.getMaterialDelivered(bid) or {}
-            -- My potential contribution per material.
-            local claim = {}
-            local anyClaim = false
+            -- My potential contribution per material: own inventory
+            -- first, then the technomule's stock for the shortfall.
+            -- (Concurrent claimants can both plan on the same mule
+            -- stock — the engine transfer fails gracefully for the
+            -- loser and the next utility pass re-claims what's still
+            -- needed, so the race resolves itself.)
+            local mule = findTechnomule(fromX, fromY)
+            local claim, fromMule = {}, {}
+            local anyClaim, anyFromMule = false, false
             for matType, count in pairs(need) do
                 local remaining = remainingUnclaimedNeed(bid, matType,
                                        count, delivered, uid)
                 if remaining > 0 then
                     local have = inventoryCountOf(uid, matType)
-                    local bring = math.min(have, remaining)
+                    local muleHave = mule
+                        and inventoryCountOf(mule.uid, matType) or 0
+                    local bring = math.min(have + muleHave, remaining)
                     if bring > 0 then
                         claim[matType] = bring
                         anyClaim = true
+                        if bring > have then
+                            fromMule[matType] = bring - have
+                            anyFromMule = true
+                        end
                     end
                 end
             end
@@ -1771,6 +1818,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
                             bid = bid, gridX = info.gridX, gridY = info.gridY,
                             tileW = tw, tileH = th, distance = d,
                             claim = claim,
+                            fromMule = anyFromMule and fromMule or nil,
                         }
                         bestD = d
                     end
@@ -1797,18 +1845,87 @@ local function deliverUtility(uid, s, params)
     return params.deliver_utility
 end
 
+-- Fetch phase of a delivery: walk to the technomule and take the
+-- claimed shortfall. Returns true while still busy (walking /
+-- transferring), false once the fetch list is empty (or abandoned —
+-- mule gone, stock gone, or capacity hit; delivery proceeds with
+-- whatever is actually in inventory, transferItemToBuilding breaks
+-- gracefully on the rest).
+local function deliverFetchFromMule(uid, s, info, params)
+    local claim = s.deliveryClaim
+    if not claim.fromMule or not next(claim.fromMule) then
+        return false
+    end
+
+    local mule = findTechnomule(info.gridX, info.gridY)
+    if not mule then
+        claim.fromMule = nil
+        return false
+    end
+
+    if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
+       > params.mule_fetch_arrival then
+        unit.moveTo(uid, mule.gridX, mule.gridY, params.mule_fetch_speed)
+        return true
+    end
+
+    unit.stop(uid)
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    for matType, count in pairs(claim.fromMule) do
+        local taken = 0
+        for _ = 1, count do
+            local w = deliverItemWeight(matType)
+            if carried + w > maxW then
+                engine.logWarn("deliver: unit " .. tostring(uid)
+                    .. " at capacity (" .. string.format("%.1f", carried + w)
+                    .. " > " .. string.format("%.1f", maxW)
+                    .. " kg) — leaving rest of " .. matType .. " on mule")
+                break
+            end
+            if not unit.transferItemToUnit(mule.uid, uid, matType) then
+                break    -- mule stock ran out (raced another claimant)
+            end
+            carried = carried + w
+            taken = taken + 1
+        end
+        claim.fromMule[matType] = nil
+        -- Whatever we couldn't take, we can't deliver — shrink the
+        -- claim so other acolytes' remaining-need math frees up the
+        -- difference immediately.
+        local shortfall = count - taken
+        if shortfall > 0 and claim.materials[matType] then
+            local kept = claim.materials[matType] - shortfall
+            claim.materials[matType] = kept > 0 and kept or nil
+        end
+    end
+    claim.fromMule = nil
+    return false
+end
+
 local function deliverExecute(uid, s, params)
     -- Lock in claim on first call so subsequent ticks (and other
     -- acolytes' utility checks) see the reservation.
     if not s.deliveryClaim then
         local target = s.deliveryPendingTarget
         if not target then return end
-        s.deliveryClaim = { bid = target.bid, materials = target.claim }
+        s.deliveryClaim = { bid = target.bid, materials = target.claim,
+                            fromMule = target.fromMule }
         s.deliveryPendingTarget = nil
     end
 
     local info = unit.getInfo(uid)
     if not info then return end
+
+    -- Source the shortfall from the technomule before heading to the
+    -- build site (own inventory first, then the mule — by design).
+    if deliverFetchFromMule(uid, s, info, params) then return end
+
+    -- Fetch may have emptied the claim entirely (mule gone / raced).
+    if not next(s.deliveryClaim.materials) then
+        s.deliveryClaim = nil
+        return
+    end
 
     local binfo = building.getInfo(s.deliveryClaim.bid)
     if not binfo then
@@ -2622,6 +2739,36 @@ unitAi.registerActions("acolyte", {
       execute = digExecute, onExit = digOnExit },
     { name = "pickup_ground", utility = pickupUtility,
       execute = pickupExecute },
+})
+
+-- Technomule: player pack unit. Stands by the colony's materials
+-- (wander self-disables — the def has no stamina stat, and that's
+-- intentional: a pack animal that drifts away from the build site
+-- defeats its purpose) but follows player move orders, and the
+-- universal combat candidates give it retreat when wolves come.
+-- Acolytes pull build materials off it via the deliver fetch phase.
+unitAi.setConfig("technomule", {
+    thought_interval = 1.0,
+    thought_jitter   = 0.5,
+    combat_thought_interval = 0.1,
+    wander_radius    = 3.0,
+    speed_frac_wander  = 0.3,
+    speed_frac_command = 0.7,
+    speed_frac_retreat = 1.0,
+    base_wander_utility          = 0.3,
+    wander_stamina_weight        = 0.0,
+    wander_time_penalty          = 0.1,
+    wander_min_stamina_fraction  = 0.0,
+    command_speed                = 2.0,
+})
+
+unitAi.registerActions("technomule", {
+    { name = "idle",           utility = idleUtility,
+      execute = idleExecute },
+    { name = "wander",         utility = wanderUtility,
+      execute = wanderExecute },
+    { name = "follow_command", utility = followCommandUtility,
+      execute = followCommandExecute },
 })
 
 -- Load species satellite scripts. Each one defines its candidates

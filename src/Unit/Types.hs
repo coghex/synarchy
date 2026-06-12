@@ -42,10 +42,15 @@ data Animation = Animation
     , aFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
     } deriving (Show, Eq)
 
--- | One additive modifier on a stat. Multiple modifiers on the same
---   stat sum together (after expiry filtering). The (source, stat)
---   pair is unique within a unit — re-adding the same source on the
---   same stat overwrites the previous entry.
+-- | One modifier on a stat. Multiple modifiers on the same stat
+--   compose (after expiry filtering): deltas sum onto the base, then
+--   percents sum into one multiplier —
+--   @effective = (base + Σdelta) × (1 + Σpercent)@.
+--   The (source, stat) pair is unique within a unit — re-adding the
+--   same source on the same stat overwrites the previous entry.
+--
+--   Field order is load-bearing: Generic Serialize is positional, so
+--   new fields go at the END (smPercent appended for save v33).
 data StatModifier = StatModifier
     { smDelta  ∷ !Float
       -- ^ added to the base; can be negative (debuff).
@@ -56,6 +61,9 @@ data StatModifier = StatModifier
       --   becomes inactive. Nothing = permanent (removed only via
       --   removeModifier). Anchored to gameTimeRef rather than POSIX
       --   so the expiry survives save/load.
+    , smPercent ∷ !Float
+      -- ^ Fractional multiplier contribution: 0.5 = +50%, -0.25 =
+      --   -25%, 0 = purely additive. Applied after all deltas.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A single wound record on a unit. Slim by design: every derived
@@ -220,6 +228,11 @@ data UnitDef = UnitDef
       --   Acolytes have Nothing here (they're expected to fight with
       --   their equipped dagger); bears declare an "unarmed" natural
       --   weapon.
+    , udModifiers ∷ ![(Text, StatModifier)]
+      -- ^ Permanent (stat name, modifier) pairs seeded into
+      --   `uiModifiers` at spawn — the species' innate buffs
+      --   (technomule: carrying_capacity +50% "cybernetic
+      --   enhancements"). Show in tooltips like any other modifier.
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.

@@ -130,15 +130,10 @@ units:
       - { item: "shovel_steel" }
       - { item: "axe_steel" }
       - { item: "radio" }
-      # Construction materials — each acolyte carries half a cargo
-      # hold's requirement, so any two with the right mix can finish
-      # one build. The delivery-AI claim system keeps duplicates from
-      # walking in (the second acolyte sees reduced remaining need).
-      - { item: "steel_plate",     count: 5 }
-      - { item: "steel_bar",       count: 12 }
-      - { item: "steel_hardware",  count: 5 }
-      - { item: "electric_motor",  count: 1 }
-      - { item: "processing_unit", count: 1 }
+      # Construction materials live on the technomule (see
+      # technomule.yaml) — acolytes carry only their personal kit
+      # and fetch build materials from the mule when their own
+      # inventory comes up short.
 
     # Combat equipment seeded into the matching slots at spawn. Each
     # entry's item kind must match the slot's accepted kind (see

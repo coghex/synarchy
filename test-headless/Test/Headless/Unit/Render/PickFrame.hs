@@ -48,6 +48,7 @@ mkDef anims = UnitDef
     , udBodyParts          = []
     , udNaturalResistance  = defaultNaturalResistance
     , udNaturalWeapon      = Nothing
+    , udModifiers          = []
     }
 
 -- | A UnitInstance facing south with the supplied anim name and start time.

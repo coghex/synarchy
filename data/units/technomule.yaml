@@ -1,0 +1,277 @@
+units:
+  - name: "technomule"
+    sprite: "assets/textures/units/technomule/animations/idle/south/frame_000.png"
+    # Big pack quadruped — bear-class footprint.
+    base_width: 16
+    # Loaded pack animal: brisk but no sprinter. Faster than a
+    # walking acolyte (1.4) so it keeps up with the column, far
+    # slower than wolves (6.5) — it is not built to escape.
+    max_speed: 3.5
+    # No equipment_class — no equipment UI; it IS the cargo.
+
+    eager_stats: true
+    stats:
+      # Calibrated against the carrying-capacity formula
+      # (2.9 × (lean_mass × strength)^0.6): with the body block
+      # below (lean ≈ 87 kg) effective strength lands ≈ 9.9 and
+      # base capacity ≈ 165 kg. The "cybernetic enhancements"
+      # +50% modifier (below) lifts the total to ≈ 250 kg.
+      strength:     { base: 3.5, range: 0.5 }
+      # Bred (and rebuilt) to haul all day.
+      endurance:    { base: 3.0, range: 0.6 }
+      reflexes:     { base: 0.8, range: 0.3 }
+      constitution: { base: 2.0, range: 0.5 }
+      metabolism:   { base: 1.0, range: 0.3 }
+      perception:   { base: 1.0, range: 0.4 }
+      # No hands; placid temperament; servo-stabilized but not nimble.
+      dexterity:    { base: 0.2, range: 0.1 }
+      agility:      { base: 0.6, range: 0.3 }
+      intelligence: { base: 0.5, range: 0.2 }
+      toughness:    { base: 1.5, range: 0.4 }
+
+    body:
+      # Shoulder height ~1.5 m; bulk 4 → body mass ≈ 200 kg
+      # (22·h²·bulk), lean ≈ 87 kg after the standard split.
+      height:  { mean: 1.5, range: 0.2 }
+      bulk:    { mean: 4.0, range: 0.6 }
+      bodyfat: { mean: 0.12, range: 0.08 }
+
+    # Innate, permanent, tooltip-visible: the percentage modifier on
+    # top of the body-derived base capacity.
+    modifiers:
+      - { stat: "carrying_capacity", percent: 0.5,
+          source: "cybernetic enhancements" }
+
+    skills:
+      balance:  { base: 60.0, range: 15.0 }
+      climbing: { base: 5.0,  range: 5.0 }
+
+    # The portal's construction stock rides on the mule — acolytes
+    # carry only their personal kit and pull build materials from
+    # here (own inventory first, then the mule). 2.5 cargo holds'
+    # worth: the same total the five acolytes used to split between
+    # them (~80 kg, well inside the ~250 kg capacity).
+    starting_inventory:
+      - { item: "steel_plate",     count: 25 }
+      - { item: "steel_bar",       count: 60 }
+      - { item: "steel_hardware",  count: 25 }
+      - { item: "electric_motor",  count: 5 }
+      - { item: "processing_unit", count: 5 }
+
+    # 8-part quadruped anchored to ~1.5 m shoulder height (wolf
+    # layout, scaled up).
+    body_parts:
+      - { id: head,         parent: neck,  vital: true,
+          area_weight: 0.10, tactical_value: 1.0,
+          max_health_factor: 0.20, bleed_factor: 2.0,
+          height_low: 1.05, height_high: 1.65 }
+      - { id: neck,         parent: torso, vital: true,
+          area_weight: 0.05, tactical_value: 1.0,
+          max_health_factor: 0.15, bleed_factor: 3.0,
+          height_low: 0.95, height_high: 1.25 }
+      - { id: torso,        parent: null,  vital: true,
+          area_weight: 0.40, tactical_value: 0.8,
+          max_health_factor: 0.40, bleed_factor: 2.0,
+          height_low: 0.55, height_high: 1.50 }
+      - { id: l_fore_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00 }
+      - { id: r_fore_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00 }
+      - { id: l_hind_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00 }
+      - { id: r_hind_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00 }
+      - { id: tail,         parent: torso,
+          area_weight: 0.05, tactical_value: 0.1,
+          max_health_factor: 0.05, bleed_factor: 0.5,
+          height_low: 0.55, height_high: 1.00 }
+
+    # Thick hide + subdermal plating: shrugs blunt and slash, stabs
+    # find the gaps.
+    natural_resistance:
+      slash: 0.3
+      stab:  0.1
+      blunt: 0.4
+
+    # No natural weapon — it is cargo, not cavalry. Wolves are a
+    # real threat; keep it near the acolytes.
+
+    # Per-direction T-pose stills (idle frame 0). SW/W/NW mirrored.
+    directional_sprites:
+      south:      "assets/textures/units/technomule/animations/idle/south/frame_000.png"
+      south-east: "assets/textures/units/technomule/animations/idle/south-east/frame_000.png"
+      east:       "assets/textures/units/technomule/animations/idle/east/frame_000.png"
+      north-east: "assets/textures/units/technomule/animations/idle/north-east/frame_000.png"
+      north:      "assets/textures/units/technomule/animations/idle/north/frame_000.png"
+
+    # Only the three user-authored chains exist (idle/walk/run); the
+    # engine falls back to the directional still for anything else.
+    state_animations:
+      standing-idle: idle
+      standing-walk: walk
+      standing-run:  run
+
+    animations:
+      idle:
+        fps: 6
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/technomule/animations/idle/south/frame_000.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_001.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_002.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_003.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_004.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_005.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_006.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_007.png"
+            - "assets/textures/units/technomule/animations/idle/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_003.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_004.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_005.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_006.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_007.png"
+            - "assets/textures/units/technomule/animations/idle/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/technomule/animations/idle/east/frame_000.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_001.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_002.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_003.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_004.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_005.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_006.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_007.png"
+            - "assets/textures/units/technomule/animations/idle/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_003.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_004.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_005.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_006.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_007.png"
+            - "assets/textures/units/technomule/animations/idle/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/technomule/animations/idle/north/frame_000.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_001.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_002.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_003.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_004.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_005.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_006.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_007.png"
+            - "assets/textures/units/technomule/animations/idle/north/frame_008.png"
+      walk:
+        fps: 10
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/technomule/animations/walk/south/frame_000.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_001.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_002.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_003.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_004.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_005.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_006.png"
+            - "assets/textures/units/technomule/animations/walk/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_003.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_004.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_005.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_006.png"
+            - "assets/textures/units/technomule/animations/walk/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/technomule/animations/walk/east/frame_000.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_001.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_002.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_003.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_004.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_005.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_006.png"
+            - "assets/textures/units/technomule/animations/walk/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_003.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_004.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_005.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_006.png"
+            - "assets/textures/units/technomule/animations/walk/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/technomule/animations/walk/north/frame_000.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_001.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_002.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_003.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_004.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_005.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_006.png"
+            - "assets/textures/units/technomule/animations/walk/north/frame_007.png"
+      run:
+        fps: 12
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/technomule/animations/run/south/frame_000.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_001.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_002.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_003.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_004.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_005.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_006.png"
+            - "assets/textures/units/technomule/animations/run/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/technomule/animations/run/south-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_003.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_004.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_005.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_006.png"
+            - "assets/textures/units/technomule/animations/run/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/technomule/animations/run/east/frame_000.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_001.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_002.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_003.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_004.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_005.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_006.png"
+            - "assets/textures/units/technomule/animations/run/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/technomule/animations/run/north-east/frame_000.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_001.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_002.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_003.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_004.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_005.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_006.png"
+            - "assets/textures/units/technomule/animations/run/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/technomule/animations/run/north/frame_000.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_001.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_002.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_003.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_004.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_005.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_006.png"
+            - "assets/textures/units/technomule/animations/run/north/frame_007.png"

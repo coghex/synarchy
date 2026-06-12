@@ -104,10 +104,11 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 32  -- v32: ground items — SaveData gains the
-                         -- trailing 'sdGroundItems' field.
-                         -- (v31: mining designations; v30: ore
-                         -- deposition + wgpOreLevers.)
+currentSaveVersion = 33  -- v33: StatModifier gains the trailing
+                         -- 'smPercent' field (percentage modifiers —
+                         -- technomule "cybernetic enhancements").
+                         -- (v32: ground items; v31: mining
+                         -- designations; v30: ore deposition.)
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

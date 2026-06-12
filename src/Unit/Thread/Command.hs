@@ -121,11 +121,14 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , uiPose        = "standing"
                     , uiAnimStride  = 1
                     , uiStats       = initialStats
-                    -- Seed modifiers from the just-built accessories so
-                    -- their buffs are active at spawn (same effect as
-                    -- if the player had right-click-equipped each).
+                    -- Seed modifiers from the def's innate modifiers
+                    -- (technomule's "cybernetic enhancements") plus
+                    -- the just-built accessories so their buffs are
+                    -- active at spawn (same effect as if the player
+                    -- had right-click-equipped each).
                     , uiModifiers   = foldl' (applyAccessoryBuffs itemMgr)
-                                             HM.empty initialAccessories
+                                             (defModifierMap def)
+                                             initialAccessories
                     , uiSkills      = initialSkills
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
@@ -667,7 +670,16 @@ recomputeBodyDerivedStats s =
                 strength   = strBase * (ratio ** 0.7)
                 maxHydration = bm * 0.6
                 maxHunger    = bm * 20
-                carryCap     = strength * 5
+                -- Carrying capacity from muscle: more lean mass AND
+                -- more strength = more capacity, sub-linearly in both
+                -- so the product doesn't explode at the tails.
+                -- Calibration (acolyte body block): average roll
+                -- (lm ≈ 28.5, strength 1.0) → ~22 kg; an exceptional
+                -- 2-sigma strongman (strength_base 1.4, lm ≈ 46)
+                -- → ~40 kg. Extrapolates to pack species: a mule-
+                -- sized body (lm ≈ 180, strength ≈ 4.7) → ~165 kg
+                -- base, before any percentage modifiers.
+                carryCap     = 2.9 * ((lm * strength) ** 0.6)
             in HM.insert "strength_base"     strBase
              $ HM.insert "strength"          strength
              $ HM.insert "max_hydration"     maxHydration
@@ -773,6 +785,18 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                         m
                 ) (return HM.empty) entries
 
+-- | Seed map of a def's innate modifiers (yaml `modifiers:` block) —
+--   the spawn-time base that accessory buffs then fold onto. Same
+--   dedup-by-source rule as everything else: later entries on the
+--   same (stat, source) pair win.
+defModifierMap ∷ UnitDef → HM.HashMap Text [StatModifier]
+defModifierMap def = foldl' insertOne HM.empty (udModifiers def)
+  where
+    insertOne acc (stat, m) =
+        let existing = HM.lookupDefault [] stat acc
+            others   = filter (\x → smSource x ≢ smSource m) existing
+        in HM.insert stat (m : others) acc
+
 -- | Fold an accessory's buffs into a modifier map. Mirrors
 --   Engine.Scripting.Lua.API.Equipment.applyItemBuffs but kept here to
 --   avoid the import cycle between Unit.Thread.Command and Equipment.
@@ -794,7 +818,8 @@ applyAccessoryBuffs itemMgr mods inst =
             src   = idDisplayName iDef
             m     = StatModifier { smDelta = delta
                                  , smSource = src
-                                 , smExpiry = Nothing }
+                                 , smExpiry = Nothing
+                                 , smPercent = 0 }
             existing = HM.lookupDefault [] (ibStat b) acc
             others   = filter (\x → smSource x ≢ src) existing
         in HM.insert (ibStat b) (m : others) acc

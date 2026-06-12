@@ -7,6 +7,7 @@ module Engine.Asset.YamlUnits
     , UnitYamlBodyAttr(..)
     , UnitYamlBody(..)
     , UnitYamlInventoryEntry(..)
+    , UnitYamlModifier(..)
     , UnitYamlBodyPart(..)
     , UnitYamlNaturalWeapon(..)
     , UnitYamlNaturalResistance(..)
@@ -114,6 +115,26 @@ instance FromJSON UnitYamlInventoryEntry where
         ⊚ v .:  "item"
         ⊛ v .:? "fill"
         ⊛ v .:? "count" .!= 1
+
+-- | One permanent stat modifier every spawned unit of this type
+--   carries from birth — e.g. the technomule's "cybernetic
+--   enhancements" +50% on carrying_capacity. @delta@ is additive,
+--   @percent@ is a fractional multiplier (0.5 = +50%); both default
+--   to 0 so a block can declare either or both. @source@ is the
+--   label shown in the stat tooltip.
+data UnitYamlModifier = UnitYamlModifier
+    { uymStat    ∷ !Text
+    , uymDelta   ∷ !Float
+    , uymPercent ∷ !Float
+    , uymSource  ∷ !Text
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlModifier where
+    parseJSON = withObject "UnitYamlModifier" $ \v → UnitYamlModifier
+        ⊚ v .:  "stat"
+        ⊛ v .:? "delta"   .!= 0.0
+        ⊛ v .:? "percent" .!= 0.0
+        ⊛ v .:  "source"
 
 -- | One skill as declared in YAML. Like a stat (base + range, rolled
 --   at spawn). Skills are continuous floats that grow via a closed-
@@ -250,6 +271,11 @@ data UnitYamlDef = UnitYamlDef
       -- ^ optional: innate weapon (claws/fangs/fists). Used by combat
       --   when no equipped weapon is found. Acolytes omit (rely on
       --   equipment); bears declare an "unarmed" natural weapon.
+    , uydModifiers          ∷ ![UnitYamlModifier]
+      -- ^ optional: permanent stat modifiers seeded at spawn
+      --   (technomule: carrying_capacity +50% "cybernetic
+      --   enhancements"). Visible in the stat tooltip like any
+      --   other modifier.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -273,6 +299,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "body_parts"          .!= []
         ⊛ v .:? "natural_resistance"  .!= defaultUnitYamlNaturalResistance
         ⊛ v .:? "natural_weapon"
+        ⊛ v .:? "modifiers"           .!= []
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

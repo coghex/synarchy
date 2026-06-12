@@ -193,6 +193,7 @@ applyItemBuffs inst iDef mods = foldl' applyOne mods (idBuffs iDef)
                       { smDelta  = delta
                       , smSource = src
                       , smExpiry = Nothing
+                      , smPercent = 0
                       }
             existing = HM.lookupDefault [] (ibStat b) acc
             others   = filter (\x → smSource x ≢ src) existing
