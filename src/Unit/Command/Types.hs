@@ -58,4 +58,10 @@ data UnitCommand
         --   against state_animations to pick the anim; missing assets
         --   yield a 0-duration transition that completes on the next
         --   tick. While transitioning, movement orders are ignored.
+    | UnitReGround !Int !Int
+        -- ^ Terrain under tile (gx, gy) changed (delete-tile edit /
+        --   dig completion): re-snap the z of any IDLE unit standing
+        --   on that tile to the new surface. Moving units re-ground
+        --   themselves on every tile crossing; stationary ones would
+        --   otherwise keep a stale z and float mid-air over the hole.
     deriving (Show)

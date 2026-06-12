@@ -5,6 +5,8 @@ materials:
     density: 2.7
     albedo: 0.35
     drainage: 0.05
+    pick_speed: 0.9
+    shovel_speed: 0.1
     tile: "assets/textures/world/granite/granite.png"
     zoom: "assets/textures/world/zoommap/granite_chunk.png"
     bg:   "assets/textures/world/zoommap/granite_chunk_background.png"
@@ -14,6 +16,8 @@ materials:
     density: 2.85
     albedo: 0.30
     drainage: 0.05
+    pick_speed: 0.95
+    shovel_speed: 0.15
     tile: "assets/textures/world/diorite/diorite.png"
     zoom: "assets/textures/world/zoommap/diorite_chunk.png"
     bg:   "assets/textures/world/zoommap/diorite_chunk_background.png"
@@ -23,6 +27,8 @@ materials:
     density: 3.0
     albedo: 0.18
     drainage: 0.05
+    pick_speed: 0.95
+    shovel_speed: 0.15
     tile: "assets/textures/world/gabbro/gabbro.png"
     zoom: "assets/textures/world/zoommap/gabbro_chunk.png"
     bg:   "assets/textures/world/zoommap/gabbro_chunk_background.png"
@@ -32,6 +38,8 @@ materials:
     density: 2.75
     albedo: 0.45
     drainage: 0.05
+    pick_speed: 0.9
+    shovel_speed: 0.1
     tile: "assets/textures/world/anorthosite/anorthosite.png"
     zoom: "assets/textures/world/zoommap/anorthosite_chunk.png"
     bg:   "assets/textures/world/zoommap/anorthosite_chunk_background.png"
@@ -41,6 +49,8 @@ materials:
     density: 3.3
     albedo: 0.15
     drainage: 0.05
+    pick_speed: 0.85
+    shovel_speed: 0.1
     tile: "assets/textures/world/peridotite/peridotite.png"
     zoom: "assets/textures/world/zoommap/peridotite_chunk.png"
     bg:   "assets/textures/world/zoommap/peridotite_chunk_background.png"
@@ -50,6 +60,8 @@ materials:
     density: 2.7
     albedo: 0.38
     drainage: 0.1
+    pick_speed: 0.9
+    shovel_speed: 0.1
     tile: "assets/textures/world/pegmatite/pegmatite.png"
     zoom: "assets/textures/world/zoommap/pegmatite_chunk.png"
     bg:   "assets/textures/world/zoommap/pegmatite_chunk_background.png"

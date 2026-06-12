@@ -5,6 +5,8 @@ materials:
     density: 4.0
     albedo: 0.12
     drainage: 0.05
+    pick_speed: 0.9
+    shovel_speed: 0.2
     tile: "assets/textures/world/iron_ore/iron_ore.png"
     zoom: "assets/textures/world/zoommap/iron_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/iron_ore_chunk_background.png"
@@ -14,6 +16,8 @@ materials:
     density: 3.3
     albedo: 0.20
     drainage: 0.05
+    pick_speed: 0.9
+    shovel_speed: 0.15
     tile: "assets/textures/world/olivine/olivine.png"
     zoom: "assets/textures/world/zoommap/olivine_chunk.png"
     bg:   "assets/textures/world/zoommap/olivine_chunk_background.png"
@@ -23,6 +27,8 @@ materials:
     density: 3.3
     albedo: 0.15
     drainage: 0.05
+    pick_speed: 0.9
+    shovel_speed: 0.15
     tile: "assets/textures/world/pyroxene/pyroxene.png"
     zoom: "assets/textures/world/zoommap/pyroxene_chunk.png"
     bg:   "assets/textures/world/zoommap/pyroxene_chunk_background.png"
@@ -32,6 +38,8 @@ materials:
     density: 2.6
     albedo: 0.42
     drainage: 0.05
+    pick_speed: 0.95
+    shovel_speed: 0.2
     tile: "assets/textures/world/feldspar/feldspar.png"
     zoom: "assets/textures/world/zoommap/feldspar_chunk.png"
     bg:   "assets/textures/world/zoommap/feldspar_chunk_background.png"
@@ -41,6 +49,8 @@ materials:
     density: 4.2
     albedo: 0.22
     drainage: 0.05
+    pick_speed: 0.95
+    shovel_speed: 0.2
     tile: "assets/textures/world/copper_ore/copper_ore.png"
     zoom: "assets/textures/world/zoommap/copper_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/copper_ore_chunk_background.png"
@@ -50,6 +60,8 @@ materials:
     density: 6.8
     albedo: 0.28
     drainage: 0.05
+    pick_speed: 0.95
+    shovel_speed: 0.2
     tile: "assets/textures/world/tin_ore/tin_ore.png"
     zoom: "assets/textures/world/zoommap/tin_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/tin_ore_chunk_background.png"
@@ -59,6 +71,8 @@ materials:
     density: 3.5
     albedo: 0.35
     drainage: 0.05
+    pick_speed: 1.0
+    shovel_speed: 0.25
     tile: "assets/textures/world/gold_ore/gold_ore.png"
     zoom: "assets/textures/world/zoommap/gold_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/gold_ore_chunk_background.png"

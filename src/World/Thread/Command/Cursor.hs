@@ -33,10 +33,11 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn
 import Engine.Graphics.Camera (Camera2D(..))
 import qualified Data.Vector.Unboxed as VU
 import World.Types
-import World.Chunk.Types (LoadedChunk(..), columnIndex)
+import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import World.Tile.Types (lookupChunk)
 import World.Constants (seaLevel)
 import World.Generate (generateChunk, globalToChunk)
+import World.Mine.Types (designationFromSlope)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
@@ -223,6 +224,20 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
                     let (coord, (lx, ly)) = globalToChunk gx gy
                     lc ← lookupChunk coord tileData
                     pure (lcSurfaceMap lc VU.! columnIndex lx ly)
+                -- Gen-time slope at the tile's surface: tiles that are
+                -- already sloped start with the lowered corners pre-dug
+                -- ('designationFromSlope'), so the designation's volume
+                -- matches the material that's actually there.
+                slopeAt gx gy z =
+                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    in case lookupChunk coord tileData of
+                        Nothing → 0
+                        Just lc →
+                            let col = lcTiles lc V.! columnIndex lx ly
+                                i = z - ctStartZ col
+                            in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+                               then ctSlopes col VU.! i
+                               else 0
                 xLo = min gx1 gx2
                 yLo = min gy1 gy2
                 xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
@@ -230,7 +245,7 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
                 entries = case surfaceZAt gx1 gy1 of
                     Nothing → []   -- anchor chunk unloaded: nothing
                     Just anchorZ →
-                        [ ((gx, gy), z)
+                        [ ((gx, gy), designationFromSlope z (slopeAt gx gy z))
                         | gx ← [xLo .. xHi]
                         , gy ← [yLo .. yHi]
                         , Just z ← [surfaceZAt gx gy]

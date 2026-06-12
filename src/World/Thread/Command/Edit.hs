@@ -2,14 +2,18 @@
 module World.Thread.Command.Edit
     ( handleWorldDeleteTileCommand
     , handleWorldSetFluidTileCommand
+    , handleWorldDigTileCommand
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
+import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
@@ -18,6 +22,8 @@ import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
+import World.Mine.Apply (applyDigSlopeToChunk)
+import World.Mine.Types (MineDesignation(..), drainCorners, cornersDone)
 import World.Thread.Helpers (unWorldPageId)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
@@ -70,9 +76,62 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         writeIORef (wsQuadCacheRef ws)     Nothing
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- Re-snap any idle unit standing on this tile to
+                        -- the new surface (otherwise it floats mid-air
+                        -- over the hole — stationary units never
+                        -- re-ground on their own).
+                        Q.writeQueue (unitQueue env) (UnitReGround gx gy)
                         logDebug logger CatWorld $
                             "Deleted tile at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy) <> " z=" <> T.pack (show oldTopZ)
+
+-- | Apply dig progress to the designated tile at (gx, gy).
+--
+--   The digger's position picks the drain order (digger-side corners
+--   first — 'drainCorners'); the partial state writes its slope-mask
+--   override into the loaded chunk ('applyDigSlopeToChunk') so the
+--   tile renders progressively excavated. When every corner reaches
+--   zero, the tile drops one z through the regular delete-tile path
+--   (edit log + replay + save survival all included) and the
+--   designation is removed.
+--
+--   No-ops when the tile isn't designated (e.g. two diggers raced and
+--   one finished it) or its chunk isn't loaded.
+handleWorldDigTileCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Float → Float → Float → IO ()
+handleWorldDigTileCommand env logger pageId gx gy ux uy amount = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for dig tile: " <> unWorldPageId pageId
+        Just ws → do
+            desigs ← readIORef (wsMineDesignationsRef ws)
+            case HM.lookup (gx, gy) desigs of
+                Nothing → pure ()
+                Just md → do
+                    let corners' = drainCorners (ux, uy) (gx, gy)
+                                                amount (mdCorners md)
+                    if cornersDone corners'
+                      then do
+                        atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
+                            (HM.delete (gx, gy) m, ())
+                        handleWorldDeleteTileCommand env logger pageId gx gy
+                      else do
+                        let md' = md { mdCorners = corners' }
+                        atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
+                            (HM.insert (gx, gy) md' m, ())
+                        td ← readIORef (wsTilesRef ws)
+                        let (coord, _) = globalToChunk gx gy
+                        case lookupChunk coord td of
+                            Nothing → pure ()
+                            Just lc → do
+                                let lc' = applyDigSlopeToChunk (gx, gy) md' lc
+                                atomicModifyIORef' (wsTilesRef ws) $ \w →
+                                    (insertChunk lc' w, ())
+                                writeIORef (wsQuadCacheRef ws)     Nothing
+                                writeIORef (wsZoomQuadCacheRef ws) Nothing
+                                writeIORef (wsBgQuadCacheRef ws)   Nothing
 
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same

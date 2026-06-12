@@ -35,6 +35,10 @@ module Engine.Scripting.Lua.API.World
     , worldDesignateMineFn
     , worldSetMineDesignateTextureFn
     , worldGetMineDesignationCountFn
+    , worldNearestMineDesignationFn
+    , worldGetDigInfoAtFn
+    , worldDigTileFn
+    , worldGetMineDesignationAtFn
     , worldSetToolModeFn
     , worldGetToolModeFn
     , worldGetInitProgressFn
@@ -46,6 +50,8 @@ module Engine.Scripting.Lua.API.World
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -60,6 +66,9 @@ import Engine.Scripting.Lua.Material (parseTextureType)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Fluid.Types (FluidType(..))
+import World.Generate.Coordinates (globalToChunk)
+import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
+import World.Mine.Types (MineDesignation(..))
 import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
 import World.Generate.Config
@@ -726,6 +735,144 @@ worldSetMineDesignateTextureFn env = do
                 WorldSetMineDesignateTexture pageId texHandle
         _ → pure ()
     return 0
+
+-- | world.nearestMineDesignation(pageId, x, y) → gx, gy, dist | nil
+--   Nearest designated tile to (x, y) by Euclidean distance — the
+--   "distance to the nearest dig job" term in the dig utility. Linear
+--   scan of the designation map (synchronous read).
+worldNearestMineDesignationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldNearestMineDesignationFn env = do
+    pageIdArg ← Lua.tostring 1
+    xArg ← Lua.tonumber 2
+    yArg ← Lua.tonumber 3
+    case (pageIdArg, xArg, yArg) of
+        (Just pageIdBS, Just x, Just y) → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                ux = realToFrac x ∷ Float
+                uy = realToFrac y ∷ Float
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws → do
+                    m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
+                    let dist2 (gx, gy) =
+                            let dx = fromIntegral gx - ux
+                                dy = fromIntegral gy - uy
+                            in dx * dx + dy * dy
+                        best = foldl' (\acc k → case acc of
+                                  Nothing → Just (k, dist2 k)
+                                  Just (_, d) | dist2 k < d → Just (k, dist2 k)
+                                  _ → acc)
+                                Nothing (HM.keys m)
+                    case best of
+                        Just ((gx, gy), d2) → do
+                            Lua.pushinteger (fromIntegral gx)
+                            Lua.pushinteger (fromIntegral gy)
+                            Lua.pushnumber (Lua.Number (realToFrac (sqrt d2)))
+                            return 3
+                        Nothing → do
+                            Lua.pushnil
+                            return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.getDigInfoAt(pageId, gx, gy) → matId, pickSpeed, shovelSpeed | nil
+--   Material being dug at a designated tile (the column's material at
+--   the designation's z) and its per-tool dig-rate multipliers. nil
+--   when the tile isn't designated or its chunk isn't loaded.
+worldGetDigInfoAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetDigInfoAtFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gxN, Just gyN) → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                gx = round gxN ∷ Int
+                gy = round gyN ∷ Int
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    desigs ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
+                    tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
+                    registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+                    let mInfo = do
+                            md ← HM.lookup (gx, gy) desigs
+                            let (coord, (lx, ly)) = globalToChunk gx gy
+                            lc ← lookupChunk coord tileData
+                            let col = lcTiles lc V.! columnIndex lx ly
+                                relZ = mdZ md - ctStartZ col
+                            if relZ ≥ 0 ∧ relZ < VU.length (ctMats col)
+                                then pure (ctMats col VU.! relZ)
+                                else Nothing
+                    case mInfo of
+                        Nothing → Lua.pushnil >> return 1
+                        Just matId → do
+                            let props = getMaterialProps registry
+                                            (MaterialId matId)
+                            Lua.pushinteger (fromIntegral matId)
+                            Lua.pushnumber (Lua.Number
+                                (realToFrac (mpPickSpeed props)))
+                            Lua.pushnumber (Lua.Number
+                                (realToFrac (mpShovelSpeed props)))
+                            return 3
+        _ → Lua.pushnil >> return 1
+
+-- | world.digTile(pageId, gx, gy, ux, uy, amount) — apply dig
+--   progress to the designated tile. (ux, uy) is the digger's
+--   tile-space position (drain order); amount is pre-scaled by
+--   tool × material speed (see getDigInfoAt).
+worldDigTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldDigTileFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    uxArg ← Lua.tonumber 4
+    uyArg ← Lua.tonumber 5
+    amtArg ← Lua.tonumber 6
+    case (pageIdArg, gxArg, gyArg, uxArg, uyArg, amtArg) of
+        (Just pageIdBS, Just gx, Just gy, Just ux, Just uy, Just amt) →
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                Q.writeQueue (worldQueue env) $
+                    WorldDigTile pageId (round gx) (round gy)
+                                 (realToFrac ux) (realToFrac uy)
+                                 (realToFrac amt)
+        _ → pure ()
+    return 0
+
+-- | world.getMineDesignationAt(pageId, gx, gy)
+--     → z, cNW, cNE, cSE, cSW | nil
+--   Designation state at a tile, including corner dig progress (the
+--   AI's "how far along is this tile" query).
+worldGetMineDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetMineDesignationAtFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gxN, Just gyN) → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    m ← Lua.liftIO $ readIORef (wsMineDesignationsRef ws)
+                    case HM.lookup (round gxN, round gyN) m of
+                        Nothing → Lua.pushnil >> return 1
+                        Just md → do
+                            let (a, b, c, d) = mdCorners md
+                            Lua.pushinteger (fromIntegral (mdZ md))
+                            Lua.pushnumber (Lua.Number (realToFrac a))
+                            Lua.pushnumber (Lua.Number (realToFrac b))
+                            Lua.pushnumber (Lua.Number (realToFrac c))
+                            Lua.pushnumber (Lua.Number (realToFrac d))
+                            return 5
+        _ → Lua.pushnil >> return 1
 
 -- | world.getMineDesignationCount(pageId) → n — number of designated
 --   tiles. Reads the ref directly (synchronous; for HUD readouts and

@@ -45,6 +45,11 @@ data MaterialDef = MaterialDef
     , mdDrainage ∷ Float
       -- ^ Hydraulic drainage 0.0–1.0. See @World.Material.MaterialProps@
       --   for semantics. Defaults to 0.4 (neutral) when omitted in YAML.
+    , mdPickSpeed   ∷ Float
+      -- ^ Dig-rate multiplier with a pick (1.0 = baseline). See
+      --   @World.Material.MaterialProps@.
+    , mdShovelSpeed ∷ Float
+      -- ^ Dig-rate multiplier with a shovel.
     , mdTile     ∷ Text
     , mdZoom     ∷ Text
     , mdBg       ∷ Text
@@ -58,6 +63,8 @@ instance FromJSON MaterialDef where
         ⊛ v .:? "density"  .!= 2.5
         ⊛ v .:? "albedo"   .!= 0.5
         ⊛ v .:? "drainage" .!= 0.4
+        ⊛ v .:? "pick_speed"   .!= 0.5
+        ⊛ v .:? "shovel_speed" .!= 0.5
         ⊛ v .: "tile"
         ⊛ v .: "zoom"
         ⊛ v .: "bg"

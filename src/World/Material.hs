@@ -185,10 +185,17 @@ data MaterialProps = MaterialProps
       --   top) to 1.0 (ultra-permeable, e.g. karst — water table dives
       --   deep). 0.4 is the neutral baseline; used by the water-table
       --   compute in @World.Hydrology.WaterTable@.
+    , mpPickSpeed   ∷ !Float
+      -- ^ Dig-rate multiplier when excavating this material with a
+      --   pick (1.0 = baseline rate; higher = faster). Picks excel on
+      --   hard rock, struggle in loose soils.
+    , mpShovelSpeed ∷ !Float
+      -- ^ Dig-rate multiplier with a shovel. Shovels excel in loose
+      --   soils (sand, loam), barely scratch igneous rock.
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps
-defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5 0.4
+defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5 0.4 0.5 0.5
 
 -- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by YAML.
 newtype MaterialRegistry = MaterialRegistry (V.Vector MaterialProps)

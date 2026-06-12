@@ -36,6 +36,7 @@ import World.Save.Serialize (saveWorld)
 import World.Save.Types (toBuildingSnapshot, fromBuildingSnapshot
                         , toUnitSnapshot, fromUnitSnapshot)
 import World.Edit.Apply (replayEdits)
+import World.Mine.Apply (applyDigSlopes)
 import Building.Types (BuildingManager(..), unBuildingId)
 import Unit.Types (UnitManager(..), unUnitId)
 import Unit.Sim.Types (UnitThreadState(..))
@@ -74,6 +75,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             paused    ← readIORef (enginePausedRef env)
             -- v3 (Phase 2) additions
             edits     ← readIORef (wsEditsRef worldState)
+            -- v31 (mining) additions
+            mineDesigs ← readIORef (wsMineDesignationsRef worldState)
             -- v4 (Phase 3) additions
             bm        ← readIORef (buildingManagerRef env)
             let buildings = toBuildingSnapshot bm
@@ -125,6 +128,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdUnits        = units
                             , sdUnitSimStates = simStates
                             , sdLuaModules   = luaBlobs
+                            , sdMineDesignations = mineDesigs
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -191,6 +195,10 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- synchronous center chunk + every chunk pulled off the init queue
     -- replay any edits the player had made.
     writeIORef (wsEditsRef worldState) (sdEdits saveData)
+    -- v31 (mining): restore designations (incl. mid-dig corner
+    -- progress). Markers render from the stored z, so this needs no
+    -- chunk loading to be visible.
+    writeIORef (wsMineDesignationsRef worldState) (sdMineDesignations saveData)
 
     -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
@@ -260,7 +268,8 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- player edited tiles in this chunk before saving, those edits
     -- need to show up immediately on load.
     edits ← readIORef (wsEditsRef worldState)
-    let centerChunk = replayEdits edits centerChunkRaw
+    desigs ← readIORef (wsMineDesignationsRef worldState)
+    let centerChunk = applyDigSlopes desigs (replayEdits edits centerChunkRaw)
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                        , wtdMaxChunks = 200 }, ())

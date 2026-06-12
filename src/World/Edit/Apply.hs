@@ -21,6 +21,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
+import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Generate.Coordinates (globalToChunk)
@@ -52,6 +53,12 @@ applyEdit (WeDeleteTile gx gy) lc
                        , ctSlopes = ctSlopes col VU.// [(i, 0)]
                        , ctVeg    = ctVeg    col VU.// [(i, 0)]
                        }
+                   -- Terrain changed: any flora rooted on this tile
+                   -- goes with it (a tree can't stand over the hole).
+                   floraKept = FloraChunkData
+                       [ fi | fi ← fcdInstances (lcFlora lc)
+                            , fromIntegral (fiTileX fi) ≠ lx
+                              ∨ fromIntegral (fiTileY fi) ≠ ly ]
                    newTopZ  = oldTopZ - 1
                    wt       = waterTableAtTile lc lx ly
                    curFluid = lcFluidMap lc V.! idx
@@ -73,6 +80,7 @@ applyEdit (WeDeleteTile gx gy) lc
                    , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, newSurface)]
                    , lcTerrainSurfaceMap = lcTerrainSurfaceMap lc VU.// [(idx, newTopZ)]
                    , lcFluidMap          = lcFluidMap lc V.// [(idx, newFluid)]
+                   , lcFlora             = floraKept
                    }
 applyEdit (WeSetFluidTile gx gy ft) lc
     | not (edgeBelongsTo gx gy lc) = lc

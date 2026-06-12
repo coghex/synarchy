@@ -223,6 +223,42 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                                  }
                 in (um { umInstances = HM.insert uid inst' insts }, ())
 
+handleUnitCommand env utsRef (UnitReGround gx gy) = do
+    -- Terrain at (gx, gy) changed under our feet (dig / delete-tile).
+    -- Re-snap idle units standing on that tile to the new surface;
+    -- moving units re-ground themselves on every tile crossing, and
+    -- transitioning/falling/climbing units are mid-state-machine and
+    -- must not be teleport-snapped.
+    mSurf ← lookupSurfaceZ env gx gy
+    case mSurf of
+        Nothing → pure ()
+        Just z → do
+            snapped ← atomicModifyIORef' utsRef $ \uts →
+                let simStates = utsSimStates uts
+                    affects ss =
+                        floor (usRealX ss) ≡ gx
+                      ∧ floor (usRealY ss) ≡ gy
+                      ∧ usState ss ≡ Idle
+                      ∧ usGridZ ss ≢ z
+                    snap ss
+                        | affects ss = ss { usGridZ = z
+                                          , usRealZ = fromIntegral z }
+                        | otherwise  = ss
+                    hit = [ uid | (uid, ss) ← HM.toList simStates
+                                , affects ss ]
+                in (uts { utsSimStates = HM.map snap simStates }, hit)
+            -- Mirror into the render-facing instances so the visual z
+            -- updates this frame, same as UnitTeleport does.
+            forM_ snapped $ \uid →
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, ())
+                        Just inst →
+                            let inst' = inst { uiGridZ = z
+                                             , uiRealZ = fromIntegral z }
+                            in (um { umInstances =
+                                    HM.insert uid inst' (umInstances um) }, ())
+
 handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
     -- Apply the injury speed multiplier on receipt so EVERY move
     -- command — commanded, wander, attack-pursuit, retreat — gets

@@ -478,6 +478,8 @@ library
                      World.Geology.Types
                      World.Geology.Ore
                      World.Geology.Ore.Types
+                     World.Mine.Types
+                     World.Mine.Apply
                      World.Geology.Log
                      World.Geology.Hash
                      World.Geology.Crater

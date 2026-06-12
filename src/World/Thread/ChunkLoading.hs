@@ -32,6 +32,7 @@ import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
 import World.Generate.Types (WorldGenParams(..), isArenaParams)
 import World.Edit.Apply (replayEdits)
+import World.Mine.Apply (applyDigSlopesTd)
 import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
@@ -97,6 +98,7 @@ updateChunkLoading env logger = do
                                 -- in this session and now coming back will
                                 -- carry their saved edits this way.
                                 edits ← readIORef (wsEditsRef worldState)
+                                desigs ← readIORef (wsMineDesignationsRef worldState)
                                 let newChunks' = map (replayEdits edits) newChunks
                                 evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
@@ -112,7 +114,14 @@ updateChunkLoading env logger = do
                                         -- The old seal's orphan removal was stripping
                                         -- ~50% of mask-seeded river tiles.
                                         td''''' = computeSideDecos seed coords td3b
-                                    in (td''''', evictedCoords)
+                                        -- Mid-dig slope overrides (must follow the
+                                        -- slope recompute, which would erase them).
+                                        -- Neighbours included: the recompute also
+                                        -- rebuilds THEIR border strips.
+                                        digCoords = coords
+                                            ⧺ concatMap chunkNeighbors coords
+                                        td6 = applyDigSlopesTd desigs digCoords td'''''
+                                    in (td6, evictedCoords)
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -170,6 +179,7 @@ drainInitQueues env logger = do
                         -- the save apply here; on first-time world init
                         -- the edits map is empty and this is a no-op.
                         edits ← readIORef (wsEditsRef worldState)
+                        desigs ← readIORef (wsMineDesignationsRef worldState)
                         let newChunks' = map (replayEdits edits) newChunks
 
                         -- Insert new chunks, then recompute slopes
@@ -182,7 +192,13 @@ drainInitQueues env logger = do
                                          coords td'
                                 td2b  = patchEdgeStrata coords td''
                                 td'''' = computeSideDecos seed coords td2b
-                            in (td'''', ())
+                                -- Mid-dig slope overrides (after the slope
+                                -- recompute, which would erase them; the
+                                -- recompute also touches neighbours' strips).
+                                digCoords = coords
+                                    ⧺ concatMap chunkNeighbors coords
+                                td5 = applyDigSlopesTd desigs digCoords td''''
+                            in (td5, ())
 
                         -- Force this batch's chunks (plus the neighbours the
                         -- slope / edge-strata / side-deco passes rebuilt) to

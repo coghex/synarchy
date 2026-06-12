@@ -5,6 +5,8 @@ materials:
     density: 2.8
     albedo: 0.08
     drainage: 0.1
+    pick_speed: 0.0
+    shovel_speed: 0.0
     tile: "assets/textures/world/lava/lava.png"
     zoom: "assets/textures/world/zoommap/lava_chunk.png"
     bg:   "assets/textures/world/zoommap/lava_chunk_background.png"
@@ -14,6 +16,8 @@ materials:
     density: 2.8
     albedo: 0.04
     drainage: 0.0
+    pick_speed: 0.0
+    shovel_speed: 0.0
     tile: "assets/textures/world/magma/magma.png"
     zoom: "assets/textures/world/zoommap/magma_chunk.png"
     bg:   "assets/textures/world/zoommap/magma_chunk_background.png"
@@ -23,6 +27,8 @@ materials:
     density: 1.0
     albedo: 0.30
     drainage: 0.7
+    pick_speed: 0.3
+    shovel_speed: 1.4
     tile: "assets/textures/world/volcanic_ash/volcanic_ash.png"
     zoom: "assets/textures/world/zoommap/volcanic_ash_chunk.png"
     bg:   "assets/textures/world/zoommap/volcanic_ash_chunk_background.png"
@@ -32,6 +38,8 @@ materials:
     density: 1.5
     albedo: 0.20
     drainage: 0.7
+    pick_speed: 0.4
+    shovel_speed: 1.2
     tile: "assets/textures/world/tephra/tephra.png"
     zoom: "assets/textures/world/zoommap/tephra_chunk.png"
     bg:   "assets/textures/world/zoommap/tephra_chunk_background.png"

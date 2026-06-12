@@ -25,6 +25,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
+import World.Mine.Types (MineDesignations)
 
 data WorldState = WorldState
     { wsTilesRef     ∷ IORef WorldTileData
@@ -59,13 +60,12 @@ data WorldState = WorldState
       --   compute time — a lookup only hits when the current edit
       --   list is identical, so edits self-invalidate. Wholesale
       --   flush at 256 entries. Loaded chunks never consult this.
-    , wsMineDesignationsRef ∷ IORef (HM.HashMap (Int, Int) Int)
-      -- ^ Mine-designation set: tile (gx, gy) → surface z captured at
-      --   designation time (so rendering needs no per-frame column
-      --   reads). Written by the world thread (WorldDesignateMine);
-      --   the future mining job system consumes entries from here.
-      --   Not yet persisted in saves — designations are session-only
-      --   until the job system lands.
+    , wsMineDesignationsRef ∷ IORef MineDesignations
+      -- ^ Mine-designation set: tile (gx, gy) → designation (surface
+      --   z + corner dig progress; see World.Mine.Types). Written by
+      --   the world thread (WorldDesignateMine / dig commands), read
+      --   by the render pass and the dig AI. Persisted in saves
+      --   (sdMineDesignations, v31) including mid-dig corners.
     }
 
 emptyWorldState ∷ IO WorldState

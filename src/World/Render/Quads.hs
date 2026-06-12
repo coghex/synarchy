@@ -23,6 +23,7 @@ import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight, worldToGrid)
+import World.Mine.Types (MineDesignation(..))
 import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.FloraQuads (floraToQuad)
@@ -467,9 +468,9 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 | HM.null designations → V.empty
                 | otherwise → V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
-                          facing dgx dgy dz zSlice effectiveDepth
+                          facing dgx dgy (mdZ md) zSlice effectiveDepth
                           tileAlpha xOff tex
-                    | ((dgx, dgy), dz) ← HM.toList designations
+                    | ((dgx, dgy), md) ← HM.toList designations
                     , let (chunkCoord, _) = globalToChunk dgx dgy
                     , Just xOff ← [isChunkVisibleWrapped facing worldSize
                                        vb camX chunkCoord]

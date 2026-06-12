@@ -5,6 +5,8 @@ materials:
     density: 2.2
     albedo: 0.40
     drainage: 0.55
+    pick_speed: 1.0
+    shovel_speed: 0.45
     tile: "assets/textures/world/sandstone/sandstone.png"
     zoom: "assets/textures/world/zoommap/sandstone_chunk.png"
     bg:   "assets/textures/world/zoommap/sandstone_chunk_background.png"
@@ -14,6 +16,8 @@ materials:
     density: 2.3
     albedo: 0.30
     drainage: 0.25
+    pick_speed: 1.0
+    shovel_speed: 0.4
     tile: "assets/textures/world/siltstone/siltstone.png"
     zoom: "assets/textures/world/zoommap/siltstone_chunk.png"
     bg:   "assets/textures/world/zoommap/siltstone_chunk_background.png"
@@ -23,6 +27,8 @@ materials:
     density: 2.4
     albedo: 0.15
     drainage: 0.05
+    pick_speed: 1.1
+    shovel_speed: 0.4
     tile: "assets/textures/world/shale/shale.png"
     zoom: "assets/textures/world/zoommap/shale_chunk.png"
     bg:   "assets/textures/world/zoommap/shale_chunk_background.png"
@@ -32,6 +38,8 @@ materials:
     density: 2.5
     albedo: 0.32
     drainage: 0.65
+    pick_speed: 0.85
+    shovel_speed: 0.4
     tile: "assets/textures/world/conglomerate/conglomerate.png"
     zoom: "assets/textures/world/zoommap/conglomerate_chunk.png"
     bg:   "assets/textures/world/zoommap/conglomerate_chunk_background.png"
@@ -41,6 +49,8 @@ materials:
     density: 2.1
     albedo: 0.20
     drainage: 0.1
+    pick_speed: 0.95
+    shovel_speed: 0.45
     tile: "assets/textures/world/mudstone/mudstone.png"
     zoom: "assets/textures/world/zoommap/mudstone_chunk.png"
     bg:   "assets/textures/world/zoommap/mudstone_chunk_background.png"
@@ -50,6 +60,8 @@ materials:
     density: 2.0
     albedo: 0.22
     drainage: 0.05
+    pick_speed: 0.95
+    shovel_speed: 0.45
     tile: "assets/textures/world/claystone/claystone.png"
     zoom: "assets/textures/world/zoommap/claystone_chunk.png"
     bg:   "assets/textures/world/zoommap/claystone_chunk_background.png"

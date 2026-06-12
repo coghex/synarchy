@@ -5,6 +5,8 @@ materials:
     density: 1.6
     albedo: 0.20
     drainage: 0.08
+    pick_speed: 0.4
+    shovel_speed: 0.9
     tile: "assets/textures/world/clay/clay.png"
     zoom: "assets/textures/world/zoommap/clay_chunk.png"
     bg:   "assets/textures/world/zoommap/clay_chunk_background.png"
@@ -14,6 +16,8 @@ materials:
     density: 1.75
     albedo: 0.22
     drainage: 0.18
+    pick_speed: 0.4
+    shovel_speed: 1.0
     tile: "assets/textures/world/sandy_clay/sandy_clay.png"
     zoom: "assets/textures/world/zoommap/sandy_clay_chunk.png"
     bg:   "assets/textures/world/zoommap/sandy_clay_chunk_background.png"
@@ -23,6 +27,8 @@ materials:
     density: 1.7
     albedo: 0.25
     drainage: 0.3
+    pick_speed: 0.35
+    shovel_speed: 1.15
     tile: "assets/textures/world/sandy_clay_loam/sandy_clay_loam.png"
     zoom: "assets/textures/world/zoommap/sandy_clay_loam_chunk.png"
     bg:   "assets/textures/world/zoommap/sandy_clay_loam_chunk_background.png"
@@ -32,6 +38,8 @@ materials:
     density: 1.55
     albedo: 0.30
     drainage: 0.55
+    pick_speed: 0.3
+    shovel_speed: 1.3
     tile: "assets/textures/world/sandy_loam/sandy_loam.png"
     zoom: "assets/textures/world/zoommap/sandy_loam_chunk.png"
     bg:   "assets/textures/world/zoommap/sandy_loam_chunk_background.png"
@@ -41,6 +49,8 @@ materials:
     density: 1.5
     albedo: 0.35
     drainage: 0.75
+    pick_speed: 0.3
+    shovel_speed: 1.4
     tile: "assets/textures/world/loamy_sand/loamy_sand.png"
     zoom: "assets/textures/world/zoommap/loamy_sand_chunk.png"
     bg:   "assets/textures/world/zoommap/loamy_sand_chunk_background.png"
@@ -50,6 +60,8 @@ materials:
     density: 1.55
     albedo: 0.40
     drainage: 0.9
+    pick_speed: 0.25
+    shovel_speed: 1.5
     tile: "assets/textures/world/sand/sand.png"
     zoom: "assets/textures/world/zoommap/sand_chunk.png"
     bg:   "assets/textures/world/zoommap/sand_chunk_background.png"
@@ -59,6 +71,8 @@ materials:
     density: 1.45
     albedo: 0.25
     drainage: 0.4
+    pick_speed: 0.3
+    shovel_speed: 1.3
     tile: "assets/textures/world/loam/loam.png"
     zoom: "assets/textures/world/zoommap/loam_chunk.png"
     bg:   "assets/textures/world/zoommap/loam_chunk_background.png"
@@ -68,6 +82,8 @@ materials:
     density: 1.6
     albedo: 0.22
     drainage: 0.18
+    pick_speed: 0.35
+    shovel_speed: 1.1
     tile: "assets/textures/world/clay_loam/clay_loam.png"
     zoom: "assets/textures/world/zoommap/clay_loam_chunk.png"
     bg:   "assets/textures/world/zoommap/clay_loam_chunk_background.png"
@@ -77,6 +93,8 @@ materials:
     density: 1.55
     albedo: 0.18
     drainage: 0.1
+    pick_speed: 0.4
+    shovel_speed: 0.95
     tile: "assets/textures/world/silty_clay/silty_clay.png"
     zoom: "assets/textures/world/zoommap/silty_clay_chunk.png"
     bg:   "assets/textures/world/zoommap/silty_clay_chunk_background.png"
@@ -86,6 +104,8 @@ materials:
     density: 1.55
     albedo: 0.20
     drainage: 0.22
+    pick_speed: 0.35
+    shovel_speed: 1.1
     tile: "assets/textures/world/silty_clay_loam/silty_clay_loam.png"
     zoom: "assets/textures/world/zoommap/silty_clay_loam_chunk.png"
     bg:   "assets/textures/world/zoommap/silty_clay_loam_chunk_background.png"

@@ -78,7 +78,9 @@ loadMaterialYamlFn env backendState = do
                                                (mdHardness def)
                                                (mdDensity def)
                                                (mdAlbedo def)
-                                               (mdDrainage def))
+                                               (mdDrainage def)
+                                               (mdPickSpeed def)
+                                               (mdShovelSpeed def))
                                 r
                             ) reg defs
                     in (reg', ())

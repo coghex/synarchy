@@ -85,6 +85,13 @@ data WorldCommand
         --   surface z; tiles in unloaded chunks are skipped.
     | WorldSetMineDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed designation markers.
+    | WorldDigTile WorldPageId Int Int Float Float Float
+        -- ^ Apply dig progress to the designated tile at (gx, gy):
+        --   pageId gx gy uxPos uyPos amount. The digger's tile-space
+        --   position picks which corners drain first (digger-side);
+        --   amount is pre-scaled by tool × material speed. Corners at
+        --   zero → the tile drops one z via the WeDeleteTile path and
+        --   the designation is removed.
     | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
         -- ^ pageId, save-name, request-timestamp (ISO 8601 second
         --   precision), Lua-module blobs. The Lua side captures the

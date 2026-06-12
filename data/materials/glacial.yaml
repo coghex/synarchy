@@ -5,6 +5,8 @@ materials:
     density: 2.0
     albedo: 0.25
     drainage: 0.25
+    pick_speed: 0.6
+    shovel_speed: 0.8
     tile: "assets/textures/world/till/till.png"
     zoom: "assets/textures/world/zoommap/till_chunk.png"
     bg:   "assets/textures/world/zoommap/till_chunk_background.png"
@@ -14,6 +16,8 @@ materials:
     density: 2.2
     albedo: 0.28
     drainage: 0.45
+    pick_speed: 0.6
+    shovel_speed: 0.7
     tile: "assets/textures/world/moraine/moraine.png"
     zoom: "assets/textures/world/zoommap/moraine_chunk.png"
     bg:   "assets/textures/world/zoommap/moraine_chunk_background.png"
@@ -23,6 +27,8 @@ materials:
     density: 1.8
     albedo: 0.30
     drainage: 0.08
+    pick_speed: 0.4
+    shovel_speed: 0.9
     tile: "assets/textures/world/glacial_clay/glacial_clay.png"
     zoom: "assets/textures/world/zoommap/glacial_clay_chunk.png"
     bg:   "assets/textures/world/zoommap/glacial_clay_chunk_background.png"
@@ -32,6 +38,8 @@ materials:
     density: 2.1
     albedo: 0.32
     drainage: 0.85
+    pick_speed: 0.55
+    shovel_speed: 1.0
     tile: "assets/textures/world/outwash_gravel/outwash_gravel.png"
     zoom: "assets/textures/world/zoommap/outwash_gravel_chunk.png"
     bg:   "assets/textures/world/zoommap/outwash_gravel_chunk_background.png"

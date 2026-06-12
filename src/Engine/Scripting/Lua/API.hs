@@ -432,6 +432,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldSetMineDesignateTextureFn env)
   registerLuaFunction "getMineDesignationCount"
     (worldGetMineDesignationCountFn env)
+  registerLuaFunction "nearestMineDesignation"
+    (worldNearestMineDesignationFn env)
+  registerLuaFunction "getDigInfoAt" (worldGetDigInfoAtFn env)
+  registerLuaFunction "digTile" (worldDigTileFn env)
+  registerLuaFunction "getMineDesignationAt"
+    (worldGetMineDesignationAtFn env)
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
   registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)

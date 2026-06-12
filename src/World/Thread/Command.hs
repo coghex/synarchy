@@ -64,7 +64,8 @@ import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
                                , handleWorldSetMapModeCommand
                                , handleWorldSetToolModeCommand)
 import World.Thread.Command.Edit (handleWorldDeleteTileCommand
-                                 , handleWorldSetFluidTileCommand)
+                                 , handleWorldSetFluidTileCommand
+                                 , handleWorldDigTileCommand)
 
 -- * Command Handler
 
@@ -121,6 +122,8 @@ handleWorldCommand env logger (WorldDesignateMine pageId gx1 gy1 gx2 gy2)
   = handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2
 handleWorldCommand env logger (WorldSetMineDesignateTexture pageId texHandle)
   = handleWorldSetMineDesignateTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount)
+  = handleWorldDigTileCommand env logger pageId gx gy ux uy amount
 handleWorldCommand env logger (WorldSetWorldCursorSelectTexture pageId texHandle)
   = handleWorldSetWorldCursorSelectTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetWorldCursorHoverTexture pageId texHandle)

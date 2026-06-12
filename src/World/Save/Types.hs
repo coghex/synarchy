@@ -23,6 +23,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
+import World.Mine.Types (MineDesignations)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
@@ -102,16 +103,12 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 30  -- v30: ore deposition. GeoEvent gains the
-                         -- trailing OreSheetEvent constructor,
-                         -- GeoTimeline gains the trailing
-                         -- 'gtOreDeposits' table, WorldGenParams'
-                         -- manual Serialize gains 'wgpOreLevers', and
-                         -- sheet deposition changes terrain output.
-                         -- (v29: wrap-seam worldgen fixes — cross-seam
-                         -- events in the chunk path; grid spacing
-                         -- divides the u-period; river components by
-                         -- plain adjacency.)
+currentSaveVersion = 31  -- v31: mining. SaveData gains the trailing
+                         -- 'sdMineDesignations' field (designated
+                         -- tiles + corner dig progress).
+                         -- (v30: ore deposition — trailing
+                         -- OreSheetEvent constructor, gtOreDeposits
+                         -- table, wgpOreLevers, terrain output change.)
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -185,6 +182,11 @@ data SaveData = SaveData
         --   `saveModules.deserializeAll(blobs)` BEFORE the engine-side
         --   restore happens, so AI memory + spawn-sequencer state
         --   line up with the units/buildings the engine then writes.
+    -- v31 fields (mining):
+    , sdMineDesignations ∷ !MineDesignations
+        -- ^ Mine designations incl. mid-dig corner progress. Restored
+        --   straight into wsMineDesignationsRef; markers re-render
+        --   from the stored z, so no chunk loading is required first.
     } deriving (Show, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`
