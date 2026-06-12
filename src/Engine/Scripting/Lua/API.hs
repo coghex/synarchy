@@ -450,6 +450,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "nearestMineDesignation"
     (worldNearestMineDesignationFn env)
   registerLuaFunction "getDigInfoAt" (worldGetDigInfoAtFn env)
+  registerLuaFunction "getSpoilInfo" (worldGetSpoilInfoFn env)
+  registerLuaFunction "debugTileQuads" (worldDebugTileQuadsFn env)
+  registerLuaFunction "addTile"       (worldAddTileFn env)
+  registerLuaFunction "listMaterials" (worldListMaterialsFn env)
   registerLuaFunction "digTile" (worldDigTileFn env)
   registerLuaFunction "getMineDesignationAt"
     (worldGetMineDesignationAtFn env)

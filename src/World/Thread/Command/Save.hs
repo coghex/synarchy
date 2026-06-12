@@ -79,6 +79,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             mineDesigs ← readIORef (wsMineDesignationsRef worldState)
             -- v32 (ground items) additions
             groundItems ← readIORef (wsGroundItemsRef worldState)
+            spoilPiles ← readIORef (wsSpoilRef worldState)
             -- v4 (Phase 3) additions
             bm        ← readIORef (buildingManagerRef env)
             let buildings = toBuildingSnapshot bm
@@ -132,6 +133,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdLuaModules   = luaBlobs
                             , sdMineDesignations = mineDesigs
                             , sdGroundItems  = groundItems
+                            , sdSpoilPiles   = spoilPiles
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -205,6 +207,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- v32 (ground items): heights derive from terrain at render, so
     -- restoration is position-only and needs no chunk loading.
     writeIORef (wsGroundItemsRef worldState) (sdGroundItems saveData)
+    -- v34 (dig yields): spoil fills are relative to tile surfaces;
+    -- promoted cells replay from sdEdits independently.
+    writeIORef (wsSpoilRef worldState) (sdSpoilPiles saveData)
 
     -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)

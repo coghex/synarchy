@@ -50,6 +50,15 @@ data MaterialDef = MaterialDef
       --   @World.Material.MaterialProps@.
     , mdShovelSpeed ∷ Float
       -- ^ Dig-rate multiplier with a shovel.
+    , mdDigSpoil ∷ Maybe Text
+      -- ^ Spoil material name produced when digging this material
+      --   (e.g. granite → "heavy_gravel"). Absent = no spoil.
+    , mdDigBulking ∷ Float
+      -- ^ Spoil volume per excavated volume (default 1.0; broken
+      --   hard rock bulks above 1).
+    , mdDigChunk ∷ Maybe Text
+      -- ^ Item def spawned by the chunk-yield accumulator
+      --   (granite → "granite_chunk"). Absent = no chunk yields.
     , mdTile     ∷ Text
     , mdZoom     ∷ Text
     , mdBg       ∷ Text
@@ -65,6 +74,9 @@ instance FromJSON MaterialDef where
         ⊛ v .:? "drainage" .!= 0.4
         ⊛ v .:? "pick_speed"   .!= 0.5
         ⊛ v .:? "shovel_speed" .!= 0.5
+        ⊛ v .:? "dig_spoil"
+        ⊛ v .:? "dig_bulking"  .!= 1.0
+        ⊛ v .:? "dig_chunk"
         ⊛ v .: "tile"
         ⊛ v .: "zoom"
         ⊛ v .: "bg"

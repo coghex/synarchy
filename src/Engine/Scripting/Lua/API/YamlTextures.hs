@@ -80,7 +80,10 @@ loadMaterialYamlFn env backendState = do
                                                (mdAlbedo def)
                                                (mdDrainage def)
                                                (mdPickSpeed def)
-                                               (mdShovelSpeed def))
+                                               (mdShovelSpeed def)
+                                               (mdDigSpoil def)
+                                               (mdDigBulking def)
+                                               (mdDigChunk def))
                                 r
                             ) reg defs
                     in (reg', ())

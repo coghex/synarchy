@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Thread.Command.Edit
-    ( handleWorldDeleteTileCommand
+    ( handleWorldAddTileCommand
+    , handleWorldDeleteTileCommand
     , handleWorldSetFluidTileCommand
     , handleWorldDigTileCommand
     ) where
@@ -22,8 +23,19 @@ import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
+import World.Material (MaterialProps(..), getMaterialProps
+                      , materialIdByName)
+import World.Material.Id (MaterialId(..))
 import World.Mine.Apply (applyDigSlopeToChunk)
 import World.Mine.Types (MineDesignation(..), drainCorners, cornersDone)
+import World.Spoil.Logic (spoilTileOk, spoilStartVertex)
+import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
+import Item.Roll (rollItemSpec)
+import Item.Types (ItemDef(..), ItemInstance(..), lookupItemDef)
+import System.Random (randomR)
+import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
+                         , candidateVertices, promotableTiles
+                         , debitPromotedTile, tileCornerVertices)
 import World.Thread.Helpers (unWorldPageId)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
@@ -85,6 +97,60 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                             "Deleted tile at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy) <> " z=" <> T.pack (show oldTopZ)
 
+-- | Raise the column at (gx, gy) one z of the given material.
+--   Records the edit in the log (same WeAddTile path spoil promotion
+--   uses) so it survives chunk eviction + save/load. Debug terrain
+--   placement is the primary caller (world.addTile from the debug
+--   overlay's Terrain section).
+handleWorldAddTileCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → MaterialId → IO ()
+handleWorldAddTileCommand env logger pageId gx gy mat = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for add tile: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, (lx, ly)) = globalToChunk gx gy
+                idx  = columnIndex lx ly
+                edit = WeAddTile gx gy mat
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing →
+                    logWarn logger CatWorld $
+                        "Chunk not loaded for add tile at "
+                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                Just lc → do
+                    -- Loud bounds pre-check, mirroring delete: replay
+                    -- is silent on out-of-range, live edits warn.
+                    -- i == colLen is fine — applyEdit grows the
+                    -- column by one cell (no headroom is the normal
+                    -- allocation).
+                    let oldTopZ = lcTerrainSurfaceMap lc VU.! idx
+                        col     = lcTiles lc V.! idx
+                        colLen  = VU.length (ctMats col)
+                        i       = oldTopZ + 1 - ctStartZ col
+                    if i < 0 ∨ i > colLen
+                      then logWarn logger CatWorld $
+                             "Add tile out of column range at "
+                               <> T.pack (show gx) <> "," <> T.pack (show gy)
+                               <> " topZ=" <> T.pack (show oldTopZ)
+                      else do
+                        let lc' = applyEdit edit lc
+                        atomicModifyIORef' (wsTilesRef ws) $ \w →
+                            (insertChunk lc' w, ())
+                        atomicModifyIORef' (wsEditsRef ws) $ \es →
+                            (appendEdit coord edit es, ())
+                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        writeIORef (wsZoomQuadCacheRef ws) Nothing
+                        writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- Units standing on the tile ride up.
+                        Q.writeQueue (unitQueue env) (UnitReGround gx gy)
+                        logDebug logger CatWorld $
+                            "Added tile at " <> T.pack (show gx) <> ","
+                              <> T.pack (show gy)
+                              <> " mat=" <> T.pack (show mat)
+
 -- | Apply dig progress to the designated tile at (gx, gy).
 --
 --   The digger's position picks the drain order (digger-side corners
@@ -95,11 +161,19 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
 --   (edit log + replay + save survival all included) and the
 --   designation is removed.
 --
+--   Spoil: when the dug material declares dig_spoil, the excavated
+--   volume × dig_bulking is routed into the vertex piles around the
+--   dig (World.Spoil). If the surrounding piles can't absorb the
+--   tick's spoil, the dig REFUSES (no drain — material never
+--   vanishes; the AI sees the blocked flag via getDigInfoAt). Tiles
+--   whose four corners complete a full pile level are promoted to
+--   real terrain through the WeAddTile edit path.
+--
 --   No-ops when the tile isn't designated (e.g. two diggers raced and
 --   one finished it) or its chunk isn't loaded.
 handleWorldDigTileCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → Float → Float → Float → IO ()
-handleWorldDigTileCommand env logger pageId gx gy ux uy amount = do
+    → Int → Int → Float → Float → Float → Float → IO ()
+handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -110,28 +184,211 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount = do
             case HM.lookup (gx, gy) desigs of
                 Nothing → pure ()
                 Just md → do
-                    let corners' = drainCorners (ux, uy) (gx, gy)
-                                                amount (mdCorners md)
-                    if cornersDone corners'
-                      then do
-                        atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
-                            (HM.delete (gx, gy) m, ())
-                        handleWorldDeleteTileCommand env logger pageId gx gy
+                    td0 ← readIORef (wsTilesRef ws)
+                    registry ← readIORef (materialRegistryRef env)
+                    piles ← readIORef (wsSpoilRef ws)
+                    let oldCorners = mdCorners md
+                        sumC (a, b, c, d) = a + b + c + d
+                        -- Properties of the dug material (the
+                        -- column's cell at the designation z).
+                        mDigProps = do
+                            lc ← lookupChunk digCoord td0
+                            let col  = lcTiles lc V.! digIdx
+                                relZ = mdZ md - ctStartZ col
+                            matId ← if relZ ≥ 0
+                                       ∧ relZ < VU.length (ctMats col)
+                                    then Just (ctMats col VU.! relZ)
+                                    else Nothing
+                            pure (getMaterialProps registry
+                                      (MaterialId matId))
+                        mSpoil = do
+                            props ← mDigProps
+                            spoilName ← mpDigSpoil props
+                            spoilId ← materialIdByName registry spoilName
+                            pure (spoilId, mpDigBulking props)
+                        mChunkItem = mDigProps >>= mpDigChunk
+                        tileOk = spoilTileOk td0 desigs (mdZ md)
+                        startV = spoilStartVertex (ux, uy) (gx, gy)
+                        -- Refusal gate: this tick's worst-case spoil
+                        -- must fit before anything drains.
+                        plannedSpoil = case mSpoil of
+                            Nothing → 0
+                            Just (_, bulking) →
+                                min amount (sumC oldCorners) * bulking
+                        capacity = case mSpoil of
+                            Nothing → 0
+                            Just (spoilId, _) →
+                                spoilCapacity tileOk spoilId startV piles
+                        blocked = plannedSpoil > 0 ∧ capacity < plannedSpoil
+                    if blocked
+                      then logDebug logger CatWorld $
+                             "Dig blocked (no spoil room) at "
+                               <> T.pack (show gx) <> "," <> T.pack (show gy)
                       else do
-                        let md' = md { mdCorners = corners' }
-                        atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
-                            (HM.insert (gx, gy) md' m, ())
-                        td ← readIORef (wsTilesRef ws)
-                        let (coord, _) = globalToChunk gx gy
-                        case lookupChunk coord td of
+                        let corners' = drainCorners (ux, uy) (gx, gy)
+                                                    amount oldCorners
+                            drained  = sumC oldCorners - sumC corners'
+                        -- Route the spoil before the tile mutates so
+                        -- the legality predicate sees the pre-dig
+                        -- world (the dig tile is excluded by its own
+                        -- designation either way).
+                        case mSpoil of
                             Nothing → pure ()
-                            Just lc → do
-                                let lc' = applyDigSlopeToChunk (gx, gy) md' lc
-                                atomicModifyIORef' (wsTilesRef ws) $ \w →
-                                    (insertChunk lc' w, ())
-                                writeIORef (wsQuadCacheRef ws)     Nothing
-                                writeIORef (wsZoomQuadCacheRef ws) Nothing
-                                writeIORef (wsBgQuadCacheRef ws)   Nothing
+                            Just (spoilId, bulking) | drained > 0 → do
+                                let (piles', leftover) = depositSpoil
+                                        tileOk spoilId startV
+                                        (drained * bulking) piles
+                                when (leftover > 0.001) $
+                                    logWarn logger CatWorld $
+                                        "Spoil leftover "
+                                          <> T.pack (show leftover)
+                                          <> " despite capacity check at "
+                                          <> T.pack (show gx) <> ","
+                                          <> T.pack (show gy)
+                                writeIORef (wsSpoilRef ws) piles'
+                                -- Promote any tile whose corners
+                                -- completed a full level.
+                                promoteFullSpoilTiles env logger pageId
+                                    ws startV
+                            _ → pure ()
+                        -- Chunk-yield accumulator: deterministic, per
+                        -- tile, scaled by the CURRENT digger's mining
+                        -- skill each tick (0.5 + skill/100 chunks per
+                        -- full tile = 4 corner-units). Whole chunks
+                        -- spawn as ground items at the dig site; the
+                        -- fractional remainder rides on the
+                        -- designation (and dies with it — one tile
+                        -- only provides what was extracted from it).
+                        chunkRemainder ← case mChunkItem of
+                            Nothing → pure (mdChunkProgress md)
+                            Just chunkDef | drained > 0 → do
+                                let rate = (0.5 + skill / 100) / 4
+                                    p    = mdChunkProgress md
+                                         + drained * rate
+                                    n    = floor p ∷ Int
+                                when (n > 0) $
+                                    spawnYieldItems env logger ws
+                                        chunkDef (gx, gy) n
+                                pure (p - fromIntegral n)
+                            _ → pure (mdChunkProgress md)
+                        if cornersDone corners'
+                          then do
+                            atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
+                                (HM.delete (gx, gy) m, ())
+                            handleWorldDeleteTileCommand env logger pageId gx gy
+                          else do
+                            let md' = md { mdCorners = corners'
+                                         , mdChunkProgress = chunkRemainder }
+                            atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
+                                (HM.insert (gx, gy) md' m, ())
+                            td ← readIORef (wsTilesRef ws)
+                            case lookupChunk digCoord td of
+                                Nothing → pure ()
+                                Just lc → do
+                                    let lc' = applyDigSlopeToChunk (gx, gy) md' lc
+                                    atomicModifyIORef' (wsTilesRef ws) $ \w →
+                                        (insertChunk lc' w, ())
+                                    writeIORef (wsQuadCacheRef ws)     Nothing
+                                    writeIORef (wsZoomQuadCacheRef ws) Nothing
+                                    writeIORef (wsBgQuadCacheRef ws)   Nothing
+  where
+    (digCoord, (digLx, digLy)) = globalToChunk gx gy
+    digIdx = columnIndex digLx digLy
+
+-- | Spawn @n@ yield items (chunks, gems) as ground items scattered
+--   on the dig tile. Each gets a random sub-tile position, retried a
+--   few times to keep ≥ 0.15 tiles from existing ground items so
+--   finds lay out as a scatter instead of a stack. Quality/condition
+--   roll from the item def's spec like any other instance.
+spawnYieldItems ∷ EngineEnv → LoggerState → WorldState → Text
+                → (Int, Int) → Int → IO ()
+spawnYieldItems env logger ws defName (gx, gy) n = do
+    itemMgr ← readIORef (itemManagerRef env)
+    case lookupItemDef defName itemMgr of
+        Nothing →
+            logWarn logger CatWorld $
+                "Dig yield: unknown item def '" <> defName
+                  <> "' — dropping " <> T.pack (show n)
+        Just iDef → forM_ [1 .. n] $ \_ → do
+            qual ← rollItemSpec (idQualitySpec iDef)   (statRNGRef env)
+            cond ← rollItemSpec (idConditionSpec iDef) (statRNGRef env)
+            let inst = ItemInstance
+                    { iiDefName     = defName
+                    , iiCurrentFill = 0
+                    , iiQuality     = qual
+                    , iiCondition   = cond
+                    }
+            gis ← readIORef (wsGroundItemsRef ws)
+            (px, py) ← pickScatterPos env gis
+            _ ← atomicModifyIORef' (wsGroundItemsRef ws) $
+                    spawnGroundItem inst px py
+            pure ()
+  where
+    -- Up to 6 candidate offsets inside the tile; first one clear of
+    -- existing items wins, last candidate is the fallback.
+    pickScatterPos env' gis = go (6 ∷ Int)
+      where
+        clearOf (px, py) = all (\gi →
+            let dx = giX gi - px
+                dy = giY gi - py
+            in dx * dx + dy * dy ≥ 0.15 * 0.15)
+            (HM.elems (gisItems gis))
+        go k = do
+            ox ← atomicModifyIORef' (statRNGRef env') $ \g →
+                let (v, g') = randomR (0.15, 0.85 ∷ Float) g in (g', v)
+            oy ← atomicModifyIORef' (statRNGRef env') $ \g →
+                let (v, g') = randomR (0.15, 0.85 ∷ Float) g in (g', v)
+            let pos = (fromIntegral gx + ox, fromIntegral gy + oy)
+            if k ≤ 1 ∨ clearOf pos
+              then pure pos
+              else go (k - 1)
+
+-- | Compact every spoil tile around @startV@ whose four corners hold
+--   a full level: raise the terrain one z via the WeAddTile edit
+--   (live mutation + log append, same single-source applyEdit as
+--   delete) and debit the contributing piles. Loops because a debit
+--   never re-fills a corner — one pass per promoted tile is enough,
+--   but promoting one tile can't complete another, so a single sweep
+--   over the candidate set suffices.
+promoteFullSpoilTiles ∷ EngineEnv → LoggerState → WorldPageId
+    → WorldState → (Int, Int) → IO ()
+promoteFullSpoilTiles env logger pageId ws startV = do
+    piles ← readIORef (wsSpoilRef ws)
+    registry ← readIORef (materialRegistryRef env)
+    let ready = promotableTiles piles (candidateVertices startV)
+    forM_ ready $ \tile@(tx, ty) → do
+        ps ← readIORef (wsSpoilRef ws)
+        -- Material of the promoted cell = the pile material at the
+        -- tile's first corner (vertices feeding one tile share the
+        -- spoil material by the router's no-mixing rule).
+        let mMat = listToMaybe
+                [ spMat p
+                | (v, _) ← tileCornerVertices tile
+                , Just p ← [HM.lookup v ps] ]
+        case mMat of
+            Nothing → pure ()
+            Just mat → do
+                let (coord, _) = globalToChunk tx ty
+                    edit = WeAddTile tx ty mat
+                td ← readIORef (wsTilesRef ws)
+                case lookupChunk coord td of
+                    Nothing → pure ()
+                    Just lc → do
+                        let lc' = applyEdit edit lc
+                        atomicModifyIORef' (wsTilesRef ws) $ \w →
+                            (insertChunk lc' w, ())
+                        atomicModifyIORef' (wsEditsRef ws) $ \es →
+                            (appendEdit coord edit es, ())
+                        atomicModifyIORef' (wsSpoilRef ws) $ \sp →
+                            (debitPromotedTile tile sp, ())
+                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        writeIORef (wsZoomQuadCacheRef ws) Nothing
+                        writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- Anything standing on the tile rides up.
+                        Q.writeQueue (unitQueue env) (UnitReGround tx ty)
+                        logDebug logger CatWorld $
+                            "Spoil promoted to terrain at "
+                              <> T.pack (show tx) <> "," <> T.pack (show ty)
 
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same

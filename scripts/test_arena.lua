@@ -160,6 +160,21 @@ function testArena.sendTextures(worldId)
             world.setTexture(worldId, "veg_tile_" .. vegId, h)
         end
     end
+
+    -- ALL registered material tile textures, not just the curated
+    -- set above. Debug terrain placement and dig yields (spoil
+    -- piles → heavy_gravel, etc.) can put ANY material on screen in
+    -- the arena; a material missing from the page's texture table
+    -- renders with a garbage fallback slot (the cursor texture, in
+    -- practice). The loam/granite direct-load fallbacks above still
+    -- cover the YAML-not-yet-loaded edge case.
+    local mats = world.listMaterials and world.listMaterials() or {}
+    for _, m in ipairs(mats) do
+        local h = engine.getTextureHandle("mat_tile_" .. m.id)
+        if h and h >= 0 then
+            world.setTexture(worldId, "mat_tile_" .. m.id, h)
+        end
+    end
 end
 
 -----------------------------------------------------------
@@ -271,6 +286,12 @@ function testArena.onKeyDown(key)
         camera.rotateCCW()
     elseif key == "E" then
         camera.rotateCW()
+    elseif key == "Home" then
+        -- Parity with world_view: re-enable z-slice auto tracking
+        -- after manual slice scrolling. Without this, anything
+        -- placed ABOVE a pinned slice (debug terrain placement!)
+        -- is silently cut away — "it renders as nothing".
+        camera.setZTracking(true)
     end
 end
 

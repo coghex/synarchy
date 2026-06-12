@@ -41,13 +41,22 @@ data MineDesignation = MineDesignation
       --   it; the designation is for removing the tile at this level).
     , mdCorners ∷ !(Float, Float, Float, Float)
       -- ^ Corner dig progress, 1.0 → 0.0 (NW, NE, SE, SW).
+    , mdChunkProgress ∷ !Float
+      -- ^ Hidden chunk-yield accumulator (dig yields, G2). Fills as
+      --   the tile is dug, scaled by the CURRENT digger's mining
+      --   skill each tick; at ≥ 1.0 a chunk item spawns and 1.0 is
+      --   subtracted. Dies with the designation (tile completion
+      --   discards any remainder — one tile only ever provides what
+      --   was extracted from it; deliberately NOT a global bar).
+      --   Field order is load-bearing (positional Generic Serialize):
+      --   appended for save v35.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 type MineDesignations = HM.HashMap (Int, Int) MineDesignation
 
--- | Fresh designation: full corners.
+-- | Fresh designation: full corners, no yield progress.
 newMineDesignation ∷ Int → MineDesignation
-newMineDesignation z = MineDesignation z (1.0, 1.0, 1.0, 1.0)
+newMineDesignation z = MineDesignation z (1.0, 1.0, 1.0, 1.0) 0.0
 
 -- | Designation for a tile that's ALREADY sloped at generation time:
 --   the lowered side is pre-dug, so its corners start at zero. The
@@ -69,6 +78,7 @@ designationFromSlope z slopeMask =
         , corner (edgeS ∨ edgeE)   -- SE
         , corner (edgeS ∨ edgeW)   -- SW
         )
+        0.0
 
 -- | A corner below this counts as "dug out" for slope-variant
 --   selection (completion still requires corners to reach 0).

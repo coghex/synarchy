@@ -480,6 +480,9 @@ library
                      World.Geology.Ore
                      World.Geology.Ore.Types
                      World.Mine.Types
+                     World.Render.SpoilQuads
+                     World.Spoil.Logic
+                     World.Spoil.Types
                      World.Mine.Apply
                      Item.Ground
                      World.Geology.Log

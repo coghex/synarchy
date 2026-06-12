@@ -7,6 +7,13 @@ materials:
     drainage: 0.05
     pick_speed: 0.9
     shovel_speed: 0.1
+    # Dig yields: excavated granite breaks up into heavy gravel at
+    # 1.25x the removed volume, mounding near the dig (spoil piles).
+    dig_spoil: heavy_gravel
+    dig_bulking: 1.25
+    # Chunk yields: a skilled miner extracts up to ~1.5 usable chunks
+    # per tile (0.5 + skill/100, deterministic accumulator).
+    dig_chunk: granite_chunk
     tile: "assets/textures/world/granite/granite.png"
     zoom: "assets/textures/world/zoommap/granite_chunk.png"
     bg:   "assets/textures/world/zoommap/granite_chunk_background.png"

@@ -223,6 +223,20 @@ function game.onMouseDown(button, x, y)
             return
         end
 
+        -- Debug terrain-placement mode: arms a material id; the click
+        -- raises the column at the hover tile one z of that material
+        -- (WeAddTile through the edit log — persists like any edit).
+        if debugOverlay.armedTerrainId then
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                local hud = require("scripts.hud")
+                local worldId = (hud and hud.worldId) or "test_arena"
+                world.addTile(worldId, math.floor(gx), math.floor(gy),
+                              debugOverlay.armedTerrainId)
+            end
+            return
+        end
+
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")
@@ -288,6 +302,10 @@ function game.onMouseDown(button, x, y)
         end
         if debugOverlay.armedItemDef then
             debugOverlay.clearArmedItem()
+            return
+        end
+        if debugOverlay.armedTerrainId then
+            debugOverlay.clearArmedTerrain()
             return
         end
         -- Storage building right-click → "Contents" menu, regardless

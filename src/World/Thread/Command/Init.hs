@@ -81,7 +81,10 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
                                (mdAlbedo def)
                                (mdDrainage def)
                                (mdPickSpeed def)
-                               (mdShovelSpeed def))
+                               (mdShovelSpeed def)
+                               (mdDigSpoil def)
+                               (mdDigBulking def)
+                               (mdDigChunk def))
                 r
             ) emptyMaterialRegistry matDefs
     writeIORef (materialRegistryRef env) populatedReg

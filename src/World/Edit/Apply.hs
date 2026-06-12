@@ -25,6 +25,7 @@ import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Generate.Coordinates (globalToChunk)
+import World.Material.Id (MaterialId(..))
 import World.Hydrology.WaterTable (waterTableAtTile)
 
 -- | Apply one edit to a chunk. Out-of-bounds edits (the column index
@@ -72,6 +73,63 @@ applyEdit (WeDeleteTile gx gy) lc
                        Nothing | newTopZ ≤ wt        →
                            Just (FluidCell Lake wt)
                        _                             → Nothing
+                   newSurface = case newFluid of
+                       Just fc → max newTopZ (fcSurface fc)
+                       Nothing → newTopZ
+               in lc
+                   { lcTiles             = lcTiles lc V.// [(idx, col')]
+                   , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, newSurface)]
+                   , lcTerrainSurfaceMap = lcTerrainSurfaceMap lc VU.// [(idx, newTopZ)]
+                   , lcFluidMap          = lcFluidMap lc V.// [(idx, newFluid)]
+                   , lcFlora             = floraKept
+                   }
+applyEdit (WeAddTile gx gy mat) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let (_, (lx, ly)) = globalToChunk gx gy
+            idx     = columnIndex lx ly
+            -- Raise on TERRAIN top, mirroring WeDeleteTile: a spoil
+            -- cell promoted under revealed groundwater displaces the
+            -- water column upward via the surface recompute below.
+            oldTopZ = lcTerrainSurfaceMap lc VU.! idx
+            col     = lcTiles lc V.! idx
+            colLen  = VU.length (ctMats col)
+            newTopZ = oldTopZ + 1
+            i       = newTopZ - ctStartZ col
+        in if i < 0 ∨ i > colLen
+           then lc                          -- malformed column; no-op
+           else
+               -- Columns are allocated with no headroom above the
+               -- generated surface, so adding at the top usually
+               -- means GROWING the vectors by one cell (i == colLen).
+               -- Without this, WeAddTile silently no-ops on flat
+               -- ground and spoil promotion would leak material.
+               let col' = if i ≡ colLen
+                       then col
+                           { ctMats   = VU.snoc (ctMats   col)
+                                                (unMaterialId mat)
+                           , ctSlopes = VU.snoc (ctSlopes col) 0
+                           , ctVeg    = VU.snoc (ctVeg    col) 0
+                           }
+                       else col
+                           { ctMats   = ctMats   col VU.// [(i, unMaterialId mat)]
+                           , ctSlopes = ctSlopes col VU.// [(i, 0)]
+                           , ctVeg    = ctVeg    col VU.// [(i, 0)]
+                           }
+                   -- A pile burying the tile takes any rooted flora
+                   -- with it, same rule as digging it out.
+                   floraKept = FloraChunkData
+                       [ fi | fi ← fcdInstances (lcFlora lc)
+                            , fromIntegral (fiTileX fi) ≠ lx
+                              ∨ fromIntegral (fiTileY fi) ≠ ly ]
+                   curFluid = lcFluidMap lc V.! idx
+                   -- Filling at or above the fluid surface displaces
+                   -- the fluid cell entirely (promotion legality
+                   -- excludes fluid tiles, but replay must stay
+                   -- total for resilience).
+                   newFluid = case curFluid of
+                       Just fc | newTopZ ≥ fcSurface fc → Nothing
+                       _                                → curFluid
                    newSurface = case newFluid of
                        Just fc → max newTopZ (fcSurface fc)
                        Nothing → newTopZ

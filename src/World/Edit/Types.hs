@@ -21,6 +21,7 @@ import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..))
 import World.Fluid.Types (FluidType(..))
+import World.Material.Id (MaterialId(..))
 
 -- | One tile-scale edit, keyed by global (gx, gy). Replay order
 --   matters: deleting a column then placing fluid produces a fluid
@@ -34,6 +35,8 @@ import World.Fluid.Types (FluidType(..))
 data WorldEdit
     = WeDeleteTile !Int !Int               -- ^ Lower the column at (gx,gy) by 1 z.
     | WeSetFluidTile !Int !Int !FluidType  -- ^ Place a fluid tile on top of the column at (gx,gy).
+    | WeAddTile !Int !Int !MaterialId      -- ^ Raise the column at (gx,gy) by 1 z of the given
+                                           --   material (spoil-pile promotion to terrain).
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

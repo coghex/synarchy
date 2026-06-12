@@ -34,6 +34,7 @@ import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import World.Render.Camera (cameraChanged, camEpsilon)
 import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
 import World.Render.GroundItemQuads (renderGroundItemQuads)
+import World.Render.SpoilQuads (renderSpoilQuads)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import Unit.Render (renderUnitQuads)
@@ -107,6 +108,20 @@ updateWorldTiles env = do
                     Nothing → return V.empty
             return $ V.concat giResults
 
+    -- Spoil-pile overlays (dig yields): per-frame for the same
+    -- reason — piles change every dig tick, and the partial fringe
+    -- is small (full cells promote to real terrain and render
+    -- through the cached tile pass).
+    spoilQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            spResults ← forM (wmVisible worldManager) $ \pageId →
+                case lookup pageId (wmWorlds worldManager) of
+                    Just worldState →
+                        renderSpoilQuads env worldState tileAlpha
+                    Nothing → return V.empty
+            return $ V.concat spResults
+
     -- Unit quads are generated every frame (cheap: handful of sprites)
     -- so they respond instantly to movement
     unitQuads ← if tileAlpha ≤ 0.001
@@ -158,7 +173,8 @@ updateWorldTiles env = do
                         Nothing → return ()
                 Nothing → return ()
 
-    let allQuads = tileQuads <> worldCursorQuads <> groundItemQuads
+    let allQuads = tileQuads <> worldCursorQuads <> spoilQuads
+                <> groundItemQuads
                 <> buildingQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
     return allQuads

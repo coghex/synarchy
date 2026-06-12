@@ -26,6 +26,7 @@ import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, default
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import World.Mine.Types (MineDesignations)
+import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import Item.Ground (GroundItems, emptyGroundItems)
 
 data WorldState = WorldState
@@ -71,6 +72,11 @@ data WorldState = WorldState
       -- ^ Items lying in the world (see Item.Ground — float x/y,
       --   height derived from current terrain at render). Persisted
       --   in saves (sdGroundItems, v32).
+    , wsSpoilRef ∷ IORef SpoilPiles
+      -- ^ Spoil mounds from digging, keyed by tile vertex (see
+      --   World.Spoil.Types). Written by the world thread's dig
+      --   handler; read by the spoil render pass. Persisted in
+      --   saves (sdSpoilPiles, v34).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -99,6 +105,7 @@ emptyWorldState = do
     wsOreSurveyRef ← newIORef HM.empty
     wsMineDesignationsRef ← newIORef HM.empty
     wsGroundItemsRef ← newIORef emptyGroundItems
+    wsSpoilRef ← newIORef emptySpoilPiles
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
@@ -107,7 +114,7 @@ emptyWorldState = do
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsOreSurveyRef wsMineDesignationsRef
-                        wsGroundItemsRef
+                        wsGroundItemsRef wsSpoilRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

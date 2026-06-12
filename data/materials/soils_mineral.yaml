@@ -67,6 +67,9 @@ materials:
     bg:   "assets/textures/world/zoommap/sand_chunk_background.png"
   - id: 56
     name: loam
+    # Dig yields: loose soil moves 1:1 — digging loam piles loam.
+    dig_spoil: loam
+    dig_bulking: 1.0
     hardness: 0.25
     density: 1.45
     albedo: 0.25

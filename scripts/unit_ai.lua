@@ -2376,8 +2376,13 @@ local function digUtility(uid, s, params)
         return -math.huge
     end
 
-    local _, pickSpeed, shovelSpeed = world.getDigInfoAt(wid, gx, gy)
+    local _, pickSpeed, shovelSpeed, spoilBlocked =
+        world.getDigInfoAt(wid, gx, gy)
     if not pickSpeed then return -math.huge end   -- chunk not loaded
+    -- No room for the spoil around this tile (boxed in by water,
+    -- cliffs, or other designations): the engine would refuse every
+    -- dig tick, so don't take the job at all.
+    if spoilBlocked then return -math.huge end
     local tool, speed = bestDigTool(uid, params, pickSpeed, shovelSpeed)
     if not tool or speed <= 0 then return -math.huge end
 
@@ -2543,12 +2548,14 @@ local function digExecute(uid, s, params)
             -- No other corner left: the residue finishes from here.
         end
         -- Material can change as digging exposes new strata; re-read
-        -- the speed each swing.
-        local _, pickSpeed, shovelSpeed =
+        -- the speed each swing. spoilBlocked can flip mid-dig too
+        -- (other diggers filled the surrounding piles) — abandon the
+        -- job rather than swing at a refusing engine forever.
+        local _, pickSpeed, shovelSpeed, spoilBlocked =
             world.getDigInfoAt(wid, job.x, job.y)
         local speed = (job.tool == "pick") and (pickSpeed or 0)
                                             or (shovelSpeed or 0)
-        if speed <= 0 then
+        if speed <= 0 or spoilBlocked then
             unit.clearAnimOverride(uid)
             releaseDigJob(s, uid)
             return
@@ -2563,8 +2570,11 @@ local function digExecute(uid, s, params)
         local strength = unit.getStat(uid, "strength") or 1.0
         local mining   = unit.getSkill(uid, "mining") or 0.0
         local unitFactor = strength * (0.5 + mining / 100.0)
+        -- Mining skill rides along: the engine's chunk-yield
+        -- accumulator scales by the CURRENT digger's skill, so a
+        -- handoff mid-dig switches to the new digger's rate.
         world.digTile(wid, job.x, job.y, info.gridX, info.gridY,
-                      params.dig_rate * speed * unitFactor * dt)
+                      params.dig_rate * speed * unitFactor * dt, mining)
         return
     end
 end

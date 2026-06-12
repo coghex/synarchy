@@ -1,0 +1,11 @@
+items:
+  - name: "granite_chunk"
+    display_name: "Granite Chunk"
+    sprite: "assets/textures/items/granite_chunk.png"
+    # Uniform ~10 kg blocks a skilled miner extracts intact while
+    # digging granite (dig yields, deterministic accumulator —
+    # see data/materials igneous_intrusive dig_chunk).
+    weight: 10.0
+    category: Materials
+    make: world
+    material: granite

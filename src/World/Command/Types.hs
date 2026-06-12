@@ -13,6 +13,7 @@ import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Chunk.Types (ChunkCoord(..))
+import World.Material.Id (MaterialId(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -85,13 +86,20 @@ data WorldCommand
         --   surface z; tiles in unloaded chunks are skipped.
     | WorldSetMineDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed designation markers.
-    | WorldDigTile WorldPageId Int Int Float Float Float
+    | WorldDigTile WorldPageId Int Int Float Float Float Float
         -- ^ Apply dig progress to the designated tile at (gx, gy):
-        --   pageId gx gy uxPos uyPos amount. The digger's tile-space
-        --   position picks which corners drain first (digger-side);
-        --   amount is pre-scaled by tool × material speed. Corners at
-        --   zero → the tile drops one z via the WeDeleteTile path and
-        --   the designation is removed.
+        --   pageId gx gy uxPos uyPos amount minerSkill. The digger's
+        --   tile-space position picks which corners drain first
+        --   (digger-side); amount is pre-scaled by tool × material
+        --   speed. minerSkill is the CURRENT digger's mining skill —
+        --   it scales the per-tick chunk-yield fill, so a mid-dig
+        --   handoff uses the new digger's rate. Corners at zero →
+        --   the tile drops one z via the WeDeleteTile path and the
+        --   designation is removed.
+    | WorldAddTile WorldPageId Int Int MaterialId
+        -- ^ Raise the column at (gx, gy) one z of the given material
+        --   via the WeAddTile edit path (debug terrain placement —
+        --   same machinery spoil promotion uses, so it persists).
     | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
         -- ^ pageId, save-name, request-timestamp (ISO 8601 second
         --   precision), Lua-module blobs. The Lua side captures the

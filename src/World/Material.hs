@@ -34,6 +34,7 @@ module World.Material
     , registerMaterial
     , getMaterialProps
     , defaultMaterialProps
+    , materialIdByName
     ) where
 
 import UPrelude
@@ -192,10 +193,32 @@ data MaterialProps = MaterialProps
     , mpShovelSpeed ∷ !Float
       -- ^ Dig-rate multiplier with a shovel. Shovels excel in loose
       --   soils (sand, loam), barely scratch igneous rock.
+    , mpDigSpoil ∷ !(Maybe Text)
+      -- ^ Material NAME the digger's spoil piles are made of (yaml
+      --   @dig_spoil@). Nothing = digging this material produces no
+      --   spoil (the pre-yields behaviour — it just vanishes).
+      --   Resolved to a MaterialId at dig time via the registry so
+      --   yaml load order doesn't matter.
+    , mpDigBulking ∷ !Float
+      -- ^ Spoil volume per excavated volume (yaml @dig_bulking@,
+      --   default 1.0). Broken hard rock bulks >1 (granite 1.25);
+      --   loose soils move 1:1.
+    , mpDigChunk ∷ !(Maybe Text)
+      -- ^ Item def NAME spawned by the chunk-yield accumulator while
+      --   digging this material (yaml @dig_chunk@ — granite →
+      --   "granite_chunk"). Nothing = no chunk yields.
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps
-defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5 0.4 0.5 0.5
+defaultMaterialProps =
+    MaterialProps "unknown" 0.5 2.5 0.5 0.4 0.5 0.5 Nothing 1.0 Nothing
+
+-- | Find a material's id by its registered yaml name. Linear scan of
+--   the 256-slot registry — called at dig frequency, not per-frame.
+materialIdByName ∷ MaterialRegistry → Text → Maybe MaterialId
+materialIdByName (MaterialRegistry vec) name =
+    MaterialId ∘ fromIntegral
+        <$> V.findIndex (\p → mpName p ≡ name) vec
 
 -- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by YAML.
 newtype MaterialRegistry = MaterialRegistry (V.Vector MaterialProps)

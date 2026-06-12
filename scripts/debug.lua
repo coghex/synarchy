@@ -52,6 +52,13 @@ debugOverlay.itemButtonId = nil
 debugOverlay.itemEntries = {}
 debugOverlay.itemListVisible = false
 debugOverlay.armedItemDef = nil
+-- Terrain placement mode. Armed value is a material id passed to
+-- world.addTile at the hover tile (raises the column one z; lands in
+-- the edit log so it persists like any player edit).
+debugOverlay.terrainButtonId = nil
+debugOverlay.terrainEntries = {}
+debugOverlay.terrainListVisible = false
+debugOverlay.armedTerrainId = nil
 debugOverlay.debugFont = nil
 debugOverlay.visible = false
 debugOverlay.uiCreated = false
@@ -99,6 +106,13 @@ local function destroyItemList()
     debugOverlay.itemEntries = {}
 end
 
+local function destroyTerrainList()
+    for _, entry in ipairs(debugOverlay.terrainEntries) do
+        if entry.id then label.destroy(entry.id) end
+    end
+    debugOverlay.terrainEntries = {}
+end
+
 local function formatEntry(defName, isArmed)
     if isArmed then return "> " .. defName
     else            return "  " .. defName end
@@ -118,6 +132,11 @@ local function refreshEntries()
     for _, entry in ipairs(debugOverlay.itemEntries) do
         local isArmed = (entry.defName == debugOverlay.armedItemDef)
         label.setText(entry.id, formatEntry(entry.defName, isArmed))
+        label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
+    end
+    for _, entry in ipairs(debugOverlay.terrainEntries) do
+        local isArmed = (entry.matId == debugOverlay.armedTerrainId)
+        label.setText(entry.id, formatEntry(entry.matName, isArmed))
         label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
     end
 end
@@ -155,6 +174,16 @@ local function itemButtonY(s)
     local y = fluidButtonY(s) + (s.fontSize + s.rowSpacing)
     if debugOverlay.fluidListVisible then
         local listRows = math.max(1, #debugOverlay.fluidEntries)
+        y = y + listRows * (s.fontSize + s.rowSpacing)
+    end
+    return y
+end
+
+-- Terrain button sits below the items button (and its open list).
+local function terrainButtonY(s)
+    local y = itemButtonY(s) + (s.fontSize + s.rowSpacing)
+    if debugOverlay.itemListVisible then
+        local listRows = math.max(1, #debugOverlay.itemEntries)
         y = y + listRows * (s.fontSize + s.rowSpacing)
     end
     return y
@@ -254,6 +283,36 @@ local function rebuildClickableRects()
             end
         end
     end
+
+    -- Terrain button rect
+    local tbY = terrainButtonY(s)
+    local tr = rowRect(s, tbY, "terrain")
+    tr.action = function()
+        if debugOverlay.terrainListVisible or debugOverlay.armedTerrainId then
+            debugOverlay.clearArmedTerrain()
+            debugOverlay.closeTerrainList()
+        else
+            debugOverlay.openTerrainList()
+        end
+    end
+    table.insert(debugOverlay.clickableRects, tr)
+
+    -- Terrain list entry rects (only if list is open)
+    if debugOverlay.terrainListVisible then
+        local baseY = tbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.terrainEntries) do
+            if entry.matId then
+                local rowY = baseY + (i - 1) * (s.fontSize + s.rowSpacing)
+                local rect = rowRect(s, rowY,
+                                     formatEntry(entry.matName, false))
+                local mid = entry.matId
+                rect.action = function()
+                    debugOverlay.setArmedTerrain(mid)
+                end
+                table.insert(debugOverlay.clickableRects, rect)
+            end
+        end
+    end
 end
 
 local function buildItemList()
@@ -297,6 +356,50 @@ local function buildItemList()
         })
         table.insert(debugOverlay.itemEntries,
             { id = lblId, defName = def.name })
+    end
+end
+
+local function buildTerrainList()
+    destroyTerrainList()
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local uiscale = scale.get()
+    local mats = world.listMaterials() or {}
+    local baseY = terrainButtonY(s) + s.fontSize
+
+    if #mats == 0 then
+        local lblId = label.new({
+            name     = "terrain_list_empty",
+            text     = "  (no materials loaded)",
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY,
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.terrainEntries,
+            { id = lblId, matId = nil, matName = nil })
+        return
+    end
+
+    for i, m in ipairs(mats) do
+        local isArmed = (m.id == debugOverlay.armedTerrainId)
+        local lblId = label.new({
+            name     = "terrain_entry_" .. m.name,
+            text     = formatEntry(m.name, isArmed),
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = isArmed and COLOR_BRIGHT or COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY + (i - 1) * (s.fontSize + s.rowSpacing),
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.terrainEntries,
+            { id = lblId, matId = m.id, matName = m.name })
     end
 end
 
@@ -388,9 +491,14 @@ function debugOverlay.createUI()
             label.destroy(debugOverlay.itemButtonId)
             debugOverlay.itemButtonId = nil
         end
+        if debugOverlay.terrainButtonId then
+            label.destroy(debugOverlay.terrainButtonId)
+            debugOverlay.terrainButtonId = nil
+        end
         destroySpawnList()
         destroyFluidList()
         destroyItemList()
+        destroyTerrainList()
     end
 
     local s = scale.applyAll(debugOverlay.baseSizes)
@@ -467,6 +575,25 @@ function debugOverlay.createUI()
         buildItemList()
     end
 
+    -- Terrain button — below the items section, same shifting-layout
+    -- rule via terrainButtonY.
+    debugOverlay.terrainButtonId = label.new({
+        name     = "terrain_button",
+        text     = "terrain",
+        font     = debugOverlay.debugFont,
+        fontSize = debugOverlay.baseSizes.fontSize,
+        color    = COLOR_DIM,
+        page     = debugOverlay.page,
+        uiscale  = uiscale,
+        x        = s2.margin,
+        y        = terrainButtonY(s2),
+        zIndex   = 1000,
+    })
+
+    if debugOverlay.terrainListVisible then
+        buildTerrainList()
+    end
+
     debugOverlay.uiCreated = true
     rebuildClickableRects()
 end
@@ -492,9 +619,11 @@ function debugOverlay.hide()
     debugOverlay.clearArmed()
     debugOverlay.clearArmedFluid()
     debugOverlay.clearArmedItem()
+    debugOverlay.clearArmedTerrain()
     debugOverlay.closeSpawnList()
     debugOverlay.closeFluidList()
     debugOverlay.closeItemList()
+    debugOverlay.closeTerrainList()
     debugOverlay.clickableRects = {}
     if debugOverlay.page then UI.hidePage(debugOverlay.page) end
 end
@@ -543,6 +672,20 @@ local function repositionFluidUI()
             end
         end
     end
+    -- Terrain section trails the items section.
+    local tbY = terrainButtonY(s)
+    if debugOverlay.terrainButtonId then
+        label.setPosition(debugOverlay.terrainButtonId, s.margin, tbY)
+    end
+    if debugOverlay.terrainListVisible then
+        local baseY = tbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.terrainEntries) do
+            if entry.id then
+                label.setPosition(entry.id, s.margin,
+                    baseY + (i - 1) * (s.fontSize + s.rowSpacing))
+            end
+        end
+    end
 end
 
 function debugOverlay.openSpawnList()
@@ -566,6 +709,7 @@ function debugOverlay.setArmed(defName)
     -- Mutually exclusive with the other arm modes.
     debugOverlay.armedFluidType = nil
     debugOverlay.armedItemDef = nil
+    debugOverlay.armedTerrainId = nil
     refreshEntries()
 end
 
@@ -597,6 +741,7 @@ function debugOverlay.setArmedFluid(kind)
     debugOverlay.armedFluidType = kind
     debugOverlay.armedDef = nil
     debugOverlay.armedItemDef = nil
+    debugOverlay.armedTerrainId = nil
     refreshEntries()
 end
 
@@ -610,6 +755,7 @@ function debugOverlay.openItemList()
     if debugOverlay.itemListVisible then return end
     debugOverlay.itemListVisible = true
     buildItemList()
+    repositionFluidUI()   -- terrain section below shifts
     rebuildClickableRects()
 end
 
@@ -617,6 +763,7 @@ function debugOverlay.closeItemList()
     if not debugOverlay.itemListVisible then return end
     debugOverlay.itemListVisible = false
     destroyItemList()
+    repositionFluidUI()   -- terrain section below shifts
     rebuildClickableRects()
 end
 
@@ -625,12 +772,42 @@ function debugOverlay.setArmedItem(defName)
     -- Mutually exclusive with the other arm modes.
     debugOverlay.armedDef = nil
     debugOverlay.armedFluidType = nil
+    debugOverlay.armedTerrainId = nil
     refreshEntries()
 end
 
 function debugOverlay.clearArmedItem()
     if debugOverlay.armedItemDef == nil then return end
     debugOverlay.armedItemDef = nil
+    refreshEntries()
+end
+
+function debugOverlay.openTerrainList()
+    if debugOverlay.terrainListVisible then return end
+    debugOverlay.terrainListVisible = true
+    buildTerrainList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.closeTerrainList()
+    if not debugOverlay.terrainListVisible then return end
+    debugOverlay.terrainListVisible = false
+    destroyTerrainList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.setArmedTerrain(matId)
+    debugOverlay.armedTerrainId = matId
+    -- Mutually exclusive with the other arm modes.
+    debugOverlay.armedDef = nil
+    debugOverlay.armedFluidType = nil
+    debugOverlay.armedItemDef = nil
+    refreshEntries()
+end
+
+function debugOverlay.clearArmedTerrain()
+    if debugOverlay.armedTerrainId == nil then return end
+    debugOverlay.armedTerrainId = nil
     refreshEntries()
 end
 
@@ -697,6 +874,9 @@ function debugOverlay.onKeyDown(key)
         if debugOverlay.armedItemDef then
             debugOverlay.clearArmedItem()
         end
+        if debugOverlay.armedTerrainId then
+            debugOverlay.clearArmedTerrain()
+        end
     end
 end
 
@@ -714,6 +894,7 @@ function debugOverlay.shutdown()
     destroySpawnList()
     destroyFluidList()
     destroyItemList()
+    destroyTerrainList()
     if debugOverlay.spawnButtonId then
         label.destroy(debugOverlay.spawnButtonId)
         debugOverlay.spawnButtonId = nil
@@ -725,6 +906,10 @@ function debugOverlay.shutdown()
     if debugOverlay.itemButtonId then
         label.destroy(debugOverlay.itemButtonId)
         debugOverlay.itemButtonId = nil
+    end
+    if debugOverlay.terrainButtonId then
+        label.destroy(debugOverlay.terrainButtonId)
+        debugOverlay.terrainButtonId = nil
     end
     if debugOverlay.fpsLabelId then
         label.destroy(debugOverlay.fpsLabelId)

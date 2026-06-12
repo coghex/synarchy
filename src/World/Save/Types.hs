@@ -24,6 +24,7 @@ import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
+import World.Spoil.Types (SpoilPiles)
 import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -104,11 +105,11 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 33  -- v33: StatModifier gains the trailing
-                         -- 'smPercent' field (percentage modifiers —
-                         -- technomule "cybernetic enhancements").
-                         -- (v32: ground items; v31: mining
-                         -- designations; v30: ore deposition.)
+currentSaveVersion = 35  -- v35: MineDesignation gains trailing
+                         -- 'mdChunkProgress' (per-tile chunk-yield
+                         -- accumulator).
+                         -- (v34: sdSpoilPiles + WeAddTile; v33:
+                         -- smPercent; v32: ground items.)
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -192,6 +193,12 @@ data SaveData = SaveData
         -- ^ Items lying in the world. Full ItemInstances + float
         --   positions; resting height derives from terrain at render,
         --   so restoration needs no chunk loading either.
+    -- v34 fields (dig yields):
+    , sdSpoilPiles ∷ !SpoilPiles
+        -- ^ Spoil mounds (vertex-keyed partial fills — see
+        --   World.Spoil.Types). Fills are relative to each tile's
+        --   terrain surface; promoted cells live in sdEdits as
+        --   WeAddTile, so restoration is order-independent.
     } deriving (Show, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`
