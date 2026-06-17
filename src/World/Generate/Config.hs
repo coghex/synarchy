@@ -6,6 +6,9 @@ module World.Generate.Config
     , MoonYaml(..)
     , ClimateYaml(..)
     , ResourcesYaml(..)
+    , TimelineYaml(..)
+    , defaultTimelineYaml
+    , timelineParamsOf
     , loadWorldGenConfig
     , saveWorldGenYaml
     , defaultWorldGenConfig
@@ -19,6 +22,7 @@ import qualified Data.Aeson as Yaml (object)
 import qualified Data.Text as T
 import System.Directory (doesFileExist)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Time.Types
     ( CalendarConfig(..), defaultCalendarConfig
@@ -53,6 +57,8 @@ data WorldGenConfig = WorldGenConfig
       --   create-world advanced tab.
     , wgcResources ∷ !ResourcesYaml
       -- ^ Resource-abundance levers (ore deposition flux multipliers).
+    , wgcTimeline ∷ !TimelineYaml
+      -- ^ Player-configurable timeline depth (eon/era/period/epoch/age counts).
     } deriving (Show, Eq)
 
 -- | Resource-abundance levers. Purely mechanistic multipliers on the
@@ -92,6 +98,17 @@ data ClimateYaml = ClimateYaml
     , clThcThreshold   ∷ !Float
     } deriving (Show, Eq)
 
+data TimelineYaml = TimelineYaml
+    { tyEonCount   ∷ !Int
+    , tyEraCount   ∷ !Int
+    , tyPeriodMin  ∷ !Int
+    , tyPeriodMax  ∷ !Int
+    , tyEpochMin   ∷ !Int
+    , tyEpochMax   ∷ !Int
+    , tyAgeMin     ∷ !Int
+    , tyAgeMax     ∷ !Int
+    } deriving (Show, Eq)
+
 -- Defaults
 
 defaultWorldGenConfig ∷ WorldGenConfig
@@ -112,6 +129,7 @@ defaultWorldGenConfig = WorldGenConfig
     , wgcLavaPoolRadius   = 22
     , wgcWaterfallQuantum = 12
     , wgcResources        = defaultResourcesYaml
+    , wgcTimeline         = defaultTimelineYaml
     }
 
 defaultResourcesYaml ∷ ResourcesYaml
@@ -151,6 +169,18 @@ defaultClimateYaml = ClimateYaml
     , clEvapScale      = cpEvapScale defaultClimateParams
     , clAlbedoFeedback = cpAlbedoFeedback defaultClimateParams
     , clThcThreshold   = cpThcThreshold defaultClimateParams
+    }
+
+defaultTimelineYaml ∷ TimelineYaml
+defaultTimelineYaml = TimelineYaml
+    { tyEonCount  = tlpEonCount defaultTimelineParams
+    , tyEraCount  = tlpEraCount defaultTimelineParams
+    , tyPeriodMin = tlpPeriodMin defaultTimelineParams
+    , tyPeriodMax = tlpPeriodMax defaultTimelineParams
+    , tyEpochMin  = tlpEpochMin defaultTimelineParams
+    , tyEpochMax  = tlpEpochMax defaultTimelineParams
+    , tyAgeMin    = tlpAgeMin defaultTimelineParams
+    , tyAgeMax    = tlpAgeMax defaultTimelineParams
     }
 
 -- FromJSON instances
@@ -199,6 +229,18 @@ instance FromJSON ResourcesYaml where
         <*> v .:? "copper_abundance" .!= ryCopperAbundance defaultResourcesYaml
     parseJSON _ = fail "Expected an object for resources"
 
+instance FromJSON TimelineYaml where
+    parseJSON (Yaml.Object v) = TimelineYaml
+        <$> v .:? "eon_count"   .!= tyEonCount defaultTimelineYaml
+        <*> v .:? "era_count"   .!= tyEraCount defaultTimelineYaml
+        <*> v .:? "period_min"  .!= tyPeriodMin defaultTimelineYaml
+        <*> v .:? "period_max"  .!= tyPeriodMax defaultTimelineYaml
+        <*> v .:? "epoch_min"   .!= tyEpochMin defaultTimelineYaml
+        <*> v .:? "epoch_max"   .!= tyEpochMax defaultTimelineYaml
+        <*> v .:? "age_min"     .!= tyAgeMin defaultTimelineYaml
+        <*> v .:? "age_max"     .!= tyAgeMax defaultTimelineYaml
+    parseJSON _ = fail "Expected an object for timeline"
+
 instance FromJSON WorldGenConfig where
     parseJSON (Yaml.Object v) = do
         wgObj ← v .: "world_gen"
@@ -216,6 +258,7 @@ instance FromJSON WorldGenConfig where
             <*> wgObj .:? "lava_pool_radius" .!= wgcLavaPoolRadius defaultWorldGenConfig
             <*> wgObj .:? "waterfall_quantum" .!= wgcWaterfallQuantum defaultWorldGenConfig
             <*> wgObj .:? "resources"   .!= wgcResources defaultWorldGenConfig
+            <*> wgObj .:? "timeline"    .!= wgcTimeline defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
 
 -- ToJSON instances
@@ -268,6 +311,7 @@ instance ToJSON WorldGenConfig where
             , "lava_pool_radius" .= wgcLavaPoolRadius cfg
             , "waterfall_quantum" .= wgcWaterfallQuantum cfg
             , "resources" .= wgcResources cfg
+            , "timeline"  .= wgcTimeline cfg
             ]
         ]
 
@@ -276,6 +320,18 @@ instance ToJSON ResourcesYaml where
         [ "ore_abundance"    .= ryOreAbundance r
         , "iron_abundance"   .= ryIronAbundance r
         , "copper_abundance" .= ryCopperAbundance r
+        ]
+
+instance ToJSON TimelineYaml where
+    toJSON t = Yaml.object
+        [ "eon_count"  .= tyEonCount t
+        , "era_count"  .= tyEraCount t
+        , "period_min" .= tyPeriodMin t
+        , "period_max" .= tyPeriodMax t
+        , "epoch_min"  .= tyEpochMin t
+        , "epoch_max"  .= tyEpochMax t
+        , "age_min"    .= tyAgeMin t
+        , "age_max"    .= tyAgeMax t
         ]
 
 -- | Load world gen config from YAML, falling back to defaults on error
@@ -335,12 +391,46 @@ paramsToConfig p = WorldGenConfig
         , ryIronAbundance   = olIron (wgpOreLevers p)
         , ryCopperAbundance = olCopper (wgpOreLevers p)
         }
+    , wgcTimeline = TimelineYaml
+        { tyEonCount  = tlpEonCount (wgpTimelineParams p)
+        , tyEraCount  = tlpEraCount (wgpTimelineParams p)
+        , tyPeriodMin = tlpPeriodMin (wgpTimelineParams p)
+        , tyPeriodMax = tlpPeriodMax (wgpTimelineParams p)
+        , tyEpochMin  = tlpEpochMin (wgpTimelineParams p)
+        , tyEpochMax  = tlpEpochMax (wgpTimelineParams p)
+        , tyAgeMin    = tlpAgeMin (wgpTimelineParams p)
+        , tyAgeMax    = tlpAgeMax (wgpTimelineParams p)
+        }
     }
 
 -- | Apply a YAML config to the default WorldGenParams.
 --   Only sets the configurable fields; derived fields (plates,
 --   timeline, ocean map, climate state) remain at their defaults
 --   and must be computed during world generation.
+-- | Convert the YAML timeline config to the engine TimelineParams used by
+--   buildTimeline. Exposed so Init can pass it before WorldGenParams is fully
+--   assembled.
+timelineParamsOf ∷ WorldGenConfig → TimelineParams
+timelineParamsOf cfg =
+    let ty = wgcTimeline cfg
+        -- Defensive clamps: counts ≥ 1, and max ≥ min ≥ 1, so malformed
+        -- input (e.g. min > max from a stray textbox) can't yield zero/
+        -- negative counts in the hashToRangeGeo rolls.
+        loHi lo hi = let lo' = max 1 lo in (lo', max lo' hi)
+        (pMin, pMax) = loHi (tyPeriodMin ty) (tyPeriodMax ty)
+        (eMin, eMax) = loHi (tyEpochMin ty) (tyEpochMax ty)
+        (aMin, aMax) = loHi (tyAgeMin ty) (tyAgeMax ty)
+    in TimelineParams
+        { tlpEonCount  = max 1 (tyEonCount ty)
+        , tlpEraCount  = max 1 (tyEraCount ty)
+        , tlpPeriodMin = pMin
+        , tlpPeriodMax = pMax
+        , tlpEpochMin  = eMin
+        , tlpEpochMax  = eMax
+        , tlpAgeMin    = aMin
+        , tlpAgeMax    = aMax
+        }
+
 applyConfigToParams ∷ WorldGenConfig → WorldGenParams
 applyConfigToParams cfg = defaultWorldGenParams
     { wgpSeed       = case wgcSeed cfg of
@@ -383,4 +473,5 @@ applyConfigToParams cfg = defaultWorldGenParams
         , olIron   = ryIronAbundance (wgcResources cfg)
         , olCopper = ryCopperAbundance (wgcResources cfg)
         }
+    , wgpTimelineParams   = timelineParamsOf cfg
     }

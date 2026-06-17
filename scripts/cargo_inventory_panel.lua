@@ -389,6 +389,25 @@ local function buildRows(originX, originY, contentW, grouped)
             UI.addToPage(h.page, iconId, originX + txtPad, iconY)
             UI.setZIndex(iconId, 133)
             s.rowElements[#s.rowElements + 1] = { kind = "sprite", id = iconId }
+            -- Broken (condition 0): overlay broken_equipment.png.
+            if g.condition and g.condition <= 0 then
+                local bt = cargoInventoryPanel.brokenTex
+                if not bt then
+                    local hh = engine.getTextureHandle("broken_equipment")
+                    if hh and hh >= 0 then
+                        cargoInventoryPanel.brokenTex = hh
+                        bt = hh
+                    end
+                end
+                if bt then
+                    local oid = UI.newSprite("cargo_inv_broken_" .. i,
+                        iconSz, iconSz, bt, 1.0, 1.0, 1.0, 1.0, h.page)
+                    UI.addToPage(h.page, oid, originX + txtPad, iconY)
+                    UI.setZIndex(oid, 134)
+                    s.rowElements[#s.rowElements + 1] =
+                        { kind = "sprite", id = oid }
+                end
+            end
         end
 
         -- Right-aligned weight (rowWeight = base × count).

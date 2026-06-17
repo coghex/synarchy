@@ -304,6 +304,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "exists"       (unitExistsFn env)
   registerLuaFunction "getAttackRange" (unitGetAttackRangeFn env)
   registerLuaFunction "getAttackCooldown" (unitGetAttackCooldownFn env)
+  registerLuaFunction "getAnimDuration" (unitGetAnimDurationFn env)
   registerLuaFunction "getMaxSpeed"  (unitGetMaxSpeedFn env)
   registerLuaFunction "getEquippedWeaponWeight"
                                           (unitGetEquippedWeaponWeightFn env)
@@ -451,6 +452,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldNearestMineDesignationFn env)
   registerLuaFunction "getDigInfoAt" (worldGetDigInfoAtFn env)
   registerLuaFunction "getSpoilInfo" (worldGetSpoilInfoFn env)
+  registerLuaFunction "getGemInfoAt" (worldGetGemInfoAtFn env)
   registerLuaFunction "debugTileQuads" (worldDebugTileQuadsFn env)
   registerLuaFunction "addTile"       (worldAddTileFn env)
   registerLuaFunction "listMaterials" (worldListMaterialsFn env)

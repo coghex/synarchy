@@ -16,6 +16,7 @@ local settingsTab    = require("scripts.create_world.settings_tab")
 local advancedTab    = require("scripts.create_world.advanced_tab")
 local generalTab     = require("scripts.create_world.general_tab")
 local climateTab     = require("scripts.create_world.climate_tab")
+local timelineTab    = require("scripts.create_world.timeline_tab")
 local logPanelMod    = require("scripts.create_world.log_panel")
 local bottomButtons  = require("scripts.create_world.bottom_buttons")
 local generation     = require("scripts.create_world.generation")
@@ -109,6 +110,15 @@ createWorldMenu.pending = {
     evapScale         = "1.0",
     albedoFeedback    = "0.5",
     thcThreshold      = "1.025",
+    -- Timeline depth
+    timelineEon = "1",
+    timelineEra = "2",
+    periodMin   = "1",
+    periodMax   = "3",
+    epochMin    = "1",
+    epochMax    = "3",
+    ageMin      = "1",
+    ageMax      = "3",
 }
 
 -- Format a float for display, avoiding long floating point representations.
@@ -165,6 +175,18 @@ function createWorldMenu.loadDefaults()
             createWorldMenu.pending.albedoFeedback    = fmtFloat(cl.albedo_feedback, 0.5)
             createWorldMenu.pending.thcThreshold      = fmtFloat(cl.thc_threshold, 1.025)
         end
+        -- Timeline
+        if defaults.timeline then
+            local t = defaults.timeline
+            createWorldMenu.pending.timelineEon = fmtInt(t.eon_count, 1)
+            createWorldMenu.pending.timelineEra = fmtInt(t.era_count, 2)
+            createWorldMenu.pending.periodMin   = fmtInt(t.period_min, 1)
+            createWorldMenu.pending.periodMax   = fmtInt(t.period_max, 3)
+            createWorldMenu.pending.epochMin    = fmtInt(t.epoch_min, 1)
+            createWorldMenu.pending.epochMax    = fmtInt(t.epoch_max, 3)
+            createWorldMenu.pending.ageMin      = fmtInt(t.age_min, 1)
+            createWorldMenu.pending.ageMax      = fmtInt(t.age_max, 3)
+        end
     end
     return defaults
 end
@@ -214,6 +236,7 @@ local tabDefs = {
     { key = "settings", name = "General" },
     { key = "advanced", name = "Geology" },
     { key = "climate",  name = "Climate" },
+    { key = "timeline", name = "Timeline" },
 }
 
 -----------------------------------------------------------
@@ -539,6 +562,7 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
 
     createWorldMenu.tabElements["advanced"] = advancedTab.create(tabParams)
     createWorldMenu.tabElements["climate"]  = climateTab.create(tabParams)
+    createWorldMenu.tabElements["timeline"] = timelineTab.create(tabParams)
 
     createWorldMenu.showTab(createWorldMenu.activeTab)
 end

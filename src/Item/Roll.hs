@@ -1,11 +1,13 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Item.Roll
     ( rollItemSpec
+    , rollItemWeight
     ) where
 
 import UPrelude
 import Data.IORef (IORef, atomicModifyIORef')
 import System.Random (StdGen)
+import Item.Types (ItemDef(..))
 import Unit.Stats (rollStat)
 
 -- | Sample a value from an item def's (min, max) roll spec. Returns
@@ -24,3 +26,15 @@ rollItemSpec (Just (mn, mx)) rngRef =
             range   = mx - mn
             (v, g') = rollStat base range g
         in (g', v)
+
+-- | This instance's empty weight: truncated normal around the def's
+--   (mean, range) spec when one exists (raw gems vary per find),
+--   else exactly idWeight. Floor at 0.001 kg — a zero-weight item
+--   breaks nothing but reads as a bug in the inventory UI.
+rollItemWeight ∷ ItemDef → IORef StdGen → IO Float
+rollItemWeight def rngRef = case idWeightSpec def of
+    Nothing → return (idWeight def)
+    Just (mean, range) →
+        atomicModifyIORef' rngRef $ \g →
+            let (v, g') = rollStat mean range g
+            in (g', max 0.001 v)

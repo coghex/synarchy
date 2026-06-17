@@ -18,7 +18,7 @@ import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
-import Unit.Anim (stateKey, resolveStateAnim, poseTag)
+import Unit.Anim (stateKey, resolveStateAnim, poseTag, chooseAnim)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
@@ -147,12 +147,17 @@ publishToRender env utsRef = do
                                         in if injured ∧ injR ≠ injK
                                               then injR
                                               else resolveStateAnim def baseKey
-                                    targetAnim
-                                      | not (T.null override) = override
-                                      | otherwise =
+                                    stateAnim =
                                           case HM.lookup (uiDefName inst) defs of
                                               Just def → resolveAnim def
                                               Nothing  → uiCurrentAnim inst
+                                    -- Precedence (see 'chooseAnim'): a
+                                    -- Dead unit always shows its death
+                                    -- animation, even if a Lua combat
+                                    -- override was still set when it was
+                                    -- killed; otherwise the override wins.
+                                    targetAnim =
+                                        chooseAnim (usPose ss) override stateAnim
                                     -- Transition assets are shared between
                                     -- forward and reverse: standing-to-crouching
                                     -- plays normally for Standing→Crouching, and

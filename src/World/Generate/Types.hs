@@ -24,6 +24,7 @@ import World.Time.Types
     )
 import World.Geology.Ore.Types (OreLevers, defaultOreLevers)
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
+import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)
 import World.Ocean.Types (OceanMap, OceanDistMap)
 import World.Flora.Types (FloraCatalog, emptyFloraCatalog)
 import World.Weather.Types (ClimateParams, ClimateState
@@ -58,6 +59,7 @@ data WorldGenParams = WorldGenParams
     , wgpLavaPoolRadius ∷ !Int            -- ^ Max pool footprint radius (tiles)
     , wgpWaterfallQuantum ∷ !Int          -- ^ Max water-surface drop between adjacent river tiles before a stepped gorge is carved
     , wgpOreLevers ∷ !OreLevers           -- ^ Resource-abundance levers for the ore deposition pass
+    , wgpTimelineParams ∷ !TimelineParams -- ^ Player-configured timeline depth (eon/era/period/epoch/age counts)
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -87,6 +89,7 @@ instance Serialize WorldGenParams where
         put (wgpLavaPoolRadius p)
         put (wgpWaterfallQuantum p)
         put (wgpOreLevers p)
+        put (wgpTimelineParams p)
     get = do
         seed       ← get
         ws         ← get
@@ -106,6 +109,7 @@ instance Serialize WorldGenParams where
         poolRadius ← get
         waterfallQ ← get
         oreLevers  ← get
+        timelineP  ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -126,6 +130,7 @@ instance Serialize WorldGenParams where
             , wgpLavaPoolRadius   = poolRadius
             , wgpWaterfallQuantum = waterfallQ
             , wgpOreLevers        = oreLevers
+            , wgpTimelineParams   = timelineP
             , wgpVolcanoCtx       = vc
             }
 
@@ -154,6 +159,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpLavaPoolRadius = 22
     , wgpWaterfallQuantum = 12
     , wgpOreLevers = defaultOreLevers
+    , wgpTimelineParams = defaultTimelineParams
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

@@ -66,3 +66,16 @@ spec = do
             resolveStateAnim
                 (mkDef (HM.fromList [("standing-idle", "idle-standing")]))
                 "standing-walk" `shouldBe` "standing-walk"
+
+    describe "chooseAnim (override vs death precedence)" $ do
+        it "a non-empty override wins over the state animation" $
+            chooseAnim Standing "combat-idle" "standing-idle"
+              `shouldBe` "combat-idle"
+        it "an empty override falls through to the state animation" $
+            chooseAnim Standing "" "standing-walk" `shouldBe` "standing-walk"
+        it "a Dead unit shows its death animation even with an override set" $
+            -- The regression: an acolyte killed mid-swing kept its combat
+            -- override and never showed the death anim. Death wins.
+            chooseAnim Dead "combat-idle" "dead-idle" `shouldBe` "dead-idle"
+        it "a Dead unit with no override still shows the death animation" $
+            chooseAnim Dead "" "dead-idle" `shouldBe` "dead-idle"

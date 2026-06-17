@@ -21,6 +21,22 @@ import World.Types
 import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, hashToRangeGeo, scaleCount)
+import World.Scale (WorldScale(..), computeWorldScale)
+
+-- | World-scale a raw volcanic edifice height so volcanoes scale with the
+--   rest of the elevation system instead of being unscaled outliers. The
+--   raw 80–300-tile shield (etc.) dwarfs the scaled-down plate-boundary
+--   mountains on sub-reference worlds and survives as a tall broad peak now
+--   that fewer Ages erode it (see project_timeline_depth). Uses sqrt wsScale
+--   (matches plate-base scaling) — gentle enough not to invert small
+--   craters against their min-depth floors, unlike the boundary's s^1.5.
+-- REVERTED (2026-06-13): scaling volcano heights at generation desynced the
+-- lake/ice surface levels from terrain and produced floating lakes (worse the
+-- more we scaled). Left as identity (a no-op) so the wrapping call sites stay
+-- harmless; the broad-peak fix moves to a regional-relief cap on the final
+-- worldTerrain (where lakes are identified). See project_timeline_depth.
+scaleVolcanoHeight ∷ Int → Int → Int
+scaleVolcanoHeight _worldSize h = h
 
 -- * Feature Generation Helpers
 
@@ -118,10 +134,10 @@ generateShieldVolcano seed worldSize plates gx gy =
                 h2 = hashGeo seed gy 81
                 h3 = hashGeo seed (gx + gy) 82
                 baseR  = hashToRangeGeo h1 30 60
-                peakH  = hashToRangeGeo h2 80 300
+                peakH  = scaleVolcanoHeight worldSize (hashToRangeGeo h2 80 300)
                 hasPit = hashToFloatGeo h3 > 0.5
                 pitR   = if hasPit then hashToRangeGeo (hashGeo seed gx 83) 2 5 else 0
-                pitD   = if hasPit then hashToRangeGeo (hashGeo seed gy 84) 15 40 else 0
+                pitD   = if hasPit then scaleVolcanoHeight worldSize (hashToRangeGeo (hashGeo seed gy 84) 15 40) else 0
             in Just $ VolcanicShape $ ShieldVolcano ShieldParams
                 { shCenter     = GeoCoord gx gy
                 , shBaseRadius = baseR
@@ -144,7 +160,7 @@ generateCinderCone seed worldSize plates gx gy =
                 h3 = hashGeo seed (gx + gy) 92
                 h4 = hashGeo seed (gx * gy) 93
                 baseR   = hashToRangeGeo h1 4 10
-                peakH   = hashToRangeGeo h2 30 120
+                peakH   = scaleVolcanoHeight worldSize (hashToRangeGeo h2 30 120)
                 craterR = hashToRangeGeo h3 1 (max 2 (baseR `div` 3))
                 craterD = hashToRangeGeo h4 8 (max 12 (peakH `div` 3))
             in Just $ VolcanicShape $ CinderCone CinderConeParams
@@ -166,7 +182,7 @@ generateLavaDome seed worldSize plates gx gy =
        else let h1 = hashGeo seed gx 100
                 h2 = hashGeo seed gy 101
                 baseR = hashToRangeGeo h1 6 15
-                height = hashToRangeGeo h2 30 100
+                height = scaleVolcanoHeight worldSize (hashToRangeGeo h2 30 100)
             in Just $ VolcanicShape $ LavaDome LavaDomeParams
                 { ldCenter     = GeoCoord gx gy
                 , ldBaseRadius = baseR
@@ -188,8 +204,8 @@ generateCaldera seed worldSize plates gx gy =
                 h5 = hashGeo seed (abs gx + abs gy) 114
                 outerR  = hashToRangeGeo h1 15 40
                 innerR  = hashToRangeGeo h2 (outerR `div` 2) (outerR * 3 `div` 4)
-                rimH    = hashToRangeGeo h3 20 80
-                floorD  = hashToRangeGeo h4 30 100
+                rimH    = scaleVolcanoHeight worldSize (hashToRangeGeo h3 20 80)
+                floorD  = scaleVolcanoHeight worldSize (hashToRangeGeo h4 30 100)
                 hasLake = hashToFloatGeo h5 > 0.6
             in Just $ Caldera CalderaParams
                 { caCenter      = GeoCoord gx gy
@@ -220,7 +236,7 @@ generateFissure seed worldSize plates gx gy =
              sxCoord = gx - round (halfLen * cos angle)
              syCoord = gy - round (halfLen * sin angle)
              width   = hashToRangeGeo h3 3 6
-             ridgeH  = hashToRangeGeo h4 15 50
+             ridgeH  = scaleVolcanoHeight worldSize (hashToRangeGeo h4 15 50)
              hasMagma = hashToFloatGeo h5 > 0.5
          in Just $ VolcanicShape $ FissureVolcano FissureParams
              { fpStart       = GeoCoord sxCoord syCoord
@@ -250,7 +266,7 @@ generateLavaTube seed worldSize plates gx gy =
                 sxCoord = gx - round (halfLen * cos angle)
                 syCoord = gy - round (halfLen * sin angle)
                 width = hashToRangeGeo h3 2 4
-                ridgeH = hashToRangeGeo h4 3 10
+                ridgeH = scaleVolcanoHeight worldSize (hashToRangeGeo h4 3 10)
                 collapses = hashToRangeGeo h5 1 4
             in Just $ LavaTube LavaTubeParams
                 { ltStart        = GeoCoord sxCoord syCoord
@@ -275,8 +291,8 @@ generateSuperVolcano seed worldSize plates gx gy =
                 h4 = hashGeo seed (gx * gy) 143
                 h5 = hashGeo seed (abs gx) 144
                 calderaR = hashToRangeGeo h1 40 80
-                rimH     = hashToRangeGeo h2 10 39
-                floorD   = hashToRangeGeo h3 40 120
+                rimH     = scaleVolcanoHeight worldSize (hashToRangeGeo h2 10 39)
+                floorD   = scaleVolcanoHeight worldSize (hashToRangeGeo h3 40 120)
                 ejectaR  = max (calderaR + 1) (hashToRangeGeo h4 80 150)
                 ejectaD  = hashToRangeGeo h5 2 12
             in Just $ VolcanicShape $ SuperVolcano SuperVolcanoParams
@@ -299,7 +315,7 @@ generateHydrothermalVent seed worldSize plates gx gy =
        else let h1 = hashGeo seed gx 150
                 h2 = hashGeo seed gy 151
                 radius   = hashToRangeGeo h1 3 8
-                chimneyH = hashToRangeGeo h2 10 30
+                chimneyH = scaleVolcanoHeight worldSize (hashToRangeGeo h2 10 30)
             in Just $ VolcanicShape $ HydrothermalVent HydrothermalParams
                 { htCenter        = GeoCoord gx gy
                 , htRadius        = radius

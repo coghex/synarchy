@@ -122,7 +122,11 @@ candidateVertices (sx, sy) =
 
 -- | Can this slot accept the material? Tiles are vetted by the
 --   caller's predicate; the vertex additionally refuses to mix
---   materials (a granite-gravel mound stays gravel).
+--   materials (a granite-gravel mound stays gravel). The no-mixing
+--   rule extends to the whole TILE the slot belongs to: a tile's four
+--   corners live in four different vertices, and promotion converts
+--   the whole cell to one material, so a slot is refused if any other
+--   corner of its tile already holds a different spoil material.
 slotUsable ∷ ((Int, Int) → Bool) → MaterialId → SpoilPiles
            → (Int, Int) → Int → Bool
 slotUsable tileOk mat piles v slot =
@@ -131,7 +135,18 @@ slotUsable tileOk mat piles v slot =
         matOk = case HM.lookup v piles of
             Nothing → True
             Just p  → spMat p ≡ mat ∨ spFill p ≡ (0, 0, 0, 0)
-    in matOk ∧ tileOk tileOf
+    in matOk ∧ tileOk tileOf ∧ not (tileMatConflict piles mat tileOf)
+
+-- | Does the tile already hold spoil of a different material in any of
+--   its four corners? Any positive fill claims the tile for its
+--   material — promotion picks a single material per cell, so corners
+--   must agree.
+tileMatConflict ∷ SpoilPiles → MaterialId → (Int, Int) → Bool
+tileMatConflict piles mat tile = any conflicting (tileCornerVertices tile)
+  where
+    conflicting (v, slot) = case HM.lookup v piles of
+        Nothing → False
+        Just p  → slotGet slot (spFill p) > 0 ∧ spMat p ≢ mat
 
 -- | Total corner-units the piles around @start@ can still absorb.
 --   The dig-refusal gate: if this is less than the spoil a dig tick

@@ -28,9 +28,10 @@ import World.Material (MaterialProps(..), getMaterialProps
 import World.Material.Id (MaterialId(..))
 import World.Mine.Apply (applyDigSlopeToChunk)
 import World.Mine.Types (MineDesignation(..), drainCorners, cornersDone)
+import World.Gem (gemChanceAt)
 import World.Spoil.Logic (spoilTileOk, spoilStartVertex)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
-import Item.Roll (rollItemSpec)
+import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemInstance(..), lookupItemDef)
 import System.Random (randomR)
 import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
@@ -172,8 +173,8 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
 --   No-ops when the tile isn't designated (e.g. two diggers raced and
 --   one finished it) or its chunk isn't loaded.
 handleWorldDigTileCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → Float → Float → Float → Float → IO ()
-handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill = do
+    → Int → Int → Float → Float → Float → Float → Float → IO ()
+handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -273,6 +274,27 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill = do
                             _ → pure (mdChunkProgress md)
                         if cornersDone corners'
                           then do
+                            -- Gem roll, once per COMPLETED tile: the
+                            -- seeded region field says which gem (if
+                            -- any) this area hosts and how rich it
+                            -- runs; the finishing digger's PERCEPTION
+                            -- scales the find chance (spotting the
+                            -- glint — deliberately not mining skill).
+                            when (maybe False mpDigGems mDigProps) $ do
+                                paramsM ← readIORef (wsGenParamsRef ws)
+                                let seed = maybe 0 (fromIntegral ∘ wgpSeed)
+                                                 paramsM
+                                case gemChanceAt seed (gx, gy) percep of
+                                    Nothing → pure ()
+                                    Just (gemDef, chance) → do
+                                        roll ← atomicModifyIORef'
+                                            (statRNGRef env) $ \g →
+                                            let (v, g') = randomR
+                                                    (0, 1 ∷ Float) g
+                                            in (g', v)
+                                        when (roll < chance) $
+                                            spawnYieldItems env logger ws
+                                                gemDef (gx, gy) 1
                             atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
                                 (HM.delete (gx, gy) m, ())
                             handleWorldDeleteTileCommand env logger pageId gx gy
@@ -312,11 +334,14 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
         Just iDef → forM_ [1 .. n] $ \_ → do
             qual ← rollItemSpec (idQualitySpec iDef)   (statRNGRef env)
             cond ← rollItemSpec (idConditionSpec iDef) (statRNGRef env)
+            wght ← rollItemWeight iDef (statRNGRef env)
             let inst = ItemInstance
                     { iiDefName     = defName
                     , iiCurrentFill = 0
                     , iiQuality     = qual
                     , iiCondition   = cond
+                    , iiWeight      = wght
+                    , iiSharpness   = 100.0
                     }
             gis ← readIORef (wsGroundItemsRef ws)
             (px, py) ← pickScatterPos env gis
@@ -359,8 +384,9 @@ promoteFullSpoilTiles env logger pageId ws startV = do
     forM_ ready $ \tile@(tx, ty) → do
         ps ← readIORef (wsSpoilRef ws)
         -- Material of the promoted cell = the pile material at the
-        -- tile's first corner (vertices feeding one tile share the
-        -- spoil material by the router's no-mixing rule).
+        -- tile's first corner. All four corners are guaranteed to share
+        -- one material: slotUsable refuses to fill a tile's corner with
+        -- a material that differs from spoil already on the tile.
         let mMat = listToMaybe
                 [ spMat p
                 | (v, _) ← tileCornerVertices tile

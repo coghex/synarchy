@@ -187,11 +187,9 @@ local config = {
             shovel = { defs = { shovel_steel = true },
                        equip_anim = "standing_to_holding_shovel",
                        work_anim  = "shoveling" },
-            -- TODO(pick art): swap anims to standing_to_holding_pick
-            -- / picking once those animations land in acolyte.yaml.
             pick   = { defs = { pick_steel = true },
-                       equip_anim = "standing_to_holding_shovel",
-                       work_anim  = "shoveling" },
+                       equip_anim = "standing_to_holding_pickaxe",
+                       work_anim  = "using_pickaxe" },
         },
         -- Ground-item pickup (player order via right-click → Pick up).
         -- Above follow_command (1.0) so the explicit order wins, below
@@ -1412,30 +1410,50 @@ local function attackTargetExecute(uid, s, params)
         local last = s.attackLastSwingAt or 0
         local prevMode = s.attackLastMode or "quick"
         local cooldown = computeAttackCooldown(uid, prevMode)
-        if now - last >= cooldown then
+        -- Stance gate: you can't throw a swing you're not set for.
+        -- Costs mirror Combat.Resolution (heavy 0.5, quick 0.25). If
+        -- not set for heavy, downgrade to quick; if not even set for
+        -- quick, hold the guard and recover (no swing this tick).
+        local stance = unit.getStat(uid, "stance") or 1.0
+        if now - last >= cooldown and stance >= 0.25 then
             -- Pick mode by current stamina + wounds + strength.
             -- Damage differential comes from the engine's strength
             -- application (sqrt(str) for quick, str for heavy); we
             -- just decide which swing to throw.
             local mode = chooseAttackMode(uid)
+            if mode == "heavy" and stance < 0.5 then mode = "quick" end
             local base = (mode == "heavy") and "attack_heavy"
                                              or "attack_quick"
             local anim = combatAnimName(uid, base)
-            if anim then unit.setAnimOverride(uid, anim) end
+            if anim then
+                unit.setAnimOverride(uid, anim)
+                -- Hold the swing override for the swing animation's real
+                -- length; otherwise the very next AI tick (still mid-
+                -- cooldown) overwrites it with combat_idle before a
+                -- single frame shows. 0.5s fallback if the duration is
+                -- unknown.
+                local dur = unit.getAnimDuration(uid, anim) or 0.5
+                s.attackSwingUntil = now + dur
+            end
             combat.attack(uid, target, mode)
             s.attackLastSwingAt = now
             s.attackLastMode    = mode
             engine.logDebug("attack: " .. tostring(uid)
                 .. " " .. mode .. " at " .. tostring(target)
                 .. " (cd=" .. string.format("%.2f", cooldown)
-                .. "s, anim=" .. tostring(anim) .. ")")
+                .. "s, stance=" .. string.format("%.2f", stance)
+                .. ", anim=" .. tostring(anim) .. ")")
         else
-            -- Mid-cooldown — show the combat-idle stance instead
-            -- of falling back to regular idle. setAnimOverride is
-            -- cheap to call every tick; engine treats same-anim
-            -- writes as a no-op for playback timing.
-            local anim = combatAnimName(uid, "combat_idle")
-            if anim then unit.setAnimOverride(uid, anim) end
+            -- Mid-cooldown — show the combat-idle stance instead of
+            -- falling back to regular idle. But NOT while the last
+            -- swing's animation is still playing (attackSwingUntil),
+            -- or we'd cut the swing short. setAnimOverride is cheap to
+            -- call every tick; engine treats same-anim writes as a
+            -- no-op for playback timing.
+            if now >= (s.attackSwingUntil or 0) then
+                local anim = combatAnimName(uid, "combat_idle")
+                if anim then unit.setAnimOverride(uid, anim) end
+            end
         end
     else
         -- Out of range — clear the override so the engine's state-
@@ -2573,8 +2591,12 @@ local function digExecute(uid, s, params)
         -- Mining skill rides along: the engine's chunk-yield
         -- accumulator scales by the CURRENT digger's skill, so a
         -- handoff mid-dig switches to the new digger's rate.
+        -- Perception scales the gem-find roll when the tile
+        -- completes — sharp-eyed miners spot more glints.
+        local percep = unit.getStat(uid, "perception") or 1.0
         world.digTile(wid, job.x, job.y, info.gridX, info.gridY,
-                      params.dig_rate * speed * unitFactor * dt, mining)
+                      params.dig_rate * speed * unitFactor * dt,
+                      mining, percep)
         return
     end
 end
@@ -2647,7 +2669,9 @@ local function pickupExecute(uid, s, params)
     -- too (1 L = 1 kg, matching getCarryingWeight).
     local carried = unit.getCarryingWeight(uid) or 0
     local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
-    local w       = pickupItemWeight(g.defName) + (g.fill or 0)
+    -- listGround's weight is the INSTANCE weight incl. fill (gems
+    -- vary per find); def-mean + fill is the fallback.
+    local w       = g.weight or (pickupItemWeight(g.defName) + (g.fill or 0))
     if carried + w > maxW then
         engine.logWarn("pickup_ground: unit " .. tostring(uid)
             .. " over capacity (" .. string.format("%.1f", carried + w)

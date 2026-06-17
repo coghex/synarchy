@@ -5,6 +5,7 @@ module Unit.Types
     , Wound(..)
     , BodyPart(..)
     , NaturalWeapon(..)
+    , StrikeProfile(..)
     , NaturalResistance(..)
     , defaultNaturalResistance
     , UnitDef(..)
@@ -132,6 +133,10 @@ data BodyPart = BodyPart
     , bpBleedFactor     ∷ !Float
     , bpHeightLow       ∷ !Float    -- ^ metres above foot
     , bpHeightHigh      ∷ !Float    -- ^ metres above foot
+    , bpLayers          ∷ ![(Text, Float)]
+      -- ^ Tissue stack, OUTER→INNER: (substance name, thickness mm).
+      --   A strike penetrates these in order; the innermost is the
+      --   vital core. Empty ⇒ a single default flesh layer.
     } deriving (Show, Eq, Generic)
 
 -- | A creature's innate (non-equipment) weapon — claws, fangs, fists.
@@ -141,11 +146,36 @@ data BodyPart = BodyPart
 --   bears declare an unarmed natural weapon.
 data NaturalWeapon = NaturalWeapon
     { nwWeaponClass            ∷ !Text   -- ^ matches a skill name on the unit
-    , nwEffectiveBladeLength   ∷ !Float  -- ^ cm; treated as a weapon blade for range/damage
+    , nwEffectiveBladeLength   ∷ !Float  -- ^ cm; REACH only (which body parts
+                                         --   the attack can touch). The
+                                         --   damage geometry is per-kind below.
     , nwAttackCooldown         ∷ !Float  -- ^ seconds between swings
-    , nwStabEff                ∷ !Float  -- ^ 0..1 — same shape as ItemWeapon.iwStabEff
-    , nwSlashEff               ∷ !Float
-    , nwBluntEff               ∷ !Float
+    -- Per-kind strike profiles. A natural weapon is really several
+    -- distinct tools — a wolf slashes/bites with keratin claws and
+    -- enamel fangs, bludgeons with a bone-cored paw — so each attack
+    -- kind carries its own material + geometry. (Manufactured weapons
+    -- use one material for all three kinds; the runtime ResolvedStrike
+    -- unifies them.)
+    , nwSlash                  ∷ !StrikeProfile
+    , nwStab                   ∷ !StrikeProfile
+    , nwBlunt                  ∷ !StrikeProfile
+    } deriving (Show, Eq, Generic)
+
+-- | One attack kind of a weapon, resolved to a material + geometry.
+--   Cutting kinds (stab, slash) use blade length + sharpness; blunt
+--   uses an impact area + striking mass. Fields irrelevant to a given
+--   kind are left at 0 (and the combat formula ignores them). The
+--   material name is looked up in the 'SubstanceManager' at combat time.
+data StrikeProfile = StrikeProfile
+    { spEff        ∷ !Float  -- ^ 0..1 effectiveness for this kind
+    , spMaterial   ∷ !Text   -- ^ substance name ("keratin", "enamel", …)
+    , spBladeCm    ∷ !Float  -- ^ edge/point length, cm (stab, slash)
+    , spSharpness  ∷ !Float  -- ^ engineering scale, lower = sharper (stab, slash)
+    , spImpactArea ∷ !Float  -- ^ mm² contact patch (blunt); 0 ⇒ derive
+    , spMass       ∷ !Float  -- ^ kg mass of the striking appendage (paw/fang)
+    , spLength     ∷ !Float  -- ^ cm; lever length of the appendage. 0 ⇒
+                             --   fall back to spBladeCm.
+    , spCenterOfMass ∷ !Float -- ^ 0..1 along the appendage from the limb
     } deriving (Show, Eq, Generic)
 
 -- | Innate per-attack-kind damage resistance baked into the unit's

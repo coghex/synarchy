@@ -29,6 +29,8 @@ items:
       stab_effectiveness:  0.5
       slash_effectiveness: 0.5
       blunt_effectiveness: 0.01
+      length:            30     # cm total (blade + grip); the swing lever
+      center_of_mass:    0.4    # balanced, slightly grip-heavy
       weapon_class:      dagger  # matches `dagger` skill on the wielder
       attack_cooldown:    1.0    # base recovery for a quick swing by a
                                  # 1.0-stat, 1.0-strength wielder at 100%

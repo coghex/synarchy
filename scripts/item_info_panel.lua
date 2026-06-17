@@ -47,7 +47,10 @@ local function pushItemInfo(gid)
     if not g then return false end
     local d = defEntry(g.defName)
     local lines = {}
-    table.insert(lines, (d and d.displayName) or g.defName)
+    local nm = (d and d.displayName) or g.defName
+    -- Condition 0 = broken (see Combat.Resolution weapon wear).
+    if g.condition and g.condition <= 0 then nm = nm .. " (broken)" end
+    table.insert(lines, nm)
     if d then
         table.insert(lines, "Category: " .. (d.category or "?"))
         table.insert(lines, "Weight: " .. fmt1(d.weight) .. " kg")

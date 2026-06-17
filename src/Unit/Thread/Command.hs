@@ -25,7 +25,7 @@ import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         EquipmentClassManager, lookupEquipmentClass)
-import Item.Roll (rollItemSpec)
+import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
                   , ItemBuff(..), ItemManager(..), lookupItemDef)
 import Engine.Core.Log (LoggerState)
@@ -108,11 +108,9 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
             -- kit always arrive; inventory entries with a drop
             -- priority shed (highest first — pick before shovel)
             -- until the loadout fits the rolled carrying_capacity.
-            -- Weights mirror getCarryingWeight: def weight + fill
-            -- (1 L = 1 kg), worn gear at full mass.
-            let itemW it = maybe 0 idWeight
-                               (lookupItemDef (iiDefName it) itemMgr)
-                         + iiCurrentFill it
+            -- Weights mirror getCarryingWeight: instance weight +
+            -- fill (1 L = 1 kg), worn gear at full mass.
+            let itemW it = iiWeight it + iiCurrentFill it
                 fixedW = sum (map itemW (HM.elems initialEquipment))
                        + sum (map itemW initialAccessories)
             initialInventory ← case HM.lookup "carrying_capacity"
@@ -779,12 +777,15 @@ buildStartingInventory env logger itemMgr entries = do
                         (Just _,  Nothing) → 0
                 qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
                 cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
+                wght ← rollItemWeight def (statRNGRef env)
                 return $ Just
                     ( ItemInstance
                         { iiDefName     = name
                         , iiCurrentFill = fill
                         , iiQuality     = qual
                         , iiCondition   = cond
+                        , iiWeight      = wght
+                        , iiSharpness   = 100.0
                         }
                     , prio
                     )
@@ -845,12 +846,16 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                     cond ← rollItemSpec
                                              (idConditionSpec iDef)
                                              (statRNGRef env)
+                                    wght ← rollItemWeight iDef
+                                             (statRNGRef env)
                                     return $ HM.insert slotId
                                         ItemInstance
                                           { iiDefName     = itemName
                                           , iiCurrentFill = 0
                                           , iiQuality     = qual
                                           , iiCondition   = cond
+                                          , iiWeight      = wght
+                                          , iiSharpness   = 100.0
                                           }
                                         m
                 ) (return HM.empty) entries
@@ -914,11 +919,14 @@ buildStartingAccessories env logger itemMgr names = do
         Just def → do
             qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
             cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
+            wght ← rollItemWeight def (statRNGRef env)
             return $ Just ItemInstance
                 { iiDefName     = name
                 , iiCurrentFill = 0
                 , iiQuality     = qual
                 , iiCondition   = cond
+                , iiWeight      = wght
+                , iiSharpness   = 100.0
                 }
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)

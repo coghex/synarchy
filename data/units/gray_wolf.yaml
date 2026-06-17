@@ -83,15 +83,21 @@ units:
       blunt: 0.2
 
     # Fangs — wolves attack with the bite, wielded from the head
-    # (unlike the bear's paw swipe).
+    # (unlike the bear's paw swipe). The canines puncture (stab) and the
+    # carnassials shear (slash); the jaw can also crush (blunt). Smaller
+    # teeth than a bear's, so shorter blades and lighter crush.
     natural_weapon:
       weapon_class:           unarmed
       effective_blade_length: 8.0
       attack_cooldown:        0.7
       wielded_from:           head
-      stab_eff:               0.8
-      slash_eff:              0.4
-      blunt_eff:              0.2
+      # Bite-driven: light heads, short levers (the jaw/muzzle).
+      stab:  { eff: 0.8, material: enamel, blade_length: 3, sharpness: 90,
+               mass: 0.5, length: 12, center_of_mass: 0.6 }
+      slash: { eff: 0.4, material: enamel, blade_length: 4, sharpness: 130,
+               mass: 0.5, length: 12, center_of_mass: 0.6 }
+      blunt: { eff: 0.2, material: bone,   impact_area: 25,
+               mass: 1,   length: 14, center_of_mass: 0.5 }
 
     # Per-direction T-pose stills (idle frame 0). SW/W/NW mirrored.
     directional_sprites:

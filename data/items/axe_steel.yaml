@@ -24,3 +24,5 @@ items:
       stab_effectiveness:  0.05
       slash_effectiveness: 0.70
       blunt_effectiveness: 0.50
+      length:            70     # cm total: long haft, the lever of the swing
+      center_of_mass:    0.8    # head-heavy — mass out at the bit

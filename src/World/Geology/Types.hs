@@ -42,7 +42,8 @@ import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
                                     , GeoScale(..), FeatureShape(..)
                                     , VolcanicFeature(..), SuperVolcanoParams(..)
                                     , LavaDomeParams(..), FissureParams(..)
-                                    , ShieldParams(..))
+                                    , ShieldParams(..)
+                                    , TimelineParams(..), defaultTimelineParams)
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
 import World.Weather.Types (ClimateState, ClimateCoord)
@@ -274,6 +275,9 @@ data TimelineBuildState = TimelineBuildState
     , tbsOreLevers ∷ !OreLevers
       -- ^ Resource-abundance config levers, threaded to the per-Age
       --   ore deposition pass ('World.Geology.Ore.buildOreSheets').
+    , tbsTimelineParams ∷ !TimelineParams
+      -- ^ Player-configured timeline depth; read by the generators in
+      --   World.Geology.Timeline to size the eon/era/period/epoch/age loops.
     , tbsCoarseOcean ∷ !(HS.HashSet ClimateCoord)
       -- ^ Cached coarse ocean classification for climate updates.
       --   Refreshed at Era boundaries from the current ElevGrid;

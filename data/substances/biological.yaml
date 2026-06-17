@@ -1,0 +1,103 @@
+# Biological substances — the materials natural weapons (and, later,
+# unarmored body parts) are made of. Same fields and scale as
+# metals.yaml: strengths in MPa, fracture_toughness in MPa·√m,
+# hardness on the Brinell-ish scale where hardened tool steel = 600,
+# density in g/cm³. Per-attack-type resistances are 0..1.
+#
+# Real-world notes drive the numbers (rounded, single representative
+# value each):
+#   - keratin (claws, horn, nail, hoof): tough and somewhat flexible,
+#     low hardness, won't shatter — a good slasher, poor at holding a
+#     fine point.
+#   - enamel (tooth crown surface): the hardest tissue in the body,
+#     HARDER than mild steel by indentation, but brittle (very low
+#     fracture toughness) so a fang tip can chip on bone.
+#   - dentin (tooth core under the enamel): softer than enamel but far
+#     tougher; the fang's backbone.
+#   - bone (cortical): structural; moderate hardness, moderate
+#     toughness — paw strikes, skulls, the core of a fang.
+#   - flesh (muscle / pad): soft, no cutting ability; the padding a
+#     fist or paw drives bone through on a blunt strike.
+#   - chitin (insect/crustacean exoskeleton): light, fairly hard,
+#     brittle — reserved for future arthropod creatures.
+substances:
+  - name: keratin
+    density:            1.30
+    tensile_strength:   180     # along the fibre
+    yield_strength:     120
+    shear_strength:     90
+    fracture_toughness: 8       # tough for a bio material; flexes, won't shatter
+    hardness:           25      # soft vs metal
+    stab_resistance:    0.20
+    slash_resistance:   0.35
+    blunt_resistance:   0.30
+
+  - name: enamel
+    density:            2.97
+    tensile_strength:   35      # brittle in tension
+    yield_strength:     330
+    shear_strength:     90
+    fracture_toughness: 1       # very low — chips/shatters
+    hardness:           350     # hardest tissue; > mild steel
+    stab_resistance:    0.50
+    slash_resistance:   0.45
+    blunt_resistance:   0.10    # brittle under impact
+
+  - name: dentin
+    density:            2.10
+    tensile_strength:   100
+    yield_strength:     150
+    shear_strength:     140
+    fracture_toughness: 3       # much tougher than enamel
+    hardness:           70
+    stab_resistance:    0.30
+    slash_resistance:   0.30
+    blunt_resistance:   0.25
+
+  - name: bone
+    density:            1.90
+    tensile_strength:   130
+    yield_strength:     115
+    shear_strength:     65
+    fracture_toughness: 4       # MPa·√m, cortical bone
+    hardness:           45
+    stab_resistance:    0.25
+    slash_resistance:   0.40
+    blunt_resistance:   0.30
+
+  - name: flesh
+    density:            1.05
+    tensile_strength:   2       # muscle is weak in tension
+    yield_strength:     1
+    shear_strength:     1
+    fracture_toughness: 2       # tears rather than shatters
+    hardness:           1       # no cutting/penetrating ability of its own
+    stab_resistance:    0.05
+    slash_resistance:   0.05
+    blunt_resistance:   0.15    # padding absorbs a little impact
+
+  # The vital innermost layer of a body part — brain, heart, viscera.
+  # Offers essentially no protection; reaching it with any real energy
+  # is catastrophic (that's what bpVital + the lethality of a deep
+  # wound expresses). Soft, wet, and a heavy bleeder.
+  - name: organ
+    density:            1.05
+    tensile_strength:   1
+    yield_strength:     1
+    shear_strength:     1
+    fracture_toughness: 1
+    hardness:           1
+    stab_resistance:    0.02
+    slash_resistance:   0.02
+    blunt_resistance:   0.05
+
+  - name: chitin
+    density:            1.30
+    tensile_strength:   100
+    yield_strength:     80
+    shear_strength:     70
+    fracture_toughness: 2       # brittle
+    hardness:           60
+    stab_resistance:    0.30
+    slash_resistance:   0.35
+    blunt_resistance:   0.20

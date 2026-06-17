@@ -59,6 +59,9 @@ data MaterialDef = MaterialDef
     , mdDigChunk ∷ Maybe Text
       -- ^ Item def spawned by the chunk-yield accumulator
       --   (granite → "granite_chunk"). Absent = no chunk yields.
+    , mdDigGems ∷ Bool
+      -- ^ Gem region field applies while digging this material
+      --   (default False).
     , mdTile     ∷ Text
     , mdZoom     ∷ Text
     , mdBg       ∷ Text
@@ -77,6 +80,7 @@ instance FromJSON MaterialDef where
         ⊛ v .:? "dig_spoil"
         ⊛ v .:? "dig_bulking"  .!= 1.0
         ⊛ v .:? "dig_chunk"
+        ⊛ v .:? "dig_gems"     .!= False
         ⊛ v .: "tile"
         ⊛ v .: "zoom"
         ⊛ v .: "bg"

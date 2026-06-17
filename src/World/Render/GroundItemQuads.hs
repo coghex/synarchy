@@ -26,6 +26,7 @@ import Data.Bits (testBit)
 import Data.IORef (readIORef)
 import Data.Maybe (mapMaybe)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Asset.YamlTextures (lookupTextureName)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
@@ -162,6 +163,10 @@ renderGroundItemQuads env worldState tileAlpha = do
         mBindless ← readIORef (textureSystemRef env)
         (fbW, fbH) ← readIORef (framebufferSizeRef env)
         defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
+        -- The broken-weapon overlay, registered by name during item
+        -- loading (Lua/API/Items). Absent until items load.
+        nameReg ← readIORef (textureNameRegistryRef env)
+        let mBrokenTex = lookupTextureName "broken_equipment" nameReg
 
         let lookupSlot texHandle = fromIntegral $ case mBindless of
                 Just bindless → getTextureSlotIndex texHandle bindless
@@ -183,7 +188,27 @@ renderGroundItemQuads env worldState tileAlpha = do
             vb = computeViewBounds camera fbW fbH effectiveDepth
             selectedGid = selectedGroundItem cs
 
-            quadFor (gid, gi) = do
+            quadFor (gid, gi) = case quadForM (gid, gi) of
+                Nothing → []
+                Just q  →
+                    -- Broken items (condition 0) get the broken overlay
+                    -- drawn over the same rect, one hair in front.
+                    if iiCondition (giInst gi) ≤ 0
+                      then case mBrokenTex of
+                          Just bt → [q, overlayQuad q bt]
+                          Nothing → [q]
+                      else [q]
+
+            overlayQuad q bt =
+                let slotF = fromIntegral (lookupSlot bt ∷ Int)
+                    setTex v = v { atlasId = slotF }
+                in q { sqSortKey = sqSortKey q + 0.0001
+                     , sqTexture = bt
+                     , sqV0 = setTex (sqV0 q), sqV1 = setTex (sqV1 q)
+                     , sqV2 = setTex (sqV2 q), sqV3 = setTex (sqV3 q)
+                     }
+
+            quadForM (gid, gi) = do
                 (tz, texHandle, drawX0, drawY, quadW, quadH, uwDepth)
                     ← itemGeometry tileData im texSizes facing zSlice gi
                 let tx = floor (giX gi) ∷ Int
@@ -241,7 +266,7 @@ renderGroundItemQuads env worldState tileAlpha = do
                         }
 
         return $ V.fromList
-            (mapMaybe quadFor (HM.toList (gisItems gis)))
+            (concatMap quadFor (HM.toList (gisItems gis)))
 
 -- | Hit test at window-pixel coordinates (the input layer's mouse
 --   coords). Returns the topmost ground item whose sprite quad

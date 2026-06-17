@@ -32,6 +32,7 @@ test-suite synarchy-test-graphical
     other-modules: Test.UPrelude
                    Test.Engine.Core.Queue
                    Test.Engine.Core.Var
+                   Test.Engine.Input.Thread
                    Test.Engine.Graphics.Window.GLFW
                    Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Surface
@@ -141,6 +142,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Geology
                    Test.Headless.WorldGen.Parity
                    Test.Headless.WorldGen.Flatness
+                   Test.Headless.WorldGen.SoilGate
                    Test.Headless.WorldGen.Exposure
                    Test.Headless.WorldGen.ZoomParity
                    Test.Headless.WorldGen.BorderProbe
@@ -151,6 +153,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Stats
                    Test.Headless.World.Save.Sanitize
+                   Test.Headless.World.Spoil
+                   Test.Headless.Combat.Damage
                    Test.Headless.Magma.Shape
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
@@ -481,6 +485,7 @@ library
                      World.Geology.Ore.Types
                      World.Mine.Types
                      World.Render.SpoilQuads
+                     World.Gem
                      World.Spoil.Logic
                      World.Spoil.Types
                      World.Mine.Apply

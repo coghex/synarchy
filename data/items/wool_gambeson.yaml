@@ -7,3 +7,10 @@ items:
     category: Armor
     material: pleated_wool  # combat resistance lives in
                             # data/substances/textiles.yaml
+    quality:   { min: 70, max: 95 }
+    condition: { min: 80, max: 100 }
+    # Worn over the torso (and the neck it laps up to). Thick padded
+    # weave — its bulk cushions blunt; a sliding edge splits it.
+    armor:
+      thickness: 15
+      covers: [torso, neck]

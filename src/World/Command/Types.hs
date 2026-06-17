@@ -86,9 +86,11 @@ data WorldCommand
         --   surface z; tiles in unloaded chunks are skipped.
     | WorldSetMineDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed designation markers.
-    | WorldDigTile WorldPageId Int Int Float Float Float Float
+    | WorldDigTile WorldPageId Int Int Float Float Float Float Float
         -- ^ Apply dig progress to the designated tile at (gx, gy):
-        --   pageId gx gy uxPos uyPos amount minerSkill. The digger's
+        --   pageId gx gy uxPos uyPos amount minerSkill perception.
+        --   perception scales the gem-find roll when the tile
+        --   completes (World.Gem). The digger's
         --   tile-space position picks which corners drain first
         --   (digger-side); amount is pre-scaled by tool × material
         --   speed. minerSkill is the CURRENT digger's mining skill —

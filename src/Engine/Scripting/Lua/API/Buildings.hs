@@ -676,7 +676,7 @@ buildingGetStorageWeightFn env = do
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     pure $ sum
-                        [ maybe 0 idWeight (lookupItemDef (iiDefName it) itemMgr)
+                        [ iiWeight it + iiCurrentFill it
                         | it ← biStorage inst
                         ]
             case mW of

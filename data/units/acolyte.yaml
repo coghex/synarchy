@@ -66,26 +66,42 @@ units:
     # toward the torso; tactical values guide high-intelligence
     # attackers to vitals. Vital parts at severity ≥ 1.0 = death.
     body_parts:
+      # Tissue layers (outer→inner; thickness mm). The skull turns
+      # blades but a heavy/blunt blow transmits to the brain; the soft
+      # neck has no bone, which is what makes throats deadly; ribs give
+      # the torso partial cover before the organs.
       - { id: head,    parent: neck,  vital: true,
           area_weight: 0.08, tactical_value: 1.0,
           max_health_factor: 0.20, bleed_factor: 2.0,
-          height_low: 1.65, height_high: 1.85 }
+          height_low: 1.65, height_high: 1.85,
+          layers: [ { material: flesh, thickness: 3 },
+                    { material: bone,  thickness: 7 },
+                    { material: organ, thickness: 80 } ] }
       - { id: neck,    parent: torso, vital: true,
           area_weight: 0.03, tactical_value: 1.0,
           max_health_factor: 0.15, bleed_factor: 3.0,
-          height_low: 1.55, height_high: 1.65 }
+          height_low: 1.55, height_high: 1.65,
+          layers: [ { material: flesh, thickness: 40 },
+                    { material: organ, thickness: 10 } ] }
       - { id: torso,   parent: null,  vital: true,
           area_weight: 0.40, tactical_value: 0.8,
           max_health_factor: 0.40, bleed_factor: 2.0,
-          height_low: 1.00, height_high: 1.55 }
+          height_low: 1.00, height_high: 1.55,
+          layers: [ { material: flesh, thickness: 25 },
+                    { material: bone,  thickness: 12 },
+                    { material: organ, thickness: 100 } ] }
       - { id: l_arm,   parent: torso,
           area_weight: 0.07, tactical_value: 0.3,
           max_health_factor: 0.20, bleed_factor: 1.0,
-          height_low: 0.90, height_high: 1.50 }
+          height_low: 0.90, height_high: 1.50,
+          layers: [ { material: flesh, thickness: 30 },
+                    { material: bone,  thickness: 25 } ] }
       - { id: r_arm,   parent: torso,
           area_weight: 0.07, tactical_value: 0.3,
           max_health_factor: 0.20, bleed_factor: 1.0,
-          height_low: 0.90, height_high: 1.50 }
+          height_low: 0.90, height_high: 1.50,
+          layers: [ { material: flesh, thickness: 30 },
+                    { material: bone,  thickness: 25 } ] }
       - { id: l_hand,  parent: l_arm,
           area_weight: 0.03, tactical_value: 0.4,
           max_health_factor: 0.10, bleed_factor: 1.0,
@@ -97,11 +113,15 @@ units:
       - { id: l_leg,   parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
           max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.90 }
+          height_low: 0.00, height_high: 0.90,
+          layers: [ { material: flesh, thickness: 40 },
+                    { material: bone,  thickness: 35 } ] }
       - { id: r_leg,   parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
           max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.90 }
+          height_low: 0.00, height_high: 0.90,
+          layers: [ { material: flesh, thickness: 40 },
+                    { material: bone,  thickness: 35 } ] }
       - { id: l_foot,  parent: l_leg,
           area_weight: 0.04, tactical_value: 0.2,
           max_health_factor: 0.08, bleed_factor: 1.0,
@@ -2637,6 +2657,116 @@ units:
             - "assets/textures/units/acolyte/animations/standing_to_crouching/north/frame_007.png"
             - "assets/textures/units/acolyte/animations/standing_to_crouching/north/frame_008.png"
 
+      standing_to_holding_pickaxe:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing_to_holding_pickaxe/north/frame_008.png"
+      using_pickaxe:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/using_pickaxe/north/frame_008.png"
       standing_to_holding_shovel:
         fps: 8
         loop: false

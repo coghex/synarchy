@@ -4,6 +4,12 @@ module World.Generate.Chunk
     , generateLoadedChunk
     , generateExposedColumn
     , generateZoomTerrain
+    -- Post-classification soil gates (exposed for unit testing).
+    , surfaceDemotion
+    , demoteWetland
+    , wetlandKeep
+    , saltFlatKeep
+    , nearFlat
     ) where
 
 import UPrelude
@@ -1212,11 +1218,9 @@ generateChunk registry catalog params coord =
             then Just (finalElevVec VU.! toIndex olx oly)
             else Nothing
         surfaceMats = VU.imap (\idx m →
-            case demoteWetland m of
-                Just demoted
-                  | not (wetlandKeep wetOutElev terrainSurfaceMap waterTableMap idx)
-                  → demoted
-                _ → m
+            case surfaceDemotion wetOutElev terrainSurfaceMap waterTableMap idx m of
+                Just demoted → demoted
+                Nothing      → m
             ) surfaceMatsRaw
 
         surfaceSlopes = VU.generate chunkArea $ \idx →
@@ -1282,14 +1286,13 @@ generateChunk registry catalog params coord =
                     then truncatedMats
                     else
                       let orig = truncatedMats VU.! i
-                      in case demoteWetland orig of
-                          Just demoted
-                            | not (wetlandKeep wetOutElev terrainSurfaceMap waterTableMap idx) →
+                      in case surfaceDemotion wetOutElev terrainSurfaceMap waterTableMap idx orig of
+                          Just demoted →
                               let go j | j ≥ 0 ∧ truncatedMats VU.! j ≡ orig = go (j - 1)
                                        | otherwise = j + 1
                                   runStart = go i
                               in truncatedMats VU.// [ (j, demoted) | j ← [runStart .. i] ]
-                          _ → truncatedMats
+                          Nothing → truncatedMats
                 vegVec   = VU.replicate matsLen 0
                 vegVec'  = if i ≥ 0 ∧ i < matsLen ∧ vegId > 0
                            then vegVec VU.// [(i, vegId)]
@@ -1342,6 +1345,22 @@ demoteWetland 63 = Just 58   -- mucky peat → silty clay
 demoteWetland 64 = Just 50   -- muck       → clay
 demoteWetland _  = Nothing
 
+-- | All post-classification soil reality checks in one place: given a
+--   surface material and the final terrain context, return the demoted
+--   material if the climate-only classifier's pick can't physically
+--   survive here, or 'Nothing' if it stays. Currently gates wetland
+--   soils (need flat + wet ground) and salt flat (needs a flat basin
+--   floor). Shared by the detail ('generateChunk') and zoom
+--   ('generateZoomTerrain') paths so the two views agree.
+surfaceDemotion ∷ (Int → Int → Maybe Int) → VU.Vector Int → VU.Vector Int
+                → Int → Word8 → Maybe Word8
+surfaceDemotion outElev terrain wt idx m
+    | Just demoted ← demoteWetland m
+    , not (wetlandKeep outElev terrain wt idx) = Just demoted
+    | m ≡ 67                                            -- salt flat
+    , not (saltFlatKeep outElev terrain idx)   = Just 66 -- → light gravel
+    | otherwise                                = Nothing
+
 -- | Keep a wetland soil only on a near-flat tile (max 4-neighbour
 --   |Δterrain| ≤ 2) whose groundwater reaches the surface
 --   (wt ≥ terrain−1; the climate baseline tops out at terrain−2, so
@@ -1359,6 +1378,36 @@ demoteWetland _  = Nothing
 wetlandKeep ∷ (Int → Int → Maybe Int) → VU.Vector Int → VU.Vector Int
             → Int → Bool
 wetlandKeep outElev terrain wt idx =
+    let tz  = terrain VU.! idx
+        wet = wt VU.! idx ≥ tz - 1
+    -- Sub-sea tiles are seabed, not land: the ocean-floor pass
+    -- ('World.Fluid.Seabed') places muck on the deep floor by design,
+    -- so the wetland demotion (a dry-hillside concern) must leave it
+    -- alone — otherwise deep seabed muck (64) gets demoted to clay
+    -- (50) on every steep stretch of sea floor.
+    in tz ≤ seaLevel ∨ (nearFlat outElev terrain idx ∧ wet)
+
+-- | Keep salt flat (matId 67) only on a near-flat basin floor. The
+--   climate classifier paints salt flat on any cold + hyper-arid tile
+--   regardless of slope, but an evaporite pan is a flat basin feature —
+--   on a slope it reads as a stripe of pan up a hillside. Gate it the
+--   same way as the wetland soils and demote a sloped salt flat to the
+--   classifier's own next rung (light gravel, 66). No wet test: salt
+--   pans are dry by definition. Sub-sea tiles are left to the seabed
+--   pass, as in 'wetlandKeep'.
+saltFlatKeep ∷ (Int → Int → Maybe Int) → VU.Vector Int → Int → Bool
+saltFlatKeep outElev terrain idx =
+    let tz = terrain VU.! idx
+    in tz ≤ seaLevel ∨ nearFlat outElev terrain idx
+
+-- | Near-flat test shared by the soil gates: max 4-neighbour
+--   |Δterrain| ≤ 2. @outElev@ supplies elevations for neighbours
+--   outside the chunk interior (chunk-local coords); both call paths
+--   pass their bordered post-carve vector so the gate sees the same
+--   neighbours the renderer does. The 'minBound' beyond-glacier
+--   sentinel reads as flat (Δ 0).
+nearFlat ∷ (Int → Int → Maybe Int) → VU.Vector Int → Int → Bool
+nearFlat outElev terrain idx =
     let tz = terrain VU.! idx
         lx = idx `mod` chunkSize
         ly = idx `div` chunkSize
@@ -1370,15 +1419,8 @@ wetlandKeep outElev terrain wt idx =
                       Just z | z ≠ minBound → abs (tz - z)
                       _                     → 0
                else abs (tz - terrain VU.! (ly' * chunkSize + lx'))
-        flat = max (max (nbrD 1 0) (nbrD (-1) 0))
-               (max (nbrD 0 1) (nbrD 0 (-1))) ≤ 2
-        wet  = wt VU.! idx ≥ tz - 1
-    -- Sub-sea tiles are seabed, not land: the ocean-floor pass
-    -- ('World.Fluid.Seabed') places muck on the deep floor by design,
-    -- so the wetland demotion (a dry-hillside concern) must leave it
-    -- alone — otherwise deep seabed muck (64) gets demoted to clay
-    -- (50) on every steep stretch of sea floor.
-    in tz ≤ seaLevel ∨ (flat ∧ wet)
+    in max (max (nbrD 1 0) (nbrD (-1) 0))
+           (max (nbrD 0 1) (nbrD 0 (-1))) ≤ 2
 
 -- | Fluid-aware water table: lift the climate baseline where surface
 --   water dictates the local groundwater level.
@@ -1653,11 +1695,9 @@ generateZoomTerrain registry params mBorderedCache coord =
             then Just (finalElevVec VU.! toIndex olx oly)
             else Nothing
         zoomMat = VU.imap (\idx m →
-            case demoteWetland m of
-                Just demoted
-                  | not (wetlandKeep zoomOutElev smoothedElev zoomWt idx)
-                  → demoted
-                _ → m
+            case surfaceDemotion zoomOutElev smoothedElev zoomWt idx m of
+                Just demoted → demoted
+                Nothing      → m
             ) interiorMat
 
         -- Vegetation via the SAME per-tile function the detail world

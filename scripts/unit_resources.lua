@@ -606,6 +606,26 @@ local function checkRevive(uid, defConfig)
 end
 
 -----------------------------------------------------------
+-- Stance: combat readiness, 0..1. Spent by attacking and by taking
+-- hits (both engine-side in Combat.Resolution); recovers here toward
+-- 1.0 — quickly, and faster for agile/dextrous units (the time it
+-- takes to set your feet and ready your guard). Absent ⇒ treated as
+-- 1.0 everywhere, so no explicit spawn init is needed.
+-----------------------------------------------------------
+local STANCE_RECOVER_BASE     = 0.35   -- per second, floor
+local STANCE_RECOVER_PER_STAT = 0.12   -- per second per (dex+agi) point
+local function tickStance(uid, dt)
+    local cur = unit.getStat(uid, "stance")
+    if cur == nil or cur >= 1.0 then return end
+    local dex  = unit.getStat(uid, "dexterity") or 1.0
+    local agi  = unit.getStat(uid, "agility") or 1.0
+    local rate = STANCE_RECOVER_BASE + STANCE_RECOVER_PER_STAT * (dex + agi)
+    local newv = cur + rate * dt
+    if newv > 1.0 then newv = 1.0 end
+    unit.setStat(uid, "stance", newv)
+end
+
+-----------------------------------------------------------
 -- Update (called at tick interval by engine.loadScript)
 -----------------------------------------------------------
 function unitResources.update(dt)
@@ -616,6 +636,7 @@ function unitResources.update(dt)
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
+            tickStance(uid, dt)
             local defConfig = config[info.defName]
             if defConfig then
                 local activity = unit.getActivity(uid) or "idle"

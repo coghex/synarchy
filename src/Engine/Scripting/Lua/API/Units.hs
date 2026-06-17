@@ -58,6 +58,7 @@ module Engine.Scripting.Lua.API.Units
     , unitExistsFn
     , unitGetAttackRangeFn
     , unitGetAttackCooldownFn
+    , unitGetAnimDurationFn
     , unitGetMaxSpeedFn
     , unitGetEquippedWeaponWeightFn
     , unitGetWeaponWieldedFromFn
@@ -95,7 +96,9 @@ import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlInventoryEntry(..),
                                UnitYamlModifier(..),
                                UnitYamlBodyPart(..),
+                               UnitYamlLayer(..),
                                UnitYamlNaturalWeapon(..),
+                               UnitYamlStrike(..),
                                UnitYamlNaturalResistance(..),
                                loadUnitYaml)
 import qualified Engine.Core.Queue as Q
@@ -110,7 +113,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
 import Item.Types (ItemInstance(..))
-import Item.Roll (rollItemSpec)
+import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemWeapon(..), ItemBuff(..)
                   , ItemManager(..), lookupItemDef)
@@ -240,6 +243,9 @@ loadUnitYamlFn env backendState = do
                                 , bpBleedFactor     = uybpBleedFactor p
                                 , bpHeightLow       = uybpHeightLow p
                                 , bpHeightHigh      = uybpHeightHigh p
+                                , bpLayers          =
+                                    [ (uylMaterial l, uylThickness l)
+                                    | l ← uybpLayers p ]
                                 }
                             | p ← uydBodyParts def
                             ]
@@ -248,15 +254,27 @@ loadUnitYamlFn env backendState = do
                             , nrStab  = uynrStab  (uydNaturalResistance def)
                             , nrBlunt = uynrBlunt (uydNaturalResistance def)
                             }
+                        toStrike s = StrikeProfile
+                            { spEff        = uysEff s
+                            , spMaterial   = uysMaterial s
+                            , spBladeCm    = uysBladeLength s
+                            , spSharpness  = uysSharpness s
+                            , spImpactArea = uysImpactArea s
+                            , spMass       = uysMass s
+                            , spLength     = if uysLength s > 0
+                                             then uysLength s
+                                             else uysBladeLength s
+                            , spCenterOfMass = uysCenterOfMass s
+                            }
                         natWeapon = case uydNaturalWeapon def of
                             Nothing → Nothing
                             Just nw → Just NaturalWeapon
                                 { nwWeaponClass          = uynwWeaponClass nw
                                 , nwEffectiveBladeLength = uynwEffectiveBladeLength nw
                                 , nwAttackCooldown       = uynwAttackCooldown nw
-                                , nwStabEff              = uynwStabEff nw
-                                , nwSlashEff             = uynwSlashEff nw
-                                , nwBluntEff             = uynwBluntEff nw
+                                , nwSlash                = toStrike (uynwSlash nw)
+                                , nwStab                 = toStrike (uynwStab nw)
+                                , nwBlunt                = toStrike (uynwBlunt nw)
                                 }
                         defMods =
                             [ ( uymStat m
@@ -771,6 +789,44 @@ unitGetAttackCooldownFn env = do
                                 >> return 1
                 Nothing → Lua.pushnil >> return 1
 
+-- | unit.getAnimDuration(uid, animName) → float seconds | nil
+--
+--   Total play time of one animation: frame count / fps (frames are the
+--   longest per-direction track). Used by combat to hold a one-shot
+--   swing override on screen for its real length before the AI reverts
+--   to the combat-idle stance — otherwise the next AI tick overwrites
+--   the swing before a single frame shows.
+unitGetAnimDurationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetAnimDurationFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBs) → do
+            let uid      = UnitId (fromIntegral n)
+                animName = TE.decodeUtf8 nameBs
+            mDur ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
+                        Nothing  → return Nothing
+                        Just def → case HM.lookup animName (udAnimations def) of
+                            Nothing → return Nothing
+                            Just an →
+                                let fps     = aFps an
+                                    nFrames = maximum
+                                        (0 : map V.length
+                                                 (Map.elems (aFrames an)))
+                                in if fps ≤ 0 ∨ nFrames ≡ 0
+                                   then return Nothing
+                                   else return
+                                       (Just (fromIntegral nFrames / fps))
+            case mDur of
+                Just (d ∷ Float) → Lua.pushnumber (Lua.Number (realToFrac d))
+                                       >> return 1
+                Nothing          → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
 -- | unit.getMaxSpeed(uid) → float (tiles/sec) | nil
 --
 --   Per-species top speed at a full sprint, read from the unit-def's
@@ -1191,11 +1247,14 @@ unitAddItemFn env = do
                                             (statRNGRef env)
                         cond ← rollItemSpec (idConditionSpec def)
                                             (statRNGRef env)
+                        wght ← rollItemWeight def (statRNGRef env)
                         let inst' = ItemInstance
                                 { iiDefName     = defName
                                 , iiCurrentFill = clampedFill
                                 , iiQuality     = qual
                                 , iiCondition   = cond
+                                , iiWeight      = wght
+                                , iiSharpness   = 100.0
                                 }
                         atomicModifyIORef' (unitManagerRef env) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -1392,10 +1451,13 @@ unitDepositToCargoFn env = do
                     itemDef ← lookupItemDef defName itemMgr
                     let cap     = bdStorageCapacity def
                         current = sum
-                            [ maybe 0 idWeight
-                                (lookupItemDef (iiDefName it) itemMgr)
+                            [ iiWeight it + iiCurrentFill it
                             | it ← biStorage inst
                             ]
+                    -- Pre-check uses the def MEAN; the actual item
+                    -- popped below carries its instance weight, so a
+                    -- rolled-heavy instance can overshoot by a hair —
+                    -- acceptable for storage.
                     pure (cap > 0 ∧ current + idWeight itemDef <= cap)
             if not okFits then do
                 Lua.pushboolean False
@@ -1514,9 +1576,7 @@ unitGetCarryingWeightFn env = do
             mW ← Lua.liftIO $ do
                 um      ← readIORef (unitManagerRef env)
                 itemMgr ← readIORef (itemManagerRef env)
-                let weightOf it = maybe 0 idWeight
-                                    (lookupItemDef (iiDefName it) itemMgr)
-                                + iiCurrentFill it
+                let weightOf it = iiWeight it + iiCurrentFill it
                 pure $ do
                     u ← HM.lookup uid (umInstances um)
                     let invW = sum (map weightOf (uiInventory u))
@@ -2635,17 +2695,27 @@ unitGetInventoryFn env = do
                         Lua.newtable
                         let name = iiDefName inst
                             mDef = lookupItemDef name itemMgr
-                            displayName = case mDef of
+                            baseName = case mDef of
                                 Just d  → idDisplayName d
                                 Nothing → name
-                            weight = case mDef of
-                                Just d  → idWeight d
-                                Nothing → 0
+                            -- Condition 0 ⇒ broken (Combat.Resolution
+                            -- weapon wear); tag the name everywhere it shows.
+                            broken = iiCondition inst ≤ 0
+                            displayName = if broken
+                                          then baseName <> " (broken)"
+                                          else baseName
+                            -- Instance weight, not the def mean — gems
+                            -- vary per find (matches getCarryingWeight).
+                            weight = iiWeight inst
                             mContainer = mDef >>= idContainer
                         Lua.pushstring (TE.encodeUtf8 name)
                         Lua.setfield (-2) "defName"
                         Lua.pushstring (TE.encodeUtf8 displayName)
                         Lua.setfield (-2) "displayName"
+                        Lua.pushboolean broken
+                        Lua.setfield (-2) "broken"
+                        Lua.pushnumber (Lua.Number (realToFrac (iiSharpness inst)))
+                        Lua.setfield (-2) "sharpness"
                         Lua.pushnumber (Lua.Number (realToFrac weight))
                         Lua.setfield (-2) "weight"
                         Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))

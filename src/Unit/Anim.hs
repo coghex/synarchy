@@ -7,6 +7,7 @@ module Unit.Anim
     , stateKey
     , poseTag
     , resolveStateAnim
+    , chooseAnim
     ) where
 
 import UPrelude
@@ -49,3 +50,21 @@ poseStateKey p = stateKey p Idle
 resolveStateAnim ∷ UnitDef → Text → Text
 resolveStateAnim def key =
     HM.lookupDefault key key (udStateAnims def)
+
+-- | Choose the animation to play this tick, given the state-derived
+--   animation and any active Lua override. Precedence:
+--
+--   * A 'Dead' unit ALWAYS shows its state-driven (death) animation —
+--     death is terminal and visually authoritative. A combat anim
+--     override may still be set on the instance when a unit is killed
+--     mid-swing (the AI short-circuits dead units, so it never clears
+--     it), and without this guard that stale override would mask the
+--     corpse forever.
+--   * Otherwise a non-empty override wins over the state animation
+--     (Lua-driven combat swings, posture changes, …).
+--   * Otherwise the state animation.
+chooseAnim ∷ Pose → Text → Text → Text
+chooseAnim pose override stateAnim
+    | pose ≡ Dead     = stateAnim
+    | override ≢ ""   = override
+    | otherwise       = stateAnim

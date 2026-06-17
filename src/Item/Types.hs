@@ -4,6 +4,7 @@ module Item.Types
     , ItemContainer(..)
     , ItemFood(..)
     , ItemWeapon(..)
+    , ItemArmor(..)
     , ItemBuff(..)
     , ItemInstance(..)
     , ItemManager(..)
@@ -61,6 +62,23 @@ data ItemWeapon = ItemWeapon
     , iwAttackCooldown ∷ !Float   -- ^ seconds between swings. Read by
                                   --   the AI's attack candidate to
                                   --   gate continuous attacks.
+    , iwLength         ∷ !Float   -- ^ cm; TOTAL length (handle + blade),
+                                  --   the lever arm of the swing. 0 ⇒
+                                  --   fall back to iwBladeLength.
+    , iwCenterOfMass   ∷ !Float   -- ^ 0..1 along the length from the
+                                  --   grip. A head-heavy weapon (~0.8)
+                                  --   swings with more inertia than a
+                                  --   balanced one (0.5).
+    } deriving (Show, Eq)
+
+-- | Armour properties — worn protective gear. Combat prepends this as
+--   an outer tissue layer over each body part it covers, and wears it
+--   (condition ↓, may break) when struck. The protective material lives
+--   in the item's top-level idMaterial (resolved against the
+--   SubstanceManager), same as weapons.
+data ItemArmor = ItemArmor
+    { iaThickness ∷ !Float    -- ^ mm of material (the outer layer's depth)
+    , iaCovers    ∷ ![Text]   -- ^ body-part ids this piece protects
     } deriving (Show, Eq)
 
 -- | Food properties — items with a Just here restore hunger when
@@ -75,7 +93,14 @@ data ItemDef = ItemDef
     { idName        ∷ !Text             -- ^ unique key, e.g. "canteen_steel_2l"
     , idDisplayName ∷ !Text             -- ^ shown in UI
     , idTexture     ∷ !TextureHandle    -- ^ inventory sprite (UI use)
-    , idWeight      ∷ !Float            -- ^ empty weight in kg
+    , idWeight      ∷ !Float            -- ^ empty weight in kg (the
+                                        --   mean, when a spec exists)
+    , idWeightSpec  ∷ !(Maybe (Float, Float))
+                                        -- ^ optional (mean, range) for
+                                        --   per-instance weight rolls
+                                        --   (truncated normal, like
+                                        --   stats). Nothing = every
+                                        --   instance weighs idWeight.
     , idKind        ∷ !Text             -- ^ equipment-slot kind ("weapon",
                                         --   "headwear", …). "misc" for
                                         --   non-equippable items. Matched
@@ -117,6 +142,7 @@ data ItemDef = ItemDef
     , idContainer   ∷ !(Maybe ItemContainer)
     , idFood        ∷ !(Maybe ItemFood)
     , idWeapon      ∷ !(Maybe ItemWeapon)
+    , idArmor       ∷ !(Maybe ItemArmor)
       -- ^ Weapon stats for items with kind="weapon". Nothing for
       --   everything else.
     , idUnequippable ∷ !Bool
@@ -141,6 +167,23 @@ data ItemInstance = ItemInstance
                                 --   sharpness / damage / armor value.
     , iiCondition   ∷ !Float    -- ^ 0..100; current wear. Degrades with
                                 --   use. 0 = broken.
+    , iiWeight      ∷ !Float    -- ^ THIS instance's empty weight (kg),
+                                --   rolled at creation from the def's
+                                --   weight spec when one is declared
+                                --   (raw gems vary per find); equals
+                                --   idWeight otherwise. Carried weight
+                                --   = iiWeight + iiCurrentFill (1 L =
+                                --   1 kg). Field order is load-bearing
+                                --   (positional Generic Serialize) —
+                                --   appended for save v36.
+    , iiSharpness   ∷ !Float    -- ^ 0..100; edge keenness as a % of the
+                                --   def's base_sharpness (100 = factory
+                                --   edge). DISTINCT from iiCondition:
+                                --   sharpness gates penetration and is
+                                --   honed on a whetstone; condition is
+                                --   structural fractures, gates breakage,
+                                --   and is restored at a furnace. Both
+                                --   drop with use. Appended for save v(+1).
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Engine-wide registry of all loaded item defs.

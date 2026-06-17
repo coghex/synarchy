@@ -837,13 +837,14 @@ def check_desert_soil_on_slope(grid: dict[tuple[int, int], dict[str, Any]],
                                issues: list[Issue]) -> None:
     """QUALITY: sand (55) / salt flat (67) on a slope.
 
-    Unlike wetland soils, these have no physical post-pass gate yet —
-    `soilFromClimate` places them purely by climate. In practice they
-    land on plateau-snapped lowlands, so on-slope occurrences are rare
-    (measured 0.1% of sand tiles at w64 seed 42, 2026-06-05). Tracked
-    as a quality score: drift upward means desert/evaporite soils are
-    bleeding onto mountainsides. Salt flats especially are basin-floor
-    evaporites and should essentially never tilt.
+    Salt flat (67) now has a physical post-pass gate (`saltFlatKeep` in
+    World.Generate.Chunk demotes a sloped salt flat to light gravel 66,
+    2026-06-15), so 67-on-slope should be 0. Sand (55) is still ungated
+    — `soilFromClimate` places it purely by climate, but in practice it
+    lands on plateau-snapped lowlands so on-slope occurrences are rare
+    (measured 0.1% of sand tiles at w64 seed 42, 2026-06-05). Tracked as
+    a quality score: drift upward means desert soils are bleeding onto
+    mountainsides.
     """
     for (x, y), t in grid.items():
         name = DESERT_MATS.get(t.get("matId"))

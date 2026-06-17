@@ -375,8 +375,11 @@ equipmentGetLoadoutFn env = do
                                 Lua.pushstring
                                     (TE.encodeUtf8 (idMaterial iDef))
                                 Lua.setfield (-2) "material"
+                                -- Instance weight, not the def mean —
+                                -- gems vary per find (matches
+                                -- getCarryingWeight + pushItemInstance).
                                 Lua.pushnumber
-                                    (Lua.Number (realToFrac (idWeight iDef)))
+                                    (Lua.Number (realToFrac (iiWeight inst)))
                                 Lua.setfield (-2) "weight"
                                 let TextureHandle texInt = idTexture iDef
                                 Lua.pushinteger (fromIntegral texInt)
@@ -446,7 +449,8 @@ pushItemInstance inst itemMgr = do
             Lua.setfield (-2) "make"
             Lua.pushstring (TE.encodeUtf8 (idMaterial iDef))
             Lua.setfield (-2) "material"
-            Lua.pushnumber (Lua.Number (realToFrac (idWeight iDef)))
+            -- Instance weight, not the def mean — gems vary per find.
+            Lua.pushnumber (Lua.Number (realToFrac (iiWeight inst)))
             Lua.setfield (-2) "weight"
             let TextureHandle texInt = idTexture iDef
             Lua.pushinteger (fromIntegral texInt)

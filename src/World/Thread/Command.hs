@@ -123,8 +123,8 @@ handleWorldCommand env logger (WorldDesignateMine pageId gx1 gy1 gx2 gy2)
   = handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2
 handleWorldCommand env logger (WorldSetMineDesignateTexture pageId texHandle)
   = handleWorldSetMineDesignateTextureCommand env logger pageId texHandle
-handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill)
-  = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill
+handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
+  = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)
   = handleWorldAddTileCommand env logger pageId gx gy mat
 handleWorldCommand env logger (WorldSetWorldCursorSelectTexture pageId texHandle)

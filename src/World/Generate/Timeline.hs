@@ -85,12 +85,27 @@ removeElevationSpikes threshold maxIters bSize (elevVec, matVec) =
                     w' = ev VU.! (idx - 1)
                     eN = ev VU.! (idx + 1)
                     mxNbr = max n' (max s' (max w' eN))
-                -- Spike: tile is more than `threshold` above all
-                -- 4 cardinal neighbors. Lower it to mxNbr + (threshold - 1)
-                -- so the resulting delta is below the audit threshold
-                -- but the tile remains visibly above its neighbors.
-                when (e - mxNbr > threshold) $ do
-                    let target = mxNbr + (threshold - 1)
+                    mnNbr = min n' (min s' (min w' eN))
+                    -- Two independent extreme-feature clamps; whichever
+                    -- lowers the tile more wins.
+                    --   • SPIKE: tile > `threshold` above ALL neighbours
+                    --     (an isolated pillar) → lower to mxNbr+(threshold-1).
+                    --   • CLIFF: tile > `cliffThreshold` above its LOWEST
+                    --     neighbour (a sheer wall the spike test misses —
+                    --     the plateau side keeps mxNbr high) → lower to
+                    --     mnNbr+cliffThreshold, capping the step. Iterating
+                    --     ramps the wall back into the slope. Coastlines and
+                    --     river canyons are shaped by earlier passes (coastal
+                    --     table, smoothCliffs), so this mainly tames the
+                    --     plate-boundary / ridge walls left tall when fewer
+                    --     Ages erode them (see project_timeline_depth).
+                    cliffThreshold = 28
+                    spikeTarget = if e - mxNbr > threshold
+                                  then mxNbr + (threshold - 1) else e
+                    cliffTarget = if e - mnNbr > cliffThreshold
+                                  then mnNbr + cliffThreshold else e
+                    target = min spikeTarget cliffTarget
+                when (target < e) $ do
                     VUM.write em idx target
                     VUM.write changedRef 0 (1 ∷ Int)
         ef ← VU.unsafeFreeze em

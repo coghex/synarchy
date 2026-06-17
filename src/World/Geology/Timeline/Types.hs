@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Geology.Timeline.Types
     ( GeoScale(..)
+    , TimelineParams(..)
+    , defaultTimelineParams
     , GeoPeriod(..)
     , GeoTimeline(..)
     , emptyTimeline
@@ -76,6 +78,33 @@ data GeoScale
     | Epoch     -- ^ Millions — climate shifts, glaciation
     | Age       -- ^ Hundreds of thousands — local events, erosion detail
     deriving (Show, Eq, Ord, Generic, Serialize, NFData, Hashable)
+
+-- | Player-configurable timeline depth (count of each geological
+--   segment). Eon + Era are fixed counts; Period/Epoch/Age roll a
+--   uniform count in [min,max] per parent. Lower counts ⇒ fewer Ages ⇒
+--   faster worldgen (less per-tile erosion replay). See project_timeline_depth.
+data TimelineParams = TimelineParams
+    { tlpEonCount  ∷ !Int
+    , tlpEraCount  ∷ !Int
+    , tlpPeriodMin ∷ !Int
+    , tlpPeriodMax ∷ !Int
+    , tlpEpochMin  ∷ !Int
+    , tlpEpochMax  ∷ !Int
+    , tlpAgeMin    ∷ !Int
+    , tlpAgeMax    ∷ !Int
+    } deriving (Show, Eq, Generic, Serialize, NFData)
+
+defaultTimelineParams ∷ TimelineParams
+defaultTimelineParams = TimelineParams
+    { tlpEonCount  = 1
+    , tlpEraCount  = 2
+    , tlpPeriodMin = 1
+    , tlpPeriodMax = 3
+    , tlpEpochMin  = 1
+    , tlpEpochMax  = 3
+    , tlpAgeMin    = 1
+    , tlpAgeMax    = 3
+    }
 
 data GeoPeriod = GeoPeriod
     { gpName       ∷ !Text

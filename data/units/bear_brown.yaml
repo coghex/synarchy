@@ -60,18 +60,29 @@ units:
     # rear-facing. Vitals (head, neck, torso) collapse the bear when
     # destroyed.
     body_parts:
+      # Tissue layers (outer→inner; mm). Thicker bone + flesh than a
+      # human; the hide is the per-unit natural_resistance above. A big
+      # skull shrugs off blades; the bulk gives the torso real depth.
       - { id: head,         parent: neck,  vital: true,
           area_weight: 0.10, tactical_value: 1.0,
           max_health_factor: 0.20, bleed_factor: 2.0,
-          height_low: 1.00, height_high: 1.40 }
+          height_low: 1.00, height_high: 1.40,
+          layers: [ { material: flesh, thickness: 8 },
+                    { material: bone,  thickness: 15 },
+                    { material: organ, thickness: 120 } ] }
       - { id: neck,         parent: torso, vital: true,
           area_weight: 0.05, tactical_value: 1.0,
           max_health_factor: 0.15, bleed_factor: 3.0,
-          height_low: 0.95, height_high: 1.10 }
+          height_low: 0.95, height_high: 1.10,
+          layers: [ { material: flesh, thickness: 60 },
+                    { material: organ, thickness: 15 } ] }
       - { id: torso,        parent: null,  vital: true,
           area_weight: 0.40, tactical_value: 0.8,
           max_health_factor: 0.40, bleed_factor: 2.0,
-          height_low: 0.50, height_high: 1.40 }
+          height_low: 0.50, height_high: 1.40,
+          layers: [ { material: flesh, thickness: 40 },
+                    { material: bone,  thickness: 18 },
+                    { material: organ, thickness: 200 } ] }
       - { id: l_fore_leg,   parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
           max_health_factor: 0.25, bleed_factor: 1.0,
@@ -100,10 +111,11 @@ units:
       stab:  0.1
       blunt: 0.3
 
-    # Claws + fangs as a virtual unarmed weapon. effective_blade_length
-    # treats claws like a short blade for range / damage formulas.
-    # slash_eff high (claws), stab moderate (fangs), blunt moderate
-    # (paw smacks).
+    # Claws + fangs + paw as a virtual unarmed weapon. Each attack kind
+    # is a different physical tool with its own material and geometry:
+    # keratin claws rake (slash), enamel-tipped canines puncture (stab),
+    # a bone-cored paw bludgeons (blunt). effective_blade_length is
+    # REACH only (the claws set the band).
     natural_weapon:
       weapon_class:           unarmed
       effective_blade_length: 12.0
@@ -114,9 +126,15 @@ units:
       # out at ~1.43 s healthy quick despite the very low 0.9 s base.
       attack_cooldown:        0.9
       wielded_from:           r_fore_leg
-      stab_eff:               0.3
-      slash_eff:              0.8
-      blunt_eff:              0.5
+      # mass = the striking-head mass (kg); the swinging LIMB mass is
+      # inferred from body_mass. length = lever of the appendage (cm),
+      # center_of_mass 0..1 from the limb.
+      slash: { eff: 0.8, material: keratin, blade_length: 9, sharpness: 110,
+               mass: 4,  length: 30, center_of_mass: 0.7 }   # raking forepaw
+      stab:  { eff: 0.3, material: enamel,  blade_length: 5, sharpness: 70,
+               mass: 1,  length: 18, center_of_mass: 0.6 }   # bite
+      blunt: { eff: 0.5, material: bone,    impact_area: 55,
+               mass: 6,  length: 25, center_of_mass: 0.7 }   # paw smash
 
     # Per-direction T-pose. Each entry is the first frame of the idle
     # animation in that direction — gives the engine a still sprite to

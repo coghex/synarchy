@@ -38,6 +38,7 @@ module Engine.Scripting.Lua.API.World
     , worldNearestMineDesignationFn
     , worldGetDigInfoAtFn
     , worldGetSpoilInfoFn
+    , worldGetGemInfoAtFn
     , worldDebugTileQuadsFn
     , worldDigTileFn
     , worldAddTileFn
@@ -73,6 +74,7 @@ import World.Fluid.Types (FluidType(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
                       , materialIdByName)
+import World.Gem (gemChanceAt)
 import World.Spoil.Logic (spoilBlockedAt)
 import World.Spoil.Types (SpoilPile(..))
 import World.Mine.Types (MineDesignation(..))
@@ -166,6 +168,26 @@ worldGetGenDefaultsFn env = do
     Lua.pushnumber (Lua.Number (realToFrac (clThcThreshold cl)))
     Lua.setfield (Lua.nth 2) "thc_threshold"
     Lua.setfield (Lua.nth 2) "climate"
+    -- Timeline sub-table
+    let tl = wgcTimeline cfg
+    Lua.newtable
+    Lua.pushinteger (fromIntegral (tyEonCount tl))
+    Lua.setfield (Lua.nth 2) "eon_count"
+    Lua.pushinteger (fromIntegral (tyEraCount tl))
+    Lua.setfield (Lua.nth 2) "era_count"
+    Lua.pushinteger (fromIntegral (tyPeriodMin tl))
+    Lua.setfield (Lua.nth 2) "period_min"
+    Lua.pushinteger (fromIntegral (tyPeriodMax tl))
+    Lua.setfield (Lua.nth 2) "period_max"
+    Lua.pushinteger (fromIntegral (tyEpochMin tl))
+    Lua.setfield (Lua.nth 2) "epoch_min"
+    Lua.pushinteger (fromIntegral (tyEpochMax tl))
+    Lua.setfield (Lua.nth 2) "epoch_max"
+    Lua.pushinteger (fromIntegral (tyAgeMin tl))
+    Lua.setfield (Lua.nth 2) "age_min"
+    Lua.pushinteger (fromIntegral (tyAgeMax tl))
+    Lua.setfield (Lua.nth 2) "age_max"
+    Lua.setfield (Lua.nth 2) "timeline"
     return 1
 
 -- | world.setGenConfig(table)
@@ -223,6 +245,7 @@ worldSetGenConfigFn env = do
         oldMoon = wgcMoon oldCfg
         oldCl  = wgcClimate oldCfg
         oldRes = wgcResources oldCfg
+        oldTl  = wgcTimeline oldCfg
 
     -- Top-level
     plateCount ← getIntField "plate_count" (wgcPlateCount oldCfg)
@@ -260,6 +283,16 @@ worldSetGenConfigFn env = do
     albedo ← getSubFloat "climate" "albedo_feedback"  (clAlbedoFeedback oldCl)
     thc    ← getSubFloat "climate" "thc_threshold"    (clThcThreshold oldCl)
 
+    -- Timeline depth
+    tlEon  ← getSubInt "timeline" "eon_count"   (tyEonCount oldTl)
+    tlEra  ← getSubInt "timeline" "era_count"   (tyEraCount oldTl)
+    tlPMin ← getSubInt "timeline" "period_min"  (tyPeriodMin oldTl)
+    tlPMax ← getSubInt "timeline" "period_max"  (tyPeriodMax oldTl)
+    tlEMin ← getSubInt "timeline" "epoch_min"   (tyEpochMin oldTl)
+    tlEMax ← getSubInt "timeline" "epoch_max"   (tyEpochMax oldTl)
+    tlAMin ← getSubInt "timeline" "age_min"     (tyAgeMin oldTl)
+    tlAMax ← getSubInt "timeline" "age_max"     (tyAgeMax oldTl)
+
     let newCfg = oldCfg
             { wgcWorldSize  = worldSize
             , wgcPlateCount = plateCount
@@ -271,6 +304,7 @@ worldSetGenConfigFn env = do
             , wgcMoon       = MoonYaml cyc poff
             , wgcClimate    = ClimateYaml iters corio wdrag therm orog evap albedo thc
             , wgcResources  = ResourcesYaml oreAb ironAb copAb
+            , wgcTimeline   = TimelineYaml tlEon tlEra tlPMin tlPMax tlEMin tlEMax tlAMin tlAMax
             }
     Lua.liftIO $ writeIORef (worldGenConfigRef env) newCfg
     return 0
@@ -965,6 +999,37 @@ worldDebugTileQuadsFn env = do
                     return 1
         _ → Lua.pushnil >> return 1
 
+-- | world.getGemInfoAt(pageId, gx, gy) → {gem, chance} | nil
+--   What the seeded gem region field says about a tile: the gem the
+--   region hosts and the per-completed-tile find chance at
+--   perception 1.0. nil for barren regions. Debug/validation (and a
+--   future prospecting skill could surface this in-game).
+worldGetGemInfoAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetGemInfoAtFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gxN, Just gyN) → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    paramsM ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
+                    let seed = maybe 0 (fromIntegral ∘ wgpSeed) paramsM
+                    case gemChanceAt seed (round gxN, round gyN) 1.0 of
+                        Nothing → Lua.pushnil >> return 1
+                        Just (gem, chance) → do
+                            Lua.newtable
+                            Lua.pushstring (TE.encodeUtf8 gem)
+                            Lua.setfield (Lua.nth 2) "gem"
+                            Lua.pushnumber (Lua.Number
+                                (realToFrac chance))
+                            Lua.setfield (Lua.nth 2) "chance"
+                            return 1
+        _ → Lua.pushnil >> return 1
+
 -- | world.getSpoilInfo(pageId) → {piles, totalFill} | nil
 --   Debug/validation view of the spoil overlay: pile (vertex) count
 --   and the summed fractional fill in corner-units. Promoted cells
@@ -992,7 +1057,8 @@ worldGetSpoilInfoFn env = do
                     Lua.setfield (Lua.nth 2) "totalFill"
                     return 1
 
--- | world.digTile(pageId, gx, gy, ux, uy, amount, minerSkill) —
+-- | world.digTile(pageId, gx, gy, ux, uy, amount, minerSkill,
+--   perception) —
 --   apply dig progress to the designated tile. (ux, uy) is the
 --   digger's tile-space position (drain order); amount is pre-scaled
 --   by tool × material speed (see getDigInfoAt). minerSkill (the
@@ -1008,6 +1074,7 @@ worldDigTileFn env = do
     uyArg ← Lua.tonumber 5
     amtArg ← Lua.tonumber 6
     skillArg ← Lua.tonumber 7
+    percepArg ← Lua.tonumber 8
     case (pageIdArg, gxArg, gyArg, uxArg, uyArg, amtArg) of
         (Just pageIdBS, Just gx, Just gy, Just ux, Just uy, Just amt) →
             Lua.liftIO $ do
@@ -1015,10 +1082,13 @@ worldDigTileFn env = do
                     skill = case skillArg of
                         Just (Lua.Number s) → realToFrac s
                         _                   → 0
+                    percep = case percepArg of
+                        Just (Lua.Number s) → realToFrac s
+                        _                   → 1.0
                 Q.writeQueue (worldQueue env) $
                     WorldDigTile pageId (round gx) (round gy)
                                  (realToFrac ux) (realToFrac uy)
-                                 (realToFrac amt) skill
+                                 (realToFrac amt) skill percep
         _ → pure ()
     return 0
 

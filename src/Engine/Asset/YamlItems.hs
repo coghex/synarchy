@@ -1,10 +1,12 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
 module Engine.Asset.YamlItems
     ( ItemYamlDef(..)
+    , ItemYamlWeight(..)
     , ItemYamlContainer(..)
     , ItemYamlFood(..)
     , ItemYamlRollSpec(..)
     , ItemYamlWeapon(..)
+    , ItemYamlArmor(..)
     , ItemYamlBuff(..)
     , ItemYamlFile(..)
     , loadItemYaml
@@ -15,6 +17,7 @@ import GHC.Generics (Generic)
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import qualified Data.Aeson as Aeson
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | Optional container block. Items without this can't hold a fluid.
@@ -75,6 +78,8 @@ data ItemYamlWeapon = ItemYamlWeapon
     , iywBluntEff       ∷ !Float
     , iywWeaponClass    ∷ !Text   -- ^ skill name (dagger/unarmed/…)
     , iywAttackCooldown ∷ !Float  -- ^ seconds between swings
+    , iywLength         ∷ !Float  -- ^ cm total; 0 ⇒ use blade_length
+    , iywCenterOfMass   ∷ !Float  -- ^ 0..1 from grip
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlWeapon where
@@ -86,12 +91,42 @@ instance FromJSON ItemYamlWeapon where
         ⊛ v .:? "blunt_effectiveness"  .!= 0
         ⊛ v .:? "weapon_class"         .!= "unarmed"
         ⊛ v .:? "attack_cooldown"      .!= 1.5
+        ⊛ v .:? "length"               .!= 0
+        ⊛ v .:? "center_of_mass"       .!= 0.5
+
+-- | Optional armour block on an item def. The protective material is
+--   the item's top-level `material`; this adds the thickness and the
+--   body parts it covers.
+data ItemYamlArmor = ItemYamlArmor
+    { iyaThickness ∷ !Float
+    , iyaCovers    ∷ ![Text]
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlArmor where
+    parseJSON = withObject "ItemYamlArmor" $ \v → ItemYamlArmor
+        ⊚ v .:? "thickness" .!= 1.0
+        ⊛ v .:? "covers"    .!= []
+
+-- | Weight as declared in YAML: a plain number (every instance the
+--   same) or @{mean, range}@ for per-instance truncated-normal rolls
+--   (raw gems vary per find).
+data ItemYamlWeight
+    = WeightFixed !Float
+    | WeightSpec !Float !Float   -- ^ mean, range
+    deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlWeight where
+    parseJSON v = case v of
+        Aeson.Object o → WeightSpec
+            ⊚ o .:  "mean"
+            ⊛ o .:? "range" .!= 0.0
+        _ → WeightFixed <$> parseJSON v
 
 data ItemYamlDef = ItemYamlDef
     { iydName        ∷ !Text
     , iydDisplayName ∷ !Text
     , iydSprite      ∷ !Text                       -- ^ texture path
-    , iydWeight      ∷ !Float                      -- ^ empty weight (kg)
+    , iydWeight      ∷ !ItemYamlWeight             -- ^ empty weight (kg)
     , iydKind        ∷ !Text                       -- ^ equipment slot kind;
                                                    --   defaults to "misc"
     , iydCategory    ∷ !Text                       -- ^ inventory tab;
@@ -105,6 +140,7 @@ data ItemYamlDef = ItemYamlDef
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydFood        ∷ !(Maybe ItemYamlFood)
     , iydWeapon      ∷ !(Maybe ItemYamlWeapon)
+    , iydArmor       ∷ !(Maybe ItemYamlArmor)
     , iydUnequippable ∷ !Bool
     , iydBuffs       ∷ ![ItemYamlBuff]
     } deriving (Show, Eq, Generic)
@@ -114,7 +150,7 @@ instance FromJSON ItemYamlDef where
         ⊚ v .:  "name"
         ⊛ v .:? "display_name" .!= ""
         ⊛ v .:  "sprite"
-        ⊛ v .:? "weight"       .!= 0.0
+        ⊛ v .:? "weight"       .!= WeightFixed 0.0
         ⊛ v .:? "kind"         .!= "misc"
         ⊛ v .:? "category"     .!= "Misc"
         ⊛ v .:? "make"         .!= ""
@@ -124,6 +160,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "container"
         ⊛ v .:? "food"
         ⊛ v .:? "weapon"
+        ⊛ v .:? "armor"
         ⊛ v .:? "unequippable" .!= False
         ⊛ v .:? "buffs"        .!= []
 

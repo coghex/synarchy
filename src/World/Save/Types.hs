@@ -105,11 +105,17 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 35  -- v35: MineDesignation gains trailing
-                         -- 'mdChunkProgress' (per-tile chunk-yield
-                         -- accumulator).
-                         -- (v34: sdSpoilPiles + WeAddTile; v33:
-                         -- smPercent; v32: ground items.)
+currentSaveVersion = 38  -- v38: ItemInstance gains trailing 'iiSharpness'
+                         -- (per-instance edge keenness, split from
+                         -- iiCondition for weapon degradation).
+                         -- (v37: WorldGenParams gains trailing
+                         -- 'wgpTimelineParams' (player-configurable
+                         -- timeline depth: eon/era/period/epoch/age counts).
+                         -- (v36: ItemInstance gains trailing
+                         -- 'iiWeight' (per-instance rolled weights —
+                         -- raw gems vary per find).
+                         -- (v35: mdChunkProgress; v34: sdSpoilPiles
+                         -- + WeAddTile; v33: smPercent.)
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

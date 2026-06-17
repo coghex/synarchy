@@ -207,11 +207,16 @@ data MaterialProps = MaterialProps
       -- ^ Item def NAME spawned by the chunk-yield accumulator while
       --   digging this material (yaml @dig_chunk@ — granite →
       --   "granite_chunk"). Nothing = no chunk yields.
+    , mpDigGems ∷ !Bool
+      -- ^ Does the seeded gem region field (World.Gem) apply while
+      --   digging this material? yaml @dig_gems@, default False.
+      --   Granite (pegmatite host) is the pilot.
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps
 defaultMaterialProps =
     MaterialProps "unknown" 0.5 2.5 0.5 0.4 0.5 0.5 Nothing 1.0 Nothing
+                  False
 
 -- | Find a material's id by its registered yaml name. Linear scan of
 --   the 256-slot registry — called at dig frequency, not per-frame.

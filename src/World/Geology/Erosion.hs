@@ -213,7 +213,17 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            -- in a single pass. With K=0.3 the worst case is "smooth 30%
            -- of the way to neighbor average", so Tier-1 ridges survive
            -- through bombardment + Era periods into the Age loop.
-           maxSmoothing = 0.3 ∷ Float
+           -- Slope-proportional smoothing cap (drama control). Flat /
+           -- uniform terrain keeps the gentle 0.3 cap so plateaus and
+           -- broad relief survive, but high-deviation tiles — isolated
+           -- spikes and cliff faces, which read high slopeNorm (deviation
+           -- from the neighbour AVERAGE) — get a much higher cap. This lets
+           -- the reduced number of erosion passes (fewer Ages, see
+           -- project_timeline_depth) still knock the extreme peaks/cliffs
+           -- down toward their surroundings without over-flattening the
+           -- bulk. Mountain MASSES survive (a ridge tile resembles its
+           -- ridge neighbours → low slopeNorm); only the jagged extremes go.
+           maxSmoothing = 0.3 + 0.5 * slopeNorm ∷ Float
            clampedRate = maxSmoothing * (1.0 - exp (negate (linearRate / maxSmoothing)))
 
            -- Raw delta: fraction of the difference we close

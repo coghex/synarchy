@@ -42,7 +42,7 @@ import World.Weather.Types (ClimateState(..))
 import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
                              , CalendarYaml(..), SunYaml(..), MoonYaml(..)
                              , ResourcesYaml(..)
-                             , applyConfigToParams)
+                             , applyConfigToParams, timelineParamsOf)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
@@ -84,7 +84,8 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
                                (mdShovelSpeed def)
                                (mdDigSpoil def)
                                (mdDigBulking def)
-                               (mdDigChunk def))
+                               (mdDigChunk def)
+                               (mdDigGems def))
                 r
             ) emptyMaterialRegistry matDefs
     writeIORef (materialRegistryRef env) populatedReg
@@ -104,7 +105,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , olIron   = ryIronAbundance resourcesCfg
             , olCopper = ryCopperAbundance resourcesCfg
             }
-    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers
+    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers (timelineParamsOf worldGenCfg0)
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
     _ ← evaluate (force borderedCache)

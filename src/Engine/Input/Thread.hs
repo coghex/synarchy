@@ -188,17 +188,20 @@ processInput env inpSt event = case event of
                 logDebug logger CatInput "Action triggered: escape"
                 Q.writeQueue (luaQueue env) LuaUIEscape
 
-        -- While text input has focus, key PRESSES are not recorded in
-        -- inpKeyStates — the map only ever reflects game-mode input, so
-        -- pollers of it (camera arrow-pan, Lua isKeyDown/isActionDown)
-        -- can't react to keys typed into the shell or a textbox.
+        -- While text input has focus, normal key presses are not
+        -- recorded in inpKeyStates — the map should keep reflecting
+        -- game-mode input, so pollers of it (camera arrow-pan, Lua
+        -- isKeyDown/isActionDown) can't react to letters typed into
+        -- the shell or a textbox. Modifiers are the exception: shift /
+        -- ctrl / alt / super still need to be live so a world click
+        -- that DROPS focus can immediately see the held modifier.
         -- RELEASES are always recorded: a key held across a focus
         -- change must still get its release, or it sticks "down".
         let textFocused = case (shellMode, uiFocus) of
               (TextInputMode _, _) → True
               (_, Just _)          → True
               _                    → False
-        return $ if textFocused ∧ keyState ≢ GLFW.KeyState'Released
+        return $ if textFocused ∧ not (shouldTrackKeyStateWhileTextFocused glfwKey keyState)
             then inpSt
             else updateKeyState inpSt glfwKey keyState mods
 
@@ -399,6 +402,22 @@ processInput env inpSt event = case event of
         return $ updateWindowState inpSt winEv
 
 -- * State update helpers
+
+-- | Key-state gate while shell/UI text input owns the keyboard.
+-- Normal typing keys stay out of inpKeyStates so game pollers ignore
+-- them, but held modifiers must still be visible because the first
+-- world click after focus loss reads engine.isKeyDown immediately.
+shouldTrackKeyStateWhileTextFocused ∷ GLFW.Key → GLFW.KeyState → Bool
+shouldTrackKeyStateWhileTextFocused key keyState =
+    keyState ≡ GLFW.KeyState'Released ∨ isModifierKey key
+
+isModifierKey ∷ GLFW.Key → Bool
+isModifierKey key = key `elem`
+    [ GLFW.Key'LeftShift, GLFW.Key'RightShift
+    , GLFW.Key'LeftControl, GLFW.Key'RightControl
+    , GLFW.Key'LeftAlt, GLFW.Key'RightAlt
+    , GLFW.Key'LeftSuper, GLFW.Key'RightSuper
+    ]
 
 updateKeyState ∷ InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → InputState
 updateKeyState state key keyState mods = state

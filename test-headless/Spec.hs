@@ -7,6 +7,7 @@ import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
 import qualified Test.Headless.WorldGen.Flatness as Flatness
+import qualified Test.Headless.WorldGen.SoilGate as SoilGate
 import qualified Test.Headless.WorldGen.Exposure as Exposure
 import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
@@ -17,6 +18,8 @@ import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
 import qualified Test.Headless.Unit.Anim as AnimTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
+import qualified Test.Headless.World.Spoil as Spoil
+import qualified Test.Headless.Combat.Damage as CombatDamage
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
@@ -43,6 +46,9 @@ main = hspec $ do
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
+    describe "World.Spoil" Spoil.spec
+    describe "WorldGen.SoilGate" SoilGate.spec
+    describe "Combat.Damage" CombatDamage.spec
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Input.KeyNames" InputKeyNames.spec

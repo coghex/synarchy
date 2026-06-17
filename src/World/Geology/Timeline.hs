@@ -21,6 +21,7 @@ import World.Hydrology.Types (RiverSegment(..))
 import World.Fluid.River (fixupSegmentContinuity)
 import World.Generate.Timeline.Fast (applyTimelineFastFrom)
 import World.Geology.Types
+import World.Geology.Timeline.Types (TimelineParams(..))
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
@@ -73,6 +74,7 @@ buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Floa
               → Int    -- ^ lava pool radius lever (config)
               → Int    -- ^ waterfall quantum lever (config)
               → OreLevers -- ^ resource-abundance levers (config)
+              → TimelineParams -- ^ timeline depth (config)
               → ( GeoTimeline, ClimateState, BorderedTerrainCache
                 , OceanMap, OceanDistMap )
                 -- ^ Ocean map + distances are returned (not recomputed
@@ -81,7 +83,7 @@ buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Floa
                 --   disagree and the deep floor keeps clay instead of
                 --   seabed muck.
 buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity
-              lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers =
+              lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers timelineParams =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
 
@@ -95,21 +97,17 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , tbsErosionIntensity = erosionIntensity
             , tbsVolcanicActivity = volcanicActivity
             , tbsOreLevers = oreLevers
+            , tbsTimelineParams = timelineParams
             , tbsCoarseOcean = HS.empty
             }
 
         grid0 = buildInitialElevGrid seed worldSize plates
-        (s1, grid1) = buildPrimordialBombardment seed worldSize plates tbs0 grid0
 
-        -- After bombardment: first climate snapshot from the
-        -- initial plate-derived elevation grid. Cache the coarse
-        -- ocean shape so per-Age climate updates can reuse it
-        -- without re-deriving from the evolving grid.
-        ocean1 = oceanRegionsFromGrid grid1 worldSize
-        climate1 = updateClimateFromGrid worldSize ocean1 (tbsFeatures s1) (tbsClimateState s1)
-        s1' = s1 { tbsClimateState = climate1, tbsCoarseOcean = ocean1 }
-
-        (s2, finalGrid) = buildEon seed worldSize plates s1' grid1
+        -- Eon loop (timeline depth). Each eon runs its own primordial
+        -- bombardment + first-climate snapshot + eras, so eonCount > 1
+        -- models a cataclysmic planetary reset (atmosphere lost +
+        -- regained, re-bombarded). See buildEonLoop.
+        (s2, finalGrid) = buildEonLoop seed worldSize plates tbs0 grid0
 
         -- Mark the most recent Age period for soil generation.
         -- Walk from head until we find a period with gpScale = Age,
@@ -430,26 +428,44 @@ buildPrimordialBombardment seed worldSize plates tbs grid =
 
 -- * Eon → Era → Period → Epoch → Age loops
 
-buildEon ∷ Word64 → Int → [TectonicPlate]
-         → TimelineBuildState → ElevGrid
-         → (TimelineBuildState, ElevGrid)
-buildEon seed worldSize plates tbs grid =
-    buildEraLoop seed worldSize plates 0 2 4 tbs grid
+-- Timeline depth comes from the player-configured TimelineParams, carried
+-- on TimelineBuildState (tbsTimelineParams) and read by each generator
+-- below. Eon + Era are fixed counts; Period/Epoch/Age roll a uniform count
+-- in [min,max] per parent. See the project_timeline_depth memory.
 
-buildEraLoop ∷ Word64 → Int → [TectonicPlate]
-             → Int → Int → Int
+-- | Eon loop. Each eon = primordial bombardment + first-climate snapshot
+--   + its eras. eonCount > 1 models cataclysmic planetary resets.
+buildEonLoop ∷ Word64 → Int → [TectonicPlate]
              → TimelineBuildState → ElevGrid
              → (TimelineBuildState, ElevGrid)
-buildEraLoop seed worldSize plates eraIdx minEras maxEras tbs grid
-    | eraIdx ≥ maxEras = (tbs, grid)
-    | otherwise =
-        let eraSeed = seed `xor` (fromIntegral eraIdx * 0xA1B2C3D4)
-            (s1, grid1) = buildEra eraSeed worldSize plates eraIdx tbs grid
-            roll = hashToFloatGeo (hashGeo eraSeed eraIdx 300)
-            continue = eraIdx < (minEras - 1) ∨ roll < 0.5
-        in if continue
-           then buildEraLoop seed worldSize plates (eraIdx + 1) minEras maxEras s1 grid1
-           else (s1, grid1)
+buildEonLoop seed worldSize plates tbs0 grid0 = go 0 tbs0 grid0
+  where
+    go eonIdx tbs grid
+        | eonIdx ≥ tlpEonCount (tbsTimelineParams tbs) = (tbs, grid)
+        | otherwise =
+            let eonSeed = seed `xor` (fromIntegral eonIdx * 0x9E3779B97F4A7C15)
+                (sB, gridB) = buildPrimordialBombardment eonSeed worldSize plates tbs grid
+                -- First climate snapshot from the post-bombardment grid;
+                -- cache the coarse ocean so per-Age climate reuses it.
+                oceanE   = oceanRegionsFromGrid gridB worldSize
+                climateE = updateClimateFromGrid worldSize oceanE
+                               (tbsFeatures sB) (tbsClimateState sB)
+                sB' = sB { tbsClimateState = climateE, tbsCoarseOcean = oceanE }
+                (sE, gridE) = buildEraGen eonSeed worldSize plates sB' gridB
+            in go (eonIdx + 1) sE gridE
+
+-- | Fixed-count era generator (tlEraCount eras per eon).
+buildEraGen ∷ Word64 → Int → [TectonicPlate]
+            → TimelineBuildState → ElevGrid
+            → (TimelineBuildState, ElevGrid)
+buildEraGen seed worldSize plates tbs0 grid0 = go 0 tbs0 grid0
+  where
+    go eraIdx tbs grid
+        | eraIdx ≥ tlpEraCount (tbsTimelineParams tbs) = (tbs, grid)
+        | otherwise =
+            let eraSeed = seed `xor` (fromIntegral eraIdx * 0xA1B2C3D4)
+                (s1, grid1) = buildEra eraSeed worldSize plates eraIdx tbs grid
+            in go (eraIdx + 1) s1 grid1
 
 buildEra ∷ Word64 → Int → [TectonicPlate] → Int
          → TimelineBuildState → ElevGrid
@@ -476,23 +492,23 @@ buildEra seed worldSize plates eraIdx tbs grid =
             HM.empty
         s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs'
                                        , tbsCoarseOcean = coarseOcean })
-        (s2, grid2) = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1 grid
+        nPeriods = hashToRangeGeo (hashGeo eraSeed eraIdx 401)
+                       (tlpPeriodMin (tbsTimelineParams tbs)) (tlpPeriodMax (tbsTimelineParams tbs))
+        (s2, grid2) = buildPeriodGen eraSeed worldSize plates nPeriods s1 grid
     in (s2, grid2)
 
-buildPeriodLoop ∷ Word64 → Int → [TectonicPlate]
-                → Int → Int → Int
-                → TimelineBuildState → ElevGrid
-                → (TimelineBuildState, ElevGrid)
-buildPeriodLoop seed worldSize plates periodIdx minPeriods maxPeriods tbs grid
-    | periodIdx ≥ maxPeriods = (tbs, grid)
-    | otherwise =
-        let periodSeed = seed `xor` (fromIntegral periodIdx * 0xB3C4D5E6)
-            (s1, grid1) = buildPeriod periodSeed worldSize plates periodIdx tbs grid
-            roll = hashToFloatGeo (hashGeo periodSeed periodIdx 400)
-            continue = periodIdx < (minPeriods - 1) ∨ roll < 0.5
-        in if continue
-           then buildPeriodLoop seed worldSize plates (periodIdx + 1) minPeriods maxPeriods s1 grid1
-           else (s1, grid1)
+-- | Count-rolled period generator (nPeriods periods for this era).
+buildPeriodGen ∷ Word64 → Int → [TectonicPlate] → Int
+               → TimelineBuildState → ElevGrid
+               → (TimelineBuildState, ElevGrid)
+buildPeriodGen seed worldSize plates nPeriods tbs0 grid0 = go 0 tbs0 grid0
+  where
+    go periodIdx tbs grid
+        | periodIdx ≥ nPeriods = (tbs, grid)
+        | otherwise =
+            let periodSeed = seed `xor` (fromIntegral periodIdx * 0xB3C4D5E6)
+                (s1, grid1) = buildPeriod periodSeed worldSize plates periodIdx tbs grid
+            in go (periodIdx + 1) s1 grid1
 
 buildPeriod ∷ Word64 → Int → [TectonicPlate] → Int
             → TimelineBuildState → ElevGrid
@@ -501,23 +517,25 @@ buildPeriod seed worldSize plates periodIdx tbs grid =
     let periodSeed = seed `xor` (fromIntegral periodIdx * 0xF1E2)
         (s1, grid1) = applyPeriodVolcanism periodSeed worldSize plates periodIdx tbs grid
         (s2, grid2) = applyVolcanicEvolution periodSeed worldSize plates s1 grid1
-        (s3, grid3) = buildEpochLoop periodSeed worldSize plates 0 2 6 s2 grid2
+        nEpochs = hashToRangeGeo (hashGeo periodSeed periodIdx 501)
+                      (tlpEpochMin (tbsTimelineParams tbs)) (tlpEpochMax (tbsTimelineParams tbs))
+        (s3, grid3) = buildEpochGen periodSeed worldSize plates nEpochs s2 grid2
     in (s3, grid3)
 
-buildEpochLoop ∷ Word64 → Int → [TectonicPlate]
-               → Int → Int → Int
-               → TimelineBuildState → ElevGrid
-               → (TimelineBuildState, ElevGrid)
-buildEpochLoop seed worldSize plates epochIdx minEpochs maxEpochs tbs grid
-    | epochIdx ≥ maxEpochs = (tbs, grid)
-    | otherwise =
-        let epochSeed = seed `xor` (fromIntegral epochIdx * 0xC5D6E7F8)
-            (s1, grid1) = buildEpoch epochSeed worldSize plates epochIdx tbs grid
-            roll = hashToFloatGeo (hashGeo epochSeed epochIdx 500)
-            continue = epochIdx < (minEpochs - 1) ∨ roll < 0.5
-        in if continue
-           then buildEpochLoop seed worldSize plates (epochIdx + 1) minEpochs maxEpochs s1 grid1
-           else (s1, grid1)
+-- | Count-rolled epoch generator (nEpochs epochs for this period).
+--   Epochs are structural — they create no GeoPeriod, only bound the
+--   age generator below.
+buildEpochGen ∷ Word64 → Int → [TectonicPlate] → Int
+              → TimelineBuildState → ElevGrid
+              → (TimelineBuildState, ElevGrid)
+buildEpochGen seed worldSize plates nEpochs tbs0 grid0 = go 0 tbs0 grid0
+  where
+    go epochIdx tbs grid
+        | epochIdx ≥ nEpochs = (tbs, grid)
+        | otherwise =
+            let epochSeed = seed `xor` (fromIntegral epochIdx * 0xC5D6E7F8)
+                (s1, grid1) = buildEpoch epochSeed worldSize plates epochIdx tbs grid
+            in go (epochIdx + 1) s1 grid1
 
 buildEpoch ∷ Word64 → Int → [TectonicPlate] → Int
            → TimelineBuildState → ElevGrid
@@ -527,23 +545,23 @@ buildEpoch seed worldSize plates epochIdx tbs grid =
         -- Epoch is purely structural — no period is created here, so
         -- no gsDate advance. Time accumulates from the Ages below
         -- (audit #5: keep gsDate in lockstep with gpDuration sums).
-        (s2, grid') = buildAgeLoop epochSeed worldSize plates 0 1 8 tbs grid
+        nAges = hashToRangeGeo (hashGeo epochSeed epochIdx 601)
+                    (tlpAgeMin (tbsTimelineParams tbs)) (tlpAgeMax (tbsTimelineParams tbs))
+        (s2, grid') = buildAgeGen epochSeed worldSize plates nAges tbs grid
     in (s2, grid')
 
-buildAgeLoop ∷ Word64 → Int → [TectonicPlate]
-             → Int → Int → Int
-             → TimelineBuildState → ElevGrid
-             → (TimelineBuildState, ElevGrid)
-buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs grid
-    | ageIdx ≥ maxAges = (tbs, grid)
-    | otherwise =
-        let ageSeed = seed `xor` (fromIntegral ageIdx * 0xD7E8F9A0)
-            (s1, grid1) = buildAge ageSeed worldSize plates ageIdx tbs grid
-            roll = hashToFloatGeo (hashGeo ageSeed ageIdx 600)
-            continue = ageIdx < minAges ∨ roll < 0.4
-        in if continue
-           then buildAgeLoop seed worldSize plates (ageIdx + 1) minAges maxAges s1 grid1
-           else (s1, grid1)
+-- | Count-rolled age generator (nAges ages for this epoch).
+buildAgeGen ∷ Word64 → Int → [TectonicPlate] → Int
+            → TimelineBuildState → ElevGrid
+            → (TimelineBuildState, ElevGrid)
+buildAgeGen seed worldSize plates nAges tbs0 grid0 = go 0 tbs0 grid0
+  where
+    go ageIdx tbs grid
+        | ageIdx ≥ nAges = (tbs, grid)
+        | otherwise =
+            let ageSeed = seed `xor` (fromIntegral ageIdx * 0xD7E8F9A0)
+                (s1, grid1) = buildAge ageSeed worldSize plates ageIdx tbs grid
+            in go (ageIdx + 1) s1 grid1
 
 buildAge ∷ Word64 → Int → [TectonicPlate] → Int
          → TimelineBuildState → ElevGrid

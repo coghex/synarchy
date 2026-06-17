@@ -698,6 +698,30 @@ local function loadIconFor(iconKey)
     return tex
 end
 
+-- Broken-equipment overlay texture (registered by name during item
+-- load; see Lua/API/Items). Cached once resolved.
+local _brokenTex = nil
+local function brokenOverlayTex()
+    if _brokenTex then return _brokenTex end
+    local h = engine.getTextureHandle("broken_equipment")
+    if h and h >= 0 then _brokenTex = h end
+    return _brokenTex
+end
+
+-- Overlay broken_equipment.png over an item icon at (x,y,w,h) when the
+-- item is broken (condition 0). z should sit just above the icon. The
+-- overlay sprite is tracked in `track` so it tears down with the panel.
+local function addBrokenOverlay(it, name, x, y, w, h, z, track)
+    if not (it and it.condition and it.condition <= 0) then return end
+    local bt = brokenOverlayTex()
+    if not bt then return end
+    local oid = UI.newSprite(name, w, h, bt, 1.0, 1.0, 1.0, 1.0,
+                             unitInfoV2.page)
+    UI.addToPage(unitInfoV2.page, oid, x, y)
+    UI.setZIndex(oid, z)
+    table.insert(track, { kind = "sprite", id = oid })
+end
+
 -- Place a single content row: stat icon on the left, bright value on
 -- the right. The icon owns the description tooltip (from STAT_DEFS or
 -- `tooltipOverride`). The value gets its OWN tooltip via
@@ -1718,6 +1742,8 @@ local function rebuildEquipmentSection()
                 UI.setOnRightClick(iconElemId, "onEquipSlotRightClick")
                 table.insert(unitInfoV2.equipElements,
                     { kind = "sprite", id = iconElemId })
+                addBrokenOverlay(eq, "unit_info_v2_equip_broken_" .. i,
+                    slotX, slotY, slotW, slotH, 14, unitInfoV2.equipElements)
             end
 
             -- Per-slot right-click metadata. Two element handles map
@@ -1786,6 +1812,8 @@ local function rebuildEquipmentSection()
                 })
                 table.insert(unitInfoV2.equipElements,
                     { kind = "sprite", id = iconId })
+                addBrokenOverlay(it, "unit_info_v2_acc_broken_" .. i,
+                    listX, rowY, accSz, accSz, 14, unitInfoV2.equipElements)
                 unitInfoV2.accessoryRows = unitInfoV2.accessoryRows or {}
                 unitInfoV2.accessoryRows[#unitInfoV2.accessoryRows + 1] = {
                     elemId        = iconId,
@@ -2158,6 +2186,9 @@ local function rebuildInventorySection()
             UI.setZIndex(iconId, 12)
             table.insert(unitInfoV2.invListElements,
                 { kind = "sprite", id = iconId })
+            addBrokenOverlay(it, "unit_info_v2_inv_broken_" .. i,
+                listX + textPad, iconY, iconSz, iconSz, 13,
+                unitInfoV2.invListElements)
         end
 
         -- Weight (right-aligned) — built FIRST so we can measure its

@@ -9,7 +9,9 @@ module Engine.Asset.YamlUnits
     , UnitYamlInventoryEntry(..)
     , UnitYamlModifier(..)
     , UnitYamlBodyPart(..)
+    , UnitYamlLayer(..)
     , UnitYamlNaturalWeapon(..)
+    , UnitYamlStrike(..)
     , UnitYamlNaturalResistance(..)
     , UnitYamlFile(..)
     , defaultUnitYamlBody
@@ -161,6 +163,17 @@ instance FromJSON UnitYamlSkill where
 -- | One body part as declared in YAML. Mirrors the runtime
 --   `Unit.Types.BodyPart`; loaded into `udBodyParts` and consumed
 --   by Combat.Resolution's body-part picker + reach filter.
+-- | One tissue layer of a body part: a substance + its thickness (mm).
+data UnitYamlLayer = UnitYamlLayer
+    { uylMaterial  ∷ !Text
+    , uylThickness ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlLayer where
+    parseJSON = withObject "UnitYamlLayer" $ \v → UnitYamlLayer
+        ⊚ v .:  "material"
+        ⊛ v .:  "thickness"
+
 data UnitYamlBodyPart = UnitYamlBodyPart
     { uybpId              ∷ !Text
     , uybpParent          ∷ !(Maybe Text)
@@ -171,6 +184,7 @@ data UnitYamlBodyPart = UnitYamlBodyPart
     , uybpBleedFactor     ∷ !Float
     , uybpHeightLow       ∷ !Float
     , uybpHeightHigh      ∷ !Float
+    , uybpLayers          ∷ ![UnitYamlLayer]   -- outer→inner; [] ⇒ default
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlBodyPart where
@@ -184,17 +198,52 @@ instance FromJSON UnitYamlBodyPart where
         ⊛ v .:? "bleed_factor"        .!= 1.0
         ⊛ v .:  "height_low"
         ⊛ v .:  "height_high"
+        ⊛ v .:? "layers"              .!= []
 
 -- | Natural (innate) weapon block — claws/fangs/fists. Optional on
 --   the unit YAML. When present, Combat.Resolution falls back to
 --   this when no equipped weapon is found.
+-- | Per-attack-kind strike block inside a natural_weapon. All fields
+--   optional so a creature declares only what it has (a clawless biter
+--   leaves out `slash`). `material` names a substance from
+--   data/substances/*.yaml.
+data UnitYamlStrike = UnitYamlStrike
+    { uysEff          ∷ !Float
+    , uysMaterial     ∷ !Text
+    , uysBladeLength  ∷ !Float   -- cm (stab, slash)
+    , uysSharpness    ∷ !Float   -- lower = sharper (stab, slash)
+    , uysImpactArea   ∷ !Float   -- mm² (blunt)
+    , uysMass         ∷ !Float   -- kg of the striking appendage
+    , uysLength       ∷ !Float   -- cm lever length; 0 ⇒ use blade_length
+    , uysCenterOfMass ∷ !Float   -- 0..1 from the limb
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlStrike where
+    parseJSON = withObject "UnitYamlStrike" $ \v → UnitYamlStrike
+        ⊚ v .:? "eff"            .!= 0.0
+        ⊛ v .:? "material"       .!= "flesh"
+        ⊛ v .:? "blade_length"   .!= 0.0
+        ⊛ v .:? "sharpness"      .!= 1000.0   -- effectively dull if unspecified
+        ⊛ v .:? "impact_area"    .!= 0.0
+        ⊛ v .:? "mass"           .!= 0.0
+        ⊛ v .:? "length"         .!= 0.0
+        ⊛ v .:? "center_of_mass" .!= 0.5
+
+-- | A natural weapon that delivers no attack of a given kind.
+emptyStrike ∷ UnitYamlStrike
+emptyStrike = UnitYamlStrike 0.0 "flesh" 0.0 1000.0 0.0 0.0 0.0 0.5
+
+-- | Default blunt strike (everything can throw a clumsy bludgeon).
+defaultBluntStrike ∷ UnitYamlStrike
+defaultBluntStrike = UnitYamlStrike 0.5 "bone" 0.0 1000.0 0.0 0.0 0.0 0.5
+
 data UnitYamlNaturalWeapon = UnitYamlNaturalWeapon
     { uynwWeaponClass          ∷ !Text
-    , uynwEffectiveBladeLength ∷ !Float   -- cm
+    , uynwEffectiveBladeLength ∷ !Float   -- cm; reach only
     , uynwAttackCooldown       ∷ !Float   -- seconds
-    , uynwStabEff              ∷ !Float
-    , uynwSlashEff             ∷ !Float
-    , uynwBluntEff             ∷ !Float
+    , uynwSlash                ∷ !UnitYamlStrike
+    , uynwStab                 ∷ !UnitYamlStrike
+    , uynwBlunt                ∷ !UnitYamlStrike
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlNaturalWeapon where
@@ -203,9 +252,9 @@ instance FromJSON UnitYamlNaturalWeapon where
         ⊚ v .:  "weapon_class"
         ⊛ v .:? "effective_blade_length" .!= 0.0
         ⊛ v .:? "attack_cooldown"        .!= 2.0
-        ⊛ v .:? "stab_eff"               .!= 0.0
-        ⊛ v .:? "slash_eff"              .!= 0.0
-        ⊛ v .:? "blunt_eff"              .!= 0.5
+        ⊛ v .:? "slash"                  .!= emptyStrike
+        ⊛ v .:? "stab"                   .!= emptyStrike
+        ⊛ v .:? "blunt"                  .!= defaultBluntStrike
 
 -- | Innate per-kind damage resistance. Defaults to all zeros
 --   (humans). Bears declare slash 0.5, stab 0.1, blunt 0.3.

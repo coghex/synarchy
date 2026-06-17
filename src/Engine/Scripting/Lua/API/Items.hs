@@ -27,9 +27,11 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
+import Engine.Asset.YamlTextures (lookupTextureName)
 import Engine.Asset.YamlItems
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
+import Item.Roll (rollItemWeight)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import World.Cursor.Types (CursorState(..))
@@ -48,6 +50,15 @@ import World.Types (WorldManager(..), WorldState(..))
 --   you'll get the usual broken-texture behaviour at draw time.
 missingEquipmentTexture ∷ FilePath
 missingEquipmentTexture = "assets/textures/equipment/missing_equipment.png"
+
+-- | Overlay drawn over a broken item's sprite. Loaded once (lazily,
+--   alongside item sprites) and registered under this name; the ground-
+--   item renderer looks it up by name via the texture-name registry.
+brokenEquipmentTexture ∷ FilePath
+brokenEquipmentTexture = "assets/textures/equipment/broken_equipment.png"
+
+brokenEquipmentTexName ∷ Text
+brokenEquipmentTexName = "broken_equipment"
 
 resolveSpritePath ∷ EngineEnv → FilePath → IO FilePath
 resolveSpritePath env preferred = do
@@ -77,6 +88,14 @@ loadItemYamlFn env backendState = do
                 defs ← loadItemYaml logger filePath
                 let (lteq, _) = lbsMsgQueues backendState
 
+                -- Register the broken-weapon overlay once (same flow as
+                -- item sprites). The ground-item renderer fetches it by
+                -- name from the texture-name registry.
+                reg0 ← readIORef (textureNameRegistryRef env)
+                when (isNothing (lookupTextureName brokenEquipmentTexName reg0)) $
+                    void $ loadAndRegister env backendState lteq
+                               brokenEquipmentTexName brokenEquipmentTexture
+
                 total ← foldM (\acc def → do
                     -- Load the sprite texture so it's ready for any
                     -- future inventory grid UI. Register under
@@ -104,15 +123,29 @@ loadItemYamlFn env backendState = do
                                 , iwBluntEff       = iywBluntEff w
                                 , iwWeaponClass    = iywWeaponClass w
                                 , iwAttackCooldown = iywAttackCooldown w
+                                , iwLength         = if iywLength w > 0
+                                                     then iywLength w
+                                                     else iywBladeLength w
+                                , iwCenterOfMass   = iywCenterOfMass w
                                 })
                             (iydWeapon def)
+                        armor = fmap
+                            (\a → ItemArmor
+                                { iaThickness = iyaThickness a
+                                , iaCovers    = iyaCovers a
+                                })
+                            (iydArmor def)
+                        (wMean, wSpec) = case iydWeight def of
+                            WeightFixed w   → (w, Nothing)
+                            WeightSpec m r  → (m, Just (m, r))
                         itemDef = ItemDef
                             { idName        = iydName def
                             , idDisplayName = if T.null (iydDisplayName def)
                                               then iydName def
                                               else iydDisplayName def
                             , idTexture     = handle
-                            , idWeight      = iydWeight def
+                            , idWeight      = wMean
+                            , idWeightSpec  = wSpec
                             , idKind        = iydKind def
                             , idCategory    = iydCategory def
                             , idMake        = iydMake def
@@ -124,6 +157,7 @@ loadItemYamlFn env backendState = do
                             , idContainer   = container
                             , idFood        = food
                             , idWeapon      = weapon
+                            , idArmor       = armor
                             , idUnequippable = iydUnequippable def
                             , idBuffs       = map
                                 (\b → ItemBuff
@@ -214,13 +248,17 @@ itemSpawnGroundFn env = do
             let name = TE.decodeUtf8 nameBS
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
             mWs ← Lua.liftIO $ activeWorld env
-            case (HM.member name (imDefs im), mWs) of
-                (True, Just ws) → do
+            case (HM.lookup name (imDefs im), mWs) of
+                (Just iDef, Just ws) → do
+                    wght ← Lua.liftIO $
+                        rollItemWeight iDef (statRNGRef env)
                     let inst = ItemInstance
                             { iiDefName = name
                             , iiCurrentFill = fill
                             , iiQuality = quality
                             , iiCondition = condition
+                            , iiWeight = wght
+                            , iiSharpness = 100.0
                             }
                     gid ← Lua.liftIO $
                         atomicModifyIORef' (wsGroundItemsRef ws) $
@@ -260,6 +298,10 @@ itemListGroundFn env = do
                     Lua.pushnumber (Lua.Number (realToFrac
                         (iiCondition (giInst gi))))
                     Lua.setfield (Lua.nth 2) "condition"
+                    Lua.pushnumber (Lua.Number (realToFrac
+                        (iiWeight (giInst gi)
+                         + iiCurrentFill (giInst gi))))
+                    Lua.setfield (Lua.nth 2) "weight"
                     Lua.rawseti (Lua.nth 2) (fromIntegral i)
             return 1
 

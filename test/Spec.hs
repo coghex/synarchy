@@ -6,6 +6,7 @@ import Test.Hspec
 import qualified Test.UPrelude as UPrelude
 import qualified Test.Engine.Core.Queue as CoreQueue
 import qualified Test.Engine.Core.Var as CoreVar
+import qualified Test.Engine.Input.Thread as InputThread
 import qualified Test.Engine.Graphics.Window.GLFW as TestGLFW
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Graphics.Vulkan.Surface as VulkanSurface
@@ -59,6 +60,7 @@ main = do
             describe "UPrelude" UPrelude.spec
             describe "Engine.Core.Queue" CoreQueue.spec
             describe "Engine.Core.Var" CoreVar.spec
+            describe "Engine.Input.Thread" InputThread.spec
         -- GLFW tests
         describe "GLFW Tests" $ TestGLFW.spec env initialState
         -- Vulkan tests

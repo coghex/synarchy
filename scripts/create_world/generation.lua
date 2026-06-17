@@ -4,6 +4,7 @@
 local advancedTab  = require("scripts.create_world.advanced_tab")
 local generalTab   = require("scripts.create_world.general_tab")
 local climateTab   = require("scripts.create_world.climate_tab")
+local timelineTab  = require("scripts.create_world.timeline_tab")
 local worldManager = require("scripts.world_manager")
 
 local generation = {}
@@ -42,6 +43,16 @@ function generation.start(menu, logPanel)
 
     local clVals = climateTab.getWidgetValues()
     for k, v in pairs(clVals) do menu.pending[k] = v end
+
+    local tlVals = timelineTab.getWidgetValues()
+    if tlVals.eonCount  then menu.pending.timelineEon = tlVals.eonCount  end
+    if tlVals.eraCount  then menu.pending.timelineEra = tlVals.eraCount  end
+    if tlVals.periodMin then menu.pending.periodMin   = tlVals.periodMin end
+    if tlVals.periodMax then menu.pending.periodMax   = tlVals.periodMax end
+    if tlVals.epochMin  then menu.pending.epochMin    = tlVals.epochMin  end
+    if tlVals.epochMax  then menu.pending.epochMax    = tlVals.epochMax  end
+    if tlVals.ageMin    then menu.pending.ageMin      = tlVals.ageMin    end
+    if tlVals.ageMax    then menu.pending.ageMax      = tlVals.ageMax    end
 
     local p = menu.pending
 
@@ -91,6 +102,16 @@ function generation.start(menu, logPanel)
             evap_scale       = tonumber(p.evapScale) or 1.0,
             albedo_feedback  = tonumber(p.albedoFeedback) or 0.5,
             thc_threshold    = tonumber(p.thcThreshold) or 1.025,
+        },
+        timeline = {
+            eon_count  = math.max(1, math.floor(tonumber(p.timelineEon) or 1)),
+            era_count  = math.max(1, math.floor(tonumber(p.timelineEra) or 2)),
+            period_min = math.max(1, math.floor(tonumber(p.periodMin) or 1)),
+            period_max = math.max(1, math.floor(tonumber(p.periodMax) or 3)),
+            epoch_min  = math.max(1, math.floor(tonumber(p.epochMin) or 1)),
+            epoch_max  = math.max(1, math.floor(tonumber(p.epochMax) or 3)),
+            age_min    = math.max(1, math.floor(tonumber(p.ageMin) or 1)),
+            age_max    = math.max(1, math.floor(tonumber(p.ageMax) or 3)),
         },
     })
 
