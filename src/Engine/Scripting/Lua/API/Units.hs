@@ -3062,11 +3062,18 @@ treatBleedingIO env medic patient mOwner = do
             let parts = case HM.lookup (uiDefName pat) (umDefs um0) of
                     Just d  → HM.fromList [(bpId bp, bp) | bp ← udBodyParts d]
                     Nothing → HM.empty
+                -- Mirror Combat.Wounds.bleedRateFor: a wound that has
+                -- already self-clotted (or been dressed) isn't really
+                -- bleeding, so the (1 − clot) and dressing factors must be
+                -- in here too. Without them the medic could rank a high-
+                -- severity but clotted wound above the one actually seeping
+                -- and waste a bandage on it.
                 scoreOf w = (woundSeverity w * woundSeverity w)
                           * kindBleedFactor (woundKind w)
                           * maybe 1.0 bpBleedFactor
                                 (HM.lookup (woundPart w) parts)
                           * woundBandage w
+                          * (1 - woundClot w)
                 bleeders = [ (w, scoreOf w) | w ← uiWounds pat
                            , woundBandage w > 0.02, scoreOf w > 1.0e-4 ]
             case bleeders of

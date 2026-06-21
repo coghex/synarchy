@@ -2794,25 +2794,57 @@ local function isAlly(uid, medicFaction)
         or (medicFaction == "player" and f == "debug")
 end
 
--- The best CAPABLE medic for a patient among all live units (the
--- patient excluded — no self-treatment in this MVP). Returns the uid.
-local function bestMedicFor(patientUid)
-    local bestUid, bestCap = nil, 0
-    for _, uid in ipairs(unit.getAllIds() or {}) do
-        if uid ~= patientUid and canActAsMedic(uid) then
-            local cap = medicCapability(uid)
-            if cap > bestCap then bestUid, bestCap = uid, cap end
-        end
-    end
-    return bestUid
-end
-
 -- A best-medic who's fighting can't break off — that's what frees a
 -- lesser medic to step in.
 local function medicBusyInCombat(uid)
     local st = uid and aiState[uid]
     local act = st and st.currentAction
     return act == "retreat" or act == "engage" or act == "attack_target"
+end
+
+-- Is `uid` free to take on THIS patient right now? A medic in combat
+-- can't break off, and one already committed to a DIFFERENT patient is
+-- spoken for — either way it's unavailable, which is what lets a free
+-- lesser medic step in. (A medic already claiming THIS patient is still
+-- "available" for it — that's the one re-confirming its own claim.)
+local function medicAvailable(uid, patientUid)
+    if medicBusyInCombat(uid) then return false end
+    local st = aiState[uid]
+    if st and st.treatClaim and st.treatClaim.patient ~= patientUid then
+        return false
+    end
+    return true
+end
+
+-- The best AVAILABLE medic for a patient, scored by capability with a
+-- gentle distance discount (a much-nearer competent medic beats a
+-- marginally-better distant one, so we don't summon a skilled medic from
+-- across the map past a free one standing next to the patient). Excludes
+-- the patient itself, the dead/collapsed, NON-allies, medics in combat,
+-- and medics already committed to a different patient. Returns the uid,
+-- or nil if nobody can help. `params` supplies treat_scan_range.
+local function bestMedicFor(patientUid, params)
+    local pinfo = unit.getInfo(patientUid)
+    local range = (params and params.treat_scan_range) or 60.0
+    local bestUid, bestScore = nil, 0
+    for _, uid in ipairs(unit.getAllIds() or {}) do
+        if uid ~= patientUid and canActAsMedic(uid)
+           and isAlly(patientUid, unit.getFaction(uid))
+           and medicAvailable(uid, patientUid) then
+            local cap = medicCapability(uid)
+            if cap > 0 then
+                local minfo = unit.getInfo(uid)
+                local d = (pinfo and minfo)
+                    and distance(pinfo.gridX, pinfo.gridY,
+                                 minfo.gridX, minfo.gridY) or 0
+                local score = cap * (1 - 0.5 * math.min(1, d / range))
+                if score > bestScore then
+                    bestUid, bestScore = uid, score
+                end
+            end
+        end
+    end
+    return bestUid
 end
 
 -- Any LIVE unit (≠ excludeUid) already claiming this patient?
@@ -2862,15 +2894,13 @@ local function treatAllyUtility(uid, s, params)
     local patient = findPatient(uid, info, params)
     if not patient then return -math.huge end
 
-    -- Squad ranking. If I'm the best, I rush. Otherwise defer to the
-    -- best medic UNLESS they're tied up in combat and nobody else has
-    -- stepped in. (findPatient already skips patients another medic
-    -- has claimed, so "nobody else is on it" is mostly handled there;
-    -- the combat check is what lets a lesser medic act at all.)
-    if bestMedicFor(patient.uid) ~= uid then
-        if not medicBusyInCombat(bestMedicFor(patient.uid)) then
-            return -math.huge
-        end
+    -- Squad ranking: only the best AVAILABLE allied medic takes the
+    -- patient. bestMedicFor already excludes medics in combat or
+    -- committed to another patient (and non-allies), so a free lesser
+    -- medic automatically steps in when the best is tied up — and two
+    -- bleeding allies get two different medics instead of serialising.
+    if bestMedicFor(patient.uid, params) ~= uid then
+        return -math.huge
     end
 
     s.treatPending = patient
