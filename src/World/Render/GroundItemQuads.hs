@@ -288,6 +288,10 @@ hitTestGroundItemAt env worldState pixX pixY = do
         let facing = camFacing camera
             zoom   = camZoom camera
             zSlice = camZSlice camera
+            -- Match the render band (renderGroundItemQuads) so a visible
+            -- item below the camera is also clickable, not just within 25.
+            effectiveDepth =
+                min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
             (camX, camY) = camPosition camera
 
             vw     = zoom * (fromIntegral winW / fromIntegral winH)
@@ -303,7 +307,7 @@ hitTestGroundItemAt env worldState pixX pixY = do
                 , Just (tz, _tex, drawX, drawY, quadW, quadH, _uw)
                     ← [itemGeometry tileData im texSizes facing zSlice gi]
                 , tz ≤ zSlice
-                , tz ≥ zSlice - 25
+                , tz ≥ zSlice - effectiveDepth
                 , let cx = drawX + quadW * 0.5
                       cy = drawY + quadH * 0.5
                       dx = worldX - cx

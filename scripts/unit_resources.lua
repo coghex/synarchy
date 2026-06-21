@@ -20,6 +20,8 @@
 -- current value up or down.
 
 local stats = require("scripts.unit_stats")
+local movementSpeed = require("scripts.movement_speed")
+local injuries = require("scripts.injuries")
 
 local unitResources = {}
 
@@ -76,7 +78,17 @@ local config = {
     acolyte = {
         stamina = {
             max_from               = "max_stamina",
-            drain_walking          = 0.1,    -- per second
+            -- Speed-dependent locomotion drain. When the unit is moving
+            -- (walking/running), stamina drains as
+            --   drain = (move_regen_factor·endurance) · (speed/comfort)²
+            -- and regens at move_regen_factor·endurance — so the net is
+            -- 0 exactly at the unit's comfort speed, positive below it,
+            -- and sharply negative when sprinting. comfort/sprint come
+            -- from scripts/movement_speed.lua. Falls back to drain_walking
+            -- only if speed_drain is unset.
+            speed_drain            = true,
+            move_regen_factor      = 0.5,
+            drain_walking          = 0.1,    -- per second (legacy fallback)
             -- These four are multiplied by current endurance.
             -- For endurance 1.0: walking net = +0.02/s (regens),
             -- idle = +0.5/s, collapsed = +0.3/s, reviving = +0.3/s.
@@ -160,6 +172,8 @@ local config = {
     bear_brown = {
         stamina = {
             max_from               = "max_stamina",
+            speed_drain            = true,
+            move_regen_factor      = 0.5,
             drain_walking          = 0.1,
             regen_factor_walking   = 0.12,
             regen_factor_idle      = 0.5,
@@ -217,6 +231,15 @@ local function unitCoords(info)
     return math.floor(info.gridX or 0), math.floor(info.gridY or 0)
 end
 
+-- uid:slot we've already emptied by a disabling injury (drop a maimed
+-- hand's weapon exactly once). Declared here so emitDeathAlert can clear
+-- it on death; populated by dropDisabledHandWeapons below.
+local droppedSlots = {}
+local function clearDropState(uid)
+    droppedSlots[uid .. ":left_hand"]  = nil
+    droppedSlots[uid .. ":right_hand"] = nil
+end
+
 local function emitDeathAlert(uid, cause)
     local info = unit.getInfo(uid)
     if not info then return end
@@ -227,10 +250,18 @@ local function emitDeathAlert(uid, cause)
     else
         engine.emitEvent("survival_critical", msg)
     end
+    -- Also narrate the death in the combat log so injury / suffocation /
+    -- survival deaths read consistently alongside engine combat kills.
+    -- The combat-log script refines the cause from the corpse's wounds
+    -- (injuries.deathCause); `cause` here is the woundless fallback.
+    if combat and combat.emitDeath then
+        combat.emitDeath(uid, cause)
+    end
     -- Death clears any pending warning flags so a future re-use of
     -- the same uid (engine reassigns ids on destroy/spawn) doesn't
     -- inherit stale state.
     unitAlertState[uid] = nil
+    clearDropState(uid)
 end
 
 local function emitWarningAlert(uid, info, msg)
@@ -480,13 +511,30 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
     -- metabolism_rate is already activity-aware (Lua-derived applies
     -- the walking multiplier internally), so the drain code just
     -- reads the authoritative burn rate.
-    local drainActivity = (activity == "walking" and params.drain_walking) or 0
+    local isMoving = (activity == "walking" or activity == "running")
     local drainConstant = params.drain_constant or 0
     local drainMetabolic = 0
     if params.drain_metabolic then
         drainMetabolic = stats.get(uid, "metabolism_rate") or 0
     end
     local drainOrganFailure = inOrganFailure and ORGAN_FAILURE_DRAIN_PER_SEC or 0
+
+    local drainActivity
+    if params.speed_drain and isMoving and not inOrganFailure then
+        -- Speed-dependent locomotion: recover at a fixed aerobic supply,
+        -- drain as (speed/comfort)². Comfort speed is the equilibrium
+        -- (net 0); slower regenerates, sprinting drains hard. Overrides
+        -- both the activity regen factor and the flat drain_walking.
+        local supply  = (params.move_regen_factor or 0.5) * endurance
+        local v       = (unit.getInfo(uid) or {}).moveSpeed or 0
+        local comfort = movementSpeed.comfort(uid)
+        local ratio   = (comfort > 0) and (v / comfort) or 1
+        regen         = supply
+        drainActivity = supply * ratio * ratio
+    else
+        drainActivity = (activity == "walking" and params.drain_walking) or 0
+    end
+
     local drain = drainActivity + drainConstant + drainMetabolic + drainOrganFailure
 
     local next = current + (regen - drain) * dt
@@ -571,6 +619,22 @@ local function checkRevive(uid, defConfig)
     local pose = unit.getPose(uid)
     if pose ~= "collapsed" then return end
 
+    -- Fall-knockdown gate. A unit knocked down by a fall recovers on its
+    -- own self-timed clock (engine-side, in the movement tick), NOT via
+    -- this resource-revive path. Standing it up here would (a) cut the
+    -- knockdown stun short whenever resources happen to be fine, and (b)
+    -- conflate "winded by a fall" with "recovered from exhaustion". Leave
+    -- knockdowns alone; the engine stands them up when the timer expires,
+    -- and if the unit is ALSO resource-collapsed it re-collapses cleanly
+    -- as a survival collapse (no getup timer) right after.
+    local info = unit.getInfo(uid)
+    if info and info.knockedDown then return end
+
+    -- Injury gate. A unit incapacitated by injury (concussion / a
+    -- disabling leg break) stays down until the wound heals below the
+    -- threshold — same hysteresis idea as the blood gate below.
+    if injuries.isIncapacitated(uid) then return end
+
     -- Blood-loss gate. The combat wound subsystem
     -- (Combat.Wounds.tickOneUnit) collapses a unit when blood drops
     -- below 30% of max. If we revive purely on stamina/hydration,
@@ -626,6 +690,182 @@ local function tickStance(uid, dt)
 end
 
 -----------------------------------------------------------
+-- Functional consequence: a severed or shattered hand/arm can no longer
+-- grip — the unit DROPS whatever weapon it held in that hand onto the
+-- ground (instance-preserving, so the dropped dagger keeps its condition /
+-- sharpness). A lost finger or a hurt bicep doesn't disarm; only the
+-- grip-bearing structures do.
+-----------------------------------------------------------
+local GRIP_DISABLERS = { hand = true, palm = true, forearm = true, arm = true }
+local HAND_SLOT = { ["l_"] = "left_hand", ["r_"] = "right_hand" }
+-- (droppedSlots + clearDropState are declared above emitDeathAlert.)
+
+local function dropDisabledHandWeapons(uid)
+    local ws = unit.getWounds(uid)
+    if type(ws) ~= "table" then return end
+    for _, w in ipairs(ws) do
+        local p    = w.part or ""
+        local slot = HAND_SLOT[p:sub(1, 2)]          -- "l_"/"r_" → slot
+        if slot then
+            local tokn = p:gsub("^[lr]_", "")
+            local disabling = GRIP_DISABLERS[tokn]
+                and (w.kind == "severed"
+                     or (w.kind == "fracture" and (w.severity or 0) >= 0.85))
+            local key = uid .. ":" .. slot
+            if disabling and not droppedSlots[key] then
+                local lo   = equipment.getLoadout(uid)
+                local held = lo and lo[slot]
+                if held then
+                    if unit.dropEquipmentToGround(uid, slot) then
+                        droppedSlots[key] = true
+                        local info = unit.getInfo(uid)
+                        if info then
+                            local gx, gy = unitCoords(info)
+                            local msg = unitLabel(info) .. " drops "
+                                .. (held.displayName or held.defName or "a weapon")
+                            if gx and gy then
+                                engine.emitEventAt("unit_event", msg, gx, gy)
+                            else
+                                engine.emitEvent("unit_event", msg)
+                            end
+                        end
+                    end
+                else
+                    droppedSlots[key] = true          -- nothing to drop; stop rechecking
+                end
+            end
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- Injury tick: death-by-injury + disabling collapse.
+--
+-- Falls (and combat) stamp wounds via the engine; this is where those
+-- injuries TRIGGER consequences:
+--   * Lethal: any vital body part whose wounds sum to >= 1.0 kills the
+--     unit, with a player alert. A tall fall thus kills by breaking the
+--     body — the death emerges from the injuries, not a height check.
+--   * Disabling (a concussion or a shattered leg): puts/keeps the unit
+--     on the ground (a normal Collapsed). It can't get up — checkRevive
+--     gates on the same condition — until the injury heals enough.
+--
+-- Returns true if the unit died this tick (caller skips the rest).
+local function tickInjuries(uid, info, pose)
+    if pose == "dead" then return false end
+
+    local cause = injuries.lethalCause(uid)
+    if cause then
+        emitDeathAlert(uid, cause)
+        unit.kill(uid)
+        return true
+    end
+
+    -- A maimed hand drops its weapon (once).
+    dropDisabledHandWeapons(uid)
+
+    -- Locomotor state machine (don't fight a fall knockdown — that's the
+    -- engine's own self-timed collapse):
+    --   * unconscious (concussion)        → Collapsed (can't even crawl)
+    --   * conscious but legs gone         → Crawling (drags itself along)
+    --   * recovered enough to walk        → stand back up
+    if not (info and info.knockedDown) then
+        if injuries.isUnconscious(uid) then
+            if pose ~= "collapsed" then unit.collapse(uid) end
+        elseif injuries.cannotWalk(uid) then
+            -- Conscious + can't walk: crawl. Covers both dropping from
+            -- standing AND rising out of a collapse once consciousness
+            -- returns but the legs are still broken.
+            if pose ~= "crawling" then unit.crawl(uid) end
+        elseif pose == "crawling" then
+            -- Legs healed enough to walk — stand up (revive handles the
+            -- Crawling→Standing snap; checkRevive handles Collapsed).
+            unit.revive(uid)
+        end
+    end
+    return false
+end
+
+-----------------------------------------------------------
+-- Failure meters: delayed-death pathways. A physiological system fills a
+-- 0→1 meter from its driving injuries and KILLS at 1.0, reporting its
+-- cause — but it RECOVERS if the injury is treated below threshold, so a
+-- dying unit has a survival window. (Blood loss is the existing analog,
+-- via the blood resource hitting 0.) First meter: HYPOXIA / suffocation.
+-----------------------------------------------------------
+-- Each meter: a 0→1 physiological bar driven by an injury function
+-- (injuries.lua), filling toward death over `fillSec` game-seconds at full
+-- failure and recovering at `recover`/s once the driving injury is treated
+-- below `deadband`. Killing reports the cause (refined from the actual
+-- wounds, falling back to the meter's own label). Death is delayed, so a
+-- catastrophically-wounded unit has a survival window for sci-fi treatment.
+--   stat     — the unit stat the meter lives in (saved with the unit)
+--   driver   — injuries.lua fn (uid → 0..1 failure fraction)
+--   fillSec  — game-seconds at full failure to reach death
+--   deadband — failure below this still self-compensates → no fill
+--   recover  — meter drained per second when below deadband
+--   cause    — fallback death-cause label (woundless / systemic)
+local FAILURE_METERS = {
+    -- HYPOXIA: total airway/lung loss → suffocation (~3 "minutes").
+    { stat = "hypoxia", driver = injuries.pulmonaryFailure,
+      fillSec = 180, deadband = 0.5,  recover = 0.08, cause = "suffocation" },
+    -- NEURO: catastrophic brain trauma → nervous-system shutdown (fast).
+    { stat = "neuro",   driver = injuries.neuroFailure,
+      fillSec = 45,  deadband = 0.55, recover = 0.05, cause = "brain death" },
+    -- SHOCK: massive aggregate acute trauma → cardiac arrest from shock.
+    { stat = "shock",   driver = injuries.shockFailure,
+      fillSec = 90,  deadband = 0.5,  recover = 0.06, cause = "shock" },
+    -- ORGAN: untreated visceral trauma festering over "hours" (sepsis /
+    -- hepatic encephalopathy / renal failure) — the slow walk-away death.
+    { stat = "organ",   driver = injuries.organFailure,
+      fillSec = 600, deadband = 0.45, recover = 0.04, cause = "organ failure" },
+}
+
+-- Returns true if a meter killed the unit this tick. Meters tick in order;
+-- the first to top out kills, with its (wound-refined) cause.
+local function tickFailureMeters(uid, dt)
+    for _, m in ipairs(FAILURE_METERS) do
+        local v    = unit.getStat(uid, m.stat) or 0
+        local fail = m.driver(uid) or 0
+        local deficit = (fail <= m.deadband) and 0
+                        or (fail - m.deadband) / (1 - m.deadband)
+        if deficit > 0 then
+            v = v + deficit * (1 / m.fillSec) * dt
+        else
+            v = v - m.recover * dt                 -- compensates once treated
+        end
+        v = math.max(0, math.min(1, v))
+        unit.setStat(uid, m.stat, v)
+        if v >= 1.0 then
+            emitDeathAlert(uid, injuries.deathCause(uid) or m.cause)
+            unit.kill(uid)
+            return true
+        end
+    end
+    return false
+end
+
+-- Per-meter readout for the info panel: current 0..1 value, signed
+-- per-(game)second rate (+ filling toward death, − recovering once the
+-- driving injury is treated), the driving failure fraction, and the death
+-- cause label. Mirrors the tickFailureMeters math exactly so the tooltip
+-- numbers match what the meter is actually doing.
+function unitResources.meterInfo(uid)
+    local out = {}
+    for _, m in ipairs(FAILURE_METERS) do
+        local v       = unit.getStat(uid, m.stat) or 0
+        local fail    = m.driver(uid) or 0
+        local deficit = (fail <= m.deadband) and 0
+                        or (fail - m.deadband) / (1 - m.deadband)
+        local rate
+        if deficit > 0 then rate = deficit * (1 / m.fillSec)   -- filling
+        else                rate = -m.recover end               -- recovering
+        out[m.stat] = { value = v, rate = rate, fail = fail, cause = m.cause }
+    end
+    return out
+end
+
+-----------------------------------------------------------
 -- Update (called at tick interval by engine.loadScript)
 -----------------------------------------------------------
 function unitResources.update(dt)
@@ -637,6 +877,11 @@ function unitResources.update(dt)
         local info = unit.getInfo(uid)
         if info and info.defName then
             tickStance(uid, dt)
+            local pose0 = unit.getPose(uid) or "standing"
+            -- Injuries first: a lethal injury kills the unit (skip the
+            -- rest of its tick); a disabling one collapses it.
+            if not tickInjuries(uid, info, pose0)
+               and not tickFailureMeters(uid, dt) then
             local defConfig = config[info.defName]
             if defConfig then
                 local activity = unit.getActivity(uid) or "idle"
@@ -653,6 +898,7 @@ function unitResources.update(dt)
                 tickStarvation(uid, dt)
                 checkRevive(uid, defConfig)
             end
+            end -- tickInjuries guard
         end
     end
 end

@@ -54,7 +54,7 @@ import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Data.IORef (readIORef, atomicModifyIORef')
-import Data.List (foldl')
+import Data.List (foldl', maximumBy)
 import Data.Word (Word32)
 import qualified System.Random as Random
 import Combat.Types (CombatEvent(..), AttackMode(..), attackModeText)
@@ -69,6 +69,9 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , NaturalResistance(..), NaturalWeapon(..)
                   , StrikeProfile(..)
                   , Wound(..))
+import Unit.Injury (penetrate, penetrateDeposits, woundFactor, tissueInjuryKind
+                   , injuryFloor, capInjurySeverity, allocateSubparts
+                   , tissueCapacityWeight, defaultPartCapacity)
 import Unit.Command.Types (UnitCommand(..))
 
 -- ----- Tuning constants -----
@@ -151,23 +154,6 @@ refHardness = 600.0
 refShearWeapon ∷ Float
 refShearWeapon = 800.0
 
--- | Reference layer thickness (mm). A layer this thick, at resistance
---   1.0, costs one unit of the absorb scales below.
-layerRefThickness ∷ Float
-layerRefThickness = 10.0
-
--- | Energy (J) a reference-thickness layer of resistance 1.0 absorbs
---   from a cut/pierce, before the weapon's penetration divides it.
---   Sized so a 7 mm skull stops a hand-knife stab but yields to a
---   heavy/spiked blow.
-cutAbsorbScale ∷ Float
-cutAbsorbScale = 40.0
-
--- | Momentum (kg·m/s) a reference-thickness layer of resistance 1.0
---   soaks from a blunt impact. Soft layers cushion; the rest transmits
---   inward to crush the core.
-bluntAbsorbScale ∷ Float
-bluntAbsorbScale = 20.0
 
 -- | ENERGY anchor (stab / slash). Effective wound-energy (J) per point
 --   of a body part's max-HP to reach severity 1.0 (part destruction).
@@ -183,6 +169,34 @@ energyPerHp = 2.0
 --   can). Calibrated so a solid heavy maul blow ≈ 0.3 of a human torso.
 momentumPerHp ∷ Float
 momentumPerHp = 2.5
+
+-- | Scales a part's tissue CAPACITY (Σ tissue-weight × thickness mm, from
+--   Unit.Injury.layerCapacity) into its severity-normalising "max HP".
+--   Calibrated so the limb/torso capacities land near the old
+--   body_mass×max_health_factor values (a baseline thigh ≈ 17 HP), then
+--   tuned by feel against headless kills. This is the single global knob
+--   that replaced the per-part max_health_factor.
+capacityHpScale ∷ Float
+capacityHpScale = 0.35
+
+-- | Reference build (a default acolyte: body_mass 22·1.8²·1.0 ≈ 71 kg,
+--   15 % fat) the per-layer thickness scaling normalises against, so the
+--   yaml authors human-reference soft-tissue thicknesses and every other
+--   species' fat/muscle depth derives from its own seeded fat_mass /
+--   lean_mass. See `layerThickScale` in `computeSeverity`.
+refBodyMass, refFatMass, refLeanMass ∷ Float
+refBodyMass = 71.3
+refFatMass  = 14.3
+refLeanMass = 30.3
+
+-- | Per-LAYER severity normaliser. A wound's severity is its deposited
+--   energy over the capacity of the TISSUE that took it (summed across the
+--   layers of that tissue type) — so a skin/fat/muscle cut reads as
+--   "fraction of soft tissue opened", independent of the bone/organ bulk
+--   behind it. This is what lets a dagger register a real laceration on a
+--   bear; tuned so it does NOT also shatter an acolyte's skull in one hack.
+layerHpScale ∷ Float
+layerHpScale = 0.9
 
 -- | Stance (combat readiness, 0..1) spent per swing — alongside
 --   stamina. A committed heavy swing leaves you far more open than a
@@ -263,10 +277,17 @@ kindSeverityFactor "blunt" = 0.7
 kindSeverityFactor _       = 1.0
 
 kindPainFactor ∷ Text → Float
-kindPainFactor "slash" = 1.0
-kindPainFactor "stab"  = 1.2
-kindPainFactor "blunt" = 1.5
-kindPainFactor _       = 1.0
+kindPainFactor "slash"      = 1.0
+kindPainFactor "stab"       = 1.2
+kindPainFactor "blunt"      = 1.5
+-- Shared injury kinds (also produced by falls): a broken bone is the
+-- most painful common injury; a concussion brings a splitting headache.
+kindPainFactor "fracture"   = 1.6
+kindPainFactor "concussion" = 1.3
+kindPainFactor "internal"   = 1.4
+kindPainFactor "arterial"   = 1.2
+kindPainFactor "severed"    = 2.0   -- losing a limb is the worst
+kindPainFactor _            = 1.0
 
 -- | Pain ceiling; normalised pain = pain / ceiling, clamped 0..1.
 painCeiling ∷ Float
@@ -322,11 +343,17 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
         atkH     = HM.lookupDefault 1.8 "height" (uiStats atk)
         reachLo  = atkH * 0.1
         reachHi  = atkH * 1.1 + bladeCm / 100.0
+        -- Only TARGETABLE macro-parts are aimed at; subparts (skull,
+        -- carotid, femur…) are never targeted directly — a hit on their
+        -- macro-part is allocated down to them. A body plan with no
+        -- subparts (every part targetable) behaves exactly as before.
+        targetableParts = filter bpTargetable (udBodyParts tdef)
         reachable = filter
             (\p → bpHeightLow p ≤ reachHi ∧ bpHeightHigh p ≥ reachLo)
-            (udBodyParts tdef)
+            targetableParts
         candidateParts = if null reachable
-            then udBodyParts tdef     -- safety fallback
+            then if null targetableParts then udBodyParts tdef
+                 else targetableParts    -- safety fallback
             else reachable
 
         pAtk = painFor atk
@@ -356,7 +383,11 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                 let (partKind, rng2) =
                         pickPartKind rng1 atk tdef mWeapon natW
                             candidateParts
-                in (rng2, Right partKind)
+                    -- One extra roll for subpart allocation (the 50/50
+                    -- skull/jaw etc.) — drawn here in the same atomic
+                    -- transaction so the whole resolution is one RNG step.
+                    (alloc, rng3) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
+                in (rng3, Right (partKind, alloc))
 
     case rngOut of
         Left () → do
@@ -366,26 +397,89 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                           <> T.pack (show atkRaw) <> " → "
                           <> T.pack (show tgtRaw)
                           <> " (p_hit=" <> T.pack (show pHit) <> ")"
-        Right (partId, kind) → do
-            let (severity, rawDmg, effDmg, hitLoad, wHard) =
-                    computeSeverity sm im atk tdef mEquipped natW
-                                     tgt partId kind mode
-                w = Wound
-                    { woundPart     = partId
-                    , woundKind     = kind
-                    , woundSeverity = severity
-                    , woundAt       = gt
-                    }
-            -- Append wound + stamp last-attacker memory atomically
-            -- so the bear AI's retaliate candidate always sees a
-            -- consistent (wound, attacker) pair on its next tick.
-            -- Taking a hit also rocks the victim's stance, by severity
-            -- × the kind's stance factor (blunt knocks hardest); it
-            -- recovers in unit_resources.lua.
-            let stanceHit = clamp 0.0 1.0 (severity * kindStanceFactor kind)
+        Right ((partId, kind), allocRoll) → do
+            let -- Resolve the swing into one or more (kind, energy-fraction)
+                -- COMPONENTS. A natural "paw" (combo_attack) fuses
+                -- slash + blunt + a little stab into ONE swing; the dedicated
+                -- bite stays a separate stab. Everything else is single-kind.
+                isCombo = maybe False nwComboAttack natW
+                -- Combo "paw" components are PRESENCE weights (how much of
+                -- each mechanism the swing carries), not strict energy
+                -- fractions — a paw rakes AND bludgeons hard with the same
+                -- motion, so it shouldn't dilute to a third of each. The
+                -- claw-tip stab is the minor component; the dedicated bite
+                -- is the separate full-strength stab.
+                components
+                    | isCombo ∧ (kind ≡ "slash" ∨ kind ≡ "blunt") =
+                        [("slash", 0.85), ("blunt", 0.70), ("stab", 0.20)]
+                    | otherwise = [(kind, 1.0)]
+                results =
+                    [ (k, computeSeverity sm im atk tdef mEquipped natW
+                                tgt partId k mode allocRoll w)
+                    | (k, w) ← components ]
+                sevOf (_, (s,_,_,_,_,_,_)) = s
+                -- Death/stance/verb-tier scalar = the worst single mechanism;
+                -- the headline KIND is the PRIMARY (first) component so a paw
+                -- reads as a maul, not a "jab" when the claw-tip stab happens
+                -- to score highest. Wear sums; wounds + log detail concat.
+                (_, (_, rawDmg, effDmg, _, wHard, _, _)) =
+                    maximumBy (\a b → compare (sevOf a) (sevOf b)) results
+                severity  = maximum (map sevOf results)
+                headKind  = case components of ((k,_):_) → k; _ → kind
+                hitLoad   = sum [ l | (_, (_,_,_,l,_,_,_)) ← results ]
+                -- Merge the components: the same tissue mustn't be wounded
+                -- once per mechanism. Keep the WORST severity per
+                -- (subpart, wound-kind) for the wound list and per
+                -- (subpart, layer) for the log — so a paw to the head reads
+                -- "lacerating the scalp, shattering the skull, destroying the
+                -- brain", not "the brain, the brain, and the brain".
+                dist =
+                    [ (p, k, s)
+                    | ((p, k), s) ← HM.toList (HM.fromListWith max
+                        [ ((p, k), s)
+                        | (_, (_,_,_,_,_,d,_)) ← results, (p, k, s) ← d ]) ]
+                logDetail =
+                    [ (sub, lyr, mat, s)
+                    | ((sub, lyr), (mat, s)) ← HM.toList (HM.fromListWith
+                        (\(m, s1) (_, s2) → (m, max s1 s2))
+                        [ ((sub, lyr), (mat, s))
+                        | (_, (_,_,_,_,_,_,ld)) ← results
+                        , (sub, lyr, mat, s) ← ld ]) ]
+                -- Combat-log narration data: the limb name, the weapon, and
+                -- the per-layer injury detail (serialized for the event
+                -- payload as "subpart:layer:material:sevPct|…").
+                limbName = maybe partId bpName
+                              (HM.lookup partId (bodyPartIndex tdef))
+                weaponName = case mEquipped of
+                    Just (_, idef, _) → idDisplayName idef
+                    Nothing → naturalAttackName natW kind isCombo
+                detailStr = T.intercalate "|"
+                    [ T.intercalate ":"
+                        [ sub, lname, lmat
+                        , T.pack (show (round (s * 100) ∷ Int)) ]
+                    | (sub, lname, lmat, s) ← logDetail ]
+                -- A landed hit produces a DISTRIBUTION of wounds, each on
+                -- the SUBPART it landed in. A mixed paw merges its slash,
+                -- blunt and stab wounds; the fallback is a single
+                -- headline-kind wound on the macro-part (a graze).
+                mkWound (pid, k, s) = Wound
+                    { woundPart = pid, woundKind = k
+                    , woundSeverity = s, woundAt = gt }
+                wounds = if null dist
+                         then [ mkWound (partId, headKind, severity) ]
+                         else map mkWound dist
+            -- Append wounds + stamp last-attacker memory atomically so the
+            -- bear AI's retaliate candidate always sees a consistent
+            -- (wound, attacker) pair on its next tick. Taking a hit also
+            -- rocks the victim's stance, by severity × the kind's stance
+            -- factor (blunt knocks hardest); it recovers in
+            -- unit_resources.lua. Stance + the death check use the OLD
+            -- scalar `severity` (total tissue destruction), unchanged by
+            -- the distribution — so combat lethality is exactly preserved.
+            let stanceHit = clamp 0.0 1.0 (severity * kindStanceFactor headKind)
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 let upd inst = inst
-                        { uiWounds          = w : uiWounds inst
+                        { uiWounds          = wounds <> uiWounds inst
                         , uiLastAttackerUid = Just atkRaw
                         , uiLastAttackerAt  = gt
                         , uiStats           =
@@ -396,8 +490,9 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                     ins = HM.adjust upd (UnitId tgtRaw)
                                           (umInstances um')
                 in (um' { umInstances = ins }, ())
-            pushEvent env (hitEvent gt atkRaw tgtRaw partId kind
-                                     severity rawDmg effDmg mode)
+            pushEvent env (hitEvent gt atkRaw tgtRaw partId headKind
+                                     severity rawDmg effDmg mode
+                                     limbName weaponName detailStr)
 
             -- Landed hit ⇒ the weapon takes wear (dulls, fractures, can
             -- break). Natural weapons don't wear.
@@ -405,15 +500,26 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
             -- ...and any armour the blow struck takes wear too.
             applyArmorWear env logger im sm tgtRaw partId rawDmg wHard
 
-            -- Vital-part instant-death check.
-            let partMeta = HM.lookup partId (bodyPartIndex tdef)
-                isVital  = maybe False bpVital partMeta
-            if isVital ∧ severity ≥ 1.0
+            -- Vital instant-death check. A hit kills outright when it
+            -- destroys a VITAL part or subpart (severity ≥ 1) — brain,
+            -- spine, heart, or (no-subpart body) a vital macro-part. The
+            -- distribution carries the subpart each wound landed in, so we
+            -- scan it for a lethal vital injury; the macro `severity`
+            -- scalar covers the no-subpart fallback.
+            let isVitalId pid = maybe False bpVital
+                                  (HM.lookup pid (bodyPartIndex tdef))
+                lethalHit =
+                    [ (pid, k) | (pid, k, s) ← dist, s ≥ 1.0, isVitalId pid ]
+                macroLethal = isVitalId partId ∧ severity ≥ 1.0 ∧ null dist
+            if not (null lethalHit) ∨ macroLethal
                 then do
                     setDead env tgtRaw
-                    let cause = kind <> "_" <> partId
+                    let (cpart, ckind) = case lethalHit of
+                            ((p, k) : _) → (p, k)
+                            []           → (partId, kind)
+                        cause = ckind <> "_" <> cpart
                     pushEvent env (deathEvent gt atkRaw tgtRaw
-                                                cause partId kind)
+                                                cause cpart ckind)
                     logDebug logger CatThread $
                         "death: " <> T.pack (show tgtRaw)
                             <> " by " <> cause
@@ -424,6 +530,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                             <> " → " <> T.pack (show tgtRaw)
                             <> " " <> kind <> "@" <> partId
                             <> " sev=" <> T.pack (show severity)
+                            <> " injuries=" <> T.pack (show dist)
 
     -- Drain stamina on EVERY swing (hit or miss). The motion costs
     -- the same; landing the blow is a separate roll. Cost is a
@@ -535,6 +642,21 @@ bodyPartIndex def = HM.fromList [(bpId p, p) | p ← udBodyParts def]
 --
 --   Weighted-random over all (p, k) pairs where the weapon has
 --   non-zero effectiveness for that kind. Single RNG draw.
+-- | Display name of the natural attack that delivered a given kind. A
+--   combo paw (slash/blunt trigger) reads as the blunt facet's name
+--   ("paw"); a stab is the stab facet ("fangs"); a plain slash the slash
+--   facet ("claws"). Falls back to "fists" when unnamed.
+naturalAttackName ∷ Maybe NaturalWeapon → Text → Bool → Text
+naturalAttackName Nothing _ _ = "fists"
+naturalAttackName (Just nw) kind combo =
+    let nm sp = let n = spName sp in if T.null n then "fists" else n
+    in if combo ∧ (kind ≡ "slash" ∨ kind ≡ "blunt")
+       then nm (nwBlunt nw)
+       else case kind of
+           "stab"  → nm (nwStab nw)
+           "slash" → nm (nwSlash nw)
+           _       → nm (nwBlunt nw)
+
 pickPartKind
     ∷ Random.StdGen → UnitInstance → UnitDef
     → Maybe ItemWeapon → Maybe NaturalWeapon
@@ -702,69 +824,23 @@ weaponPenetration rs kind =
             _       → 1.0
     in max 0.05 (sharpF * matF * qualityF)
 
--- | How lethal it is to deposit damage into a given tissue, per kind.
---   The vital innermost core (organ) is deadly; flesh bleeds; bone is
---   structural (a nicked bone is minor, a fractured one under a blunt
---   blow is serious); a hit landing on armour/skin-thin tissue barely
---   counts as a wound.
-woundFactor ∷ Text → Text → Float
-woundFactor mat kind = case mat of
-    "organ"   → 1.5
-    "flesh"   → if kind ≡ "blunt" then 0.3 else 0.7
-    "bone"    → if kind ≡ "blunt" then 0.7 else 0.2
-    "dentin"  → if kind ≡ "blunt" then 0.6 else 0.2
-    "keratin" → 0.3
-    "chitin"  → 0.2
-    _         → 0.1   -- skin-thin / armour plate: the wound is deeper in
+-- | Resolve a body part's tissue layers (outer→inner), keeping each
+--   layer's DISPLAY NAME alongside the resolved substance + thickness so
+--   the combat log can name the structures the strike crossed.
+resolvePartLayersNamed ∷ SubstanceManager → UnitDef → Text
+                       → [(Text, Maybe SubstanceDef, Float)]
+resolvePartLayersNamed sm tdef partId =
+    let raw = case HM.lookup partId (bodyPartIndex tdef) of
+                Just bp | not (null (bpLayers bp)) → bpLayers bp
+                _                                  → [("flesh", "flesh", 40.0)]
+    in [ (nm, lookupSubstance m sm, t) | (nm, m, t) ← raw ]
 
--- | Energy (cut/pierce) or momentum (blunt) one tissue layer soaks from
---   a strike. Cut/pierce: proportional to the layer's kind-resistance ×
---   thickness, made cheaper by weapon penetration. Blunt: soft layers
---   cushion (resistance × thickness), no penetration discount.
-layerAbsorb ∷ Maybe SubstanceDef → Float → Text → Float → Float
-layerAbsorb msub thick kind wp =
-    let r = case kind of
-            "stab"  → maybe 0.05 sbsStabResistance  msub
-            "slash" → maybe 0.05 sbsSlashResistance msub
-            _       → maybe 0.15 sbsBluntResistance msub
-        thickF = max 0.0 thick / layerRefThickness
-    in case kind of
-        "blunt" → r * thickF * bluntAbsorbScale
-        _       → r * thickF * cutAbsorbScale / max 0.05 wp
-
--- | Drive a strike through a body part's tissue stack (outer→inner) and
---   return the severity driver: the sum over layers of
---   @woundFactor(tissue) × (damage deposited there)@. The strike spends
---   its @budget@ crossing each layer; outer layers (skin, bone, armour)
---   absorb and can stop it before the vital core, while a strike that
---   powers through dumps its remainder into the deepest tissue. Energy
---   deposited ≈ tissue destroyed, so a deep gash through thick flesh
---   (neck) or a blow that reaches the brain scores high; a blade turned
---   by a skull scores low.
-penetrate ∷ [(Maybe SubstanceDef, Float)] → Float → Float → Text → Float
-penetrate layers0 budget0 wp kind = go layers0 budget0
-  where
-    go [] _ = 0.0
-    go ((msub, thick) : rest) budget
-        | budget ≤ 0 = 0.0
-        | otherwise =
-            let absorb = layerAbsorb msub thick kind wp
-                isLast = null rest
-                -- The core (innermost) layer takes whatever reaches it;
-                -- an outer layer takes up to what it can absorb.
-                dep    = if isLast then budget else min absorb budget
-                wf     = woundFactor (maybe "" sbsName msub) kind
-            in wf * dep + (if isLast then 0.0 else go rest (budget - dep))
-
--- | Resolve a body part's tissue layers to substances (outer→inner).
---   A part with no declared layers is treated as solid flesh.
+-- | Substance + thickness only — the physics path (penetrate) doesn't
+--   need the display names.
 resolvePartLayers ∷ SubstanceManager → UnitDef → Text
                   → [(Maybe SubstanceDef, Float)]
 resolvePartLayers sm tdef partId =
-    let raw = case HM.lookup partId (bodyPartIndex tdef) of
-                Just bp | not (null (bpLayers bp)) → bpLayers bp
-                _                                  → [("flesh", 40.0)]
-    in [ (lookupSubstance m sm, t) | (m, t) ← raw ]
+    [ (msub, t) | (_, msub, t) ← resolvePartLayersNamed sm tdef partId ]
 
 -- | Intact worn armour covering the struck part — the outer layers to
 --   prepend to its tissue stack (and the instances to wear). Broken
@@ -832,9 +908,14 @@ computeSeverity
     ∷ SubstanceManager → ItemManager
     → UnitInstance → UnitDef
     → Maybe (ItemInstance, ItemDef, ItemWeapon) → Maybe NaturalWeapon
-    → UnitInstance → Text → Text → AttackMode
-    → (Float, Float, Float, Float, Float)
-computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode =
+    → UnitInstance → Text → Text → AttackMode → Float → Float
+    → ( Float, Float, Float, Float, Float
+      , [(Text, Text, Float)]            -- wound distribution (subpart, kind, sev)
+      , [(Text, Text, Text, Float)] )    -- log detail (subpartName, layer, material, sev)
+-- The final Float is `kindWeight`: the fraction of the swing's energy
+-- delivered as THIS mechanism (1.0 for a single-kind attack; a combo "paw"
+-- splits its energy across slash/blunt/stab components that each call in).
+computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kindWeight =
     let -- Muscular work committed to the swing (J).
         str      = statOr "strength" 1.0 atk
         wepClass = case mEquipped of
@@ -895,7 +976,7 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode =
         toughness = statOr "toughness" 1.0 tgt
         toughCut  = clamp 0.0 0.5 (toughness * 0.05)
         budget = driver * rsEff strike * qualityF
-                        * (1.0 - natRes) * (1.0 - toughCut)
+                        * (1.0 - natRes) * (1.0 - toughCut) * kindWeight
 
         -- Drive it through the struck part's tissue stack — with any
         -- worn armour covering that part prepended as the OUTERMOST
@@ -903,32 +984,148 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode =
         wp         = weaponPenetration strike kind
         armorLayers = [ (msub, th)
                       | (_, _, msub, th) ← defenderArmor sm im tgt partId ]
-        layers     = armorLayers ++ resolvePartLayers sm tdef partId
-        sevDriver  = penetrate layers budget wp kind
 
-        -- Reaction load on the weapon: the strike force × how hard the
-        -- target was relative to the weapon (cutting flesh barely loads
-        -- it; striking bone / rigid armour loads it fully). Feeds wear.
-        --
-        -- NOTE (intentional, not a unit bug): `driver` is energy (J) for
-        -- cut/pierce but momentum (kg·m/s) for blunt, and both feed the
-        -- one wear calibration in 'weaponWear'. That's deliberate — wear
-        -- is a coarse "strike force" proxy, the two drivers share a
-        -- magnitude range, and we only care about relative wear rates,
-        -- not absolute units. The trade-off: retuning eHuman vs
-        -- momentumPerHp independently would drift cut-vs-blunt break
-        -- rates apart, so keep them in step if you rescale either.
+        -- Body composition → per-LAYER thickness. The yaml authors
+        -- REFERENCE-HUMAN base thicknesses (70 kg, 15 % fat); each layer is
+        -- scaled to the actual target: skin/bone/organ by linear size
+        -- (∛mass), fat additionally by relative bodyfat, muscle by relative
+        -- leanness. A 280 kg bear thus grows a thick fat/muscle barrier from
+        -- the SAME template a human uses — "thickness from fat/muscle mass".
+        -- The seeded body-composition stats (body_mass = 22·h²·bulk,
+        -- fat_mass, lean_mass = skeletal muscle). Fat/muscle layer thickness
+        -- is the tissue mass spread over the body's surface area
+        -- (∝ mass^⅔); skin/bone/organ scale with linear size (∝ mass^⅓).
+        -- Normalised to a reference acolyte so the yaml authors human-scale
+        -- thicknesses and every other species derives from its own mass.
+        bodyMassT = statOr "body_mass" refBodyMass tgt
+        fatMassT  = statOr "fat_mass"  (0.20 * bodyMassT) tgt
+        leanMassT = statOr "lean_mass" (0.40 * bodyMassT) tgt
+        surfArea m  = m ** (2.0/3.0)
+        sizeF       = (bodyMassT / refBodyMass) ** (1.0/3.0)
+        fatScale    = (fatMassT  / surfArea bodyMassT) / (refFatMass  / surfArea refBodyMass)
+        muscleScale = (leanMassT / surfArea bodyMassT) / (refLeanMass / surfArea refBodyMass)
+        layerThickScale mat = case mat of
+            "fat"    → fatScale
+            "muscle" → muscleScale
+            _        → sizeF
+        scalePair (msub, th) =
+            (msub, th * layerThickScale (maybe "" sbsName msub))
+        scaledLayers pid = map scalePair (resolvePartLayers sm tdef pid)
+
+        -- Per-tissue-stack injury distribution. Each layer's wound severity
+        -- is normalised by THAT LAYER'S own capacity (capWeight·thickness),
+        -- not the whole part — so a dagger that fully pierces thin skin
+        -- registers a real skin laceration even behind a 150 kg of bear,
+        -- while the deep organ (its capacity ≈ the whole part) still needs a
+        -- powerful strike. The whole-part scalar `sev` below (death / reach)
+        -- is unchanged, so lethality calibration is preserved.
+        layerHpMat mat th =
+            max 0.05 (tissueCapacityWeight mat * th * layerHpScale)
+        -- Each wound KIND is normalised by the summed capacity of the
+        -- layers that produced it: the soft-tissue cut over all the
+        -- skin/fat/muscle it crossed, the fracture over the bone, etc. (Not
+        -- per-individual-layer — that double-counts a thin layer's tiny
+        -- capacity and would let a graze "destroy" the skin.)
+        distOf layerSet _pmh =
+            let deps = penetrateDeposits layerSet budget wp kind
+                perKind = HM.fromListWith
+                    (\(c1, h1) (c2, h2) → (c1 + c2, h1 + h2))
+                    [ (k, (c * kindSeverityFactor kind, layerHpMat tissue th))
+                    | ((_, th), (tissue, c)) ← zip layerSet deps
+                    , Just k ← [tissueInjuryKind tissue kind] ]
+            in [ (k, capInjurySeverity k s)
+               | (k, (csum, hsum)) ← HM.toList perKind
+               , let s = csum / (max 0.05 hsum * perHp)
+               , capInjurySeverity k s ≥ injuryFloor ]
+        -- Part "max HP" — the severity normaliser — DERIVED from the part's
+        -- COMPOSITION-SCALED tissue layers. Size enters through the layer
+        -- THICKNESSES (above), not a separate body-mass multiplier — the old
+        -- `massScale` factor double-counted it and made a big animal a sponge
+        -- (a 280 kg bear was 4× HP, so a dagger couldn't register a wound).
+        partHpId pid =
+            let cap = sum [ tissueCapacityWeight (maybe "" sbsName msub) * th
+                          | (msub, th) ← scaledLayers pid ]
+                cap' = if cap ≤ 0 then defaultPartCapacity * sizeF else cap
+            in max 0.5 (cap' * capacityHpScale)
+        hpOf pid = partHpId pid
+
+        -- MACRO-part severity (the strike's reach + the death/wear scalar),
+        -- on the macro-part's representative tissue stack.
+        macroLayers = armorLayers ++ scaledLayers partId
+        sevDriver   = penetrate macroLayers budget wp kind
+
+        -- Reaction load on the weapon: strike force × target-vs-weapon
+        -- hardness (feeds wear). `driver` is energy (cut) or momentum
+        -- (blunt) — intentionally one wear proxy for both.
         weaponHardness = maybe 1.0 sbsHardness (rsSub strike)
         targetHardness = maximum (1.0 : [ maybe 0.0 sbsHardness msub
-                                        | (msub, _) ← layers ])
+                                        | (msub, _) ← macroLayers ])
         load = driver * clamp 0.0 2.0 (targetHardness / max 1.0 weaponHardness)
 
-        partMaxHp = case HM.lookup partId (bodyPartIndex tdef) of
-            Just p  → max 0.5 (statOr "body_mass" 70.0 tgt
-                              * bpMaxHealthFactor p)
-            Nothing → 50.0
-        sev = sevDriver * kindSeverityFactor kind / (partMaxHp * perHp)
-    in (clamp 0.0 1.0 sev, driver, sevDriver, load, weaponHardness)
+        sev = sevDriver * kindSeverityFactor kind / (hpOf partId * perHp)
+        -- Reach: how deep the strike penetrates (0 = surface, 1 = deepest
+        -- subpart), from the macro severity. A solid hit reaches the deep
+        -- structures; a glance only the shallow ones.
+        reach = clamp 0.0 1.0 sev
+
+        -- ALLOCATION to subparts. A hit on the macro-part is distributed to
+        -- its (non-targetable) subparts; each runs its OWN tissue cascade
+        -- and the wounds are stored on the subpart. A body plan with no
+        -- subparts falls back to one wound-set on the macro-part itself
+        -- (unchanged behaviour). The WHICH-subpart is weighted-random
+        -- ("aim within the part" — the 50/50 skull/jaw); severity stays
+        -- deterministic physics.
+        subparts = [ p | p ← udBodyParts tdef
+                       , bpParent p ≡ Just partId, not (bpTargetable p) ]
+        selected = allocateSubparts kind reach allocRoll subparts
+        subInjuries p =
+            let sl = armorLayers ++ scaledLayers (bpId p)
+            in [ (bpId p, k, s) | (k, s) ← distOf sl (hpOf (bpId p)) ]
+        -- Scale a named layer's thickness the same way scalePair does.
+        scaleNamed (nm, msub, th) =
+            (nm, msub, th * layerThickScale (maybe "" sbsName msub))
+        injuries = if null subparts
+                   then [ (partId, k, s) | (k, s) ← distOf macroLayers (hpOf partId) ]
+                   else concatMap subInjuries selected
+
+        -- PER-LAYER log detail (for the combat-log narration): every named
+        -- tissue layer the strike actually crossed in each injured subpart,
+        -- with its display name + material + severity. (The `injuries` above
+        -- aggregate by kind for the wound list; the log wants the layers
+        -- individually — skin, fat, muscle, radius, ulna — so it can say
+        -- "lacerating the forearm's skin, fat, and muscle and breaking the
+        -- radius".) Returns (subpartDisplayName, layerName, material, sev).
+        bpNameOf pid = maybe pid bpName (HM.lookup pid (bodyPartIndex tdef))
+        layerDetailOf p =
+            let named = map scaleNamed (resolvePartLayersNamed sm tdef (bpId p))
+                armorNamed = [ ("armor", msub, th) | (msub, th) ← armorLayers ]
+                full  = armorNamed ++ named
+                deps  = penetrateDeposits [ (s, t) | (_, s, t) ← full ] budget wp kind
+                sub   = bpNameOf (bpId p)
+            in [ (sub, lname, lmat, capInjurySeverity k sv)
+               | ((lname, _, th), (lmat, contrib)) ← zip full deps
+               , Just k ← [tissueInjuryKind lmat kind]
+               , let sv = capInjurySeverity k
+                            (contrib * kindSeverityFactor kind
+                               / (layerHpMat lmat th * perHp))
+               , sv ≥ injuryFloor ]
+        logDetail = if null subparts
+                    then layerDetailOfMacro
+                    else concatMap layerDetailOf selected
+        layerDetailOfMacro =
+            let named = map scaleNamed (resolvePartLayersNamed sm tdef partId)
+                armorNamed = [ ("armor", msub, th) | (msub, th) ← armorLayers ]
+                full  = armorNamed ++ named
+                deps  = penetrateDeposits [ (s, t) | (_, s, t) ← full ] budget wp kind
+                sub   = bpNameOf partId
+            in [ (sub, lname, lmat, capInjurySeverity k sv)
+               | ((lname, _, th), (lmat, contrib)) ← zip full deps
+               , Just k ← [tissueInjuryKind lmat kind]
+               , let sv = capInjurySeverity k
+                            (contrib * kindSeverityFactor kind
+                               / (layerHpMat lmat th * perHp))
+               , sv ≥ injuryFloor ]
+    in (clamp 0.0 1.0 sev, driver, sevDriver, load, weaponHardness, injuries, logDetail)
 
 -- ----- Event constructors -----
 
@@ -944,16 +1141,20 @@ missEvent gt atk tgt mode = CombatEvent
 
 hitEvent
     ∷ Double → Word32 → Word32 → Text → Text
-    → Float → Float → Float → AttackMode → CombatEvent
-hitEvent gt atk tgt part kind sev rawDmg effDmg mode = CombatEvent
+    → Float → Float → Float → AttackMode
+    → Text → Text → Text → CombatEvent
+hitEvent gt atk tgt part kind sev rawDmg effDmg mode limb weapon detail = CombatEvent
     { ceTs       = gt
     , ceKind     = "hit"
     , ceAttacker = Just atk
     , ceTarget   = Just tgt
     , cePayload  = HM.fromList
-        [ ("part",     part)
-        , ("kind",     kind)
+        [ ("part",     part)         -- macro-part id
+        , ("limb",     limb)         -- macro-part display name ("left arm")
+        , ("kind",     kind)         -- mechanism (slash/stab/blunt)
+        , ("weapon",   weapon)       -- weapon display name
         , ("severity", T.pack (show sev))
+        , ("detail",   detail)       -- per-layer "subpart:layer:material:sevPct|…"
         , ("raw",      T.pack (show rawDmg))
         , ("eff",      T.pack (show effDmg))
         , ("mode",     attackModeText mode)

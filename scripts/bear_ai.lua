@@ -18,6 +18,7 @@
 -- the saveModules registration in unit_ai.init. Nothing extra here.
 
 local unitAi = require("scripts.unit_ai")
+local mv = require("scripts.movement_speed")
 
 local bearAi = package.loaded["scripts.bear_ai"] or {}
 package.loaded["scripts.bear_ai"] = bearAi
@@ -92,7 +93,7 @@ local function bearWanderExecute(uid, s, params)
     local r     = math.sqrt(math.random()) * params.wander_radius
     local tx = s.bearAnchor.x + math.cos(angle) * r
     local ty = s.bearAnchor.y + math.sin(angle) * r
-    unit.moveTo(uid, tx, ty, params.wander_speed)
+    unit.moveTo(uid, tx, ty, mv.meander(uid))  -- aimless wander → slow meander
     s.activityUntil = engine.gameTime()
         + randRange(params.wander_dur_min, params.wander_dur_max)
     if math.random() < params.anchor_drift_chance then
@@ -247,16 +248,10 @@ unitAi.setConfig("bear_brown", {
     -- charging units need sub-second range checks or they walk
     -- straight through their target.
     combat_thought_interval = 0.1,
-    -- Wander geometry.
+    -- Wander geometry. Movement speeds come from the comfort/ordered/
+    -- sprint regime (scripts/movement_speed.lua).
     wander_radius = 8.0,
-    wander_speed  = 1.0,    -- LEGACY (still used by bearWanderExecute)
     anchor_drift_chance = 0.25,
-    -- Combat speed fractions. command_frac is also what attack
-    -- pursuit uses; retreat is full sprint. wander stays slow
-    -- (handled by wander_speed above as a literal for now).
-    speed_frac_wander  = 0.17,  -- ~1.0 tiles/sec at max_speed 6.0
-    speed_frac_command = 0.7,   -- ~4.2 tiles/sec — faster than acolyte sprint
-    speed_frac_retreat = 1.0,   -- ~6.0 tiles/sec, full pelt
     -- Activity durations (seconds; randomised in [min, max]).
     idle_dur_min   = 3,  idle_dur_max   = 8,
     wander_dur_min = 5,  wander_dur_max = 14,
@@ -270,9 +265,6 @@ unitAi.setConfig("bear_brown", {
     -- Rest-cycle pacing. Score grows over time-since-last-rest;
     -- ties wander at rest_interval, hits 1.0 at 2 × rest_interval.
     rest_interval = 120.0,
-    -- LEGACY: kept for any straggler reading params.command_speed.
-    -- New code uses speed_frac_* above × unit.getMaxSpeed.
-    command_speed = 3.0,
 })
 
 unitAi.registerActions("bear_brown", {

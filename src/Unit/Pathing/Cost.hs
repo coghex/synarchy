@@ -35,7 +35,9 @@ module Unit.Pathing.Cost
     , isCliffStep
     -- * Tunables (constants for now; future: load from config)
     , climbFactor
+    , rampFactor
     , fallFactor
+    , fallTriggerDrop
     , riverPenalty
     , lakePenalty
     , replanCostThreshold
@@ -58,19 +60,37 @@ import World.Generate (globalToChunk)
 -- actually navigate. They live here so Phase D's threshold trigger
 -- imports from the same place as the cost function itself.
 
--- | Cost added per +1 z of climb. A 1-z step costs ~`climbFactor`
---   units on top of the horizontal distance. Tuned high enough that
---   units prefer flat detours; low enough that they'll climb when
---   nothing else is available.
+-- | Cost added per +1 z of a CLIFF climb (a vertical face, per
+--   `isCliffStep`). A 1-z cliff costs ~`climbFactor` on top of the
+--   horizontal distance. High enough that units prefer flat detours;
+--   low enough that they'll climb when nothing else is available.
 climbFactor ∷ Float
 climbFactor = 10.0
 
--- | Base for fall cost. `fallCost(-dz) = fallFactor ** (negate dz)`,
---   i.e. exponential in drop height. A 1-z drop is `fallFactor`; a
---   3-z drop is `fallFactor^3`. Units will jump small drops freely
---   but treat cliffs as expensive enough to avoid unless desperate.
+-- | Cost added per +1 z of a WALKABLE RAMP (a 1-z step whose tile has a
+--   slope bit toward the source — `isCliffStep` is False). Barely above
+--   flat so the planner walks up gentle slopes instead of detouring
+--   around them or treating them as cliffs. This is what keeps the cost
+--   layer (A*) in agreement with the movement layer, which already
+--   walks ramps via `isCliffStep`.
+rampFactor ∷ Float
+rampFactor = 0.5
+
+-- | Base for fall cost on a REAL fall (drop ≥ `fallTriggerDrop`):
+--   `fallCost = fallFactor ** drop`, exponential in height. A 2-z drop
+--   is `fallFactor²`, a 3-z drop `fallFactor³` — steep enough that the
+--   planner takes any reasonable detour rather than a damaging fall.
+--   Drops below the trigger (a single step down) cost nothing: they're
+--   a free walk-off, matching the movement layer's `fallTriggerDz`.
 fallFactor ∷ Float
-fallFactor = 3.0
+fallFactor = 5.0
+
+-- | Drop magnitude (in z) at which a descent stops being a free
+--   step-down and becomes a costed fall. Mirrors
+--   `Unit.Thread.Movement.fallTriggerDz` (kept as a local constant to
+--   avoid a Cost↔Movement import cycle — Movement imports Cost).
+fallTriggerDrop ∷ Int
+fallTriggerDrop = 2
 
 -- | Cost added for stepping into a river/lake tile. River and lake
 --   are wadeable — high cost but not impassable. Ocean and lava are
@@ -111,17 +131,54 @@ stepCost wtd (sgx, sgy) (dgx, dgy) = do
     dstZ <- lookupTerrainZ wtd dgx dgy
     let fluidAtDst = lookupFluidType wtd dgx dgy
     fluidCost <- fluidPenalty fluidAtDst
-    let dx        = fromIntegral (dgx - sgx) ∷ Float
-        dy        = fromIntegral (dgy - sgy) ∷ Float
-        horizD    = sqrt (dx * dx + dy * dy)
-        dz        = dstZ - srcZ
-        climb     = if dz > 0
-                    then climbFactor * fromIntegral dz
-                    else 0
-        fall      = if dz < 0
-                    then fallFactor ** fromIntegral (negate dz)
-                    else 0
-    pure $! horizD + climb + fall + fluidCost
+    -- No-corner-cutting: a diagonal step grazes the two axis-aligned
+    -- neighbours of the source tile. Reject the step if either neighbour
+    -- is impassable (Ocean/Lava/unloaded chunk), so a mover can't slip
+    -- diagonally past a wall. This rule lives HERE — in the single cost
+    -- function both the greedy stepper and A* consult — so the two
+    -- planners can never disagree about it. (They used to: A* allowed
+    -- the corner-cut, the stepper rejected it, and a unit aimed at a
+    -- diagonal corner replanned the same rejected path forever, frozen
+    -- in its walk animation.)
+    let isDiagonal = sgx ≢ dgx ∧ sgy ≢ dgy
+        cornerBlocked = isDiagonal
+                      ∧ not (passable wtd dgx sgy ∧ passable wtd sgx dgy)
+    if cornerBlocked
+      then Nothing
+      else
+        let dx     = fromIntegral (dgx - sgx) ∷ Float
+            dy     = fromIntegral (dgy - sgy) ∷ Float
+            horizD = sqrt (dx * dx + dy * dy)
+            dz     = dstZ - srcZ
+            -- Upward: a walkable ramp (isCliffStep False) costs only the
+            -- gentle rampFactor; a true cliff costs the steep climbFactor.
+            -- This is the #3 fix — the planner used to charge climbFactor
+            -- for ramps too, so units detoured around slopes they could
+            -- just walk up.
+            climb  = if dz > 0
+                     then if isCliffStep wtd (sgx, sgy) (dgx, dgy) srcZ dstZ
+                          then climbFactor * fromIntegral dz
+                          else rampFactor  * fromIntegral dz
+                     else 0
+            -- Downward: a single step is a free walk-off; a real fall
+            -- (drop ≥ fallTriggerDrop) costs an exponential in height so
+            -- the planner avoids damaging drops.
+            fall   = if negate dz ≥ fallTriggerDrop
+                     then fallFactor ** fromIntegral (negate dz)
+                     else 0
+        in pure $! horizD + climb + fall + fluidCost
+
+-- | Is a single tile traversable on its own merits? True iff its chunk
+--   is loaded (terrain z resolves) and its fluid isn't a non-wadeable
+--   barrier (Ocean/Lava). Used by the no-corner-cutting gate in
+--   `stepCost` to test the two axis-neighbours a diagonal step grazes.
+passable ∷ WorldTileData → Int → Int → Bool
+passable wtd gx gy =
+    case lookupTerrainZ wtd gx gy of
+        Nothing → False
+        Just _  → case fluidPenalty (lookupFluidType wtd gx gy) of
+            Just _  → True
+            Nothing → False
 
 -- | Map fluid type at the destination to a step-cost modifier.
 --   Ocean and lava are non-traversable (`Nothing`); rivers and lakes
@@ -188,6 +245,12 @@ isCliffStep
 isCliffStep wtd (sgx, sgy) (dgx, dgy) srcZ dstZ
     | dz ≤ 0   = False
     | dz ≥ 2   = True
+    -- Diagonal 1-z step: always a cliff. Slope bits are cardinal-only,
+    -- so there's no such thing as a diagonal ramp — you'd have to climb
+    -- the corner block. (Without this, the cardinal slope-bit check
+    -- below picks ONE axis's bit and can wrongly read a diagonal corner
+    -- as a walkable ramp, making the unit step up a wall it shouldn't.)
+    | sgx ≢ dgx ∧ sgy ≢ dgy = True
     | otherwise = case lookupSlopeAt wtd dgx dgy dstZ of
         Nothing     → True              -- no slope info → assume cliff
         Just slope  →

@@ -105,7 +105,7 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 38  -- v38: ItemInstance gains trailing 'iiSharpness'
+currentSaveVersion = 40  -- v40: UnitSimState gains usGetUpAt + usPendingFallDrop (fall knockdown + injuries)
                          -- (per-instance edge keenness, split from
                          -- iiCondition for weapon degradation).
                          -- (v37: WorldGenParams gains trailing
@@ -447,4 +447,5 @@ fromUnitInstanceSnapshot def s = UnitInstance
     -- Runtime-only debug flags — always False on load.
     , uiFrozen      = False
     , uiForceLoop   = False
+    , uiClimbDest   = Nothing   -- runtime-only; not persisted
     }

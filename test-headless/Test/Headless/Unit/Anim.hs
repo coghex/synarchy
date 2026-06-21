@@ -18,6 +18,7 @@ mkDef stateAnims = UnitDef
     , udDirSprites    = Map.empty
     , udBaseWidth     = 0
     , udMaxSpeed      = 1.0
+    , udRunThreshold  = 0.6
     , udAnimations    = HM.empty
     , udStateAnims    = stateAnims
     , udEagerStats    = False

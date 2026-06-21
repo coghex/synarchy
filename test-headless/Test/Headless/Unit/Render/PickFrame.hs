@@ -35,6 +35,7 @@ mkDef anims = UnitDef
     , udDirSprites    = Map.fromList [(DirS, h 1)]
     , udBaseWidth     = 0
     , udMaxSpeed      = 1.0
+    , udRunThreshold  = 0.6
     , udAnimations    = anims
     , udStateAnims    = HM.empty
     , udEagerStats    = False
@@ -83,6 +84,7 @@ mkInst animName start = UnitInstance
     , uiAnimOverride    = ""
     , uiFrozen          = False
     , uiForceLoop       = False
+    , uiClimbDest       = Nothing
     }
 
 -- | An animation with frame handles 100,101,102,103 on DirS, fps 4, loop.

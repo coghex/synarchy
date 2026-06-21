@@ -58,41 +58,79 @@ units:
       - { item: "electric_motor",  count: 5 }
       - { item: "processing_unit", count: 5 }
 
-    # 8-part quadruped anchored to ~1.5 m shoulder height (wolf
-    # layout, scaled up).
+    # 8-part quadruped anchored to ~1.5 m shoulder height
+    # (canine layout, scaled up).
+    # A regular donkey's anatomy (cybernetic enhancements deferred). Soft
+    # tissue is authored at HUMAN-REFERENCE thicknesses (skin/fat/muscle);
+    # the engine scales each layer from the mule's own fat_mass / lean_mass /
+    # body_mass, same as the bear.
     body_parts:
-      - { id: head,         parent: neck,  vital: true,
+      - { id: head,         name: "head", parent: neck,  vital: true,
           area_weight: 0.10, tactical_value: 1.0,
-          max_health_factor: 0.20, bleed_factor: 2.0,
-          height_low: 1.05, height_high: 1.65 }
-      - { id: neck,         parent: torso, vital: true,
+          bleed_factor: 2.0,
+          height_low: 1.05, height_high: 1.65,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 3 },
+                    { name: muscle, material: muscle, thickness: 4 },
+                    { name: skull,  material: bone,   thickness: 7 },
+                    { name: brain,  material: organ,  thickness: 80 } ] }
+      - { id: neck,         name: "neck", parent: torso, vital: true,
           area_weight: 0.05, tactical_value: 1.0,
-          max_health_factor: 0.15, bleed_factor: 3.0,
-          height_low: 0.95, height_high: 1.25 }
-      - { id: torso,        parent: null,  vital: true,
+          bleed_factor: 3.0,
+          height_low: 0.95, height_high: 1.25,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 4 },
+                    { name: muscle, material: muscle, thickness: 22 },
+                    { name: throat, material: organ,  thickness: 10 } ] }
+      - { id: torso,        name: "torso", parent: null,  vital: true,
           area_weight: 0.40, tactical_value: 0.8,
-          max_health_factor: 0.40, bleed_factor: 2.0,
-          height_low: 0.55, height_high: 1.50 }
-      - { id: l_fore_leg,   parent: torso,
+          bleed_factor: 2.0,
+          height_low: 0.55, height_high: 1.50,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 10 },
+                    { name: muscle, material: muscle, thickness: 25 },
+                    { name: ribs,   material: bone,   thickness: 10 },
+                    { name: vitals, material: organ,  thickness: 120 } ] }
+      - { id: l_fore_leg,   name: "left foreleg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 1.00 }
-      - { id: r_fore_leg,   parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 22 },
+                    { name: bone,   material: bone,   thickness: 14 } ] }
+      - { id: r_fore_leg,   name: "right foreleg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 1.00 }
-      - { id: l_hind_leg,   parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 22 },
+                    { name: bone,   material: bone,   thickness: 14 } ] }
+      - { id: l_hind_leg,   name: "left hind leg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 1.00 }
-      - { id: r_hind_leg,   parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 25 },
+                    { name: bone,   material: bone,   thickness: 16 } ] }
+      - { id: r_hind_leg,   name: "right hind leg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 1.00 }
-      - { id: tail,         parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 1.00,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 25 },
+                    { name: bone,   material: bone,   thickness: 16 } ] }
+      - { id: tail,         name: "tail", parent: torso,
           area_weight: 0.05, tactical_value: 0.1,
-          max_health_factor: 0.05, bleed_factor: 0.5,
-          height_low: 0.55, height_high: 1.00 }
+          bleed_factor: 0.5,
+          height_low: 0.55, height_high: 1.00,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 2 },
+                    { name: muscle, material: muscle, thickness: 5 },
+                    { name: bone,   material: bone,   thickness: 4 } ] }
 
     # Thick hide + subdermal plating: shrugs blunt and slash, stabs
     # find the gaps.

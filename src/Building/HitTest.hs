@@ -21,6 +21,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , applyFacingF, GridConfig(..), defaultGridConfig)
+import World.Generate (viewDepth)
 import Building.Types
 
 baseTileW ∷ Float
@@ -45,6 +46,10 @@ hitTestBuildingAt env pixX pixY = do
             let facing  = camFacing camera
                 zoom    = camZoom camera
                 zSlice  = camZSlice camera
+                -- Match the render cull (Building.Render): visible down
+                -- to the terrain view depth, not a fixed 25.
+                effDepth = min viewDepth
+                               (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
                 (camX, camY) = camPosition camera
 
                 -- Screen pixel → world coord (same projection as
@@ -64,7 +69,7 @@ hitTestBuildingAt env pixX pixY = do
                     , let gridZ     = biGridZ inst
                           relativeZ = gridZ - zSlice
                     , gridZ ≤ zSlice
-                    , gridZ ≥ zSlice - 25
+                    , gridZ ≥ zSlice - effDepth
                     , let texHandle = biTexture inst
                           (texW, texH) = case HM.lookup texHandle texSizes of
                               Just (w, h) → (fromIntegral w, fromIntegral h)

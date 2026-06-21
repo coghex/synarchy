@@ -25,6 +25,7 @@ module Engine.Scripting.Lua.API.Units
     , unitSetFrozenFn
     , unitSetForceLoopFn
     , unitCollapseFn
+    , unitCrawlFn
     , unitReviveFn
     , unitKillFn
     , unitRecomputeBodyFn
@@ -64,6 +65,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetWeaponWieldedFromFn
     , unitGetWoundSeverityOnFn
     , unitGetWoundsFn
+    , unitDropEquipmentToGroundFn
     , unitGetBloodFn
     , unitGetPainFn
     , unitGetLastAttackerFn
@@ -107,7 +109,8 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame)
-import Unit.Sim.Types (Pose(..))
+import Unit.Sim.Types (Pose(..), UnitActivity(..), UnitSimState(..)
+                      , MoveTarget(..), UnitThreadState(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -117,6 +120,8 @@ import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemWeapon(..), ItemBuff(..)
                   , ItemManager(..), lookupItemDef)
+import Item.Ground (spawnGroundItem)
+import Combat.Wounds (bleedRateFor)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
@@ -235,17 +240,20 @@ loadUnitYamlFn env backendState = do
                         bodyParts =
                             [ BodyPart
                                 { bpId              = uybpId p
+                                , bpName            = maybe (uybpId p) id (uybpName p)
                                 , bpParent          = uybpParent p
                                 , bpVital           = uybpVital p
                                 , bpAreaWeight      = uybpAreaWeight p
                                 , bpTacticalValue   = uybpTacticalValue p
-                                , bpMaxHealthFactor = uybpMaxHealthFactor p
                                 , bpBleedFactor     = uybpBleedFactor p
                                 , bpHeightLow       = uybpHeightLow p
                                 , bpHeightHigh      = uybpHeightHigh p
                                 , bpLayers          =
-                                    [ (uylMaterial l, uylThickness l)
+                                    [ ( maybe (uylMaterial l) id (uylName l)
+                                      , uylMaterial l, uylThickness l )
                                     | l ← uybpLayers p ]
+                                , bpTargetable      = uybpTargetable p
+                                , bpDepth           = uybpDepth p
                                 }
                             | p ← uydBodyParts def
                             ]
@@ -265,6 +273,7 @@ loadUnitYamlFn env backendState = do
                                              then uysLength s
                                              else uysBladeLength s
                             , spCenterOfMass = uysCenterOfMass s
+                            , spName         = uysName s
                             }
                         natWeapon = case uydNaturalWeapon def of
                             Nothing → Nothing
@@ -275,6 +284,7 @@ loadUnitYamlFn env backendState = do
                                 , nwSlash                = toStrike (uynwSlash nw)
                                 , nwStab                 = toStrike (uynwStab nw)
                                 , nwBlunt                = toStrike (uynwBlunt nw)
+                                , nwComboAttack          = uynwComboAttack nw
                                 }
                         defMods =
                             [ ( uymStat m
@@ -293,6 +303,7 @@ loadUnitYamlFn env backendState = do
                             , udDirSprites    = dirMap
                             , udBaseWidth     = uydBaseWidth def
                             , udMaxSpeed      = uydMaxSpeed def
+                            , udRunThreshold  = uydRunThreshold def
                             , udAnimations    = animMap
                             , udStateAnims    = stateAnims
                             , udEagerStats    = uydEagerStats def
@@ -529,6 +540,23 @@ unitCollapseFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitCollapse uid
+            Lua.pushboolean True
+            return 1
+
+-- | unit.crawl(id) — drop a conscious-but-can't-walk unit (legs broken
+--   or severed) to a sustained Crawling pose. Unlike collapse, a crawling
+--   unit still accepts move commands and crawls slowly toward its goal;
+--   any in-flight target is preserved. unit.revive stands it back up.
+unitCrawlFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitCrawlFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitCrawl uid
             Lua.pushboolean True
             return 1
 
@@ -1031,15 +1059,38 @@ unitGetWoundsFn env = do
             let uid = UnitId (fromIntegral n)
             mWounds ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
-                pure (uiWounds <$> HM.lookup uid (umInstances um))
+                pure $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    let parts = maybe [] udBodyParts
+                                  (HM.lookup (uiDefName inst) (umDefs um))
+                    pure (uiWounds inst, parts)
             case mWounds of
                 Nothing → Lua.pushnil >> return 1
-                Just ws → do
+                Just (ws, parts) → do
+                    -- Index for the subpart → macro-part rollup + vital
+                    -- lookup, so Lua impairment/death logic can work on
+                    -- subpart wounds without knowing the body tree.
+                    let idx = HM.fromList [(bpId p, p) | p ← parts]
+                        vitalOf pid = maybe False bpVital (HM.lookup pid idx)
+                        -- Walk parents until a targetable macro-part (the
+                        -- limb the combat log names); bounded by part count.
+                        macroOf pid = climb (length parts) pid
+                        climb 0 pid = pid
+                        climb k pid = case HM.lookup pid idx of
+                            Just p | bpTargetable p → pid
+                                   | otherwise → case bpParent p of
+                                       Just par → climb (k - 1) par
+                                       Nothing  → pid
+                            Nothing → pid
                     Lua.newtable
                     forM_ (zip [1..] ws) $ \(i, w) → do
                         Lua.newtable
                         Lua.pushstring (TE.encodeUtf8 (woundPart w))
                         Lua.setfield (-2) "part"
+                        Lua.pushstring (TE.encodeUtf8 (macroOf (woundPart w)))
+                        Lua.setfield (-2) "macro"
+                        Lua.pushboolean (vitalOf (woundPart w))
+                        Lua.setfield (-2) "vital"
                         Lua.pushstring (TE.encodeUtf8 (woundKind w))
                         Lua.setfield (-2) "kind"
                         Lua.pushnumber (Lua.Number
@@ -1070,15 +1121,19 @@ unitGetBloodFn env = do
                     Just inst →
                         let bm = HM.lookupDefault 70.0 "body_mass"
                                                  (uiStats inst)
-                        in return $ Just (uiBlood inst, bm * 0.075)
+                            rate = maybe 0.0 (\d → bleedRateFor d inst)
+                                     (HM.lookup (uiDefName inst) (umDefs um))
+                        in return $ Just (uiBlood inst, bm * 0.075, rate)
             case mPair of
                 Nothing → Lua.pushnil >> return 1
-                Just (cur, mx) → do
+                Just (cur, mx, rate) → do
                     Lua.newtable
                     Lua.pushnumber (Lua.Number (realToFrac cur))
                     Lua.setfield (-2) "current"
                     Lua.pushnumber (Lua.Number (realToFrac mx))
                     Lua.setfield (-2) "max"
+                    Lua.pushnumber (Lua.Number (realToFrac rate))
+                    Lua.setfield (-2) "bleedRate"
                     return 1
 
 -- | unit.getWeaponClass(uid) → string | nil
@@ -1317,6 +1372,66 @@ popFirstByName name (x:xs)
     | iiDefName x ≡ name = Just (x, xs)
     | otherwise          = fmap (\(it, rest) → (it, x:rest))
                                 (popFirstByName name xs)
+
+-- | unit.dropEquipmentToGround(uid, slotId) → bool
+--
+-- Removes whatever is equipped in `slotId` and drops it on the ground at
+-- the unit's tile, PRESERVING the exact ItemInstance (condition /
+-- sharpness / quality / fill). Used when a hand or arm is severed or
+-- destroyed and the unit can no longer hold its weapon. Returns false if
+-- the slot is empty, the unit is gone, or no world is active (the item is
+-- left equipped rather than vanishing).
+unitDropEquipmentToGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDropEquipmentToGroundFn env = do
+    uidArg  ← Lua.tointeger 1
+    slotArg ← Lua.tostring 2
+    case (uidArg, slotArg) of
+        (Just n, Just slotBS) → do
+            let uid    = UnitId (fromIntegral n)
+                slotId = TE.decodeUtf8 slotBS
+            -- Resolve the world FIRST so we never strip the item from the
+            -- unit when there's nowhere to drop it.
+            mWs ← Lua.liftIO $ activeWorldU env
+            case mWs of
+                Nothing → Lua.pushboolean False >> return 1
+                Just ws → do
+                    mDrop ← Lua.liftIO $
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, Nothing)
+                                Just inst →
+                                    case HM.lookup slotId (uiEquipment inst) of
+                                        Nothing → (um, Nothing)
+                                        Just it →
+                                            let inst' = inst
+                                                  { uiEquipment =
+                                                      HM.delete slotId
+                                                        (uiEquipment inst) }
+                                            in ( um { umInstances =
+                                                        HM.insert uid inst'
+                                                          (umInstances um) }
+                                               , Just (it, uiGridX inst,
+                                                           uiGridY inst) )
+                    case mDrop of
+                        Nothing → Lua.pushboolean False >> return 1
+                        Just (it, gx, gy) → do
+                            _ ← Lua.liftIO $
+                                atomicModifyIORef' (wsGroundItemsRef ws) $
+                                    spawnGroundItem it gx gy
+                            Lua.pushboolean True
+                            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | The active (shown) world, or the first one if none is explicitly
+--   shown. Mirrors the helper in API.Items.
+activeWorldU ∷ EngineEnv → IO (Maybe WorldState)
+activeWorldU env = do
+    mgr ← readIORef (worldManagerRef env)
+    pure $ case wmVisible mgr of
+        (pid:_) → lookup pid (wmWorlds mgr)
+        []      → case wmWorlds mgr of
+            ((_, ws):_) → Just ws
+            []          → Nothing
 
 -- | unit.transferItemToBuilding(uid, bid, defName) → bool. Atomic
 --   move of one ItemInstance from the unit's inventory to the
@@ -1908,16 +2023,33 @@ unitGetInfoFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
+                um  ← readIORef (unitManagerRef env)
+                uts ← readIORef (utsRef env)
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     let mDef = HM.lookup (uiDefName inst) (umDefs um)
-                    pure (inst, mDef)
+                        -- Current locomotion speed (tiles/s) for the
+                        -- stamina tick: the active move target's speed
+                        -- while the unit is actually walking/running,
+                        -- else 0 (idle / transitioning / no target).
+                        moveSpeed = case HM.lookup uid (utsSimStates uts) of
+                            Just ss | isLocomoting (usState ss) →
+                                maybe 0 mtSpeed (usTarget ss)
+                            _ → 0
+                        -- True while the unit is in a fall KNOCKDOWN (a
+                        -- self-timed getup is pending). Lets the survival
+                        -- revive logic leave knockdowns to the movement
+                        -- tick, and the status panel explain why a unit is
+                        -- down ("Knocked down" vs an exhaustion collapse).
+                        knockedDown = case HM.lookup uid (utsSimStates uts) of
+                            Just ss → maybe False (const True) (usGetUpAt ss)
+                            _       → False
+                    pure (inst, mDef, moveSpeed, knockedDown)
             case mPair of
                 Nothing → do
                     Lua.pushnil
                     return 1
-                Just (inst, mDef) → do
+                Just (inst, mDef, moveSpeed, knockedDown) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
                     Lua.setfield (-2) "defName"
@@ -1940,6 +2072,10 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "currentAnim"
                     Lua.pushnumber (Lua.Number (realToFrac (uiAnimStart inst)))
                     Lua.setfield (-2) "animStart"
+                    Lua.pushnumber (Lua.Number (realToFrac moveSpeed))
+                    Lua.setfield (-2) "moveSpeed"
+                    Lua.pushboolean knockedDown
+                    Lua.setfield (-2) "knockedDown"
                     -- equipmentClass is per-def, not per-instance. Only
                     -- present in the table when the def declares one.
                     case mDef >>= udEquipmentClass of
@@ -1948,6 +2084,14 @@ unitGetInfoFn env = do
                             Lua.setfield (-2) "equipmentClass"
                         Nothing → pure ()
                     return 1
+
+-- | True for activities where the unit is translating across the ground
+--   (so its move speed feeds stamina drain). Transitions / idle / drink
+--   etc. are stationary.
+isLocomoting ∷ UnitActivity → Bool
+isLocomoting Walking = True
+isLocomoting Running = True
+isLocomoting _       = False
 
 dirToText ∷ Direction → Text
 dirToText DirS  = "S"

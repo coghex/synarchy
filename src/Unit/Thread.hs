@@ -187,6 +187,14 @@ publishToRender env utsRef = do
                                         , uiActivity    = activityLabel (usState ss)
                                         , uiPose        = poseTag (usPose ss)
                                         , uiAnimStride  = newStride
+                                        -- Cliff column being climbed (for
+                                        -- far-face occlusion in the renderer);
+                                        -- set only while the climb fields are
+                                        -- live (Climbing→pullup), else Nothing.
+                                        , uiClimbDest   = case usClimbToTile ss of
+                                            Just (tx, ty, _) →
+                                                Just (floor tx, floor ty)
+                                            Nothing → Nothing
                                         }
                       ) (umInstances um)
                 in (um { umInstances = updated }, ())

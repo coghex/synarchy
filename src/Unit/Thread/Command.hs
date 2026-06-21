@@ -155,6 +155,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , uiAnimOverride = ""
                     , uiFrozen      = False
                     , uiForceLoop   = False
+                    , uiClimbDest   = Nothing
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
@@ -183,6 +184,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , usFallToTile       = Nothing
                     , usFallImpact       = Nothing
                     , usPendingClimbXP   = 0
+                    , usGetUpAt          = Nothing
+                    , usPendingFallDrop = Nothing
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -295,22 +298,23 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
             Nothing   → (speed, False)
             Just inst →
                 let sp     = speed * injurySpeedMult inst
-                    maxSp  = case HM.lookup (uiDefName inst) (umDefs um) of
-                        Just d  → udMaxSpeed d
-                        Nothing → 3.0
-                    runCut = maxSp * 0.6   -- run-anim threshold
+                    (maxSp, runFrac) = case HM.lookup (uiDefName inst) (umDefs um) of
+                        Just d  → (udMaxSpeed d, udRunThreshold d)
+                        Nothing → (3.0, 0.6)
+                    runCut = maxSp * runFrac   -- per-unit run-anim threshold
                 in (sp, sp > runCut)
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
-                -- Only Standing units can move. Crouching / Crawling /
-                -- Collapsed all refuse moves until they transition back
-                -- up. (Will relax when per-pose walk assets exist.)
-                -- In-progress transitions also ignore moves so a
-                -- right-click can't yank a unit out of mid-transition.
-                | usPose ss ≢ Standing → (uts, ())
+                -- Standing AND Crawling units can move (a crawling unit
+                -- crawls slowly toward the goal — the mover caps its
+                -- speed). Crouching / Collapsed refuse moves until they
+                -- transition back up. In-progress transitions also ignore
+                -- moves so a right-click can't yank a unit out of a
+                -- mid-transition.
+                | usPose ss ≢ Standing ∧ usPose ss ≢ Crawling → (uts, ())
                 | isTransitioning (usState ss) → (uts, ())
                 | otherwise →
                     let activity = if isRunning then Running else Walking
@@ -333,6 +337,7 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                              , usEatUntil        = Nothing
                              , usPickupUntil     = Nothing
                              , usTransitionUntil = Nothing
+                             , usGetUpAt         = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -353,8 +358,41 @@ handleUnitCommand env utsRef (UnitCollapse uid) = do
                              , usEatUntil        = Nothing
                              , usPickupUntil     = Nothing
                              , usTransitionUntil = Nothing
+                             -- A survival/explicit collapse is NOT a fall
+                             -- knockdown: clear any getup timer so this
+                             -- collapse stays resource-gated (recovers via
+                             -- checkRevive), not auto-stood by the movement
+                             -- tick.
+                             , usGetUpAt         = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitCrawl uid) = do
+    -- Drop to a sustained Crawling pose. Unlike Collapsed this KEEPS the
+    -- in-flight move target + walking state, so a unit maimed mid-stride
+    -- keeps crawling toward its goal (the mover caps its speed to a
+    -- crawl). Only clears mid-transition/getup timers so it can't be both
+    -- crawling and mid-climb. No-op if already crawling/collapsed/dead.
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                | usPose ss ≡ Crawling ∨ usPose ss ≡ Dead → (uts, ())
+                | otherwise →
+                    -- Preserve a Walking/Idle move state (so it crawls on
+                    -- toward the goal); drop a stranded transition to Idle.
+                    let st  = if isTransitioning (usState ss)
+                              then Idle else usState ss
+                        ss' = ss { usPose            = Crawling
+                                 , usState           = st
+                                 , usTransitionUntil = Nothing
+                                 , usGetUpAt         = Nothing
+                                 , usDrinkUntil      = Nothing
+                                 , usEatUntil        = Nothing
+                                 , usPickupUntil     = Nothing
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 handleUnitCommand env utsRef (UnitKill uid) = do
     -- Terminal: snap to Dead pose and clear all in-flight state.
@@ -384,6 +422,8 @@ handleUnitCommand env utsRef (UnitKill uid) = do
                              , usFallToTile       = Nothing
                              , usFallImpact       = Nothing
                              , usPendingClimbXP   = 0
+                             , usGetUpAt          = Nothing
+                             , usPendingFallDrop = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -391,13 +431,14 @@ handleUnitCommand env utsRef (UnitRevive uid) = do
     -- Snap to Standing pose. Per the orthogonal-pose plan, a real
     -- revive eventually chains Collapsed → Crawling → Crouching →
     -- Standing reverse transitions; for now (no transition assets yet)
-    -- it just snaps. Only acts on Collapsed units.
+    -- it just snaps. Acts on Collapsed (waking) AND Crawling (legs healed,
+    -- standing back up) units.
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
-                | usPose ss ≢ Collapsed → (uts, ())
+                | usPose ss ≢ Collapsed ∧ usPose ss ≢ Crawling → (uts, ())
                 | otherwise →
                     let ss' = ss { usPose            = Standing
                                  , usState           = Idle
@@ -405,6 +446,7 @@ handleUnitCommand env utsRef (UnitRevive uid) = do
                                  , usEatUntil        = Nothing
                                  , usPickupUntil     = Nothing
                                  , usTransitionUntil = Nothing
+                                 , usGetUpAt         = Nothing
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 

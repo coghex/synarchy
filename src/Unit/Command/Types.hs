@@ -22,8 +22,15 @@ data UnitCommand
     | UnitStop !UnitId
     | UnitCollapse !UnitId
         -- ^ Snap pose to Collapsed (no fall animation yet — deferred).
+    | UnitCrawl !UnitId
+        -- ^ Snap pose to Crawling — a conscious unit that can no longer
+        --   walk (legs broken / a leg severed) drops to a crawl instead of
+        --   collapsing. Unlike Collapsed, a Crawling unit can still be
+        --   commanded to move (it crawls slowly toward the goal). Preserves
+        --   any in-flight move target so a unit maimed mid-stride keeps
+        --   crawling where it was headed. UnitRevive stands it back up.
     | UnitRevive !UnitId
-        -- ^ No-op unless the unit is in Collapsed pose. Snaps pose to
+        -- ^ No-op unless the unit is Collapsed or Crawling. Snaps pose to
         --   Standing. Will eventually chain reverse transitions
         --   Collapsed → Crawling → Crouching → Standing once those
         --   assets exist.

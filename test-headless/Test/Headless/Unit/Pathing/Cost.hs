@@ -108,11 +108,14 @@ spec = do
                     Just c  → c `shouldSatisfy` approxEq (1.0 + climbFactor)
                     Nothing → expectationFailure "expected Just"
 
-            it "stepping down 1-z adds the fall cost (small but nonzero)" $
+            it "stepping down 1-z is a free walk-off (no fall cost)" $
                 case stepCost wtd (8, 5) (7, 5) of
                     Just c  →
-                        -- horizontalDist + fallFactor^1 = 1.0 + fallFactor
-                        c `shouldSatisfy` approxEq (1.0 + fallFactor)
+                        -- A single step down is below fallTriggerDrop (2),
+                        -- so it costs nothing beyond the horizontal
+                        -- distance — units walk off a 1-z lip, they don't
+                        -- "fall". Real (costed) falls start at a 2-z drop.
+                        c `shouldSatisfy` approxEq 1.0
                     Nothing → expectationFailure "expected Just"
 
         describe "fall scaling" $ do

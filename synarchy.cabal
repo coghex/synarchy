@@ -151,10 +151,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Render.PickFrame
                    Test.Headless.Unit.Anim
+                   Test.Headless.Unit.Injury
+                   Test.Headless.Unit.Fall
                    Test.Headless.Unit.Stats
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Spoil
                    Test.Headless.Combat.Damage
+                   Test.Headless.Combat.Severing
                    Test.Headless.Magma.Shape
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
@@ -390,6 +393,8 @@ library
                      Unit.LineOfSight
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
+                     Unit.Fall
+                     Unit.Injury
                      Unit.Command.Types
                      Unit.Direction
                      Unit.Sim.Types

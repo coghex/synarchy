@@ -3,6 +3,7 @@ module World.Thread.Command.Edit
     ( handleWorldAddTileCommand
     , handleWorldDeleteTileCommand
     , handleWorldSetFluidTileCommand
+    , handleWorldSetSlopeCommand
     , handleWorldDigTileCommand
     ) where
 
@@ -151,6 +152,51 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                             "Added tile at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy)
                               <> " mat=" <> T.pack (show mat)
+
+-- | Set the walkable-ramp slope bitmask of an existing tile at (gx,gy,z).
+--   Routes through the edit log (WeSetSlope) like every other edit, so a
+--   ramp authored by a test harness survives chunk eviction + save/load.
+--   No generator emits this — addTile only ever produces flat tops
+--   (slope = 0), so authoring a walkable ramp needs an explicit set.
+handleWorldSetSlopeCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Int → Word8 → IO ()
+handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for set slope: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, (lx, ly)) = globalToChunk gx gy
+                idx  = columnIndex lx ly
+                edit = WeSetSlope gx gy z bits
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing →
+                    logWarn logger CatWorld $
+                        "Chunk not loaded for set slope at "
+                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        i   = z - ctStartZ col
+                    if i < 0 ∨ i ≥ VU.length (ctSlopes col)
+                      then logWarn logger CatWorld $
+                             "Set slope z out of column range at "
+                               <> T.pack (show gx) <> "," <> T.pack (show gy)
+                               <> " z=" <> T.pack (show z)
+                      else do
+                        let lc' = applyEdit edit lc
+                        atomicModifyIORef' (wsTilesRef ws) $ \w →
+                            (insertChunk lc' w, ())
+                        atomicModifyIORef' (wsEditsRef ws) $ \es →
+                            (appendEdit coord edit es, ())
+                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        writeIORef (wsZoomQuadCacheRef ws) Nothing
+                        writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        logDebug logger CatWorld $
+                            "Set slope at " <> T.pack (show gx) <> ","
+                              <> T.pack (show gy) <> " z=" <> T.pack (show z)
+                              <> " bits=" <> T.pack (show bits)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
 --

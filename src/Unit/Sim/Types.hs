@@ -104,6 +104,22 @@ data UnitSimState = UnitSimState
     --   "climbing" (with diminishing returns) and clears the field
     --   back to 0.
     , usPendingClimbXP ∷ !Float
+    -- | Game-time at which a fall KNOCKDOWN auto-stands the unit, set on
+    --   a non-lethal fall landing. The movement tick stands the unit
+    --   (Collapsed → Standing) once now ≥ this and then clears it
+    --   (one-shot). This is deliberately INDEPENDENT of the resource
+    --   revive gate in unit_resources.lua: getting the wind knocked out
+    --   of you shouldn't require being fed/hydrated to stand back up. A
+    --   survival (exhaustion/thirst) collapse has no getup timer and stays
+    --   resource-gated. Nothing outside an active knockdown.
+    , usGetUpAt ∷ !(Maybe Double)
+    -- | Drop magnitude (z-levels) of a fall the unit just landed from,
+    --   set by the pure landing routing. Drained by tickAllMovement
+    --   (which has body-part + substance data + the unit manager), which
+    --   runs the `Unit.Fall` physics model to turn it into a SET of
+    --   fracture/concussion wounds, sizes the knockdown stun from the
+    --   worst injury, then clears this. Nothing when no fall is pending.
+    , usPendingFallDrop ∷ !(Maybe Int)
     } deriving (Show, Eq, Generic, Serialize)
 
 data MoveTarget = MoveTarget

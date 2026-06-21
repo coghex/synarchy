@@ -165,40 +165,51 @@ instance FromJSON UnitYamlSkill where
 --   by Combat.Resolution's body-part picker + reach filter.
 -- | One tissue layer of a body part: a substance + its thickness (mm).
 data UnitYamlLayer = UnitYamlLayer
-    { uylMaterial  ∷ !Text
+    { uylName      ∷ !(Maybe Text)   -- ^ combat-log noun; defaults to material
+    , uylMaterial  ∷ !Text
     , uylThickness ∷ !Float
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlLayer where
     parseJSON = withObject "UnitYamlLayer" $ \v → UnitYamlLayer
-        ⊚ v .:  "material"
+        ⊚ v .:? "name"
+        ⊛ v .:  "material"
         ⊛ v .:  "thickness"
 
 data UnitYamlBodyPart = UnitYamlBodyPart
     { uybpId              ∷ !Text
+    , uybpName            ∷ !(Maybe Text)
     , uybpParent          ∷ !(Maybe Text)
     , uybpVital           ∷ !Bool
     , uybpAreaWeight      ∷ !Float
     , uybpTacticalValue   ∷ !Float
-    , uybpMaxHealthFactor ∷ !Float
     , uybpBleedFactor     ∷ !Float
     , uybpHeightLow       ∷ !Float
     , uybpHeightHigh      ∷ !Float
     , uybpLayers          ∷ ![UnitYamlLayer]   -- outer→inner; [] ⇒ default
+    , uybpTargetable      ∷ !Bool              -- macro-part (aimed at) vs subpart
+    , uybpDepth           ∷ !Float             -- subpart depth 0..1 (slash swath)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlBodyPart where
     parseJSON = withObject "UnitYamlBodyPart" $ \v → UnitYamlBodyPart
         ⊚ v .:  "id"
+        ⊛ v .:? "name"
         ⊛ v .:? "parent"
         ⊛ v .:? "vital"               .!= False
-        ⊛ v .:  "area_weight"
+        -- Subparts ("targetable: false") aren't aimed at, so area_weight
+        -- is an allocation weight among siblings; default 1.0. Macro-parts
+        -- still require it (the targeting picker uses it).
+        ⊛ v .:? "area_weight"         .!= 1.0
         ⊛ v .:? "tactical_value"      .!= 0.5
-        ⊛ v .:  "max_health_factor"
+        -- (max_health_factor removed — durability is derived from the
+        -- tissue layers; any leftover key in YAML is ignored.)
         ⊛ v .:? "bleed_factor"        .!= 1.0
-        ⊛ v .:  "height_low"
-        ⊛ v .:  "height_high"
+        ⊛ v .:? "height_low"          .!= 0.0
+        ⊛ v .:? "height_high"         .!= 0.0
         ⊛ v .:? "layers"              .!= []
+        ⊛ v .:? "targetable"          .!= True
+        ⊛ v .:? "depth"               .!= 0.0
 
 -- | Natural (innate) weapon block — claws/fangs/fists. Optional on
 --   the unit YAML. When present, Combat.Resolution falls back to
@@ -216,6 +227,7 @@ data UnitYamlStrike = UnitYamlStrike
     , uysMass         ∷ !Float   -- kg of the striking appendage
     , uysLength       ∷ !Float   -- cm lever length; 0 ⇒ use blade_length
     , uysCenterOfMass ∷ !Float   -- 0..1 from the limb
+    , uysName         ∷ !Text    -- display name ("claws"/"fangs"/"paw")
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlStrike where
@@ -228,14 +240,15 @@ instance FromJSON UnitYamlStrike where
         ⊛ v .:? "mass"           .!= 0.0
         ⊛ v .:? "length"         .!= 0.0
         ⊛ v .:? "center_of_mass" .!= 0.5
+        ⊛ v .:? "name"           .!= ""
 
 -- | A natural weapon that delivers no attack of a given kind.
 emptyStrike ∷ UnitYamlStrike
-emptyStrike = UnitYamlStrike 0.0 "flesh" 0.0 1000.0 0.0 0.0 0.0 0.5
+emptyStrike = UnitYamlStrike 0.0 "flesh" 0.0 1000.0 0.0 0.0 0.0 0.5 ""
 
 -- | Default blunt strike (everything can throw a clumsy bludgeon).
 defaultBluntStrike ∷ UnitYamlStrike
-defaultBluntStrike = UnitYamlStrike 0.5 "bone" 0.0 1000.0 0.0 0.0 0.0 0.5
+defaultBluntStrike = UnitYamlStrike 0.5 "bone" 0.0 1000.0 0.0 0.0 0.0 0.5 "fists"
 
 data UnitYamlNaturalWeapon = UnitYamlNaturalWeapon
     { uynwWeaponClass          ∷ !Text
@@ -244,6 +257,7 @@ data UnitYamlNaturalWeapon = UnitYamlNaturalWeapon
     , uynwSlash                ∷ !UnitYamlStrike
     , uynwStab                 ∷ !UnitYamlStrike
     , uynwBlunt                ∷ !UnitYamlStrike
+    , uynwComboAttack          ∷ !Bool
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlNaturalWeapon where
@@ -255,6 +269,7 @@ instance FromJSON UnitYamlNaturalWeapon where
         ⊛ v .:? "slash"                  .!= emptyStrike
         ⊛ v .:? "stab"                   .!= emptyStrike
         ⊛ v .:? "blunt"                  .!= defaultBluntStrike
+        ⊛ v .:? "combo_attack"           .!= False
 
 -- | Innate per-kind damage resistance. Defaults to all zeros
 --   (humans). Bears declare slash 0.5, stab 0.1, blunt 0.3.
@@ -280,7 +295,8 @@ data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
     , uydSprite            ∷ !Text       -- ^ path to default sprite texture
     , uydBaseWidth         ∷ !Float      -- ^ ground contact diameter in pixels (0 = point)
-    , uydMaxSpeed          ∷ !Float      -- ^ tiles/sec at a full sprint (default 3.0)
+    , uydMaxSpeed          ∷ !Float      -- ^ tiles/sec reference top speed at agility 1.0 (default 3.0)
+    , uydRunThreshold      ∷ !Float      -- ^ run-anim threshold as a fraction of max_speed (default 0.6)
     , uydDirectionalSprites ∷ !(Map.Map Text Text)
       -- ^ optional: direction key ("S","SW",…) → texture path
     , uydPortrait          ∷ !(Maybe Text)
@@ -342,6 +358,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:  "sprite"
         ⊛ v .:? "base_width"          .!= 0.0
         ⊛ v .:? "max_speed"           .!= 3.0
+        ⊛ v .:? "run_threshold"       .!= 0.6
         ⊛ v .:? "directional_sprites" .!= Map.empty
         ⊛ v .:? "portrait"
         ⊛ v .:? "state_animations"    .!= Map.empty

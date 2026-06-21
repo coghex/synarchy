@@ -195,8 +195,10 @@ local function tickOne(bid, info)
     -- Route through the AI so the walk-out is a commanded task (beats
     -- the autonomous wander utility; survives if the AI tick fires
     -- before the unit reaches its destination).
+    -- No explicit speed → the sustainable "ordered" regime. A hard-coded
+    -- fast speed exhausts the unit's stamina (collapses it mid-walk).
     local unitAi = require("scripts.unit_ai")
-    unitAi.commandMove(newUid, walkX, walkY, 2.0)
+    unitAi.commandMove(newUid, walkX, walkY)
 
     local newRemaining = building.consumeSpawn(bid) or 0
     s.lastUid       = newUid

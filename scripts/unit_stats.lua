@@ -10,7 +10,7 @@
 --   2. Derived formula registered in this module.
 --   3. nil
 --
--- YAML wins so a per-unit override (e.g. "wolf" with an explicit
+-- YAML wins so a per-unit override (e.g. a unit with an explicit
 -- max_stamina in its YAML) takes precedence over the generic formula.
 --
 -- Formulas always recompute; no caching. Float math is cheap and

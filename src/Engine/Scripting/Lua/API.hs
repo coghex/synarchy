@@ -281,6 +281,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setFrozen"   (unitSetFrozenFn env)
   registerLuaFunction "setForceLoop" (unitSetForceLoopFn env)
   registerLuaFunction "collapse"    (unitCollapseFn env)
+  registerLuaFunction "crawl"       (unitCrawlFn env)
   registerLuaFunction "revive"      (unitReviveFn env)
   registerLuaFunction "kill"        (unitKillFn env)
   registerLuaFunction "recomputeBody" (unitRecomputeBodyFn env)
@@ -313,6 +314,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getWoundSeverityOn"
                                           (unitGetWoundSeverityOnFn env)
   registerLuaFunction "getWounds"    (unitGetWoundsFn env)
+  registerLuaFunction "dropEquipmentToGround" (unitDropEquipmentToGroundFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)
   registerLuaFunction "getLastAttacker" (unitGetLastAttackerFn env)
@@ -464,6 +466,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "destroy" (worldDestroyFn env)
   registerLuaFunction "deleteTile" (worldDeleteTileFn env)
   registerLuaFunction "setFluidTile" (worldSetFluidTileFn env)
+  registerLuaFunction "setSlope" (worldSetSlopeFn env)
 
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
@@ -516,4 +519,5 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable
   registerLuaFunction "attack"      (combatAttackFn env)
   registerLuaFunction "drainEvents" (combatDrainEventsFn env)
+  registerLuaFunction "emitDeath"   (combatEmitDeathFn env)
   Lua.setglobal (Lua.Name "combat")

@@ -76,6 +76,35 @@ substances:
     slash_resistance:   0.05
     blunt_resistance:   0.15    # padding absorbs a little impact
 
+  # Subcutaneous fat — the layer under the skin. Very soft and a poor
+  # barrier to a point, but THICK on a well-fed/large animal, so it eats a
+  # blade's remaining energy before it reaches muscle. Cushions blunt best
+  # of the soft tissues. Thickness is derived per-unit from fat mass.
+  - name: fat
+    density:            0.92       # fat floats
+    tensile_strength:   1
+    yield_strength:     1
+    shear_strength:     1
+    fracture_toughness: 1
+    hardness:           1
+    stab_resistance:    0.03
+    slash_resistance:   0.04
+    blunt_resistance:   0.25       # the best soft-tissue cushion
+
+  # Skeletal muscle — the real soft-tissue barrier. Denser and tougher
+  # than fat, with grain that resists a cut more than skin or fat do.
+  # Thickness is derived per-unit from muscle mass.
+  - name: muscle
+    density:            1.06
+    tensile_strength:   3
+    yield_strength:     2
+    shear_strength:     2
+    fracture_toughness: 3
+    hardness:           1
+    stab_resistance:    0.12
+    slash_resistance:   0.15
+    blunt_resistance:   0.18
+
   # The vital innermost layer of a body part — brain, heart, viscera.
   # Offers essentially no protection; reaching it with any real energy
   # is catastrophic (that's what bpVital + the lethality of a deep
@@ -100,4 +129,44 @@ substances:
     hardness:           60
     stab_resistance:    0.30
     slash_resistance:   0.35
+    blunt_resistance:   0.20
+
+  # Neural tissue — brain + spinal cord. Like organ but its injury reads
+  # as a "concussion" (neural trauma); destroying it is catastrophic.
+  # A body plan with no nerve tissue (a robot) can never be concussed.
+  - name: nerve
+    density:            1.04
+    tensile_strength:   1
+    yield_strength:     1
+    shear_strength:     1
+    fracture_toughness: 1
+    hardness:           1
+    stab_resistance:    0.02
+    slash_resistance:   0.02
+    blunt_resistance:   0.05
+
+  # Major blood vessel (carotid, aorta, femoral). Almost no structural
+  # resistance; the danger is the bleed once it's opened.
+  - name: artery
+    density:            1.05
+    tensile_strength:   1
+    yield_strength:     1
+    shear_strength:     1
+    fracture_toughness: 1
+    hardness:           1
+    stab_resistance:    0.02
+    slash_resistance:   0.02
+    blunt_resistance:   0.10
+
+  # Cartilage — windpipe/trachea, joints, nose. Crushable; offers a
+  # little structural resistance but caves under a blunt blow.
+  - name: cartilage
+    density:            1.10
+    tensile_strength:   10
+    yield_strength:     8
+    shear_strength:     6
+    fracture_toughness: 2
+    hardness:           5
+    stab_resistance:    0.10
+    slash_resistance:   0.15
     blunt_resistance:   0.20

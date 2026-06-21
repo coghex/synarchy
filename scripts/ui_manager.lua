@@ -897,6 +897,12 @@ function uiManager.onScrollUp(elemHandle)
             end
         end
     end
+    if combatLog and combatLog.isVisible and combatLog.isVisible()
+       and combatLog.handleScrollCallback then
+        if combatLog.handleScrollCallback("onScrollUp", elemHandle) then
+            return true
+        end
+    end
     -- Unit info v2 has its own stats-panel scrollbar.
     local uimod = package.loaded["scripts.unit_info_v2"]
     if uimod and uimod.handleScrollCallback then
@@ -931,6 +937,12 @@ function uiManager.onScrollDown(elemHandle)
             if saveBrowser.handleScrollCallback("onScrollDown", elemHandle) then
                 return true
             end
+        end
+    end
+    if combatLog and combatLog.isVisible and combatLog.isVisible()
+       and combatLog.handleScrollCallback then
+        if combatLog.handleScrollCallback("onScrollDown", elemHandle) then
+            return true
         end
     end
     local uimod = package.loaded["scripts.unit_info_v2"]
@@ -1011,6 +1023,12 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
     end
     if saveBrowser and currentMenu == "save_browser" then
         if saveBrowser.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    if combatLog and combatLog.isVisible and combatLog.isVisible()
+       and combatLog.onScroll then
+        if combatLog.onScroll(elemHandle, dx, dy) then
             return
         end
     end

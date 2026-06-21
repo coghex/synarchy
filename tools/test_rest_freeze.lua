@@ -1,4 +1,4 @@
--- Offline regression harness for the bear/wolf rest-freeze fix.
+-- Offline regression harness for the bear rest-freeze fix.
 -- Stubs the engine API surface that unit_ai/bear_ai touch, then
 -- recreates the freeze scenario: a bear mid-rest (lying, restPhase
 -- set) whose activeGoal was stolen by combat and then cleared.
@@ -100,39 +100,3 @@ end
 assert(s.goalStatus.rest == "accomplished", "rest goal not closed out")
 print("PASS: bear resumed rest machine and stood back up (anim=" ..
     tostring(lastAnim) .. ")")
-
--- Same scenario for the wolf.
-units[1] = {
-    defName = "gray_wolf", gridX = 0, gridY = 0,
-    pose = "lying", activity = "idle",
-    stats = { stamina = 10, endurance = 1.0 },
-}
-local sw = {
-    currentAction   = "attack_target",
-    actionStartedAt = now,
-    nextActionAt    = 0,
-    goalStatus      = { rest = "in_progress", attack = "accomplished" },
-    activeGoal      = nil,
-    wolfPosture     = "sleeping",
-    restPhase       = "sleep_idle",
-    restPhaseUntil  = now - 1,
-    lastRestAt      = 0,
-    activityUntil   = 0,
-}
-unitAi.aiState[1] = sw
-local wolfStood = false
-for i = 1, 200 do
-    now = now + 60.0
-    sw.restPhaseUntil = sw.restPhaseUntil and math.min(sw.restPhaseUntil, now - 1)
-    unitAi.update(0.1)
-    if sw.wolfPosture == "standing" and not sw.restPhase then
-        wolfStood = true
-        break
-    end
-end
-if not wolfStood then
-    print("FAIL: wolf never recovered (posture=" .. tostring(sw.wolfPosture)
-        .. " restPhase=" .. tostring(sw.restPhase) .. ")")
-    os.exit(1)
-end
-print("PASS: wolf resumed rest machine and stood back up")

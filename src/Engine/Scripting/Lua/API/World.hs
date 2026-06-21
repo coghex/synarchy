@@ -51,6 +51,7 @@ module Engine.Scripting.Lua.API.World
     , worldDestroyFn
     , worldDeleteTileFn
     , worldSetFluidTileFn
+    , worldSetSlopeFn
     ) where
 
 import UPrelude
@@ -1309,6 +1310,34 @@ worldSetFluidTileFn env = do
                 Q.writeQueue (worldQueue env) $
                     WorldSetFluidTile pageId
                         (fromIntegral gx) (fromIntegral gy) fluidType
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | world.setSlope(pageId, gx, gy, z, bits) → bool
+--   Set the walkable-ramp slope bitmask of the tile at (gx,gy,z).
+--   Bits: 0=N 1=E 2=S 3=W; a set bit marks that cardinal neighbour as a
+--   1-z ramp down (so a unit can walk up it instead of climbing). addTile
+--   only ever makes flat tops (slope 0 = cliff), so this is the only way
+--   to author a walkable ramp — exists for the movement test harness.
+worldSetSlopeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetSlopeFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tointeger 2
+    gyArg     ← Lua.tointeger 3
+    zArg      ← Lua.tointeger 4
+    bitsArg   ← Lua.tointeger 5
+    case (pageIdArg, gxArg, gyArg, zArg, bitsArg) of
+        (Just pageIdBS, Just gx, Just gy, Just z, Just bits) → do
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                Q.writeQueue (worldQueue env) $
+                    WorldSetSlope pageId
+                        (fromIntegral gx) (fromIntegral gy)
+                        (fromIntegral z)
+                        (fromIntegral bits)  -- → Word8 truncates to low 8 bits
             Lua.pushboolean True
             return 1
         _ → do

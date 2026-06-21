@@ -17,6 +17,7 @@ module World.Edit.Types
 
 import UPrelude
 import Data.Serialize (Serialize)
+import Data.Word (Word8)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..))
@@ -37,6 +38,12 @@ data WorldEdit
     | WeSetFluidTile !Int !Int !FluidType  -- ^ Place a fluid tile on top of the column at (gx,gy).
     | WeAddTile !Int !Int !MaterialId      -- ^ Raise the column at (gx,gy) by 1 z of the given
                                            --   material (spoil-pile promotion to terrain).
+    | WeSetSlope !Int !Int !Int !Word8     -- ^ Set the slope bitmask of the tile at (gx,gy,z).
+                                           --   Bits: 0=N 1=E 2=S 3=W; a set bit marks that
+                                           --   cardinal neighbour as a walkable 1-z ramp down.
+                                           --   No generator path emits this — it exists so test
+                                           --   harnesses can author walkable ramps (addTile only
+                                           --   ever makes flat tops / cliffs, slope = 0).
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

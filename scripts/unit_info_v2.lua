@@ -20,6 +20,7 @@ local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
 local stats       = require("scripts.unit_stats")
+local injuries    = require("scripts.injuries")
 
 -- Singleton via package.loaded so ui_manager's click handlers (which
 -- look us up via require / package.loaded) get the same module table
@@ -160,7 +161,7 @@ local DIVIDER_COLOR     = { 0.7, 0.7, 0.7, 1.0 }   -- same grey as tooltip separ
 -- Sub-tabs (Status, Stats, Mental, …) inside the stats section.
 -- Styled to match scripts/ui/tabbar.lua (settings + create-world menus):
 -- 9-patch box, dark text on unselected, white text on selected.
-local SUB_TAB_LIST       = { "Status", "Physical", "Mental", "Skill", "Effects" }
+local SUB_TAB_LIST       = { "Status", "Physical", "Mental", "Skill" }
 local SUB_TAB_FONT_SIZE  = 14
 local SUB_TAB_TEXT_PAD   = 10   -- horizontal padding inside each sub-tab around the label
 local SUB_TAB_ROW_H      = 32   -- per-row height — matches settingsMenu.baseSizes.tabHeight
@@ -175,6 +176,10 @@ local SUB_TAB_SEL_TEXT_COLOR = { 1.0, 1.0, 1.0, 1.0 }
 -- Hovering the icon brings up the stat's tooltip (name + description).
 local CONTENT_ROW_H      = 48
 local CONTENT_FONT_SIZE  = 20
+-- Conditions / injuries use a smaller font than the big stat numbers — the
+-- name reads better small, severity is shown by COLOUR (severityColor) with
+-- the word + effects in the tooltip.
+local CONDITION_FONT_SIZE = 14
 local CONTENT_LEFT_PAD   = 16
 local CONTENT_RIGHT_PAD  = 16
 local CONTENT_DIM_COLOR  = { 0.78, 0.78, 0.78, 1.0 }
@@ -729,8 +734,29 @@ end
 -- effective stat was computed (e.g. base + modifier sources). Returns
 -- the value-label id and its baseline-y so per-panel refresh closures
 -- can re-rightalign the value on update.
+-- Trim `text` with a trailing "…" so it fits `maxW` px at `fontSize`.
+local function abbreviateToWidth(text, maxW, fontSize)
+    if maxW <= 0 then return text end
+    if engine.getTextWidth(hud.menuFont, text, fontSize) <= maxW then
+        return text
+    end
+    local n = #text
+    while n > 1 do
+        local cand = text:sub(1, n) .. "…"
+        if engine.getTextWidth(hud.menuFont, cand, fontSize) <= maxW then
+            return cand
+        end
+        n = n - 1
+    end
+    return "…"
+end
+
+-- opts (optional): { fontSize, color, align = "left", abbreviate = true }.
+-- Default (no opts) = big white value, right-aligned (the stat-number look).
+-- align="left" puts a coloured, abbreviated name right after the icon — the
+-- condition/injury look.
 local function placeIconStatRow(rect, rowIndex, statKey, valueText,
-                                  tooltipOverride, valueTooltip)
+                                  tooltipOverride, valueTooltip, opts)
     local rowTop = rect.y + CONTENT_TOP_PAD + rowIndex * CONTENT_ROW_H
     local y      = rowTop + CONTENT_FONT_SIZE
                  + math.floor((CONTENT_ROW_H - CONTENT_FONT_SIZE) / 2)
@@ -777,24 +803,53 @@ local function placeIconStatRow(rect, rowIndex, statKey, valueText,
             { kind = "label", id = nameLbl })
     end
 
+    local fontSize = (opts and opts.fontSize) or CONTENT_FONT_SIZE
+    local color    = (opts and opts.color)    or CONTENT_VAL_COLOR
+    -- Re-centre the value vertically for its (possibly smaller) font.
+    local valY = rowTop + fontSize
+               + math.floor((CONTENT_ROW_H - fontSize) / 2)
+               - math.floor(fontSize * 0.3)
+
+    local text = valueText
+    local valX, leftMaxW
+    if opts and opts.align == "left" then
+        -- Coloured name flowing right from the icon; abbreviate to fit.
+        valX = rect.x + CONTENT_LEFT_PAD + ICON_SIZE
+             + math.floor(ICON_SIZE * 0.25)
+        leftMaxW = (rect.x + rect.w - CONTENT_RIGHT_PAD) - valX
+        if opts.abbreviate then
+            text = abbreviateToWidth(text, leftMaxW, fontSize)
+        end
+    end
+
     local valLbl = label.new({
         name        = "unit_info_v2_stat_val_" .. rowIndex,
-        text        = valueText,
+        text        = text,
         font        = hud.menuFont,
-        fontSize    = CONTENT_FONT_SIZE,
-        color       = CONTENT_VAL_COLOR,
+        fontSize    = fontSize,
+        color       = color,
         page        = unitInfoV2.page,
         uiscale     = 1.0,
         tooltipRich = valueTooltip,
     })
     local valH = label.getElementHandle(valLbl)
-    local valW = select(1, label.getSize(valLbl))
-    UI.addToPage(unitInfoV2.page, valH,
-        rect.x + rect.w - CONTENT_RIGHT_PAD - valW, y)
+    if not valX then
+        -- Default: right-aligned (stat numbers).
+        local valW = select(1, label.getSize(valLbl))
+        valX = rect.x + rect.w - CONTENT_RIGHT_PAD - valW
+    end
+    UI.addToPage(unitInfoV2.page, valH, valX, valY)
     UI.setZIndex(valH, 12)
     table.insert(unitInfoV2.statsContentElements, { kind = "label", id = valLbl })
 
-    return valLbl, y
+    -- Return layout info so the live-refresh closure can re-place the value
+    -- correctly per alignment (left-aligned names keep their x + abbreviate;
+    -- right-aligned numbers re-right-align to their new width).
+    return valLbl, valY, {
+        leftX    = (opts and opts.align == "left") and valX or nil,
+        maxW     = leftMaxW,
+        fontSize = fontSize,
+    }
 end
 
 -- Format a "cur / max" pair: "0 / 10" with stat lookup. Returns "?"
@@ -1081,13 +1136,23 @@ local function buildIconStatPanel(rect, uid, rowDefs)
         if type(tt) == "function" then tt = tt(uid) end
         local vtt = nil
         if r.valueTooltip then vtt = r.valueTooltip(uid) end
-        local valLbl, y = placeIconStatRow(rowRect, i - 1, r.key,
-            r.value(uid) or "?", tt, vtt)
+        -- A colorFn lets a value recolour by danger level (vitals go amber
+        -- → red as they near critical). Resolve the initial colour into opts.
+        local rowOpts = r.opts
+        if r.colorFn then
+            rowOpts = {}
+            if r.opts then for k, v in pairs(r.opts) do rowOpts[k] = v end end
+            rowOpts.color = r.colorFn(uid) or rowOpts.color
+        end
+        local valLbl, y, lay = placeIconStatRow(rowRect, i - 1, r.key,
+            r.value(uid) or "?", tt, vtt, rowOpts)
         refs[i] = {
             valLbl     = valLbl,
             fn         = r.value,
             y          = y,
             tooltipFn  = r.valueTooltip,
+            lay        = lay,
+            colorFn    = r.colorFn,
         }
     end
 
@@ -1164,11 +1229,27 @@ local function buildIconStatPanel(rect, uid, rowDefs)
     return function (newUid)
         if not newUid then return end
         for _, ref in ipairs(refs) do
-            label.setText(ref.valLbl, ref.fn(newUid) or "?")
-            local valH = label.getElementHandle(ref.valLbl)
-            local valW = select(1, label.getSize(ref.valLbl))
-            UI.setPosition(valH,
-                rowRect.x + rowRect.w - CONTENT_RIGHT_PAD - valW, ref.y)
+            local valH    = label.getElementHandle(ref.valLbl)
+            local newText = ref.fn(newUid) or "?"
+            local lay     = ref.lay
+            if lay and lay.leftX then
+                -- Left-aligned name: re-abbreviate to the fixed width and
+                -- keep its x (don't yank it to the right edge).
+                label.setText(ref.valLbl,
+                    abbreviateToWidth(newText, lay.maxW, lay.fontSize))
+                UI.setPosition(valH, lay.leftX, ref.y)
+            else
+                -- Right-aligned number: re-right-align to its new width.
+                label.setText(ref.valLbl, newText)
+                local valW = select(1, label.getSize(ref.valLbl))
+                UI.setPosition(valH,
+                    rowRect.x + rowRect.w - CONTENT_RIGHT_PAD - valW, ref.y)
+            end
+            -- Live re-colour by danger level (vitals reddening as they drop).
+            if ref.colorFn then
+                local c = ref.colorFn(newUid)
+                if c then UI.setColor(valH, c[1], c[2], c[3], c[4] or 1.0) end
+            end
             -- Keep the value tooltip live so modifier-source changes
             -- (e.g. equipping a buff item) show up without waiting
             -- for a sub-tab swap.
@@ -1194,6 +1275,125 @@ local function fmtPain(uid)
     return string.format("%.2f", p)
 end
 
+-- Conditions: the unit's transient STATES (as opposed to injuries, which
+-- are wounds). Returns a worst-first list of { name, icon } — what's
+-- keeping the unit down or threatening it — derived from pose + the
+-- knockedDown flag + vitals + wounds. Shown as rows in the Status tab
+-- alongside the vitals and the injury list, so the panel always answers
+-- "why can / can't this unit act?".
+local function lowFrac(uid, cur, maxName, frac)
+    local c = stats.get(uid, cur)
+    local m = stats.get(uid, maxName)
+    return c and m and m > 0 and (c / m < frac)
+end
+
+local function unitConditions(uid)
+    local out = {}
+    local pose = unit.getPose(uid)
+    local info = unit.getInfo(uid)
+
+    if pose == "dead" then
+        out[#out + 1] = { name = "Dead", icon = "death",
+            hint = "This unit is dead." }
+        return out   -- nothing else matters
+    end
+
+    if pose == "collapsed" then
+        if info and info.knockedDown then
+            out[#out + 1] = { name = "Knocked down", icon = "pain",
+                hint = "Stunned by a fall. Recovers on its own after a moment." }
+        else
+            -- Survival collapse: name the gate keeping it down (order
+            -- matches checkRevive: blood, then hydration, then stamina).
+            local blood = unit.getBlood(uid)
+            if blood and blood.max > 0 and blood.current / blood.max < 0.5 then
+                out[#out + 1] = { name = "Unconscious (blood loss)", icon = "blood",
+                    hint = "Out cold from blood loss. Wakes once blood recovers above 50%." }
+            elseif lowFrac(uid, "hydration", "max_hydration", 0.5) then
+                out[#out + 1] = { name = "Collapsed (dehydrated)", icon = "hydration",
+                    hint = "Collapsed from thirst. Rises once hydration recovers above 50%." }
+            elseif lowFrac(uid, "stamina", "max_stamina", 0.5) then
+                out[#out + 1] = { name = "Collapsed (exhausted)", icon = "stamina",
+                    hint = "Collapsed from exhaustion. Rises once stamina recovers above 50%." }
+            else
+                out[#out + 1] = { name = "Collapsed", icon = "pain",
+                    hint = "On the ground, unable to act." }
+            end
+        end
+    end
+
+    -- Failure meters (delayed-death pathways) — show the rising % so the
+    -- player sees the clock and can treat in time. The tooltip carries the
+    -- real numbers: current %, the per-second fill/recover rate, and what it
+    -- kills you with. Bucketed to 10% in the row name so the panel rebuilds
+    -- in steps, not every tick.
+    local METER_CONDITIONS = {
+        { stat = "hypoxia", label = "Suffocating",   icon = "hydration",
+          title = "Cell hypoxia", fatal = "suffocation",
+          desc  = "Lungs/airway can't oxygenate the blood." },
+        { stat = "neuro",   label = "Brain failing", icon = "nerve_injury",
+          title = "Neural shutdown", fatal = "brain death",
+          desc  = "Catastrophic brain trauma is shutting the nervous system down." },
+        { stat = "shock",   label = "In shock",      icon = "blood",
+          title = "Systemic shock", fatal = "cardiac arrest",
+          desc  = "The body's whole-system collapse under massive trauma." },
+        { stat = "organ",   label = "Organ failure", icon = "festered_injury",
+          title = "Organ failure", fatal = "sepsis",
+          desc  = "Untreated visceral trauma festering (sepsis / encephalopathy)." },
+    }
+    local meterInfo = require("scripts.unit_resources").meterInfo(uid)
+    for _, mc in ipairs(METER_CONDITIONS) do
+        local v = stats.get(uid, mc.stat)
+        if v and v > 0.02 then
+            local mi   = meterInfo[mc.stat] or {}
+            local rate = mi.rate or 0
+            local rateLine
+            if rate > 0 then
+                rateLine = string.format(
+                    "Rising %.2f%%/s → fatal (%s) at 100%%.", rate * 100, mc.fatal)
+            else
+                rateLine = string.format(
+                    "Recovering %.2f%%/s (injury treated).", -rate * 100)
+            end
+            out[#out + 1] = {
+                name = string.format("%s (%d%%)", mc.label, math.floor(v * 10) * 10),
+                icon = mc.icon,
+                hint = string.format("%s: %.0f%%\n%s\n%s",
+                    mc.title, (mi.value or v) * 100, rateLine, mc.desc),
+            }
+        end
+    end
+
+    -- Bleeding: any open (cutting) wound of meaningful severity.
+    local ws = unit.getWounds(uid)
+    if type(ws) == "table" then
+        for _, w in ipairs(ws) do
+            if (w.kind == "slash" or w.kind == "stab")
+               and (w.severity or 0) >= 0.2 then
+                out[#out + 1] = { name = "Bleeding", icon = "blood",
+                    hint = "Losing blood from open wounds.\n"
+                        .. "Bleeds out at 0 blood; revives once it recovers." }
+                break
+            end
+        end
+    end
+
+    -- Standing daily-need warnings.
+    if pose ~= "collapsed" then
+        if lowFrac(uid, "hydration", "max_hydration", 0.25) then
+            out[#out + 1] = { name = "Dehydrated", icon = "hydration",
+                hint = "Water below 25%. Collapses near empty; find a water source." }
+        end
+        local hu = stats.get(uid, "hunger")
+        if hu and hu <= 0 then
+            out[#out + 1] = { name = "Starving", icon = "hunger",
+                hint = "Out of food — burning fat then muscle reserves to survive." }
+        end
+    end
+
+    return out
+end
+
 -- Carry row: carried weight / effective capacity. The value tooltip
 -- surfaces the capacity breakdown when modifiers are active — the
 -- technomule's "cybernetic enhancements +50%" shows here.
@@ -1204,21 +1404,143 @@ local function fmtCarry(uid)
     return string.format("%.1f / %.1f kg", carried, cap)
 end
 
--- Status panel: vitals most-likely-to-kill at the top, daily-need
--- resources below. Blood goes first (death-relevant), pain second,
--- then the existing stamina/hunger/hydration trio, and the carry
--- load last (informational, not a vital).
+-- Danger colour-coding for the vital numbers: amber as they enter the
+-- warning band, red at critical. Returns white when safe (so the refresh
+-- restores it as values recover).
+local VITAL_CRIT_COLOR = { 1.0, 0.30, 0.30, 1.0 }
+local VITAL_WARN_COLOR = { 1.0, 0.62, 0.25, 1.0 }
+local function dangerColor(frac, crit, warn)
+    if frac == nil  then return CONTENT_VAL_COLOR end
+    if frac <= crit then return VITAL_CRIT_COLOR  end
+    if frac <= warn then return VITAL_WARN_COLOR  end
+    return CONTENT_VAL_COLOR
+end
+local function bloodColorFn(uid)
+    local b = unit.getBlood(uid)
+    if not (b and b.max and b.max > 0) then return CONTENT_VAL_COLOR end
+    return dangerColor(b.current / b.max, 0.30, 0.50)
+end
+local function painColorFn(uid)
+    local p = unit.getPain(uid) or 0
+    if p >= 0.70 then return VITAL_CRIT_COLOR end
+    if p >= 0.40 then return VITAL_WARN_COLOR end
+    return CONTENT_VAL_COLOR
+end
+local function fracColorFn(cur, maxName, crit, warn)
+    return function(uid)
+        local c = stats.get(uid, cur)
+        local m = stats.get(uid, maxName)
+        if not (c and m and m > 0) then return CONTENT_VAL_COLOR end
+        return dangerColor(c / m, crit, warn)
+    end
+end
+
+-- Blood value tooltip: the live BLEED rate in ml/s (with %/s of total blood
+-- in parens). engine.getBlood exposes bleedRate (L/s) summed over wounds.
+local function bloodValueTooltip(uid)
+    local b = unit.getBlood(uid)
+    if not b then return nil end
+    local rate = b.bleedRate or 0
+    if rate <= 0 then
+        return { text = "Blood", hint = "Not bleeding." }
+    end
+    local pctS = (b.max and b.max > 0) and (rate / b.max * 100) or 0
+    return { text = "Blood",
+             hint = string.format("Bleeding: %.0f ml/s (%.2f%%/s)",
+                 rate * 1000, pctS) }
+end
+
+-- Status panel: the unit's whole current state in one scrollable list —
+-- vitals (most-likely-to-kill first), then daily-need resources, then
+-- the carry load, then any active CONDITIONS (knocked down, collapsed,
+-- bleeding…) and finally the full INJURY list (icon + name + severity).
+-- Conditions + injuries are dynamic rows appended to the fixed vitals,
+-- each rendered icon-left / text-right by the shared row builder (its
+-- `key` doubles as the icon basename, so an injury's catalog icon shows
+-- without a STAT_DEFS entry). This is the one place to see why a unit
+-- can or can't act.
 local function buildStatusPanel(rect, uid)
-    return buildIconStatPanel(rect, uid, {
-        { key = "blood",     value = fmtBlood },
-        { key = "pain",      value = fmtPain },
-        { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end },
-        { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end },
-        { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end },
+    local rows = {
+        { key = "blood",     value = fmtBlood, colorFn = bloodColorFn,
+          valueTooltip = bloodValueTooltip },
+        { key = "pain",      value = fmtPain,  colorFn = painColorFn },
+        { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
+          colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) },
+        { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
+          colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) },
+        { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
+          colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) },
         { key          = "carrying_capacity",
           value        = fmtCarry,
           valueTooltip = carryValueTooltip },
-    })
+    }
+
+    -- Conditions (states): icon + small amber name. Captured per-build;
+    -- the panel rebuilds when the condition/injury set changes (panelShapeSig).
+    local CONDITION_COLOR = { 1.0, 0.62, 0.25, 1.0 }
+    for _, c in ipairs(unitConditions(uid)) do
+        local name = c.name
+        local tt   = { text = name, hint = c.hint or "Current condition." }
+        rows[#rows + 1] = {
+            key          = c.icon,
+            value        = function() return name end,
+            opts         = { fontSize = CONDITION_FONT_SIZE,
+                             color = CONDITION_COLOR,
+                             align = "left", abbreviate = true },
+            tooltip      = tt,
+            valueTooltip = function() return tt end,
+        }
+    end
+
+    -- Injuries (wounds): icon + small name, COLOUR-coded by severity, with
+    -- the severity word + effects in the tooltip. Identical wounds STACK
+    -- with a (xN) multiplier — consistent with item stacking — so a flurry
+    -- of small cuts reads "Cut (x6)" instead of six rows. Wounds of
+    -- different severity carry different tiered names, so they don't merge;
+    -- only truly-identical (mostly minor) ones do. Worst in a group drives
+    -- the colour.
+    local groups, order = {}, {}
+    for _, inj in ipairs(injuries.list(uid)) do   -- list is worst-first
+        local g = groups[inj.name]
+        if not g then
+            g = { icon = inj.icon, count = 0, worst = inj }
+            groups[inj.name] = g
+            order[#order + 1] = inj.name
+        end
+        g.count = g.count + 1
+        if (inj.severity or 0) > (g.worst.severity or 0) then g.worst = inj end
+    end
+    for _, nm in ipairs(order) do
+        local g    = groups[nm]
+        local inj  = g.worst
+        local disp = (g.count > 1) and (nm .. " (x" .. g.count .. ")") or nm
+        local pct     = string.format("%d%%",
+                            math.floor((inj.severity or 0) * 100 + 0.5))
+        local sevWord = injuries.severityLabel(inj.severity)
+                            :gsub("^%l", string.upper)
+        local loc     = injuries.locationName(inj.part):gsub("^%l", string.upper)
+        if g.count > 1 then loc = loc .. " + " .. (g.count - 1) .. " more" end
+        local hint = "Location: " .. loc
+                     .. "\nSeverity: " .. sevWord .. " (" .. pct .. ")"
+                     .. (inj.kind == "severed" and "\nPermanent."
+                                                or  "\nHeals over time.")
+        local effects = injuries.effects(inj.kind, inj.part, inj.severity)
+        if #effects > 0 then
+            hint = hint .. "\n\nEffects:\n• " .. table.concat(effects, "\n• ")
+        end
+        local tt = { text = disp, hint = hint }
+        rows[#rows + 1] = {
+            key          = g.icon,
+            value        = function() return disp end,
+            opts         = { fontSize = CONDITION_FONT_SIZE,
+                             color = injuries.severityColor(inj.severity),
+                             align = "left", abbreviate = true },
+            tooltip      = tt,
+            valueTooltip = function() return tt end,
+        }
+    end
+
+    return buildIconStatPanel(rect, uid, rows)
 end
 
 -- Row spec helper for engine-side stats. Icon tooltip = stat name +
@@ -1330,55 +1652,12 @@ end
 -- weightHint moved above buildPhysicalPanel so its forward-reference
 -- resolves at function-definition time.)
 
-local function buildEffectsPanel(rect, uid)
-    -- Placeholder. unit.getModifiers requires (uid, statName) — there's
-    -- no API yet for "all active effects on a unit", so this always
-    -- falls through to the empty message. When that API lands, the
-    -- iteration below already handles the {name=..., delta=...} shape.
-    local mods = unit.getModifiers(uid) or {}
-    if #mods == 0 then
-        local lblId = label.new({
-            name     = "unit_info_v2_effects_empty",
-            text     = "(no active effects)",
-            font     = hud.menuFont,
-            fontSize = CONTENT_FONT_SIZE,
-            color    = {0.6, 0.6, 0.6, 1.0},
-            page     = unitInfoV2.page,
-            uiscale  = 1.0,
-        })
-        local h = label.getElementHandle(lblId)
-        UI.addToPage(unitInfoV2.page, h,
-            rect.x + CONTENT_LEFT_PAD,
-            rect.y + CONTENT_TOP_PAD + CONTENT_FONT_SIZE)
-        UI.setZIndex(h, 12)
-        table.insert(unitInfoV2.statsContentElements, { kind = "label", id = lblId })
-        return function () end
-    end
-    for i, m in ipairs(mods) do
-        local y = rect.y + CONTENT_TOP_PAD + (i - 1) * CONTENT_ROW_H + CONTENT_FONT_SIZE
-        local lblId = label.new({
-            name     = "unit_info_v2_effect_" .. i,
-            text     = tostring(m.name or "?"),
-            font     = hud.menuFont,
-            fontSize = CONTENT_FONT_SIZE,
-            color    = CONTENT_VAL_COLOR,
-            page     = unitInfoV2.page,
-            uiscale  = 1.0,
-        })
-        local h = label.getElementHandle(lblId)
-        UI.addToPage(unitInfoV2.page, h, rect.x + CONTENT_LEFT_PAD, y)
-        UI.setZIndex(h, 12)
-        table.insert(unitInfoV2.statsContentElements, { kind = "label", id = lblId })
-    end
-    return function () end
-end
 
 local PANEL_BUILDERS = {
     Status   = buildStatusPanel,
     Physical = buildPhysicalPanel,
     Mental   = buildMentalPanel,
     Skill    = buildSkillPanel,
-    Effects  = buildEffectsPanel,
 }
 
 -- Forward-declared above. Clears the current panel's elements and
@@ -1399,12 +1678,22 @@ local function panelShapeSig(panel, uid)
         for n, _ in pairs(all) do names[#names + 1] = n end
         table.sort(names)
         base = "skill:" .. table.concat(names, "|")
-    elseif panel == "Effects" then
-        -- Phase-3 wiring; the modifiers API is per-stat so we have
-        -- no global enumeration yet. Signature is fixed ("empty")
-        -- so Effects never re-shapes itself. When that API lands,
-        -- sort + concat modifier ids here.
-        base = "effects_v1_empty"
+    elseif panel == "Status" then
+        -- The Status row SET changes when a condition appears/clears or
+        -- an injury is gained/healed, so its signature tracks both (the
+        -- vitals' live numbers are pushed in-place and don't rebuild).
+        -- Severity is bucketed (~0.1) so passive healing only rebuilds on
+        -- a visible step, not every tick.
+        local parts = {}
+        for _, c in ipairs(unitConditions(uid)) do
+            parts[#parts + 1] = "c:" .. c.name
+        end
+        for _, inj in ipairs(injuries.list(uid)) do
+            parts[#parts + 1] = string.format("i:%s:%s:%d",
+                inj.kind or "?", inj.part or "?",
+                math.floor((inj.severity or 0) * 10))
+        end
+        base = "status:" .. table.concat(parts, "|")
     else
         base = "static"
     end

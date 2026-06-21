@@ -113,10 +113,10 @@ cost confirmation). Existing acolyte (48×48, group of ~13 states) and bear_brow
 states) live in the PixelLab account — `list_characters` / `get_character` show rotation and
 per-frame URLs (backblaze), downloadable with plain curl.
 
-Recipe for a new unit (validated with gray_wolf, 2026-06):
+Recipe for a new unit (validated with bear_brown, 2026-06):
 1. `create_character` (humanoid, or quadruped with template bear/cat/dog/horse/lion — **v3 mode
    rejects quadrupeds**, use standard). `size` is the character; the canvas comes out ~40% larger
-   (64px wolf → 92×92 canvas, same as the bear). Dog-template animations: bark, fast-walk, idle,
+   (64px character → 92×92 canvas, like the bear). Dog-template animations: bark, fast-walk, idle,
    running-4/6/8-frames, sneaking, walk-4/6/8-frames.
 2. **MANDATORY STOP: after the base 8-direction character generates, present the rotations to
    the user and wait for explicit sign-off before generating anything else** (no states, no

@@ -26,6 +26,9 @@
 local unitAi = package.loaded["scripts.unit_ai"] or {}
 package.loaded["scripts.unit_ai"] = unitAi
 
+-- Shared comfort/ordered/sprint speed model (see movement_speed.lua).
+local mv = require("scripts.movement_speed")
+
 -----------------------------------------------------------
 -- Tunables per unit def
 -----------------------------------------------------------
@@ -47,18 +50,12 @@ local config = {
         -- catch the in-range moment instead of walking through it.
         combat_thought_interval = 0.1,
         wander_radius    = 5.0,    -- tiles
-        -- Movement speed fractions (multiply max_speed from unit yaml
-        -- to get the actual tiles/sec passed to moveTo). Lets one
-        -- species run twice as fast as another at the same activity
-        -- without restating the ratios per def.
-        speed_frac_wander  = 0.5,   -- leisurely
-        speed_frac_command = 0.7,   -- combat / following orders
-        speed_frac_retreat = 1.0,   -- full sprint
+        -- Movement speeds come from the comfort/ordered/sprint regime
+        -- (scripts/movement_speed.lua), not per-action fractions.
         base_wander_utility          = 0.5,
         wander_stamina_weight        = 0.3,
         wander_time_penalty          = 0.1,    -- per second in session
         wander_min_stamina_fraction  = 0.2,
-        command_speed                = 2.0,    -- LEGACY: kept for non-combat consumers
         -- Drinking
         drink_sip_litres        = 0.5,    -- canteen water consumed per sip
         drink_min_thirst        = 0.2,    -- 1 - hydration/max; below this, no drink
@@ -92,10 +89,6 @@ local config = {
         refill_base_weight       = 0.85,
         refill_urgency_scale     = 0.5,   -- added on top, scaled by (x²)
         refill_arrival_tiles     = 1.5,
-        refill_speed             = 1.5,
-        -- Source-drinking. Used when the unit has no canteen-with-
-        -- water but knows where water is. Speed matches refill.
-        source_drink_speed    = 1.5,
         -- Searching. Fires when canteen has headroom but no water is
         -- known. Walks a rosette: 8 compass waypoints per ring,
         -- distance = ring_index * search_spacing. Spacing roughly
@@ -107,7 +100,6 @@ local config = {
         search_emptiness_weight  = 0.1,    -- → 0.85 at threshold, 0.95 at empty
         search_spacing           = 6,
         search_arrival_tiles     = 1.5,
-        search_speed             = 1.5,
         search_max_step          = 32,     -- ~4 rings; then re-anchor origin
         -- Goal-driven utility floor for "find_water". Beats wander
         -- (0.5 + ~0.3) and follow_command (1.0) so a goal-bound
@@ -122,7 +114,6 @@ local config = {
         notify_broadcast_seconds = 1.0,
         notify_transfer_seconds  = 1.0,
         notify_arrival_tiles     = 1.5,
-        notify_walk_speed        = 1.8,
         goal_notify_weight       = 5.0,
         -- Construction (build_nearby). Utility shape:
         --   util = base · (1 − workers_present/saturation) · dist_factor
@@ -132,7 +123,6 @@ local config = {
         -- 0 at build_scan_range tiles away.
         build_scan_range       = 30.0,
         build_arrival_tiles    = 1.5,
-        build_walk_speed       = 1.5,
         build_base_utility     = 3.0,
         build_saturation_n     = 5,
         -- Material delivery (deliver_to_build_site). Higher than the
@@ -140,7 +130,6 @@ local config = {
         -- adjacent build site will deliver first, then transition to
         -- building once empty.
         deliver_scan_range     = 30.0,
-        deliver_walk_speed     = 1.6,
         deliver_utility        = 4.0,
         -- Fetching from the technomule. Construction materials live
         -- on the mule (technomule.yaml), so a deliverer whose own
@@ -148,7 +137,6 @@ local config = {
         -- and takes the shortfall (unit.transferItemToUnit preserves
         -- the instances). Capacity-gated per item like pickup.
         mule_fetch_arrival     = 1.5,
-        mule_fetch_speed       = 1.6,
         -- Auto-store materials. Utility curve = base · fill³ where
         -- fill = carrying_weight / carrying_capacity. Below ~65 %
         -- full the action sits under wander (0.8); past that it
@@ -156,7 +144,6 @@ local config = {
         -- in the "Materials" category — supplies, tools, and worn
         -- equipment stay on them.
         store_scan_range       = 30.0,
-        store_walk_speed       = 1.6,
         store_base_utility     = 3.0,
         -- Mining (dig_designation). Utility shape mirrors build:
         --   util = base · min(toolSpeed, 1) · dist_factor
@@ -168,7 +155,6 @@ local config = {
         -- still preempt; never math.huge).
         dig_scan_range       = 30.0,
         dig_arrival_tiles    = 0.4,   -- tight: stand AT the corner
-        dig_walk_speed       = 1.5,
         dig_base_utility     = 2.0,
         dig_lock_utility     = 6.0,
         dig_rate             = 0.5,   -- corner-units/sec at tool speed
@@ -196,7 +182,6 @@ local config = {
         -- dire needs. Capacity is checked at the moment of pickup.
         pickup_utility       = 1.5,
         pickup_arrival_tiles = 1.2,
-        pickup_walk_speed    = 1.8,
         pickup_timeout       = 30.0,
     },
     -- Species-specific config blocks (bear, future wildlife) are
@@ -458,11 +443,10 @@ local function wanderExecute(uid, s, params)
     local tx = info.gridX + math.cos(angle) * dist
     local ty = info.gridY + math.sin(angle) * dist
 
-    -- speed_frac_wander × max_speed. Computed inline because the
-    -- speedFor helper is declared further down the file (locals
-    -- aren't hoisted, so referencing it here would hit a nil global).
-    local maxSpd = unit.getMaxSpeed(uid) or 3.0
-    unit.moveTo(uid, tx, ty, maxSpd * (params.speed_frac_wander or 0.5))
+    -- Aimless wander is a slow meander — well below comfort, so the unit
+    -- ambles (and recovers stamina) rather than cruising. Units only move
+    -- at comfort/ordered/sprint when they have an actual purpose.
+    unit.moveTo(uid, tx, ty, mv.meander(uid))
 end
 
 -----------------------------------------------------------
@@ -698,7 +682,7 @@ local function refillExecute(uid, s, params)
     local alpha = 0.45
     local tx = nx + 0.5 + alpha * (loc.x - nx)
     local ty = ny + 0.5 + alpha * (loc.y - ny)
-    unit.moveTo(uid, tx, ty, params.refill_speed)
+    unit.moveTo(uid, tx, ty, mv.comfort(uid))  -- routine errand → comfort
 end
 
 -----------------------------------------------------------
@@ -820,7 +804,7 @@ local function drinkFromSourceExecute(uid, s, params)
     local alpha = 0.45
     local tx = nx + 0.5 + alpha * (loc.x - nx)
     local ty = ny + 0.5 + alpha * (loc.y - ny)
-    unit.moveTo(uid, tx, ty, params.source_drink_speed)
+    unit.moveTo(uid, tx, ty, mv.comfort(uid))  -- routine errand → comfort
 end
 
 -----------------------------------------------------------
@@ -914,21 +898,32 @@ local function searchExecute(uid, s, params)
                                 s.searchSpacingMult)
     end
 
-    unit.moveTo(uid, wx, wy, params.search_speed)
+    unit.moveTo(uid, wx, wy, mv.comfort(uid))  -- searching → comfort
 end
 
 -----------------------------------------------------------
 -- Action: follow_command
 -----------------------------------------------------------
+-- An explicit player move order outranks the unit's autonomous
+-- behaviour: above goal-pursuit/search (5.0), combat (retreat/engage
+-- 6.0), and ambient wander, so a right-click reliably moves the unit.
+-- It stays BELOW dire survival needs — drink/eat scale to ~10 only when
+-- the unit is genuinely critical (thirst·drink_weight), so a unit dying
+-- of thirst still tends to that first, then resumes the order
+-- (commandedTask persists until maintainTask clears it on arrival/timeout).
+local FOLLOW_COMMAND_UTILITY = 7.0
+
 local function followCommandUtility(uid, s, params)
     if not s.commandedTask then return -math.huge end
-    return 1.0
+    return FOLLOW_COMMAND_UTILITY
 end
 
 local function followCommandExecute(uid, s, params)
     local task = s.commandedTask
     if not task then return end
-    unit.moveTo(uid, task.x, task.y, task.speed or params.command_speed)
+    -- Player-ordered move: a slight sustainable push above comfort
+    -- (ordered regime), unless the command specified an explicit speed.
+    unit.moveTo(uid, task.x, task.y, task.speed or mv.ordered(uid))
 end
 
 -----------------------------------------------------------
@@ -961,21 +956,6 @@ local function selfWoundedByTarget(uid, s)
     local att = unit.getLastAttacker(uid)
     if not att then return false end
     return att.uid == s.attackTargetUid
-end
-
------------------------------------------------------------
--- Movement speed helpers
---
--- All combat-related movement (attack pursuit, retreat) is paced as
--- a FRACTION of the unit's per-species max_speed (read from YAML
--- via unit.getMaxSpeed). Stat-driven modulation lives in the engine
--- (UnitMoveTo applies an injury/blood multiplier on receipt) so
--- this helper only handles the species-level scaling.
------------------------------------------------------------
-
-local function speedFor(uid, fraction)
-    local maxSpd = unit.getMaxSpeed(uid) or 3.0
-    return maxSpd * (fraction or 1.0)
 end
 
 -----------------------------------------------------------
@@ -1125,10 +1105,8 @@ local function retreatExecute(uid, s, params)
         or math.abs(last.x - tx) > 0.5
         or math.abs(last.y - ty) > 0.5
     if needRepath then
-        -- Retreat sprints — full max-speed, per the design spec
-        -- ("a unit who retreats should try to run as fast as they can").
-        unit.moveTo(uid, tx, ty,
-            speedFor(uid, params.speed_frac_retreat or 1.0))
+        -- Fleeing → sprint: max_speed × agility, "as fast as they can".
+        unit.moveTo(uid, tx, ty, mv.sprint(uid))
         s.retreatLastMoveTo = { x = tx, y = ty }
     end
 end
@@ -1155,6 +1133,10 @@ end
 -- still drinks before fighting.
 -----------------------------------------------------------
 local ENGAGE_WINDOW_SEC = 10.0
+-- How recently a melee hit must have landed for the in-combat target swap
+-- to round on the new attacker (shorter than the engage window so the bear
+-- chases a fled target rather than ping-ponging to whoever poked it once).
+local RETALIATE_WINDOW_SEC = 3.0
 
 local THREAT_SOURCES = {
     -- Recently took damage from someone who is still alive. The
@@ -1387,6 +1369,30 @@ local function attackTargetExecute(uid, s, params)
         return
     end
 
+    -- Mid-fight RETALIATION: if someone other than the current target just
+    -- hit us and they're within melee reach, turn on them. A predator
+    -- chasing a fleeing victim will round on whoever's stabbing its flank
+    -- instead of tunnel-visioning the runner. (The initial-engage path
+    -- already handles first contact; this is the in-combat target swap.)
+    do
+        local att = unit.getLastAttacker(uid)
+        if att and att.uid ~= target and unit.exists(att.uid)
+           and unit.getPose(att.uid) ~= "dead"
+           and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC then
+            local m = unit.getInfo(uid)
+            local a = unit.getInfo(att.uid)
+            if m and a then
+                local d = math.max(math.abs(m.gridX - a.gridX),
+                                   math.abs(m.gridY - a.gridY))
+                if d <= (unit.getAttackRange(uid) or 1.0) + 0.5 then
+                    s.attackTargetUid = att.uid
+                    target = att.uid
+                    clearAttackAnim(uid)
+                end
+            end
+        end
+    end
+
     local me  = unit.getInfo(uid)
     local you = unit.getInfo(target)
     if not me or not you then return end
@@ -1464,8 +1470,20 @@ local function attackTargetExecute(uid, s, params)
         local dyLast = last and math.abs(last.y - you.gridY) or math.huge
         if unit.getActivity(uid) == "idle"
            or dxLast > 0.5 or dyLast > 0.5 then
-            unit.moveTo(uid, you.gridX, you.gridY,
-                        speedFor(uid, params.speed_frac_command or 0.7))
+            -- Close on the enemy at a STAMINA-AWARE pace. Sprint only while
+            -- we have the wind for it; cruise when winded. Charging an empty
+            -- tank just collapses us two tiles short — only fleeing for our
+            -- lives (retreat) runs to exhaustion.
+            local sp      = mv.sprint(uid)
+            local stam    = unit.getStat(uid, "stamina")
+            local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
+            if stam and maxStam and maxStam > 0 then
+                local frac = stam / maxStam
+                if frac < 0.30 then sp = mv.comfort(uid)      -- winded: cruise
+                elseif frac < 0.55 then sp = mv.ordered(uid)  -- tiring: push
+                end
+            end
+            unit.moveTo(uid, you.gridX, you.gridY, sp)
             s.attackLastMoveTo = { x = you.gridX, y = you.gridY }
         end
     end
@@ -1688,7 +1706,7 @@ local function notifyAlliesExecute(uid, s, params)
     if d > params.notify_arrival_tiles then
         s.notifyPhase = "walking"
         unit.moveTo(uid, targetInfo.gridX, targetInfo.gridY,
-                    params.notify_walk_speed)
+                    mv.comfort(uid))  -- routine errand → comfort
         return
     end
 
@@ -1883,7 +1901,7 @@ local function deliverFetchFromMule(uid, s, info, params)
 
     if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
        > params.mule_fetch_arrival then
-        unit.moveTo(uid, mule.gridX, mule.gridY, params.mule_fetch_speed)
+        unit.moveTo(uid, mule.gridX, mule.gridY, mv.comfort(uid))  -- hauling → comfort
         return true
     end
 
@@ -1975,7 +1993,7 @@ local function deliverExecute(uid, s, params)
             end
         end
         if bestX then
-            unit.moveTo(uid, bestX, bestY, params.deliver_walk_speed)
+            unit.moveTo(uid, bestX, bestY, mv.comfort(uid))  -- hauling → comfort
         end
         return
     end
@@ -2107,7 +2125,7 @@ local function storeMaterialsExecute(uid, s, params)
             end
         end
         if bestX then
-            unit.moveTo(uid, bestX, bestY, params.store_walk_speed)
+            unit.moveTo(uid, bestX, bestY, mv.comfort(uid))  -- hauling → comfort
         end
         return
     end
@@ -2280,7 +2298,7 @@ local function buildNearbyExecute(uid, s, params)
         end
     end
     if bestX then
-        unit.moveTo(uid, bestX, bestY, params.build_walk_speed)
+        unit.moveTo(uid, bestX, bestY, mv.comfort(uid))  -- going to build site → comfort
     end
 end
 
@@ -2494,7 +2512,7 @@ local function digExecute(uid, s, params)
         s.digPhase = "walking"
         cand.corner = ci
         local sx, sy = digStandPos(cand, ci)
-        unit.moveTo(uid, sx, sy, params.dig_walk_speed)
+        unit.moveTo(uid, sx, sy, mv.comfort(uid))  -- approaching dig site → comfort
         return
     end
 
@@ -2524,7 +2542,7 @@ local function digExecute(uid, s, params)
         else
             -- Execute only fires when idle, so this re-issue means
             -- the previous walk arrived short or failed.
-            unit.moveTo(uid, sx, sy, params.dig_walk_speed)
+            unit.moveTo(uid, sx, sy, mv.comfort(uid))  -- approaching dig site → comfort
         end
         return
     end
@@ -2560,7 +2578,7 @@ local function digExecute(uid, s, params)
                 unit.clearAnimOverride(uid)
                 s.digPhase = "walking"
                 local sx, sy = digStandPos(job, ci)
-                unit.moveTo(uid, sx, sy, params.dig_walk_speed)
+                unit.moveTo(uid, sx, sy, mv.comfort(uid))  -- approaching dig site → comfort
                 return
             end
             -- No other corner left: the residue finishes from here.
@@ -2659,7 +2677,7 @@ local function pickupExecute(uid, s, params)
 
     local d = distance(info.gridX, info.gridY, g.x, g.y)
     if d > params.pickup_arrival_tiles then
-        unit.moveTo(uid, g.x, g.y, params.pickup_walk_speed)
+        unit.moveTo(uid, g.x, g.y, mv.comfort(uid))  -- going to pick up → comfort
         return
     end
 
@@ -2788,14 +2806,10 @@ unitAi.setConfig("technomule", {
     thought_jitter   = 0.5,
     combat_thought_interval = 0.1,
     wander_radius    = 3.0,
-    speed_frac_wander  = 0.3,
-    speed_frac_command = 0.7,
-    speed_frac_retreat = 1.0,
     base_wander_utility          = 0.3,
     wander_stamina_weight        = 0.0,
     wander_time_penalty          = 0.1,
     wander_min_stamina_fraction  = 0.0,
-    command_speed                = 2.0,
 })
 
 unitAi.registerActions("technomule", {
@@ -2812,7 +2826,6 @@ unitAi.registerActions("technomule", {
 -- the dispatch loop. Done at load time so all defs are wired by
 -- the time the first tick runs.
 require("scripts.bear_ai")
-require("scripts.gray_wolf_ai")
 
 -----------------------------------------------------------
 -- FOV-based water memory.

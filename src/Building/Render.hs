@@ -85,8 +85,8 @@ pickBuildingFrame now inst def =
                           | otherwise                                  = timeIdx
                     in fs V.! idx
 
-renderBuildingQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vector SortableQuad)
-renderBuildingQuads env facing zSlice tileAlpha = do
+renderBuildingQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
+renderBuildingQuads env facing zSlice effDepth tileAlpha = do
     bm ← readIORef (buildingManagerRef env)
     let instances = bmInstances bm
         defs      = bmDefs bm
@@ -111,7 +111,7 @@ renderBuildingQuads env facing zSlice tileAlpha = do
                                 let mDef  = HM.lookup (biDefName inst) defs
                                     isSel = selected ≡ Just bid
                                 in case buildingToQuad lookupSlot defFmSlot facing
-                                                zSlice tileAlpha isSel inst mDef
+                                                zSlice effDepth tileAlpha isSel inst mDef
                                                 now texSizes of
                                     Just sq → sq : acc
                                     Nothing → acc
@@ -123,6 +123,7 @@ buildingToQuad
     → Float
     → CameraFacing
     → Int
+    → Int                                   -- ^ effDepth (terrain view depth)
     → Float
     → Bool                                  -- ^ selected (sets outline bit)
     → BuildingInstance
@@ -130,10 +131,12 @@ buildingToQuad
     → Double
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-buildingToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texSizes =
+buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef now texSizes =
     let gridZ = biGridZ inst
         relativeZ = gridZ - zSlice
-    in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
+        -- Match the terrain band (see Unit.Render): cull only above the
+        -- slice or past the view depth, not for being below the camera.
+    in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
        then Nothing
        else
         let -- Pre-delivery ghost: building was placed but its materials

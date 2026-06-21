@@ -23,6 +23,7 @@ import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , applyFacingF, GridConfig(..), defaultGridConfig)
+import World.Generate (viewDepth)
 import Unit.Types
 import Unit.Direction (Direction(..), dirIndex, indexToDir)
 
@@ -54,6 +55,10 @@ hitTestUnitAt env pixX pixY = do
             let facing  = camFacing camera
                 zoom    = camZoom camera
                 zSlice  = camZSlice camera
+                -- Match the render cull (Unit.Render): visible down to
+                -- the terrain view depth, not a fixed 25.
+                effDepth = min viewDepth
+                               (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
                 (camX, camY) = camPosition camera
 
                 -- Screen pixel → world coord. Same math as the tile
@@ -79,7 +84,7 @@ hitTestUnitAt env pixX pixY = do
                     , let gridZ     = uiGridZ inst
                           relativeZ = gridZ - zSlice
                     , gridZ ≤ zSlice
-                    , gridZ ≥ zSlice - 25
+                    , gridZ ≥ zSlice - effDepth
                     , let texHandle = resolveTextureH facing (uiFacing inst)
                                                       (uiDirSprites inst)
                                                       (uiTexture inst)
@@ -99,8 +104,11 @@ hitTestUnitAt env pixX pixY = do
                           baseRadius   = uiBaseWidth inst * 0.5
                                        / baseTileH * tileHeight
                           drawX = rawX + (tileWidth - quadW) * 0.5
-                          drawY = rawY - heightOffset
-                                + tileHalfDiamondHeight - quadH + baseRadius
+                          -- Must match Unit.Render.unitToQuad: continuous
+                          -- position → rawY is already the ground point,
+                          -- so NO tileHalfDiamondHeight (that's the
+                          -- apex→centre shift only flora/items need).
+                          drawY = rawY - heightOffset - quadH + baseRadius
                           -- Sprite quad center
                           cx    = drawX + quadW * 0.5
                           cy    = drawY + quadH * 0.5
@@ -139,6 +147,7 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
         facing  = camFacing camera
         zoom    = camZoom camera
         zSlice  = camZSlice camera
+        effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
         (camX, camY) = camPosition camera
         vw      = zoom * (fromIntegral winW / fromIntegral winH)
         vh      = zoom
@@ -166,8 +175,10 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
                 baseRadius   = uiBaseWidth inst * 0.5
                              / baseTileH * tileHeight
                 drawX = rawX + (tileWidth - quadW) * 0.5
-                drawY = rawY - heightOffset
-                      + tileHalfDiamondHeight - quadH + baseRadius
+                -- Match Unit.Render.unitToQuad (no tileHalfDiamondHeight —
+                -- rawY from the continuous position is already the ground
+                -- point; see the render note).
+                drawY = rawY - heightOffset - quadH + baseRadius
             in (drawX + quadW * 0.5, drawY + quadH * 0.5)
 
         -- World → screen pixel (inverse of hitTestUnitAt's projection).
@@ -180,7 +191,7 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
 
         inRect inst =
             let z = uiGridZ inst
-            in z ≤ zSlice ∧ z ≥ zSlice - 25 ∧
+            in z ≤ zSlice ∧ z ≥ zSlice - effDepth ∧
                let (pixX, pixY) = worldToPixel (unitCenter inst)
                in pixX ≥ x1 ∧ pixX ≤ x2 ∧ pixY ≥ y1 ∧ pixY ≤ y2
 

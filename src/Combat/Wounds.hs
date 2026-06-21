@@ -27,11 +27,14 @@
 -- recomputed live so wasting/regrowth carries through naturally.
 module Combat.Wounds
     ( tickAllWounds
+    , propagateSevering   -- exposed for unit testing
+    , bleedRateFor        -- current L/sec blood loss (for the info panel)
     ) where
 
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
@@ -71,10 +74,52 @@ unconsciousFraction ∷ Float
 unconsciousFraction = 0.30   -- pose flips to Collapsed below this
 
 kindBleedFactor ∷ Text → Float
-kindBleedFactor "slash" = 1.0
-kindBleedFactor "stab"  = 0.6
-kindBleedFactor "blunt" = 0.2
-kindBleedFactor _       = 0.5
+kindBleedFactor "slash"      = 1.0
+kindBleedFactor "stab"       = 0.6
+kindBleedFactor "blunt"      = 0.2
+-- A closed fracture barely bleeds (some internal); a concussion is a
+-- closed-head injury — no external bleed at all. They're dangerous
+-- through severity/pain and (for the head, a vital part) the lethal
+-- ≥1 rule, not exsanguination.
+kindBleedFactor "fracture"   = 0.05
+kindBleedFactor "concussion" = 0.0
+-- Internal bleeding drains blood with no external wound; a severed limb
+-- hemorrhages from the stump (major, but clots over time); an opened
+-- artery is the fastest bleed of all (a cut carotid empties you).
+kindBleedFactor "internal"   = 0.5
+kindBleedFactor "severed"    = 0.6
+kindBleedFactor "arterial"   = 1.2
+kindBleedFactor _            = 0.5
+
+-- | Current total bleed rate (litres/second) for a unit, summed over its
+--   wounds with the SAME per-wound formula 'tickOneUnit' drains by
+--   (severity² × kind × part.bleed_factor × bleedScale / clamp(con)).
+--   Exposed so the info panel can show "ml/s lost".
+bleedRateFor ∷ UnitDef → UnitInstance → Float
+bleedRateFor def inst =
+    let parts    = HM.fromList [(bpId p, p) | p ← udBodyParts def]
+        con      = HM.lookupDefault 1.0 "constitution" (uiStats inst)
+        bleedCon = max 0.5 (min 2.0 con)
+    in sum [ (woundSeverity w * woundSeverity w)
+                * kindBleedFactor (woundKind w)
+                * maybe 1.0 bpBleedFactor (HM.lookup (woundPart w) parts)
+                * bleedScale / bleedCon
+           | w ← uiWounds inst ]
+
+-- | Per-kind healing-rate multiplier on `healingBase`. Soft-tissue
+--   wounds (slash/stab/blunt) heal at the base rate (1.0); broken bones
+--   and concussions mend much more slowly, so an injured unit stays
+--   impaired for a long time rather than shrugging it off in seconds.
+kindHealFactor ∷ Text → Float
+kindHealFactor "fracture"   = 0.12
+kindHealFactor "concussion" = 0.18
+kindHealFactor "internal"   = 0.10
+kindHealFactor "arterial"   = 0.15   -- a vessel can close, slowly
+-- A severed part never grows back: zero healing keeps the severity
+-- pinned at 1.0 (and the wound is never cleaned up), so the limb stays
+-- gone for the unit's life. (Stump bleeding above still clots.)
+kindHealFactor "severed"    = 0.0
+kindHealFactor _            = 1.0
 
 -- ----- Entry point -----
 
@@ -176,6 +221,7 @@ tickOneUnit def dt inst
                             / bleedCon
                         healRate   = if bleedRate < bleedClotThreshold
                             then healingBase
+                               * kindHealFactor (woundKind w)
                                * (1 - woundSeverity w)
                                * (1 - woundSeverity w)
                                * healCon
@@ -214,4 +260,50 @@ tickOneUnit def dt inst
                 { uiWounds = newWoundsR
                 , uiBlood  = max 0 newBlood
                 }
-        in (inst', outcome)
+        in (propagateSevering def inst', outcome)
+
+-- | Severity at/above which a NON-VITAL part is "destroyed" (pulverised
+--   / cut through). A destroyed part takes its attached children with
+--   it: they are SEVERED. (Vital parts hitting this threshold die via
+--   the normal injury→death rule instead.)
+destroyThreshold ∷ Float
+destroyThreshold = 1.0
+
+-- | Reconcile severing: any part that is destroyed — a fracture or
+--   severed wound at/above 'destroyThreshold' — severs its child parts
+--   (a pulverised arm takes the hand with it). Idempotent: a severed
+--   child gets a single severity-1 "severed" wound, which then makes IT
+--   "destroyed" too, so the next tick severs ITS children — the loss
+--   propagates down the limb over a couple of 10 Hz ticks. Adds nothing
+--   when no part is destroyed (the common case), so it's cheap.
+propagateSevering ∷ UnitDef → UnitInstance → UnitInstance
+propagateSevering def inst =
+    let parts     = udBodyParts def
+        sevOf w   = woundSeverity w
+        destroyed = HS.fromList
+            [ woundPart w
+            | w ← uiWounds inst
+            , woundKind w ≡ "fracture" ∨ woundKind w ≡ "severed"
+            , sevOf w ≥ destroyThreshold ]
+        -- Children whose parent is destroyed and that aren't already
+        -- severed.
+        alreadySevered = HS.fromList
+            [ woundPart w | w ← uiWounds inst, woundKind w ≡ "severed" ]
+        toSever =
+            [ bpId p
+            | p ← parts
+            , Just par ← [bpParent p]
+            , HS.member par destroyed
+            , not (HS.member (bpId p) alreadySevered) ]
+    in if null toSever
+       then inst
+       else inst { uiWounds =
+            [ Wound { woundPart = pid, woundKind = "severed"
+                    , woundSeverity = 1.0, woundAt = woundAtNow }
+            | pid ← toSever ] <> uiWounds inst }
+  where
+    -- Reuse the freshest wound's timestamp (avoids threading gameTime
+    -- through; severing is driven by existing wounds, so one exists).
+    woundAtNow = case uiWounds inst of
+        (w:_) → woundAt w
+        []    → 0

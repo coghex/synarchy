@@ -159,6 +159,18 @@ applyEdit (WeSetFluidTile gx gy ft) lc
             , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, renderedSurf)]
             }
 
+applyEdit (WeSetSlope gx gy z bits) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let idx = columnIdx gx gy
+            col = lcTiles lc V.! idx
+            i   = z - ctStartZ col
+        in if i < 0 ∨ i ≥ VU.length (ctSlopes col)
+           then lc                              -- z outside the column; no-op
+           else
+               let col' = col { ctSlopes = ctSlopes col VU.// [(i, bits)] }
+               in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
+
 -- | Replay every edit recorded for this chunk, in stored order.
 --   Defensive `HM.lookup` — chunks with no edits round-trip unchanged.
 replayEdits ∷ WorldEdits → LoadedChunk → LoadedChunk

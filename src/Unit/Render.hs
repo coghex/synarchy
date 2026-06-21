@@ -24,7 +24,7 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, GridConfig(..), defaultGridConfig)
+                  , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
 import Unit.Types
 import Unit.Direction (Direction(..), dirIndex, indexToDir, mirrorDir)
 
@@ -147,8 +147,8 @@ pickFrame now cam inst def
               Just md → (\v → (v, True)) <$> Map.lookup md m
               Nothing → Nothing
 
-renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vector SortableQuad)
-renderUnitQuads env facing zSlice tileAlpha = do
+renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
+renderUnitQuads env facing zSlice effDepth tileAlpha = do
     um ← readIORef (unitManagerRef env)
     let instances = umInstances um
         defs      = umDefs um
@@ -173,7 +173,7 @@ renderUnitQuads env facing zSlice tileAlpha = do
                                 let isSel = HS.member uid selected
                                     mDef  = HM.lookup (uiDefName inst) defs
                                 in case unitToQuad lookupSlot defFmSlot facing
-                                                zSlice tileAlpha isSel inst
+                                                zSlice effDepth tileAlpha isSel inst
                                                 mDef now texSizes of
                                     Just sq → sq : acc
                                     Nothing → acc
@@ -185,6 +185,7 @@ unitToQuad
     → Float
     → CameraFacing
     → Int
+    → Int                                  -- ^ effDepth (terrain view depth)
     → Float
     → Bool                                 -- ^ selected (sets outline bit)
     → UnitInstance
@@ -192,13 +193,19 @@ unitToQuad
     → Double                               -- ^ now (POSIX seconds)
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texSizes =
+unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef now texSizes =
     let gridZ = uiGridZ inst
         -- Use the continuous uiRealZ for the visual vertical offset
         -- so climbs interpolate smoothly. Cull / slice math still
         -- consults the integer uiGridZ — visibility is per-tile.
         relativeZf = uiRealZ inst - fromIntegral zSlice
-    in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
+        -- Visible band matches the terrain (Quads.hs): culled only when
+        -- ABOVE the slice (camera below the unit) or beyond the view
+        -- depth. The old fixed `zSlice - 25` lower bound (= camera's own
+        -- terrain level, since z-tracking sets zSlice = camTerrain + 25)
+        -- wrongly hid every unit standing below the camera — e.g. units
+        -- at a cliff base seen from the top.
+    in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
        then Nothing
        else
         let (texHandle, flipX) = case mDef of
@@ -226,14 +233,51 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texS
             baseRadius = uiBaseWidth inst * 0.5 / baseTileH * tileHeight
 
             drawX = rawX + (tileWidth - quadW) * 0.5
-            drawY = rawY - heightOffset
-                  + tileHalfDiamondHeight - quadH + baseRadius
+            -- Foot anchor: the unit feeds its CONTINUOUS position
+            -- (uiGridX/Y = usRealX/Y) straight through applyFacingF, so
+            -- rawY is already the ground-point projection — the diamond
+            -- CENTRE of the tile it stands on. (Flora and ground items
+            -- feed INTEGER tile coords, so their rawY is the diamond
+            -- APEX and they add tileHalfDiamondHeight to reach the
+            -- centre; the unit must NOT — doing so dropped the feet a
+            -- half-diamond down onto the tile's vertical side face.)
+            drawY = rawY - heightOffset - quadH + baseRadius
 
-            spriteRowSpan = quadH / tileHalfDiamondHeight * 0.5
-            sortKey = (faF + fbF)
-                    + spriteRowSpan
-                    + relativeZf * 0.001
-                    + 0.0006
+            -- Painter sort anchored at the unit's FOOT row (faF+fbF),
+            -- with z as a sub-row tiebreak and a small constant nudge so
+            -- the unit draws just above the terrain/fluid at its own tile.
+            -- This matches the flora/ground-item convention.
+            --
+            -- It deliberately does NOT add a "sprite row span" forward
+            -- push. A tall sprite spans more than one screen row, so a
+            -- push sized to its height (~1.33 rows for a 1:1 sprite, more
+            -- for taller units) exceeded a full row and let an elevated /
+            -- climbing unit out-sort — and draw OVER — a cliff a full row
+            -- in FRONT of it. The screen row (faF+fbF) already orders the
+            -- unit correctly against tiles ahead of and behind it; the
+            -- sprite extends upward from the foot, over the rows behind,
+            -- which the row term already handles.
+            normalSort = (faF + fbF)
+                       + relativeZf * 0.001
+                       + 0.0006
+            -- Far-side climb occlusion: while climbing onto a cliff
+            -- column whose face is between the unit and the camera (its
+            -- screen-row is in FRONT of the unit's frozen base), sort the
+            -- unit just BEHIND that column so the cliff hides it. The
+            -- spriteRowSpan forward-push would otherwise draw the climber
+            -- OVER the column it's climbing. Only applies while the unit
+            -- is still on the base side (its tile ≠ the dest column); once
+            -- the pullup carries its xy onto the top tile it falls back to
+            -- normalSort and emerges in front.
+            baseTile = (floor (uiGridX inst) ∷ Int, floor (uiGridY inst) ∷ Int)
+            sortKey = case uiClimbDest inst of
+                Just dest@(dx, dy) | baseTile ≢ dest →
+                    let (bfa, bfb) = applyFacing facing (fst baseTile) (snd baseTile)
+                        (dfa, dfb) = applyFacing facing dx dy
+                    in if (dfa + dfb) > (bfa + bfb)
+                       then fromIntegral (dfa + dfb) - 0.5  -- behind the column
+                       else normalSort
+                _ → normalSort
 
             actualSlot = lookupSlot texHandle
             tint = Vec4 1.0 1.0 1.0 tileAlpha

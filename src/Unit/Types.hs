@@ -106,9 +106,8 @@ newtype UnitId = UnitId { unUnitId ∷ Word32 }
 --                         high-value parts (vitals usually 1.0,
 --                         limbs ~0.3). Combined with area_weight via
 --                         the unit's intelligence stat.
---     max_health_factor — part max_hp = body_mass × this factor.
---                         A wound of severity 1.0 ≈ a fatal blow to
---                         the part (head crushed, neck severed, ...).
+--     (part durability is DERIVED from the tissue layers — see
+--      Unit.Injury.layerCapacity — not a hand-authored factor.)
 --     bleed_factor      — multiplier on the per-wound bleed rate.
 --                         Neck > head > torso > limbs (more major
 --                         vessels near the centre line).
@@ -122,6 +121,9 @@ newtype UnitId = UnitId { unUnitId ∷ Word32 }
 --                         formatted as "<wound_kind>_<part_id>".
 data BodyPart = BodyPart
     { bpId              ∷ !Text
+    , bpName            ∷ !Text
+      -- ^ Display name for the combat log ("left arm", "forearm",
+      --   "radius"). Defaults to bpId when the YAML omits it.
     , bpParent          ∷ !(Maybe Text)
       -- ^ Attached part id (so severing an arm later cascades to
       --   the hand). For 2.1 the parent chain is read but not yet
@@ -129,14 +131,31 @@ data BodyPart = BodyPart
     , bpVital           ∷ !Bool
     , bpAreaWeight      ∷ !Float
     , bpTacticalValue   ∷ !Float
-    , bpMaxHealthFactor ∷ !Float
     , bpBleedFactor     ∷ !Float
     , bpHeightLow       ∷ !Float    -- ^ metres above foot
     , bpHeightHigh      ∷ !Float    -- ^ metres above foot
-    , bpLayers          ∷ ![(Text, Float)]
-      -- ^ Tissue stack, OUTER→INNER: (substance name, thickness mm).
-      --   A strike penetrates these in order; the innermost is the
-      --   vital core. Empty ⇒ a single default flesh layer.
+    , bpLayers          ∷ ![(Text, Text, Float)]
+      -- ^ Tissue stack, OUTER→INNER: (display name, substance, thickness mm).
+      --   A strike penetrates these in order; the innermost is the vital
+      --   core. The DISPLAY NAME is the noun the combat log uses ("radius",
+      --   "intestines", "skin") — distinct named layers let one part list
+      --   several bones/organs; the SUBSTANCE drives the wound kind +
+      --   physics. Empty ⇒ a single default flesh layer. (Name defaults to
+      --   the substance when the YAML omits it.)
+    , bpTargetable      ∷ !Bool
+      -- ^ True for the macro-parts an attack aims at (head, torso, an
+      --   arm…) and that the combat log names ("…in the arm"). False for
+      --   SUBPARTS (skull, carotid, femur, a lung) — these aren't aimed
+      --   at directly; a hit on their parent macro-part is ALLOCATED down
+      --   to them, and they carry the real tissue + injury detail. The
+      --   whole tree is fully data-driven (humanoid → robot → fish): the
+      --   engine reads targetable/parent/depth generically.
+    , bpDepth            ∷ !Float
+      -- ^ 0 = at the surface, 1 = deepest. Drives the slash-swath: a cut
+      --   that penetrates to depth D injures every sibling subpart with
+      --   depth ≤ D (skin → windpipe → carotid → spine), and a thrust
+      --   drives to the deepest subpart it can reach. Ignored for
+      --   targetable macro-parts.
     } deriving (Show, Eq, Generic)
 
 -- | A creature's innate (non-equipment) weapon — claws, fangs, fists.
@@ -151,7 +170,7 @@ data NaturalWeapon = NaturalWeapon
                                          --   damage geometry is per-kind below.
     , nwAttackCooldown         ∷ !Float  -- ^ seconds between swings
     -- Per-kind strike profiles. A natural weapon is really several
-    -- distinct tools — a wolf slashes/bites with keratin claws and
+    -- distinct tools — a beast slashes/bites with keratin claws and
     -- enamel fangs, bludgeons with a bone-cored paw — so each attack
     -- kind carries its own material + geometry. (Manufactured weapons
     -- use one material for all three kinds; the runtime ResolvedStrike
@@ -159,6 +178,11 @@ data NaturalWeapon = NaturalWeapon
     , nwSlash                  ∷ !StrikeProfile
     , nwStab                   ∷ !StrikeProfile
     , nwBlunt                  ∷ !StrikeProfile
+    , nwComboAttack            ∷ !Bool
+      -- ^ When True the slash/blunt facets fuse into ONE "paw" swing that
+      --   delivers slash + blunt + a fraction of stab together (a raking
+      --   bludgeon), while the stab facet remains a separate dedicated
+      --   "bite". When False each kind is its own single-mechanism attack.
     } deriving (Show, Eq, Generic)
 
 -- | One attack kind of a weapon, resolved to a material + geometry.
@@ -176,6 +200,8 @@ data StrikeProfile = StrikeProfile
     , spLength     ∷ !Float  -- ^ cm; lever length of the appendage. 0 ⇒
                              --   fall back to spBladeCm.
     , spCenterOfMass ∷ !Float -- ^ 0..1 along the appendage from the limb
+    , spName        ∷ !Text   -- ^ display name of this attack ("claws",
+                              --   "fangs", "paw") for the combat log
     } deriving (Show, Eq, Generic)
 
 -- | Innate per-attack-kind damage resistance baked into the unit's
@@ -201,10 +227,17 @@ data UnitDef = UnitDef
       -- ^ directional sprite overrides (may be empty)
     , udBaseWidth  ∷ !Float                           -- ^ ground contact diameter
     , udMaxSpeed   ∷ !Float
-      -- ^ Per-species maximum movement speed in tiles/sec at a full
-      --   sprint. AI candidates compute commanded / wander / retreat
-      --   speeds as fractions of this. Sim picks Running over Walking
-      --   when current move speed crosses 0.6 × udMaxSpeed.
+      -- ^ Per-species reference movement speed in tiles/sec — the top
+      --   speed at agility 1.0. Actual sprint = max_speed × agility
+      --   (computed Lua-side), so an exceptionally agile individual
+      --   exceeds this. AI candidates derive comfort / ordered / sprint
+      --   speeds from it + the unit's stats.
+    , udRunThreshold ∷ !Float
+      -- ^ Gait threshold as a fraction of udMaxSpeed: the sim renders
+      --   the Running animation instead of Walking when the current move
+      --   speed exceeds udRunThreshold × udMaxSpeed. Per-species (default
+      --   0.6) so a lumbering unit breaks into a run later than a nimble
+      --   one. Purely visual — independent of the comfort/sprint regime.
     , udAnimations ∷ !(HM.HashMap Text Animation)
       -- ^ named animation library (may be empty)
     , udStateAnims ∷ !(HM.HashMap Text Text)
@@ -389,6 +422,13 @@ data UnitInstance = UnitInstance
       --   the debug anim panel so previewed one-shot animations loop
       --   within a direction window. Runtime state only, NOT in
       --   SaveData.
+    , uiClimbDest   ∷ !(Maybe (Int, Int))
+      -- ^ While the unit is mid-climb, the (gx,gy) of the cliff column
+      --   it's climbing onto (mirrored from sim `usClimbToTile`);
+      --   Nothing otherwise. Lets the renderer occlude a unit climbing
+      --   the FAR face behind that column (so it doesn't draw over the
+      --   cliff), emerging as the pullup carries it onto the top tile.
+      --   Runtime state only, NOT in SaveData.
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.

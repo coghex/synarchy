@@ -63,53 +63,86 @@ units:
       # Tissue layers (outer→inner; mm). Thicker bone + flesh than a
       # human; the hide is the per-unit natural_resistance above. A big
       # skull shrugs off blades; the bulk gives the torso real depth.
-      - { id: head,         parent: neck,  vital: true,
+      # Soft-tissue layers are authored at HUMAN-REFERENCE thicknesses
+      # (skin/fat/muscle); the engine scales them up from the bear's own
+      # seeded fat_mass / lean_mass / body_mass, so the bear grows a thick
+      # fat+muscle barrier without per-species hand-tuning. The thin skin
+      # is what a steel dagger pierces; the scaled fat is the real wall.
+      - { id: head,         name: "head", parent: neck,  vital: true,
           area_weight: 0.10, tactical_value: 1.0,
-          max_health_factor: 0.20, bleed_factor: 2.0,
+          bleed_factor: 2.0,
           height_low: 1.00, height_high: 1.40,
-          layers: [ { material: flesh, thickness: 8 },
-                    { material: bone,  thickness: 15 },
-                    { material: organ, thickness: 120 } ] }
-      - { id: neck,         parent: torso, vital: true,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 3 },
+                    { name: muscle, material: muscle, thickness: 4 },
+                    { name: skull,  material: bone,   thickness: 7 },
+                    { name: brain,  material: organ,  thickness: 80 } ] }
+      - { id: neck,         name: "neck", parent: torso, vital: true,
           area_weight: 0.05, tactical_value: 1.0,
-          max_health_factor: 0.15, bleed_factor: 3.0,
+          bleed_factor: 3.0,
           height_low: 0.95, height_high: 1.10,
-          layers: [ { material: flesh, thickness: 60 },
-                    { material: organ, thickness: 15 } ] }
-      - { id: torso,        parent: null,  vital: true,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 4 },
+                    { name: muscle, material: muscle, thickness: 22 },
+                    { name: throat, material: organ,  thickness: 10 } ] }
+      - { id: torso,        name: "torso", parent: null,  vital: true,
           area_weight: 0.40, tactical_value: 0.8,
-          max_health_factor: 0.40, bleed_factor: 2.0,
+          bleed_factor: 2.0,
           height_low: 0.50, height_high: 1.40,
-          layers: [ { material: flesh, thickness: 40 },
-                    { material: bone,  thickness: 18 },
-                    { material: organ, thickness: 200 } ] }
-      - { id: l_fore_leg,   parent: torso,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 10 },
+                    { name: muscle, material: muscle, thickness: 25 },
+                    { name: ribs,   material: bone,   thickness: 10 },
+                    { name: vitals, material: organ,  thickness: 120 } ] }
+      - { id: l_fore_leg,   name: "left foreleg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.95 }
-      - { id: r_fore_leg,   parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 22 },
+                    { name: bone,   material: bone,   thickness: 14 } ] }
+      - { id: r_fore_leg,   name: "right foreleg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.95 }
-      - { id: l_hind_leg,   parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 22 },
+                    { name: bone,   material: bone,   thickness: 14 } ] }
+      - { id: l_hind_leg,   name: "left hind leg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.95 }
-      - { id: r_hind_leg,   parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 25 },
+                    { name: bone,   material: bone,   thickness: 16 } ] }
+      - { id: r_hind_leg,   name: "right hind leg", parent: torso,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.95 }
-      - { id: tail,         parent: torso,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 5 },
+                    { name: muscle, material: muscle, thickness: 25 },
+                    { name: bone,   material: bone,   thickness: 16 } ] }
+      - { id: tail,         name: "tail", parent: torso,
           area_weight: 0.05, tactical_value: 0.1,
-          max_health_factor: 0.05, bleed_factor: 0.5,
-          height_low: 0.40, height_high: 0.60 }
+          bleed_factor: 0.5,
+          height_low: 0.40, height_high: 0.60,
+          layers: [ { name: skin,   material: flesh,  thickness: 2 },
+                    { name: fat,    material: fat,    thickness: 2 },
+                    { name: muscle, material: muscle, thickness: 5 },
+                    { name: bone,   material: bone,   thickness: 4 } ] }
 
-    # Thick hide blunts slashes most; fangs/blades still poke through
-    # easily; fur + fat reduce blunt force somewhat.
+    # The hide/fat/muscle are now real tissue LAYERS (scaled from the
+    # bear's mass), so they carry the protection. natural_resistance is
+    # just the residual fur effect: it blunts a slash a little, barely
+    # affects a thrust, softens an impact slightly.
     natural_resistance:
-      slash: 0.5
-      stab:  0.1
-      blunt: 0.3
+      slash: 0.15
+      stab:  0.0
+      blunt: 0.1
 
     # Claws + fangs + paw as a virtual unarmed weapon. Each attack kind
     # is a different physical tool with its own material and geometry:
@@ -129,12 +162,17 @@ units:
       # mass = the striking-head mass (kg); the swinging LIMB mass is
       # inferred from body_mass. length = lever of the appendage (cm),
       # center_of_mass 0..1 from the limb.
-      slash: { eff: 0.8, material: keratin, blade_length: 9, sharpness: 110,
-               mass: 4,  length: 30, center_of_mass: 0.7 }   # raking forepaw
-      stab:  { eff: 0.3, material: enamel,  blade_length: 5, sharpness: 70,
-               mass: 1,  length: 18, center_of_mass: 0.6 }   # bite
-      blunt: { eff: 0.5, material: bone,    impact_area: 55,
-               mass: 6,  length: 25, center_of_mass: 0.7 }   # paw smash
+      # combo_attack fuses the slash + blunt facets (and a little stab from
+      # the claw tips) into ONE "paw" swing — a raking bludgeon. The stab
+      # facet is the dedicated BITE: a separate, much stronger thrust with
+      # enamel fangs, the bear's best penetrating attack.
+      combo_attack: true
+      slash: { eff: 0.7, material: keratin, blade_length: 9, sharpness: 110,
+               mass: 4,  length: 30, center_of_mass: 0.7, name: claws }   # forepaw claws
+      stab:  { eff: 0.9, material: enamel,  blade_length: 7, sharpness: 45,
+               mass: 2,  length: 14, center_of_mass: 0.6, name: fangs }   # the bite
+      blunt: { eff: 0.6, material: bone,    impact_area: 55,
+               mass: 6,  length: 25, center_of_mass: 0.7, name: paw }     # paw smash
 
     # Per-direction T-pose. Each entry is the first frame of the idle
     # animation in that direction — gives the engine a still sprite to

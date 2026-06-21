@@ -70,66 +70,239 @@ units:
       # blades but a heavy/blunt blow transmits to the brain; the soft
       # neck has no bone, which is what makes throats deadly; ribs give
       # the torso partial cover before the organs.
-      - { id: head,    parent: neck,  vital: true,
+      # ---- HEAD (targetable) + subparts. NOTHING here is "vital" (only the
+      # heart is) — a destroyed brain or a severed head kills via blood loss
+      # / nervous-system shutdown in the survival tick, not instantly.
+      - { id: head, name: "head", parent: cervical_spine, vital: false, targetable: true,
           area_weight: 0.08, tactical_value: 1.0,
-          max_health_factor: 0.20, bleed_factor: 2.0,
+          bleed_factor: 2.0,
           height_low: 1.65, height_high: 1.85,
-          layers: [ { material: flesh, thickness: 3 },
-                    { material: bone,  thickness: 7 },
-                    { material: organ, thickness: 80 } ] }
-      - { id: neck,    parent: torso, vital: true,
+          layers: [ { name: scalp, material: flesh, thickness: 3 },
+                    { name: skull, material: bone,  thickness: 7 },
+                    { name: brain, material: nerve, thickness: 80 } ] }
+      # 50/50 skull-vs-jaw on a blunt fracture; the brain (concussion) is a
+      # separate subpart hit regardless of which bone broke.
+      - { id: skull, name: "skull", parent: head, targetable: false, vital: false, depth: 0.25,
+          area_weight: 0.55, bleed_factor: 1.5,
+          layers: [ { name: scalp, material: flesh, thickness: 3 },
+                    { name: skull, material: bone,  thickness: 7 } ] }
+      - { id: jaw, name: "jaw", parent: head, targetable: false, vital: false, depth: 0.25,
+          area_weight: 0.45, bleed_factor: 1.2,
+          layers: [ { name: skin,   material: flesh, thickness: 3 },
+                    { name: muscle, material: flesh, thickness: 4 },
+                    { name: jaw,    material: bone,  thickness: 6 } ] }
+      # The brain sits BEHIND the skull bone — a strike must beat the bone
+      # to reach it (blunt transmits → concussion; a blade mostly turned).
+      - { id: brain, name: "brain", parent: head, targetable: false, vital: false, depth: 0.6,
+          area_weight: 0.30, bleed_factor: 1.0,
+          layers: [ { name: scalp, material: flesh, thickness: 3 },
+                    { name: skull, material: bone,  thickness: 7 },
+                    { name: brain, material: nerve, thickness: 60 } ] }
+      # ---- NECK (targetable) + subparts (front→back by depth) ----
+      - { id: neck, name: "neck", parent: torso, vital: false, targetable: true,
           area_weight: 0.03, tactical_value: 1.0,
-          max_health_factor: 0.15, bleed_factor: 3.0,
+          bleed_factor: 3.0,
           height_low: 1.55, height_high: 1.65,
-          layers: [ { material: flesh, thickness: 40 },
-                    { material: organ, thickness: 10 } ] }
-      - { id: torso,   parent: null,  vital: true,
+          layers: [ { name: skin,     material: flesh, thickness: 10 },
+                    { name: muscle,   material: flesh, thickness: 20 },
+                    { name: vertebra, material: bone,  thickness: 12 } ] }
+      - { id: windpipe, name: "windpipe", parent: neck, targetable: false, vital: false, depth: 0.15,
+          area_weight: 0.40, bleed_factor: 1.0,
+          layers: [ { name: skin,     material: flesh,     thickness: 8 },
+                    { name: windpipe, material: cartilage, thickness: 6 } ] }
+      - { id: carotid, name: "carotid artery", parent: neck, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.30, bleed_factor: 6.0,
+          layers: [ { name: skin, material: flesh,  thickness: 8 },
+                    { name: fat,  material: flesh,  thickness: 4 },
+                    { name: "carotid artery", material: artery, thickness: 4 } ] }
+      - { id: cervical_spine, name: "spine", parent: neck, targetable: false, vital: false, depth: 0.80,
+          area_weight: 0.30, bleed_factor: 1.5,
+          layers: [ { name: skin,         material: flesh, thickness: 8 },
+                    { name: muscle,       material: flesh, thickness: 12 },
+                    { name: vertebra,     material: bone,  thickness: 14 },
+                    { name: "spinal cord", material: nerve, thickness: 8 } ] }
+      # ---- TORSO (root, targetable) + organ subparts. Organ SEPARATION
+      # (regions / deep multi-organ series) is a V2 goal — for now a torso
+      # hit lands in ONE organ (weighted by size). Only the HEART is vital
+      # (instant death). Other organ damage kills later via the survival
+      # tick (blood loss / suffocation / shock). Torso = root, never severed.
+      # Part durability is derived from the tissue layers below (no
+      # max_health_factor); the representative layers also set the strike's
+      # REACH, so deep organs (depth 0.5) stay reachable.
+      - { id: torso, name: "torso", parent: null, vital: false, targetable: true,
           area_weight: 0.40, tactical_value: 0.8,
-          max_health_factor: 0.40, bleed_factor: 2.0,
+          bleed_factor: 2.0,
           height_low: 1.00, height_high: 1.55,
-          layers: [ { material: flesh, thickness: 25 },
-                    { material: bone,  thickness: 12 },
-                    { material: organ, thickness: 100 } ] }
-      - { id: l_arm,   parent: torso,
+          layers: [ { name: skin,   material: flesh, thickness: 25 },
+                    { name: ribs,   material: bone,  thickness: 12 },
+                    { name: organs, material: organ, thickness: 100 } ] }
+      # bone shell (depth 0.2)
+      - { id: ribcage, name: "ribcage", parent: torso, targetable: false, vital: false, depth: 0.20,
+          area_weight: 0.50, bleed_factor: 1.5,
+          layers: [ { name: skin, material: flesh, thickness: 12 }, { name: muscle, material: flesh, thickness: 8 }, { name: ribs, material: bone, thickness: 12 } ] }
+      - { id: sternum, name: "sternum", parent: torso, targetable: false, vital: false, depth: 0.20,
+          area_weight: 0.15, bleed_factor: 1.2,
+          layers: [ { name: skin, material: flesh, thickness: 10 }, { name: sternum, material: bone, thickness: 18 } ] }
+      - { id: pelvis,  name: "pelvis", parent: torso, targetable: false, vital: false, depth: 0.20,
+          area_weight: 0.35, bleed_factor: 2.0,
+          layers: [ { name: skin, material: flesh, thickness: 15 }, { name: muscle, material: flesh, thickness: 10 }, { name: pelvis, material: bone, thickness: 30 } ] }
+      # organs (depth 0.5 — one per hit, behind the rib bone)
+      - { id: heart, name: "heart", parent: torso, targetable: false, vital: true, depth: 0.50,
+          area_weight: 0.06, bleed_factor: 4.0,
+          layers: [ { name: skin, material: flesh, thickness: 25 }, { name: ribs, material: bone, thickness: 12 },
+                    { name: heart, material: organ, thickness: 60 } ] }
+      - { id: lungs, name: "lung", parent: torso, targetable: false, vital: false, depth: 0.50,
+          area_weight: 0.20, bleed_factor: 2.5,
+          layers: [ { name: skin, material: flesh, thickness: 22 }, { name: ribs, material: bone, thickness: 12 },
+                    { name: lung, material: organ, thickness: 50 } ] }
+      - { id: liver, name: "liver", parent: torso, targetable: false, vital: false, depth: 0.50,
+          area_weight: 0.15, bleed_factor: 3.0,
+          layers: [ { name: skin, material: flesh, thickness: 25 }, { name: liver, material: organ, thickness: 60 } ] }
+      - { id: stomach, name: "stomach", parent: torso, targetable: false, vital: false, depth: 0.50,
+          area_weight: 0.15, bleed_factor: 2.0,
+          layers: [ { name: skin, material: flesh, thickness: 25 }, { name: stomach, material: organ, thickness: 50 } ] }
+      - { id: intestines, name: "intestines", parent: torso, targetable: false, vital: false, depth: 0.50,
+          area_weight: 0.30, bleed_factor: 1.8,
+          layers: [ { name: skin, material: flesh, thickness: 25 }, { name: intestines, material: organ, thickness: 80 } ] }
+      - { id: kidneys, name: "kidney", parent: torso, targetable: false, vital: false, depth: 0.50,
+          area_weight: 0.10, bleed_factor: 3.0,
+          layers: [ { name: skin, material: flesh, thickness: 30 }, { name: rib, material: bone, thickness: 6 },
+                    { name: kidney, material: organ, thickness: 40 } ] }
+      - { id: aorta, name: "aorta", parent: torso, targetable: false, vital: false, depth: 0.50,
+          area_weight: 0.04, bleed_factor: 7.0,
+          layers: [ { name: skin, material: flesh, thickness: 30 }, { name: vertebra, material: bone, thickness: 8 },
+                    { name: aorta, material: artery, thickness: 8 } ] }
+      # spine (depth 0.85 — deepest)
+      - { id: thoracic_spine, name: "spine", parent: torso, targetable: false, vital: false, depth: 0.85,
+          area_weight: 0.5, bleed_factor: 1.5,
+          layers: [ { name: muscle, material: flesh, thickness: 25 }, { name: vertebra, material: bone, thickness: 16 },
+                    { name: "spinal cord", material: nerve, thickness: 10 } ] }
+      - { id: lumbar_spine, name: "spine", parent: torso, targetable: false, vital: false, depth: 0.85,
+          area_weight: 0.5, bleed_factor: 1.5,
+          layers: [ { name: muscle, material: flesh, thickness: 30 }, { name: vertebra, material: bone, thickness: 18 },
+                    { name: "spinal cord", material: nerve, thickness: 10 } ] }
+
+      # ---- ARMS (targetable) → bicep + forearm (share depth 0.3, one per
+      # hit). Skeleton chain bicep(humerus) → forearm(radius/ulna) → hand,
+      # so severing the bicep takes the whole arm below it.
+      - { id: l_arm, name: "left arm", parent: torso, vital: false, targetable: true,
           area_weight: 0.07, tactical_value: 0.3,
-          max_health_factor: 0.20, bleed_factor: 1.0,
-          height_low: 0.90, height_high: 1.50,
-          layers: [ { material: flesh, thickness: 30 },
-                    { material: bone,  thickness: 25 } ] }
-      - { id: r_arm,   parent: torso,
+          bleed_factor: 1.0, height_low: 0.90, height_high: 1.50,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 26 }, { name: bone, material: bone, thickness: 25 } ] }
+      - { id: l_bicep, name: "bicep", parent: l_arm, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.5, bleed_factor: 1.2,
+          layers: [ { name: skin, material: flesh, thickness: 3 }, { name: fat, material: flesh, thickness: 6 }, { name: muscle, material: flesh, thickness: 22 }, { name: humerus, material: bone, thickness: 25 } ] }
+      - { id: l_forearm, name: "forearm", parent: l_bicep, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.5, bleed_factor: 1.0,
+          layers: [ { name: skin, material: flesh, thickness: 3 }, { name: fat, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 18 }, { name: radius, material: bone, thickness: 12 }, { name: ulna, material: bone, thickness: 12 } ] }
+      - { id: r_arm, name: "right arm", parent: torso, vital: false, targetable: true,
           area_weight: 0.07, tactical_value: 0.3,
-          max_health_factor: 0.20, bleed_factor: 1.0,
-          height_low: 0.90, height_high: 1.50,
-          layers: [ { material: flesh, thickness: 30 },
-                    { material: bone,  thickness: 25 } ] }
-      - { id: l_hand,  parent: l_arm,
+          bleed_factor: 1.0, height_low: 0.90, height_high: 1.50,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 26 }, { name: bone, material: bone, thickness: 25 } ] }
+      - { id: r_bicep, name: "bicep", parent: r_arm, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.5, bleed_factor: 1.2,
+          layers: [ { name: skin, material: flesh, thickness: 3 }, { name: fat, material: flesh, thickness: 6 }, { name: muscle, material: flesh, thickness: 22 }, { name: humerus, material: bone, thickness: 25 } ] }
+      - { id: r_forearm, name: "forearm", parent: r_bicep, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.5, bleed_factor: 1.0,
+          layers: [ { name: skin, material: flesh, thickness: 3 }, { name: fat, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 18 }, { name: radius, material: bone, thickness: 12 }, { name: ulna, material: bone, thickness: 12 } ] }
+
+      # ---- HANDS (targetable; parent = forearm so a severed forearm takes
+      # the hand). Palm + 5 digits share depth 0.2 → one per hit.
+      - { id: l_hand, name: "left hand", parent: l_forearm, vital: false, targetable: true,
           area_weight: 0.03, tactical_value: 0.4,
-          max_health_factor: 0.10, bleed_factor: 1.0,
-          height_low: 0.80, height_high: 1.00 }
-      - { id: r_hand,  parent: r_arm,
+          bleed_factor: 1.0, height_low: 0.80, height_high: 1.00,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 11 }, { name: bone, material: bone, thickness: 10 } ] }
+      - { id: l_palm,   name: "palm",          parent: l_hand, targetable: false, depth: 0.2, area_weight: 0.5,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 8 }, { name: bone, material: bone, thickness: 8 } ] }
+      - { id: l_thumb,  name: "thumb",         parent: l_hand, targetable: false, depth: 0.2, area_weight: 0.12,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 5 } ] }
+      - { id: l_index,  name: "index finger",  parent: l_hand, targetable: false, depth: 0.2, area_weight: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: l_middle, name: "middle finger", parent: l_hand, targetable: false, depth: 0.2, area_weight: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: l_ring,   name: "ring finger",   parent: l_hand, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: l_pinky,  name: "little finger", parent: l_hand, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: bone, material: bone, thickness: 3 } ] }
+      - { id: r_hand, name: "right hand", parent: r_forearm, vital: false, targetable: true,
           area_weight: 0.03, tactical_value: 0.4,
-          max_health_factor: 0.10, bleed_factor: 1.0,
-          height_low: 0.80, height_high: 1.00 }
-      - { id: l_leg,   parent: torso,
+          bleed_factor: 1.0, height_low: 0.80, height_high: 1.00,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 11 }, { name: bone, material: bone, thickness: 10 } ] }
+      - { id: r_palm,   name: "palm",          parent: r_hand, targetable: false, depth: 0.2, area_weight: 0.5,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 8 }, { name: bone, material: bone, thickness: 8 } ] }
+      - { id: r_thumb,  name: "thumb",         parent: r_hand, targetable: false, depth: 0.2, area_weight: 0.12,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 5 } ] }
+      - { id: r_index,  name: "index finger",  parent: r_hand, targetable: false, depth: 0.2, area_weight: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: r_middle, name: "middle finger", parent: r_hand, targetable: false, depth: 0.2, area_weight: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: r_ring,   name: "ring finger",   parent: r_hand, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: muscle, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: r_pinky,  name: "little finger", parent: r_hand, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: fat, material: flesh, thickness: 1 }, { name: bone, material: bone, thickness: 3 } ] }
+
+      # ---- LEGS (targetable) → thigh + knee + shin (share depth 0.3, one
+      # per hit). Skeleton chain thigh(femur) → shin(tibia/fibula) → foot.
+      - { id: l_leg, name: "left leg", parent: torso, vital: false, targetable: true,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.90,
-          layers: [ { material: flesh, thickness: 40 },
-                    { material: bone,  thickness: 35 } ] }
-      - { id: r_leg,   parent: torso,
+          bleed_factor: 1.0, height_low: 0.00, height_high: 0.90,
+          layers: [ { name: skin, material: flesh, thickness: 5 }, { name: muscle, material: flesh, thickness: 35 }, { name: bone, material: bone, thickness: 35 } ] }
+      - { id: l_thigh, name: "thigh", parent: l_leg, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.45, bleed_factor: 1.5,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: fat, material: flesh, thickness: 10 }, { name: muscle, material: flesh, thickness: 30 }, { name: femur, material: bone, thickness: 32 } ] }
+      - { id: l_knee, name: "knee", parent: l_thigh, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.15, bleed_factor: 1.0,
+          layers: [ { name: skin, material: flesh, thickness: 5 }, { name: kneecap, material: bone, thickness: 20 } ] }
+      - { id: l_shin, name: "shin", parent: l_thigh, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.40, bleed_factor: 1.2,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 28 }, { name: tibia, material: bone, thickness: 16 }, { name: fibula, material: bone, thickness: 12 } ] }
+      - { id: r_leg, name: "right leg", parent: torso, vital: false, targetable: true,
           area_weight: 0.10, tactical_value: 0.3,
-          max_health_factor: 0.25, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.90,
-          layers: [ { material: flesh, thickness: 40 },
-                    { material: bone,  thickness: 35 } ] }
-      - { id: l_foot,  parent: l_leg,
+          bleed_factor: 1.0, height_low: 0.00, height_high: 0.90,
+          layers: [ { name: skin, material: flesh, thickness: 5 }, { name: muscle, material: flesh, thickness: 35 }, { name: bone, material: bone, thickness: 35 } ] }
+      - { id: r_thigh, name: "thigh", parent: r_leg, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.45, bleed_factor: 1.5,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: fat, material: flesh, thickness: 10 }, { name: muscle, material: flesh, thickness: 30 }, { name: femur, material: bone, thickness: 32 } ] }
+      - { id: r_knee, name: "knee", parent: r_thigh, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.15, bleed_factor: 1.0,
+          layers: [ { name: skin, material: flesh, thickness: 5 }, { name: kneecap, material: bone, thickness: 20 } ] }
+      - { id: r_shin, name: "shin", parent: r_thigh, targetable: false, vital: false, depth: 0.30,
+          area_weight: 0.40, bleed_factor: 1.2,
+          layers: [ { name: skin, material: flesh, thickness: 4 }, { name: muscle, material: flesh, thickness: 28 }, { name: tibia, material: bone, thickness: 16 }, { name: fibula, material: bone, thickness: 12 } ] }
+
+      # ---- FEET (targetable; parent = shin). Sole + 5 toes, depth 0.2.
+      - { id: l_foot, name: "left foot", parent: l_shin, vital: false, targetable: true,
           area_weight: 0.04, tactical_value: 0.2,
-          max_health_factor: 0.08, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.10 }
-      - { id: r_foot,  parent: r_leg,
+          bleed_factor: 1.0, height_low: 0.00, height_high: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 5 }, { name: muscle, material: flesh, thickness: 15 }, { name: bone, material: bone, thickness: 15 } ] }
+      - { id: l_sole,      name: "sole",       parent: l_foot, targetable: false, depth: 0.2, area_weight: 0.5,
+          layers: [ { name: skin, material: flesh, thickness: 6 }, { name: muscle, material: flesh, thickness: 12 }, { name: bone, material: bone, thickness: 12 } ] }
+      - { id: l_bigtoe,    name: "big toe",    parent: l_foot, targetable: false, depth: 0.2, area_weight: 0.14,
+          layers: [ { name: skin, material: flesh, thickness: 3 }, { name: fat, material: flesh, thickness: 1 }, { name: bone, material: bone, thickness: 5 } ] }
+      - { id: l_indextoe,  name: "second toe", parent: l_foot, targetable: false, depth: 0.2, area_weight: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: l_middletoe, name: "middle toe", parent: l_foot, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: l_ringtoe,   name: "fourth toe", parent: l_foot, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 3 } ] }
+      - { id: l_pinkytoe,  name: "little toe", parent: l_foot, targetable: false, depth: 0.2, area_weight: 0.08,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 3 } ] }
+      - { id: r_foot, name: "right foot", parent: r_shin, vital: false, targetable: true,
           area_weight: 0.04, tactical_value: 0.2,
-          max_health_factor: 0.08, bleed_factor: 1.0,
-          height_low: 0.00, height_high: 0.10 }
+          bleed_factor: 1.0, height_low: 0.00, height_high: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 5 }, { name: muscle, material: flesh, thickness: 15 }, { name: bone, material: bone, thickness: 15 } ] }
+      - { id: r_sole,      name: "sole",       parent: r_foot, targetable: false, depth: 0.2, area_weight: 0.5,
+          layers: [ { name: skin, material: flesh, thickness: 6 }, { name: muscle, material: flesh, thickness: 12 }, { name: bone, material: bone, thickness: 12 } ] }
+      - { id: r_bigtoe,    name: "big toe",    parent: r_foot, targetable: false, depth: 0.2, area_weight: 0.14,
+          layers: [ { name: skin, material: flesh, thickness: 3 }, { name: fat, material: flesh, thickness: 1 }, { name: bone, material: bone, thickness: 5 } ] }
+      - { id: r_indextoe,  name: "second toe", parent: r_foot, targetable: false, depth: 0.2, area_weight: 0.10,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: r_middletoe, name: "middle toe", parent: r_foot, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 4 } ] }
+      - { id: r_ringtoe,   name: "fourth toe", parent: r_foot, targetable: false, depth: 0.2, area_weight: 0.09,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 3 } ] }
+      - { id: r_pinkytoe,  name: "little toe", parent: r_foot, targetable: false, depth: 0.2, area_weight: 0.08,
+          layers: [ { name: skin, material: flesh, thickness: 2 }, { name: bone, material: bone, thickness: 3 } ] }
 
     # Acolytes have no innate hide resistance (just skin). Default
     # block is all-zero, so we omit it here for brevity.

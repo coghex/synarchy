@@ -459,8 +459,7 @@ function game.onMouseDown(button, x, y)
                             label = "Move here",
                             callback = function()
                                 for _, uid in ipairs(selUids) do
-                                    unitAi.commandMove(uid, ipos.x,
-                                                       ipos.y, 2.0)
+                                    unitAi.commandMove(uid, ipos.x, ipos.y)
                                 end
                             end })
                     end
@@ -484,7 +483,11 @@ function game.onMouseDown(button, x, y)
                     -- Route through the AI so the command becomes a
                     -- utility-scored candidate that high-priority
                     -- needs (thirst, etc.) can interrupt and resume.
-                    unitAi.commandMove(uid, tx, ty, 2.0)
+                    -- No explicit speed → the "ordered" regime (a
+                    -- sustainable push above comfort). A hard-coded
+                    -- fast speed here exhausts the unit's stamina and
+                    -- collapses it mid-move.
+                    unitAi.commandMove(uid, tx, ty)
                 end
             end
         else

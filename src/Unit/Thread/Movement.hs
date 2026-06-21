@@ -29,9 +29,11 @@ import Engine.Core.State (EngineEnv(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Tile.Types (WorldTileData(..))
 import Unit.Sim.Types
-import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
+import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
+                  , Wound(..))
 import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep, replanCostThreshold)
 import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
+import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
 
 -- | Per-unit movement stats relevant to climb/fall mechanics.
 --   Snapshotted once per tick at the top of tickAllMovement so the
@@ -43,6 +45,12 @@ data UnitMoveStats = UnitMoveStats
     , umsClimbing  ∷ !Float   -- ^ skill 0..100
     , umsDexterity ∷ !Float   -- ^ stat (1.0 = baseline)
     , umsStrength  ∷ !Float   -- ^ stat (1.0 = baseline)
+    , umsRunThreshold ∷ !Float -- ^ absolute speed (tiles/s) above which the
+                               --   unit renders the Running anim instead of
+                               --   Walking = def.run_threshold × def.max_speed.
+    , umsHeight    ∷ !Float   -- ^ body height (metres). Drives climb reach:
+                               --   how much of a cliff the unit mantles in the
+                               --   pullup vs has to wall-climb first.
     }
 
 defaultMoveStats ∷ UnitMoveStats
@@ -52,7 +60,22 @@ defaultMoveStats = UnitMoveStats
     , umsClimbing  = 0.0
     , umsDexterity = 1.0
     , umsStrength  = 1.0
+    , umsRunThreshold = 1.0e9  -- no def → never auto-run (sentinel high)
+    , umsHeight    = 1.8       -- baseline human height
     }
+
+-- | Metres of body height needed to mantle one full z-level. A unit's
+--   climb "reach" (z-levels it can pull up onto without wall-climbing) is
+--   height / this. Tuned so a baseline acolyte (1.8 m) reaches exactly
+--   1 z — i.e. a 1-z cliff is handled entirely by the pullup, with no
+--   vertical wall-climb, matching "acolytes are tall enough to climb a
+--   1-z cliff and should go almost straight to the pullup".
+heightPerClimbZ ∷ Float
+heightPerClimbZ = 1.8
+
+-- | How many z-levels the unit can mantle (pull up onto) given its height.
+climbReachZ ∷ UnitMoveStats → Float
+climbReachZ s = max 0.1 (umsHeight s / heightPerClimbZ)
 
 -- | Distance below which the unit is considered arrived at a
 --   waypoint or target. Larger than one tick of motion (≈ 0.066) so
@@ -74,12 +97,21 @@ tickAllMovement dt env utsRef = do
     -- acolyte against the impact thresholds.
     um ← readIORef (unitManagerRef env)
     let statsFor uid = case HM.lookup uid (umInstances um) of
-            Just inst → UnitMoveStats
+            Just inst →
+                -- Gait threshold (absolute tiles/s) from the unit's def:
+                -- run_threshold × max_speed. No def → leave it effectively
+                -- infinite so the unit never auto-runs.
+                let (maxSp, runFrac) = case HM.lookup (uiDefName inst) (umDefs um) of
+                        Just d  → (udMaxSpeed d, udRunThreshold d)
+                        Nothing → (1.0e9, 0.6)
+                in UnitMoveStats
                 { umsBodyMass  = HM.lookupDefault 70.0 "body_mass"  (uiStats  inst)
                 , umsToughness = HM.lookupDefault 1.0  "toughness"  (uiStats  inst)
                 , umsClimbing  = HM.lookupDefault 0.0  "climbing"   (uiSkills inst)
                 , umsDexterity = HM.lookupDefault 1.0  "dexterity"  (uiStats  inst)
                 , umsStrength  = HM.lookupDefault 1.0  "strength"   (uiStats  inst)
+                , umsRunThreshold = runFrac * maxSp
+                , umsHeight    = HM.lookupDefault 1.8  "height"     (uiStats  inst)
                 }
             Nothing → defaultMoveStats
     uts ← readIORef utsRef
@@ -108,8 +140,54 @@ tickAllMovement dt env utsRef = do
         atomicModifyIORef' (unitManagerRef env) $ \um' →
             let bumped = foldr applyClimbXP (umInstances um') climbers
             in (um' { umInstances = bumped }, ())
-    -- Clear the pending field on the snapshot we just wrote back.
-    let simStates'''' = HM.map clearPendingClimbXP simStates'''
+
+    -- Apply physics-based fall injuries. A unit that just landed stamped
+    -- its drop magnitude onto usPendingFallDrop (the pure tick has no
+    -- body-part or substance data); here — where both, plus the unit
+    -- manager, are in hand — run the Unit.Fall model to turn the drop into
+    -- a SET of fracture/concussion wounds (energy from mass × g × h,
+    -- per-part bone resistance vs delivered load), apply them, and size
+    -- the knockdown stun from the worst injury. The combat wound tick then
+    -- heals/bleeds them; the Lua injury tick reads them for impairment +
+    -- death. Mirrors the climb-XP drain above.
+    sm ← readIORef (substanceManagerRef env)
+    let fallResults =
+            [ (uid, injs, foldr (max . fiSeverity) 0 injs)
+            | (uid, ss) ← HM.toList simStates'''
+            , Just drop ← [usPendingFallDrop ss]
+            , Just inst ← [HM.lookup uid (umInstances um)]
+            , Just def  ← [HM.lookup (uiDefName inst) (umDefs um)]
+            , let mass  = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
+                  tough = HM.lookupDefault 1.0  "toughness" (uiStats inst)
+                  injs  = fallInjuries sm def mass tough drop
+            ]
+    when (not (null fallResults)) $
+        atomicModifyIORef' (unitManagerRef env) $ \um' →
+            let applyOne (uid, injs, _) m = case HM.lookup uid m of
+                    Nothing → m
+                    Just inst →
+                        let ws = [ Wound { woundPart     = fiPart i
+                                         , woundKind     = fiKind i
+                                         , woundSeverity = fiSeverity i
+                                         , woundAt       = now }
+                                 | i ← injs ]
+                        in HM.insert uid (inst { uiWounds = ws <> uiWounds inst }) m
+            in (um' { umInstances = foldr applyOne (umInstances um') fallResults }, ())
+
+    -- Knockdown stun per landed unit, keyed for the sim writeback.
+    let stunMap = HM.fromList [ (uid, fallStunFor worst)
+                              | (uid, _, worst) ← fallResults ]
+        setFall uid ss = case HM.lookup uid stunMap of
+            Just stun → ss { usGetUpAt = Just (now + stun)
+                           , usPendingFallDrop = Nothing }
+            Nothing
+              | usPendingFallDrop ss ≡ Nothing → ss
+              | otherwise → ss { usPendingFallDrop = Nothing }  -- defensive
+
+    -- Clear the pending fields on the snapshot we just wrote back.
+    let simStates'''' = HM.mapWithKey
+                          (\uid ss → setFall uid (clearPendingClimbXP ss))
+                          simStates'''
     writeIORef utsRef (uts { utsSimStates = simStates'''' })
 
 -- | Per-z-level slip chance. Probability rises sharply with body
@@ -260,7 +338,8 @@ tickUnit ∷ Double → Double → Maybe WorldTileData
          → UnitMoveStats
          → UnitSimState → UnitSimState
 tickUnit now dt mWtd stats us =
-    let us1 = handleTransitionExpiry now
+    let us1 = handleGetUp now
+            $ handleTransitionExpiry now
             $ handlePickupExpiry now
             $ handleEatExpiry now
             $ handleDrinkExpiry now us
@@ -270,7 +349,7 @@ tickUnit now dt mWtd stats us =
         -- pin xy at the start position for the whole transition.
         -- handleTransitionExpiry handles the landing snaps + the
         -- post-fall outcome routing (walk / collapse / kill).
-        us2 = tickFallZ now (tickClimbZ now us1)
+        us2 = tickPullup now stats (tickFallZ now (tickClimbZ now stats us1))
     in case usState us2 of
         -- Stationary anim states block movement.
         Drinking            → us2
@@ -285,27 +364,58 @@ tickUnit now dt mWtd stats us =
                         []      → (mtTargetX mt, mtTargetY mt)
                 in stepTowardSubGoal now dt mWtd stats us2 mt subGoal
 
--- | While the unit is in TransitioningTo Climbing and has a climb
---   destination set, lerp usRealZ smoothly from usClimbFromTile's z
---   toward the target z based on how far we are through the
---   transition. usGridZ (the integer tile-z used by game logic)
---   stays at fromZ for the duration of the climb — the renderer
---   consumes usRealZ for the visual position, but tile lookups
---   treat the unit as logically pinned at the cliff base until
---   handleTransitionExpiry commits the snap at the top.
-tickClimbZ ∷ Double → UnitSimState → UnitSimState
-tickClimbZ now us =
+-- | While the unit is in TransitioningTo Climbing, lerp usRealZ up the
+--   WALL portion of the cliff only — from the base z to the climb-top
+--   (dstZ − pullup reach), with xy frozen at the base. The remaining
+--   `pullupZ` is covered by the pullup (Crawling) phase via tickPullup,
+--   which also slides the unit forward onto the ledge. A unit whose
+--   reach ≥ the cliff height has a zero-length wall climb and goes
+--   straight to the pullup. usGridZ stays at fromZ until the climb
+--   commits the top in handleTransitionExpiry.
+tickClimbZ ∷ Double → UnitMoveStats → UnitSimState → UnitSimState
+tickClimbZ now stats us =
     case (usState us, usClimbFromTile us, usClimbToTile us,
           usTransitionUntil us, usClimbStartTime us) of
         (TransitioningTo Climbing, Just (_, _, fromZ),
          Just (_, _, toZ), Just untilT, Just startT) →
-            let dur      = max 0.001 (untilT - startT)
-                remain   = max 0 (untilT - now)
-                progress = clamp01 (1 - realToFrac remain / dur)
-                fromZF   = fromIntegral fromZ ∷ Float
-                toZF     = fromIntegral toZ   ∷ Float
-                lerp     = fromZF + realToFrac progress * (toZF - fromZF)
-            in us { usRealZ = if remain ≤ 0 then toZF else lerp }
+            let dz        = fromIntegral (toZ - fromZ) ∷ Float
+                pullupZ   = min dz (climbReachZ stats)
+                climbTopZ = fromIntegral toZ - pullupZ
+                dur       = max 0.001 (untilT - startT)
+                remain    = max 0 (untilT - now)
+                progress  = clamp01 (1 - realToFrac remain / dur)
+                fromZF    = fromIntegral fromZ ∷ Float
+                lerp      = fromZF + realToFrac progress * (climbTopZ - fromZF)
+            in us { usRealZ = if remain ≤ 0 then climbTopZ else lerp }
+        _ → us
+  where
+    clamp01 ∷ Double → Double
+    clamp01 x = max 0 (min 1 x)
+
+-- | The pullup. During TransitioningTo Crawling on an active climb (climb
+--   fields still set), slide the unit UP and FORWARD: usRealZ from the
+--   climb-top to the ledge z, and usRealX/usRealY from the frozen base
+--   to the ledge anchor (usClimbToTile's xy). This is the mantle motion
+--   — without it the unit teleported onto the ledge and the pullup anim
+--   played in place. Standing (stand-up) plays in place afterward, so
+--   only the Crawling step interpolates.
+tickPullup ∷ Double → UnitMoveStats → UnitSimState → UnitSimState
+tickPullup now stats us =
+    case (usState us, usClimbFromTile us, usClimbToTile us,
+          usTransitionUntil us) of
+        (TransitioningTo Crawling, Just (fx, fy, fromZ),
+         Just (tx, ty, toZ), Just untilT) →
+            let dz        = fromIntegral (toZ - fromZ) ∷ Float
+                pullupZ   = min dz (climbReachZ stats)
+                climbTopZ = fromIntegral toZ - pullupZ
+                remain    = max 0 (untilT - now)
+                progress  = clamp01 (1 - realToFrac remain / chainStepDuration)
+                p         = realToFrac progress ∷ Float
+                toZF      = fromIntegral toZ ∷ Float
+            in us { usRealX = fx + p * (tx - fx)
+                  , usRealY = fy + p * (ty - fy)
+                  , usRealZ = climbTopZ + p * (toZF - climbTopZ)
+                  }
         _ → us
   where
     clamp01 ∷ Double → Double
@@ -360,20 +470,11 @@ fallSpeedZ = 6.0
 fallTriggerDz ∷ Int
 fallTriggerDz = 2
 
--- | Impact thresholds. impact = dz × (body_mass / 50) / toughness.
---   At these values the unit walks off (no impact event), collapses
---   into the landing anim, or dies. Tuned so:
---     * Acolyte (70 kg, toughness 1.0): walks dz=1 (1.4), collapses
---       dz=2-3 (2.8/4.2), dies dz=4+ (5.6+).
---     * Bear   (~143 kg, toughness 3.0): walks dz=1 (0.95), collapses
---       dz=2-5 (1.9/2.9/3.8/4.8), dies dz=6+ (5.7+).
-impactWalkThreshold ∷ Float
-impactWalkThreshold = 1.5
-
-impactKillThreshold ∷ Float
-impactKillThreshold = 5.0
-
--- | Compute fall impact. impact = dz × (mass/50) / toughness.
+-- | Legacy scalar fall impact (dz × mass/50 / toughness). The landing
+--   OUTCOME no longer uses this — falls now go through the `Unit.Fall`
+--   physics injury model (see tickAllMovement). Retained only because a
+--   slip-converted climb still stamps `usFallImpact` for any future
+--   consumer; the value is otherwise vestigial.
 computeFallImpact ∷ Int → UnitMoveStats → Float
 computeFallImpact dz stats =
     let absDz   = abs (fromIntegral dz) ∷ Float
@@ -407,6 +508,24 @@ computeClimbSpeed s =
         lo          = climbSpeedZ * 0.3
         hi          = climbSpeedZ * 2.5
     in max lo (min hi raw)
+
+-- | Fall knockdown recovery. A non-lethal fall lands the unit in the
+--   Collapsed pose with a self-timed `usGetUpAt`. Once the down/landing
+--   transition has finished (usState back to Idle) and the timer is
+--   reached, stand the unit up and clear the timer (one-shot).
+--
+--   This is INTENTIONALLY independent of the resource revive gate in
+--   unit_resources.lua: a fall knockdown recovers on its own clock, not
+--   when the unit happens to be ≥50% blood/stamina/hydration. If the
+--   unit is also genuinely exhausted/thirsty/bleeding, the Lua survival
+--   tick or the combat wound tick will re-collapse it next tick — but as
+--   a SURVIVAL collapse (no getup timer), correctly resource-gated and
+--   now legible in the status panel.
+handleGetUp ∷ Double → UnitSimState → UnitSimState
+handleGetUp now us = case (usPose us, usGetUpAt us, usState us) of
+    (Collapsed, Just t, Idle) | now ≥ t →
+        us { usPose = Standing, usState = Idle, usGetUpAt = Nothing }
+    _ → us
 
 -- | When a Drinking timer expires, snap back to Idle.
 handleDrinkExpiry ∷ Double → UnitSimState → UnitSimState
@@ -463,16 +582,20 @@ handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
             --     standup phase doesn't keep climbToTile around.
             wasClimbing = usPose us ≡ Climbing
             snapped = case (target, usClimbToTile us, usFallToTile us) of
-                (Climbing, Just (tx, ty, tz), _) →
-                    -- Climb done. Stamp the dz climbed onto a
-                    -- transient XP field that tickAllMovement
-                    -- drains into the unit's "climbing" skill.
+                (Climbing, Just (_, _, tz), _) →
+                    -- Wall-climb phase done. The unit is hanging at the
+                    -- climb-top over the BASE xy; the pullup (Crawling)
+                    -- phase slides it up + forward onto the ledge
+                    -- (tickPullup). So DON'T snap xy/realZ to the ledge
+                    -- here — leave them where the climb left them and
+                    -- only commit the logical tile-z to the top. Stamp
+                    -- the dz climbed onto the XP field tickAllMovement
+                    -- drains into the "climbing" skill.
                     let dz = case usClimbFromTile us of
                             Just (_, _, fromZ) →
                                 fromIntegral (abs (tz - fromZ)) ∷ Float
                             Nothing → 0
-                    in us { usRealX = tx, usRealY = ty
-                          , usGridZ = tz, usRealZ = fromIntegral tz
+                    in us { usGridZ = tz
                           , usPendingClimbXP = usPendingClimbXP us + dz
                           }
                 (Falling, _, Just (tx, ty, tz)) →
@@ -485,32 +608,27 @@ handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
             clearClimb = case target of
                 Crawling | wasClimbing → True
                 _                      → False
-            -- Fall landing: decide what happens on impact. The fall
-            -- transition's expiry routes to walk (low impact),
-            -- collapse (medium), or death (high) based on the
-            -- impact score stored at fall start.
+            -- Fall landing. With the physics injury model, EVERY fall (a
+            -- drop ≥ fallTriggerDz — a 1-z step never enters the fall
+            -- transition) becomes a knockdown: play the Collapsed landing
+            -- anim, then sit knocked down until usGetUpAt. The drop
+            -- magnitude is stamped onto usPendingFallDrop for
+            -- tickAllMovement, which runs Unit.Fall to turn it into a SET
+            -- of fracture/concussion wounds and sizes the getup stun from
+            -- the worst of them. Death is NOT decided here — a tall fall
+            -- kills by inflicting a lethal (vital severity ≥1) injury that
+            -- the Lua injury tick acts on (death emerges from injuries).
             fellAndLanded = target ≡ Falling
-            (poseAfter, chainAfter, clearFall) = case usFallImpact us of
-                Just imp
-                  | not fellAndLanded         → (target, usPostTransition snapped, False)
-                  | imp ≤ impactWalkThreshold → (Standing, [], True)
-                       -- Light landing: keep pose Standing, no chain.
-                  | imp ≤ impactKillThreshold →
-                       -- Medium landing: TransitioningTo Collapsed
-                       -- (the landing anim plays as that transition).
-                       -- After it, leave the unit Collapsed — the
-                       -- existing collapsed→standing path handles
-                       -- recovery.
-                       (Falling, [Collapsed], True)
-                  | otherwise                 → (Dead, [], True)
-                       -- Lethal: snap to Dead pose. UnitKill-style
-                       -- in-flight clears below.
-                Nothing                       → (target, usPostTransition snapped, False)
-            killedByFall = poseAfter ≡ Dead ∧ fellAndLanded
-            usPosed = snapped { usPose            = poseAfter
-                              , usState           = if killedByFall
-                                                    then Idle
-                                                    else Idle
+            fallDrop = case (usFallFromTile us, usFallToTile us) of
+                (Just (_, _, fz), Just (_, _, tz)) → fz - tz
+                _                                  → 0
+            (chainAfter, clearFall, pendingDrop)
+              | fellAndLanded = ([Collapsed], True, Just fallDrop)
+              | otherwise     = ( usPostTransition snapped, False
+                                , usPendingFallDrop snapped )
+            usPosed = snapped { usPose            = if fellAndLanded
+                                                    then Falling else target
+                              , usState           = Idle
                               , usTransitionUntil = Nothing
                               , usClimbFromTile   = if clearClimb
                                                     then Nothing
@@ -530,26 +648,11 @@ handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
                               , usFallImpact      = if clearFall
                                                     then Nothing
                                                     else usFallImpact snapped
-                              -- Lethal fall clears the same in-flight
-                              -- fields UnitKill clears so AI / drink /
-                              -- transition timers can't tick on a
-                              -- corpse.
-                              , usTarget          = if killedByFall
-                                                    then Nothing
-                                                    else usTarget snapped
-                              , usLocalPath       = if killedByFall
-                                                    then []
-                                                    else usLocalPath snapped
-                              , usDrinkUntil      = if killedByFall
-                                                    then Nothing
-                                                    else usDrinkUntil snapped
-                              , usEatUntil        = if killedByFall
-                                                    then Nothing
-                                                    else usEatUntil snapped
-                              , usPickupUntil     = if killedByFall
-                                                    then Nothing
-                                                    else usPickupUntil snapped
                               , usPostTransition  = chainAfter
+                              -- Drop magnitude for tickAllMovement's injury
+                              -- pass; usGetUpAt is set there once the worst
+                              -- injury (and thus the stun) is known.
+                              , usPendingFallDrop = pendingDrop
                               }
         in case usPostTransition usPosed of
             (next : rest) →
@@ -588,21 +691,33 @@ stepTowardSubGoal now dt mWtd stats us mt (gx, gy) =
     let dx   = gx - usRealX us
         dy   = gy - usRealY us
         dist = sqrt (dx * dx + dy * dy)
-        step = mtSpeed mt * realToFrac dt
+        -- A crawling unit (legs maimed) is capped to a crawl regardless of
+        -- the commanded speed — it drags itself along the ground.
+        effSpeed = if usPose us ≡ Crawling
+                   then min (mtSpeed mt) crawlSpeed
+                   else mtSpeed mt
+        step = effSpeed * realToFrac dt
     in if dist ≤ max step arrivalEpsilon
-       then arriveAtSubGoal us mt (gx, gy) mWtd
+       then arriveAtSubGoal stats us mt (gx, gy) mWtd
        else moveToward now stats us mt mWtd dx dy dist step
+
+-- | Top speed (tiles/sec) of a unit dragging itself along on a maimed
+--   body. Slow enough to read as a crawl; the injury speed-multiplier
+--   already applied at command time stacks on top.
+crawlSpeed ∷ Float
+crawlSpeed = 0.7
 
 -- | Snap to the sub-goal. If we arrived at the final target (no more
 --   waypoints, sub-goal is the target), clear the target. Otherwise
 --   pop the first waypoint and continue next tick.
 arriveAtSubGoal
-    ∷ UnitSimState
+    ∷ UnitMoveStats
+    → UnitSimState
     → MoveTarget
     → (Float, Float)
     → Maybe WorldTileData
     → UnitSimState
-arriveAtSubGoal us mt (gx, gy) mWtd =
+arriveAtSubGoal stats us mt (gx, gy) mWtd =
     let z   = lookupZ mWtd (floor gx) (floor gy) (usGridZ us)
         us' = us { usRealX = gx, usRealY = gy
                  , usGridZ = z, usRealZ = fromIntegral z }
@@ -620,7 +735,7 @@ arriveAtSubGoal us mt (gx, gy) mWtd =
                         , usState     = Idle
                         }
                else us' { usLocalPath = rest
-                        , usState     = Walking
+                        , usState     = gaitForPose (usPose us') stats mt
                         }
         [] →
             -- Greedy mode: subGoal was the final target, so we've arrived.
@@ -648,29 +763,13 @@ moveToward now stats us mt mWtd dx dy dist step =
         newY = usRealY us + ny * step
         srcTile = (floor (usRealX us), floor (usRealY us))
         dstTile = (floor newX, floor newY)
+        -- stepCost enforces the no-corner-cutting rule itself (a
+        -- diagonal step grazing an impassable axis-neighbour returns
+        -- Nothing), so the greedy stepper and A* agree by construction.
         mCost
             | srcTile ≡ dstTile = Just 0  -- sub-tile motion, no boundary cross
             | otherwise = case mWtd of
-                Just wtd → case stepCost wtd srcTile dstTile of
-                    Nothing → Nothing
-                    Just c  →
-                        -- No-corner-cutting: a diagonal step grazes the
-                        -- two axis-aligned neighbors of srcTile. Reject
-                        -- the step if either neighbor is impassable
-                        -- (Ocean/Lava/unloaded chunk), so units can't
-                        -- slip diagonally past a wall. Endpoint cost is
-                        -- preserved; only the passability gate widens.
-                        let (sx, sy)   = srcTile
-                            (dgx, dgy) = dstTile
-                            isDiagonal = sx ≢ dgx ∧ sy ≢ dgy
-                            cornerOk =
-                                case ( stepCost wtd srcTile (dgx, sy)
-                                     , stepCost wtd srcTile (sx, dgy) ) of
-                                    (Just _, Just _) → True
-                                    _                → False
-                        in if isDiagonal ∧ not cornerOk
-                           then Nothing
-                           else Just c
+                Just wtd → stepCost wtd srcTile dstTile
                 Nothing  → Just 0  -- no world snapshot: don't block
         followingPath = not (null (usLocalPath us))
         -- Cliff and fall detection: only meaningful when actually
@@ -735,8 +834,25 @@ moveToward now stats us mt mWtd dx dy dist step =
                       , usGridZ  = newZ
                       , usRealZ  = fromIntegral newZ
                       , usFacing = vectorToDirection nx ny
-                      , usState  = Walking
+                      , usState  = gaitForPose (usPose us) stats mt
                       }
+
+-- | Walking vs Running gait, by whether the commanded speed crosses the
+--   unit's run-anim threshold (def.run_threshold × def.max_speed). This
+--   is the fix for "units never run": the per-tick movement update used
+--   to hard-code Walking, clobbering the Running activity set at command
+--   time. Now the gait is re-derived from speed every tick so it sticks.
+gaitFor ∷ UnitMoveStats → MoveTarget → UnitActivity
+gaitFor stats mt
+    | mtSpeed mt > umsRunThreshold stats = Running
+    | otherwise                          = Walking
+
+-- | Gait that respects the pose: a Crawling unit is always Walking-gait
+--   (there is only a crawling-walk anim, no crawling-run), so a unit told
+--   to move fast still renders crawling rather than falling back.
+gaitForPose ∷ Pose → UnitMoveStats → MoveTarget → UnitActivity
+gaitForPose Crawling _ _ = Walking
+gaitForPose _ stats mt   = gaitFor stats mt
 
 -- | Initiate a climb sequence: stop horizontal movement, face the
 --   cliff, snap into a Climbing transition whose duration scales
@@ -753,37 +869,35 @@ startClimb
     → UnitSimState
 startClimb now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
     let dz       = dstZ - srcZ
+        -- Only the WALL portion (cliff height minus the unit's mantle
+        -- reach) is a vertical wall-climb; the rest is the pullup. A
+        -- unit whose reach ≥ the cliff height has a zero-length climb
+        -- and goes straight to the pullup next tick.
+        pullupZ  = min (fromIntegral dz) (climbReachZ stats)
+        climbDz  = max 0 (fromIntegral dz - pullupZ)
         speed    = computeClimbSpeed stats
-        duration = realToFrac (fromIntegral dz / speed) ∷ Double
+        duration = realToFrac (climbDz / speed) ∷ Double
         srcX     = usRealX us
         srcY     = usRealY us
         (sx, sy) = (floor srcX ∷ Int, floor srcY ∷ Int)
-        -- Pullup anchor = the cliff edge of the destination tile
-        -- facing the source, nudged inward by `edgeMargin` so that
-        -- `floor edgeX` reliably returns `dgx` (the destination
-        -- tile), not `dgx+1`. Without this nudge, the unit lands
-        -- exactly on the tile-boundary line — `floor` rounds up
-        -- and the unit is logically on the SOURCE tile with the
-        -- destination tile's Z. Next tick the engine re-syncs Z
-        -- down to the source tile's terrain and the cliff trigger
-        -- fires again. Climb loop.
-        --
-        -- Anchoring slightly INSIDE the destination tile keeps the
-        -- visual at the cliff edge (margin is too small to see)
-        -- and the game-logic tile assignment correct.
-        edgeMargin = 0.05
+        -- Pullup anchor = just PAST the climbed edge, by `ledgeInset`,
+        -- on the destination tile. The pullup (Crawling) phase
+        -- interpolates the unit from its frozen base xy to here, so the
+        -- inset controls how far forward the mantle hauls — small enough
+        -- to read as "pulled up onto the lip", not "leapt half a tile
+        -- inward". Measured from the NEAR (climbed) edge so east- and
+        -- west-facing cliffs are symmetric. floor() resolves to the
+        -- destination tile either way, so the logical tile/z stay
+        -- consistent (no climb loop).
+        ledgeInset = 0.125
         edgeX
-            | dgx > sx  = fromIntegral dgx + edgeMargin
-                -- east cliff: just inside west edge of dst tile
-            | dgx < sx  = fromIntegral (dgx + 1) - edgeMargin
-                -- west cliff: just inside east edge of dst tile
-            | otherwise = srcX                       -- cardinal y-only
+            | dgx > sx  = fromIntegral dgx + ledgeInset        -- climb east
+            | dgx < sx  = fromIntegral (dgx + 1) - ledgeInset  -- climb west
+            | otherwise = srcX                                 -- cardinal y-only
         edgeY
-            | dgy > sy  = fromIntegral dgy + edgeMargin
-                -- south cliff: just inside north edge of dst tile
-            | dgy < sy  = fromIntegral (dgy + 1) - edgeMargin
-                -- north cliff: just inside south edge of dst tile
-            | otherwise = srcY                       -- cardinal x-only
+            | dgy > sy  = fromIntegral dgy + ledgeInset        -- climb south
+            | dgy < sy  = fromIntegral (dgy + 1) - ledgeInset  -- climb north
+            | otherwise = srcY                                 -- cardinal x-only
     in us { usState            = TransitioningTo Climbing
           , usTransitionUntil  = Just (now + duration)
           , usTransitionStride = 1

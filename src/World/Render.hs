@@ -55,6 +55,13 @@ updateWorldTiles env = do
     let zoom = camZoom camera
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
         zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
+        -- Terrain's visible Z-band depth below the slice (same formula as
+        -- Quads.hs). Units/buildings cull to this so a sprite is hidden
+        -- exactly when its ground tile is — only ABOVE the slice (camera
+        -- below it) or past the view depth, never just for being below
+        -- the camera's own terrain level (the old fixed-25 bug: base-of-
+        -- cliff sprites vanished when viewed from the top).
+        effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
 
     worldManager ← readIORef (worldManagerRef env)
 
@@ -129,7 +136,7 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderUnitQuads env facing zSlice tileAlpha
+            renderUnitQuads env facing zSlice effDepth tileAlpha
 
     -- Buildings: same shape as units, simpler internals. Plus the
     -- optional ghost preview while in placement mode.
@@ -138,7 +145,7 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderBuildingQuads env facing zSlice tileAlpha
+            renderBuildingQuads env facing zSlice effDepth tileAlpha
 
     ghostQuads ← if tileAlpha ≤ 0.001
         then return V.empty

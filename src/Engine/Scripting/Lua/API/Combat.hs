@@ -16,6 +16,7 @@
 module Engine.Scripting.Lua.API.Combat
     ( combatAttackFn
     , combatDrainEventsFn
+    , combatEmitDeathFn
     ) where
 
 import UPrelude
@@ -23,7 +24,7 @@ import Control.Monad (forM_, forM)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import qualified Data.Text.Encoding as TE
-import Data.IORef (atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', readIORef)
 import qualified HsLua as Lua
 import Combat.Types (CombatCommand(..), CombatEvent(..), AttackMode(..))
 import Engine.Core.State (EngineEnv(..))
@@ -45,6 +46,37 @@ combatAttackFn env = do
         (Just a, Just t) → do
             Lua.liftIO $ Q.writeQueue (combatQueue env) $
                 CombatAttack (fromIntegral a) (fromIntegral t) mode
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | combat.emitDeath(targetUid [, cause]) → bool
+--
+-- Pushes a synthetic "death" combat event so that NON-combat / delayed
+-- deaths (suffocation, organ failure, starvation, fall) narrate in the
+-- combat log alongside engine-resolved combat deaths. There is no
+-- attacker. The combat-log script refines the cause from the corpse's
+-- own wounds (injuries.deathCause); the optional `cause` string is the
+-- fallback used for woundless deaths (e.g. "starvation").
+combatEmitDeathFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+combatEmitDeathFn env = do
+    tArg     ← Lua.tointeger 1
+    causeArg ← Lua.tostring 2
+    case tArg of
+        Just t → do
+            gt ← Lua.liftIO $ readIORef (gameTimeRef env)
+            let cause = maybe "their wounds" TE.decodeUtf8 causeArg
+                ev = CombatEvent
+                    { ceTs       = gt
+                    , ceKind     = "death"
+                    , ceAttacker = Nothing
+                    , ceTarget   = Just (fromIntegral t)
+                    , cePayload  = HM.singleton "cause" cause
+                    }
+            Lua.liftIO $ atomicModifyIORef' (combatEventsRef env) $ \buf →
+                (buf Seq.|> ev, ())
             Lua.pushboolean True
             return 1
         _ → do
