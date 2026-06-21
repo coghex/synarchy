@@ -876,29 +876,39 @@ function unitResources.update(dt)
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
-            tickStance(uid, dt)
             local pose0 = unit.getPose(uid) or "standing"
-            -- Injuries first: a lethal injury kills the unit (skip the
-            -- rest of its tick); a disabling one collapses it.
-            if not tickInjuries(uid, info, pose0)
-               and not tickFailureMeters(uid, dt) then
-            local defConfig = config[info.defName]
-            if defConfig then
-                local activity = unit.getActivity(uid) or "idle"
-                local pose     = unit.getPose(uid) or "standing"
-                for resourceName, params in pairs(defConfig) do
-                    tickResource(uid, info.defName, resourceName,
-                                 params, activity, pose, dt)
+            -- A corpse ticks NOTHING. Without this guard, a failure-meter
+            -- death leaves the driving wound pinned on the corpse (the
+            -- engine wound tick skips dead units, so it never heals), so
+            -- tickFailureMeters would re-hit emitDeathAlert + unit.kill
+            -- every tick — spamming the death feed. Resource/starvation
+            -- drains on the dead are pointless for the same reason. (Note
+            -- tickInjuries returns false for the dead, so the `and` chain
+            -- below would otherwise fall straight through to the meters.)
+            if pose0 ~= "dead" then
+                tickStance(uid, dt)
+                -- Injuries first: a lethal injury kills the unit (skip the
+                -- rest of its tick); a disabling one collapses it.
+                if not tickInjuries(uid, info, pose0)
+                   and not tickFailureMeters(uid, dt) then
+                    local defConfig = config[info.defName]
+                    if defConfig then
+                        local activity = unit.getActivity(uid) or "idle"
+                        local pose     = unit.getPose(uid) or "standing"
+                        for resourceName, params in pairs(defConfig) do
+                            tickResource(uid, info.defName, resourceName,
+                                         params, activity, pose, dt)
+                        end
+                        -- After resources have ticked (and hunger has
+                        -- drained), catabolism eats body mass if hunger is
+                        -- empty. Respiratory failure (lean ≤ min_lean) is the
+                        -- direct kill path here; the gradual organ-failure
+                        -- path lives in the stamina branch of tickResource.
+                        tickStarvation(uid, dt)
+                        checkRevive(uid, defConfig)
+                    end
                 end
-                -- After resources have ticked (and hunger has drained),
-                -- catabolism eats body mass if hunger is empty.
-                -- Respiratory failure (lean ≤ min_lean) is the direct
-                -- kill path here; the gradual organ-failure path lives
-                -- in the stamina branch of tickResource above.
-                tickStarvation(uid, dt)
-                checkRevive(uid, defConfig)
             end
-            end -- tickInjuries guard
         end
     end
 end

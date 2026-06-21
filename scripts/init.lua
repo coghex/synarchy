@@ -102,6 +102,13 @@ function game.init(scriptId)
     cargoInventoryPanelScriptId = engine.loadScript(
         "scripts/cargo_inventory_panel.lua", 0.2)
 
+    -- Item contents popup: the unit-carried analogue of the cargo
+    -- panel — right-click "Contents" on a container item (first-aid
+    -- kit / toolbox) in a unit's inventory. Same cheap content-hash
+    -- refresh cadence.
+    itemContentsPanelScriptId = engine.loadScript(
+        "scripts/item_contents_panel.lua", 0.2)
+
     -- Popup: receives engine.emitEvent broadcasts (onShowPopup) and
     -- renders OK-dismissable popups. Slow tick (1.0s) — render work
     -- is event-driven on click/broadcast, the tick is just here so
@@ -402,6 +409,79 @@ function game.onMouseDown(button, x, y)
                         end,
                     })
                 end
+                -- Treat bleeding: a selected unit that KNOWS bleed-control
+                -- dresses the target's worst bleeding wound, drawing
+                -- bandages from a first-aid kit carried by the medic OR
+                -- any other selected unit (e.g. the technomule standing
+                -- by). Greyed until both a kit and a bleeding wound exist.
+                do
+                    local medic
+                    for _, uid in ipairs(selectedUids) do
+                        if uid ~= targetUid
+                           and unit.getKnowledge(uid, "bleed_control") then
+                            medic = uid; break
+                        end
+                    end
+                    if medic then
+                        local function hasBandages(uid)
+                            for _, it in ipairs(unit.getInventory(uid) or {}) do
+                                if it.kind == "container" then
+                                    for _, r in ipairs(unit.getItemContents(
+                                                  uid, it.defName) or {}) do
+                                        if r.defName == "bandage"
+                                           and (r.count or 0) > 0 then
+                                            return true
+                                        end
+                                    end
+                                end
+                            end
+                            return false
+                        end
+                        local kitOwner
+                        if hasBandages(medic) then
+                            kitOwner = medic
+                        else
+                            for _, uid in ipairs(selectedUids) do
+                                if hasBandages(uid) then kitOwner = uid; break end
+                            end
+                        end
+                        local bleeding = false
+                        for _, w in ipairs(unit.getWounds(targetUid) or {}) do
+                            if (w.bandage or 1) > 0.02
+                               and w.kind ~= "concussion" then
+                                bleeding = true; break
+                            end
+                        end
+                        table.insert(items, {
+                            label   = "Treat bleeding",
+                            enabled = (kitOwner ~= nil) and bleeding,
+                            callback = function()
+                                local res = unit.treatBleeding(
+                                    medic, targetUid, kitOwner)
+                                if res then
+                                    local msg
+                                    if res.ok then
+                                        local pct = math.floor(
+                                            (res.seep or 0) * 100 + 0.5)
+                                        msg = (pct <= 0)
+                                            and "Bleeding stopped"
+                                            or string.format(
+                                                "Bleeding cut to %d%%", pct)
+                                        if (res.bandagesUsed or 1) > 1 then
+                                            msg = msg .. string.format(
+                                                " (%d bandages used)",
+                                                res.bandagesUsed)
+                                        end
+                                    else
+                                        msg = "Treatment failed: "
+                                              .. (res.message or "")
+                                    end
+                                    engine.emitEvent("unit_event", msg)
+                                end
+                            end,
+                        })
+                    end
+                end
                 contextMenu.show(items, mx, my)
                 return
             end
@@ -574,6 +654,10 @@ function game.onKeyDown(key)
         local cargoPanel = require("scripts.cargo_inventory_panel")
         if cargoPanel.handleKeyDown(key) then return end
 
+        -- Item contents popup (unit-carried container) — same tier.
+        local itemContents = require("scripts.item_contents_panel")
+        if itemContents.handleKeyDown(key) then return end
+
         local popup = require("scripts.popup")
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")
@@ -660,6 +744,9 @@ function game.shutdown()
     end
     if cargoInventoryPanelScriptId then
         engine.killScript(cargoInventoryPanelScriptId)
+    end
+    if itemContentsPanelScriptId then
+        engine.killScript(itemContentsPanelScriptId)
     end
     if shellScriptId then
         engine.killScript(shellScriptId)

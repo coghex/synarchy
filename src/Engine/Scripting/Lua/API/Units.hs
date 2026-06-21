@@ -41,9 +41,15 @@ module Engine.Scripting.Lua.API.Units
     , unitGetActivityFn
     , unitGetSkillFn
     , unitSetSkillFn
+    , unitGetKnowledgeFn
+    , unitSetKnowledgeFn
+    , unitGetKnowledgeListFn
     , unitAddXPFn
     , unitGetAllSkillsFn
     , unitGetInventoryFn
+    , unitGetItemContentsFn
+    , unitTreatBleedingFn
+    , unitInjureFn
     , unitDrinkFn
     , unitEatFn
     , unitPickupFn
@@ -65,6 +71,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetWeaponWieldedFromFn
     , unitGetWoundSeverityOnFn
     , unitGetWoundsFn
+    , unitGetScarsFn
     , unitDropEquipmentToGroundFn
     , unitGetBloodFn
     , unitGetPainFn
@@ -88,6 +95,8 @@ import qualified HsLua as Lua
 import Control.Monad (foldM, forM_, unless)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
+import qualified Data.List as L
+import qualified System.Random as Random
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -119,9 +128,9 @@ import Item.Types (ItemInstance(..))
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemWeapon(..), ItemBuff(..)
-                  , ItemManager(..), lookupItemDef)
+                  , ItemManager(..), lookupItemDef, itemTotalWeight)
 import Item.Ground (spawnGroundItem)
-import Combat.Wounds (bleedRateFor)
+import Combat.Wounds (bleedRateFor, kindBleedFactor)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
@@ -226,6 +235,10 @@ loadUnitYamlFn env backendState = do
                             [ (sname, (uyskBase s, uyskRange s))
                             | (sname, s) ← Map.toList (uydSkills def)
                             ]
+                        knowledgeTemplates = HM.fromList
+                            [ (kname, (uyskBase s, uyskRange s))
+                            | (kname, s) ← Map.toList (uydKnowledge def)
+                            ]
 
                     -- Expand each entry by its count. Each repetition
                     -- becomes a distinct ItemInstance (quality /
@@ -310,6 +323,7 @@ loadUnitYamlFn env backendState = do
                             , udStatTemplates = statTemplates
                             , udBodyTemplates = bodyTemplates
                             , udSkillTemplates = skillTemplates
+                            , udKnowledgeTemplates = knowledgeTemplates
                             , udStartingInventory = startingInv
                             , udEquipmentClass    = uydEquipmentClass def
                             , udStartingEquipment = HM.fromList
@@ -1093,13 +1107,68 @@ unitGetWoundsFn env = do
                         Lua.setfield (-2) "vital"
                         Lua.pushstring (TE.encodeUtf8 (woundKind w))
                         Lua.setfield (-2) "kind"
+                        -- `severity` is the EFFECTIVE severity (inflicted ×
+                        -- (1 − heal)) — so every consumer (pain, impairment,
+                        -- naming) automatically eases as the wound heals.
+                        -- `severityInflicted` is the original, `heal` the
+                        -- 0..1 healing progress.
+                        Lua.pushnumber (Lua.Number (realToFrac
+                            (woundSeverity w * (1 - woundHeal w))))
+                        Lua.setfield (-2) "severity"
                         Lua.pushnumber (Lua.Number
                             (realToFrac (woundSeverity w)))
-                        Lua.setfield (-2) "severity"
+                        Lua.setfield (-2) "severityInflicted"
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundHeal w)))
+                        Lua.setfield (-2) "heal"
                         Lua.pushnumber (Lua.Number
                             (realToFrac (woundAt w)))
                         Lua.setfield (-2) "at"
+                        -- First-aid dressing: fraction of natural bleed
+                        -- that still seeps (1.0 untreated, < 1.0 = bandaged).
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundBandage w)))
+                        Lua.setfield (-2) "bandage"
+                        -- Clotting progress 0..1 (bleed × (1−clot); 1 = stopped).
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundClot w)))
+                        Lua.setfield (-2) "clot"
+                        -- Dressing type: "" / "bandage" / "tourniquet".
+                        Lua.pushstring (TE.encodeUtf8 (woundDressing w))
+                        Lua.setfield (-2) "dressing"
                         Lua.rawseti (-2) i
+                    return 1
+
+-- | unit.getScars(uid) → array of { part, kind, severity, at } | nil
+--   Permanent marks left by severe wounds that finished healing.
+--   `severity` is the wound's inflicted severity (how bad it was);
+--   `at` is the game-time it healed. Empty table if none; nil if the
+--   unit doesn't exist.
+unitGetScarsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetScarsFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mScars ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (uiScars <$> HM.lookup uid (umInstances um))
+            case mScars of
+                Nothing → Lua.pushnil >> return 1
+                Just scars → do
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] scars) $ \(i, sc) → do
+                        Lua.newtable
+                        Lua.pushstring (TE.encodeUtf8 (scarPart sc))
+                        Lua.setfield (-2) "part"
+                        Lua.pushstring (TE.encodeUtf8 (scarKind sc))
+                        Lua.setfield (-2) "kind"
+                        Lua.pushnumber (Lua.Number (realToFrac (scarSeverity sc)))
+                        Lua.setfield (-2) "severity"
+                        Lua.pushnumber (Lua.Number (realToFrac (scarAt sc)))
+                        Lua.setfield (-2) "at"
+                        Lua.rawseti (-2) (fromIntegral i)
                     return 1
 
 -- | unit.getBlood(uid) → { current, max } | nil
@@ -1310,6 +1379,7 @@ unitAddItemFn env = do
                                 , iiCondition   = cond
                                 , iiWeight      = wght
                                 , iiSharpness   = 100.0
+                                , iiContents    = []
                                 }
                         atomicModifyIORef' (unitManagerRef env) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -1565,10 +1635,8 @@ unitDepositToCargoFn env = do
                     def     ← HM.lookup (biDefName inst) (bmDefs bm)
                     itemDef ← lookupItemDef defName itemMgr
                     let cap     = bdStorageCapacity def
-                        current = sum
-                            [ iiWeight it + iiCurrentFill it
-                            | it ← biStorage inst
-                            ]
+                        current = sum (map (itemTotalWeight itemMgr)
+                                           (biStorage inst))
                     -- Pre-check uses the def MEAN; the actual item
                     -- popped below carries its instance weight, so a
                     -- rolled-heavy instance can overshoot by a hair —
@@ -1691,7 +1759,7 @@ unitGetCarryingWeightFn env = do
             mW ← Lua.liftIO $ do
                 um      ← readIORef (unitManagerRef env)
                 itemMgr ← readIORef (itemManagerRef env)
-                let weightOf it = iiWeight it + iiCurrentFill it
+                let weightOf = itemTotalWeight itemMgr
                 pure $ do
                     u ← HM.lookup uid (umInstances um)
                     let invW = sum (map weightOf (uiInventory u))
@@ -1811,6 +1879,79 @@ unitSetSkillFn env = do
         _ → do
             Lua.pushboolean False
             return 1
+
+-- | unit.getKnowledge(uid, name) → level | nil. nil means the unit does
+--   NOT know it (presence in uiKnowledge = known). Raw stored level —
+--   callers wanting effective capability multiply by the relevant stat
+--   (e.g. intelligence) themselves.
+unitGetKnowledgeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetKnowledgeFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid  = UnitId (fromIntegral n)
+                name = TE.decodeUtf8 nameBS
+            mVal ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure $ HM.lookup uid (umInstances um)
+                         ⌦ (HM.lookup name . uiKnowledge)
+            case mVal of
+                Just v  → Lua.pushnumber (Lua.Number (realToFrac v)) >> return 1
+                Nothing → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
+-- | unit.setKnowledge(uid, name, value) — grant/set a knowledge at `value`
+--   (its mere presence marks it KNOWN). Clamps at 0. Used to seed knowledge
+--   from a source (book/teacher) or for debug; spawn-known knowledge comes
+--   from the unit def's `knowledge:` block. Returns true if the unit exists.
+unitSetKnowledgeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetKnowledgeFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    valArg  ← Lua.tonumber 3
+    case (idArg, nameArg, valArg) of
+        (Just n, Just nameBS, Just (Lua.Number v)) → do
+            let uid  = UnitId (fromIntegral n)
+                name = TE.decodeUtf8 nameBS
+                lvl  = max 0 (realToFrac v)
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, False)
+                    Just inst →
+                        let inst' = inst { uiKnowledge =
+                                HM.insert name lvl (uiKnowledge inst) }
+                        in (um { umInstances = HM.insert uid inst'
+                                                 (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | unit.getKnowledgeList(uid) → array of { name, level } for everything the
+--   unit KNOWS. Empty table if it knows nothing / doesn't exist.
+unitGetKnowledgeListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetKnowledgeListFn env = do
+    idArg ← Lua.tointeger 1
+    Lua.newtable
+    case idArg of
+        Nothing → return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mInst ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (HM.lookup uid (umInstances um))
+            case mInst of
+                Nothing → return 1
+                Just inst → do
+                    forM_ (zip [1 ∷ Int ..] (HM.toList (uiKnowledge inst)))
+                        $ \(i, (k, v)) → do
+                            Lua.newtable
+                            Lua.pushstring (TE.encodeUtf8 k)
+                            Lua.setfield (-2) "name"
+                            Lua.pushnumber (Lua.Number (realToFrac v))
+                            Lua.setfield (-2) "level"
+                            Lua.rawseti (-2) (fromIntegral i)
+                    return 1
 
 -- | unit.addXP(uid, name, amount) — apply XP to a stat OR skill via
 --   @newValue = value + amount / max (value^2, 1e-4)@. The lookup
@@ -2804,6 +2945,355 @@ parseDirKey t = case T.toLower t of
     "east"       → Just DirE
     "south-east" → Just DirSE
     _            → Nothing
+
+-- | unit.getItemContents(uid, defName) → array of { defName, displayName,
+--   count, fill, condition }, GROUPED by item type (10 bandages → one entry
+--   with count=10), for the FIRST inventory item matching `defName` that is
+--   an item-container (a first-aid kit / toolbox). Empty table if it holds
+--   nothing; nil if the unit or that item isn't found.
+unitGetItemContentsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetItemContentsFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid  = UnitId (fromIntegral n)
+                want = TE.decodeUtf8 nameBS
+            mRes ← Lua.liftIO $ do
+                um      ← readIORef (unitManagerRef env)
+                itemMgr ← readIORef (itemManagerRef env)
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing → Nothing
+                    Just inst →
+                        case [ i | i ← uiInventory inst, iiDefName i ≡ want ] of
+                            (kit : _) → Just (iiContents kit, itemMgr)
+                            []        → Nothing
+            case mRes of
+                Nothing → Lua.pushnil >> return 1
+                Just (contents, itemMgr) → do
+                    -- Group identical contents by defName. A kit holds at
+                    -- most a handful of types, so a flat defName grouping
+                    -- (rather than the cargo panel's defName+quality+cond
+                    -- key) reads fine — tools are count 1, consumables have
+                    -- no condition spread.
+                    let grouped = HM.toList $ HM.fromListWith
+                            (\(c1, f, cond) (c2, _, _) → (c1 + c2, f, cond))
+                            [ ( iiDefName i
+                              , (1 ∷ Int, iiCurrentFill i, iiCondition i) )
+                            | i ← contents ]
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] grouped) $
+                      \(idx, (dname, (cnt, fill, cond))) → do
+                        let mDef = lookupItemDef dname itemMgr
+                            disp = maybe dname idDisplayName mDef
+                            cat  = maybe "Misc" idCategory mDef
+                            wt   = maybe 0 idWeight mDef
+                            tex  = maybe (-1) (\d → let TextureHandle t =
+                                                          idTexture d in t) mDef
+                        Lua.newtable
+                        Lua.pushstring (TE.encodeUtf8 dname)
+                        Lua.setfield (-2) "defName"
+                        Lua.pushstring (TE.encodeUtf8 disp)
+                        Lua.setfield (-2) "displayName"
+                        Lua.pushstring (TE.encodeUtf8 cat)
+                        Lua.setfield (-2) "category"
+                        Lua.pushinteger (fromIntegral cnt)
+                        Lua.setfield (-2) "count"
+                        Lua.pushnumber (Lua.Number (realToFrac wt))
+                        Lua.setfield (-2) "weight"
+                        Lua.pushinteger (fromIntegral tex)
+                        Lua.setfield (-2) "iconTex"
+                        Lua.pushnumber (Lua.Number (realToFrac fill))
+                        Lua.setfield (-2) "fill"
+                        Lua.pushnumber (Lua.Number (realToFrac cond))
+                        Lua.setfield (-2) "condition"
+                        Lua.rawseti (-2) (fromIntegral idx)
+                    return 1
+        _ → Lua.pushnil >> return 1
+
+-- ----- Treat action (C MVP) -----
+
+-- | Outcome of a treat attempt. `trSeep` is the wound's new
+--   `woundBandage` (fraction of bleed that still seeps): 0 = perfectly
+--   sealed, 0.05 = a competent dressing, 1.0 = untreated (on failure).
+data TreatResult = TreatResult
+    { trOk        ∷ !Bool
+    , trSeep      ∷ !Float
+    , trBandages  ∷ !Int     -- bandages consumed (incl. wasted on failed tries)
+    , trAttempts  ∷ !Int
+    , trPart      ∷ !Text
+    , trKind      ∷ !Text
+    , trMessage   ∷ !Text
+    , trMethod    ∷ !Text     -- "" / "bandage" / "tourniquet"
+    }
+
+treatFail ∷ Text → TreatResult
+treatFail msg = TreatResult False 1.0 0 0 "" "" msg ""
+
+bandageItemName ∷ Text
+bandageItemName = "bandage"
+
+-- | The mechanic behind `unit.treatBleeding`. A medic who KNOWS
+--   bleed-control dresses the patient's worst-bleeding wound using
+--   bandages drawn from a first-aid kit (carried by `owner`, default
+--   the medic). Capability = (bleed_control / 100) × intelligence ×
+--   tool-condition factor:
+--     * each attempt succeeds with probability ≈ 0.15 + capability
+--       (experts essentially never miss; the poorly trained may need
+--       several tries, wasting a bandage each fail);
+--     * on success the dressing's seep fraction is 0.6·(1−cap)² — an
+--       expert with high intelligence reaches 0 (bleed stopped dead),
+--       a competent hand ~5%, a poor one ~50%.
+--   Worn tweezers/scissors in the kit drag the capability down. Tools
+--   are reusable (never consumed); only bandages are spent.
+treatBleedingIO ∷ EngineEnv → UnitId → UnitId → Maybe UnitId → IO TreatResult
+treatBleedingIO env medic patient mOwner = do
+    um0 ← readIORef (unitManagerRef env)
+    let owner = fromMaybe medic mOwner
+    case ( HM.lookup medic   (umInstances um0)
+         , HM.lookup patient (umInstances um0)
+         , HM.lookup owner   (umInstances um0) ) of
+      (Just med, Just pat, Just own) →
+        case HM.lookup "bleed_control" (uiKnowledge med) of
+          Nothing → pure (treatFail "medic lacks bleed-control knowledge")
+          Just level → do
+            -- Worst bleeding wound — needed by BOTH the kit-dressing and
+            -- the no-supplies tourniquet path, so it's found up front.
+            let parts = case HM.lookup (uiDefName pat) (umDefs um0) of
+                    Just d  → HM.fromList [(bpId bp, bp) | bp ← udBodyParts d]
+                    Nothing → HM.empty
+                scoreOf w = (woundSeverity w * woundSeverity w)
+                          * kindBleedFactor (woundKind w)
+                          * maybe 1.0 bpBleedFactor
+                                (HM.lookup (woundPart w) parts)
+                          * woundBandage w
+                bleeders = [ (w, scoreOf w) | w ← uiWounds pat
+                           , woundBandage w > 0.02, scoreOf w > 1.0e-4 ]
+            case bleeders of
+              [] → pure (treatFail "no bleeding wound to treat")
+              _  → do
+                let (worst, _) = L.foldl1'
+                        (\a@(_, sa) b@(_, sb) → if sb > sa then b else a)
+                        bleeders
+                    targetKey = (woundPart worst, woundKind worst, woundAt worst)
+                mIntel ← getEffectiveStat env medic "intelligence"
+                let intel    = fromMaybe 1.0 mIntel
+                    nLevel   = max 0 (min 1 (level / 100))
+                    baseComp = nLevel * intel   -- skill × intelligence (no tools)
+                    kits = [ it | it ← uiInventory own
+                                , any ((≡ bandageItemName) . iiDefName)
+                                      (iiContents it) ]
+                case kits of
+                  (kit:_) → do
+                    -- PROPER DRESSING from the kit (the C-MVP attempt cycle).
+                    let bandageCount = length
+                            [ () | c ← iiContents kit, iiDefName c ≡ bandageItemName ]
+                        toolConds = [ iiCondition c | c ← iiContents kit
+                                    , iiDefName c ≡ "tweezers"
+                                      ∨ iiDefName c ≡ "scissors" ]
+                        toolCond01 = if null toolConds
+                            then 0.5
+                            else (sum toolConds / fromIntegral (length toolConds)) / 100
+                        toolFactor = 0.7 + 0.3 * toolCond01
+                        competence = max 0 (min 1.1 (baseComp * toolFactor))
+                        pSucc      = max 0.05 (min 0.99 (0.15 + competence))
+                        capClamp   = min 1 competence
+                        seepBase   = 0.6 * (1 - capClamp) * (1 - capClamp)
+                        maxAttempts = 8 ∷ Int
+                    localGen ← atomicModifyIORef' (statRNGRef env) Random.splitGen
+                    let go gen attemptsLeft used
+                          | used >= bandageCount = (False, used, gen)
+                          | attemptsLeft ≤ 0     = (False, used, gen)
+                          | otherwise =
+                              let (r, gen') = Random.randomR (0, 1) gen
+                                                ∷ (Float, Random.StdGen)
+                                  used' = used + 1
+                              in if r < pSucc
+                                   then (True,  used', gen')
+                                   else go gen' (attemptsLeft - 1) used'
+                        (success, consumed, gen2) = go localGen maxAttempts 0
+                        (jr, _) = Random.randomR (0, 1) gen2
+                                    ∷ (Float, Random.StdGen)
+                        seep = if success
+                                 then max 0 (min 0.6 (seepBase * (0.9 + 0.2 * jr)))
+                                 else 1.0
+                        treatXp = if consumed ≤ 0 then 0
+                                  else if success then 2.0 else 1.0
+                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                        let um1 = consumeBandages owner consumed um
+                            um2 = if success
+                                    then setWoundDressing patient targetKey
+                                             seep "bandage" um1
+                                    else um1
+                            um3 = grantKnowledgeXP medic "bleed_control"
+                                                   treatXp um2
+                        in (um3, ())
+                    let msg = if success then "treated"
+                                         else "failed — out of material"
+                    pure (TreatResult success seep consumed
+                            (max consumed 1) (woundPart worst)
+                            (woundKind worst) msg "bandage")
+                  [] → do
+                    -- NO SUPPLIES → improvise a makeshift tourniquet. Crude
+                    -- but better than nothing: it always goes on, consumes
+                    -- no material, and stops the bleed only "somewhat" — a
+                    -- poor seep (~0.4–0.58, a touch better with skill). Still
+                    -- trains the medic a little.
+                    let tqSeep = max 0.4 (min 0.58 (0.58 - 0.2 * min 1 baseComp))
+                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                        let um1 = setWoundDressing patient targetKey
+                                      tqSeep "tourniquet" um
+                            um2 = grantKnowledgeXP medic "bleed_control" 1.0 um1
+                        in (um2, ())
+                    pure (TreatResult True tqSeep 0 1 (woundPart worst)
+                            (woundKind worst) "makeshift tourniquet" "tourniquet")
+      _ → pure (treatFail "medic, patient, or kit owner not found")
+
+-- | Drop the first `n` bandage instances from the first inventory item
+--   (kit) that holds any. Leaves tools / other contents untouched.
+consumeBandages ∷ UnitId → Int → UnitManager → UnitManager
+consumeBandages _     0 um = um
+consumeBandages owner n um =
+    case HM.lookup owner (umInstances um) of
+        Nothing  → um
+        Just own →
+            let inv' = dropFromFirstKit (uiInventory own)
+            in um { umInstances =
+                      HM.insert owner (own { uiInventory = inv' })
+                                (umInstances um) }
+  where
+    dropFromFirstKit [] = []
+    dropFromFirstKit (it:rest)
+        | any ((≡ bandageItemName) . iiDefName) (iiContents it) =
+            it { iiContents = dropN n (iiContents it) } : rest
+        | otherwise = it : dropFromFirstKit rest
+    dropN 0 cs = cs
+    dropN _ [] = []
+    dropN k (c:cs)
+        | iiDefName c ≡ bandageItemName = dropN (k - 1) cs
+        | otherwise                     = c : dropN k cs
+
+-- | Apply XP to one of a unit's KNOWN knowledges (same diminishing-
+--   returns curve as skill XP: newLevel = level + xp / max(level², ε)).
+--   No-op if the unit doesn't exist, doesn't know it, or xp ≤ 0 — a
+--   knowledge is only trained once a unit actually has it.
+grantKnowledgeXP ∷ UnitId → Text → Float → UnitManager → UnitManager
+grantKnowledgeXP uid name xp um
+    | xp ≤ 0 = um
+    | otherwise = case HM.lookup uid (umInstances um) of
+        Nothing → um
+        Just inst → case HM.lookup name (uiKnowledge inst) of
+            Nothing  → um
+            Just lvl →
+                let inst' = inst { uiKnowledge =
+                        HM.insert name (applySkillXP lvl xp)
+                                  (uiKnowledge inst) }
+                in um { umInstances =
+                          HM.insert uid inst' (umInstances um) }
+
+-- | Dress the matching wound on the patient: set its seep (woundBandage)
+--   and the dressing type ("bandage" / "tourniquet"). Matched by
+--   part+kind+inflicted-time so a concurrent wound-list reshuffle can't
+--   dress the wrong wound.
+setWoundDressing
+    ∷ UnitId → (Text, Text, Double) → Float → Text
+    → UnitManager → UnitManager
+setWoundDressing patient (pPart, pKind, pAt) seep dressing um =
+    case HM.lookup patient (umInstances um) of
+        Nothing  → um
+        Just pat →
+            let ws' = map (\w → if woundPart w ≡ pPart
+                                   ∧ woundKind w ≡ pKind
+                                   ∧ woundAt w ≡ pAt
+                                  then w { woundBandage  = seep
+                                         , woundDressing = dressing }
+                                  else w)
+                          (uiWounds pat)
+            in um { umInstances =
+                      HM.insert patient (pat { uiWounds = ws' })
+                                (umInstances um) }
+
+-- | unit.treatBleeding(medicUid, patientUid [, kitOwnerUid]) →
+--     { ok, seep, bandagesUsed, attempts, part, kind, message } | nil
+--
+--   One full treatment attempt-cycle (the medic keeps trying until the
+--   wound is dressed or the kit runs out of bandages). `kitOwnerUid`
+--   defaults to the medic — pass the technomule's id to draw from its
+--   kit while a different acolyte administers. nil only when the
+--   id args are missing; all other failures come back as ok=false with
+--   a message.
+unitTreatBleedingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTreatBleedingFn env = do
+    medicArg ← Lua.tointeger 1
+    patArg   ← Lua.tointeger 2
+    ownerArg ← Lua.tointeger 3
+    case (medicArg, patArg) of
+        (Just m, Just p) → do
+            let mOwner = (UnitId . fromIntegral) <$> ownerArg
+            res ← Lua.liftIO $ treatBleedingIO env
+                    (UnitId (fromIntegral m)) (UnitId (fromIntegral p)) mOwner
+            Lua.newtable
+            Lua.pushboolean (trOk res)
+            Lua.setfield (-2) "ok"
+            Lua.pushnumber (Lua.Number (realToFrac (trSeep res)))
+            Lua.setfield (-2) "seep"
+            Lua.pushinteger (fromIntegral (trBandages res))
+            Lua.setfield (-2) "bandagesUsed"
+            Lua.pushinteger (fromIntegral (trAttempts res))
+            Lua.setfield (-2) "attempts"
+            Lua.pushstring (TE.encodeUtf8 (trPart res))
+            Lua.setfield (-2) "part"
+            Lua.pushstring (TE.encodeUtf8 (trKind res))
+            Lua.setfield (-2) "kind"
+            Lua.pushstring (TE.encodeUtf8 (trMessage res))
+            Lua.setfield (-2) "message"
+            Lua.pushstring (TE.encodeUtf8 (trMethod res))
+            Lua.setfield (-2) "method"
+            return 1
+        _ → Lua.pushnil >> return 1
+
+-- | unit.injure(uid, part, kind, severity [, bandage]) → bool
+--   Stamp an arbitrary wound onto a unit — the Lua hook into the
+--   injury system (debug, arena testing, and future gameplay events
+--   like traps/hazards). `part` is a body-part id (e.g. "l_thigh",
+--   "neck", "torso"), `kind` a wound kind ("slash"/"stab"/"blunt"/
+--   "arterial"/"severed"/"internal"/"fracture"/"concussion"),
+--   `severity` 0..1, optional `bandage` 0..1 (default 1 = untreated).
+--   Prepended so it reads newest-first like a combat wound. Returns
+--   false if the unit is missing or required args are absent.
+unitInjureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitInjureFn env = do
+    idArg   ← Lua.tointeger 1
+    partArg ← Lua.tostring 2
+    kindArg ← Lua.tostring 3
+    sevArg  ← Lua.tonumber 4
+    bandArg ← Lua.tonumber 5
+    case (idArg, partArg, kindArg, sevArg) of
+        (Just n, Just partBS, Just kindBS, Just (Lua.Number sev)) → do
+            now ← Lua.liftIO $ readIORef (gameTimeRef env)
+            let uid = UnitId (fromIntegral n)
+                bandage = case bandArg of
+                    Just (Lua.Number b) → max 0 (min 1 (realToFrac b))
+                    _                   → 1.0
+                w = Wound
+                    { woundPart     = TE.decodeUtf8 partBS
+                    , woundKind     = TE.decodeUtf8 kindBS
+                    , woundSeverity = max 0 (min 1 (realToFrac sev))
+                    , woundAt       = now
+                    , woundBandage  = bandage
+                    , woundClot     = 0.0
+                    , woundHeal     = 0.0
+                    , woundDressing = "" }
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing   → (um, False)
+                    Just inst →
+                        let inst' = inst { uiWounds = w : uiWounds inst }
+                        in (um { umInstances =
+                                   HM.insert uid inst' (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+        _ → Lua.pushboolean False >> return 1
 
 -- | unit.getInventory(uid) → array of item tables, or nil if the unit
 --   doesn't exist. Each table has:

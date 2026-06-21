@@ -169,7 +169,11 @@ tickAllMovement dt env utsRef = do
                         let ws = [ Wound { woundPart     = fiPart i
                                          , woundKind     = fiKind i
                                          , woundSeverity = fiSeverity i
-                                         , woundAt       = now }
+                                         , woundAt       = now
+                                         , woundBandage  = 1.0
+                                         , woundClot     = 0.0
+                                         , woundHeal     = 0.0
+                                         , woundDressing = "" }
                                  | i ← injs ]
                         in HM.insert uid (inst { uiWounds = ws <> uiWounds inst }) m
             in (um' { umInstances = foldr applyOne (umInstances um') fallResults }, ())

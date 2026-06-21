@@ -311,7 +311,12 @@ allocateSubparts kind reach roll subs =
                       soft   = filter deepSoft pool
                       sPick  = case struct of [] → []; _ → [weightedPick roll struct]
                       tPick  = case soft   of [] → []; _ → [weightedPick (rollFor 1) soft]
-                  in sPick ++ tPick
+                      picks  = sPick ++ tPick
+                  -- An all-soft part (no bone/cartilage, no nerve/organ —
+                  -- e.g. a hand of skin+fat+muscle subparts) has neither a
+                  -- structural nor a deep target; honour the "always ≥1"
+                  -- contract by bruising one subpart from the pool.
+                  in if null picks then [ weightedPick roll pool ] else picks
 
 -- | Pick one part weighted by area weight, from a roll in [0,1). Total.
 weightedPick ∷ Float → [BodyPart] → BodyPart

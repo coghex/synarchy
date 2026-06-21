@@ -3,6 +3,7 @@ module Unit.Types
     ( Animation(..)
     , StatModifier(..)
     , Wound(..)
+    , Scar(..)
     , BodyPart(..)
     , NaturalWeapon(..)
     , StrikeProfile(..)
@@ -89,6 +90,52 @@ data Wound = Wound
       --   ones; Phase 2.1 just appends).
     , woundAt       ∷ !Double
       -- ^ gameTime (seconds) when inflicted.
+    , woundBandage  ∷ !Float
+      -- ^ first-aid bleed multiplier: the FRACTION of this wound's
+      --   natural bleed that still seeps after dressing. 1.0 =
+      --   untreated (full bleed, the default for a fresh wound); 0.05
+      --   = a competent bandage (5% seeps); 0.0 = a perfect dressing
+      --   that stops the bleed entirely. Set by `unit.treatBleeding`
+      --   (Combat.Wounds multiplies the per-wound bleed by this). A
+      --   well-dressed wound's effective bleed drops below the clot
+      --   threshold, so it then heals naturally.
+    , woundClot     ∷ !Float
+      -- ^ clotting progress 0..1. Fills over time in the wound tick
+      --   (Combat.Wounds); the per-wound bleed is multiplied by
+      --   (1 − woundClot), so at 1.0 the bleed has stopped entirely.
+      --   Starts at 0 on a fresh wound. The clot rate ACCELERATES as
+      --   it forms, scales DOWN with severity and dangerous kinds
+      --   (arterial/severed barely self-clot), and is boosted by a
+      --   bandage (pressure). Distinct from healing: clotting stops the
+      --   bleed, healing then mends the tissue.
+    , woundHeal     ∷ !Float
+      -- ^ healing progress 0..1. Fills slowly in the wound tick once
+      --   the wound has clotted (the rate scales with woundClot; an
+      --   open wound barely heals). woundSeverity is the INFLICTED
+      --   severity (static); the wound's EFFECTIVE severity — what
+      --   drives bleed magnitude, pain, and impairment — is
+      --   woundSeverity × (1 − woundHeal), so a unit recovers function
+      --   as it heals. When effective severity falls below cleanup
+      --   threshold the wound is removed, leaving a Scar if it was
+      --   severe enough. Severed wounds don't heal (the limb is gone).
+    , woundDressing ∷ !Text
+      -- ^ what first-aid is on the wound: "" (none), "bandage" (a
+      --   proper kit dressing), or "tourniquet" (the improvised
+      --   no-supplies fallback — crude, poor seep). Cosmetic/record:
+      --   the seep that actually scales bleed is woundBandage. Set by
+      --   `unit.treatBleeding`; drives the Status-tab label.
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | A healed-over wound left as a permanent mark. Descriptive record
+--   for now (shown in the unit's Status tab); the data is here to hang
+--   visuals or minor gameplay effects on later. Created when a wound
+--   finishes healing and its inflicted severity was above the scar
+--   threshold (scratches heal clean).
+data Scar = Scar
+    { scarPart     ∷ !Text     -- ^ body-part id the wound was on
+    , scarKind     ∷ !Text     -- ^ the wound kind that left it (slash/…)
+    , scarSeverity ∷ !Float     -- ^ the wound's INFLICTED severity (how bad)
+    , scarAt       ∷ !Double    -- ^ gameTime when it finished healing
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Unique identifier for a spawned unit instance.
@@ -257,6 +304,13 @@ data UnitDef = UnitDef
       --   Skills are continuous floats; XP is applied via a closed-
       --   form formula (see Unit.Stats.applySkillXP) — there's no
       --   per-level threshold to store.
+    , udKnowledgeTemplates ∷ !(HM.HashMap Text (Float, Float))
+      -- ^ knowledge name → (base, range), rolled at spawn into uiKnowledge.
+      --   Knowledge is like a skill but GATED on being "known": a unit only
+      --   trains a knowledge it possesses (acquired from a book/teacher, or
+      --   spawned-known via this template). Presence in uiKnowledge = known;
+      --   the float is the level. Effective capability = level × the
+      --   relevant stat (e.g. intelligence) at the point of use.
     , udStartingInventory ∷ ![(Text, Maybe Float, Int)]
       -- ^ ItemDef name + optional initial fill + drop priority.
       --   Materialised into `uiInventory` at spawn by looking each
@@ -353,6 +407,10 @@ data UnitInstance = UnitInstance
       --   each call directly nudges the level by an amount that
       --   shrinks quadratically with the current level. No XP
       --   accumulator is stored.
+    , uiKnowledge   ∷ !(HM.HashMap Text Float)
+      -- ^ KNOWN knowledge → level. Like uiSkills, but a key's PRESENCE
+      --   means the unit knows it (absent = unknown); rolled at spawn from
+      --   udKnowledgeTemplates, gained later from a source (book/teacher).
     , uiInventory   ∷ ![ItemInstance]
       -- ^ Item instances carried by the unit. Populated at spawn from
       --   the def's starting_inventory. Mutable: drinking decrements
@@ -378,8 +436,13 @@ data UnitInstance = UnitInstance
     , uiWounds      ∷ ![Wound]
       -- ^ Newest-first wound list. Mutated by Combat.Resolution on
       --   hits and by Combat.Wounds during the per-tick heal pass.
-      --   Wounds below severity 0.01 are auto-removed; vital wounds
-      --   ≥1.0 trigger instant death (set in Combat.Resolution).
+      --   Wounds whose EFFECTIVE severity falls below 0.01 are
+      --   auto-removed (healed); vital wounds inflicted ≥1.0 trigger
+      --   instant death (set in Combat.Resolution).
+    , uiScars       ∷ ![Scar]
+      -- ^ Permanent marks left by severe wounds that finished healing.
+      --   Appended by Combat.Wounds at the moment a qualifying wound is
+      --   removed. Descriptive only for now.
     , uiBlood       ∷ !Float
       -- ^ Current blood volume in litres. Spawn-time seeded to
       --   body_mass × 0.075 (≈7.5 % real-world ratio). Drained by

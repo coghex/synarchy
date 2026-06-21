@@ -1,0 +1,21 @@
+items:
+  # An ITEM-CONTAINER (kind: container). It holds a list of items in its
+  # iiContents — units draw supplies + tools from it and return reusable
+  # tools. The `contents:` block is the default loadout every fresh kit
+  # spawns holding. This is the same mechanism a toolbox will use.
+  - name: "first_aid_kit"
+    display_name: "First Aid Kit"
+    sprite: "assets/textures/items/first_aid_kit.png"
+    weight: 0.5           # empty case (contents not yet summed into weight)
+    kind: container
+    category: Medical
+    contents:
+      - { item: bandage,      count: 10 }
+      - { item: gauze,        count: 10 }
+      - { item: elastic_wrap, count: 5 }
+      - { item: antibiotics,  count: 1, fill: 60 }   # one bottle, 60 pills
+      - { item: antiseptic,   count: 1, fill: 1.0 }  # one bottle, 1 L
+      # Reusable tools (not in the user's starting-consumables list, but a
+      # working kit needs them — remove if you want consumables only):
+      - { item: tweezers,     count: 1 }
+      - { item: scissors,     count: 1 }

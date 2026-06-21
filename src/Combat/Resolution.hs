@@ -464,7 +464,8 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                 -- headline-kind wound on the macro-part (a graze).
                 mkWound (pid, k, s) = Wound
                     { woundPart = pid, woundKind = k
-                    , woundSeverity = s, woundAt = gt }
+                    , woundSeverity = s, woundAt = gt
+                    , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = "" }
                 wounds = if null dist
                          then [ mkWound (partId, headKind, severity) ]
                          else map mkWound dist
@@ -500,12 +501,22 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
             -- ...and any armour the blow struck takes wear too.
             applyArmorWear env logger im sm tgtRaw partId rawDmg wHard
 
-            -- Vital instant-death check. A hit kills outright when it
-            -- destroys a VITAL part or subpart (severity ≥ 1) — brain,
-            -- spine, heart, or (no-subpart body) a vital macro-part. The
-            -- distribution carries the subpart each wound landed in, so we
-            -- scan it for a lethal vital injury; the macro `severity`
-            -- scalar covers the no-subpart fallback.
+            -- Instant-death check, keyed PURELY off the struck part's
+            -- engine `bpVital` flag (severity ≥ 1 on a vital part = outright
+            -- kill). The distribution carries the subpart each wound landed
+            -- in, so we scan it for a lethal vital injury; the macro
+            -- `severity` scalar covers the no-subpart fallback.
+            --
+            -- DESIGN — NOT A BUG (don't "fix" by flagging brain/neck vital):
+            -- for the acolyte ONLY the `heart` is `vital: true`. Destroying
+            -- the brain, severing the neck, etc. is deliberately NOT an
+            -- instant kill — the unit SURVIVES the moment (the sci-fi
+            -- treatment-window conceit) and dies a few seconds later via the
+            -- delayed failure meters (neuro / shock / suffocation / organ in
+            -- unit_resources.lua) unless treated. Only a destroyed heart
+            -- stops the pump immediately. Other body plans (a robot, say)
+            -- may legitimately flag several parts vital — this rule is
+            -- data-driven precisely so they can, without code changes.
             let isVitalId pid = maybe False bpVital
                                   (HM.lookup pid (bodyPartIndex tdef))
                 lethalHit =

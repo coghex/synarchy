@@ -3,6 +3,7 @@ module Engine.Asset.YamlItems
     ( ItemYamlDef(..)
     , ItemYamlWeight(..)
     , ItemYamlContainer(..)
+    , ItemYamlContent(..)
     , ItemYamlFood(..)
     , ItemYamlRollSpec(..)
     , ItemYamlWeapon(..)
@@ -22,14 +23,31 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | Optional container block. Items without this can't hold a fluid.
 data ItemYamlContainer = ItemYamlContainer
-    { iycCapacity ∷ !Float
-    , iycHolds    ∷ !Text
+    { iycCapacity   ∷ !Float
+    , iycHolds      ∷ !Text
+    , iycFillWeight ∷ !Float   -- kg per fill unit (1.0 = litres/water)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlContainer where
     parseJSON = withObject "ItemYamlContainer" $ \v → ItemYamlContainer
         ⊚ v .:  "capacity"
         ⊛ v .:? "holds" .!= "water"
+        ⊛ v .:? "fill_weight" .!= 1.0
+
+-- | One entry in an item-container's default contents (first-aid kit /
+--   toolbox): which item, how many, and an optional fill for fillable
+--   contents (a pill bottle's count, a fluid bottle's litres).
+data ItemYamlContent = ItemYamlContent
+    { iycoItem  ∷ !Text
+    , iycoCount ∷ !Int
+    , iycoFill  ∷ !(Maybe Float)
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlContent where
+    parseJSON = withObject "ItemYamlContent" $ \v → ItemYamlContent
+        ⊚ v .:  "item"
+        ⊛ v .:? "count" .!= 1
+        ⊛ v .:? "fill"
 
 -- | Optional food block. Items without this can't be eaten.
 data ItemYamlFood = ItemYamlFood
@@ -138,6 +156,7 @@ data ItemYamlDef = ItemYamlDef
     , iydQuality     ∷ !(Maybe ItemYamlRollSpec)   -- ^ quality roll range
     , iydCondition   ∷ !(Maybe ItemYamlRollSpec)   -- ^ condition roll range
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
+    , iydContents    ∷ ![ItemYamlContent]            -- ^ item-container defaults
     , iydFood        ∷ !(Maybe ItemYamlFood)
     , iydWeapon      ∷ !(Maybe ItemYamlWeapon)
     , iydArmor       ∷ !(Maybe ItemYamlArmor)
@@ -158,6 +177,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "quality"
         ⊛ v .:? "condition"
         ⊛ v .:? "container"
+        ⊛ v .:? "contents"     .!= []
         ⊛ v .:? "food"
         ⊛ v .:? "weapon"
         ⊛ v .:? "armor"

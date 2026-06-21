@@ -59,6 +59,14 @@ units:
       # Acolytes arrive as novice excavators — wide spread.
       mining:  { base: 25.0, range: 30.0 }
 
+    # Knowledge the acolyte spawns KNOWING (gated training — a unit only
+    # advances a knowledge it possesses; others stay "Unknown" until learned
+    # from a book/teacher). Rolled like a skill. Effective capability at the
+    # point of use = level × the relevant stat (e.g. intelligence for the
+    # quality of a suture/bandage). Range 40 → wide spread, most in [30,70].
+    knowledge:
+      bleed_control: { base: 50.0, range: 40.0 }
+
     # 12-part humanoid body. Heights are metres above the foot,
     # calibrated for a 1.8m default body — taller spawns naturally
     # have parts higher on the ladder via uiStats["height"] but for
@@ -147,6 +155,13 @@ units:
           area_weight: 0.35, bleed_factor: 2.0,
           layers: [ { name: skin, material: flesh, thickness: 15 }, { name: muscle, material: flesh, thickness: 10 }, { name: pelvis, material: bone, thickness: 30 } ] }
       # organs (depth 0.5 — one per hit, behind the rib bone)
+      # DESIGN: heart-only vitality. ONLY the heart is `vital: true`. This is
+      # deliberate — destroying the brain / severing the neck / etc. does NOT
+      # instakill; the unit survives the moment (treatment-window conceit) and
+      # dies seconds later via the delayed failure meters (neuro/shock/
+      # suffocation/organ in unit_resources.lua) unless treated. Do not flag
+      # brain/spine/aorta vital. (Other creatures may have multiple vital
+      # parts in their own YAML — a robot, say.)
       - { id: heart, name: "heart", parent: torso, targetable: false, vital: true, depth: 0.50,
           area_weight: 0.06, bleed_factor: 4.0,
           layers: [ { name: skin, material: flesh, thickness: 25 }, { name: ribs, material: bone, thickness: 12 },

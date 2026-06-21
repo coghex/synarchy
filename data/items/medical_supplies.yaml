@@ -1,0 +1,70 @@
+items:
+  # Consumable dressings — used up applying treatment; the player must
+  # acquire more once the kit runs dry.
+  - name: "bandage"
+    display_name: "Bandage"
+    sprite: "assets/textures/items/bandage.png"
+    weight: 0.02
+    category: Medical
+  - name: "gauze"
+    display_name: "Gauze Pad"
+    sprite: "assets/textures/items/gauze.png"
+    weight: 0.015
+    category: Medical
+  - name: "elastic_wrap"
+    display_name: "Elastic Wrap"
+    sprite: "assets/textures/items/elastic_wrap.png"
+    weight: 0.06
+    category: Medical
+
+  # Bottles are FILLABLE containers: carried weight = empty bottle
+  # (weight) + fill × fill_weight. Antiseptic holds litres of fluid
+  # (fill_weight 1.0 = water density); antibiotics holds discrete pills
+  # (fill_weight = a 0.5 mg pill = 5.0e-7 kg). Both shed mass as they're
+  # drawn down, leaving just the empty bottle.
+  - name: "antiseptic"
+    display_name: "Antiseptic"
+    sprite: "assets/textures/items/antiseptic.png"
+    weight: 0.12          # empty bottle (full 1 L ≈ +1 kg of fluid)
+    category: Medical
+    container:
+      capacity: 1.0       # litres
+      holds: "antiseptic"
+      fill_weight: 1.0    # 1 L = 1 kg
+  - name: "antibiotics"
+    display_name: "Antibiotics"
+    sprite: "assets/textures/items/antibiotics.png"
+    weight: 0.022         # empty 22 g plastic bottle
+    category: Medical
+    container:
+      capacity: 60          # pills
+      holds: "antibiotics"
+      fill_weight: 0.0000005   # 0.5 mg per pill (60 pills ≈ 30 mg)
+
+  # Makeshift tourniquet — the no-supplies fallback. A medic with no
+  # bandages improvises one (torn cloth) to stop the bleed SOMEWHAT; it
+  # acts like a very poor bandage (high seep). Light; craftable/stockable
+  # later, but the treat fallback improvises it for free.
+  - name: "makeshift_tourniquet"
+    display_name: "Makeshift Tourniquet"
+    sprite: "assets/textures/items/tourniquet.png"
+    weight: 0.05
+    category: Medical
+
+  # Reusable tools — units draw and RETURN these; they wear (condition).
+  - name: "tweezers"
+    display_name: "Tweezers"
+    sprite: "assets/textures/items/tweezers.png"
+    weight: 0.02
+    category: Medical
+    condition:
+      min: 70
+      max: 100
+  - name: "scissors"
+    display_name: "Scissors"
+    sprite: "assets/textures/items/scissors.png"
+    weight: 0.06
+    category: Medical
+    condition:
+      min: 70
+      max: 100

@@ -32,7 +32,7 @@ humanoid = UnitDef
     , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
     , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
     , udStatTemplates = HM.empty, udBodyTemplates = HM.empty
-    , udSkillTemplates = HM.empty, udStartingInventory = []
+    , udSkillTemplates = HM.empty, udKnowledgeTemplates = HM.empty, udStartingInventory = []
     , udEquipmentClass = Nothing, udStartingEquipment = HM.empty
     , udStartingAccessories = []
     , udBodyParts =

@@ -21,6 +21,7 @@ local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
 local stats       = require("scripts.unit_stats")
 local injuries    = require("scripts.injuries")
+local knowledge   = require("scripts.knowledge")
 
 -- Singleton via package.loaded so ui_manager's click handlers (which
 -- look us up via require / package.loaded) get the same module table
@@ -161,7 +162,7 @@ local DIVIDER_COLOR     = { 0.7, 0.7, 0.7, 1.0 }   -- same grey as tooltip separ
 -- Sub-tabs (Status, Stats, Mental, …) inside the stats section.
 -- Styled to match scripts/ui/tabbar.lua (settings + create-world menus):
 -- 9-patch box, dark text on unselected, white text on selected.
-local SUB_TAB_LIST       = { "Status", "Physical", "Mental", "Skill" }
+local SUB_TAB_LIST       = { "Status", "Physical", "Mental", "Skill", "Knowledge" }
 local SUB_TAB_FONT_SIZE  = 14
 local SUB_TAB_TEXT_PAD   = 10   -- horizontal padding inside each sub-tab around the label
 local SUB_TAB_ROW_H      = 32   -- per-row height — matches settingsMenu.baseSizes.tabHeight
@@ -1528,12 +1529,51 @@ local function buildStatusPanel(rect, uid)
         if #effects > 0 then
             hint = hint .. "\n\nEffects:\n• " .. table.concat(effects, "\n• ")
         end
+        -- Dressing: a bandaged wound seeps only a fraction of its
+        -- natural bleed (0% = sealed). Report it so the player sees
+        -- how good the first-aid was.
+        if inj.bandaged then
+            local seepPct = math.floor((inj.seep or 0) * 100 + 0.5)
+            local quality = (seepPct <= 0) and "Bleeding stopped"
+                            or string.format("Bleeding cut to %d%%", seepPct)
+            local kind = (inj.dressing == "tourniquet")
+                         and "Makeshift tourniquet" or "Dressing"
+            hint = hint .. "\n\n" .. kind .. ": " .. quality
+        end
+        -- Clotting progress (0 = open, 1.0 = clotted shut). Skip for
+        -- kinds that don't externally bleed.
+        local clotKind = inj.kind ~= "concussion" and inj.kind ~= "fracture"
+        if clotKind then
+            local clotPct = math.floor((inj.clot or 0) * 100 + 0.5)
+            local clotLine = (clotPct >= 100) and "Clotted"
+                             or string.format("Clotting: %d%%", clotPct)
+            hint = hint .. "\nWound: " .. clotLine
+        end
         local tt = { text = disp, hint = hint }
         rows[#rows + 1] = {
             key          = g.icon,
             value        = function() return disp end,
             opts         = { fontSize = CONDITION_FONT_SIZE,
                              color = injuries.severityColor(inj.severity),
+                             align = "left", abbreviate = true },
+            tooltip      = tt,
+            valueTooltip = function() return tt end,
+        }
+    end
+
+    -- Scars: permanent marks from healed severe wounds. Dim grey,
+    -- below the active injuries, descriptive only.
+    for _, sc in ipairs(injuries.scarList(uid)) do
+        local loc = injuries.locationName(sc.part):gsub("^%l", string.upper)
+        local hint = "Location: " .. loc
+                     .. "\nA permanent scar from a healed "
+                     .. (sc.kind or "wound") .. "."
+        local tt = { text = sc.name, hint = hint }
+        rows[#rows + 1] = {
+            key          = sc.icon,
+            value        = function() return sc.name end,
+            opts         = { fontSize = CONDITION_FONT_SIZE,
+                             color = { 0.55, 0.55, 0.55, 1.0 },
                              align = "left", abbreviate = true },
             tooltip      = tt,
             valueTooltip = function() return tt end,
@@ -1653,11 +1693,59 @@ end
 -- resolves at function-definition time.)
 
 
+-- Knowledge panel: the catalogue of knowledge TYPES (scripts/knowledge.lua),
+-- KNOWN first then unknown. A known knowledge shows its icon + trained
+-- level (right-aligned, like a skill), with the effective value
+-- (level × intelligence) in the tooltip. A knowledge the unit hasn't learned
+-- shows the "unknown" icon + a dim "Unknown" — the player sees a slot exists
+-- but not what it is until it's learned (from a book/teacher).
+local function buildKnowledgePanel(rect, uid)
+    local known, unknown = {}, {}
+    for _, k in ipairs(knowledge.list()) do
+        local kk = k   -- capture for the closures
+        if unit.getKnowledge(uid, kk.id) ~= nil then
+            known[#known + 1] = {
+                key   = kk.icon,
+                value = function(u)
+                    local l = unit.getKnowledge(u, kk.id)
+                    return l and fmtNum(l) or "?"
+                end,
+                tooltip = function(u)
+                    local l   = unit.getKnowledge(u, kk.id) or 0
+                    local int = unit.getStat(u, "intelligence") or 1.0
+                    return { text = kk.name,
+                             hint = kk.desc
+                                 .. string.format(
+                                    "\n\nLevel %s × intelligence %.2f = effective %s.",
+                                    fmtNum(l), int, fmtNum(l * int)) }
+                end,
+            }
+        else
+            unknown[#unknown + 1] = {
+                key   = knowledge.UNKNOWN_ICON,
+                value = function() return "Unknown" end,
+                opts  = { fontSize = CONDITION_FONT_SIZE,
+                          color = CONTENT_DIM_COLOR, align = "left",
+                          abbreviate = true },
+                tooltip = { text = "Unknown",
+                            hint = "This unit hasn't learned this knowledge.\n"
+                                .. "It can be learned from a book or a teacher." },
+            }
+        end
+    end
+    -- Known capabilities lead; unlearned slots follow.
+    local rows = {}
+    for _, r in ipairs(known)   do rows[#rows + 1] = r end
+    for _, r in ipairs(unknown) do rows[#rows + 1] = r end
+    return buildIconStatPanel(rect, uid, rows)
+end
+
 local PANEL_BUILDERS = {
-    Status   = buildStatusPanel,
-    Physical = buildPhysicalPanel,
-    Mental   = buildMentalPanel,
-    Skill    = buildSkillPanel,
+    Status    = buildStatusPanel,
+    Physical  = buildPhysicalPanel,
+    Mental    = buildMentalPanel,
+    Skill     = buildSkillPanel,
+    Knowledge = buildKnowledgePanel,
 }
 
 -- Forward-declared above. Clears the current panel's elements and
@@ -1678,6 +1766,16 @@ local function panelShapeSig(panel, uid)
         for n, _ in pairs(all) do names[#names + 1] = n end
         table.sort(names)
         base = "skill:" .. table.concat(names, "|")
+    elseif panel == "Knowledge" then
+        -- The row SET changes only when a knowledge is learned/lost (a key
+        -- appears/disappears); trained levels are pushed in-place by the
+        -- refresh closure, so they don't force a rebuild.
+        local names = {}
+        for _, e in ipairs(unit.getKnowledgeList(uid) or {}) do
+            names[#names + 1] = e.name
+        end
+        table.sort(names)
+        base = "knowledge:" .. table.concat(names, "|")
     elseif panel == "Status" then
         -- The Status row SET changes when a condition appears/clears or
         -- an injury is gained/healed, so its signature tracks both (the
@@ -1689,9 +1787,14 @@ local function panelShapeSig(panel, uid)
             parts[#parts + 1] = "c:" .. c.name
         end
         for _, inj in ipairs(injuries.list(uid)) do
-            parts[#parts + 1] = string.format("i:%s:%s:%d",
+            parts[#parts + 1] = string.format("i:%s:%s:%d:%s",
                 inj.kind or "?", inj.part or "?",
-                math.floor((inj.severity or 0) * 10))
+                math.floor((inj.severity or 0) * 10),
+                inj.dressing or "")
+        end
+        -- Scars change the row set when one appears (a wound healed out).
+        for _, sc in ipairs(injuries.scarList(uid)) do
+            parts[#parts + 1] = "s:" .. (sc.kind or "?") .. ":" .. (sc.part or "?")
         end
         base = "status:" .. table.concat(parts, "|")
     else
@@ -2762,6 +2865,26 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
             end
             items[1] = { label = "Equip", submenu = sub }
         end
+    end
+
+    -- Contents: item-containers (first-aid kit / toolbox) open a
+    -- floating list of what they hold. Available whether carried or
+    -- equipped — you can inspect a kit without unslinging it.
+    if item.kind == "container" then
+        items[#items + 1] = {
+            label    = "Contents",
+            callback = function()
+                local icp = require("scripts.item_contents_panel")
+                local mx, my = engine.getMousePosition()
+                local fbW, fbH = engine.getFramebufferSize()
+                local ww, wh = engine.getWindowSize()
+                if ww and wh and ww > 0 and wh > 0 then
+                    mx = mx * (fbW / ww)
+                    my = my * (fbH / wh)
+                end
+                icp.openFor(uid, item.defName, mx, my)
+            end,
+        }
     end
 
     -- Storage: append "Store in <cargo>" entries for each adjacent

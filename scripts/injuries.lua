@@ -13,12 +13,18 @@
 
 local M = {}
 
--- Body parts that are fatal to destroy (summed severity >= 1.0 kills).
--- Mirrors the engine's bpVital flags for the shipped humanoid/quadruped
--- bodies; a part not listed here is a limb (never directly lethal).
+-- DESIGN — heart-only vitality (do NOT add brain/neck/spine here):
+-- instant death keys off the engine's per-part `bpVital` flag, which
+-- `unit.getWounds` ships as `w.vital`. For the acolyte ONLY the heart is
+-- vital — destroying the brain, severing the neck, etc. is SURVIVED for a
+-- few seconds (the treatment-window conceit) and then kills via the delayed
+-- failure meters (neuro/shock/suffocation/organ in unit_resources.lua),
+-- not instantly. This table is a heart-only FALLBACK for the rare caller
+-- whose wound carries no `w.vital` (the engine normally always sets it, so
+-- it's effectively belt-and-braces). Other body plans (a robot) may flag
+-- several parts vital — that lives in their YAML, not here.
 local VITAL_PARTS = {
-    head = true, neck = true, torso = true,
-    brain = true, skull = true, spine = true, chest = true,
+    heart = true,
 }
 
 -- Severity-tiered flavour names, keyed "kind|token". Each entry is a
@@ -258,22 +264,70 @@ function M.effects(kind, part, sev)
 end
 
 -- A panel-ready description list, worst-first:
---   { { name, icon, severity, label } , ... }
+--   { { name, icon, severity, label, kind, part, bandaged, seep } , ... }
+--
+-- `w.bandage` (from unit.getWounds) is the fraction of the wound's
+-- natural bleed that still seeps after a dressing — 1.0 untreated,
+-- < 1.0 bandaged, 0.0 fully sealed. A treated wound reads
+-- "Laceration (bandaged)" and its name carries the suffix, so a
+-- bandaged and an untreated wound of the same kind stay on separate
+-- rows in the Status panel.
 function M.list(uid)
     local ws = unit.getWounds(uid)
     if type(ws) ~= "table" then return {} end
     local out = {}
     for _, w in ipairs(ws) do
+        local base     = M.name(w.kind, w.part, w.severity)
+        local bandaged = (w.bandage or 1) < 1
+        -- Dressing label: a makeshift tourniquet reads distinctly from a
+        -- proper bandage (it's the crude no-supplies fallback).
+        local suffix = ""
+        if w.dressing == "tourniquet" then suffix = " (tourniquet)"
+        elseif bandaged then suffix = " (bandaged)" end
         out[#out + 1] = {
-            name     = M.name(w.kind, w.part, w.severity),
+            name     = base .. suffix,
             icon     = M.icon(w.kind, w.part),
             severity = w.severity or 0,
             label    = M.severityLabel(w.severity or 0),
             kind     = w.kind,
             part     = w.part,
+            bandaged = bandaged,
+            dressing = w.dressing or "",
+            seep     = w.bandage or 1,
+            clot     = w.clot or 0,
         }
     end
     table.sort(out, function(a, b) return a.severity > b.severity end)
+    return out
+end
+
+-- Scar display name by the wound kind that left it.
+local SCAR_NAMES = {
+    slash    = "Scar",
+    stab     = "Puncture scar",
+    blunt    = "Healed contusion",
+    fracture = "Healed fracture",
+    arterial = "Scar",
+    internal = "Healed trauma",
+    burn     = "Burn scar",
+}
+function M.scarName(kind) return SCAR_NAMES[kind] or "Scar" end
+
+-- Panel-ready list of a unit's permanent scars:
+--   { { name, icon, kind, part, severity } , ... }
+function M.scarList(uid)
+    local sc = unit.getScars(uid)
+    if type(sc) ~= "table" then return {} end
+    local out = {}
+    for _, s in ipairs(sc) do
+        out[#out + 1] = {
+            name     = M.scarName(s.kind),
+            icon     = "scar",   -- dedicated scar icon (assets/textures/icons/scar.png)
+            kind     = s.kind,
+            part     = s.part,
+            severity = s.severity or 0,
+        }
+    end
     return out
 end
 

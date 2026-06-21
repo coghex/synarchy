@@ -416,6 +416,17 @@ function hud.createUI()
         menuFont  = hud.menuFont,
     })
 
+    -- Item contents popup (unit-carried container) shares the same
+    -- page + assets as the cargo panel.
+    local itemContentsPanel = require("scripts.item_contents_panel")
+    itemContentsPanel.setup({
+        page      = hud.world_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+    })
+
     ---------------------------------------------------------
     -- Info panel on its own dedicated page.
     -- This page is shown/hidden independently so we can

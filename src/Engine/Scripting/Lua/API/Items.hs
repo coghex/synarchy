@@ -107,8 +107,9 @@ loadItemYamlFn env backendState = do
 
                     let container = fmap
                             (\c → ItemContainer
-                                { icCapacity = iycCapacity c
-                                , icHolds    = iycHolds c
+                                { icCapacity   = iycCapacity c
+                                , icHolds      = iycHolds c
+                                , icFillWeight = iycFillWeight c
                                 })
                             (iydContainer def)
                         food = fmap
@@ -155,6 +156,9 @@ loadItemYamlFn env backendState = do
                             , idConditionSpec = (\r → (iyrsMin r, iyrsMax r))
                                               <$> iydCondition def
                             , idContainer   = container
+                            , idDefaultContents =
+                                [ (iycoItem c, iycoCount c, iycoFill c)
+                                | c ← iydContents def ]
                             , idFood        = food
                             , idWeapon      = weapon
                             , idArmor       = armor
@@ -259,6 +263,7 @@ itemSpawnGroundFn env = do
                             , iiCondition = condition
                             , iiWeight = wght
                             , iiSharpness = 100.0
+                            , iiContents = []
                             }
                     gid ← Lua.liftIO $
                         atomicModifyIORef' (wsGroundItemsRef ws) $

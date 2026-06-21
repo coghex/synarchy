@@ -20,7 +20,7 @@ def = UnitDef
     , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
     , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
     , udStatTemplates = HM.empty, udBodyTemplates = HM.empty
-    , udSkillTemplates = HM.empty, udStartingInventory = []
+    , udSkillTemplates = HM.empty, udKnowledgeTemplates = HM.empty, udStartingInventory = []
     , udEquipmentClass = Nothing, udStartingEquipment = HM.empty
     , udStartingAccessories = []
     , udBodyParts =
@@ -44,16 +44,17 @@ inst ws = UnitInstance
     , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0, uiRealZ = 0
     , uiFacing = DirS, uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
-    , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
+    , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty, uiKnowledge = HM.empty
     , uiInventory = [], uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = "t", uiWounds = ws, uiBlood = 5
+    , uiFactionId = "t", uiWounds = ws, uiScars = [], uiBlood = 5
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing }
 
 wound ∷ Text → Text → Float → Wound
 wound part kind sev = Wound { woundPart = part, woundKind = kind
-                            , woundSeverity = sev, woundAt = 0 }
+                            , woundSeverity = sev, woundAt = 0
+                            , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = "" }
 
 severedParts ∷ UnitInstance → [Text]
 severedParts i = [ woundPart w | w ← uiWounds i, woundKind w ≡ "severed" ]

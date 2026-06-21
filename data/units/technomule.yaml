@@ -57,6 +57,10 @@ units:
       - { item: "steel_hardware",  count: 25 }
       - { item: "electric_motor",  count: 5 }
       - { item: "processing_unit", count: 5 }
+      # The mule is the mobile medical depot — it carries the first-aid kit
+      # (which spawns pre-stocked, see first_aid_kit.yaml). Injured units
+      # path to it for treatment.
+      - { item: "first_aid_kit",   count: 1 }
 
     # 8-part quadruped anchored to ~1.5 m shoulder height
     # (canine layout, scaled up).

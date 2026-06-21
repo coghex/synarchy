@@ -206,7 +206,12 @@ instance FromJSON UnitYamlBodyPart where
         -- tissue layers; any leftover key in YAML is ignored.)
         ⊛ v .:? "bleed_factor"        .!= 1.0
         ⊛ v .:? "height_low"          .!= 0.0
-        ⊛ v .:? "height_high"         .!= 0.0
+        -- Default reach band = ground to "tall" (9 m). A part that omits
+        -- heights must stay REACHABLE: Combat.Resolution drops targetable
+        -- parts whose height_high < reachLo, so a 0.0 default would silently
+        -- make an unspecified part un-hittable. Authoring real heights still
+        -- narrows the band; this is just a safe, always-reachable fallback.
+        ⊛ v .:? "height_high"         .!= 9.0
         ⊛ v .:? "layers"              .!= []
         ⊛ v .:? "targetable"          .!= True
         ⊛ v .:? "depth"               .!= 0.0
@@ -319,6 +324,9 @@ data UnitYamlDef = UnitYamlDef
     , uydSkills            ∷ !(Map.Map Text UnitYamlSkill)
       -- ^ optional: per-skill base/range/xp_per_level schema.
       --   Skills are always eager-rolled at spawn (no lazy mode).
+    , uydKnowledge         ∷ !(Map.Map Text UnitYamlSkill)
+      -- ^ optional: knowledge the unit spawns KNOWING, base/range like a
+      --   skill (reuses UnitYamlSkill). Rolled into uiKnowledge at spawn.
     , uydStartingInventory ∷ ![UnitYamlInventoryEntry]
       -- ^ optional: items every freshly spawned unit of this type
       --   starts with. Looked up against the ItemManager at spawn time;
@@ -367,6 +375,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "stats"               .!= Map.empty
         ⊛ v .:? "body"                .!= defaultUnitYamlBody
         ⊛ v .:? "skills"              .!= Map.empty
+        ⊛ v .:? "knowledge"           .!= Map.empty
         ⊛ v .:? "starting_inventory"  .!= []
         ⊛ v .:? "equipment_class"
         ⊛ v .:? "starting_equipment"  .!= Map.empty

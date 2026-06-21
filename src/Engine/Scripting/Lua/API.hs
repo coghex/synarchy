@@ -290,6 +290,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setStat"     (unitSetStatFn env)
   registerLuaFunction "getAllStats" (unitGetAllStatsFn env)
   registerLuaFunction "getInventory" (unitGetInventoryFn env)
+  registerLuaFunction "getItemContents" (unitGetItemContentsFn env)
+  registerLuaFunction "treatBleeding" (unitTreatBleedingFn env)
+  registerLuaFunction "injure"       (unitInjureFn env)
   registerLuaFunction "drink"        (unitDrinkFn env)
   registerLuaFunction "eat"          (unitEatFn env)
   registerLuaFunction "pickup"       (unitPickupFn env)
@@ -314,6 +317,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getWoundSeverityOn"
                                           (unitGetWoundSeverityOnFn env)
   registerLuaFunction "getWounds"    (unitGetWoundsFn env)
+  registerLuaFunction "getScars"     (unitGetScarsFn env)
   registerLuaFunction "dropEquipmentToGround" (unitDropEquipmentToGroundFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)
@@ -333,6 +337,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- NB: skill functions follow; the building global is set up after
   -- this `unit` table is finalized below.
   registerLuaFunction "setSkill"     (unitSetSkillFn env)
+  registerLuaFunction "getKnowledge"     (unitGetKnowledgeFn env)
+  registerLuaFunction "setKnowledge"     (unitSetKnowledgeFn env)
+  registerLuaFunction "getKnowledgeList" (unitGetKnowledgeListFn env)
   registerLuaFunction "addXP"        (unitAddXPFn env)
   registerLuaFunction "getAllSkills" (unitGetAllSkillsFn env)
 

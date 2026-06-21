@@ -49,7 +49,8 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Asset.Handle (TextureHandle(..))
-import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..), lookupItemDef)
+import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..), lookupItemDef
+                  , itemTotalWeight)
 import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
 import Building.Placement (canPlaceAt, PlacementResult(..))
 import Building.HitTest (hitTestBuildingAt)
@@ -675,10 +676,7 @@ buildingGetStorageWeightFn env = do
                 itemMgr ← readIORef (itemManagerRef env)
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
-                    pure $ sum
-                        [ iiWeight it + iiCurrentFill it
-                        | it ← biStorage inst
-                        ]
+                    pure $ sum (map (itemTotalWeight itemMgr) (biStorage inst))
             case mW of
                 Just w → do
                     Lua.pushnumber (Lua.Number (realToFrac w))

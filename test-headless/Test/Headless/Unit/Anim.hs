@@ -24,7 +24,7 @@ mkDef stateAnims = UnitDef
     , udEagerStats    = False
     , udStatTemplates = HM.empty
     , udBodyTemplates = HM.empty
-    , udSkillTemplates = HM.empty
+    , udSkillTemplates = HM.empty, udKnowledgeTemplates = HM.empty
     , udStartingInventory = []
     , udEquipmentClass = Nothing
     , udStartingEquipment = HM.empty

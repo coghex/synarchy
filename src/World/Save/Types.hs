@@ -30,7 +30,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
-                  , StatModifier(..), Wound(..))
+                  , StatModifier(..), Wound(..), Scar(..))
 import Unit.Direction (Direction(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Item.Types (ItemInstance(..))
@@ -105,7 +105,7 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 40  -- v40: UnitSimState gains usGetUpAt + usPendingFallDrop (fall knockdown + injuries)
+currentSaveVersion = 46  -- v46: Wound gains woundDressing (bandage vs makeshift tourniquet)
                          -- (per-instance edge keenness, split from
                          -- iiCondition for weapon degradation).
                          -- (v37: WorldGenParams gains trailing
@@ -332,6 +332,7 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
     , uisStats       ∷ !(HM.HashMap Text Float)
     , uisModifiers   ∷ !(HM.HashMap Text [StatModifier])
     , uisSkills      ∷ !(HM.HashMap Text Float)
+    , uisKnowledge   ∷ !(HM.HashMap Text Float)
     , uisInventory   ∷ ![ItemInstance]
     , uisEquipped    ∷ !(HM.HashMap Text ItemInstance)
       -- ^ v8: slot id → equipped item. Empty map is legal (no gear).
@@ -348,6 +349,8 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       -- ^ v16: per-unit wound list. Roundtrips faithfully. Generic
       --   Serialize over the Wound record below; fields are
       --   positional, so appending a field to Wound also bumps v.
+    , uisScars       ∷ ![Scar]
+      -- ^ v45: permanent scar records left by healed severe wounds.
     , uisBlood       ∷ !Float
       -- ^ v16: current blood volume in litres. Spawn-time seeded
       --   from body_mass; ticked down by Combat.Wounds bleeding.
@@ -376,11 +379,13 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisStats       = uiStats ui
     , uisModifiers   = uiModifiers ui
     , uisSkills      = uiSkills ui
+    , uisKnowledge   = uiKnowledge ui
     , uisInventory   = uiInventory ui
     , uisEquipped    = uiEquipment ui
     , uisAccessories = uiAccessories ui
     , uisFactionId   = uiFactionId ui
     , uisWounds      = uiWounds ui
+    , uisScars       = uiScars ui
     , uisBlood       = uiBlood ui
     }
 
@@ -431,11 +436,13 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiStats       = uisStats s
     , uiModifiers   = uisModifiers s
     , uiSkills      = uisSkills s
+    , uiKnowledge   = uisKnowledge s
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s
     , uiFactionId   = uisFactionId s
     , uiWounds      = uisWounds s
+    , uiScars       = uisScars s
     , uiBlood       = uisBlood s
     -- Runtime-only combat memory — reset on load. A bear that was
     -- in the middle of a fight gets a clean slate on reload; the

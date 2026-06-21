@@ -7,6 +7,7 @@ module Item.Types
     , ItemArmor(..)
     , ItemBuff(..)
     , ItemInstance(..)
+    , itemTotalWeight
     , ItemManager(..)
     , emptyItemManager
     , lookupItemDef
@@ -22,8 +23,17 @@ import Engine.Asset.Handle (TextureHandle(..))
 --   (water, future: lava/beer/etc). Non-containers (a hammer, food)
 --   have Nothing.
 data ItemContainer = ItemContainer
-    { icCapacity ∷ !Float   -- ^ max volume (litres for water-class)
-    , icHolds    ∷ !Text    -- ^ what fluid it holds: "water" / etc.
+    { icCapacity   ∷ !Float   -- ^ max volume: litres for fluids, COUNT for
+                              --   discrete contents (e.g. 60 pills).
+    , icHolds      ∷ !Text    -- ^ what it holds: "water" / "antiseptic" /
+                              --   "antibiotics" / etc.
+    , icFillWeight ∷ !Float   -- ^ kilograms per fill unit. 1.0 for fluids
+                              --   (1 L = 1 kg, the default); tiny for
+                              --   discrete solids (a 0.5 mg pill =
+                              --   5.0e-7). Carried weight counts
+                              --   iiCurrentFill × this, so a bottle sheds
+                              --   mass as each unit is drawn out and the
+                              --   empty case (iiWeight) is what remains.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A single stat-modifier conferred by wearing/holding this item.
@@ -140,6 +150,12 @@ data ItemDef = ItemDef
       --   distribution shape as quality. Condition degrades with use;
       --   quality is fixed for the item's lifetime.
     , idContainer   ∷ !(Maybe ItemContainer)
+    , idDefaultContents ∷ ![(Text, Int, Maybe Float)]
+      -- ^ For ITEM-containers (a first-aid kit, a toolbox): the contents a
+      --   fresh instance spawns holding — (item def name, count, optional
+      --   fill for fillable contents like a pill/fluid bottle). Each entry
+      --   is materialised into `iiContents` (rolled like any item) at
+      --   creation. Empty for everything that doesn't hold items.
     , idFood        ∷ !(Maybe ItemFood)
     , idWeapon      ∷ !(Maybe ItemWeapon)
     , idArmor       ∷ !(Maybe ItemArmor)
@@ -184,7 +200,35 @@ data ItemInstance = ItemInstance
                                 --   structural fractures, gates breakage,
                                 --   and is restored at a furnace. Both
                                 --   drop with use. Appended for save v(+1).
+    , iiContents    ∷ ![ItemInstance]
+                                -- ^ For ITEM-containers (first-aid kit /
+                                --   toolbox): the items it holds. Units draw
+                                --   tools + supplies from here and return
+                                --   reusable tools. Empty for ordinary
+                                --   items. Recursive (a kit could hold a
+                                --   kit); serialised via the same instance.
+                                --   Appended for save v42.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | Total carried mass of an item (kg), INCLUDING its container
+--   contents, computed recursively. Empty weight (iiWeight) + the mass
+--   of its fill (iiCurrentFill × the container's per-unit fill weight)
+--   + the full weight of everything nested inside it. So a stocked
+--   first-aid kit weighs its bandages, bottles, and tools — not just
+--   its empty case — and a pill bottle sheds mass as pills are drawn.
+--
+--   Fill weight is looked up per item from its container def
+--   (icFillWeight): 1 kg/L for fluids, ~5e-7 kg for a 0.5 mg pill. A
+--   non-container (fill 0) contributes nothing from fill regardless.
+itemTotalWeight ∷ ItemManager → ItemInstance → Float
+itemTotalWeight im it =
+    iiWeight it
+      + iiCurrentFill it * fillUnitWeight
+      + sum (map (itemTotalWeight im) (iiContents it))
+  where
+    fillUnitWeight = case idContainer =<< lookupItemDef (iiDefName it) im of
+        Just c  → icFillWeight c
+        Nothing → 1.0   -- no container def in scope → assume litres (1 kg/L)
 
 -- | Engine-wide registry of all loaded item defs.
 newtype ItemManager = ItemManager

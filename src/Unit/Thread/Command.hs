@@ -27,7 +27,8 @@ import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         EquipmentClassManager, lookupEquipmentClass)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
-                  , ItemBuff(..), ItemManager(..), lookupItemDef)
+                  , ItemBuff(..), ItemManager(..), lookupItemDef
+                  , itemTotalWeight)
 import Engine.Core.Log (LoggerState)
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
@@ -87,6 +88,15 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                         (HM.empty, g0)
                         (udSkillTemplates def)
                 in (g', rolled)
+            -- Knowledge the unit spawns KNOWING, rolled like skills.
+            initialKnowledge ← atomicModifyIORef' (statRNGRef env) $ \g0 →
+                let (rolled, g') = HM.foldlWithKey'
+                        (\(acc, g) name (b, r) →
+                            let (v, g'') = rollStat b r g
+                            in (HM.insert name v acc, g''))
+                        (HM.empty, g0)
+                        (udKnowledgeTemplates def)
+                in (g', rolled)
             -- Starting inventory: look each entry up in the ItemManager
             -- and build an ItemInstance. Unknown names are dropped
             -- with a warning (load-order issue: items loaded after
@@ -108,9 +118,9 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
             -- kit always arrive; inventory entries with a drop
             -- priority shed (highest first — pick before shovel)
             -- until the loadout fits the rolled carrying_capacity.
-            -- Weights mirror getCarryingWeight: instance weight +
-            -- fill (1 L = 1 kg), worn gear at full mass.
-            let itemW it = iiWeight it + iiCurrentFill it
+            -- Weights mirror getCarryingWeight: instance weight + fill
+            -- (1 L = 1 kg) + container contents, worn gear at full mass.
+            let itemW = itemTotalWeight itemMgr
                 fixedW = sum (map itemW (HM.elems initialEquipment))
                        + sum (map itemW initialAccessories)
             initialInventory ← case HM.lookup "carrying_capacity"
@@ -144,11 +154,13 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                                              (defModifierMap def)
                                              initialAccessories
                     , uiSkills      = initialSkills
+                    , uiKnowledge   = initialKnowledge
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
                     , uiAccessories = initialAccessories
                     , uiFactionId   = factionId
                     , uiWounds      = []
+                    , uiScars       = []
                     , uiBlood       = bloodSeedFromStats initialStats
                     , uiLastAttackerUid = Nothing
                     , uiLastAttackerAt  = 0
@@ -317,7 +329,11 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
                 | usPose ss ≢ Standing ∧ usPose ss ≢ Crawling → (uts, ())
                 | isTransitioning (usState ss) → (uts, ())
                 | otherwise →
-                    let activity = if isRunning then Running else Walking
+                    -- A crawling unit is always Walking-gait (there's no
+                    -- crawling-run anim, and the mover caps its speed); only
+                    -- a standing unit can break into a Running activity.
+                    let activity = if isRunning ∧ usPose ss ≡ Standing
+                                   then Running else Walking
                         ss' = ss { usTarget    = Just (MoveTarget tx ty effSpeed)
                                  , usState     = activity
                                  , usLocalPath = []
@@ -805,32 +821,49 @@ buildStartingInventory env logger itemMgr entries = do
     mInsts ← mapM resolve entries
     return [i | Just i ← mInsts]
   where
-    resolve (name, mFill, prio) =
-        case lookupItemDef name itemMgr of
+    resolve (name, mFill, prio) = do
+        mi ← rollInstance env itemMgr name mFill
+        case mi of
             Nothing → do
                 logWarn logger CatThread $
                     "Unit starting_inventory: unknown item '" <> name
                       <> "' — skipping"
                 return Nothing
-            Just def → do
-                let fill = case (mFill, idContainer def) of
-                        (Just f,  Just c) → max 0 (min f (icCapacity c))
-                        (Nothing, _     ) → 0
-                        (Just _,  Nothing) → 0
-                qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
-                cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
-                wght ← rollItemWeight def (statRNGRef env)
-                return $ Just
-                    ( ItemInstance
-                        { iiDefName     = name
-                        , iiCurrentFill = fill
-                        , iiQuality     = qual
-                        , iiCondition   = cond
-                        , iiWeight      = wght
-                        , iiSharpness   = 100.0
-                        }
-                    , prio
-                    )
+            Just inst → return (Just (inst, prio))
+
+-- | Build one rolled ItemInstance from a def name (quality / condition /
+--   weight rolled from the def's specs, fill clamped to capacity), and
+--   RECURSIVELY materialise its default contents — so a first-aid kit /
+--   toolbox spawns already holding its bandages, tools, etc. Returns
+--   Nothing for an unknown item name.
+rollInstance ∷ EngineEnv → ItemManager → Text → Maybe Float
+             → IO (Maybe ItemInstance)
+rollInstance env itemMgr name mFill =
+    case lookupItemDef name itemMgr of
+        Nothing → return Nothing
+        Just def → do
+            let fill = case (mFill, idContainer def) of
+                    (Just f, Just c) → max 0 (min f (icCapacity c))
+                    _                → 0
+            qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
+            cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
+            wght ← rollItemWeight def (statRNGRef env)
+            -- Expand each (name, count, fill) content entry into `count`
+            -- rolled instances, then drop unknown names.
+            let reqs = [ (cName, cFill)
+                       | (cName, cCount, cFill) ← idDefaultContents def
+                       , _ ← [1 .. max 0 cCount] ]
+            contentMaybes ← mapM (\(cn, cf) → rollInstance env itemMgr cn cf) reqs
+            let contents = [ c | Just c ← contentMaybes ]
+            return $ Just ItemInstance
+                { iiDefName     = name
+                , iiCurrentFill = fill
+                , iiQuality     = qual
+                , iiCondition   = cond
+                , iiWeight      = wght
+                , iiSharpness   = 100.0
+                , iiContents    = contents
+                }
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
 --   map, validating each item's `idKind` against the slot's accepted
@@ -898,6 +931,7 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           , iiCondition   = cond
                                           , iiWeight      = wght
                                           , iiSharpness   = 100.0
+                                          , iiContents    = []
                                           }
                                         m
                 ) (return HM.empty) entries
@@ -969,6 +1003,7 @@ buildStartingAccessories env logger itemMgr names = do
                 , iiCondition   = cond
                 , iiWeight      = wght
                 , iiSharpness   = 100.0
+                , iiContents    = []
                 }
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
