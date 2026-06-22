@@ -29,6 +29,21 @@ package.loaded["scripts.unit_ai"] = unitAi
 -- Shared comfort/ordered/sprint speed model (see movement_speed.lua).
 local mv = require("scripts.movement_speed")
 
+-- Report a FAILED job/task to the player as a red unit_warning in the
+-- event log (and the unit's per-unit Log). The engine coalesces
+-- identical (category+text+uid) emits into one "…(xN)" line, so a unit
+-- that keeps re-failing won't flood the log — no per-site rate-limiting
+-- needed. Keep `msg` STABLE (no counts/changing numbers) so repeats
+-- actually coalesce. `uid` is the unit the failure is ABOUT.
+local function reportFailure(uid, msg)
+    local info = unit.getInfo(uid)
+    if info and info.gridX then
+        engine.emitEventForUnit("unit_warning", msg, uid, info.gridX, info.gridY)
+    else
+        engine.emitEventForUnit("unit_warning", msg, uid)
+    end
+end
+
 -----------------------------------------------------------
 -- Tunables per unit def
 -----------------------------------------------------------
@@ -2673,9 +2688,15 @@ end
 local function pickupUtility(uid, s, params)
     local order = s.pickupOrder
     if not order then return -math.huge end
-    if engine.gameTime() - order.issuedAt > (params.pickup_timeout or 30)
-       or not pickupGroundEntry(order.gid) then
-        -- Expired, or someone else took it.
+    if not pickupGroundEntry(order.gid) then
+        -- Item gone (someone else took it / already collected) — normal,
+        -- not a failure.
+        s.pickupOrder = nil
+        return -math.huge
+    end
+    if engine.gameTime() - order.issuedAt > (params.pickup_timeout or 30) then
+        -- Timed out trying to reach a still-present item: a real failure.
+        reportFailure(uid, "Couldn't reach item to pick up")
         s.pickupOrder = nil
         return -math.huge
     end
@@ -3011,6 +3032,9 @@ local function treatExecute(uid, s, params)
     unit.stop(uid)
     local res = unit.treatBleeding(uid, patient)
     if res and not res.ok then
+        -- Surface the failed treatment (red, coalesced per patient).
+        reportFailure(patient, "Treatment failed: "
+            .. (res.message or "unknown"))
         s.treatClaim = nil
     end
 end
@@ -3234,6 +3258,7 @@ local function tickOne(uid, defName)
                     engine.logDebug("unitAi: stuck-walk watchdog stopped unit "
                         .. tostring(uid))
                     unit.stop(uid)
+                    reportFailure(uid, "Stuck — can't reach destination")
                     s.lastProgressAt = engine.gameTime()
                 end
             else

@@ -492,10 +492,17 @@ renderRows = function()
               truncateToWidth(lookup.displayName, eventLog.font,
                               L.s.fontSize, L.catColW),
               catX, lookup.color)
+        -- Coalesced repeats show "(xN)"; the message takes the category
+        -- colour so failures (red unit_warning) stand out, not just the
+        -- category label.
+        local msg = ev.text or ""
+        if (ev.count or 1) > 1 then
+            msg = msg .. " (x" .. ev.count .. ")"
+        end
         place("evlog_text_" .. tostring(idx),
-              truncateToWidth(ev.text or "", eventLog.font,
+              truncateToWidth(msg, eventLog.font,
                               L.s.fontSize, textColW),
-              textX, {1.0, 1.0, 1.0, 1.0})
+              textX, lookup.color)
 
         table.insert(eventLog.rowEntries, {
             rowLabels      = rowLabels,

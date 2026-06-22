@@ -90,6 +90,7 @@ emitEventFull env category source eventText mCoords mUid = do
                     , peButtons  = ccButtons cfg
                     , peCoords   = mCoords
                     , peUid      = mUid
+                    , peCount    = 1
                     }
             when (ccLog cfg) $
                 atomically $ pushBounded (eventStoreRef env) ev
@@ -105,13 +106,25 @@ emitEventFull env category source eventText mCoords mUid = do
             when (ccPause cfg) $
                 writeIORef (enginePausedRef env) True
 
--- | Append an event to a bounded ring buffer. Oldest entries are
---   dropped when the buffer would exceed 'eventStoreCap'.
+-- | Append an event to a bounded ring buffer, COALESCING identical
+--   repeats (Dwarf-Fortress style). If an existing entry has the same
+--   category + text + uid, we bump its count and timestamp and move it
+--   to the tail (most-recent) instead of appending a duplicate — so a
+--   stuck unit that re-fails every tick stays one "…(xN)" line. Oldest
+--   entries are dropped when the buffer exceeds 'eventStoreCap'.
 pushBounded ∷ TVar (Seq PlayerEvent) → PlayerEvent → STM ()
 pushBounded ref ev = modifyTVar' ref $ \s →
-    let s' = s |> ev
-        excess = Seq.length s' - eventStoreCap
-    in if excess > 0 then Seq.drop excess s' else s'
+    let coalesced = case Seq.findIndexR (sameEntry ev) s of
+            Just i  →
+                let old = Seq.index s i
+                in Seq.deleteAt i s |> ev { peCount = peCount old + 1 }
+            Nothing → s |> ev
+        excess = Seq.length coalesced - eventStoreCap
+    in if excess > 0 then Seq.drop excess coalesced else coalesced
+  where
+    sameEntry a b = peCategory a == peCategory b
+                  ∧ peText a == peText b
+                  ∧ peUid a == peUid b
 
 -- | Snapshot of the event log. Returns events oldest-first; the Lua
 --   side reverses if it wants newest-on-top.

@@ -112,6 +112,9 @@ getEventLogFn env = do
             Just u  → Lua.pushinteger (fromIntegral u)
             Nothing → Lua.pushnil
         Lua.setfield (-2) "uid"
+        -- Coalesced-repeat count (1 unless identical emits merged).
+        Lua.pushinteger (fromIntegral (peCount ev))
+        Lua.setfield (-2) "count"
 
         -- buttons array (same shape as getNotificationCfg's buttons
         -- field) — needed for the event-log panel's row click to

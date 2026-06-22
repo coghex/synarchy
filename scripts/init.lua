@@ -473,7 +473,7 @@ function game.onMouseDown(button, x, y)
                                 local res = unit.treatBleeding(
                                     medic, targetUid, kitOwner)
                                 if res then
-                                    local msg
+                                    local msg, cat
                                     if res.ok then
                                         local pct = math.floor(
                                             (res.seep or 0) * 100 + 0.5)
@@ -486,11 +486,14 @@ function game.onMouseDown(button, x, y)
                                                 " (%d bandages used)",
                                                 res.bandagesUsed)
                                         end
+                                        cat = "unit_event"
                                     else
                                         msg = "Treatment failed: "
                                               .. (res.message or "")
+                                        cat = "unit_warning"   -- red; a failed job
                                     end
-                                    engine.emitEvent("unit_event", msg)
+                                    -- Tag the patient so it shows in their Log.
+                                    engine.emitEventForUnit(cat, msg, targetUid)
                                 end
                             end,
                         })

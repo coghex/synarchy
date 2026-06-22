@@ -141,17 +141,35 @@ local function displayName(uid)
     return "unit_" .. tostring(uid)
 end
 
+-- Per-category text colour (so a red unit_warning reads red here too,
+-- not the generic event tint). Built fresh from the notification cfg.
+local function categoryColors()
+    local m = {}
+    for _, c in ipairs(engine.getNotificationCfg() or {}) do
+        local tc = c.textColor
+        if c.id and tc then
+            m[c.id] = { tc.r or 1.0, tc.g or 1.0, tc.b or 1.0, tc.a or 1.0 }
+        end
+    end
+    return m
+end
+
 -- Event-log entries about this unit (tagged via emitEventForUnit).
 local function eventEntries(uid)
     local out = {}
+    local colors = categoryColors()
     local log = engine.getEventLog() or {}
     for _, ev in ipairs(log) do
         if ev.uid == uid then
+            local txt = ev.text or ""
+            if (ev.count or 1) > 1 then
+                txt = txt .. " (x" .. ev.count .. ")"
+            end
             out[#out + 1] = {
                 ts    = ev.gameTime or 0,
                 text  = string.format("[%s] %s",
-                    formatGameTimeHMS(ev.gameTime or 0), ev.text or ""),
-                color = COLOR_EVENT,
+                    formatGameTimeHMS(ev.gameTime or 0), txt),
+                color = colors[ev.category] or COLOR_EVENT,
             }
         end
     end
@@ -565,9 +583,11 @@ end
 
 -- Re-render while visible so new entries appear live. (No stream of its
 -- own to drain — it reads the sibling logs' stores + the event log.)
+-- Do NOT force justifyBottom here: that snaps the view to the foot every
+-- tick and fights the user scrolling up. renderContent preserves the
+-- current scroll offset; justify only happens on open / tab switch.
 function unitLog.update(dt)
     if unitLog.visible and unitLog.uiCreated then
-        unitLog.justifyBottom = true
         renderContent()
     end
 end

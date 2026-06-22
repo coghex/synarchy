@@ -44,6 +44,17 @@ data PlayerEvent = PlayerEvent
                                   --   Lets the per-unit log panel filter
                                   --   event-log entries to one unit.
                                   --   'Nothing' for world/global events.
+    , peCount    ∷ !Int
+                                  -- ^ How many identical emits (same
+                                  --   category + text + uid) have
+                                  --   coalesced into this entry. Starts
+                                  --   at 1; the log shows "msg (xN)" for
+                                  --   N>1. 'peGameTime' tracks the MOST
+                                  --   RECENT of the coalesced emits, so a
+                                  --   repeating failure (a stuck unit)
+                                  --   stays one log line that bumps its
+                                  --   count + timestamp instead of
+                                  --   flooding the log.
     } deriving (Show, Eq, Generic)
 -- No Serialize derivation: events are per-session and never saved.
 

@@ -91,6 +91,30 @@ categories:
       - { label: "Go To", action: "go_to" }
       - { label: "OK",    action: "dismiss" }
 
+  - id: unit_event
+    display_name: Unit Event
+    description: Low-priority per-unit happenings — dropped items, minor incidents.
+    text_color: [0.8, 0.85, 1.0, 1.0]
+    # Logged but never pops up: ambient flavour the player can browse in
+    # the event log (or a unit's Log tab), not alerts that interrupt.
+    default_settings: { log: true,  popup: false, pause: false }
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
+  - id: unit_warning
+    display_name: Unit Warning
+    description: A unit FAILED a task or job — treatment failed, can't reach
+      a target, out of materials. The player should notice and intervene.
+    # Red, so failures stand out when scanning the event log.
+    text_color: [1.0, 0.35, 0.35, 1.0]
+    # Logged + red (not a popup by default — the player checks the log;
+    # flip popup to true here if you want failures to interrupt).
+    default_settings: { log: true,  popup: false, pause: false }
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
   - id: debug
     display_name: Debug
     description: Development events surfaced to the in-game log.
