@@ -17,6 +17,8 @@ local buildingInfoPanelScriptId = nil
 local popupScriptId = nil
 local eventLogScriptId = nil
 local combatLogScriptId = nil
+local injuryLogScriptId = nil
+local unitLogScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -129,6 +131,18 @@ function game.init(scriptId)
     -- combat events sub-second latency in the log without burning
     -- CPU.
     combatLogScriptId = engine.loadScript("scripts/combat_log.lua", 0.1)
+
+    -- Injury log panel: sibling to combat_log, third HUD log mode.
+    -- update() drains injury.drainEvents every tick (falls / hazards /
+    -- wound-caused deaths), groups by injured unit, renders rows. MUST
+    -- run even when hidden so the engine injury stream is drained and
+    -- doesn't grow unbounded.
+    injuryLogScriptId = engine.loadScript("scripts/injury_log_panel.lua", 0.1)
+
+    -- Per-unit log panel: opened from the unit-info "Log" button. It owns
+    -- no stream (reads the other logs' stores); the tick just re-renders
+    -- it live while it's open. 0.3s is plenty for a passive viewer.
+    unitLogScriptId = engine.loadScript("scripts/unit_log.lua", 0.3)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -676,6 +690,16 @@ function game.onKeyDown(key)
             combatLog.hide()
             return
         end
+        local injuryLog = require("scripts.injury_log_panel")
+        if injuryLog.isVisible() then
+            injuryLog.hide()
+            return
+        end
+        local unitLog = require("scripts.unit_log")
+        if unitLog.isVisible() then
+            unitLog.hide()
+            return
+        end
         -- (fall through to the existing unit-deselect path below)
     end
 
@@ -780,6 +804,12 @@ function game.shutdown()
     end
     if combatLogScriptId then
         engine.killScript(combatLogScriptId)
+    end
+    if injuryLogScriptId then
+        engine.killScript(injuryLogScriptId)
+    end
+    if unitLogScriptId then
+        engine.killScript(unitLogScriptId)
     end
 end
 

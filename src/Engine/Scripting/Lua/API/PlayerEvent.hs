@@ -2,6 +2,7 @@
 module Engine.Scripting.Lua.API.PlayerEvent
     ( emitEventFn
     , emitEventAtFn
+    , emitEventForUnitFn
     , getEventLogFn
     , getNotificationCfgFn
     , setNotificationOverridesFn
@@ -19,7 +20,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.PlayerEvent (CategoryCfg(..), PopupButton(..)
                           , popupActionTag)
 import Engine.PlayerEvent.Emit (PlayerEvent(..), emitEvent, emitEventAt
-                               , readEventLog)
+                               , emitEventFull, readEventLog)
 
 -- | @engine.emitEvent(category, text)@ — fire a player-visible event
 --   from Lua. Returns nothing. Unknown categories drop with a dev
@@ -58,6 +59,32 @@ emitEventAtFn env = do
         _ → return ()
     return 0
 
+-- | @engine.emitEventForUnit(category, text, uid [, gx, gy])@ — fire an
+--   event tagged with the UNIT it concerns, so the per-unit log panel
+--   can filter it. @gx@/@gy@ are optional (same location payload as
+--   'emitEventAt'). Used by unit-attributable emitters (survival
+--   warnings/criticals, unit events) that already know the uid.
+emitEventForUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+emitEventForUnitFn env = do
+    catArg  ← Lua.tostring 1
+    textArg ← Lua.tostring 2
+    uidArg  ← Lua.tointeger 3
+    gxArg   ← Lua.tointeger 4
+    gyArg   ← Lua.tointeger 5
+    case (catArg, textArg, uidArg) of
+        (Just catBS, Just textBS, Just uid) → do
+            let mCoords = case (gxArg, gyArg) of
+                    (Just gx, Just gy) → Just (fromIntegral gx, fromIntegral gy)
+                    _                  → Nothing
+            Lua.liftIO $ emitEventFull env
+                (TE.decodeUtf8 catBS)
+                "Lua"
+                (TE.decodeUtf8 textBS)
+                mCoords
+                (Just (fromIntegral uid))
+        _ → return ()
+    return 0
+
 -- | @engine.getEventLog()@ — return the event-log ring buffer as a
 --   Lua array of @{category, text, gameTime, source, buttons,
 --   coords}@ tables, oldest-first. @buttons@ is an array of
@@ -79,6 +106,12 @@ getEventLogFn env = do
         Lua.setfield (-2) "gameTime"
         Lua.pushstring (TE.encodeUtf8 (peSource ev))
         Lua.setfield (-2) "source"
+        -- uid: the unit this event is about (engine.emitEventForUnit), or
+        -- nil. The per-unit log panel filters on this.
+        case peUid ev of
+            Just u  → Lua.pushinteger (fromIntegral u)
+            Nothing → Lua.pushnil
+        Lua.setfield (-2) "uid"
 
         -- buttons array (same shape as getNotificationCfg's buttons
         -- field) — needed for the event-log panel's row click to

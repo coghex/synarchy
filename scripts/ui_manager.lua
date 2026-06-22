@@ -41,6 +41,8 @@ local pauseMenu = nil
 local popup = nil
 local eventLog = nil
 local combatLog = nil
+local injuryLog = nil
+local unitLog = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -83,6 +85,8 @@ function uiManager.init(scriptId)
     popup = require("scripts.popup")
     eventLog = require("scripts.event_log")
     combatLog = require("scripts.combat_log")
+    injuryLog = require("scripts.injury_log_panel")
+    unitLog = require("scripts.unit_log")
 
     button.init()
     scrollbar.init()
@@ -193,6 +197,8 @@ function uiManager.finishStartupBoot()
     popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
     eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
     combatLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    injuryLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    unitLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
     local persistedDwell = engine.getTooltipDwellMs()
     local persistedHintDelay = engine.getTooltipHintDelayMs()
     -- engine.loadTexture caches by path, so this returns the
@@ -243,6 +249,8 @@ function uiManager.onFramebufferResize(width, height)
     if popup then popup.onFramebufferResize(width, height) end
     if eventLog then eventLog.onFramebufferResize(width, height) end
     if combatLog then combatLog.onFramebufferResize(width, height) end
+    if injuryLog then injuryLog.onFramebufferResize(width, height) end
+    if unitLog then unitLog.onFramebufferResize(width, height) end
     if pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
@@ -589,6 +597,8 @@ function uiManager.shutdown()
     if popup then popup.shutdown() end
     if eventLog then eventLog.shutdown() end
     if combatLog then combatLog.shutdown() end
+    if injuryLog then injuryLog.shutdown() end
+    if unitLog then unitLog.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -646,6 +656,37 @@ end
 function uiManager.onCombatLogScrollNext(elemHandle)
     if combatLog and combatLog.onScrollNext then
         return combatLog.onScrollNext()
+    end
+    return false
+end
+
+-- Injury-log panel click routes (mirror the combat-log ones; tabs are
+-- per injured unit).
+function uiManager.onInjuryLogTabClick(elemHandle)
+    if injuryLog and injuryLog.onTabClick then
+        return injuryLog.onTabClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onInjuryLogScrollPrev(elemHandle)
+    if injuryLog and injuryLog.onScrollPrev then
+        return injuryLog.onScrollPrev()
+    end
+    return false
+end
+
+function uiManager.onInjuryLogScrollNext(elemHandle)
+    if injuryLog and injuryLog.onScrollNext then
+        return injuryLog.onScrollNext()
+    end
+    return false
+end
+
+-- Per-unit log panel: tab clicks switch the All/Event/Combat/Injury view.
+function uiManager.onUnitLogTabClick(elemHandle)
+    if unitLog and unitLog.onTabClick then
+        return unitLog.onTabClick(elemHandle)
     end
     return false
 end
@@ -745,6 +786,14 @@ function uiManager.onUnitInfoSubTabClick(elemHandle)
     local mod = package.loaded["scripts.unit_info_v2"]
     if mod and mod.handleSubTabClick then
         return mod.handleSubTabClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onUnitInfoLogClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleLogClick then
+        return mod.handleLogClick(elemHandle)
     end
     return false
 end
@@ -903,6 +952,18 @@ function uiManager.onScrollUp(elemHandle)
             return true
         end
     end
+    if injuryLog and injuryLog.isVisible and injuryLog.isVisible()
+       and injuryLog.handleScrollCallback then
+        if injuryLog.handleScrollCallback("onScrollUp", elemHandle) then
+            return true
+        end
+    end
+    if unitLog and unitLog.isVisible and unitLog.isVisible()
+       and unitLog.handleScrollCallback then
+        if unitLog.handleScrollCallback("onScrollUp", elemHandle) then
+            return true
+        end
+    end
     -- Unit info v2 has its own stats-panel scrollbar.
     local uimod = package.loaded["scripts.unit_info_v2"]
     if uimod and uimod.handleScrollCallback then
@@ -942,6 +1003,18 @@ function uiManager.onScrollDown(elemHandle)
     if combatLog and combatLog.isVisible and combatLog.isVisible()
        and combatLog.handleScrollCallback then
         if combatLog.handleScrollCallback("onScrollDown", elemHandle) then
+            return true
+        end
+    end
+    if injuryLog and injuryLog.isVisible and injuryLog.isVisible()
+       and injuryLog.handleScrollCallback then
+        if injuryLog.handleScrollCallback("onScrollDown", elemHandle) then
+            return true
+        end
+    end
+    if unitLog and unitLog.isVisible and unitLog.isVisible()
+       and unitLog.handleScrollCallback then
+        if unitLog.handleScrollCallback("onScrollDown", elemHandle) then
             return true
         end
     end
@@ -1029,6 +1102,18 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
     if combatLog and combatLog.isVisible and combatLog.isVisible()
        and combatLog.onScroll then
         if combatLog.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    if injuryLog and injuryLog.isVisible and injuryLog.isVisible()
+       and injuryLog.onScroll then
+        if injuryLog.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    if unitLog and unitLog.isVisible and unitLog.isVisible()
+       and unitLog.onScroll then
+        if unitLog.onScroll(elemHandle, dx, dy) then
             return
         end
     end

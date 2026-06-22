@@ -287,6 +287,11 @@ local function clearOwned()
         UI.deleteElement(unitInfoV2.outerBoxId)
         unitInfoV2.outerBoxId = nil
     end
+
+    if unitInfoV2.logBtnBoxId then
+        UI.deleteElement(unitInfoV2.logBtnBoxId)
+        unitInfoV2.logBtnBoxId = nil
+    end
 end
 
 -----------------------------------------------------------
@@ -3085,6 +3090,44 @@ local function placeHeader(x, y, w, h)
             unitInfoV2.headerActionLabelId = lblId
         end
     end
+
+    -- "Log" button (top-right of the header): opens the per-unit log
+    -- panel (Event/Combat/Injury collated for activeUid). Box + label +
+    -- click callback, mirroring the sub-tab cells; routed through
+    -- ui_manager.onUnitInfoLogClick → handleLogClick.
+    local btnW = math.floor(56 * scale.get())
+    local btnH = math.floor(rowH * 1.4)
+    local btnX = x + w - btnW - SECTION_PAD
+    local btnY = y + math.floor((h - btnH) / 2)
+    unitInfoV2.logBtnBoxId = UI.newBox(
+        "unit_info_v2_log_btn",
+        btnW, btnH,
+        unitInfoV2.subTabUnselectedTexSet,
+        16,
+        1.0, 1.0, 1.0, 1.0,
+        0,
+        unitInfoV2.page)
+    UI.addToPage(unitInfoV2.page, unitInfoV2.logBtnBoxId, btnX, btnY)
+    UI.setClickable(unitInfoV2.logBtnBoxId, true)
+    UI.setOnClick(unitInfoV2.logBtnBoxId, "onUnitInfoLogClick")
+    UI.setZIndex(unitInfoV2.logBtnBoxId, 12)
+
+    local logLblId = label.new({
+        name     = "unit_info_v2_log_btn_label",
+        text     = "Log",
+        font     = hud.menuFont,
+        fontSize = 14,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = unitInfoV2.page,
+        uiscale  = 1.0,
+    })
+    table.insert(unitInfoV2.ownedLabels, logLblId)
+    local logLblHandle = label.getElementHandle(logLblId)
+    local logLblW = engine.getTextWidth(hud.menuFont, "Log", 14)
+    UI.addToPage(unitInfoV2.page, logLblHandle,
+        btnX + math.floor((btnW - logLblW) / 2),
+        btnY + math.floor((btnH + 14) / 2))
+    UI.setZIndex(logLblHandle, 13)
 end
 
 -----------------------------------------------------------
@@ -3363,6 +3406,14 @@ function unitInfoV2.handleTabClick(elemHandle)
         end
     end
     return false
+end
+
+-- "Log" button → open the per-unit collated log for the active unit.
+function unitInfoV2.handleLogClick(elemHandle)
+    if elemHandle ~= unitInfoV2.logBtnBoxId then return false end
+    if not unitInfoV2.activeUid then return true end
+    require("scripts.unit_log").show(unitInfoV2.activeUid)
+    return true
 end
 
 function unitInfoV2.handleScrollLeft(elemHandle)

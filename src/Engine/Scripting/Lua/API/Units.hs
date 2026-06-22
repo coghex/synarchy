@@ -92,7 +92,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_, unless)
+import Control.Monad (foldM, forM_, unless, when)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
 import qualified Data.List as L
@@ -131,6 +131,7 @@ import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemManager(..), lookupItemDef, itemTotalWeight)
 import Item.Ground (spawnGroundItem)
 import Combat.Wounds (bleedRateFor, kindBleedFactor)
+import Combat.Types (pushInjuryEvent)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
@@ -3298,6 +3299,13 @@ unitInjureFn env = do
                         let inst' = inst { uiWounds = w : uiWounds inst }
                         in (um { umInstances =
                                    HM.insert uid inst' (umInstances um) }, True)
+            -- A successful (non-combat) wound feeds the injury log.
+            Lua.liftIO $ when ok $
+                pushInjuryEvent (injuryEventsRef env) now (fromIntegral n)
+                    "injure"
+                    [ ("part",      TE.decodeUtf8 partBS)
+                    , ("woundKind", TE.decodeUtf8 kindBS)
+                    , ("severity",  T.pack (show (woundSeverity w))) ]
             Lua.pushboolean ok
             return 1
         _ → Lua.pushboolean False >> return 1

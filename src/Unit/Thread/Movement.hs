@@ -21,7 +21,9 @@ module Unit.Thread.Movement
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import Control.Monad (when)
+import Control.Monad (when, forM_)
+import qualified Data.Text as T
+import Combat.Types (pushInjuryEvent)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified System.Random as Random
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -177,6 +179,20 @@ tickAllMovement dt env utsRef = do
                                  | i ← injs ]
                         in HM.insert uid (inst { uiWounds = ws <> uiWounds inst }) m
             in (um' { umInstances = foldr applyOne (umInstances um') fallResults }, ())
+
+    -- Feed the injury log: one event per fall that actually hurt someone,
+    -- carrying a "detail" string (part:woundKind:sevPct|…) the injury-log
+    -- prose turns into a clause list, plus the worst severity + count.
+    forM_ fallResults $ \(uid, injs, worst) → when (not (null injs)) $
+        let detail = T.intercalate "|"
+                [ T.intercalate ":"
+                    [ fiPart i, fiKind i
+                    , T.pack (show (round (fiSeverity i * 100) ∷ Int)) ]
+                | i ← injs ]
+        in pushInjuryEvent (injuryEventsRef env) now (unUnitId uid) "fall"
+             [ ("detail",   detail)
+             , ("count",    T.pack (show (length injs)))
+             , ("severity", T.pack (show worst)) ]
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)

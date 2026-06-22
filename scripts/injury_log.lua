@@ -216,6 +216,96 @@ local function weaponPhrase(w)
     return art .. lw
 end
 
+-- ── non-combat injury prose (injury log) ────────────────────────────
+--
+-- The combat log narrates per-LAYER (it has the engine's tissue detail);
+-- the injury log narrates per-WOUND, since falls/hazards only carry
+-- (part, kind, severity). These builders turn an injury-stream event
+-- (injury.drainEvents — kind "fall" | "injure" | "death") into a line.
+
+-- Lazy require: injuries.lua provides locationName; resolve on first use
+-- to avoid any load-order surprise.
+local injuriesMod
+local function locName(part)
+    injuriesMod = injuriesMod or require("scripts.injuries")
+    return injuriesMod.locationName(part)
+end
+
+-- Parse the injury detail "part:woundKind:sevPct|..." into
+-- { {part, kind, sev}, ... }. (Distinct from combat parseDetail, which
+-- is the 4-field per-layer "sub:layer:material:sevPct".)
+local function parseInjuries(s)
+    local out = {}
+    if not s or s == "" then return out end
+    for entry in s:gmatch("[^|]+") do
+        local p, k, pct = entry:match("([^:]*):([^:]*):([^:]*)")
+        if p then
+            out[#out + 1] = { part = p, kind = k,
+                              sev = (tonumber(pct) or 0) / 100 }
+        end
+    end
+    return out
+end
+
+-- One wound → a verb clause ("shattered its left shin", "suffered a
+-- concussion"). Possessive "its" is gender/species-neutral.
+local function injClause(part, kind, sev)
+    local t = tier(sev)
+    local loc = locName(part)
+    if kind == "fracture" then
+        return (t >= 3 and "shattered" or "fractured") .. " its " .. loc
+    elseif kind == "concussion" then
+        return t >= 3 and "suffered a severe concussion"
+                       or  "suffered a concussion"
+    elseif kind == "internal" then
+        return (t >= 3 and "ruptured" or "bruised") .. " its " .. loc
+    elseif kind == "severed" then
+        return "severed its " .. loc
+    elseif kind == "arterial" then
+        return "tore an artery in its " .. loc
+    elseif kind == "slash" then
+        return (t >= 3 and "deeply gashed" or "gashed") .. " its " .. loc
+    elseif kind == "stab" then
+        return "punctured its " .. loc
+    else  -- blunt / bruise / unknown
+        return (t >= 3 and "badly bruised" or "bruised") .. " its " .. loc
+    end
+end
+
+-- A fall: "<Name> fell and shattered its left shin and bruised its hip."
+function M.fallLine(name, payload)
+    local injs = parseInjuries(payload.detail)
+    if #injs == 0 then return name .. " took a hard fall." end
+    table.sort(injs, function(a, b) return a.sev > b.sev end)
+    local cl = {}
+    for _, w in ipairs(injs) do cl[#cl + 1] = injClause(w.part, w.kind, w.sev) end
+    return name .. " fell and " .. listJoin(cl) .. "."
+end
+
+-- A discrete (hazard / debug) wound: "<Name> punctured its left arm."
+function M.injureLine(name, payload)
+    return name .. " "
+        .. injClause(payload.part or "body",
+                     payload.woundKind or "blunt",
+                     tonumber(payload.severity) or 0)
+        .. "."
+end
+
+-- A wound-caused death: "<Name> died of blood loss."
+function M.deathLine(name, payload)
+    local cause = payload.cause
+    if not cause or cause == "" then cause = "their wounds" end
+    return name .. " died of " .. cause .. "."
+end
+
+-- Top-level dispatch for an injury-stream event (name pre-formatted).
+function M.eventLine(name, ev)
+    local p = ev.payload or {}
+    if ev.kind == "fall"  then return M.fallLine(name, p)  end
+    if ev.kind == "death" then return M.deathLine(name, p) end
+    return M.injureLine(name, p)   -- "injure" + fallback
+end
+
 -- Full hit line. atkName/tgtName already display-formatted by the caller.
 function M.hitLine(atkName, tgtName, payload)
     local mech   = payload.kind or "blunt"

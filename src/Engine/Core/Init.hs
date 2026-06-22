@@ -122,6 +122,7 @@ initializeEngineWith logBackend = do
   buildingGhostRef ← newIORef Nothing
   combatQueue ← Q.newQueue
   combatEventsRef ← newIORef Combat.Types.emptyEventQueue
+  injuryEventsRef ← newIORef Combat.Types.emptyEventQueue
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
@@ -190,6 +191,7 @@ initializeEngineWith logBackend = do
         , buildingQueue      = buildingQueue
         , combatQueue        = combatQueue
         , combatEventsRef    = combatEventsRef
+        , injuryEventsRef    = injuryEventsRef
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue

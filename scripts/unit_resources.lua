@@ -240,22 +240,26 @@ local function clearDropState(uid)
     droppedSlots[uid .. ":right_hand"] = nil
 end
 
-local function emitDeathAlert(uid, cause)
+-- `channel` is optional: pass "injury" for a WOUND-caused death (it also
+-- lands in the injury/medical log). Pure survival deaths (starvation /
+-- thirst) omit it and stay event-only — they aren't injuries.
+local function emitDeathAlert(uid, cause, channel)
     local info = unit.getInfo(uid)
     if not info then return end
     local gx, gy = unitCoords(info)
     local msg = unitLabel(info) .. " died of " .. cause
+    -- Player-facing alert (event feed / popup / pause), tagged with the
+    -- unit so the per-unit log panel can filter it.
     if gx and gy then
-        engine.emitEventAt("survival_critical", msg, gx, gy)
+        engine.emitEventForUnit("survival_critical", msg, uid, gx, gy)
     else
-        engine.emitEvent("survival_critical", msg)
+        engine.emitEventForUnit("survival_critical", msg, uid)
     end
-    -- Also narrate the death in the combat log so injury / suffocation /
-    -- survival deaths read consistently alongside engine combat kills.
-    -- The combat-log script refines the cause from the corpse's wounds
-    -- (injuries.deathCause); `cause` here is the woundless fallback.
-    if combat and combat.emitDeath then
-        combat.emitDeath(uid, cause)
+    -- Wound-caused deaths also narrate in the injury log (the medical
+    -- record). The injury-log script refines the cause from the corpse's
+    -- wounds (injuries.deathCause); `cause` here is the fallback.
+    if channel == "injury" and injury and injury.emit then
+        injury.emit(uid, "death", cause)
     end
     -- Death clears any pending warning flags so a future re-use of
     -- the same uid (engine reassigns ids on destroy/spawn) doesn't
@@ -270,9 +274,9 @@ local function emitWarningAlert(uid, info, msg)
     local gx, gy = unitCoords(info)
     local fullMsg = unitLabel(info) .. " " .. msg
     if gx and gy then
-        engine.emitEventAt("survival_warning", fullMsg, gx, gy)
+        engine.emitEventForUnit("survival_warning", fullMsg, uid, gx, gy)
     else
-        engine.emitEvent("survival_warning", fullMsg)
+        engine.emitEventForUnit("survival_warning", fullMsg, uid)
     end
 end
 
@@ -724,9 +728,9 @@ local function dropDisabledHandWeapons(uid)
                             local msg = unitLabel(info) .. " drops "
                                 .. (held.displayName or held.defName or "a weapon")
                             if gx and gy then
-                                engine.emitEventAt("unit_event", msg, gx, gy)
+                                engine.emitEventForUnit("unit_event", msg, uid, gx, gy)
                             else
-                                engine.emitEvent("unit_event", msg)
+                                engine.emitEventForUnit("unit_event", msg, uid)
                             end
                         end
                     end
@@ -756,7 +760,7 @@ local function tickInjuries(uid, info, pose)
 
     local cause = injuries.lethalCause(uid)
     if cause then
-        emitDeathAlert(uid, cause)
+        emitDeathAlert(uid, cause, "injury")
         unit.kill(uid)
         return true
     end
@@ -837,7 +841,7 @@ local function tickFailureMeters(uid, dt)
         v = math.max(0, math.min(1, v))
         unit.setStat(uid, m.stat, v)
         if v >= 1.0 then
-            emitDeathAlert(uid, injuries.deathCause(uid) or m.cause)
+            emitDeathAlert(uid, injuries.deathCause(uid) or m.cause, "injury")
             unit.kill(uid)
             return true
         end

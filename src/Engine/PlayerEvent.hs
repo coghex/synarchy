@@ -13,6 +13,7 @@ module Engine.PlayerEvent
 
 import UPrelude
 import GHC.Generics (Generic)
+import Data.Word (Word32)
 import qualified Data.HashMap.Strict as HM
 
 -- | A player-visible event. Routed to up-to-three surfaces (log,
@@ -37,6 +38,12 @@ data PlayerEvent = PlayerEvent
                                   --   'ActGoTo' buttons; 'Nothing'
                                   --   for events without a natural
                                   --   location (e.g. save success).
+    , peUid      ∷ !(Maybe Word32)
+                                  -- ^ Optional unit this event is ABOUT
+                                  --   (set via 'engine.emitEventForUnit').
+                                  --   Lets the per-unit log panel filter
+                                  --   event-log entries to one unit.
+                                  --   'Nothing' for world/global events.
     } deriving (Show, Eq, Generic)
 -- No Serialize derivation: events are per-session and never saved.
 

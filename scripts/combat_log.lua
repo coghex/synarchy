@@ -65,6 +65,14 @@ local ALL_RING_CAP = 200
 -- Battle quiescence: if a battle hasn't seen an event for this many
 -- seconds, mark it inactive (red → grey).
 local BATTLE_QUIESCENCE_SEC = 15
+-- Battle "closed for good": a battle silent longer than this can no
+-- longer absorb a new event, so it won't be re-joined. This guards the
+-- unit-id-REUSE hazard — the engine reassigns ids on destroy/spawn, and
+-- without this a brand-new unit that inherits a dead one's id would get
+-- its events glued onto the dead unit's long-quiescent battle. Set well
+-- beyond any real combat lull so a paused-then-resumed fight still
+-- rejoins; only stale-id collisions fall past it.
+local BATTLE_REJOIN_MAX_SEC = 120
 combatLog.allEvents = combatLog.allEvents or {}   -- {ev, ev, ...}
 -- Each battle: { id, name, active, participants={[uid]=true,...},
 --                events={ev,...}, lastEventAt }
@@ -364,11 +372,15 @@ local function displayName(uid)
 end
 
 -- Try to find a battle that contains either participant. Returns
--- the battle table, or nil.
+-- the battle table, or nil. Battles silent longer than
+-- BATTLE_REJOIN_MAX_SEC are skipped: they're considered closed, so a
+-- reused unit id can't get its events merged into a dead unit's battle.
 local function findBattle(atk, tgt)
+    local now = engine.gameTime()
     for _, b in ipairs(combatLog.battles) do
-        if (atk and b.participants[atk])
-           or (tgt and b.participants[tgt]) then
+        if (now - (b.lastEventAt or 0)) <= BATTLE_REJOIN_MAX_SEC
+           and ((atk and b.participants[atk])
+                or (tgt and b.participants[tgt])) then
             return b
         end
     end
@@ -511,6 +523,21 @@ function combatLog.formatEvent(ev)
     -- Unknown kind: dump raw.
     return string.format("[%s] %s %s %s", ts, atk, ev.kind, tgt),
         {0.7, 0.7, 0.7, 1.0}
+end
+
+-- Rendered combat-log entries involving `uid` (attacker OR target), for
+-- the per-unit log panel. Returns { {ts, text, color}, ... } newest-first
+-- (allEvents is already newest-first).
+function combatLog.unitEntries(uid)
+    local out = {}
+    if not uid then return out end
+    for _, ev in ipairs(combatLog.allEvents) do
+        if ev.attacker == uid or ev.target == uid then
+            local text, color = combatLog.formatEvent(ev)
+            out[#out + 1] = { ts = ev.ts or 0, text = text, color = color }
+        end
+    end
+    return out
 end
 
 -----------------------------------------------------------

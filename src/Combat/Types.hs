@@ -18,11 +18,13 @@ module Combat.Types
     , AttackMode(..)
     , attackModeText
     , emptyEventQueue
+    , pushInjuryEvent
     ) where
 
 import UPrelude
 import qualified Data.Sequence as Seq
 import qualified Data.HashMap.Strict as HM
+import Data.IORef (IORef, atomicModifyIORef')
 import Data.Word (Word32)
 
 -- | Which swing the attacker is throwing.
@@ -74,3 +76,27 @@ data CombatEvent = CombatEvent
 --   the init module doesn't need to know the buffer's concrete type.
 emptyEventQueue ∷ Seq.Seq CombatEvent
 emptyEventQueue = Seq.empty
+
+-- | Append a NON-combat injury event to a stream buffer (the victim
+--   rides in `ceTarget`, no attacker). Shared by the engine-side injury
+--   producers — Unit.Fall and unit.injure — so they don't each
+--   re-spell the CombatEvent construction. The Lua-side producer uses
+--   `injury.emit`; both feed the same `injuryEventsRef` the injury-log
+--   UI drains.
+pushInjuryEvent
+    ∷ IORef (Seq.Seq CombatEvent)  -- ^ injuryEventsRef
+    → Double                       -- ^ game-time
+    → Word32                       -- ^ victim uid
+    → Text                         -- ^ kind: "fall" | "injure" | "death"
+    → [(Text, Text)]               -- ^ payload (part / woundKind / severity / cause / detail)
+    → IO ()
+pushInjuryEvent ref ts victim kind payload =
+    atomicModifyIORef' ref $ \buf →
+        ( buf Seq.|> CombatEvent
+            { ceTs       = ts
+            , ceKind     = kind
+            , ceAttacker = Nothing
+            , ceTarget   = Just victim
+            , cePayload  = HM.fromList payload
+            }
+        , () )

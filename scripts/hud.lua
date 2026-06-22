@@ -133,6 +133,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texEventLogSelected = engine.loadTexture("assets/textures/hud/event_log_selected.png")
     hud.texCombatLog         = engine.loadTexture("assets/textures/hud/combat_log.png")
     hud.texCombatLogSelected = engine.loadTexture("assets/textures/hud/combat_log_selected.png")
+    hud.texInjuryLog         = engine.loadTexture("assets/textures/hud/injury_log.png")
+    hud.texInjuryLogSelected = engine.loadTexture("assets/textures/hud/injury_log_selected.png")
     engine.logDebug("HUD initialized")
 end
 
@@ -190,6 +192,13 @@ function hud.createUI()
                 texSelected = hud.texCombatLogSelected,
                 tooltip     = "Combat log",
             }
+        elseif mode == "injury" then
+            return {
+                name        = "injury",
+                texDefault  = hud.texInjuryLog,
+                texSelected = hud.texInjuryLogSelected,
+                tooltip     = "Injury log",
+            }
         end
         return {
             name        = "event",
@@ -198,7 +207,13 @@ function hud.createUI()
             tooltip     = "Event log",
         }
     end
-    local otherMode = (hud.logMode == "combat") and "event" or "combat"
+    -- The two modes that aren't current become the toggle's options
+    -- (in a stable order so the fan doesn't reshuffle each open).
+    local LOG_MODE_ORDER = { "event", "combat", "injury" }
+    local otherModes = {}
+    for _, m in ipairs(LOG_MODE_ORDER) do
+        if m ~= hud.logMode then otherModes[#otherModes + 1] = logItem(m) end
+    end
 
     hud.logToggleId = toggle.new({
         name = "log_mode_toggle",
@@ -206,7 +221,7 @@ function hud.createUI()
         items = {
             (function()
                 local it = logItem(hud.logMode)
-                it.options = { logItem(otherMode) }
+                it.options = otherModes
                 return it
             end)(),
         },
@@ -222,11 +237,7 @@ function hud.createUI()
         onChange = function(_idx, itemName)
             if itemName == hud.logMode then
                 -- Same-mode click: toggle that log's panel.
-                if itemName == "combat" then
-                    require("scripts.combat_log").toggle()
-                else
-                    require("scripts.event_log").toggle()
-                end
+                require(hud.logModuleFor(itemName)).toggle()
             else
                 -- Option-swap: switch modes and open the new panel.
                 hud.setLogMode(itemName)
@@ -639,21 +650,23 @@ end
 -- the incoming one so the picker always lands the player on a
 -- visible panel. Called from the toggle's onChange after a swap,
 -- and from the `toggleEventLog` keybind path when needed.
+-- Script module backing each log mode.
+local LOG_MODULES = {
+    event  = "scripts.event_log",
+    combat = "scripts.combat_log",
+    injury = "scripts.injury_log_panel",
+}
+function hud.logModuleFor(mode)
+    return LOG_MODULES[mode] or LOG_MODULES.event
+end
+
 function hud.setLogMode(mode)
-    if mode ~= "event" and mode ~= "combat" then return end
+    if not LOG_MODULES[mode] then return end
     if mode ~= hud.logMode then
-        if hud.logMode == "combat" then
-            pcall(function() require("scripts.combat_log").hide() end)
-        else
-            pcall(function() require("scripts.event_log").hide() end)
-        end
+        pcall(function() require(LOG_MODULES[hud.logMode]).hide() end)
         hud.logMode = mode
     end
-    if mode == "combat" then
-        require("scripts.combat_log").show()
-    else
-        require("scripts.event_log").show()
-    end
+    require(LOG_MODULES[mode]).show()
 end
 
 -----------------------------------------------------------

@@ -127,6 +127,12 @@ data EngineEnv = EngineEnv
     -- ^ Combat thread → Lua. Resolution produces events; Lua drains
     --   them via `combat.drainEvents` and pipes into the combat-log
     --   UI. Runtime only, not persisted to SaveData.
+  , injuryEventsRef     ∷ IORef (Seq Combat.Types.CombatEvent)
+    -- ^ NON-combat injury stream (falls / hazards / wound-caused
+    --   deaths) → Lua. Reuses the CombatEvent shape (target = victim).
+    --   Producers: Unit.Fall, unit.injure, and `injury.emit` from Lua;
+    --   drained via `injury.drainEvents` into the injury-log UI.
+    --   Runtime only, not persisted.
   , buildingGhostRef    ∷ IORef (Maybe BuildingGhost)
     -- ^ Single-slot ghost preview during placement mode. Lua sets and
     --   clears via the build_tool module; the render path picks it up

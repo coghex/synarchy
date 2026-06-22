@@ -40,6 +40,7 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
 import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
+                                            , emitEventForUnitFn
                                             , getEventLogFn
                                             , getNotificationCfgFn
                                             , setNotificationOverridesFn)
@@ -184,6 +185,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
   registerLuaFunction "emitEvent"   (emitEventFn env)
   registerLuaFunction "emitEventAt" (emitEventAtFn env)
+  registerLuaFunction "emitEventForUnit" (emitEventForUnitFn env)
   registerLuaFunction "getEventLog" (getEventLogFn env)
   registerLuaFunction "getNotificationCfg"      (getNotificationCfgFn env)
   registerLuaFunction "setNotificationOverrides"
@@ -528,3 +530,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "drainEvents" (combatDrainEventsFn env)
   registerLuaFunction "emitDeath"   (combatEmitDeathFn env)
   Lua.setglobal (Lua.Name "combat")
+
+  -- Injury: NON-combat wound stream (falls / hazards / wound-caused
+  -- deaths) for the injury-log UI. Mirrors the combat event stream.
+  Lua.newtable
+  registerLuaFunction "emit"        (injuryEmitFn env)
+  registerLuaFunction "drainEvents" (injuryDrainEventsFn env)
+  Lua.setglobal (Lua.Name "injury")
