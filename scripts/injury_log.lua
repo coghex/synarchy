@@ -205,7 +205,7 @@ end
 local NATURAL_WEAPONS = {
     fists = true, claws = true, fangs = true, paw = true, paws = true,
     teeth = true, bite = true, talons = true, beak = true, horns = true,
-    hooves = true, tail = true,
+    hooves = true, tail = true, incisors = true, snout = true,
 }
 -- "Steel Dagger" → "a steel dagger"; "claws" → "its claws".
 local function weaponPhrase(w)
@@ -316,11 +316,19 @@ function M.hitLine(atkName, tgtName, payload)
     -- Main verb tier = worst layer severity in the blow.
     local worst = tonumber(payload.severity) or 0
     for _, d in ipairs(detail) do if d.sev > worst then worst = d.sev end end
-    local mv = MAIN_VERB[mech] or MAIN_VERB.blunt
-    local verb = mv[tier(worst)] or mv[1]
 
-    local head = string.format("%s %s %s in the %s with %s",
-        atkName, verb, tgtName, limb, weapon)
+    local head
+    if payload.lunge then
+        -- A lunge is a committed leaping pounce, not a standing swing — it
+        -- opens with the leap and names the part it drove into.
+        head = string.format("%s has lunged at %s's %s with %s",
+            atkName, tgtName, limb, weapon)
+    else
+        local mv = MAIN_VERB[mech] or MAIN_VERB.blunt
+        local verb = mv[tier(worst)] or mv[1]
+        head = string.format("%s %s %s in the %s with %s",
+            atkName, verb, tgtName, limb, weapon)
+    end
     local cl = M.clauses(detail, mech)
     if #cl == 0 then return head .. "." end
     return head .. ", " .. listJoin(cl) .. "."

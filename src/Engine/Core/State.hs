@@ -47,6 +47,7 @@ import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
 import Structure.Types (StructureStore)
+import Structure.Palette (TexPalette)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
@@ -123,6 +124,16 @@ data EngineEnv = EngineEnv
   , structureStoreRef   ∷ IORef StructureStore
     -- ^ Walls / floors / ceilings placed by the structures debug builder.
     --   In-memory only (no save yet); written from Lua, read on render.
+  , texPaletteRef       ∷ IORef TexPalette
+    -- ^ Save-level texture PALETTE (path↔id). Structure edits store palette
+    --   ids; this interns paths → ids at placement and resolves ids → paths
+    --   at render. Saved as sdTexPalette, restored on load.
+  , texPaletteHandlesRef ∷ IORef (HM.HashMap Int TextureHandle)
+    -- ^ Runtime paletteId → texture handle (the "translation table"; NOT
+    --   saved — rebuilt per session). Populated at placement (the handle is
+    --   already loaded) and lazily after load (Lua re-resolves each palette
+    --   path). The structure renderer reads it; a palette id with no entry
+    --   yet is skipped (renders once its handle is resolved).
   , buildingQueue       ∷ Q.Queue BuildingCommand
   , combatQueue         ∷ Q.Queue Combat.Types.CombatCommand
     -- ^ Lua / AI → combat thread. Issued via `combat.attack` (and

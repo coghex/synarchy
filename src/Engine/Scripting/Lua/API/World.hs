@@ -295,7 +295,7 @@ worldSetGenConfigFn env = do
     tlAMin ← getSubInt "timeline" "age_min"     (tyAgeMin oldTl)
     tlAMax ← getSubInt "timeline" "age_max"     (tyAgeMax oldTl)
 
-    let newCfg = oldCfg
+    let newCfg = normalizeWorldGenConfig $ oldCfg
             { wgcWorldSize  = worldSize
             , wgcPlateCount = plateCount
             , wgcErosionIntensity = erosionInt
@@ -324,23 +324,24 @@ worldInitFn env = do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
                 rawSize = maybe 64 fromIntegral sizeArg
-                -- worldSize must be even so wrapChunkCoordU
-                -- (Fluid/Internal.hs) has an integer period that
-                -- matches wrapGlobalU's tile-level period. Odd
-                -- values silently alias chunks at the cylindrical
-                -- seam (audit #9). Round up and warn.
-                size = if even rawSize then rawSize else rawSize + 1
+                size = normalizeWorldSize rawSize
                 -- Plate count scales with worldSize when caller
                 -- doesn't supply one — fixes the "10 plates for any
                 -- world" issue (audit #17). Explicit user values
-                -- still honored.
-                plates = maybe (defaultPlatesFor size) fromIntegral platesArg
-            when (size /= rawSize) $ do
+                -- still honored after minimum-count normalization.
+                rawPlates = maybe (defaultPlatesFor size) fromIntegral platesArg
+                plates = normalizePlateCount rawPlates
+            when (size /= rawSize ∨ plates /= rawPlates) $ do
                 logger ← readIORef (loggerRef env)
                 logWarn logger CatWorld $
-                    "world.init: worldSize " <> T.pack (show rawSize)
-                    <> " is odd; rounded up to " <> T.pack (show size)
-                    <> " (chunk-coord wrap requires even worldSize)."
+                    "world.init normalized worldgen inputs: worldSize "
+                    <> T.pack (show rawSize) <> " → "
+                    <> T.pack (show size) <> ", plateCount "
+                    <> T.pack (show rawPlates) <> " → "
+                    <> T.pack (show plates)
+                    <> " (worldSize minimum/multiple "
+                    <> T.pack (show minimumWorldSize)
+                    <> ", plateCount min 1)."
             Q.writeQueue (worldQueue env) (WorldInit pageId seed size plates)
         Nothing → pure ()
 

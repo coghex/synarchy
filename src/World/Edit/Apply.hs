@@ -22,6 +22,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
+import Structure.Types (StructurePieceData(..))
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Edit.Types (WorldEdit(..), WorldEdits)
@@ -208,6 +209,17 @@ applyEdit (WeSetCell gx gy z mat) lc
                in if z ≥ oldTop
                   then lc' { lcFlora = dropFloraAt lx ly (lcFlora lc') }
                   else lc'
+
+-- Structure overlay: a separate render layer keyed (gx,gy,slot-tag), holding
+-- texture PALETTE IDS (resolved to handles at render). Pure — no terrain
+-- touched — so dig (terrain) and build (structure) stay in ONE ordered log and
+-- replay in sequence (the dig clears the cell before the build lands on it).
+applyEdit (WeSetStructure gx gy slotTag texId faceId z) lc =
+    lc { lcStructures = HM.insert (gx, gy, slotTag)
+                                  (StructurePieceData texId faceId z)
+                                  (lcStructures lc) }
+applyEdit (WeClearStructure gx gy slotTag) lc =
+    lc { lcStructures = HM.delete (gx, gy, slotTag) (lcStructures lc) }
 
 -- | Replay every edit recorded for this chunk, in stored order.
 --   Defensive `HM.lookup` — chunks with no edits round-trip unchanged.

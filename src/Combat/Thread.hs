@@ -132,8 +132,9 @@ processAllCommands env = go
                 go
 
 handleCommand ∷ EngineEnv → CombatCommand → IO ()
-handleCommand env (CombatAttack attacker target mode) =
+handleCommand env (CombatAttack attacker target mode reachBonus impactSpeed) =
     -- Full resolution: hit roll → body part → damage → wound →
     -- death check + stamina drain. Emits "miss" / "hit" / "death"
-    -- events.
-    resolveAttack env attacker target mode
+    -- events. reachBonus lifts the strike-height reach + impactSpeed folds
+    -- the lunge's full-body momentum into the strike (both 0 = normal swing).
+    resolveAttack env attacker target mode reachBonus impactSpeed

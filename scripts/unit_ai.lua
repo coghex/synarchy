@@ -984,8 +984,18 @@ end
 -- and ambient candidates take back over.
 -----------------------------------------------------------
 local RETREAT_FUTILITY_RATIO = 1.5
+-- 2e: a unit under a player/scripted ORDER is much braver — it weighs the
+-- group by the same ratio but tolerates being outmatched far further before
+-- breaking. SOFT override (the user's choice): a truly hopeless fight (beyond
+-- this) still routs it; an order isn't a fight-to-the-last-cell compulsion.
+local RETREAT_FUTILITY_RATIO_COMMITTED = 4.0
 local RETREAT_SAFE_DIST      = 12.0    -- chebyshev tiles
 local RETREAT_TARGET_DIST    = 8.0     -- how far to pick a new retreat tile
+-- 2e swarm: an ally counts toward "our" strength vs a threat if it's already
+-- engaging it OR is a same-side unit within this many tiles of the threat (a
+-- potential joiner). This breaks the chicken-and-egg where the FIRST attacker
+-- sees only itself, judges the fight futile, and flees before a pack can form.
+local SWARM_RALLY_RADIUS     = 8.0     -- chebyshev tiles from the threat
 
 local function selfWoundedByTarget(uid, s)
     if not s.attackTargetUid then return false end
@@ -1069,7 +1079,10 @@ local function futilityCheck(uid, s)
     local groupEff  = unitAi.groupEffectivenessVs(threatUid)
     if groupEff <= 0 then return false, 0 end
     local ratio = threatEff / groupEff
-    return ratio > RETREAT_FUTILITY_RATIO, ratio
+    -- A unit under orders (player/scripted commandAttack) holds far longer.
+    local cap = s.committed and RETREAT_FUTILITY_RATIO_COMMITTED
+                            or  RETREAT_FUTILITY_RATIO
+    return ratio > cap, ratio
 end
 
 local function retreatUtility(uid, s, params)
@@ -1091,6 +1104,7 @@ local function retreatExecute(uid, s, params)
     if not isGoalActive(s, "retreat") then
         s.retreatThreatUid = s.attackTargetUid
         s.attackTargetUid  = nil
+        s.committed        = nil   -- broke despite the order; drop commitment
         markGoalAccomplished(s, "attack")
         setGoal(s, "retreat")
         unit.clearAnimOverride(uid)
@@ -1378,6 +1392,142 @@ local function clearAttackAnim(uid)
     unit.clearAnimOverride(uid)
 end
 
+-- Only very-short-reach attackers lunge (slice 2a: the squirrel, reach
+-- ~0.11). Normal melee units (reach ≥ this) just close and swing. The
+-- general "skilled/unintelligent fighters also lunge" gating is later (2e).
+-- Abort a lunge that never resolves (e.g. interrupted mid-air) after this.
+local LUNGE_TIMEOUT_SEC = 3.0
+
+-- ----- Lunge decision (2e: rarity, split by intelligence + skill) -----
+-- A lunge is a deliberate, committed move — not something a unit does every
+-- time it's out of reach. WHO lunges, and how readily, depends on the mind:
+--   * Unintelligent creatures (intelligence < LUNGE_INSTINCT_INTEL — squirrels,
+--     bears, mules) lunge on INSTINCT. For a short-reach predator/prey it's
+--     often the ONLY way to reach a tall target, so the propensity is high;
+--     the leap's REACH is still naturally bounded by the jumping skill (the
+--     engine's getJumpReach), so a clumsy animal simply can't leap far.
+--   * Intelligent fighters (acolytes) treat the lunge as a trained TECHNIQUE,
+--     gated by the `jumping` skill — a novice (skill 10) almost never lunges;
+--     a skilled one occasionally does to close a gap. Otherwise they walk in
+--     and fight normally.
+-- Either way it costs commitment, so it's gated on stamina.
+local LUNGE_INSTINCT_INTEL    = 0.7   -- below = instinct regime (animals)
+local LUNGE_INSTINCT_P        = 0.85  -- animal propensity when out of reach
+local LUNGE_TECH_MAX_P        = 0.5   -- ceiling for a trained lunger
+local LUNGE_TECH_SKILL_K      = 0.6   -- jumping/100 × this = technique chance
+local LUNGE_MIN_STAMINA_FRAC  = 0.25  -- too winded to commit below this
+
+-- Decide whether an out-of-reach unit commits to a lunge THIS attempt.
+-- Rolled only when already eligible (out of reach, off cooldown), so the
+-- attack cooldown spaces the rolls — a "no" just means the unit pursues on
+-- foot this cycle and may roll again next time it's off cooldown.
+local function shouldLunge(uid, s)
+    -- Stamina gate — a leap is a big spend.
+    local stam = unit.getStat(uid, "stamina")
+    if stam then
+        local maxStam = (unit.getStat(uid, "endurance") or 1.0) * 10.0
+        if maxStam > 0 and stam / maxStam < LUNGE_MIN_STAMINA_FRAC then
+            return false
+        end
+    end
+    local intel = unit.getStat(uid, "intelligence") or 1.0
+    local p
+    if intel < LUNGE_INSTINCT_INTEL then
+        p = LUNGE_INSTINCT_P                       -- instinct: readily
+    else
+        local jumping = unit.getSkill(uid, "jumping") or 0.0
+        p = math.min(LUNGE_TECH_MAX_P, (jumping / 100.0) * LUNGE_TECH_SKILL_K)
+    end
+    return math.random() < p
+end
+
+-- The lunge: a short-reach unit leaps to land ADJACENT to a target it
+-- can't otherwise reach, then strikes on arrival with a reach BONUS equal
+-- to the leap's strike-reach — so the engine's height-gated part picker
+-- can select the now-reachable high parts (neck/throat). Multi-tick:
+-- issue the leap, wait for the airborne→land transition, then strike.
+-- Returns true if it handled this tick (caller skips normal attack/pursue).
+local function tryLunge(uid, s, target, me, you, chebyshev)
+    local range = unit.getAttackRange(uid) or 1.0
+    local now = engine.gameTime()
+
+    -- Phase 2: airborne — wait until we've actually left the ground and
+    -- come back down, then deliver the strike.
+    if s.lungePhase == "air" then
+        if now - (s.lungeStartAt or now) > LUNGE_TIMEOUT_SEC then
+            s.lungePhase = nil; return false        -- bail; resume normal logic
+        end
+        local pose = unit.getPose(uid)
+        if pose == "falling" then s.lungeSawAir = true end
+        if s.lungeSawAir and pose == "standing"
+           and unit.getActivity(uid) ~= "transitioning" then
+            if unit.exists(target) and unit.getPose(target) ~= "dead" then
+                unit.setAnimOverride(uid, "attack_quick")
+                -- reach bonus lets the strike hit a high part; impact speed
+                -- folds the leap's full-body momentum into the damage.
+                combat.attack(uid, target, s.lungeMode or "quick",
+                              s.lungeReach or 0, s.lungeImpactSpeed or 0)
+                s.attackSwingUntil  = now + (unit.getAnimDuration(uid, "attack_quick") or 0.4)
+                s.attackLastSwingAt = now
+                s.attackLastMode    = s.lungeMode or "quick"
+            end
+            s.lungePhase = nil; s.lungeSawAir = nil
+            s.lungeTarget = nil; s.lungeReach = nil; s.lungeImpactSpeed = nil
+        end
+        return true   -- consume the tick while leaping / landing
+    end
+
+    -- Phase 1: decide to leap. Must be out of melee reach, off cooldown,
+    -- and the mind/skill check (2e) must elect to commit — otherwise fall
+    -- through to normal pursue (walk closer and fight).
+    if chebyshev <= range then return false end
+    local last = s.attackLastSwingAt or 0
+    if now - last < computeAttackCooldown(uid, s.attackLastMode or "quick") then
+        return false
+    end
+    if not shouldLunge(uid, s) then return false end
+    local jr = unit.getJumpReach(uid)
+    if not jr or not jr.dist or jr.dist <= 0 then return false end
+
+    -- Land one tile from the target, on our side. getInfo gridX/Y are
+    -- CONTINUOUS positions, so floor to integer TILE coords (unit.jump
+    -- needs integers, or its tointeger silently rejects the command).
+    local mtx, mty = math.floor(me.gridX),  math.floor(me.gridY)
+    local ttx, tty = math.floor(you.gridX), math.floor(you.gridY)
+    local sgx = (mtx > ttx and 1) or (mtx < ttx and -1) or 0
+    local sgy = (mty > tty and 1) or (mty < tty and -1) or 0
+    local landX, landY = ttx + sgx, tty + sgy
+    local ldx, ldy = landX - mtx, landY - mty
+    local d = math.sqrt(ldx * ldx + ldy * ldy)
+
+    if d < 0.5 then
+        -- Already adjacent: a vertical pounce in place — full strike-reach,
+        -- no horizontal leap (which the engine would refuse at d≈0).
+        unit.setAnimOverride(uid, "attack_quick")
+        combat.attack(uid, target, "quick", jr.height or 0,
+                      unit.lungeImpactSpeed(uid, 0))
+        s.attackSwingUntil  = now + (unit.getAnimDuration(uid, "attack_quick") or 0.4)
+        s.attackLastSwingAt = now
+        s.attackLastMode    = "quick"
+        return true
+    end
+    if d > jr.dist then return false end
+
+    -- Strike-reach envelope at this leap distance.
+    local frac  = d / jr.dist
+    local reach = (jr.height or 0) * (1 - frac * frac)
+    if unit.jump(uid, landX, landY) then
+        s.lungePhase        = "air"
+        s.lungeSawAir       = false
+        s.lungeStartAt      = now
+        s.lungeTarget       = target
+        s.lungeMode         = "quick"
+        s.lungeReach        = reach
+        s.lungeImpactSpeed  = unit.lungeImpactSpeed(uid, d)
+    end
+    return true
+end
+
 local function attackTargetExecute(uid, s, params)
     local target = s.attackTargetUid
     if not target then
@@ -1437,6 +1587,11 @@ local function attackTargetExecute(uid, s, params)
     local dy = math.abs(me.gridY - you.gridY)
     local chebyshev = (dx > dy) and dx or dy
     local range    = unit.getAttackRange(uid) or 1.0
+
+    -- Short-reach units (the squirrel) lunge instead of futilely closing to
+    -- a melee range they can never reach. Handles the whole leap→land→strike
+    -- sequence over several ticks; if it acted, skip the normal path.
+    if tryLunge(uid, s, target, me, you, chebyshev) then return end
 
     if chebyshev <= range then
         -- In range. If we were mid-walk, stop so the next AI tick
@@ -3470,26 +3625,47 @@ function unitAi.combatEffectiveness(uid)
         * (1 - painNorm * 0.5)
 end
 
--- | Sum of combat-effectiveness across every unit currently attacking
---   `threatUid`. Used by the retreat candidate to compare "the squad
---   that's currently engaging this guy" vs the threat itself, so a
---   solo acolyte sees a futile fight against a bear while a trio sees
---   it as winnable.
+-- | "Our" combat strength against `threatUid`. Counts every unit that is
+--   EITHER already attacking the threat OR a same-side ally (faction ≠ the
+--   threat's) within SWARM_RALLY_RADIUS of it — a POTENTIAL joiner. Used by
+--   the retreat candidate so a solo acolyte still sees a bear as futile,
+--   while a pack near the threat reads as a winnable swarm and commits
+--   together instead of each member fleeing before the swarm forms.
+--   (2-faction world for now — player vs wildlife — so "not the threat's
+--   faction" = our side; wildlife rallying with wildlife is intended.)
 function unitAi.groupEffectivenessVs(threatUid)
+    if not unit.exists(threatUid) then return 0 end
+    local you = unit.getInfo(threatUid)
+    local threatFaction = unit.getFaction(threatUid)
     local total = 0
     for _, uid in ipairs(unit.getAllIds() or {}) do
         local st = aiState[uid]
-        if st and st.attackTargetUid == threatUid then
+        local committed = st and st.attackTargetUid == threatUid
+        local rallyable = false
+        if not committed and you
+           and unit.getFaction(uid) ~= threatFaction then
+            local me = unit.getInfo(uid)
+            if me then
+                local d = math.max(math.abs(me.gridX - you.gridX),
+                                   math.abs(me.gridY - you.gridY))
+                rallyable = d <= SWARM_RALLY_RADIUS
+            end
+        end
+        if committed or rallyable then
             total = total + unitAi.combatEffectiveness(uid)
         end
     end
     return total
 end
 
-function unitAi.commandAttack(uid, targetUid)
+-- commandAttack(uid, targetUid [, committed]) — set the attack goal. When
+-- `committed` is true (a player or scripted ORDER, vs the AI's own emergent
+-- engage), the unit holds far longer before futility breaks it (soft override).
+function unitAi.commandAttack(uid, targetUid, committed)
     if not targetUid then return end
     local s = ensureState(uid)
     s.attackTargetUid = targetUid
+    s.committed = committed and true or nil
     setGoal(s, "attack")
     s.nextActionAt = 0
 end

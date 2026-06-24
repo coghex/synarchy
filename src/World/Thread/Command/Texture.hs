@@ -96,6 +96,14 @@ handleWorldSetTextureCommand env logger pageId texType texHandle = do
                   VegTileTexture vid  → wt { wtVegTextures  = HM.insert vid texHandle (wtVegTextures wt) }
             atomicModifyIORef' (wsTexturesRef worldState) 
                 (\wt → (updateTextures wt, ()))
+            -- Texture bindings feed directly into the cached world quads.
+            -- If a world became visible before late texture loads arrived
+            -- (arena fast-boot), keep the new handles but force the next
+            -- render to rebuild against them instead of reusing the old
+            -- checkerboard-slot cache until the camera happens to move.
+            writeIORef (wsQuadCacheRef worldState) Nothing
+            writeIORef (wsZoomQuadCacheRef worldState) Nothing
+            writeIORef (wsBgQuadCacheRef worldState) Nothing
             logDebug logger CatWorld $ 
                 "Texture updated for world: " <> unWorldPageId pageId
         Nothing → 

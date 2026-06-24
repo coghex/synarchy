@@ -5,10 +5,13 @@ module World.Thread.Command.Edit
     , handleWorldSetFluidTileCommand
     , handleWorldSetSlopeCommand
     , handleWorldSetCellCommand
+    , handleWorldSetStructureCommand
+    , handleWorldClearStructureCommand
     , handleWorldDigTileCommand
     ) where
 
 import UPrelude
+import Data.Word (Word8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -153,6 +156,59 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                             "Added tile at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy)
                               <> " mat=" <> T.pack (show mat)
+
+-- | Place a structure piece (floor/wall/post/ceiling) at (gx,gy,slot-tag) via
+--   the WeSetStructure edit path: live-apply to the loaded chunk's structure
+--   overlay AND append to the per-chunk edit log, so it persists + replays on
+--   eviction. Palette ids (texture/facemap) are resolved Lua-side; the cap
+--   variant is already baked into facePaletteId (the BUILDER chose it). No
+--   terrain is touched — but it shares the ordered log with terrain edits, so
+--   a dig recorded before this lands before it on replay.
+handleWorldSetStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Word8 → Int → Int → Int → IO ()
+handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for set structure: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, _) = globalToChunk gx gy
+                edit = WeSetStructure gx gy slotTag texId faceId z
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing →
+                    logWarn logger CatWorld $
+                        "Chunk not loaded for set structure at "
+                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                Just lc → do
+                    let lc' = applyEdit edit lc
+                    atomicModifyIORef' (wsTilesRef ws) $ \w →
+                        (insertChunk lc' w, ())
+                    atomicModifyIORef' (wsEditsRef ws) $ \es →
+                        (appendEdit coord edit es, ())
+
+-- | Remove the structure piece at (gx,gy,slot-tag) via WeClearStructure.
+handleWorldClearStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Word8 → IO ()
+handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for clear structure: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, _) = globalToChunk gx gy
+                edit = WeClearStructure gx gy slotTag
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing → pure ()
+                Just lc → do
+                    let lc' = applyEdit edit lc
+                    atomicModifyIORef' (wsTilesRef ws) $ \w →
+                        (insertChunk lc' w, ())
+                    atomicModifyIORef' (wsEditsRef ws) $ \es →
+                        (appendEdit coord edit es, ())
 
 -- | Set the walkable-ramp slope bitmask of an existing tile at (gx,gy,z).
 --   Routes through the edit log (WeSetSlope) like every other edit, so a

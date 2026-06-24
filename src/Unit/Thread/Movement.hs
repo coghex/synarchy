@@ -17,11 +17,18 @@
 module Unit.Thread.Movement
     ( tickAllMovement
     , UnitMoveStats(..)
+    , startJump
+    , jumpMaxTiles
+    , maxJumpHeight
+    , strikeReach
+    , metresPerTile
+    , lungeImpactSpeed
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Control.Monad (when, forM_)
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import Combat.Types (pushInjuryEvent)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
@@ -35,7 +42,7 @@ import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep, replanCostThreshold)
 import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
-import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
+import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor, gravity, metresPerZ)
 
 -- | Per-unit movement stats relevant to climb/fall mechanics.
 --   Snapshotted once per tick at the top of tickAllMovement so the
@@ -299,8 +306,7 @@ convertSlippedClimb now statsFor uid ss =
                 curRealZ  = usRealZ ss
                 currentZ  = floor curRealZ ∷ Int
                 dropZ     = currentZ - fromZ
-                duration  = realToFrac (fromIntegral dropZ / fallSpeedZ)
-                            ∷ Double
+                duration  = fallDuration dropZ
                 dstX      = fromX
                 dstY      = fromY
                 impact    = computeFallImpact dropZ stats
@@ -310,6 +316,7 @@ convertSlippedClimb now statsFor uid ss =
                   , usFallFromTile     = Just (fromX, fromY, currentZ)
                   , usFallToTile       = Just (dstX, dstY, fromZ)
                   , usFallImpact       = Just impact
+                  , usJumpApex         = Nothing   -- a fall, not a leap
                   -- Cancel the climb-chain follow-ups; the unit isn't
                   -- going to crawl + stand after a fall.
                   , usPostTransition   = []
@@ -454,15 +461,32 @@ tickFallZ ∷ Double → UnitSimState → UnitSimState
 tickFallZ now us =
     case (usState us, usFallFromTile us, usFallToTile us,
           usTransitionUntil us) of
-        (TransitioningTo Falling, Just (_, _, fromZ), Just (_, _, toZ), Just untilT) →
-            let dur = max 0.001
-                          (untilT - fallStartFromUntil untilT fromZ toZ)
-                remain   = max 0 (untilT - now)
-                progress = clamp01 (1 - realToFrac remain / dur)
-                fromZF   = fromIntegral fromZ ∷ Float
-                toZF     = fromIntegral toZ   ∷ Float
-                lerp     = fromZF + realToFrac progress * (toZF - fromZF)
-            in us { usRealZ = if remain ≤ 0 then toZF else lerp }
+        (TransitioningTo Falling, Just (fx, fy, fromZ), Just (tx, ty, toZ), Just untilT) →
+            let remain = max 0 (untilT - now)
+                fromZF = fromIntegral fromZ ∷ Float
+                toZF   = fromIntegral toZ   ∷ Float
+            in case usJumpApex us of
+                Just apex →
+                    -- LEAP: a gravity arc (rise then fall) plus horizontal
+                    -- interpolation across the gap. realZ peaks `apex` above
+                    -- the chord midpoint (4·p·(1−p) is 1 at p=0.5), so it
+                    -- launches up, sails over, and comes down onto the target.
+                    let dur  = max 0.001 (jumpFlightTime apex)
+                        p    = realToFrac (clamp01 (1 - realToFrac remain / dur)) ∷ Float
+                        arcZ = fromZF + (toZF - fromZF) * p + apex * 4 * p * (1 - p)
+                    in us { usRealX = fx + p * (tx - fx)
+                          , usRealY = fy + p * (ty - fy)
+                          , usRealZ = if remain ≤ 0 then toZF else arcZ }
+                Nothing →
+                    -- FALL: parabolic, gravity-accelerated descent (realZ
+                    -- falls as ½·g·t² → progress² in normalised time), xy
+                    -- pinned at the launch and snapped at landing.
+                    let dur      = max 0.001
+                                       (untilT - fallStartFromUntil untilT fromZ toZ)
+                        progress = clamp01 (1 - realToFrac remain / dur)
+                        accel    = realToFrac progress * realToFrac progress ∷ Float
+                        lerp     = fromZF + accel * (toZF - fromZF)
+                    in us { usRealZ = if remain ≤ 0 then toZF else lerp }
         _ → us
   where
     clamp01 ∷ Double → Double
@@ -470,22 +494,127 @@ tickFallZ now us =
 
 fallStartFromUntil ∷ Double → Int → Int → Double
 fallStartFromUntil untilT fromZ toZ =
-    let dz = abs (toZ - fromZ)
-        secondsPerZ = realToFrac (1 / fallSpeedZ) ∷ Double
-        duration = secondsPerZ * fromIntegral dz
-    in untilT - duration
+    untilT - fallDuration (abs (toZ - fromZ))
 
 -- | Climb ascent rate in tiles-of-Z per real-second. 0.3 → 3.33 s
 --   per Z level. Tuned for "climbing is a real commitment" pacing.
 climbSpeedZ ∷ Float
 climbSpeedZ = 0.3
 
--- | Fall descent rate in tiles-of-Z per real-second. Faster than
---   climbing — falling is hardly a controlled motion. ~6 z/sec is
---   a 2-tile drop in 0.33 s, which keeps the falling animation
---   snappy without making it inscrutable.
-fallSpeedZ ∷ Float
-fallSpeedZ = 6.0
+-- | Free-fall gravity in z-levels/s². Derived from the injury model's
+--   constants (Unit.Fall.gravity m/s² ÷ metresPerZ) so the motion that
+--   brings a unit down stays consistent with the impact energy the fall
+--   injuries assume — one source of truth for "how hard gravity pulls."
+fallGravityZ ∷ Float
+fallGravityZ = gravity / metresPerZ
+
+-- | Time (s) to free-fall `dropZ` z-levels from rest under gravity:
+--   dropZ = ½·g·t² ⇒ t = √(2·dropZ/g). Replaces the old constant-rate
+--   dropZ/fallSpeedZ — short falls start gently, tall falls build real
+--   speed, and the descent matches the energy the injury model uses.
+fallDuration ∷ Int → Double
+fallDuration dropZ =
+    realToFrac (sqrt (2 * fromIntegral (max 0 dropZ) / fallGravityZ))
+
+-- | Metres per tile at UNIT scale (combat/leaps). Not the worldgen
+--   tectonic 10 m/tile — at the sprite scale a tile reads as ~2-3 m, so
+--   a 1-tile-gap leap looks athletic-but-possible. Lets the leap's
+--   horizontal reach (tiles) be related to strike heights (metres).
+metresPerTile ∷ Float
+metresPerTile = 2.5
+
+-- | Max horizontal leap distance (tiles) from the leap skill + stats,
+--   PENALISED by body-fat fraction (power-to-weight: a fat unit launches
+--   the same legs against more mass). The skill/stat split: LEARNED
+--   `jumping` sets the base, agility/strength extend it, fat cuts it.
+--   Tuned so only an athletic acolyte clears a 1-tile gap (~2-tile leap)
+--   and a fat one falls short; a squirrel leaps well past it.
+jumpMaxTiles ∷ Float → Float → Float → Float → Float
+             -- jumping skill, agility, strength, fat fraction
+jumpMaxTiles jumpSkill agility strength fatFrac =
+    (1.8 + 1.2 * (jumpSkill / 100)
+         + 1.0 * max 0 (agility - 1)
+         + 0.4 * max 0 (strength - 1))
+    * (1 - 0.6 * clamp01F fatFrac)
+
+-- | Max vertical strike height (metres above foot) a unit can reach by
+--   leaping STRAIGHT UP — the hard cap that stops a squirrel headshotting
+--   a giraffe. Same skill/stat/fat blend as the distance; squirrel ~1.5 m,
+--   athletic acolyte ~1.0 m, bear ~1.8 m.
+maxJumpHeight ∷ Float → Float → Float → Float → Float
+              -- jumping skill, agility, strength, fat fraction
+maxJumpHeight jumpSkill agility strength fatFrac =
+    (0.6 + 1.0 * (jumpSkill / 100)
+         + 0.5 * max 0 (agility - 1)
+         + 0.2 * max 0 (strength - 1))
+    * (1 - 0.6 * clamp01F fatFrac)
+
+-- | Highest a unit can land a strike at horizontal leap distance d
+--   (tiles), given its max distance and max vertical reach: the reach
+--   ENVELOPE. Full height at d=0 (a near, steep-pitched leap), tapering
+--   to 0 at max distance (a long, flat leap stays low). Capped ≥ 0.
+strikeReach ∷ Float → Float → Float → Float
+            -- d (tiles), maxDist (tiles), maxHeight (m)
+strikeReach d maxDist maxHeight
+    | maxDist ≤ 0 = maxHeight
+    | otherwise   = max 0 (maxHeight * (1 - (d / maxDist) * (d / maxDist)))
+
+clamp01F ∷ Float → Float
+clamp01F x = max 0 (min 1 x)
+
+-- | Arc apex (z above launch) for a leap of horizontal distance d —
+--   taller for longer leaps, clamped so the arc stays readable.
+jumpApexFor ∷ Float → Float
+jumpApexFor d = max 0.5 (min 2.0 (0.5 + 0.3 * d))
+
+-- | Time of flight (s) for a symmetric leap reaching apex `a`: up then
+--   down, each leg √(2a/g). Shares fallGravityZ so a leap and a fall
+--   obey the exact same gravity.
+jumpFlightTime ∷ Float → Double
+jumpFlightTime a = realToFrac (2 * sqrt (2 * max 0.01 a / fallGravityZ))
+
+-- | Impact speed (m/s) of a lunge — how fast the body is travelling when it
+--   hits, used by combat to size the full-body momentum a lunge adds to its
+--   strike. A real horizontal leap (d > 0): the horizontal travel speed
+--   (distance ÷ flight time). An in-place vertical pounce (d ≈ 0): the
+--   downward speed gained falling from the unit's max jump height
+--   (√(2·g·h)). Both rise with how committed the leap is.
+lungeImpactSpeed ∷ Float → Float → Float    -- distTiles, maxHeight (m)
+lungeImpactSpeed distTiles maxHeight
+    | distTiles ≤ 0.01 = sqrt (2 * gravity * max 0 maxHeight)
+    | otherwise        =
+        let t = max 0.05 (realToFrac (jumpFlightTime (jumpApexFor distTiles)))
+        in distTiles * metresPerTile / t
+
+-- | Set up a LEAP: a Standing→Falling arc transition from the unit's
+--   current position to (tgx,tgy) at the same z (slice 1 = flat leaps).
+--   usJumpApex is what makes tickFallZ arc up-then-down + lerp xy, and
+--   what makes handleTransitionExpiry land the unit STANDING (a leap is
+--   a controlled jump, not a fall). Reuses the falling/landing anims.
+startJump ∷ Double → UnitSimState → Int → Int → UnitSimState
+startJump now ss tgx tgy =
+    let fromX = usRealX ss
+        fromY = usRealY ss
+        z     = usGridZ ss
+        dstX  = fromIntegral tgx + 0.5
+        dstY  = fromIntegral tgy + 0.5
+        dx    = dstX - fromX
+        dy    = dstY - fromY
+        d     = sqrt (dx * dx + dy * dy)
+        apex  = jumpApexFor d
+        dur   = jumpFlightTime apex
+    in ss { usState            = TransitioningTo Falling
+          , usTransitionUntil  = Just (now + dur)
+          , usTransitionStride = 1
+          , usFacing           = vectorToDirection dx dy
+          , usFallFromTile     = Just (fromX, fromY, z)
+          , usFallToTile       = Just (dstX, dstY, z)
+          , usFallImpact       = Nothing
+          , usJumpApex         = Just apex
+          , usPostTransition   = []
+          , usTarget           = Nothing
+          , usLocalPath        = []
+          }
 
 -- | The Z drop magnitude at which a descent step stops being a
 --   "walk off the edge" and becomes a real fall. dz of -1 still
@@ -642,16 +771,29 @@ handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
             -- the worst of them. Death is NOT decided here — a tall fall
             -- kills by inflicting a lethal (vital severity ≥1) injury that
             -- the Lua injury tick acts on (death emerges from injuries).
-            fellAndLanded = target ≡ Falling
+            -- A LEAP (usJumpApex set) lands on its feet: it shares the
+            -- Falling transition + snap, but skips the fall's knockdown +
+            -- injury and stands the unit straight back up.
+            isLeap        = isJust (usJumpApex us)
+            fellAndLanded = target ≡ Falling ∧ not isLeap
+            leapLanded    = target ≡ Falling ∧ isLeap
             fallDrop = case (usFallFromTile us, usFallToTile us) of
                 (Just (_, _, fz), Just (_, _, tz)) → fz - tz
                 _                                  → 0
             (chainAfter, clearFall, pendingDrop)
               | fellAndLanded = ([Collapsed], True, Just fallDrop)
+              -- A leap touches down then recovers to standing: hold the
+              -- landing frame and chain Falling→Standing, which plays the
+              -- `falling-to-standing` (landing) anim — same shape as a
+              -- fall's Falling→Collapsed, but no knockdown/injury.
+              | leapLanded    = ([Standing], True, Nothing)
               | otherwise     = ( usPostTransition snapped, False
                                 , usPendingFallDrop snapped )
-            usPosed = snapped { usPose            = if fellAndLanded
-                                                    then Falling else target
+            landedPose
+              | fellAndLanded = Falling   -- held on the collapse landing frame
+              | leapLanded    = Falling   -- held on the landing frame; chain stands it up
+              | otherwise     = target
+            usPosed = snapped { usPose            = landedPose
                               , usState           = Idle
                               , usTransitionUntil = Nothing
                               , usClimbFromTile   = if clearClimb
@@ -677,6 +819,9 @@ handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
                               -- pass; usGetUpAt is set there once the worst
                               -- injury (and thus the stun) is known.
                               , usPendingFallDrop = pendingDrop
+                              -- Leap is over once it lands (cleared whether
+                              -- it was a leap or a fall).
+                              , usJumpApex        = Nothing
                               }
         in case usPostTransition usPosed of
             (next : rest) →
@@ -951,7 +1096,7 @@ startFall
     → UnitSimState
 startFall now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
     let dz       = srcZ - dstZ                 -- positive: drop magnitude
-        duration = realToFrac (fromIntegral dz / fallSpeedZ) ∷ Double
+        duration = fallDuration dz
         srcX     = usRealX us
         srcY     = usRealY us
         -- Land on the destination tile center. Falls don't have the
@@ -967,6 +1112,7 @@ startFall now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
           , usFallFromTile     = Just (srcX, srcY, srcZ)
           , usFallToTile       = Just (dstX, dstY, dstZ)
           , usFallImpact       = Just impact
+          , usJumpApex         = Nothing   -- a fall, not a leap
           -- usPostTransition stays empty here; the landing outcome
           -- (set in handleTransitionExpiry based on impact) decides
           -- whether to chain into Collapsed/Standing/Dead.

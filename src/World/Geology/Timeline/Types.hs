@@ -65,6 +65,7 @@ import World.Hydrology.Types
     ( HydroFeature(..)
     , HydroEvolution(..)
     , GlacierParams(..)
+    , GlacierMoraineParams(..)
     , RiverParams(..)
     , RiverSegment(..)
     , LakeParams(..)
@@ -235,8 +236,12 @@ data GeoEvent
     | RiverSegmentEvent !RiverSegmentCarve
     | RiverDeltaEvent   !RiverDeltaParams
     | OreSheetEvent     !OreSheetParams
-      -- ^ Flow-routed sedimentary ore deposit (appended last:
+      -- ^ Flow-routed sedimentary ore deposit (appended in save v30:
       --   'Generic Serialize' is positional by constructor tag).
+    | GlacierMoraineEvent !GlacierMoraineParams
+      -- ^ Retreat/melt moraine deposit from pre-change glacier geometry.
+      --   Appended last (save v53): 'Generic Serialize' is positional by
+      --   constructor tag.
     deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 -- * Explode a river HydroEvent into per-segment events
@@ -349,6 +354,8 @@ eventBBox (OreSheetEvent os) _ws =
         ys = map snd corners
     in EventBBox (minimum xs - s) (minimum ys - s)
                  (maximum xs + s) (maximum ys + s)
+eventBBox (GlacierMoraineEvent mp) ws =
+    glacierMoraineBBoxW ws mp
 
 featureShapeBBox ∷ FeatureShape → Int → EventBBox
 featureShapeBBox (VolcanicShape vf) ws = volcanicFeatureBBox vf ws
@@ -422,6 +429,16 @@ glacierBBox glacier =
         moraine = glMoraineSize glacier
         r = len + moraine + w
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+glacierMoraineBBoxW ∷ Int → GlacierMoraineParams → EventBBox
+glacierMoraineBBoxW ws mp =
+    let GeoCoord cx0 cy0 = gmpCenter mp
+        (cx, cy) = wrapCoordU ws cx0 cy0
+        footX0 = cx0 + round (fromIntegral (gmpLength mp) * cos (gmpFlowDir mp))
+        footY0 = cy0 + round (fromIntegral (gmpLength mp) * sin (gmpFlowDir mp))
+        (fx, fy) = wrapRelative ws cx cy footX0 footY0
+        r = gmpWidth mp + gmpRidgeHalfLength mp + gmpDepositHeight mp + 4
+    in EventBBox (fx - r) (fy - r) (fx + r) (fy + r)
 
 hydroFeatureBBox ∷ HydroFeature → Int → EventBBox
 hydroFeatureBBox (RiverFeature river) ws =
@@ -756,4 +773,3 @@ data PersistentFeature = PersistentFeature
     , pfEruptionCount ∷ !Int
     , pfParentId      ∷ !(Maybe GeoFeatureId)
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
-

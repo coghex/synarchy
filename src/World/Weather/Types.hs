@@ -5,6 +5,7 @@ module World.Weather.Types
     , ClimateGrid(..)
     , emptyClimateGrid
     , climateRegionSize
+    , climateRegionCount
       -- * Regional Climate (equilibrium state)
     , RegionClimate(..)
     , defaultRegionClimate
@@ -48,6 +49,9 @@ import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 --   but you could unify them if you prefer.
 climateRegionSize ∷ Int
 climateRegionSize = 4  -- in chunks (so 64 tiles per side)
+
+climateRegionCount ∷ Int → Int
+climateRegionCount worldSize = worldSize `div` climateRegionSize
 
 data ClimateCoord = ClimateCoord !Int !Int
     deriving (Show, Eq, Ord, Generic, Serialize)
@@ -327,7 +331,7 @@ data ClimateState = ClimateState
 
 initClimateState ∷ Int → ClimateState
 initClimateState worldSize =
-    let regSize = worldSize `div` climateRegionSize
+    let regSize = climateRegionCount worldSize
     in ClimateState
         { csClimate    = emptyClimateGrid regSize
         , csOcean      = emptyOceanGrid

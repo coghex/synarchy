@@ -19,6 +19,11 @@ data UnitCommand
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)
     | UnitMoveTo !UnitId !Float !Float !Float
         -- ^ unitId, targetX, targetY, speed (tiles per second)
+    | UnitJump !UnitId !Int !Int
+        -- ^ unitId, target tile (gx, gy). Launches a leap — a gravity arc
+        --   to the target tile at the same z — if the gap is within the
+        --   unit's jump reach (jumping skill + agility/strength) and it's
+        --   standing. Lands standing. See Unit.Thread.Movement.startJump.
     | UnitStop !UnitId
     | UnitCollapse !UnitId
         -- ^ Snap pose to Collapsed (no fall animation yet — deferred).

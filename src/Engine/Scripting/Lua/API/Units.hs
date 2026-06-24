@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.Units
     , unitDestroyFn
     , unitSetPosFn
     , unitMoveToFn
+    , unitJumpFn
     , unitStopFn
     , unitGetPosFn
     , unitGetInfoFn
@@ -39,6 +40,8 @@ module Engine.Scripting.Lua.API.Units
     , unitClearModifiersFn
     , unitGetAllIdsFn
     , unitGetActivityFn
+    , unitGetJumpReachFn
+    , unitLungeImpactSpeedFn
     , unitGetSkillFn
     , unitSetSkillFn
     , unitGetKnowledgeFn
@@ -121,6 +124,7 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
+import Unit.Thread.Movement (jumpMaxTiles, maxJumpHeight, lungeImpactSpeed)
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame)
 import Unit.Sim.Types (Pose(..), UnitActivity(..), UnitSimState(..)
@@ -531,6 +535,27 @@ unitMoveToFn env = do
             Lua.liftIO $ Q.writeQueue (unitQueue env) $
                 UnitMoveTo uid tx ty speed
             Lua.pushboolean True
+            return 1
+
+-- | unit.jump(uid, gx, gy) — order a unit to LEAP to target tile (gx,gy).
+--   The unit thread launches a gravity arc if the gap is within reach
+--   (jumping skill + agility/strength) and the unit is standing; otherwise
+--   it's a no-op. Returns true if the command was enqueued (not whether
+--   the leap will be in range — that's decided on the unit thread).
+unitJumpFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitJumpFn env = do
+    idArg ← Lua.tointeger 1
+    xArg  ← Lua.tointeger 2
+    yArg  ← Lua.tointeger 3
+    case (idArg, xArg, yArg) of
+        (Just n, Just tx, Just ty) → do
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+                UnitJump (UnitId (fromIntegral n))
+                         (fromIntegral tx) (fromIntegral ty)
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
             return 1
 
 unitStopFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -2149,6 +2174,73 @@ unitGetAllSkillsFn env = do
                         Lua.insert (-2)
                         Lua.rawset (-3)
                     return 1
+
+-- | unit.getJumpReach(uid) → { dist = maxTiles, height = maxMetres } or nil.
+--   The unit's leap envelope: max horizontal distance (tiles) and max
+--   vertical strike reach (metres), from jumping skill + agility + strength,
+--   penalised by body-fat. The AI reads these to decide whether to lunge and
+--   to compute the strike-reach it passes to combat.attack.
+unitGetJumpReachFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetJumpReachFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mReach ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst →
+                        let jmp = HM.lookupDefault 0.0 "jumping"  (uiSkills inst)
+                            agi = HM.lookupDefault 1.0 "agility"   (uiStats inst)
+                            str = HM.lookupDefault 1.0 "strength"  (uiStats inst)
+                            bm  = HM.lookupDefault 1.0 "body_mass" (uiStats inst)
+                            fm  = HM.lookupDefault 0.0 "fat_mass"  (uiStats inst)
+                            ff  = if bm > 0 then fm / bm else 0
+                        in return (Just ( jumpMaxTiles jmp agi str ff
+                                        , maxJumpHeight jmp agi str ff ))
+            case mReach of
+                Just (d, h) → do
+                    Lua.newtable
+                    Lua.pushnumber (Lua.Number (realToFrac d))
+                    Lua.setfield (-2) "dist"
+                    Lua.pushnumber (Lua.Number (realToFrac h))
+                    Lua.setfield (-2) "height"
+                    return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.lungeImpactSpeed(uid, distTiles) → m/s. How fast the unit's body
+--   is moving at the end of a leap of `distTiles` tiles (0 = an in-place
+--   vertical pounce). The AI passes this to combat.attack so the lunge's
+--   full-body momentum folds into the strike. 0 / nil unit → 0.
+unitLungeImpactSpeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitLungeImpactSpeedFn env = do
+    idArg ← Lua.tointeger 1
+    dArg  ← Lua.tonumber 2
+    case idArg of
+        Nothing → Lua.pushnumber (Lua.Number 0) >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+                d   = case dArg of
+                          Just (Lua.Number v) → realToFrac v
+                          _                   → 0.0
+            mh ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst →
+                        let jmp = HM.lookupDefault 0.0 "jumping"  (uiSkills inst)
+                            agi = HM.lookupDefault 1.0 "agility"   (uiStats inst)
+                            str = HM.lookupDefault 1.0 "strength"  (uiStats inst)
+                            bm  = HM.lookupDefault 1.0 "body_mass" (uiStats inst)
+                            fm  = HM.lookupDefault 0.0 "fat_mass"  (uiStats inst)
+                            ff  = if bm > 0 then fm / bm else 0
+                        in return (Just (maxJumpHeight jmp agi str ff))
+            case mh of
+                Just h  → Lua.pushnumber (Lua.Number (realToFrac (lungeImpactSpeed d h)))
+                                >> return 1
+                Nothing → Lua.pushnumber (Lua.Number 0) >> return 1
 
 -- | unit.getActivity(uid) — returns the unit's current sim-thread
 --   activity as a string: "idle", "walking", or "collapsed". nil if

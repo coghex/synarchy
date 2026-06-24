@@ -29,6 +29,9 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, GridConfig(..), defaultGridConfig
                   , applyFacingF, gridToScreen)
+import World.Types (wmWorlds, wsTilesRef)
+import World.Tile.Types (WorldTileData(..))
+import World.Chunk.Types (LoadedChunk(..))
 import Structure.Types
 
 baseTileW ∷ Float
@@ -39,32 +42,45 @@ baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 renderStructureQuads ∷ EngineEnv → CameraFacing → Int → Int → Float
                      → IO (V.Vector SortableQuad)
 renderStructureQuads env facing zSlice effDepth tileAlpha = do
-    store ← readIORef (structureStoreRef env)
-    if HM.null store
-      then return V.empty
-      else do
-        texSizes ← readIORef (textureSizeRef env)
-        mBts ← readIORef (textureSystemRef env)
-        defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
-        case mBts of
-            Nothing → return V.empty
-            Just bts → do
-                let lookupSlot h = getTextureSlotIndex h bts
-                    defFmSlot = fromIntegral defFmSlotWord ∷ Float
-                    -- Corner posts anchor at a tile VERTEX (small sprite, inset
-                    -- toward the centre); the rest at the tile face.
-                    isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
-                    mkQuad gx gy slot piece
-                        | isPost slot = postToQuad lookupSlot defFmSlot facing zSlice
-                                            effDepth tileAlpha gx gy slot piece texSizes
-                        | otherwise   = structureToQuad lookupSlot facing zSlice effDepth
-                                            tileAlpha gx gy slot piece texSizes
-                    quads = V.fromList $ HM.foldlWithKey'
-                        (\acc (gx, gy, slotI) piece →
-                            case mkQuad gx gy (toEnum slotI) piece of
-                                Just sq → sq : acc
-                                Nothing → acc) [] store
-                return quads
+    mgr ← readIORef (worldManagerRef env)
+    case wmWorlds mgr of
+        [] → return V.empty
+        ((_, ws):_) → do
+            td      ← readIORef (wsTilesRef ws)
+            handles ← readIORef (texPaletteHandlesRef env)
+            -- Gather structures across ALL loaded chunks' overlays, resolving
+            -- each piece's texture/facemap PALETTE IDs → runtime handles. A
+            -- piece whose id isn't resolved yet (e.g. just after a load,
+            -- before the Lua re-resolve) is skipped — it draws once resolved.
+            let pieces =
+                    [ ( gx, gy, toEnum (fromIntegral slotTag) ∷ StructureSlot
+                      , StructurePiece th fh (spdGridZ spd) )
+                    | lc ← HM.elems (wtdChunks td)
+                    , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
+                    , Just th ← [HM.lookup (spdTexId spd) handles]
+                    , Just fh ← [HM.lookup (spdFaceId spd) handles] ]
+            if null pieces then return V.empty else do
+                texSizes ← readIORef (textureSizeRef env)
+                mBts ← readIORef (textureSystemRef env)
+                defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
+                case mBts of
+                    Nothing → return V.empty
+                    Just bts → do
+                        let lookupSlot h = getTextureSlotIndex h bts
+                            defFmSlot = fromIntegral defFmSlotWord ∷ Float
+                            -- Corner posts anchor at a tile VERTEX (small sprite,
+                            -- inset toward the centre); the rest at the tile face.
+                            isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
+                            mkQuad gx gy slot piece
+                                | isPost slot = postToQuad lookupSlot defFmSlot facing zSlice
+                                                    effDepth tileAlpha gx gy slot piece texSizes
+                                | otherwise   = structureToQuad lookupSlot facing zSlice effDepth
+                                                    tileAlpha gx gy slot piece texSizes
+                            quads = V.fromList
+                                [ sq
+                                | (gx, gy, slot, piece) ← pieces
+                                , Just sq ← [mkQuad gx gy slot piece] ]
+                        return quads
 
 structureToQuad
     ∷ (TextureHandle → Word32)
@@ -96,14 +112,17 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             heightOffset = fromIntegral relativeZ * tileSideHeight
             -- Per-slot vertical offset (tileSideHeight=16px → /4 = 4px, the
             -- floor's lift/thickness):
-            --   • ceiling hangs ~4px BELOW the level above (underside of that
-            --     floor), so +4px (down on screen).
-            --   • a wall RISES ~4px to sit on TOP of the floor instead of at
+            --   • a wall RISES 4px to sit on TOP of the floor instead of at
             --     ground level (the wall art isn't drawn lifted like the
             --     floor's), so −4px (up on screen).
+            --   • a ceiling DROPS ~8px (+0.5·tileSideHeight) to rest on the
+            --     wall tops without cutting them off. (The ceiling art's
+            --     diamond sits 12px HIGHER in its 96×64 canvas — apex y0 vs the
+            --     floor's y12 — so it needs a drop at all; tuned between 12px
+            --     which buried the tops and 6px which floated ~2px high.)
             floorLift = tileSideHeight * 0.25
             slotVOffset = case slot of
-                SCeiling → floorLift
+                SCeiling → tileSideHeight * 0.5
                 SWallNE  → negate floorLift
                 SWallNW  → negate floorLift
                 SWallSE  → negate floorLift
@@ -204,10 +223,15 @@ postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot pie
             drawX = baseX - quadW * 0.5
             drawY = baseY - quadH * postBaseAnchorY
 
-            -- Sort to match the walls this corner caps.
+            -- Sort relative to the walls this corner caps. The bias is PER
+            -- CORNER because back and front need opposite treatment (see
+            -- postBias): the back (N) post nestles BEHIND its NE/NW walls, the
+            -- front (S) post stands IN FRONT of its SE/SW walls. All biases
+            -- stay above the floor (0.0002) so the post sits on the floor, and
+            -- below the z-step (0.001) so they never cross a level.
             (psX, psY) = postSortAnchor slot gx gy
             (faS, fbS) = applyFacingF facing psX psY
-            sortKey = (faS + fbS) + fromIntegral relativeZ * 0.001 + 0.0008
+            sortKey = (faS + fbS) + fromIntegral relativeZ * 0.001 + postBias slot
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))  -- postface
@@ -254,6 +278,24 @@ postCornerOffset slot = case slot of
 postDiamondCentre ∷ (Float, Float)
 postDiamondCentre = (48 * postPx, 36 * postPx)
 
+-- | Per-corner sort bias (all in (floor 0.0002 .. z-step 0.001)). A post fills
+--   its walls' notch; whether it draws in front of or behind those walls
+--   depends on which corner it is:
+--     • N (back) post → BEHIND its NE/NW walls (tieBreak 0.0003/0.0004), so
+--       bias below those → 0.00025 (still above the floor).
+--     • S (front) post → IN FRONT of its SE/SW walls (tieBreak 0.0005/0.0006),
+--       so bias above those → 0.00065.
+--     • E/W posts cap a back wall (depth d) AND a front wall (d+1); their own
+--       anchor depth already lands between the two, so the bias only needs to
+--       beat the floor — 0.00045.
+postBias ∷ StructureSlot → Float
+postBias s = case s of
+    SPostN → 0.00025
+    SPostS → 0.00065
+    SPostE → 0.00045
+    SPostW → 0.00045
+    _      → 0.00025
+
 -- | Depth-sort anchor for a post — matches the walls it caps (back walls
 --   sort at the tile centre, front walls at the front corner).
 postSortAnchor ∷ StructureSlot → Int → Int → (Float, Float)
@@ -282,7 +324,11 @@ sortAnchor slot gx gy =
         SWallSW → (gxf + 1.0, gyf + 1.0)   -- front corner (south vertex)
         SWallNW → (gxf + 0.5, gyf + 0.5)   -- back walls anchor at centre so
         SWallNE → (gxf + 0.5, gyf + 0.5)   --   they draw OVER the floor
-        _       → (gxf + 0.5, gyf + 0.5)   -- floor / ceiling: tile centre
+        SCeiling → (gxf + 1.0, gyf + 1.0)  -- front corner: its +1 z then beats
+                                           --   the front walls (which anchor
+                                           --   here too) so the ceiling draws
+                                           --   OVER all the walls/posts beneath
+        _       → (gxf + 0.5, gyf + 0.5)   -- floor: tile centre
 
 -- | Tiny per-slot offset (all < the 0.001 z-step, so they never cross a
 --   z-level). Two purposes: break exact sort TIES between a wall pair that

@@ -84,6 +84,30 @@ evolveGlacier seed periodIdx gs (events, tbs) pf =
         FExtinct   → (events, tbs)
         FCollapsed → (events, tbs)
 
+glacierMoraineEvent ∷ GlacierParams → Int → Int → GeoEvent
+glacierMoraineEvent glacier ridgeHalfLen moraineDep =
+    GlacierMoraineEvent GlacierMoraineParams
+        { gmpCenter          = glCenter glacier
+        , gmpFlowDir         = glFlowDir glacier
+        , gmpLength          = glLength glacier
+        , gmpWidth           = glWidth glacier
+        , gmpFootElev        = glFootElev glacier
+        , gmpDepositHeight   = moraineDep
+        , gmpRidgeHalfLength = max 2 ridgeHalfLen
+        }
+
+retreatEvents ∷ GeoFeatureId → GlacierParams → Int → Int → [GeoEvent]
+retreatEvents fid glacier retreatLen moraineDep =
+    [ glacierMoraineEvent glacier (max 2 (retreatLen `div` 3)) moraineDep
+    , HydroModify fid (GlacierRetreat retreatLen moraineDep)
+    ]
+
+meltEvents ∷ GeoFeatureId → GlacierParams → Int → [GeoEvent]
+meltEvents fid glacier moraineDep =
+    [ glacierMoraineEvent glacier (max 3 (glLength glacier `div` 8)) moraineDep
+    , HydroModify fid (GlacierMelt moraineDep)
+    ]
+
 
 -- | Active (advancing) glacier evolution
 evolveFActiveGlacier ∷ Word64 → Int → GeoState → Float → Float
@@ -223,14 +247,15 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  h3 = hashGeo seed fidInt 922
                  retreatLen = hashToRangeGeo h2 10 30
                  moraineDep = hashToRangeGeo h3 3 12
-                 evt = HydroModify fid (GlacierRetreat retreatLen moraineDep)
+                 glacier = getGlacierParams pf
+                 evts = retreatEvents fid glacier retreatLen moraineDep
                  tbs' = updateFeature fid
                      (\p → let g = getGlacierParams p
                            in p { pfFeature = HydroShape $ GlacierFeature
                                       (g { glLength = max 5 (glLength g - retreatLen) })
                                 , pfActivity = FDormant
                                 , pfLastActivePeriod = periodIdx }) tbs
-             in (evt : events, tbs')
+             in (evts <> events, tbs')
 
         else if roll < 0.50
         -- 10%: Branch (same as cold, but shorter)
@@ -311,24 +336,26 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  h3 = hashGeo seed fidInt 942
                  retreatLen = hashToRangeGeo h2 20 60
                  moraineDep = hashToRangeGeo h3 5 20
-                 evt = HydroModify fid (GlacierRetreat retreatLen moraineDep)
+                 glacier = getGlacierParams pf
+                 evts = retreatEvents fid glacier retreatLen moraineDep
                  tbs' = updateFeature fid
                      (\p → let g = getGlacierParams p
                            in p { pfFeature = HydroShape $ GlacierFeature
                                       (g { glLength = max 5 (glLength g - retreatLen) })
                                 , pfActivity = FDormant
                                 , pfLastActivePeriod = periodIdx }) tbs
-             in (evt : events, tbs')
+             in (evts <> events, tbs')
 
         else if roll < 0.65
         -- 20%: Melt entirely — glacier dies, valley + moraine persist
         -- Like GoExtinct for volcanoes
         then let h2 = hashGeo seed fidInt 943
                  moraineDep = hashToRangeGeo h2 8 25
-                 evt = HydroModify fid (GlacierMelt moraineDep)
+                 glacier = getGlacierParams pf
+                 evts = meltEvents fid glacier moraineDep
                  tbs' = updateFeature fid
                      (\p → p { pfActivity = FExtinct }) tbs
-             in (evt : events, tbs')
+             in (evts <> events, tbs')
 
         else if roll < 0.75
         -- 10%: Moraine dam → lake
@@ -393,10 +420,11 @@ evolveFDormantGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
         -- 20%: Melt entirely
         then let h2 = hashGeo seed fidInt 956
                  moraineDep = hashToRangeGeo h2 5 15
-                 evt = HydroModify fid (GlacierMelt moraineDep)
+                 glacier = getGlacierParams pf
+                 evts = meltEvents fid glacier moraineDep
                  tbs' = updateFeature fid
                      (\p → p { pfActivity = FExtinct }) tbs
-             in (evt : events, tbs')
+             in (evts <> events, tbs')
 
         else
         -- 65%: Stay dormant
@@ -408,10 +436,11 @@ evolveFDormantGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
         -- 60%: Melt
         then let h2 = hashGeo seed fidInt 960
                  moraineDep = hashToRangeGeo h2 8 25
-                 evt = HydroModify fid (GlacierMelt moraineDep)
+                 glacier = getGlacierParams pf
+                 evts = meltEvents fid glacier moraineDep
                  tbs' = updateFeature fid
                      (\p → p { pfActivity = FExtinct }) tbs
-             in (evt : events, tbs')
+             in (evts <> events, tbs')
 
         else if roll < 0.75
         -- 15%: Moraine dam → lake (the glacier's last gift)

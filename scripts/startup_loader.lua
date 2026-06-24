@@ -13,6 +13,7 @@ startupLoader.processed     = 0
 startupLoader.currentLabel  = "Initializing..."
 startupLoader.built         = false
 startupLoader.done          = false
+startupLoader.profile       = "normal"
 startupLoader.itemsPerTick  = 4
 
 local function addItem(label, fn)
@@ -137,14 +138,7 @@ local hudPaths = {
 -- Build the queue
 -----------------------------------------------------------
 
-function startupLoader.build()
-    startupLoader.items     = {}
-    startupLoader.processed = 0
-    startupLoader.done      = false
-
-    -- YAML phases. Each YAML loader internally calls engine.loadTexture
-    -- for the textures it references, so the texture cache warms up
-    -- as we go.
+local function queueNormalProfile()
     addYamlDir("data/materials",  "Loading materials...",  engine.loadMaterialYaml)
     addYamlDir("data/vegetation", "Loading vegetation...", engine.loadVegetationYaml)
     addYamlDir("data/flora",      "Loading flora...",      engine.loadFloraYaml)
@@ -159,10 +153,41 @@ function startupLoader.build()
     addTextureDir("assets/textures/icons", "Loading icons...")
     addTextureList("Loading HUD...",   hudPaths)
     addTextureList("Loading world...", worldStructuralPaths)
+end
+
+local function queueArenaProfile()
+    -- Arena/dev boot only needs the registries and runtime definitions
+    -- required by the debug overlay, build tool, and flat arena world.
+    -- Everything else can stream in later on first use.
+    addYamlDir("data/materials",  "Loading materials...",  engine.loadMaterialYaml)
+    -- Arena surface tiles spawn with grass vegetation IDs 5-8, so the
+    -- vegetation registry has to exist up front or every visible tile
+    -- resolves to the undefined magenta checkerboard.
+    addYamlDir("data/vegetation", "Loading vegetation...", engine.loadVegetationYaml)
+    addYamlDir("data/substances", "Loading substances...", engine.loadSubstanceYaml)
+    addYamlDir("data/infections", "Loading infections...", engine.loadInfectionYaml)
+    addYamlDir("data/items",      "Loading items...",      engine.loadItemYaml)
+    addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
+    addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
+    addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
+end
+
+function startupLoader.build(profile)
+    startupLoader.items     = {}
+    startupLoader.processed = 0
+    startupLoader.done      = false
+    startupLoader.profile   = profile or "normal"
+
+    if startupLoader.profile == "arena" then
+        queueArenaProfile()
+    else
+        queueNormalProfile()
+    end
 
     startupLoader.built = true
     startupLoader.currentLabel = "Loading..."
-    engine.logInfo("Startup loader queued " .. #startupLoader.items .. " items")
+    engine.logInfo("Startup loader queued " .. #startupLoader.items
+        .. " items for profile " .. startupLoader.profile)
 end
 
 -----------------------------------------------------------
@@ -201,12 +226,20 @@ function startupLoader.isDone()
     return startupLoader.done
 end
 
+function startupLoader.runAll()
+    if startupLoader.done or not startupLoader.built then return end
+    while not startupLoader.done do
+        startupLoader.tick(0)
+    end
+end
+
 function startupLoader.reset()
     startupLoader.items        = {}
     startupLoader.processed    = 0
     startupLoader.currentLabel = "Initializing..."
     startupLoader.built        = false
     startupLoader.done         = false
+    startupLoader.profile      = "normal"
 end
 
 return startupLoader

@@ -224,7 +224,7 @@ function testArena.show()
     -- so nothing renders — just blank + HUD
 
     -- Note: tile-editor arena-mode is armed by ui_manager's
-    -- test_arena_view branch (after this loading screen finishes).
+    -- test_arena_view branch once the world thread signals readiness.
     -- Arming here would be wiped by the mid-transition hide().
 end
 

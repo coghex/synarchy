@@ -5,6 +5,7 @@ module World.Hydrology.Types
     , RiverParams(..)
     , RiverSegment(..)
     , GlacierParams(..)
+    , GlacierMoraineParams(..)
     , LakeParams(..)
     , LakeSource(..)
       -- * Activity states
@@ -100,6 +101,16 @@ data GlacierParams = GlacierParams
     , glIsIceSheet  ∷ !Bool       -- ^ True = polar ice sheet edge, False = alpine
     , glStartElev   ∷ !Int        -- ^ Terrain elevation at glCenter (head), sampled at generation
     , glFootElev    ∷ !Int        -- ^ Terrain elevation at the foot (glCenter + flowDir × glLength)
+    } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
+
+data GlacierMoraineParams = GlacierMoraineParams
+    { gmpCenter          ∷ !GeoCoord
+    , gmpFlowDir         ∷ !Float
+    , gmpLength          ∷ !Int
+    , gmpWidth           ∷ !Int
+    , gmpFootElev        ∷ !Int
+    , gmpDepositHeight   ∷ !Int
+    , gmpRidgeHalfLength ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data GlacierActivity

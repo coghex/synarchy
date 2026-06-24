@@ -12,6 +12,15 @@ import qualified Data.HashMap.Strict as HM
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
+import World.Generate.Config
+    ( WorldGenConfig(..)
+    , applyConfigToParams
+    , defaultWorldGenConfig
+    , minimumWorldSize
+    , normalizePlateCount
+    , normalizeWorldSize
+    )
+import World.Plate (generatePlates)
 import World.Types
 
 spec ∷ SpecWith EngineEnv
@@ -42,6 +51,38 @@ spec = do
                 Just params →
                     length (wgpPlates params) `shouldSatisfy` (> 0)
                 Nothing → expectationFailure "params should exist"
+
+        it "keeps plate centers inside canonical world tile bounds" $ \_env → do
+            let cases = [ (seed, worldSize)
+                        | seed ← [0 .. 128]
+                        , worldSize ← [32, 64, 128]
+                        ]
+            forM_ cases $ \(seed, worldSize) → do
+                let halfTiles = (worldSize * chunkSize) `div` 2
+                    inBounds plate =
+                           plateCenterX plate ≥ negate halfTiles
+                        ∧ plateCenterX plate < halfTiles
+                        ∧ plateCenterY plate ≥ negate halfTiles
+                        ∧ plateCenterY plate < halfTiles
+                forM_ (generatePlates (fromIntegral seed) worldSize 8) $ \plate →
+                    plate `shouldSatisfy` inBounds
+
+    describe "Worldgen input normalization" $ do
+        it "snaps world size to a minimum region multiple" $ \_env → do
+            let m = minimumWorldSize
+            map normalizeWorldSize [negate m, 0, 1, m - 1, m, m + 1, 2 * m - 1, 2 * m]
+                `shouldBe` [m, m, m, m, m, 2 * m, 2 * m, 2 * m]
+
+        it "snaps plate count to at least 1" $ \_env →
+            map normalizePlateCount [-3, 0, 1, 8] `shouldBe` [1, 1, 1, 8]
+
+        it "normalizes config-derived worldgen params" $ \_env → do
+            let params = applyConfigToParams defaultWorldGenConfig
+                    { wgcWorldSize = 3
+                    , wgcPlateCount = 0
+                    }
+            wgpWorldSize params `shouldBe` minimumWorldSize
+            wgpPlateCount params `shouldBe` 1
 
     describe "Determinism" $ do
 

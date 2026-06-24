@@ -22,7 +22,7 @@ import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
-                       , LogLevel(..), LogCategory(..), LogBackend(..))
+                       , LogCategory(..), LogBackend(..))
 import System.IO (stdout)
 import Engine.Core.State
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
@@ -41,6 +41,7 @@ import Unit.Types (emptyUnitManager)
 import Unit.Sim.Types (emptyUnitThreadState)
 import Building.Types (emptyBuildingManager)
 import Structure.Types (emptyStructureStore)
+import Structure.Palette (emptyTexPalette)
 import Item.Types (emptyItemManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Substance.Types (emptySubstanceManager)
@@ -75,8 +76,7 @@ initializeEngineWith logBackend = do
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
  
-  logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug
-                                       , lcBackend = logBackend }
+  logger ← initLogger defaultLogConfig { lcBackend = logBackend }
   loggerRef ← newIORef logger
   
   assetPool ← defaultAssetPool
@@ -121,6 +121,8 @@ initializeEngineWith logBackend = do
   statRNGRef ← Random.newStdGen >>= newIORef
   buildingManagerRef ← newIORef emptyBuildingManager
   structureStoreRef ← newIORef emptyStructureStore
+  texPaletteRef ← newIORef emptyTexPalette
+  texPaletteHandlesRef ← newIORef HM.empty
   buildingQueue ← Q.newQueue
   buildingGhostRef ← newIORef Nothing
   combatQueue ← Q.newQueue
@@ -193,6 +195,8 @@ initializeEngineWith logBackend = do
         , statRNGRef         = statRNGRef
         , buildingManagerRef = buildingManagerRef
         , structureStoreRef  = structureStoreRef
+        , texPaletteRef      = texPaletteRef
+        , texPaletteHandlesRef = texPaletteHandlesRef
         , buildingQueue      = buildingQueue
         , combatQueue        = combatQueue
         , combatEventsRef    = combatEventsRef

@@ -54,6 +54,17 @@ data WorldEdit
                                            --   grow-down — underground rooms never carve below
                                            --   bedrock). The replay recomputes the column's surface
                                            --   maps and trims trailing air.
+    | WeSetStructure !Int !Int !Word8 !Int !Int !Int
+                                           -- ^ Place a structure piece (floor/
+                                           --   wall/post/ceiling) at (gx,gy),
+                                           --   slot-tag (= fromEnum StructureSlot),
+                                           --   texture + facemap PALETTE IDS,
+                                           --   and world z. Texture identity is a
+                                           --   palette id (stable across save/
+                                           --   load), resolved to a runtime handle
+                                           --   at render via the palette.
+    | WeClearStructure !Int !Int !Word8    -- ^ Remove the structure piece at
+                                           --   (gx,gy,slot-tag).
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

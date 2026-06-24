@@ -9,7 +9,7 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       setTickIntervalFn, pauseScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
                                       listFilesFn, setPausedFn, isPausedFn,
-                                      realTimeFn, gameTimeFn)
+                                      getBootProfileFn, realTimeFn, gameTimeFn)
 import Engine.Scripting.Lua.API.Camera
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -51,6 +51,7 @@ import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
+import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
@@ -113,6 +114,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "hideDebug"         (hideDebugFn backendState)
   registerLuaFunction "toggleDebug"       (toggleDebugFn backendState)
   registerLuaFunction "getFPS"            (getFPSFn env)
+  registerLuaFunction "getBootProfile"    (getBootProfileFn env)
   registerLuaFunction "setPaused"         (setPausedFn env)
   registerLuaFunction "isPaused"          (isPausedFn env)
   registerLuaFunction "realTime"          realTimeFn
@@ -123,6 +125,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "resumeScript"      (resumeScriptFn backendState)
   registerLuaFunction "setTickInterval"   (setTickIntervalFn env backendState)
   registerLuaFunction "listFiles"         (listFilesFn)
+  registerLuaFunction "loadYaml"          loadYamlFn
 
   registerLuaFunction "getVideoConfig"    (getVideoConfigFn env)
   registerLuaFunction "setVideoConfig"    (setVideoConfigFn env)
@@ -271,6 +274,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "listDefs"    (unitListDefsFn env)
   registerLuaFunction "listAnimations" (unitListAnimationsFn env)
   registerLuaFunction "moveTo"      (unitMoveToFn env)
+  registerLuaFunction "jump"        (unitJumpFn env)
   registerLuaFunction "stop"        (unitStopFn env)
   registerLuaFunction "select"      (unitSelectFn env)
   registerLuaFunction "deselectAll" (unitDeselectAllFn env)
@@ -342,6 +346,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "clearModifiers" (unitClearModifiersFn env)
   registerLuaFunction "getAllIds"   (unitGetAllIdsFn env)
   registerLuaFunction "getActivity" (unitGetActivityFn env)
+  registerLuaFunction "getJumpReach" (unitGetJumpReachFn env)
+  registerLuaFunction "lungeImpactSpeed" (unitLungeImpactSpeedFn env)
   registerLuaFunction "getSkill"     (unitGetSkillFn env)
   -- NB: skill functions follow; the building global is set up after
   -- this `unit` table is finalized below.
@@ -391,7 +397,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "clear"    (structureClearFn env)
   registerLuaFunction "clearAll" (structureClearAllFn env)
   registerLuaFunction "count"    (structureCountFn env)
+  registerLuaFunction "loadedCount" (structureLoadedCountFn env)
+  registerLuaFunction "unresolvedPaletteIds" (structureUnresolvedPaletteIdsFn env)
+  registerLuaFunction "setPaletteHandle" (structureSetPaletteHandleFn env)
+  registerLuaFunction "paletteCount" (structurePaletteCountFn env)
   registerLuaFunction "floorZAt" (structureFloorZAtFn env)
+  registerLuaFunction "hasAt"    (structureHasAtFn env)
   Lua.setglobal (Lua.Name "structure")
 
   -- Equipment global.

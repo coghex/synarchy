@@ -24,6 +24,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Material (MaterialProps(..), registerMaterial
                       , emptyMaterialRegistry)
 import World.Types
+import Structure.Types (emptyChunkStructures)
 import World.Constants (seaLevel)
 import World.Generate (generateChunk)
 import World.Generate.Constants (chunkLoadRadius)
@@ -42,14 +43,28 @@ import World.Weather.Types (ClimateState(..))
 import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
                              , CalendarYaml(..), SunYaml(..), MoonYaml(..)
                              , ResourcesYaml(..)
-                             , applyConfigToParams, timelineParamsOf)
+                             , applyConfigToParams, timelineParamsOf
+                             , minimumWorldSize, normalizeWorldGenInputs)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → IO ()
-handleWorldInitCommand env logger pageId seed worldSize placeCount = do
+handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
+    let (worldSize, placeCount) =
+            normalizeWorldGenInputs rawWorldSize rawPlaceCount
+    when (worldSize ≠ rawWorldSize ∨ placeCount ≠ rawPlaceCount) $ do
+        let msg = "Normalized worldgen inputs: worldSize "
+                <> T.pack (show rawWorldSize) <> " → "
+                <> T.pack (show worldSize) <> ", plateCount "
+                <> T.pack (show rawPlaceCount) <> " → "
+                <> T.pack (show placeCount)
+                <> " (worldSize minimum/multiple "
+                <> T.pack (show minimumWorldSize)
+                <> ", plateCount min 1)."
+        logWarn logger CatWorld msg
+        sendGenLog env msg
     logDebug logger CatWorld $ "Initializing world: " <> unWorldPageId pageId
         <> " (seed=" <> T.pack (show seed)
         <> ", size=" <> T.pack (show worldSize)
@@ -227,6 +242,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
             , lcWaterTableMap = cwt
             , lcMagma      = cmagma
+            , lcStructures = emptyChunkStructures
             }
 
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
@@ -323,6 +339,7 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcWaterTableMap    = VU.replicate (chunkSize * chunkSize) (arenaZ - 2)
             , lcMagma             = Nothing
+            , lcStructures        = emptyChunkStructures
             }
 
         allChunks = [ mkChunk cx cy

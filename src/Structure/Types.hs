@@ -14,9 +14,14 @@ module Structure.Types
     , StructurePiece(..)
     , StructureStore
     , emptyStructureStore
+    , StructurePieceData(..)
+    , ChunkStructures
+    , emptyChunkStructures
     ) where
 
 import UPrelude
+import Control.DeepSeq (NFData(..))
+import Data.Word (Word8)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle)
@@ -58,3 +63,25 @@ type StructureStore = HM.HashMap (Int, Int, Int) StructurePiece
 
 emptyStructureStore ∷ StructureStore
 emptyStructureStore = HM.empty
+
+-- | PURE, per-chunk structure piece — texture identity by PALETTE ID (not a
+--   runtime handle), so it can be produced by the pure replay (`applyEdit`) and
+--   live inside a 'LoadedChunk'. The renderer resolves the ids → handles via
+--   the texture palette. (Contrast 'StructurePiece', which holds resolved
+--   handles for the old in-memory global store.)
+data StructurePieceData = StructurePieceData
+    { spdTexId  ∷ !Int   -- ^ palette id of the sprite texture
+    , spdFaceId ∷ !Int   -- ^ palette id of the facemap
+    , spdGridZ  ∷ !Int   -- ^ world z it sits at
+    } deriving (Show, Eq)
+
+instance NFData StructurePieceData where
+    rnf (StructurePieceData a b c) = rnf a `seq` rnf b `seq` rnf c
+
+-- | A chunk's structure overlay: piece keyed by (gx, gy, slot-tag = fromEnum
+--   slot). Built by replaying the chunk's structure edits; lives in
+--   'LoadedChunk' so it evicts and reloads with the chunk.
+type ChunkStructures = HM.HashMap (Int, Int, Word8) StructurePieceData
+
+emptyChunkStructures ∷ ChunkStructures
+emptyChunkStructures = HM.empty

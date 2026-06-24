@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Hydrology.Glacier.Carving
     ( applyGlacierCarve
+    , applyGlacierMoraine
     , applyGlacierEvolution
     ) where
 
@@ -8,7 +9,7 @@ import UPrelude
 import Data.Word (Word64)
 import World.Base (GeoCoord(..))
 import World.Geology.Hash (wrappedDeltaUV, valueNoise2D)
-import World.Material (matSandstone, unMaterialId)
+import World.Material (matMoraine, matSandstone, unMaterialId)
 import World.Constants (seaLevel)
 import World.Hydrology.Types
 import World.Geology.Types
@@ -123,17 +124,49 @@ applyGlacierCarve glacier worldSize gx gy baseElev =
 
        else noModification
 
+-- | Deposit a retreat/melt moraine at the glacier's former terminus.
+--   This is target-based, like glacier carving: replaying the same event
+--   after its ridge already exists yields no further elevation change.
+applyGlacierMoraine ∷ GlacierMoraineParams → Int → Int → Int → Int → GeoModification
+applyGlacierMoraine mp worldSize gx gy baseElev =
+    let GeoCoord cx cy = gmpCenter mp
+        flowDir = gmpFlowDir mp
+        flowX = cos flowDir
+        flowY = sin flowDir
+        (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
+        alongDist = dx * flowX + dy * flowY
+        perpDist = abs (dx * (-flowY) + dy * flowX)
+        formerTerminus = fromIntegral (gmpLength mp) ∷ Float
+        alongOffset = alongDist - formerTerminus
+        halfBand = max 2.0 (fromIntegral (gmpRidgeHalfLength mp))
+        halfWidth = max 2.0 (fromIntegral (gmpWidth mp) * 0.75)
+        alongT = abs alongOffset / halfBand
+        perpT = perpDist / (halfWidth * 1.25)
+    in if alongT > 1.0 ∨ perpT > 1.0
+       then noModification
+       else
+        let alongProfile = 1.0 - alongT * alongT
+            perpProfile  = 1.0 - perpT * perpT
+            ridgeHeight = fromIntegral (gmpDepositHeight mp)
+                        * alongProfile * perpProfile
+            target = gmpFootElev mp + max 1 (round ridgeHeight)
+            deposit = target - baseElev
+        in if deposit ≤ 0
+           then noModification
+           else GeoModification deposit
+                (Just (unMaterialId matMoraine))
+                deposit
+
 -- * Glacier Evolution Application (pure GeoModification)
 --
 -- NOTE: Advance and Branch need no terrain effect here — active glaciers
 -- are re-carved each age with updated dimensions (see activeGlacierRecarve
 -- in Timeline.hs), so dimension changes propagate automatically.
 --
--- TODO: Retreat and Melt should deposit moraine at the former terminus.
--- The moraineDep parameter is generated in Evolution.hs but currently
--- discarded. Implementing this requires adding glacier geometry (center,
--- flowDir, width, oldLength) to the GlacierRetreat/GlacierMelt variants
--- of HydroEvolution so the spatial deposit can be computed here.
+-- Retreat/melt terrain is emitted as 'GlacierMoraineEvent', which carries
+-- the pre-change glacier geometry needed to place a former-terminus ridge.
 
 applyGlacierEvolution ∷ HydroEvolution → Int → Int → Int → Int → GeoModification
 applyGlacierEvolution (GlacierAdvance _advLen _advWid) _ws _gx _gy _e =

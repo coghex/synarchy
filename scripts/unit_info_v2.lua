@@ -699,6 +699,8 @@ local STAT_DEFS = {
     -- Skills (weapon classes + balance). All grow with XP.
     balance      = { icon = "balance",      name = "Balance",
         desc = "Footing on uneven terrain. Reduces falls, slips, and stagger from impacts; contributes to dodge." },
+    dodge        = { icon = "agility",      name = "Dodge",
+        desc = "Active evasion — slipping a blow you SEE coming. Only works against attacks you're aware of (in view, facing them); useless against an ambush from behind. Chance scales with agility and this skill; telegraphed lunges are easier to dodge." },
     dagger       = { icon = "dagger",       name = "Dagger",
         desc = "Skill with daggers and other short blades. Improves hit chance and damage with that weapon class." },
     unarmed      = { icon = "unarmed",      name = "Unarmed",

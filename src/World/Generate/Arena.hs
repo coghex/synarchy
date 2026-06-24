@@ -10,6 +10,7 @@ import World.Types
 import World.Material
 import World.Vegetation
 import World.Constants (seaLevel)
+import Structure.Types (emptyChunkStructures)
 
 -- | Generate a single flat loam chunk at seaLevel.
 --   Pure and trivial — no geology, no fluids, no flora.
@@ -36,4 +37,5 @@ generateFlatChunk coord =
         , lcSideDeco          = VU.replicate chunkArea 0
         , lcWaterTableMap     = VU.replicate chunkArea (arenaZ - 2)
         , lcMagma             = Nothing
+        , lcStructures        = emptyChunkStructures
         }

@@ -413,6 +413,8 @@ library
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
                      Engine.Scripting.Lua.API.Structure
+                     Engine.Scripting.Lua.API.Yaml
+                     Structure.Palette
                      Engine.Scripting.Lua.API.Combat
                      Item.Types
                      Item.Roll

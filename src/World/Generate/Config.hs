@@ -8,6 +8,11 @@ module World.Generate.Config
     , ResourcesYaml(..)
     , TimelineYaml(..)
     , defaultTimelineYaml
+    , minimumWorldSize
+    , normalizeWorldSize
+    , normalizePlateCount
+    , normalizeWorldGenInputs
+    , normalizeWorldGenConfig
     , timelineParamsOf
     , loadWorldGenConfig
     , saveWorldGenYaml
@@ -24,13 +29,14 @@ import System.Directory (doesFileExist)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)
 import World.Geology.Ore.Types (OreLevers(..))
+import World.Region.Types (regionSize)
 import World.Time.Types
     ( CalendarConfig(..), defaultCalendarConfig
     , SunConfig(..), defaultSunConfig
     , MoonConfig(..), defaultMoonConfig
     )
 import World.Weather.Types
-    ( ClimateParams(..), defaultClimateParams
+    ( ClimateParams(..), climateRegionSize, defaultClimateParams
     , initClimateState
     )
 
@@ -344,7 +350,7 @@ loadWorldGenConfig path = do
             result ← Yaml.decodeFileEither path
             case result of
                 Left _  → return defaultWorldGenConfig
-                Right c → return c
+                Right c → return (normalizeWorldGenConfig c)
 
 -- | Save world gen params as YAML (for save files)
 saveWorldGenYaml ∷ FilePath → WorldGenParams → IO ()
@@ -403,6 +409,37 @@ paramsToConfig p = WorldGenConfig
         }
     }
 
+-- | Smallest supported world side, in chunks. A world must contain at
+--   least one complete region for every region grid used by generation.
+minimumWorldSize ∷ Int
+minimumWorldSize = max regionSize climateRegionSize
+
+roundUpToMultiple ∷ Int → Int → Int
+roundUpToMultiple step n =
+    let r = n `mod` step
+    in if r ≡ 0 then n else n + step - r
+
+-- | Normalize world dimensions and plate counts before they reach
+--   generation. These are UI-friendly clamps: impossible small values
+--   snap to one full region, then round up to the next region multiple
+--   so every region grid tiles the world exactly.
+normalizeWorldSize ∷ Int → Int
+normalizeWorldSize n =
+    roundUpToMultiple minimumWorldSize (max minimumWorldSize n)
+
+normalizePlateCount ∷ Int → Int
+normalizePlateCount = max 1
+
+normalizeWorldGenInputs ∷ Int → Int → (Int, Int)
+normalizeWorldGenInputs worldSize plateCount =
+    (normalizeWorldSize worldSize, normalizePlateCount plateCount)
+
+normalizeWorldGenConfig ∷ WorldGenConfig → WorldGenConfig
+normalizeWorldGenConfig cfg =
+    let (worldSize, plateCount) =
+            normalizeWorldGenInputs (wgcWorldSize cfg) (wgcPlateCount cfg)
+    in cfg { wgcWorldSize = worldSize, wgcPlateCount = plateCount }
+
 -- | Apply a YAML config to the default WorldGenParams.
 --   Only sets the configurable fields; derived fields (plates,
 --   timeline, ocean map, climate state) remain at their defaults
@@ -432,7 +469,9 @@ timelineParamsOf cfg =
         }
 
 applyConfigToParams ∷ WorldGenConfig → WorldGenParams
-applyConfigToParams cfg = defaultWorldGenParams
+applyConfigToParams cfg0 =
+    let cfg = normalizeWorldGenConfig cfg0
+    in defaultWorldGenParams
     { wgpSeed       = case wgcSeed cfg of
                         Just s  → s
                         Nothing → wgpSeed defaultWorldGenParams

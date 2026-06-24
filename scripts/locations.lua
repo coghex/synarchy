@@ -89,16 +89,54 @@ end
 
 local builders = {}
 
--- STUB — the room layout is authored here. It needs the dungeon
--- materials (dungeon_floor / dungeon_wall / ...) and the door / chest /
--- torch defs to exist before it can reference them, so for now it just
--- logs. Fill in: carve interior, lay floor / walls / ceiling, punch a
--- staircase up to the surface, place door + chest + torch.
-function builders.room_small(worldId, gx, gy)
-    engine.logInfo("locations: room_small stamp at " .. gx .. "," .. gy
-                   .. " on '" .. tostring(worldId)
-                   .. "' — geometry TODO (awaiting dungeon textures/defs)")
-    -- TODO(room layout)
+-- A small rectangular room built from the STRUCTURE pieces (floor / wall /
+-- post / ceiling — the RCT-style edge subsystem), NOT terrain voxels. The
+-- click tile is the room CENTRE. Order matters: floors first (posts gate on a
+-- floor), then corner posts (each caps the two perimeter walls meeting there),
+-- then the inward-facing perimeter walls (which cap to those posts).
+--
+-- Perimeter edge per side: −gx = nw, +gx = se, −gy = ne, +gy = sw.
+-- worldId is unused for now — the structure store is global (Stage-1 limit).
+-- Ceiling is OFF by default so the interior stays visible while iterating.
+local ROOM_SMALL_RADIUS = 2   -- → 5×5 footprint
+
+function builders.room_small(worldId, gx, gy, withCeiling)
+    local S = require("scripts.structures")
+    local r = ROOM_SMALL_RADIUS
+    local x0, x1 = gx - r, gx + r
+    local y0, y1 = gy - r, gy + r
+
+    -- 1. floor across the whole footprint
+    for x = x0, x1 do
+        for y = y0, y1 do S.floor(x, y) end
+    end
+
+    -- 2. corner posts (cap the two perimeter walls that meet at each)
+    S.post(x0, y0, "n")   -- nw + ne meet
+    S.post(x1, y0, "e")   -- ne + se meet
+    S.post(x1, y1, "s")   -- se + sw meet
+    S.post(x0, y1, "w")   -- sw + nw meet
+
+    -- 3. perimeter walls (after posts so they cap to them)
+    for y = y0, y1 do
+        S.wall(x0, y, "nw")   -- −gx side
+        S.wall(x1, y, "se")   -- +gx side
+    end
+    for x = x0, x1 do
+        S.wall(x, y0, "ne")   -- −gy side
+        S.wall(x, y1, "sw")   -- +gy side
+    end
+
+    -- 4. ceiling (optional)
+    if withCeiling then
+        for x = x0, x1 do
+            for y = y0, y1 do S.ceiling(x, y) end
+        end
+    end
+
+    engine.logInfo(string.format("locations: room_small %dx%d at %d,%d%s",
+        x1 - x0 + 1, y1 - y0 + 1, gx, gy,
+        withCeiling and " (+ceiling)" or ""))
 end
 
 -- Stamp location `name`, anchored at tile (gx, gy) on page `worldId`.

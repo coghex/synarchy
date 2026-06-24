@@ -149,6 +149,9 @@ function game.init(scriptId)
 end
 
 function game.update(dt)
+    -- Lazily resolve any structure texture-palette ids that need a runtime
+    -- handle (after a save/load). No-op in steady state.
+    require("scripts.structures").resolvePending()
 end
 
 -- Mouse-button constants (match Engine.Scripting.Lua.Thread::LuaMouseDownEvent)
@@ -458,8 +461,10 @@ function game.onMouseDown(button, x, y)
                         label    = "Attack",
                         enabled  = not allFriendly,
                         callback = function()
+                            -- Player order → committed (holds far longer
+                            -- before futility breaks it; soft, not absolute).
                             for _, uid in ipairs(attackers) do
-                                unitAi.commandAttack(uid, targetUid)
+                                unitAi.commandAttack(uid, targetUid, true)
                             end
                         end,
                     })

@@ -3,9 +3,11 @@ module World.Hydrology.Glacier
     ( generateGlaciers
     , evolveGlacier
     , applyGlacierCarve
+    , applyGlacierMoraine
     , applyGlacierEvolution
     ) where
 
 import World.Hydrology.Glacier.Generation (generateGlaciers)
 import World.Hydrology.Glacier.Evolution (evolveGlacier)
-import World.Hydrology.Glacier.Carving (applyGlacierCarve, applyGlacierEvolution)
+import World.Hydrology.Glacier.Carving (applyGlacierCarve, applyGlacierMoraine
+                                       , applyGlacierEvolution)

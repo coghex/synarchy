@@ -19,6 +19,7 @@ import UPrelude
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
+import Structure.Palette (TexPalette)
 import World.Generate.Types (WorldGenParams(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -105,7 +106,8 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 51  -- v51: Wound gains woundNecrosis (necrosis/rot/gangrene)
+currentSaveVersion = 54  -- v54: structure edits (WeSetStructure/WeClearStructure) + sdTexPalette
+                         -- v52: UnitSimState gains usJumpApex (leap arc state)
                          -- v50: UnitInstance gains uiImmuneResponse + uiImmunities (immunity system)
                          -- v49: Wound gains woundInfectionType (data-driven infections)
                          -- v48: WorldEdit gains WeSetCell (3D set-cell edit for locations)
@@ -208,6 +210,13 @@ data SaveData = SaveData
         --   World.Spoil.Types). Fills are relative to each tile's
         --   terrain surface; promoted cells live in sdEdits as
         --   WeAddTile, so restoration is order-independent.
+    -- v54 fields (structure persistence):
+    , sdTexPalette ∷ !TexPalette
+        -- ^ Texture path↔id palette. Structure edits in sdEdits store
+        --   palette ids; this resolves them to paths → runtime handles
+        --   on load. Stable ids → no per-object remap. (Structures
+        --   themselves ride sdEdits as WeSetStructure — no separate
+        --   structure channel.)
     } deriving (Show, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`

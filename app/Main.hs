@@ -17,6 +17,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Generate.Types (WorldGenParams(..))
+import World.Generate.Config (minimumWorldSize, normalizeWorldSize
+                             , normalizePlateCount)
 import World.Geology.Ore (oreMaterialIds)
 import World.Geology.Ore.Types (wodByChunk)
 import World.Geology.Timeline.Types (GeoTimeline(..))
@@ -29,7 +31,7 @@ import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..)
                          , graphicsState, glfwWindow)
-import Engine.Core.Types (EngineConfig(..))
+import Engine.Core.Types (EngineConfig(..), BootProfile(..))
 import Engine.Core.Thread (shutdownThread)
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
                                    , SystemError(..), mkErrorContext)
@@ -100,6 +102,7 @@ main = do
 
   args ← getArgs
   let headless = "--headless" `elem` args
+      bootProfile = if "--arena" `elem` args then BootArena else BootNormal
       mDump    = parseDump args
       port = parseArg "--port" args
       seed = parseArg "--seed" args
@@ -111,17 +114,28 @@ main = do
       plates  = parseArg "--plates" args
       agesLeg = parseArg "--ages" args
       region = parseRegion args
-      worldSize = fromMaybe 256 worldSz
-      plateCount = case plates of
+      rawWorldSize = fromMaybe 256 worldSz
+      worldSize = normalizeWorldSize rawWorldSize
+      rawPlateCount = case plates of
           Just p  → p
           Nothing → fromMaybe (defaultPlatesFor worldSize) agesLeg
+      plateCount = normalizePlateCount rawPlateCount
+
+  when (isJust mDump ∧ worldSize /= rawWorldSize) $
+    hPutStrLn stderr $ "worldSize " ⧺ show rawWorldSize
+        ⧺ " normalized to " ⧺ show worldSize
+        ⧺ " (minimum/multiple " ⧺ show minimumWorldSize ⧺ ")."
+  when (isJust mDump ∧ plateCount /= rawPlateCount) $
+    hPutStrLn stderr $ "plateCount " ⧺ show rawPlateCount
+        ⧺ " normalized to " ⧺ show plateCount
+        ⧺ " (minimum 1)."
 
   case mDump of
     Just layers → runDump layers (fromMaybe 42 seed) worldSize
                                  plateCount region
     Nothing
-      | headless  → runHeadless (Just (fromMaybe 8008 port))
-      | otherwise → runGraphical (Just (fromMaybe 8008 port))
+      | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
+      | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
 
 -- | Parse --flag N from args
 parseArg ∷ Read a ⇒ String → [String] → Maybe a
@@ -167,14 +181,21 @@ guardNativeExceptions act = act `catch` \(e ∷ SomeException) →
             mkErrorContext
 
 -- | Run engine with full graphics (GLFW window + Vulkan)
-runGraphical ∷ Maybe Int → IO ()
-runGraphical mPort = do
+runGraphical ∷ BootProfile → Maybe Int → IO ()
+runGraphical bootProfile mPort = do
   -- Initialize engine
   EngineInitResult env ← initializeEngine
 
   let env' = case mPort of
-        Just p  → env { engineConfig = (engineConfig env) { ecDebugPort = p } }
+        Just p  → env
+            { engineConfig = (engineConfig env)
+                { ecDebugPort = p
+                , ecBootProfile = bootProfile
+                } }
         Nothing → env
+            { engineConfig = (engineConfig env)
+                { ecBootProfile = bootProfile
+                } }
 
   inputThreadState ← startInputThread env'
   luaThreadState   ← startLuaThread env'
@@ -227,13 +248,20 @@ runGraphical mPort = do
 -- | Run engine in headless mode (no window, no GPU)
 --   Starts Lua, world, and unit threads. Debug console on configurable port.
 --   Useful for automated testing, CI, and scripted world generation.
-runHeadless ∷ Maybe Int → IO ()
-runHeadless mPort = do
+runHeadless ∷ BootProfile → Maybe Int → IO ()
+runHeadless bootProfile mPort = do
   EngineInitResult env ← initializeEngineHeadless
 
   let env' = case mPort of
-        Just p  → env { engineConfig = (engineConfig env) { ecDebugPort = p } }
+        Just p  → env
+            { engineConfig = (engineConfig env)
+                { ecDebugPort = p
+                , ecBootProfile = bootProfile
+                } }
         Nothing → env
+            { engineConfig = (engineConfig env)
+                { ecBootProfile = bootProfile
+                } }
 
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'

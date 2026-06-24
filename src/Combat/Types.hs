@@ -49,10 +49,15 @@ attackModeText Heavy = "heavy"
 -- | A command issued from Lua / AI / scripts asking the combat sim
 --   to do something. Drained by the combat thread.
 data CombatCommand
-    = CombatAttack !Word32 !Word32 !AttackMode
-      -- ^ attacker uid → target uid + swing type. The combat thread
-      --   will resolve hit/miss, apply damage + stamina drain, and
-      --   emit events.
+    = CombatAttack !Word32 !Word32 !AttackMode !Float !Float
+      -- ^ attacker uid → target uid + swing type + REACH BONUS + IMPACT
+      --   SPEED. reachBonus (metres) is added to the attacker's strike-
+      --   height reach (0 for a normal swing); a lunge passes its leap
+      --   strike-reach so it can hit higher parts. impactSpeed (m/s) is
+      --   the lunge's body travel speed (0 for a normal swing); the body's
+      --   full-mass momentum (½·m·v² / m·v) folds into the strike. The
+      --   combat thread resolves hit/miss, applies damage + stamina
+      --   drain, and emits events.
     deriving (Show)
 
 -- | One log-worthy thing the combat sim did. Drained by Lua to feed

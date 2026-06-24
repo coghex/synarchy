@@ -7,17 +7,23 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Storable as Vec
+import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Data.Time.Clock (getCurrentTime)
+import Foreign.ForeignPtr (ForeignPtr, withForeignPtr)
 import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
 import qualified Codec.Picture as JP
+import Engine.Asset.Base (AssetId, AssetStatus(AssetLoaded))
 import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Types
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logWarnM
+                             , logDebugSM, logInfoSM, logWarnSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (ecHeadless)
@@ -27,6 +33,7 @@ import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..
                               , textureFilterToText, textureFilterToVulkan)
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Types (DevQueues(..))
+import Engine.Graphics.Vulkan.Base (TextureInfo(..))
 import Engine.Graphics.Vulkan.Image (createVulkanImage', createVulkanImageView'
                                     , copyBufferToImage, VulkanImage(..))
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
@@ -38,7 +45,10 @@ import Engine.Graphics.Vulkan.Texture (transitionImageLayout
 import Engine.Graphics.Vulkan.Sampler.Cache ( acquireSampler, releaseSampler
                                             , SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (setTextureFilter, registerPinnedTexture
+                                              , registerTexture
                                                , unregisterTexture)
+import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
+import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
@@ -52,6 +62,29 @@ import qualified Graphics.UI.GLFW as GLFW
 import Vulkan.Core10
 import Vulkan.Zero (zero)
 
+data TextureUploadPrep = TextureUploadPrep
+    { tupHandle    ∷ !TextureHandle
+    , tupPath      ∷ !FilePath
+    , tupAssetId   ∷ !AssetId
+    , tupWidth     ∷ !Word32
+    , tupHeight    ∷ !Word32
+    , tupPixels    ∷ !(ForeignPtr Word8)
+    , tupPixelLen  ∷ !Int
+    , tupImage     ∷ !VulkanImage
+    , tupCleanImage ∷ !(IO ())
+    }
+
+invalidateVisibleWorldRenderCaches ∷ EngineEnv → IO ()
+invalidateVisibleWorldRenderCaches env = do
+    mgr ← readIORef (worldManagerRef env)
+    forM_ (wmVisible mgr) $ \pageId →
+        case lookup pageId (wmWorlds mgr) of
+            Nothing → pure ()
+            Just ws → do
+                writeIORef (wsQuadCacheRef ws) Nothing
+                writeIORef (wsZoomQuadCacheRef ws) Nothing
+                writeIORef (wsBgQuadCacheRef ws) Nothing
+
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
     env ← ask
@@ -61,9 +94,25 @@ processLuaMessages = do
         logDebugSM CatLua "Processing Lua messages"
             [("count", T.pack $ show $ length messages)]
     
-    forM_ messages handleLuaMessage
+    process messages
     whenGraphical handleWorldPreview
     whenGraphical handleZoomAtlasUpload
+  where
+    process [] = pure ()
+    process (LuaLoadTextureRequest handle path : rest) = do
+        let (burst, rest') = span isTextureLoad rest
+            requests = (handle, path) : unwrapTextureLoads burst
+        whenGraphical $ handleLoadTextureBatch requests
+        process rest'
+    process (msg : rest) = do
+        handleLuaMessage msg
+        process rest
+
+    isTextureLoad (LuaLoadTextureRequest _ _) = True
+    isTextureLoad _                           = False
+
+    unwrapTextureLoads msgs =
+        [ (handle, path) | LuaLoadTextureRequest handle path ← msgs ]
 
 -- | Run a GPU-touching action only in graphical mode; skip it when
 --   headless (no device). Lets the single 'handleLuaMessage' serve both
@@ -348,27 +397,225 @@ handleSetTextureFilter tf = do
                 <> " (takes effect on next texture load or restart)"
         _ → pure ()
 
+duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
+                           → TextureAtlas → EngineM ε σ ()
+duplicateCachedTextureHandle env handle assetId atlas = do
+    poolRef ← asks assetPoolRef
+    pool ← liftIO $ readIORef poolRef
+    mBindless ← liftIO $ readIORef (textureSystemRef env)
+    case mBindless of
+        Just bindless →
+            case Map.lookup (taTextureHandle atlas) (btsHandleMap bindless) of
+                Just existingBindlessHandle →
+                    liftIO $ writeIORef (textureSystemRef env) (Just bindless
+                        { btsHandleMap =
+                            Map.insert handle existingBindlessHandle
+                                (btsHandleMap bindless)
+                        })
+                Nothing → logWarnM CatAsset $
+                    "Cached texture missing bindless slot for "
+                        <> taPath atlas
+        Nothing →
+            logWarnM CatAsset "No bindless system available for cached texture reuse"
+
+    liftIO $ do
+        updateTextureState handle (AssetReady assetId []) pool
+        atomicModifyIORef' poolRef $ \p →
+            ( p { apTextureAtlases =
+                    Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
+                        assetId (apTextureAtlases p)
+              }
+            , ()
+            )
+        let (w, h) = amDimensions (taMetadata atlas)
+            (TextureHandle rawHandle) = handle
+        atomicModifyIORef' (textureSizeRef env) $ \m →
+            (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
+        Q.writeQueue (luaQueue env)
+            (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
+
+prepareTextureUpload ∷ AssetPool → Device → PhysicalDevice
+                     → (TextureHandle, FilePath)
+                     → EngineM ε σ TextureUploadPrep
+prepareTextureUpload pool dev pdev (handle, path) = do
+    assetId ← liftIO $ generateAssetId pool
+    JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
+      ← liftIO (JP.readImage path) ⌦ \case
+        Left err → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+                     $ "cannot load texture image: " <> T.pack err
+        Right dynImg → pure $ JP.convertRGBA8 dynImg
+
+    let (pixelPtr, pixelLen) = Vec.unsafeToForeignPtr0 imageData
+        width = fromIntegral imageWidth
+        height = fromIntegral imageHeight
+
+    (image, cleanImage) ← createVulkanImage' dev pdev
+        (width, height)
+        FORMAT_R8G8B8A8_UNORM
+        IMAGE_TILING_OPTIMAL
+        (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
+        MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+
+    pure TextureUploadPrep
+        { tupHandle = handle
+        , tupPath = path
+        , tupAssetId = assetId
+        , tupWidth = width
+        , tupHeight = height
+        , tupPixels = pixelPtr
+        , tupPixelLen = pixelLen
+        , tupImage = image
+        , tupCleanImage = cleanImage
+        }
+
+handleLoadTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM ε σ ()
+handleLoadTextureBatch [] = pure ()
+handleLoadTextureBatch requests = do
+    env ← ask
+    poolRef ← asks assetPoolRef
+    pool ← liftIO $ readIORef poolRef
+
+    let (cachedReqs, freshReqs, aliasReqs, _) =
+            foldl'
+                (\(cached, fresh, aliases, seen) (handle, path) →
+                    let key = T.pack path
+                    in case Map.lookup key (apAssetPaths pool) of
+                        Just assetId →
+                            case Map.lookup assetId (apTextureAtlases pool) of
+                                Just atlas →
+                                    ((handle, assetId, atlas) : cached,
+                                     fresh, aliases, seen)
+                                Nothing →
+                                    (cached, (handle, path) : fresh,
+                                     aliases, Map.insert key handle seen)
+                        Nothing →
+                            case Map.lookup key seen of
+                                Just canonical →
+                                    (cached, fresh, (handle, canonical) : aliases, seen)
+                                Nothing →
+                                    (cached, (handle, path) : fresh,
+                                     aliases, Map.insert key handle seen)
+                )
+                ([], [], [], Map.empty)
+                requests
+
+    forM_ (reverse cachedReqs) $ \(handle, assetId, atlas) →
+        duplicateCachedTextureHandle env handle assetId atlas
+
+    let invalidateVisible = liftIO $ invalidateVisibleWorldRenderCaches env
+
+    when (not (null freshReqs)) $ do
+        gs ← gets graphicsState
+        mBindless ← liftIO $ readIORef (textureSystemRef env)
+        case (vulkanDevice gs, vulkanPDevice gs, vulkanCmdPool gs, deviceQueues gs, mBindless) of
+            (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
+                preps ← mapM (prepareTextureUpload pool dev pdev) (reverse freshReqs)
+                let queue = graphicsQueue queues
+
+                locally $ do
+                    stagingBuffers ← forM preps $ \prep → do
+                        let bufSize = fromIntegral (tupPixelLen prep)
+                        (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
+                            BUFFER_USAGE_TRANSFER_SRC_BIT
+                            (MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                             .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                        stagingPtr ← mapMemory dev stagingMem 0 bufSize zero
+                        liftIO $ withForeignPtr (tupPixels prep) $ \srcPtr →
+                            copyBytes (castPtr stagingPtr) srcPtr (tupPixelLen prep)
+                        unmapMemory dev stagingMem
+                        pure (stagingMem, stagingBuf)
+
+                    runCommandsOnce dev cmdPool queue $ \cmdBuf →
+                        forM_ (zip preps stagingBuffers) $ \(prep, (_, stagingBuf)) → do
+                            transitionImageLayout (tupImage prep) FORMAT_R8G8B8A8_UNORM
+                                Undef_TransDst 1 cmdBuf
+                            copyBufferToImage cmdBuf stagingBuf (tupImage prep)
+                                (tupWidth prep) (tupHeight prep)
+                            transitionImageLayout (tupImage prep) FORMAT_R8G8B8A8_UNORM
+                                TransDst_ShaderRO 1 cmdBuf
+
+                (loaded, bindlessN) ← foldM
+                    (\(acc, bindless) prep → do
+                        let VulkanImage image imageMemory = tupImage prep
+                        (imageView, cleanView) ← createVulkanImageView' dev (tupImage prep)
+                            FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
+                        (mbHandle, bindless') ← registerTexture dev (tupHandle prep)
+                            imageView (btsTextureSampler bindless) bindless
+                        when (isNothing mbHandle) $
+                            logWarnM CatTexture $
+                                "Failed to allocate bindless slot for texture: "
+                                    <> T.pack (tupPath prep)
+                        let bindlessSlot = fmap (tsIndex ∘ bthSlot) mbHandle
+                            atlas = TextureAtlas
+                                { taId = tupAssetId prep
+                                , taName = T.pack (takeBaseName (tupPath prep))
+                                , taPath = T.pack (tupPath prep)
+                                , taMetadata = AtlasMetadata
+                                    (tupWidth prep, tupHeight prep)
+                                    FORMAT_R8G8B8A8_UNORM
+                                    Map.empty
+                                , taStatus = AssetLoaded
+                                , taInfo = Just TextureInfo
+                                    { tiImage = image
+                                    , tiView = imageView
+                                    , tiMemory = imageMemory
+                                    , tiLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                    }
+                                , taRefCount = 1
+                                , taCleanup = Just (cleanView >> tupCleanImage prep)
+                                , taBindlessSlot = bindlessSlot
+                                , taTextureHandle = tupHandle prep
+                                }
+                            (TextureHandle rawHandle) = tupHandle prep
+                        liftIO $ do
+                            updateTextureState (tupHandle prep)
+                                (AssetReady (tupAssetId prep) []) pool
+                            atomicModifyIORef' poolRef $ \p →
+                                ( p { apTextureAtlases =
+                                        Map.insert (tupAssetId prep) atlas
+                                            (apTextureAtlases p)
+                                    , apAssetPaths =
+                                        Map.insert (T.pack (tupPath prep))
+                                            (tupAssetId prep) (apAssetPaths p)
+                                    }
+                                , ()
+                                )
+                            atomicModifyIORef' (textureSizeRef env) $ \m →
+                                ( HM.insert (tupHandle prep)
+                                    (fromIntegral (tupWidth prep), fromIntegral (tupHeight prep)) m
+                                , ()
+                                )
+                            Q.writeQueue (luaQueue env)
+                                (LuaAssetLoaded "texture" (fromIntegral rawHandle)
+                                    (T.pack (tupPath prep)))
+                        pure (((tupHandle prep, tupAssetId prep, atlas) : acc), bindless'))
+                    ([], bindless0)
+                    preps
+
+                liftIO $ writeIORef (textureSystemRef env) (Just bindlessN)
+
+                let loadedMap = Map.fromList
+                        [ (handle, (assetId, atlas))
+                        | (handle, assetId, atlas) ← loaded
+                        ]
+                forM_ (reverse aliasReqs) $ \(handle, canonical) →
+                    case Map.lookup canonical loadedMap of
+                        Just (assetId, atlas) →
+                            duplicateCachedTextureHandle env handle assetId atlas
+                        Nothing →
+                            logWarnM CatTexture $
+                                "Missing canonical texture for deduped alias: "
+                                    <> T.pack (show handle)
+                invalidateVisible
+
+            _ → logWarnM CatTexture "Cannot batch-load textures: Vulkan not ready"
+
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
                     <> " (handle: " <> T.pack (show handle) <> ")"
-    assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
-    env ← ask
-    let (TextureHandle h) = handle
-    liftIO $ Q.writeQueue (luaQueue env)
-      (LuaAssetLoaded "texture" (fromIntegral h) (T.pack path))
+    handleLoadTextureBatch [(handle, path)]
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
-    mDims ← liftIO $ do
-        result ← JP.readImage path
-        case result of
-            Right dynImg →
-                let img = JP.convertRGBA8 dynImg
-                in pure $ Just (JP.imageWidth img, JP.imageHeight img)
-            Left _ → pure Nothing
-    case mDims of
-        Just (w, h) → liftIO $ atomicModifyIORef' (textureSizeRef env) $ \m →
-            (HM.insert handle (w, h) m, ())
-        Nothing → pure ()
 
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do

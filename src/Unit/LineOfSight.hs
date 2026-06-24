@@ -9,6 +9,7 @@
 -- future) drive fog of war.
 module Unit.LineOfSight
     ( unitVisibleTiles
+    , unitAwareness
     ) where
 
 import UPrelude
@@ -66,6 +67,77 @@ unitVisibleTiles env uid = do
                                               (ux + dx) (uy + dy)
                                 ]
                         return visible
+
+-- | How aware is @defender@ of @attacker@ right now (0..1)? Used by
+--   combat to gate the active DODGE — you can't slip a blow you never
+--   saw coming. Three outcomes:
+--
+--     * 1.0  — attacker is within perception range, inside the defender's
+--              facing cone, and terrain doesn't block the sightline:
+--              fully aware, best chance to react.
+--     * 0.4  — attacker is very close (≤ 'awareCloseRadius') but OUTSIDE
+--              the cone: you sense a body in your face but can't fully
+--              read the strike (peripheral / behind).
+--     * 0.0  — terrain blocks LOS, the attacker is beyond perception
+--              range, or it's outside the cone AND not close: a blind
+--              spot. No dodge — this is what makes an ambush pounce land.
+--
+--   Perception widens the range; facing is the defender's last sim
+--   heading (set by movement — a unit that walked up to its foe faces it).
+unitAwareness ∷ EngineEnv → UnitInstance → UnitInstance → IO Float
+unitAwareness env defender attacker = do
+    let defX = uiGridX defender
+        defY = uiGridY defender
+        atkX = uiGridX attacker
+        atkY = uiGridY attacker
+        dxF  = realToFrac (atkX - defX) ∷ Double
+        dyF  = realToFrac (atkY - defY) ∷ Double
+        dist = sqrt (dxF * dxF + dyF * dyF)
+        perception = HM.lookupDefault 1.0 "perception" (uiStats defender)
+        perceptionRange = max 1.5 (realToFrac perception * awareRangeTiles)
+        (fvx, fvy) = facingVector (uiFacing defender)
+        dot   = dxF * fvx + dyF * fvy
+        lenSq = dxF * dxF + dyF * dyF
+        -- Same half-angle-60° cone test as the vision FOV (cos²60 = 0.25).
+        inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
+    blocked ← losBlockedBetween env defender attacker
+    pure $! if dist > perceptionRange ∨ blocked
+            then 0.0
+            else if inFacingCone           then 1.0
+            else if dist ≤ awareCloseRadius then awarePeripheral
+            else 0.0
+
+-- | Terrain line-of-sight between two units (true ⇒ a hill/wall blocks
+--   the sightline). Falls back to "clear" when no world is loaded (the
+--   flat arena), matching 'notBlocked''s chunk-missing assumption.
+losBlockedBetween ∷ EngineEnv → UnitInstance → UnitInstance → IO Bool
+losBlockedBetween env defender attacker = do
+    wm ← readIORef (worldManagerRef env)
+    case wmVisible wm of
+        [] → pure False
+        (pageId:_) → case lookup pageId (wmWorlds wm) of
+            Nothing → pure False
+            Just ws → do
+                wtd ← readIORef (wsTilesRef ws)
+                let ux   = floor (uiGridX defender) ∷ Int
+                    uy   = floor (uiGridY defender) ∷ Int
+                    gx   = floor (uiGridX attacker) ∷ Int
+                    gy   = floor (uiGridY attacker) ∷ Int
+                    eyeZ = fromIntegral (uiGridZ defender + 1) ∷ Double
+                pure (not (notBlocked wtd ux uy eyeZ gx gy))
+
+-- | Vision/awareness radius per point of perception (tiles).
+awareRangeTiles ∷ Double
+awareRangeTiles = 6.0
+
+-- | Within this many tiles a defender senses an attacker even outside
+--   its facing cone (but only at 'awarePeripheral' awareness).
+awareCloseRadius ∷ Double
+awareCloseRadius = 1.6
+
+-- | Awareness of an attacker that's close but outside the facing cone.
+awarePeripheral ∷ Float
+awarePeripheral = 0.4
 
 -- | Direction → unit-length screen-space heading. Y grows south, so
 --   DirS is (0, +1).

@@ -58,6 +58,9 @@ units:
       # is in the grab/maul: strong grappling.
       jumping:   { base: 25.0, range: 10.0 }
       grappling: { base: 65.0, range: 20.0 }
+      # A bear is powerful, not nimble — it tanks blows rather than slips
+      # them. Low dodge; its bulk also drags the agility term down.
+      dodge:     { base: 20.0, range: 15.0 }
 
     # 8-part quadruped body. Heights anchored to shoulder-height 1.4 m.
     # Head sits out front, similar to shoulder height; tail is low and
@@ -254,6 +257,7 @@ units:
       falling-idle:                falling        # held mid-air (unreached)
       standing-to-falling:         falling        # descent loop
       falling-to-collapsed:        landing        # landing → collapse
+      falling-to-standing:         landing        # a leap touches down → recover
 
       # Collapsed pose. Held by units knocked out from low blood or
       # a non-lethal fall; lying_down_idle covers the static held

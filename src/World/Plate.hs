@@ -75,8 +75,8 @@ generateOnePlate seed worldSize plateIndex =
         h7 = plateHash seed plateIndex 7
         h8 = plateHash seed plateIndex 8
 
-        cx = hashToRange h1 (-halfTiles) halfTiles
-        cy = hashToRange h2 (-halfTiles) halfTiles
+        cx = hashToRange h1 (-halfTiles) (halfTiles - 1)
+        cy = hashToRange h2 (-halfTiles) (halfTiles - 1)
 
         isLand = hashToFloat' h3 > 0.4
 
@@ -684,7 +684,7 @@ hashToRange ∷ Word32 → Int → Int → Int
 hashToRange h lo hi =
     let f = hashToFloat' h
         span' = hi - lo + 1
-    in lo + floor (f * fromIntegral span')
+    in min hi (lo + floor (f * fromIntegral span'))
 
 smoothstep ∷ Float → Float
 smoothstep t = t * t * (3.0 - 2.0 * t)

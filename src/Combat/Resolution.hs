@@ -73,6 +73,7 @@ import Unit.Injury (penetrate, penetrateDeposits, woundFactor, tissueInjuryKind
                    , injuryFloor, capInjurySeverity, allocateSubparts
                    , tissueCapacityWeight, defaultPartCapacity)
 import Unit.Command.Types (UnitCommand(..))
+import Unit.LineOfSight (unitAwareness)
 
 -- ----- Tuning constants -----
 
@@ -169,6 +170,15 @@ energyPerHp = 2.0
 --   can). Calibrated so a solid heavy maul blow ≈ 0.3 of a human torso.
 momentumPerHp ∷ Float
 momentumPerHp = 2.5
+
+-- | Fraction of a lunge's full-body kinetic energy / momentum that couples
+--   into the strike (the rest is lost to the attacker's own deceleration,
+--   imperfect contact, etc.). At 1.0 a ½·m·v² body-slam dwarfs a swing for
+--   heavy units; 0.5 keeps a lunge a heavy hit, not an instant kill.
+--   Negligible for light creatures (a squirrel's ½·m·v² is tiny — its lunge
+--   is about REACH, not momentum). Tune for feel.
+lungeMomentumScale ∷ Float
+lungeMomentumScale = 0.5
 
 -- | Scales a part's tissue CAPACITY (Σ tissue-weight × thickness mm, from
 --   Unit.Injury.layerCapacity) into its severity-normalising "max HP".
@@ -270,6 +280,33 @@ weaponWear wsub load sharp cond =
         sharp'   = max 0.0 (sharp - dSharp)
     in (sharp', cond', broke)
 
+-- ----- Dodge (active, awareness-gated evasion) -----
+-- A SECOND save after the hit roll: a would-be hit can still be slipped
+-- if the defender SEES it coming. This is distinct from the passive
+-- evasion baked into the hit roll ('computeDefenderEvasion') — that's
+-- instinctive footwork/parrying that happens even unaware; THIS is a
+-- deliberate sidestep, so it's gated on 'unitAwareness' (LOS + facing +
+-- perception). Scales with agility + the learned `dodge` skill. A
+-- telegraphed lunge is easier to read (if seen), so it dodges better.
+dodgeBase, dodgeAgiScale, dodgeSkillScale, dodgePainScale ∷ Float
+dodgeLungeMult, dodgeMaxChance ∷ Float
+-- | Floor chance an aware, average (agility 1, no skill) defender dodges.
+dodgeBase       = 0.10
+-- | Added dodge chance per point of agility above the 1.0 baseline.
+dodgeAgiScale   = 0.15
+-- | Added dodge chance at full (level-100) dodge skill.
+dodgeSkillScale = 0.35
+-- | Dodge chance lost at full (normalised 1.0) pain — a hurt unit reacts
+--   slower.
+dodgePainScale  = 0.50
+-- | A lunge is a committed, readable leap — multiply the dodge chance for
+--   one (only matters when the defender is aware; an unseen pounce still
+--   lands).
+dodgeLungeMult  = 1.4
+-- | Ceiling on dodge chance, before the awareness factor scales it down.
+--   Even a master can't dodge everything.
+dodgeMaxChance  = 0.60
+
 kindSeverityFactor ∷ Text → Float
 kindSeverityFactor "stab"  = 1.2
 kindSeverityFactor "slash" = 1.0
@@ -298,8 +335,8 @@ painCeiling = 5.0
 -- | Resolve one attack. No-ops cleanly if either unit is missing,
 --   either side's def isn't registered, or either side is already
 --   dead (the AI shouldn't be issuing swings then but races happen).
-resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → IO ()
-resolveAttack env atkRaw tgtRaw mode = do
+resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → Float → Float → IO ()
+resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
     um ← readIORef (unitManagerRef env)
     im ← readIORef (itemManagerRef env)
@@ -323,17 +360,17 @@ resolveAttack env atkRaw tgtRaw mode = do
                     | not (isAlreadyDead atk adef)
                     , not (isAlreadyDead tgt tdef) →
                         runResolution env logger im sm gt
-                            atkRaw tgtRaw mode atk adef tgt tdef
+                            atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef
                 _ → pure ()
         _ → pure ()
 
 runResolution
     ∷ EngineEnv → LoggerState → ItemManager → SubstanceManager → Double
-    → Word32 → Word32 → AttackMode
+    → Word32 → Word32 → AttackMode → Float → Float
     → UnitInstance → UnitDef
     → UnitInstance → UnitDef
     → IO ()
-runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
+runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef = do
     let mEquipped = firstEquippedWeapon im (uiEquipment atk)
         mWeapon   = (\(_, _, w) → w) ⊚ mEquipped
         natW      = udNaturalWeapon adef
@@ -342,7 +379,10 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
             Nothing → maybe 0.0 nwEffectiveBladeLength natW
         atkH     = HM.lookupDefault 1.8 "height" (uiStats atk)
         reachLo  = atkH * 0.1
-        reachHi  = atkH * 1.1 + bladeCm / 100.0
+        -- reachBonus (metres) lifts the top of the reach for a LUNGE — the
+        -- leap's strike-reach lets a short attacker hit parts above its
+        -- standing height (capped by the leap, so still no impossible hits).
+        reachHi  = atkH * 1.1 + bladeCm / 100.0 + reachBonus
         -- Only TARGETABLE macro-parts are aimed at; subparts (skull,
         -- carotid, femur…) are never targeted directly — a hit on their
         -- macro-part is allocated down to them. A body plan with no
@@ -366,6 +406,15 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
         -- moderately better than attacker.
         pHit = clamp 0.05 0.95 (0.7 + (atkSkill - defEva) * 0.3)
 
+    -- Active dodge: an aware defender gets a SECOND save against a
+    -- would-be hit. Awareness (LOS + facing cone + perception range)
+    -- gates and scales it — an unseen pounce can't be dodged. Computed
+    -- before the RNG transaction (it reads world tiles); the roll itself
+    -- is drawn inside the atomic block below.
+    awareness ← unitAwareness env tgt atk
+    let pDodge = awareness
+               * defenderDodgeChance tgt (lungeSpeed > 0) pTgt
+
     -- Single RNG transaction: draw hit-roll + (if hit) the joint
     -- body-part + wound-kind decision from the same generator,
     -- atomically. The joint picker (pickPartKind) blends a random
@@ -378,25 +427,34 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
     rngOut ← atomicModifyIORef' (statRNGRef env) $ \rng0 →
         let (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rng0
         in if roll > pHit
-            then (rng1, Left ())               -- miss
+            then (rng1, Left False)            -- whiff (attacker missed)
             else
-                let (partKind, rng2) =
-                        pickPartKind rng1 atk tdef mWeapon natW
-                            candidateParts
-                    -- One extra roll for subpart allocation (the 50/50
-                    -- skull/jaw etc.) — drawn here in the same atomic
-                    -- transaction so the whole resolution is one RNG step.
-                    (alloc, rng3) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
-                in (rng3, Right (partKind, alloc))
+                -- The strike was on target — does the defender slip it?
+                let (dodgeRoll, rngD) = Random.uniformR (0.0 ∷ Float, 1.0) rng1
+                in if dodgeRoll < pDodge
+                    then (rngD, Left True)      -- dodged (defender evaded)
+                    else
+                        let (partKind, rng2) =
+                                pickPartKind rngD atk tdef mWeapon natW
+                                    candidateParts
+                            -- One extra roll for subpart allocation (the
+                            -- 50/50 skull/jaw etc.) — drawn here in the
+                            -- same atomic transaction so the whole
+                            -- resolution is one RNG step.
+                            (alloc, rng3) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
+                        in (rng3, Right (partKind, alloc))
 
     case rngOut of
-        Left () → do
-            pushEvent env (missEvent gt atkRaw tgtRaw mode)
+        Left isDodge → do
+            pushEvent env (missEvent gt atkRaw tgtRaw mode
+                                     (lungeSpeed > 0) isDodge)
             logDebug logger CatThread $
-                "miss (" <> attackModeText mode <> "): "
+                (if isDodge then "dodge (" else "miss (")
+                          <> attackModeText mode <> "): "
                           <> T.pack (show atkRaw) <> " → "
                           <> T.pack (show tgtRaw)
-                          <> " (p_hit=" <> T.pack (show pHit) <> ")"
+                          <> " (p_hit=" <> T.pack (show pHit)
+                          <> " p_dodge=" <> T.pack (show pDodge) <> ")"
         Right ((partId, kind), allocRoll) → do
             let -- Resolve the swing into one or more (kind, energy-fraction)
                 -- COMPONENTS. A natural "paw" (combo_attack) fuses
@@ -415,7 +473,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                     | otherwise = [(kind, 1.0)]
                 results =
                     [ (k, computeSeverity sm im atk tdef mEquipped natW
-                                tgt partId k mode allocRoll w)
+                                tgt partId k mode allocRoll w lungeSpeed)
                     | (k, w) ← components ]
                 sevOf (_, (s,_,_,_,_,_,_)) = s
                 -- Death/stance/verb-tier scalar = the worst single mechanism;
@@ -495,7 +553,8 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                 in (um' { umInstances = ins }, ())
             pushEvent env (hitEvent gt atkRaw tgtRaw partId headKind
                                      severity rawDmg effDmg mode
-                                     limbName weaponName detailStr)
+                                     limbName weaponName detailStr
+                                     (lungeSpeed > 0))
 
             -- Landed hit ⇒ the weapon takes wear (dulls, fractures, can
             -- break). Natural weapons don't wear.
@@ -634,6 +693,19 @@ computeDefenderEvasion tgt pain =
        + 0.10 * dex
        - 0.001 * massExc
        - 0.30 * pain
+
+-- | Active-dodge chance BEFORE the awareness scale (caller multiplies by
+--   'unitAwareness'). Agility + the learned `dodge` skill drive it; pain
+--   slows it; a telegraphed lunge reads easier. Clamped to 'dodgeMaxChance'.
+defenderDodgeChance ∷ UnitInstance → Bool → Float → Float
+defenderDodgeChance tgt isLunge pain =
+    let agi   = statOr "agility" 1.0 tgt
+        dodge = skillOr "dodge" 0.0 tgt / 100.0
+        base  = dodgeBase
+              + dodgeAgiScale   * (agi - 1.0)
+              + dodgeSkillScale * dodge
+        lungeM = if isLunge then dodgeLungeMult else 1.0
+    in clamp 0.0 dodgeMaxChance (base * lungeM - dodgePainScale * pain)
 
 bodyPartIndex ∷ UnitDef → HM.HashMap Text BodyPart
 bodyPartIndex def = HM.fromList [(bpId p, p) | p ← udBodyParts def]
@@ -921,14 +993,16 @@ computeSeverity
     ∷ SubstanceManager → ItemManager
     → UnitInstance → UnitDef
     → Maybe (ItemInstance, ItemDef, ItemWeapon) → Maybe NaturalWeapon
-    → UnitInstance → Text → Text → AttackMode → Float → Float
+    → UnitInstance → Text → Text → AttackMode → Float → Float → Float
     → ( Float, Float, Float, Float, Float
       , [(Text, Text, Float)]            -- wound distribution (subpart, kind, sev)
       , [(Text, Text, Text, Float)] )    -- log detail (subpartName, layer, material, sev)
--- The final Float is `kindWeight`: the fraction of the swing's energy
--- delivered as THIS mechanism (1.0 for a single-kind attack; a combo "paw"
--- splits its energy across slash/blunt/stab components that each call in).
-computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kindWeight =
+-- The trailing Floats are `allocRoll`, `kindWeight` (the fraction of the
+-- swing's energy delivered as THIS mechanism — 1.0 for a single-kind attack;
+-- a combo "paw" splits across slash/blunt/stab components that each call in),
+-- and `lungeSpeed` (m/s of the attacker's body at impact — 0 for a normal
+-- swing; a lunge adds its full-body momentum on top of the swing).
+computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kindWeight lungeSpeed =
     let -- Muscular work committed to the swing (J).
         str      = statOr "strength" 1.0 atk
         wepClass = case mEquipped of
@@ -959,10 +1033,20 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
         (eKin, pImp) = swingKinematics work (rsMass strike) (rsLength strike)
                                        (rsCoM strike) armLen armMass dexA mode
 
+        -- LUNGE: the whole body slams in at `lungeSpeed` (m/s) on top of the
+        -- limb's swing — FULL body mass, not the limb's. Adds ½·m·v² of
+        -- energy (stab/slash channel) and m·v of momentum (blunt channel),
+        -- which then flow through the SAME attenuation as the swing below
+        -- (weapon eff, quality, hide, toughness, and kindWeight via budget).
+        -- 0 lungeSpeed ⇒ no contribution (an ordinary swing). Scaled so a
+        -- leap is a heavy hit without being a guaranteed one-shot.
+        lungeKE = lungeMomentumScale * 0.5 * bodyMassA * lungeSpeed * lungeSpeed
+        lungeP  = lungeMomentumScale * bodyMassA * lungeSpeed
+
         -- Stab/slash spend ENERGY; blunt spends MOMENTUM.
         (driver, perHp) = if kind ≡ "blunt"
-                          then (pImp, momentumPerHp)
-                          else (eKin, energyPerHp)
+                          then (pImp + lungeP,  momentumPerHp)
+                          else (eKin + lungeKE, energyPerHp)
 
         -- Weapon suitability + build set how much of the driver enters
         -- the body; the creature's hide (per-unit natural_resistance) is
@@ -1142,36 +1226,39 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
 
 -- ----- Event constructors -----
 
-missEvent ∷ Double → Word32 → Word32 → AttackMode → CombatEvent
-missEvent gt atk tgt mode = CombatEvent
+missEvent ∷ Double → Word32 → Word32 → AttackMode → Bool → Bool → CombatEvent
+missEvent gt atk tgt mode isLunge isDodge = CombatEvent
     { ceTs       = gt
     , ceKind     = "miss"
     , ceAttacker = Just atk
     , ceTarget   = Just tgt
-    , cePayload  = HM.fromList
+    , cePayload  = HM.fromList $
         [ ("mode", attackModeText mode) ]
+        <> [ ("lunge", "1") | isLunge ]   -- a missed lunge → "lunges but…"
+        <> [ ("dodge", "1") | isDodge ]   -- defender evaded → "X dodges…"
     }
 
 hitEvent
     ∷ Double → Word32 → Word32 → Text → Text
     → Float → Float → Float → AttackMode
-    → Text → Text → Text → CombatEvent
-hitEvent gt atk tgt part kind sev rawDmg effDmg mode limb weapon detail = CombatEvent
+    → Text → Text → Text → Bool → CombatEvent
+hitEvent gt atk tgt part kind sev rawDmg effDmg mode limb weapon detail isLunge = CombatEvent
     { ceTs       = gt
     , ceKind     = "hit"
     , ceAttacker = Just atk
     , ceTarget   = Just tgt
-    , cePayload  = HM.fromList
+    , cePayload  = HM.fromList $
         [ ("part",     part)         -- macro-part id
         , ("limb",     limb)         -- macro-part display name ("left arm")
         , ("kind",     kind)         -- mechanism (slash/stab/blunt)
-        , ("weapon",   weapon)       -- weapon display name
+        , ("weapon",   weapon)       -- weapon display name / natural facet
         , ("severity", T.pack (show sev))
         , ("detail",   detail)       -- per-layer "subpart:layer:material:sevPct|…"
         , ("raw",      T.pack (show rawDmg))
         , ("eff",      T.pack (show effDmg))
         , ("mode",     attackModeText mode)
         ]
+        <> [ ("lunge", "1") | isLunge ]  -- the combat log opens with a lunge line
     }
 
 deathEvent

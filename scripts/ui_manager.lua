@@ -51,6 +51,22 @@ local hud = nil
 
 local currentMenu = "main"
 local previousMenu = nil
+local bootProfile = "normal"
+
+uiManager.startupBootDone = uiManager.startupBootDone or false
+uiManager.moduleReady = uiManager.moduleReady or {
+    loadingScreen = false,
+    tooltipStyle = false,
+    mainMenu = false,
+    settingsMenu = false,
+    createWorldMenu = false,
+    worldView = false,
+    hud = false,
+    saveBrowser = false,
+    testArena = false,
+    pauseMenu = false,
+    popupsAndLogs = false,
+}
 
 local function handleNonTextBoxClick()
     if textbox then
@@ -95,6 +111,14 @@ function uiManager.init(scriptId)
     randbox.init()
     toggle.init()
     uiList.init()
+    -- These load their own widget textures. They used to be initialized
+    -- only by settingsMenu.init, which the eager boot ran at startup; once
+    -- menu init went lazy, a menu that uses them BEFORE Settings is ever
+    -- opened (e.g. Create World from an --arena boot) got nil texture sets
+    -- and rendered invisible widgets. Init them here with the rest.
+    textbox.init()
+    checkbox.init()
+    dropdown.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -141,6 +165,7 @@ function uiManager.init(scriptId)
         uiManager.showMenu(menuName, params)
     end)
 
+    bootProfile = engine.getBootProfile and engine.getBootProfile() or "normal"
     engine.logDebug("UI Manager waiting for assets...")
 end
 
@@ -168,13 +193,21 @@ end
 function uiManager.checkReady()
     if fontsReady and fbW > 0 and fbH > 0 then
         if not initialized then
+            local startupLoader = require("scripts.startup_loader")
+            uiManager.ensureLoadingScreen()
+            if bootProfile == "arena" then
+                startupLoader.build("arena")
+                startupLoader.runAll()
+                initialized = true
+                uiManager.startupBootDone = true
+                uiManager.finishArenaBoot()
+                return
+            end
             -- Boot the loading screen first so the user sees a green
             -- progress bar while startup_loader drains the asset queue.
             -- The rest of the per-module init runs in finishStartupBoot
             -- once startup_loader is done.
-            loadingScreen.init(boxTexSet, menuFont, fbW, fbH)
-            local startupLoader = require("scripts.startup_loader")
-            startupLoader.build()
+            startupLoader.build("normal")
             loadingScreen.show({mode = "startup", fbW = fbW, fbH = fbH})
             initialized = true
         else
@@ -183,29 +216,16 @@ function uiManager.checkReady()
     end
 end
 
--- Per-module init pass that used to live inline in checkReady.
--- Called once when startup_loader drains (see uiManager.update).
-function uiManager.finishStartupBoot()
-    mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
-    settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    worldView.init(fbW, fbH)
-    hud.init(boxTexSet, menuFont, fbW, fbH)
-    saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
-    pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
-    popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    combatLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    injuryLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-    unitLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+function uiManager.ensureLoadingScreen()
+    if uiManager.moduleReady.loadingScreen then return end
+    loadingScreen.init(boxTexSet, menuFont, fbW, fbH)
+    uiManager.moduleReady.loadingScreen = true
+end
+
+function uiManager.ensureTooltipStyle()
+    if uiManager.moduleReady.tooltipStyle then return end
     local persistedDwell = engine.getTooltipDwellMs()
     local persistedHintDelay = engine.getTooltipHintDelayMs()
-    -- engine.loadTexture caches by path, so this returns the
-    -- same handle that drag_select etc. already use for the
-    -- 1×1 white pixel — letting the separator render in the
-    -- exact colour we tint it, instead of inheriting the box
-    -- centre tile.
     local whitePixelTex = engine.loadTexture(
         "assets/textures/hud/utility/white.png")
     UI.setTooltipStyle({
@@ -227,7 +247,87 @@ function uiManager.finishStartupBoot()
         separatorColor     = {0.7, 0.7, 0.7, 1.0},
         separatorThickness = 2,
     })
+    uiManager.moduleReady.tooltipStyle = true
+end
+
+function uiManager.ensureMainMenu()
+    if uiManager.moduleReady.mainMenu then return end
+    mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
+    uiManager.moduleReady.mainMenu = true
+end
+
+function uiManager.ensureSettingsMenu()
+    if uiManager.moduleReady.settingsMenu then return end
+    settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    uiManager.moduleReady.settingsMenu = true
+end
+
+function uiManager.ensureCreateWorldMenu()
+    if uiManager.moduleReady.createWorldMenu then return end
+    createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    uiManager.moduleReady.createWorldMenu = true
+end
+
+function uiManager.ensureWorldView()
+    if uiManager.moduleReady.worldView then return end
+    worldView.init(fbW, fbH)
+    uiManager.moduleReady.worldView = true
+end
+
+function uiManager.ensureHUD()
+    if uiManager.moduleReady.hud then return end
+    hud.init(boxTexSet, menuFont, fbW, fbH)
+    uiManager.moduleReady.hud = true
+end
+
+function uiManager.ensureSaveBrowser()
+    if uiManager.moduleReady.saveBrowser then return end
+    saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    uiManager.moduleReady.saveBrowser = true
+end
+
+function uiManager.ensureTestArena()
+    if uiManager.moduleReady.testArena then return end
+    testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
+    uiManager.moduleReady.testArena = true
+end
+
+function uiManager.ensurePauseMenu()
+    if uiManager.moduleReady.pauseMenu then return end
+    pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
+    uiManager.moduleReady.pauseMenu = true
+end
+
+function uiManager.ensurePopupsAndLogs()
+    if uiManager.moduleReady.popupsAndLogs then return end
+    popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    combatLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    injuryLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    unitLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    uiManager.moduleReady.popupsAndLogs = true
+end
+
+function uiManager.ensureGameplayUI()
+    uiManager.ensureTooltipStyle()
+    uiManager.ensureHUD()
+    uiManager.ensurePauseMenu()
+    uiManager.ensurePopupsAndLogs()
+end
+
+-- Per-module init pass that used to live inline in checkReady.
+-- Called once when startup_loader drains (see uiManager.update).
+function uiManager.finishStartupBoot()
+    uiManager.ensureTooltipStyle()
+    uiManager.ensureMainMenu()
     uiManager.showMenu("main")
+end
+
+function uiManager.finishArenaBoot()
+    uiManager.ensureTooltipStyle()
+    uiManager.ensureGameplayUI()
+    uiManager.ensureTestArena()
+    uiManager.showMenu("test_arena")
 end
 
 function uiManager.onFramebufferResize(width, height)
@@ -239,19 +339,21 @@ function uiManager.onFramebufferResize(width, height)
         return
     end
     
-    if mainMenu then mainMenu.onFramebufferResize(width, height) end
-    if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
-    if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
-    if worldView then worldView.onFramebufferResize(width, height) end
-    if hud then hud.onFramebufferResize(width, height) end
-    if saveBrowser then saveBrowser.onFramebufferResize(width, height) end
-    if loadingScreen then loadingScreen.onFramebufferResize(width, height) end
-    if popup then popup.onFramebufferResize(width, height) end
-    if eventLog then eventLog.onFramebufferResize(width, height) end
-    if combatLog then combatLog.onFramebufferResize(width, height) end
-    if injuryLog then injuryLog.onFramebufferResize(width, height) end
-    if unitLog then unitLog.onFramebufferResize(width, height) end
-    if pauseMenu then pauseMenu.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.mainMenu then mainMenu.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.settingsMenu then settingsMenu.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.worldView then worldView.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.hud then hud.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.saveBrowser then saveBrowser.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.loadingScreen then loadingScreen.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.popupsAndLogs then
+        popup.onFramebufferResize(width, height)
+        eventLog.onFramebufferResize(width, height)
+        combatLog.onFramebufferResize(width, height)
+        injuryLog.onFramebufferResize(width, height)
+        unitLog.onFramebufferResize(width, height)
+    end
+    if uiManager.moduleReady.pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
@@ -282,46 +384,58 @@ function uiManager.showMenu(menuName, params)
     local keepWorld = (menuName == "settings")
         and (previousMenu == "world_view" or previousMenu == "test_arena_view")
 
-    mainMenu.hide()
-    settingsMenu.hide()
-    createWorldMenu.hide()
+    if uiManager.moduleReady.mainMenu then mainMenu.hide() end
+    if uiManager.moduleReady.settingsMenu then settingsMenu.hide() end
+    if uiManager.moduleReady.createWorldMenu then createWorldMenu.hide() end
     if not keepWorld then
-        worldView.hide()
-        hud.hide()
+        if uiManager.moduleReady.worldView then worldView.hide() end
+        if uiManager.moduleReady.hud then hud.hide() end
     end
-    if saveBrowser then saveBrowser.hide() end
-    if loadingScreen then loadingScreen.hide() end
-    if testArena and not keepWorld then testArena.hide() end
-    if pauseMenu then pauseMenu.hide() end
+    if uiManager.moduleReady.saveBrowser then saveBrowser.hide() end
+    if uiManager.moduleReady.loadingScreen then loadingScreen.hide() end
+    if uiManager.moduleReady.testArena and not keepWorld then testArena.hide() end
+    if uiManager.moduleReady.pauseMenu then pauseMenu.hide() end
 
     if menuName == "main" then
+        uiManager.ensureMainMenu()
         mainMenu.show()
     elseif menuName == "settings" then
+        uiManager.ensureSettingsMenu()
         settingsMenu.show()
     elseif menuName == "create_world" then
+        uiManager.ensureCreateWorldMenu()
         createWorldMenu.show()
     elseif menuName == "world_view" then
+        uiManager.ensureWorldView()
+        uiManager.ensureGameplayUI()
         worldView.show()
         hud.worldId = "main_world"
         hud.show()
         -- Re-show pause menu if returning from settings (opened via pause menu)
         if previousMenu == "settings" then
-            if pauseMenu then pauseMenu.show() end
+            pauseMenu.show()
         end
     elseif menuName == "save_browser" then
+        uiManager.ensureMainMenu()
+        uiManager.ensureSaveBrowser()
         saveBrowser.show(mainMenu.saves, function(saveName)
             mainMenu.loadAndShowSave(saveName)
         end, function()
             uiManager.showMenu("main")
         end)
     elseif menuName == "loading" then
+        uiManager.ensureLoadingScreen()
         params = params or {}
         params.fbW = fbW
         params.fbH = fbH
         loadingScreen.show(params)
     elseif menuName == "test_arena" then
-        testArena.show()    -- this queues creation + shows loading screen
+        uiManager.ensureGameplayUI()
+        uiManager.ensureTestArena()
+        testArena.show()
     elseif menuName == "test_arena_view" then
+        uiManager.ensureGameplayUI()
+        uiManager.ensureTestArena()
         -- Arena world already exists and is visible, just show the UI page
         testArena.visible = true
         if not testArena.page then testArena.createUI() end
@@ -335,7 +449,7 @@ function uiManager.showMenu(menuName, params)
         require("scripts.tile_editor").setArenaActive(true)
         -- Re-show pause menu if returning from settings (opened via pause menu)
         if previousMenu == "settings" then
-            if pauseMenu then pauseMenu.show() end
+            pauseMenu.show()
         end
     end
 end
@@ -369,6 +483,9 @@ function uiManager.onArenaReady(pageId)
         testArena.ready = true
         -- Full menu transition: hides main menu, loading screen, everything
         uiManager.showMenu("test_arena_view")
+        if bootProfile == "arena" then
+            engine.showDebug()
+        end
     end
 end
 
@@ -382,7 +499,7 @@ end
 
 function uiManager.onPauseMenuItem(elemHandle)
     handleNonTextBoxClick()
-    if pauseMenu then
+    if uiManager.moduleReady.pauseMenu then
         return pauseMenu.handleClick(elemHandle)
     end
     return false
@@ -399,18 +516,18 @@ end
 
 function uiManager.onSettingsBack()
     handleNonTextBoxClick()
-    if settingsMenu then settingsMenu.onBack() end
+    if uiManager.moduleReady.settingsMenu then settingsMenu.onBack() end
     uiManager.showMenu("back")
 end
 
 function uiManager.onSettingsSave()
     handleNonTextBoxClick()
-    if settingsMenu then settingsMenu.onSave() end
+    if uiManager.moduleReady.settingsMenu then settingsMenu.onSave() end
 end
 
 function uiManager.onSettingsApply()
     handleNonTextBoxClick()
-    if settingsMenu then settingsMenu.onApply() end
+    if uiManager.moduleReady.settingsMenu then settingsMenu.onApply() end
 end
 
 function uiManager.onCancel()
@@ -430,20 +547,20 @@ function uiManager.update(dt)
         worldManager.update(dt)
     end
     
-    if worldView then
+    if uiManager.moduleReady.worldView then
         worldView.update(dt)
     end
 
     -- Create world menu update (generation polling)
-    if createWorldMenu then
+    if uiManager.moduleReady.createWorldMenu then
         createWorldMenu.update(dt)
     end
 
-    if hud then
+    if uiManager.moduleReady.hud then
         hud.update(dt)
     end
 
-    if loadingScreen then
+    if uiManager.moduleReady.loadingScreen then
         loadingScreen.update(dt)
     end
 
@@ -457,7 +574,7 @@ function uiManager.update(dt)
         uiManager.finishStartupBoot()
     end
 
-    if testArena then
+    if uiManager.moduleReady.testArena then
         testArena.update(dt)
     end
 
@@ -1311,13 +1428,11 @@ function uiManager.onUIEscape()
         or currentMenu == "save_browser" then
         uiManager.showMenu("back")
     elseif currentMenu == "world_view" then
-        if pauseMenu then
-            pauseMenu.toggle({ showSave = true })
-        end
+        uiManager.ensurePauseMenu()
+        pauseMenu.toggle({ showSave = true })
     elseif currentMenu == "test_arena_view" then
-        if pauseMenu then
-            pauseMenu.toggle({ showSave = false })
-        end
+        uiManager.ensurePauseMenu()
+        pauseMenu.toggle({ showSave = false })
     end
     return true
 end
@@ -1339,14 +1454,15 @@ end
 -----------------------------------------------------------
 
 function uiManager.onWorldGenLog(text)
-    if createWorldMenu then
+    if uiManager.moduleReady.createWorldMenu then
         createWorldMenu.onWorldGenLog(text)
     end
 end
 
 function uiManager.onWorldPreviewReady(textureHandle)
     engine.logDebug("World preview texture ready: " .. tostring(textureHandle))
-    if createWorldMenu and createWorldMenu.onWorldPreviewReady then
+    if uiManager.moduleReady.createWorldMenu
+       and createWorldMenu.onWorldPreviewReady then
         createWorldMenu.onWorldPreviewReady(textureHandle)
     end
 end
@@ -1356,27 +1472,27 @@ end
 -----------------------------------------------------------
 
 function uiManager.onSetInfoBasic(text)
-    if hud then hud.setInfoBasic(text) end
+    if uiManager.moduleReady.hud then hud.setInfoBasic(text) end
 end
 
 function uiManager.onSetInfoAdvanced(text)
-    if hud then hud.setInfoAdvanced(text) end
+    if uiManager.moduleReady.hud then hud.setInfoAdvanced(text) end
 end
 
 function uiManager.onSetInfoText(basicText, advancedText)
-    if hud then hud.setInfoText(basicText, advancedText) end
+    if uiManager.moduleReady.hud then hud.setInfoText(basicText, advancedText) end
 end
 
 function uiManager.onSetWeatherInfo(text)
-    if hud then hud.setWeatherInfo(text) end
+    if uiManager.moduleReady.hud then hud.setWeatherInfo(text) end
 end
 
 function uiManager.onSetResourcesInfo(text)
-    if hud then hud.setResourcesInfo(text) end
+    if uiManager.moduleReady.hud then hud.setResourcesInfo(text) end
 end
 
 function uiManager.onClearInfo()
-    if hud then hud.clearInfo() end
+    if uiManager.moduleReady.hud then hud.clearInfo() end
 end
 
 function uiManager.onOpenArena()

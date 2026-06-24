@@ -42,13 +42,21 @@ combatAttackFn env = do
     aArg    ← Lua.tointeger 1
     tArg    ← Lua.tointeger 2
     modeArg ← Lua.tostring 3
+    reachArg ← Lua.tonumber 4
+    speedArg ← Lua.tonumber 5
     let mode = case modeArg of
             Just bs | TE.decodeUtf8 bs == ("heavy" ∷ Text) → Heavy
             _                                              → Quick
+        reachBonus = case reachArg of
+            Just (Lua.Number v) → realToFrac v   -- lunge strike-reach (m)
+            _                   → 0.0
+        impactSpeed = case speedArg of
+            Just (Lua.Number v) → realToFrac v   -- lunge body speed (m/s)
+            _                   → 0.0
     case (aArg, tArg) of
         (Just a, Just t) → do
             Lua.liftIO $ Q.writeQueue (combatQueue env) $
-                CombatAttack (fromIntegral a) (fromIntegral t) mode
+                CombatAttack (fromIntegral a) (fromIntegral t) mode reachBonus impactSpeed
             Lua.pushboolean True
             return 1
         _ → do

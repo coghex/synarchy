@@ -23,6 +23,7 @@ import Unit.Sim.Types
 import Unit.Stats (rollStat)
 import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
+import Unit.Thread.Movement (startJump, jumpMaxTiles)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         EquipmentClassManager, lookupEquipmentClass)
 import Item.Roll (rollItemSpec, rollItemWeight)
@@ -200,6 +201,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , usPendingClimbXP   = 0
                     , usGetUpAt          = Nothing
                     , usPendingFallDrop = Nothing
+                    , usJumpApex         = Nothing
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -341,6 +343,42 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
                                  , usLocalPath = []
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitJump uid tgx tgy) = do
+    now ← readIORef (gameTimeRef env)
+    um  ← readIORef (unitManagerRef env)
+    -- Reach = learned jumping skill blended with agility/strength stats
+    -- (the skill/stat split). Unknown unit → 0 reach (can't leap).
+    let maxTiles = case HM.lookup uid (umInstances um) of
+            Nothing   → 0
+            Just inst →
+                let bm = HM.lookupDefault 1.0 "body_mass" (uiStats inst)
+                    fm = HM.lookupDefault 0.0 "fat_mass"  (uiStats inst)
+                    fatFrac = if bm > 0 then fm / bm else 0
+                in jumpMaxTiles (HM.lookupDefault 0.0 "jumping"  (uiSkills inst))
+                                (HM.lookupDefault 1.0 "agility"  (uiStats  inst))
+                                (HM.lookupDefault 1.0 "strength" (uiStats  inst))
+                                fatFrac
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                -- Only a standing, non-transitioning unit can leap.
+                | usPose ss ≢ Standing         → (uts, ())
+                | isTransitioning (usState ss)  → (uts, ())
+                | otherwise →
+                    let dstX = fromIntegral tgx + 0.5
+                        dstY = fromIntegral tgy + 0.5
+                        dx   = dstX - usRealX ss
+                        dy   = dstY - usRealY ss
+                        d    = sqrt (dx * dx + dy * dy)
+                    -- Refuse a leap beyond reach (or a no-op onto self); the
+                    -- unit just stays put — slice 1 has no "fall short" yet.
+                    in if d < 0.001 ∨ d > maxTiles
+                       then (uts, ())
+                       else let ss' = startJump now ss tgx tgy
+                            in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 handleUnitCommand env utsRef (UnitStop uid) = do
     atomicModifyIORef' utsRef $ \uts →

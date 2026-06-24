@@ -22,6 +22,7 @@ import World.Material (MaterialId(..))
 import World.Fluid.Types (FluidCell(..), IceMap, emptyIceMap)
 import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
 import World.Magma.Overlay (MagmaOverlay)
+import Structure.Types (ChunkStructures)
 
 data ChunkCoord = ChunkCoord !Int !Int
     deriving (Show, Eq, Ord, Generic, Serialize)
@@ -86,6 +87,11 @@ data LoadedChunk = LoadedChunk
       --   gen. Nothing in nearly every chunk; when present, the
       --   overlay's moSurface map drives lava placement in
       --   composeFluidMap (highest priority above water + ice).
+    , lcStructures ∷ !ChunkStructures
+      -- ^ Per-chunk structure overlay (floors/walls/posts/ceilings),
+      --   built by replaying this chunk's WeSetStructure edits. Keyed
+      --   (gx,gy,slot-tag); pieces hold texture PALETTE IDS (resolved to
+      --   handles at render). Evicts + reloads with the chunk.
     } deriving (Show, Eq)
 -- Removed: lcModified :: Bool. The world's edit log
 -- (WorldState.wsEditsRef) is now the source of truth for "this chunk
@@ -93,7 +99,8 @@ data LoadedChunk = LoadedChunk
 -- via replay on regeneration.
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco wtMap magma) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco wtMap magma structs) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
-        rnf flora `seq` rnf sideDeco `seq` rnf wtMap `seq` rnf magma
+        rnf flora `seq` rnf sideDeco `seq` rnf wtMap `seq` rnf magma `seq`
+        rnf structs

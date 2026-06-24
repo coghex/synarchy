@@ -1,0 +1,53 @@
+# Structure pack: dungeon_1
+#
+# Texture + facemap paths for the RCT-style edge-piece structures
+# (floor / ceiling / post / 4 wall edges). Read by scripts/structures.lua
+# via engine.loadYaml() so the pack's paths live in data, not hardcoded.
+# A new pack = a new yaml in this folder pointing at its own art.
+#
+# Walls carry four facemap cap variants keyed "<left><right>" (1 = pillar
+# notch carved out that end; 00 = full wall) — the wall builder picks one
+# from the posts present on the tile.
+
+name: dungeon_1
+
+pieces:
+  floor:
+    texture: assets/textures/buildings/dungeon_1/floor.png
+    facemap: assets/textures/world/facemap/floorface.png
+  ceiling:
+    texture: assets/textures/buildings/dungeon_1/ceiling.png
+    facemap: assets/textures/world/facemap/ceilingface.png
+  post:
+    texture: assets/textures/buildings/dungeon_1/post.png
+    facemap: assets/textures/world/facemap/postface.png
+
+walls:
+  ne:
+    texture: assets/textures/buildings/dungeon_1/wall_ne.png
+    facemaps:
+      "00": assets/textures/world/facemap/wallface_ne_00.png
+      "10": assets/textures/world/facemap/wallface_ne_10.png
+      "01": assets/textures/world/facemap/wallface_ne_01.png
+      "11": assets/textures/world/facemap/wallface_ne_11.png
+  nw:
+    texture: assets/textures/buildings/dungeon_1/wall_nw.png
+    facemaps:
+      "00": assets/textures/world/facemap/wallface_nw_00.png
+      "10": assets/textures/world/facemap/wallface_nw_10.png
+      "01": assets/textures/world/facemap/wallface_nw_01.png
+      "11": assets/textures/world/facemap/wallface_nw_11.png
+  se:
+    texture: assets/textures/buildings/dungeon_1/wall_se.png
+    facemaps:
+      "00": assets/textures/world/facemap/wallface_se_00.png
+      "10": assets/textures/world/facemap/wallface_se_10.png
+      "01": assets/textures/world/facemap/wallface_se_01.png
+      "11": assets/textures/world/facemap/wallface_se_11.png
+  sw:
+    texture: assets/textures/buildings/dungeon_1/wall_sw.png
+    facemaps:
+      "00": assets/textures/world/facemap/wallface_sw_00.png
+      "10": assets/textures/world/facemap/wallface_sw_10.png
+      "01": assets/textures/world/facemap/wallface_sw_01.png
+      "11": assets/textures/world/facemap/wallface_sw_11.png

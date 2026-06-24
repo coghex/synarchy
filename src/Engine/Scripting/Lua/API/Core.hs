@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Core
   , listFilesFn
   , setPausedFn
   , isPausedFn
+  , getBootProfileFn
   , realTimeFn
   , gameTimeFn
   ) where
@@ -19,6 +20,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.Types (EngineConfig(..), bootProfileTag)
 import Engine.Core.Log (logInfo, logThreadInfo, logWarn, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
@@ -61,6 +63,13 @@ isPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 isPausedFn env = do
   p ← Lua.liftIO $ readIORef (enginePausedRef env)
   Lua.pushboolean p
+  return 1
+
+-- | engine.getBootProfile() → "normal" | "arena"
+getBootProfileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getBootProfileFn env = do
+  Lua.pushstring . TE.encodeUtf8 . bootProfileTag . ecBootProfile $
+      engineConfig env
   return 1
 
 -- | engine.realTime() → number

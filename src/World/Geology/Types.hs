@@ -249,8 +249,10 @@ initGeoState seed worldSize plates =
         -- ry=0 is one pole, ry=regionsPerSide-1 is the other
         -- Middle is equator
         baseTemp ry =
-            let latRatio = abs (fromIntegral (ry - halfRegions))
-                         / fromIntegral halfRegions ∷ Float
+            let latRatio = if regionsPerSide ≤ 1
+                           then 0.0
+                           else abs (fromIntegral (ry - halfRegions))
+                                / fromIntegral halfRegions ∷ Float
             in 30.0 - 60.0 * latRatio  -- +30 at equator, -30 at poles
 
     in GeoState

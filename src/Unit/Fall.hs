@@ -28,6 +28,7 @@ module Unit.Fall
     , fallStunFor
     -- * Tunables
     , metresPerZ
+    , gravity
     ) where
 
 import UPrelude

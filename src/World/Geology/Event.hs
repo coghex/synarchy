@@ -17,7 +17,7 @@ import World.Hydrology.Types (HydroFeature(..))
 import World.Hydrology.Event (applyHydroEvolution, applyHydroFeature)
 import World.Hydrology.River (applyRiverCarve)
 import World.Hydrology.River.Carving (carveFromSegment, computeDeltaDeposit')
-import World.Hydrology.Glacier (applyGlacierCarve)
+import World.Hydrology.Glacier (applyGlacierCarve, applyGlacierMoraine)
 
 -- * Event Application
 
@@ -48,6 +48,8 @@ applyGeoEvent (OreSheetEvent os) _worldSize gx gy _baseElev _ =
     in if delta ≤ 0
        then noModification
        else GeoModification delta (Just (osMat os)) delta
+applyGeoEvent (GlacierMoraineEvent mp) worldSize gx gy baseElev _ =
+    applyGlacierMoraine mp worldSize gx gy baseElev
 applyGeoEvent (LandslideEvent _)    _ _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ _ = noModification

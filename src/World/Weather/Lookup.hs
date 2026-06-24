@@ -13,7 +13,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import World.Weather.Types (ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
-                           , ClimateCoord(..), climateRegionSize)
+                           , ClimateCoord(..), climateRegionSize
+                           , climateRegionCount)
 
 -- | Interpolated climate data at a specific tile coordinate.
 data LocalClimate = LocalClimate
@@ -49,7 +50,7 @@ regionGridCoords chunkSz worldSize gx gy =
         v = gx + gy
         wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
 
-        regionsPerSide = worldSize `div` climateRegionSize
+        regionsPerSide = climateRegionCount worldSize
 
         -- Continuous region coordinates
         fCS  = fromIntegral chunkSz ∷ Float

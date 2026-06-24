@@ -18,6 +18,7 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
+import Structure.Types (emptyChunkStructures)
 import World.Constants (seaLevel)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Grid (worldToGrid)
@@ -80,6 +81,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             -- v32 (ground items) additions
             groundItems ← readIORef (wsGroundItemsRef worldState)
             spoilPiles ← readIORef (wsSpoilRef worldState)
+            -- v54 (structure persistence) additions
+            texPalette ← readIORef (texPaletteRef env)
             -- v4 (Phase 3) additions
             bm        ← readIORef (buildingManagerRef env)
             let buildings = toBuildingSnapshot bm
@@ -134,6 +137,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdMineDesignations = mineDesigs
                             , sdGroundItems  = groundItems
                             , sdSpoilPiles   = spoilPiles
+                            , sdTexPalette   = texPalette
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -210,6 +214,14 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- v34 (dig yields): spoil fills are relative to tile surfaces;
     -- promoted cells replay from sdEdits independently.
     writeIORef (wsSpoilRef worldState) (sdSpoilPiles saveData)
+    -- v54 (structures): restore the texture palette BEFORE any chunk
+    -- replays its WeSetStructure edits, so palette-id → path resolution
+    -- is available. Structures themselves ride sdEdits (replayed per chunk).
+    writeIORef (texPaletteRef env) (sdTexPalette saveData)
+    -- The paletteId → runtime-handle map is session-local (handles differ
+    -- per run). Clear it so the Lua resolve tick re-loads every palette
+    -- texture for THIS session and the renderer can resolve loaded pieces.
+    writeIORef (texPaletteHandlesRef env) HM.empty
 
     -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
@@ -273,6 +285,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcWaterTableMap    = cwt
             , lcMagma            = cmagma
+            , lcStructures       = emptyChunkStructures
             }
     -- Replay edits onto the freshly-generated center chunk. The edit
     -- log was restored from sdEdits earlier in this handler; if the

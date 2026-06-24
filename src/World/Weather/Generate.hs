@@ -44,7 +44,7 @@ initEarlyClimate ∷ Int          -- ^ worldSize (in chunks)
                  → GeoTimeline  -- ^ completed timeline (for lake/river moisture)
                  → ClimateState
 initEarlyClimate worldSize oceanMap timeline =
-    let regionsPerSide = worldSize `div` climateRegionSize
+    let regionsPerSide = climateRegionCount worldSize
         halfChunks = worldSize `div` 2
 
         allCoords = [ ClimateCoord ru rv
@@ -90,7 +90,7 @@ oceanRegionsFromGrid grid worldSize =
     let gridW   = egGridW grid
         spacing = egSpacing grid
         halfGrid = gridW `div` 2
-        regionsPerSide = worldSize `div` climateRegionSize
+        regionsPerSide = climateRegionCount worldSize
         halfChunks = worldSize `div` 2
         -- Region size in tiles (climateRegionSize chunks × chunkSize tiles)
         regionSizeTiles = climateRegionSize * chunkSize
@@ -150,7 +150,7 @@ buildClimateFromOceanSet ∷ Int                       -- ^ worldSize
                          → Float                     -- ^ solar constant
                          → ClimateState
 buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTempOffset solarConst =
-    let regionsPerSide = worldSize `div` climateRegionSize
+    let regionsPerSide = climateRegionCount worldSize
         halfRegions    = regionsPerSide `div` 2
 
         allCoords = [ ClimateCoord ru rv
@@ -520,7 +520,7 @@ geoToClimateCoord ∷ Int → Int → Int → ClimateCoord
 geoToClimateCoord worldSize gx gy =
     let w = worldSize * chunkSize
         halfW = w `div` 2
-        regionsPerSide = worldSize `div` climateRegionSize
+        regionsPerSide = climateRegionCount worldSize
         regionSizeTiles = climateRegionSize * chunkSize
         u = gx - gy
         v = gx + gy

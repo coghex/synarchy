@@ -494,8 +494,18 @@ function combatLog.formatEvent(ev)
     -- bear" reads "The brown bear …").
     local function up1(s) return (s:gsub("^%l", string.upper)) end
     if ev.kind == "miss" then
-        return string.format("[%s] %s",
-            ts, up1(string.format("%s's swing misses %s", atk, tgt))),
+        local missText
+        if payload.dodge then
+            -- The blow was on target; the defender saw it and slipped it.
+            missText = payload.lunge
+                and string.format("%s leaps at %s, who slips aside", atk, tgt)
+                or  string.format("%s dodges %s's attack", tgt, atk)
+        elseif payload.lunge then
+            missText = string.format("%s lunges at %s but fails to connect", atk, tgt)
+        else
+            missText = string.format("%s's swing misses %s", atk, tgt)
+        end
+        return string.format("[%s] %s", ts, up1(missText)),
             {0.7, 0.7, 0.7, 1.0}
     elseif ev.kind == "hit" then
         -- Rich, clinical per-layer narration (scripts/injury_log.lua).

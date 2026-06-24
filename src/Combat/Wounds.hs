@@ -663,16 +663,18 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
                 [ woundPart w | w ← newWoundsR
                 , woundNecrosis w ≥ necrosisLethalVital
                 , maybe False bpVital (HM.lookup (woundPart w) parts) ]
-            -- Edge-triggered: fire DiedNow only on the tick blood
-            -- crosses zero. Without the `uiBlood inst > 0` guard, a
-            -- unit that died last tick (uiBlood = 0) would re-emit
-            -- DiedNow every tick until the unit thread's UnitKill
-            -- processing snaps uiPose, which is up to one combat tick
-            -- away. Matches the existing UnconsciousNow gating, which
-            -- already checks uiPose ≠ "collapsed" for the same reason.
+            -- Edge-triggered death guards. Exsanguination only fires on
+            -- the tick blood crosses zero; gangrene only fires while the
+            -- unit has not yet been published dead. Without these guards,
+            -- the combat tick would re-emit DiedNow every tick until the
+            -- unit thread's UnitKill processing snaps the render pose,
+            -- which is up to one combat tick away. Matches the existing
+            -- UnconsciousNow gating, which already checks uiPose ≠
+            -- "collapsed" for the same reason.
             outcome
                 | uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart "exsanguination"
-                | (g:_) ← gangrenousVital        = DiedNow g "gangrene"
+                | uiPose inst /= "dead"
+                , (g:_) ← gangrenousVital        = DiedNow g "gangrene"
                 | newBlood < unconsCut, uiPose inst /= "collapsed"
                                      = UnconsciousNow worstPart
                 | otherwise          = NoChange

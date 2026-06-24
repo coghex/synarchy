@@ -61,6 +61,8 @@ units:
       jumping:  { base: 85.0, range: 10.0 }
       # Small grip, but clawed + toothed — decent purchase for its size.
       grappling: { base: 40.0, range: 15.0 }
+      # Twitchy prey animal — dodging is its survival reflex, near-elite.
+      dodge:     { base: 80.0, range: 10.0 }
 
     # 8-part quadruped, same topology as the bear but scaled to a tiny
     # animal. Soft-tissue layers are authored at HUMAN-REFERENCE
@@ -209,6 +211,7 @@ units:
       falling-idle:          idle
       standing-to-falling:   idle
       falling-to-collapsed:  idle
+      falling-to-standing:   idle   # no dedicated landing art yet (slides)
 
       # Collapsed (knocked out, rare — usually it just dies).
       collapsed-idle:        death

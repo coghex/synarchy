@@ -120,6 +120,13 @@ data UnitSimState = UnitSimState
     --   fracture/concussion wounds, sizes the knockdown stun from the
     --   worst injury, then clears this. Nothing when no fall is pending.
     , usPendingFallDrop ∷ !(Maybe Int)
+    -- | Active LEAP marker + arc apex (z above the launch). When set, the
+    --   shared Standing→Falling airborne transition arcs up-then-down and
+    --   interpolates xy across the gap (a jump), and lands the unit
+    --   STANDING instead of collapsing like a fall. Nothing = an ordinary
+    --   fall (descend only, xy pinned). Set by startJump, cleared on
+    --   landing in handleTransitionExpiry.
+    , usJumpApex ∷ !(Maybe Float)
     } deriving (Show, Eq, Generic, Serialize)
 
 data MoveTarget = MoveTarget

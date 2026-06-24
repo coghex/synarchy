@@ -32,6 +32,7 @@ defaultEngineConfig = EngineConfig
 #endif
   , ecHeadless   = False
   , ecDebugPort  = 8008
+  , ecBootProfile = BootNormal
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig
@@ -107,4 +108,3 @@ defaultEngineState = EngineState
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager
   }
-

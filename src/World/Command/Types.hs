@@ -127,6 +127,14 @@ data WorldCommand
         --   cell via the WeSetCell edit path — the locations primitive for
         --   carving interior air, walls, ceilings, staircases. Grows the
         --   column up to reach z; z below the column floor is a no-op.
+    | WorldSetStructure WorldPageId Int Int Word8 Int Int Int
+        -- ^ worldId, gx, gy, slot-tag, texture palette id, facemap palette
+        --   id, z. Places a structure piece via the WeSetStructure edit path
+        --   (per-chunk overlay; persists). The palette ids are interned Lua-
+        --   side before queueing; the resolved cap variant is already baked
+        --   into facePaletteId (the BUILDER picks it, not this handler).
+    | WorldClearStructure WorldPageId Int Int Word8
+        -- ^ worldId, gx, gy, slot-tag. Removes a structure piece.
     | WorldDestroy !WorldPageId
     | WorldApplyFluids !FluidWritebackBatch
         -- ^ Sim → World: apply the sim's settled/active fluid results to

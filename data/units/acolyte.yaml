@@ -63,6 +63,9 @@ units:
       # XP from a low base rather than starting combat-ready.
       jumping:   { base: 10.0, range: 10.0 }
       grappling: { base: 15.0, range: 15.0 }
+      # Active dodge — slipping a seen blow. Untrained humans start low
+      # and learn it under fire; blends with the agility stat.
+      dodge:     { base: 12.0, range: 12.0 }
 
     # Knowledge the acolyte spawns KNOWING (gated training — a unit only
     # advances a knowledge it possesses; others stay "Unknown" until learned
@@ -435,6 +438,7 @@ units:
       falling-idle:            falling         # held mid-air if ever stable
       standing-to-falling:     falling         # the descent loop
       falling-to-collapsed:    landing         # landing → collapse
+      falling-to-standing:     landing         # a leap touches down → recover
       # falling-to-dead isn't needed — lethal falls go straight to
       # Dead pose, which resolves via dead-idle → death (already wired).
 

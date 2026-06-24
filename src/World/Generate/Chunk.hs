@@ -33,6 +33,7 @@ import World.Geology.Timeline.Types (GeoEvent(..), GeoTimeline(..))
 import World.Constants (seaLevel)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
+import Structure.Types (emptyChunkStructures)
 import World.Fluids (hasAnyOceanFluid)
 import World.Ocean.Types (oceanDistAt)
 import World.Fluid.Internal (emptyFluidMap, lavaOverrides
@@ -760,6 +761,7 @@ generateLoadedChunk registry catalog params coord =
         , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
         , lcWaterTableMap = wtMap
         , lcMagma      = magma
+        , lcStructures = emptyChunkStructures
         }
 
 -- | Generate a single chunk. Pure and deterministic.
@@ -1103,15 +1105,29 @@ generateChunk registry catalog params coord =
                         | capRaise > 0 = matBasalt
                         | isShellTile  = matBasalt
                         | otherwise    = rawSurfMat
-                    -- Post-coastal neighbor elevations for determining how
-                    -- far down to expose strata (cliff face visibility).
+                    -- Final visible terrain for determining how far down
+                    -- to expose strata (cliff face visibility). In-chunk
+                    -- neighbours must read 'terrainSurfaceMap', not the
+                    -- pre-smoothing bordered terrain, because
+                    -- 'smoothIslandColumns' may lower a lake-adjacent tile
+                    -- after 'finalElevVec' is computed.
+                    finalSelf = terrainSurfaceMap VU.! idx
+                    visibleTerrainOr olx oly fallback =
+                        if olx ≥ 0 ∧ olx < chunkSize
+                           ∧ oly ≥ 0 ∧ oly < chunkSize
+                        then terrainSurfaceMap VU.! columnIndex olx oly
+                        else lookupElevOr olx oly fallback
+                    exposeN = visibleTerrainOr lx (ly - 1) rawSurfZ
+                    exposeS = visibleTerrainOr lx (ly + 1) rawSurfZ
+                    exposeE = visibleTerrainOr (lx + 1) ly rawSurfZ
+                    exposeW = visibleTerrainOr (lx - 1) ly rawSurfZ
+                    neighborMinZ = min exposeN (min exposeS (min exposeE exposeW))
+                    exposeFrom = minimum [rawSurfZ, finalSelf, neighborMinZ]
+                    -- Post-coastal neighbor elevations for the strata cache.
                     finalN = lookupElevOr lx (ly - 1) rawSurfZ
                     finalS = lookupElevOr lx (ly + 1) rawSurfZ
                     finalE = lookupElevOr (lx + 1) ly rawSurfZ
                     finalW = lookupElevOr (lx - 1) ly rawSurfZ
-                    neighborMinZ = min finalN (min finalS (min finalE finalW))
-                    exposeFromRaw = min rawSurfZ neighborMinZ
-                    exposeFrom = exposeFromRaw
                     -- Clamp neighbor elevations for the strata cache.
                     -- Coastal erosion can lower neighbors 30+ tiles below
                     -- a cliff column. The cache uses neighbors to compute
@@ -1719,4 +1735,3 @@ generateZoomTerrain registry params mBorderedCache coord =
                       zoomFluid (wgpClimateState params)
 
     in (zoomSurface, zoomMat, zoomVeg, zoomFluid)
-
