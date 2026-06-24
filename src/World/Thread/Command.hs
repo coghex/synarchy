@@ -66,6 +66,7 @@ import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
 import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldSetFluidTileCommand
                                  , handleWorldSetSlopeCommand
+                                 , handleWorldSetCellCommand
                                  , handleWorldDigTileCommand
                                  , handleWorldAddTileCommand)
 
@@ -146,6 +147,8 @@ handleWorldCommand env logger (WorldSetFluidTile pageId gx gy fluidType)
   = handleWorldSetFluidTileCommand env logger pageId gx gy fluidType
 handleWorldCommand env logger (WorldSetSlope pageId gx gy z bits)
   = handleWorldSetSlopeCommand env logger pageId gx gy z bits
+handleWorldCommand env logger (WorldSetCell pageId gx gy z mat)
+  = handleWorldSetCellCommand env logger pageId gx gy z mat
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env _ (WorldApplyFluids batch)

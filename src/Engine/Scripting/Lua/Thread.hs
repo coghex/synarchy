@@ -158,6 +158,18 @@ runLuaLoop env ls stateRef debugQueue = do
         ThreadStopped → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatLua "Lua thread stopped"
+            -- Answer any debug commands still queued at teardown so their
+            -- client threads (and netcat connections) don't sit out the full
+            -- 30 s response timeout while the engine shuts down. Mirrors the
+            -- crash handler's drain.
+            let drainDebug = do
+                    mCmd ← pollDebugCommand debugQueue
+                    case mCmd of
+                        Nothing → pure ()
+                        Just (DebugCommand _ mvar) → do
+                            _ ← tryPutMVar mvar "engine shutting down"
+                            drainDebug
+            drainDebug
             Lua.close (lbsLuaState ls)
             pure ()
         ThreadPaused → do
@@ -254,11 +266,21 @@ debugBuiltin env cmd =
     let t0 = T.strip cmd
         t1 = maybe t0 T.strip (T.stripPrefix "return " t0)
         t2 = T.strip (fromMaybe t1 (T.stripSuffix ";" t1))
-    in case matchCall "world.waitForInit" t2 of
-        Just arg → Just <$> runWaitForInit env (fromMaybe 600 arg)
-        Nothing  → case matchCall "world.waitForChunks" t2 of
-            Just arg → Just <$> runWaitForChunks env (fromMaybe 120 arg)
-            Nothing  → return Nothing
+        isQuit = t2 ≡ "engine.quit"
+               ∨ case matchCall "engine.quit" t2 of Just _ → True; Nothing → False
+    in if isQuit
+       -- Handle quit HERE, on the client thread, so the ack is sent before
+       -- the Lua thread (which would otherwise answer this command) is torn
+       -- down. Round-tripping quit through the thread it's about to kill is
+       -- the shutdown race that left the client blocked on the full 30 s
+       -- response timeout. Same effect as quitFn: just flip the lifecycle
+       -- flag; the main/headless loop drives the actual teardown.
+       then writeIORef (lifecycleRef env) CleaningUp ≫ return (Just "shutting down")
+       else case matchCall "world.waitForInit" t2 of
+           Just arg → Just <$> runWaitForInit env (fromMaybe 600 arg)
+           Nothing  → case matchCall "world.waitForChunks" t2 of
+               Just arg → Just <$> runWaitForChunks env (fromMaybe 120 arg)
+               Nothing  → return Nothing
 
 -- | Match @<fn>(<int?>)@ exactly. @Just Nothing@ = no/empty arg (use the
 --   caller's default); @Just (Just n)@ = explicit timeout; @Nothing@ =

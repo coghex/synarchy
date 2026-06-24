@@ -105,7 +105,10 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 46  -- v46: Wound gains woundDressing (bandage vs makeshift tourniquet)
+currentSaveVersion = 51  -- v51: Wound gains woundNecrosis (necrosis/rot/gangrene)
+                         -- v50: UnitInstance gains uiImmuneResponse + uiImmunities (immunity system)
+                         -- v49: Wound gains woundInfectionType (data-driven infections)
+                         -- v48: WorldEdit gains WeSetCell (3D set-cell edit for locations)
                          -- (per-instance edge keenness, split from
                          -- iiCondition for weapon degradation).
                          -- (v37: WorldGenParams gains trailing
@@ -351,6 +354,10 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       --   positional, so appending a field to Wound also bumps v.
     , uisScars       ∷ ![Scar]
       -- ^ v45: permanent scar records left by healed severe wounds.
+    , uisImmuneResponse ∷ !Float
+      -- ^ v50: systemic immune-response level (the active infection fight).
+    , uisImmunities   ∷ !(HM.HashMap Text Float)
+      -- ^ v50: acquired per-type immunity (decays very slowly).
     , uisBlood       ∷ !Float
       -- ^ v16: current blood volume in litres. Spawn-time seeded
       --   from body_mass; ticked down by Combat.Wounds bleeding.
@@ -386,6 +393,8 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisFactionId   = uiFactionId ui
     , uisWounds      = uiWounds ui
     , uisScars       = uiScars ui
+    , uisImmuneResponse = uiImmuneResponse ui
+    , uisImmunities  = uiImmunities ui
     , uisBlood       = uiBlood ui
     }
 
@@ -443,6 +452,8 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiFactionId   = uisFactionId s
     , uiWounds      = uisWounds s
     , uiScars       = uisScars s
+    , uiImmuneResponse = uisImmuneResponse s
+    , uiImmunities  = uisImmunities s
     , uiBlood       = uisBlood s
     -- Runtime-only combat memory — reset on load. A bear that was
     -- in the middle of a fight gets a clean slate on reload; the

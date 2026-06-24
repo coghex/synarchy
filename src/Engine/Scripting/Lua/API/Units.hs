@@ -49,6 +49,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetInventoryFn
     , unitGetItemContentsFn
     , unitTreatBleedingFn
+    , unitTreatInfectionFn
+    , unitFrostbiteFn
     , unitInjureFn
     , unitDrinkFn
     , unitEatFn
@@ -72,6 +74,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetWoundSeverityOnFn
     , unitGetWoundsFn
     , unitGetScarsFn
+    , unitGetImmunitiesFn
+    , unitGetInsulationFn
     , unitDropEquipmentToGroundFn
     , unitGetBloodFn
     , unitGetPainFn
@@ -98,6 +102,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
 import Engine.Core.State (EngineEnv(..))
+import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
@@ -1072,6 +1077,7 @@ unitGetWoundsFn env = do
         Nothing → Lua.pushnil >> return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
+            infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
             mWounds ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
                 pure $ do
@@ -1137,6 +1143,36 @@ unitGetWoundsFn env = do
                         -- Dressing type: "" / "bandage" / "tourniquet".
                         Lua.pushstring (TE.encodeUtf8 (woundDressing w))
                         Lua.setfield (-2) "dressing"
+                        -- Infection level 0..1 (drives the sepsis meter;
+                        -- antibiotics cure it) and the clean/disinfected flag
+                        -- (antiseptic prevention — a clean wound won't infect).
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundInfection w)))
+                        Lua.setfield (-2) "infection"
+                        Lua.pushboolean (woundClean w)
+                        Lua.setfield (-2) "clean"
+                        -- Which infection (id) + its display name / icon /
+                        -- category, resolved from the catalogue. Empty id =
+                        -- not yet typed (generic "infected" naming in Lua).
+                        Lua.pushstring (TE.encodeUtf8 (woundInfectionType w))
+                        Lua.setfield (-2) "infectionType"
+                        let mInf = if woundInfectionType w ≡ ""
+                                     then Nothing
+                                     else lookupInfection (woundInfectionType w) infMgr
+                        Lua.pushstring (TE.encodeUtf8
+                            (maybe "" infName mInf))
+                        Lua.setfield (-2) "infectionName"
+                        Lua.pushstring (TE.encodeUtf8
+                            (maybe "" infIcon mInf))
+                        Lua.setfield (-2) "infectionIcon"
+                        Lua.pushstring (TE.encodeUtf8
+                            (maybe "" infCategory mInf))
+                        Lua.setfield (-2) "infectionCategory"
+                        -- Necrosis (dead tissue) 0..1: drives the rot display
+                        -- + the gangrene death cause.
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundNecrosis w)))
+                        Lua.setfield (-2) "necrosis"
                         Lua.rawseti (-2) i
                     return 1
 
@@ -1171,6 +1207,66 @@ unitGetScarsFn env = do
                         Lua.setfield (-2) "at"
                         Lua.rawseti (-2) (fromIntegral i)
                     return 1
+
+-- | unit.getImmunities(uid) → array of { type, name, icon, level } | nil.
+--   Acquired per-type immunity (level 0..1), resolved to display name + icon
+--   from the infection catalogue (falls back to the id + immunity.png).
+--   Sorted strongest-first. Empty table if none.
+unitGetImmunitiesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetImmunitiesFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
+            mImm ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (uiImmunities <$> HM.lookup uid (umInstances um))
+            case mImm of
+                Nothing → Lua.pushnil >> return 1
+                Just immMap → do
+                    let rows = L.sortBy (\a b → compare (snd b) (snd a))
+                                        (HM.toList immMap)
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] rows) $ \(i, (tid, lvl)) → do
+                        let mInf = lookupInfection tid infMgr
+                        Lua.newtable
+                        Lua.pushstring (TE.encodeUtf8 tid)
+                        Lua.setfield (-2) "type"
+                        Lua.pushstring (TE.encodeUtf8 (maybe tid infName mInf))
+                        Lua.setfield (-2) "name"
+                        Lua.pushstring (TE.encodeUtf8 "immunity")
+                        Lua.setfield (-2) "icon"
+                        Lua.pushnumber (Lua.Number (realToFrac lvl))
+                        Lua.setfield (-2) "level"
+                        Lua.rawseti (-2) (fromIntegral i)
+                    return 1
+
+-- | unit.getInsulation(uid) → total thermal insulation (Float) of the unit's
+--   worn gear — summed `idInsulation` over equipped items + accessories. Read
+--   by scripts/thermo.lua to slow heat loss (dress for the climate). 0 if the
+--   unit doesn't exist or wears nothing insulating.
+unitGetInsulationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetInsulationFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnumber 0 >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            total ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                im ← readIORef (itemManagerRef env)
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing → 0
+                    Just inst →
+                        let worn = HM.elems (uiEquipment inst)
+                                 ++ uiAccessories inst
+                            insOf it = maybe 0 idInsulation
+                                         (lookupItemDef (iiDefName it) im)
+                        in sum (map insOf worn)
+            Lua.pushnumber (Lua.Number (realToFrac (total ∷ Float)))
+            return 1
 
 -- | unit.getBlood(uid) → { current, max } | nil
 --
@@ -3135,7 +3231,18 @@ treatBleedingIO env medic patient mOwner = do
                                     else um1
                             um3 = grantKnowledgeXP medic "bleed_control"
                                                    treatXp um2
-                        in (um3, ())
+                            -- PREVENTION: if the kit holds antiseptic, a
+                            -- successful dressing also disinfects the wound —
+                            -- it won't accumulate infection. Consumes a dose.
+                            um4 = if success
+                                     ∧ kitHasFill owner antisepticItemName
+                                                  antisepticDose um3
+                                    then setWoundClean patient targetKey True
+                                             (consumeKitFill owner
+                                                antisepticItemName
+                                                antisepticDose um3)
+                                    else um3
+                        in (um4, ())
                     let msg = if success then "treated"
                                          else "failed — out of material"
                     pure (TreatResult success seep consumed
@@ -3221,6 +3328,233 @@ setWoundDressing patient (pPart, pKind, pAt) seep dressing um =
                       HM.insert patient (pat { uiWounds = ws' })
                                 (umInstances um) }
 
+-- Medical-supply item def-names + per-use doses.
+antisepticItemName, antibioticsItemName ∷ Text
+antisepticItemName  = "antiseptic"
+antibioticsItemName = "antibiotics"
+
+antisepticDose ∷ Float
+antisepticDose = 0.05   -- litres per wound disinfection (a 1 L bottle ≈ 20 uses)
+
+antibioticsDose ∷ Float
+antibioticsDose = 1.0   -- one pill per cure dose (a 60-pill bottle = 60 doses)
+
+-- | True if the owner carries a kit holding `name` with at least `dose`
+--   of fill remaining (antiseptic litres / antibiotic pills).
+kitHasFill ∷ UnitId → Text → Float → UnitManager → Bool
+kitHasFill owner name dose um = case HM.lookup owner (umInstances um) of
+    Nothing  → False
+    Just own → any (\it → any hasIt (iiContents it)) (uiInventory own)
+  where hasIt c = iiDefName c ≡ name ∧ iiCurrentFill c ≥ dose
+
+-- | Spend `dose` of fill from the first matching item in the first kit
+--   (inventory item whose contents hold one with enough). No-op if none.
+consumeKitFill ∷ UnitId → Text → Float → UnitManager → UnitManager
+consumeKitFill owner name dose um = case HM.lookup owner (umInstances um) of
+    Nothing  → um
+    Just own →
+        let inv' = goInv (uiInventory own)
+        in um { umInstances =
+                  HM.insert owner (own { uiInventory = inv' }) (umInstances um) }
+  where
+    enough c = iiDefName c ≡ name ∧ iiCurrentFill c ≥ dose
+    goInv [] = []
+    goInv (it:rest)
+        | any enough (iiContents it) =
+            it { iiContents = goContents (iiContents it) } : rest
+        | otherwise = it : goInv rest
+    goContents [] = []
+    goContents (c:cs)
+        | enough c  = c { iiCurrentFill = iiCurrentFill c - dose } : cs
+        | otherwise = c : goContents cs
+
+-- | Mark the matching wound clean/disinfected (antiseptic prevention) —
+--   a clean wound never accumulates infection. Same part+kind+at match as
+--   setWoundDressing so a concurrent reshuffle can't hit the wrong wound.
+setWoundClean ∷ UnitId → (Text, Text, Double) → Bool → UnitManager → UnitManager
+setWoundClean patient (pPart, pKind, pAt) cln um =
+    case HM.lookup patient (umInstances um) of
+        Nothing  → um
+        Just pat →
+            let ws' = map (\w → if woundPart w ≡ pPart ∧ woundKind w ≡ pKind
+                                   ∧ woundAt w ≡ pAt
+                                  then w { woundClean = cln } else w)
+                          (uiWounds pat)
+            in um { umInstances =
+                      HM.insert patient (pat { uiWounds = ws' })
+                                (umInstances um) }
+
+-- | Nudge a unit's systemic immune response up by `boost` (clamped to 1).
+--   Antibiotics "speed up the response ticker" through this on top of the
+--   bacterial-specific knockdown.
+bumpImmuneResponse ∷ UnitId → Float → UnitManager → UnitManager
+bumpImmuneResponse uid boost um =
+    case HM.lookup uid (umInstances um) of
+        Nothing  → um
+        Just inst →
+            let r' = max 0 (min 1 (uiImmuneResponse inst + boost))
+            in um { umInstances =
+                      HM.insert uid (inst { uiImmuneResponse = r' })
+                                (umInstances um) }
+
+-- | Set the matching wound's infection level (antibiotics cure). Same
+--   match key as the other wound mutators.
+setWoundInfection ∷ UnitId → (Text, Text, Double) → Float → UnitManager → UnitManager
+setWoundInfection patient (pPart, pKind, pAt) inf um =
+    case HM.lookup patient (umInstances um) of
+        Nothing  → um
+        Just pat →
+            let ws' = map (\w → if woundPart w ≡ pPart ∧ woundKind w ≡ pKind
+                                   ∧ woundAt w ≡ pAt
+                                  then w { woundInfection = inf } else w)
+                          (uiWounds pat)
+            in um { umInstances =
+                      HM.insert patient (pat { uiWounds = ws' })
+                                (umInstances um) }
+
+-- | unit.frostbite(uid, part, necDelta) → new necrosis level (0..1) | nil.
+--   Grow (or create) a "frostbite" wound on `part`, adding `necDelta` to its
+--   woundNecrosis. The Lua thermo tick calls this for extremities when the unit
+--   is cold + poorly perfused (cold-killed tissue = necrosis). The engine's
+--   existing necrosis machinery then handles the consequences for free: at
+--   necrosis 1.0 a non-vital extremity rots off (propagateSevering), the open
+--   wound can get infected (the infection system), and it shows as rot in the
+--   Status panel. Returns the frostbite wound's new necrosis level.
+unitFrostbiteFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitFrostbiteFn env = do
+    idArg   ← Lua.tointeger 1
+    partArg ← Lua.tostring 2
+    deltaArg ← Lua.tonumber 3
+    case (idArg, partArg, deltaArg) of
+        (Just n, Just partBS, Just (Lua.Number d)) → do
+            now ← Lua.liftIO $ readIORef (gameTimeRef env)
+            let uid   = UnitId (fromIntegral n)
+                part  = TE.decodeUtf8 partBS
+                delta = max 0 (realToFrac d)
+                isFb w = woundKind w ≡ "frostbite" ∧ woundPart w ≡ part
+            result ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, Nothing)
+                    Just inst →
+                        let ws = uiWounds inst
+                            grown = [ if isFb w
+                                        then w { woundNecrosis =
+                                                   min 1 (woundNecrosis w + delta) }
+                                        else w | w ← ws ]
+                            newW = Wound
+                                { woundPart = part, woundKind = "frostbite"
+                                , woundSeverity = 0.3, woundAt = now
+                                , woundBandage = 1.0, woundClot = 0.0
+                                , woundHeal = 0.0, woundDressing = ""
+                                , woundInfection = 0.0, woundClean = False
+                                , woundInfectionType = ""
+                                , woundNecrosis = min 1 delta }
+                            ws' = if any isFb ws then grown else newW : ws
+                            inst' = inst { uiWounds = ws' }
+                            lvl = maximum (min 1 delta
+                                  : [ woundNecrosis w | w ← ws', isFb w ])
+                        in ( um { umInstances =
+                                    HM.insert uid inst' (umInstances um) }
+                           , Just lvl )
+            case result of
+                Just lvl → Lua.pushnumber (Lua.Number (realToFrac lvl)) >> return 1
+                Nothing  → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
+-- | The mechanic behind `unit.treatInfection` — the CURE half of the
+--   medical loop (antiseptic prevention is folded into treatBleeding). A
+--   medic who knows INFECTION-CONTROL administers antibiotics from the kit
+--   to the patient's worst-infected wound, cutting its infection by an
+--   amount scaled by capability (infection_control / 100 × intelligence),
+--   and marking it clean so it won't re-infect. Consumes one antibiotic
+--   pill per call.
+--   Reuses TreatResult: trSeep carries the wound's NEW infection level,
+--   trMethod = "antibiotics".
+treatInfectionIO ∷ EngineEnv → UnitId → UnitId → Maybe UnitId → IO TreatResult
+treatInfectionIO env medic patient mOwner = do
+    um0 ← readIORef (unitManagerRef env)
+    infMgr ← readIORef (infectionManagerRef env)
+    let owner = fromMaybe medic mOwner
+        -- A wound is antibiotic-curable if its infection is bacterial — i.e.
+        -- the def lists "antibiotics" in curable_by. An untyped infection
+        -- (woundInfectionType "") is treated as bacterial (the default).
+        curableW w = case lookupInfection (woundInfectionType w) infMgr of
+            Nothing  → True   -- untyped / unknown → assume bacterial
+            Just inf → antibioticsItemName `elem` infCurableBy inf
+        cureRateW w = maybe 1.0 infCureRate
+                        (lookupInfection (woundInfectionType w) infMgr)
+    case ( HM.lookup medic   (umInstances um0)
+         , HM.lookup patient (umInstances um0) ) of
+      (Just med, Just pat) →
+        case HM.lookup "infection_control" (uiKnowledge med) of
+          Nothing → pure (treatFail "medic lacks infection-control knowledge")
+          Just level →
+            case [ w | w ← uiWounds pat, woundInfection w > 0.05 ] of
+              [] → pure (treatFail "no infected wound to treat")
+              infected
+                | null (filter curableW infected) →
+                    pure (treatFail "infection not treatable with antibiotics")
+                | not (kitHasFill owner antibioticsItemName antibioticsDose um0) →
+                    pure (treatFail "no antibiotics in kit")
+                | otherwise → do
+                    let worst = L.foldl1'
+                            (\a b → if woundInfection b > woundInfection a
+                                    then b else a) (filter curableW infected)
+                        targetKey = ( woundPart worst, woundKind worst
+                                    , woundAt worst )
+                    mIntel ← getEffectiveStat env medic "intelligence"
+                    let intel     = fromMaybe 1.0 mIntel
+                        nLevel    = max 0 (min 1 (level / 100))
+                        cap       = max 0 (min 1.1 (nLevel * intel))
+                        -- cure strength scales with capability AND the
+                        -- infection's own cure_rate (some bugs resist more).
+                        reduction = max 0.15 (min 0.85 (0.2 + 0.6 * cap))
+                                    * cureRateW worst
+                        newInf    = max 0 (woundInfection worst - reduction)
+                    atomicModifyIORef' (unitManagerRef env) $ \um →
+                        let um1 = consumeKitFill owner antibioticsItemName
+                                                 antibioticsDose um
+                            um2 = setWoundInfection patient targetKey newInf um1
+                            um3 = setWoundClean patient targetKey True um2
+                            um4 = grantKnowledgeXP medic "infection_control" 1.5 um3
+                            -- Antibiotics also speed up the systemic immune
+                            -- response (helps clear other bacterial foci).
+                            um5 = bumpImmuneResponse patient
+                                    (min 0.5 (0.3 * cap)) um4
+                        in (um5, ())
+                    pure (TreatResult True newInf 1 1 (woundPart worst)
+                            (woundKind worst) "antibiotics administered"
+                            "antibiotics")
+      _ → pure (treatFail "medic or patient not found")
+
+-- | unit.treatInfection(medicUid, patientUid [, kitOwnerUid]) →
+--     { ok, infection, part, kind, message, method } | nil
+unitTreatInfectionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTreatInfectionFn env = do
+    medicArg ← Lua.tointeger 1
+    patArg   ← Lua.tointeger 2
+    ownerArg ← Lua.tointeger 3
+    case (medicArg, patArg) of
+        (Just m, Just p) → do
+            let mOwner = (UnitId . fromIntegral) <$> ownerArg
+            res ← Lua.liftIO $ treatInfectionIO env
+                    (UnitId (fromIntegral m)) (UnitId (fromIntegral p)) mOwner
+            Lua.newtable
+            Lua.pushboolean (trOk res)
+            Lua.setfield (-2) "ok"
+            Lua.pushnumber (Lua.Number (realToFrac (trSeep res)))
+            Lua.setfield (-2) "infection"
+            Lua.pushstring (TE.encodeUtf8 (trPart res))
+            Lua.setfield (-2) "part"
+            Lua.pushstring (TE.encodeUtf8 (trKind res))
+            Lua.setfield (-2) "kind"
+            Lua.pushstring (TE.encodeUtf8 (trMessage res))
+            Lua.setfield (-2) "message"
+            Lua.pushstring (TE.encodeUtf8 (trMethod res))
+            Lua.setfield (-2) "method"
+            return 1
+        _ → Lua.pushnil >> return 1
+
 -- | unit.treatBleeding(medicUid, patientUid [, kitOwnerUid]) →
 --     { ok, seep, bandagesUsed, attempts, part, kind, message } | nil
 --
@@ -3291,7 +3625,11 @@ unitInjureFn env = do
                     , woundBandage  = bandage
                     , woundClot     = 0.0
                     , woundHeal     = 0.0
-                    , woundDressing = "" }
+                    , woundDressing = ""
+                    , woundInfection = 0.0
+                    , woundClean    = False
+                    , woundInfectionType = ""
+                    , woundNecrosis = 0.0 }
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, False)

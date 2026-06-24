@@ -162,6 +162,9 @@ data ItemYamlDef = ItemYamlDef
     , iydArmor       ∷ !(Maybe ItemYamlArmor)
     , iydUnequippable ∷ !Bool
     , iydBuffs       ∷ ![ItemYamlBuff]
+    , iydInsulation  ∷ !Float                      -- ^ thermal insulation when
+                                                   --   worn (slows heat loss);
+                                                   --   defaults to 0
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlDef where
@@ -183,6 +186,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "armor"
         ⊛ v .:? "unequippable" .!= False
         ⊛ v .:? "buffs"        .!= []
+        ⊛ v .:? "insulation"   .!= 0.0
 
 newtype ItemYamlFile = ItemYamlFile
     { iyfItems ∷ [ItemYamlDef]

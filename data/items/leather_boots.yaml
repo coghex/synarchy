@@ -5,6 +5,7 @@ items:
     weight: 0.9
     kind: boots
     category: Armor
+    insulation: 0.2   # warm feet
     material: leather  # combat resistance lives in
                        # data/substances/leathers.yaml under "leather"
     quality:   { min: 60, max: 90 }

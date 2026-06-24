@@ -46,7 +46,8 @@ inst ws = UnitInstance
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty, uiKnowledge = HM.empty
     , uiInventory = [], uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = "t", uiWounds = ws, uiScars = [], uiBlood = 5
+    , uiFactionId = "t", uiWounds = ws, uiScars = []
+    , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 5
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing }
@@ -54,7 +55,9 @@ inst ws = UnitInstance
 wound ∷ Text → Text → Float → Wound
 wound part kind sev = Wound { woundPart = part, woundKind = kind
                             , woundSeverity = sev, woundAt = 0
-                            , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = "" }
+                            , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = ""
+                            , woundInfection = 0.0, woundClean = False, woundInfectionType = ""
+                            , woundNecrosis = 0.0 }
 
 severedParts ∷ UnitInstance → [Text]
 severedParts i = [ woundPart w | w ← uiWounds i, woundKind w ≡ "severed" ]

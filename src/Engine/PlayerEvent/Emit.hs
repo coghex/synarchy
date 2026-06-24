@@ -93,7 +93,8 @@ emitEventFull env category source eventText mCoords mUid = do
                     , peCount    = 1
                     }
             when (ccLog cfg) $
-                atomically $ pushBounded (eventStoreRef env) ev
+                atomically $
+                    pushBounded (ccLogCoalesceWindow cfg) (eventStoreRef env) ev
             when (ccPopup cfg) $ do
                 atomically $ modifyTVar' (popupQueueRef env) (|> ev)
                 let (r, g, b, a) = ccTextColor cfg
@@ -106,15 +107,15 @@ emitEventFull env category source eventText mCoords mUid = do
             when (ccPause cfg) $
                 writeIORef (enginePausedRef env) True
 
--- | Append an event to a bounded ring buffer, COALESCING identical
---   repeats (Dwarf-Fortress style). If an existing entry has the same
---   category + text + uid, we bump its count and timestamp and move it
---   to the tail (most-recent) instead of appending a duplicate — so a
---   stuck unit that re-fails every tick stays one "…(xN)" line. Oldest
---   entries are dropped when the buffer exceeds 'eventStoreCap'.
-pushBounded ∷ TVar (Seq PlayerEvent) → PlayerEvent → STM ()
-pushBounded ref ev = modifyTVar' ref $ \s →
-    let coalesced = case Seq.findIndexR (sameEntry ev) s of
+-- | Append an event to a bounded ring buffer. When @window > 0@, identical
+--   repeats within that many GAME-seconds coalesce Dwarf-Fortress style:
+--   bump the count, refresh the timestamp, and move the row to the tail.
+--   Outside the window, or when @window <= 0@, every emit keeps its own
+--   history row. Oldest entries are dropped when the buffer exceeds
+--   'eventStoreCap'.
+pushBounded ∷ Double → TVar (Seq PlayerEvent) → PlayerEvent → STM ()
+pushBounded window ref ev = modifyTVar' ref $ \s →
+    let coalesced = case findCoalescedIndex s of
             Just i  →
                 let old = Seq.index s i
                 in Seq.deleteAt i s |> ev { peCount = peCount old + 1 }
@@ -122,6 +123,14 @@ pushBounded ref ev = modifyTVar' ref $ \s →
         excess = Seq.length coalesced - eventStoreCap
     in if excess > 0 then Seq.drop excess coalesced else coalesced
   where
+    findCoalescedIndex s
+        | window <= 0 = Nothing
+        | otherwise   = Seq.findIndexR (sameEntryWithin ev) s
+
+    sameEntryWithin a b =
+        let dt = peGameTime a - peGameTime b
+        in sameEntry a b ∧ dt >= 0 ∧ dt <= window
+
     sameEntry a b = peCategory a == peCategory b
                   ∧ peText a == peText b
                   ∧ peUid a == peUid b

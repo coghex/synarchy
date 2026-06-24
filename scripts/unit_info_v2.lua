@@ -653,6 +653,18 @@ local STAT_DEFS = {
         desc = "Blood volume in litres. Drained by bleeding wounds; below 30% triggers unconsciousness, ≤0 means death." },
     pain         = { icon = "pain",         name = "Pain",
         desc = "Accumulated pain from wounds (severity weighted by attack kind). High pain penalises hit chance and evasion." },
+    body_temp    = { icon = "body_temp",    name = "Body Temp",
+        desc = "Core body temperature (°C). Driven by the environment, the body's heat production, and insulation. Far from 37°C means hypothermia (cold) or heat stroke (hot)." },
+    circulation  = { icon = "circulation",  name = "Circulation",
+        desc = "How well the body perfuses blood to its tissues. Lowered by blood loss, obesity, frailty, sickness, and cold (vasoconstriction). Poor circulation freezes the extremities first." },
+    salt         = { icon = "salt",         name = "Salt",
+        desc = "Electrolyte (sodium) balance, as % of ideal. Sweat and water dilute it (cramps, hyponatremia); dehydration concentrates it (hypernatremia). Food restores salt — the kidneys can't make it. Both extremes are dangerous." },
+    heart_rate   = { icon = "heart_rate",   name = "Heart Rate",
+        desc = "Beats per minute. Rises with exertion, heat, blood loss, and low oxygen (the body compensating); cold slows it (bradycardia). Drives circulation." },
+    blood_oxygen = { icon = "blood_oxygen", name = "Blood O₂",
+        desc = "Blood oxygen saturation. Lung damage, massive blood loss, or a cold-slowed heart starve the blood of oxygen → hypoxia → suffocation." },
+    consciousness = { icon = "consciousness", name = "Consciousness",
+        desc = "Mental clarity, set by the worst of: temperature extremes, low blood oxygen, salt imbalance. Falling → confused → delirious (stumbles) → unconscious (collapses)." },
     carrying_capacity = { icon = "weight",  name = "Carry Load",
         desc = "Carried weight vs carrying capacity (from muscle mass and strength). Includes worn gear and container contents; over-capacity units refuse to pick anything else up." },
 
@@ -691,6 +703,14 @@ local STAT_DEFS = {
         desc = "Skill with daggers and other short blades. Improves hit chance and damage with that weapon class." },
     unarmed      = { icon = "unarmed",      name = "Unarmed",
         desc = "Skill at fighting without a weapon — fists, claws, fangs. Used by all natural-weapon creatures (bears) plus unarmed humanoids." },
+    -- Leap/grapple skills (combat: lunging + clinging). LEARNED proficiency;
+    -- effective capability blends with the STATS noted — the skill/stat split,
+    -- so a strong, agile novice still out-leaps a frail expert. Icons reuse
+    -- agility/strength until dedicated art exists.
+    jumping      = { icon = "agility",      name = "Jumping",
+        desc = "Technique for leaping — gap-closing lunges that turn body momentum into a strike. Effective leap range and speed scale with the agility and strength stats." },
+    grappling    = { icon = "strength",     name = "Grappling",
+        desc = "Technique for grabbing and clinging — latching a grasping part (jaws, claws, hands) onto an enemy and holding through their thrashing. Scales with strength and dexterity." },
 }
 
 -- engine.loadTexture caches by path, but we keep a per-key map so each
@@ -1281,6 +1301,67 @@ local function fmtPain(uid)
     return string.format("%.2f", p)
 end
 
+local thermo = require("scripts.thermo")
+local function fmtBodyTemp(uid)
+    return string.format("%.1f\194\176C", thermo.coreTemp(uid))
+end
+-- Green near 37, amber in the cold/hot bands, red in the danger zone.
+local function bodyTempColor(uid)
+    local c = thermo.coreTemp(uid)
+    if c <= 35.0 or c >= 39.0 then return { 1.0, 0.30, 0.30, 1.0 } end
+    if c <= 36.0 or c >= 38.0 then return { 1.0, 0.62, 0.25, 1.0 } end
+    return { 0.75, 0.85, 0.70, 1.0 }
+end
+
+local function fmtCirculation(uid)
+    return string.format("%d%%", math.floor((unit.getStat(uid, "circulation") or 1.0) * 100 + 0.5))
+end
+local function circulationColor(uid)
+    local c = unit.getStat(uid, "circulation") or 1.0
+    if c <= 0.4 then return { 1.0, 0.30, 0.30, 1.0 } end
+    if c <= 0.65 then return { 1.0, 0.62, 0.25, 1.0 } end
+    return { 0.75, 0.85, 0.70, 1.0 }
+end
+
+-- Salt concentration as % of ideal (100% = balanced); both directions bad.
+local function fmtSalt(uid)
+    return string.format("%d%%", math.floor((unit.getStat(uid, "salt_conc") or 1.0) * 100 + 0.5))
+end
+local function saltColor(uid)
+    local c = unit.getStat(uid, "salt_conc") or 1.0
+    if c <= 0.55 or c >= 1.6 then return { 1.0, 0.30, 0.30, 1.0 } end
+    if c <= 0.8  or c >= 1.35 then return { 1.0, 0.62, 0.25, 1.0 } end
+    return { 0.75, 0.85, 0.70, 1.0 }
+end
+
+local function fmtHeartRate(uid)
+    return string.format("%d bpm", math.floor((unit.getStat(uid, "heart_rate") or 70) + 0.5))
+end
+local function heartRateColor(uid)
+    local hr = unit.getStat(uid, "heart_rate") or 70
+    if hr <= 40 or hr >= 160 then return { 1.0, 0.30, 0.30, 1.0 } end
+    if hr <= 50 or hr >= 120 then return { 1.0, 0.62, 0.25, 1.0 } end
+    return { 0.75, 0.85, 0.70, 1.0 }
+end
+local function fmtBloodOxygen(uid)
+    return string.format("%d%%", math.floor((unit.getStat(uid, "blood_oxygen") or 1.0) * 100 + 0.5))
+end
+local function bloodOxygenColor(uid)
+    local o = unit.getStat(uid, "blood_oxygen") or 1.0
+    if o <= 0.6 then return { 1.0, 0.30, 0.30, 1.0 } end
+    if o <= 0.85 then return { 1.0, 0.62, 0.25, 1.0 } end
+    return { 0.75, 0.85, 0.70, 1.0 }
+end
+local function fmtConsciousness(uid)
+    return string.format("%d%%", math.floor((unit.getStat(uid, "consciousness") or 1.0) * 100 + 0.5))
+end
+local function consciousnessColor(uid)
+    local c = unit.getStat(uid, "consciousness") or 1.0
+    if c < 0.4 then return { 1.0, 0.30, 0.30, 1.0 } end   -- delirious/out
+    if c < 0.7 then return { 1.0, 0.62, 0.25, 1.0 } end   -- confused
+    return { 0.75, 0.85, 0.70, 1.0 }
+end
+
 -- Conditions: the unit's transient STATES (as opposed to injuries, which
 -- are wounds). Returns a worst-first list of { name, icon } — what's
 -- keeping the unit down or threatening it — derived from pose + the
@@ -1328,6 +1409,21 @@ local function unitConditions(uid)
         end
     end
 
+    -- Mental state from consciousness (brain.lua): confused / delirious. Out-
+    -- cold shows as the collapse condition above. Driven by temp extremes, low
+    -- blood oxygen, or salt imbalance.
+    local cns = stats.get(uid, "consciousness") or 1.0
+    if cns < 0.15 then
+        -- unconscious — already shown via the collapsed condition.
+    elseif cns < 0.40 then
+        out[#out + 1] = { name = "Delirious", icon = "confusion",
+            hint = "Addled and unable to act purposefully — stumbling around. "
+                   .. "From temperature extremes, low oxygen, or salt imbalance." }
+    elseif cns < 0.70 then
+        out[#out + 1] = { name = "Confused", icon = "confusion",
+            hint = "Mentally clouded. Worsens toward delirium and collapse." }
+    end
+
     -- Failure meters (delayed-death pathways) — show the rising % so the
     -- player sees the clock and can treat in time. The tooltip carries the
     -- real numbers: current %, the per-second fill/recover rate, and what it
@@ -1346,6 +1442,22 @@ local function unitConditions(uid)
         { stat = "organ",   label = "Organ failure", icon = "festered_injury",
           title = "Organ failure", fatal = "sepsis",
           desc  = "Untreated visceral trauma festering (sepsis / encephalopathy)." },
+        { stat = "sepsis",  label = "Septic",        icon = "festered_injury",
+          title = "Sepsis", fatal = "sepsis",
+          desc  = "Infection from untreated wounds has spread to the blood. "
+                  .. "Antibiotics can still cure it." },
+        { stat = "hypothermia", label = "Hypothermic", icon = "frostbite",
+          title = "Hypothermia", fatal = "hypothermia",
+          desc  = "Core body temperature is dangerously low. Get the unit "
+                  .. "somewhere warm." },
+        { stat = "hyperthermia", label = "Overheating", icon = "frostbite",
+          title = "Hyperthermia", fatal = "heat stroke",
+          desc  = "Core body temperature is dangerously high. Get the unit "
+                  .. "out of the heat and rehydrated." },
+        { stat = "salt_imbalance", label = "Electrolyte crisis", icon = "salt",
+          title = "Electrolyte imbalance", fatal = "electrolyte imbalance",
+          desc  = "Blood sodium is dangerously off balance (hypo- or "
+                  .. "hypernatremia). Food restores salt; water rebalances it." },
     }
     local meterInfo = require("scripts.unit_resources").meterInfo(uid)
     for _, mc in ipairs(METER_CONDITIONS) do
@@ -1470,6 +1582,12 @@ local function buildStatusPanel(rect, uid)
         { key = "blood",     value = fmtBlood, colorFn = bloodColorFn,
           valueTooltip = bloodValueTooltip },
         { key = "pain",      value = fmtPain,  colorFn = painColorFn },
+        { key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor },
+        { key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor },
+        { key = "blood_oxygen", value = fmtBloodOxygen, colorFn = bloodOxygenColor },
+        { key = "consciousness", value = fmtConsciousness, colorFn = consciousnessColor },
+        { key = "circulation", value = fmtCirculation, colorFn = circulationColor },
+        { key = "salt",      value = fmtSalt, colorFn = saltColor },
         { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
           colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) },
         { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
@@ -1530,7 +1648,8 @@ local function buildStatusPanel(rect, uid)
                      .. "\nSeverity: " .. sevWord .. " (" .. pct .. ")"
                      .. (inj.kind == "severed" and "\nPermanent."
                                                 or  "\nHeals over time.")
-        local effects = injuries.effects(inj.kind, inj.part, inj.severity)
+        local effects = injuries.effects(inj.kind, inj.part, inj.severity,
+                                         inj.infection)
         if #effects > 0 then
             hint = hint .. "\n\nEffects:\n• " .. table.concat(effects, "\n• ")
         end
@@ -1566,6 +1685,31 @@ local function buildStatusPanel(rect, uid)
         }
     end
 
+    -- Infections: their own section, below injuries. An infected wound shows
+    -- the specific bug (e.g. "Gas gangrene (left thigh)") + its level, colour-
+    -- coded by how bad it is. Cured by antibiotics; cleared by the immune
+    -- response over time (which then leaves immunity, below the scars).
+    for _, inf in ipairs(injuries.infectionList(uid)) do
+        local pct = math.floor((inf.level or 0) * 100 + 0.5)
+        local col = (inf.level >= 0.7) and { 1.00, 0.35, 0.35, 1.0 }   -- red
+                 or (inf.level >= 0.4) and { 1.00, 0.55, 0.20, 1.0 }   -- orange
+                 or { 0.95, 0.80, 0.45, 1.0 }                          -- amber
+        local hint = inf.name .. "\nInfection level: " .. pct .. "%"
+                     .. ((inf.category == "bacterial")
+                         and "\nTreatable with antibiotics."
+                         or  "\nThe immune system must fight this off.")
+        local disp = inf.name .. " " .. pct .. "%"
+        local tt = { text = inf.name, hint = hint }
+        rows[#rows + 1] = {
+            key          = inf.icon,
+            value        = function() return disp end,
+            opts         = { fontSize = CONDITION_FONT_SIZE, color = col,
+                             align = "left", abbreviate = true },
+            tooltip      = tt,
+            valueTooltip = function() return tt end,
+        }
+    end
+
     -- Scars: permanent marks from healed severe wounds. Dim grey,
     -- below the active injuries, descriptive only.
     for _, sc in ipairs(injuries.scarList(uid)) do
@@ -1579,6 +1723,26 @@ local function buildStatusPanel(rect, uid)
             value        = function() return sc.name end,
             opts         = { fontSize = CONDITION_FONT_SIZE,
                              color = { 0.55, 0.55, 0.55, 1.0 },
+                             align = "left", abbreviate = true },
+            tooltip      = tt,
+            valueTooltip = function() return tt end,
+        }
+    end
+
+    -- Immunities: acquired resistance from surviving infections. Bottom of
+    -- the panel, dim blue-green, descriptive. Fades very slowly.
+    for _, im in ipairs(unit.getImmunities(uid) or {}) do
+        local pct = math.floor((im.level or 0) * 100 + 0.5)
+        local disp = "Immunity (" .. im.name .. ") " .. pct .. "%"
+        local hint = "Acquired immunity to " .. im.name
+                     .. "\nStrength: " .. pct .. "%"
+                     .. "\nResists re-infection; fades slowly over time."
+        local tt = { text = disp, hint = hint }
+        rows[#rows + 1] = {
+            key          = im.icon,   -- "immunity"
+            value        = function() return disp end,
+            opts         = { fontSize = CONDITION_FONT_SIZE,
+                             color = { 0.55, 0.80, 0.80, 1.0 },
                              align = "left", abbreviate = true },
             tooltip      = tt,
             valueTooltip = function() return tt end,
@@ -1792,14 +1956,28 @@ local function panelShapeSig(panel, uid)
             parts[#parts + 1] = "c:" .. c.name
         end
         for _, inj in ipairs(injuries.list(uid)) do
-            parts[#parts + 1] = string.format("i:%s:%s:%d:%s",
+            parts[#parts + 1] = string.format("i:%s:%s:%d:%s:%d",
                 inj.kind or "?", inj.part or "?",
                 math.floor((inj.severity or 0) * 10),
-                inj.dressing or "")
+                inj.dressing or "",
+                math.floor((inj.necrosis or 0) * 10))
+        end
+        -- Infections: their own rows; bucket the level (~0.1) so passive
+        -- growth/clearance only rebuilds on a visible step.
+        for _, inf in ipairs(injuries.infectionList(uid)) do
+            parts[#parts + 1] = string.format("f:%s:%s:%d",
+                inf.part or "?", inf.infectionType or inf.name or "?",
+                math.floor((inf.level or 0) * 10))
         end
         -- Scars change the row set when one appears (a wound healed out).
         for _, sc in ipairs(injuries.scarList(uid)) do
             parts[#parts + 1] = "s:" .. (sc.kind or "?") .. ":" .. (sc.part or "?")
+        end
+        -- Immunities: bucket the level so the slow decay doesn't rebuild every
+        -- tick, but a new immunity / a visible step does.
+        for _, im in ipairs(unit.getImmunities(uid) or {}) do
+            parts[#parts + 1] = string.format("m:%s:%d",
+                im.type or "?", math.floor((im.level or 0) * 10))
         end
         base = "status:" .. table.concat(parts, "|")
     else

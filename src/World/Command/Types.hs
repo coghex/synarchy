@@ -122,6 +122,11 @@ data WorldCommand
         --   walkable-ramp slope bits of an existing tile via the WeSetSlope
         --   edit path. No generator emits this — it exists for movement
         --   test harnesses, since addTile only ever produces flat tops.
+    | WorldSetCell WorldPageId Int Int Int MaterialId
+        -- ^ worldId, gx, gy, z, material (id 0 = air). Sets a single 3D
+        --   cell via the WeSetCell edit path — the locations primitive for
+        --   carving interior air, walls, ceilings, staircases. Grows the
+        --   column up to reach z; z below the column floor is a no-op.
     | WorldDestroy !WorldPageId
     | WorldApplyFluids !FluidWritebackBatch
         -- ^ Sim → World: apply the sim's settled/active fluid results to

@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldWaitForChunksFn
     , worldGetHoverTileFn
     , worldGetHoverPosFn
+    , worldGetClimateAtFn
     ) where
 
 import UPrelude
@@ -24,6 +25,8 @@ import World.Types
 import World.Geology.Timeline.Types
 import World.Hydrology.Types
 import World.Cursor.Types (CursorState(..))
+import World.Generate.Types (WorldGenParams(..))
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
 import World.Generate (globalToChunk)
 
@@ -265,6 +268,34 @@ getWorldGenParams env = do
     case wmWorlds manager of
         ((_, ws):_) → readIORef (wsGenParamsRef ws)
         []          → pure Nothing
+
+-- | world.getClimateAt(gx, gy) → { temp, summerTemp, winterTemp, precip,
+--   humidity, snow } | nil. Region climate sampled (bilinear) at a global
+--   tile. temp in °C; precip/humidity/snow 0..1. nil if no world is active.
+worldGetClimateAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetClimateAtFn env = do
+    gxArg ← Lua.tointeger 1
+    gyArg ← Lua.tointeger 2
+    case (gxArg, gyArg) of
+        (Just gx, Just gy) → do
+            mParams ← Lua.liftIO (getWorldGenParams env)
+            case mParams of
+                Nothing → Lua.pushnil >> return 1
+                Just p → do
+                    let c = lookupLocalClimate (wgpClimateState p)
+                                (wgpWorldSize p) (fromIntegral gx)
+                                (fromIntegral gy)
+                        putN k v = Lua.pushnumber (Lua.Number (realToFrac v))
+                                   >> Lua.setfield (-2) k
+                    Lua.newtable
+                    putN "temp"       (lcTemp c)
+                    putN "summerTemp" (lcSummerTemp c)
+                    putN "winterTemp" (lcWinterTemp c)
+                    putN "precip"     (lcPrecip c)
+                    putN "humidity"   (lcHumidity c)
+                    putN "snow"       (lcSnow c)
+                    return 1
+        _ → Lua.pushnil >> return 1
 
 -- | world.getRivers() → array of river tables
 --   Each river: { source={x,y}, mouth={x,y}, flowRate=N, segments={...} }

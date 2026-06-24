@@ -171,6 +171,7 @@ loadItemYamlFn env backendState = do
                                         iybScalesWithCondition b
                                     })
                                 (iydBuffs def)
+                            , idInsulation  = iydInsulation def
                             }
 
                     atomicModifyIORef' (itemManagerRef env) $ \im →

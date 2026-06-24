@@ -17,6 +17,7 @@ module World.Edit.Apply
     ) where
 
 import UPrelude
+import Data.Word (Word8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -170,6 +171,43 @@ applyEdit (WeSetSlope gx gy z bits) lc
            else
                let col' = col { ctSlopes = ctSlopes col VU.// [(i, bits)] }
                in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
+applyEdit (WeSetCell gx gy z mat) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let (_, (lx, ly)) = globalToChunk gx gy
+            idx    = columnIndex lx ly
+            col    = lcTiles lc V.! idx
+            start  = ctStartZ col
+            len    = VU.length (ctMats col)
+            i      = z - start
+            m      = unMaterialId mat
+            oldTop = lcTerrainSurfaceMap lc VU.! idx
+        in if i < 0
+           then lc                              -- below the column floor; no grow-down
+           else
+               -- In range → overwrite the cell. Above the top → grow the
+               -- column up, air-filling (mat 0) any gap so the cell lands
+               -- at z. Either way slope/veg reset on the touched cell.
+               let col'
+                       | i < len   = col
+                           { ctMats   = ctMats   col VU.// [(i, m)]
+                           , ctSlopes = ctSlopes col VU.// [(i, 0)]
+                           , ctVeg    = ctVeg    col VU.// [(i, 0)]
+                           }
+                       | otherwise = col
+                           { ctMats   = ctMats   col VU.++
+                                            VU.snoc (VU.replicate (i - len) 0) m
+                           , ctSlopes = ctSlopes col VU.++ VU.replicate (i - len + 1) 0
+                           , ctVeg    = ctVeg    col VU.++ VU.replicate (i - len + 1) 0
+                           }
+                   lc' = recomputeColumnSurface idx col' lc
+               -- A write at or above the old terrain top changes the
+               -- surface (e.g. carving a staircase mouth) → any flora
+               -- rooted on the tile goes with it. A purely subsurface
+               -- write (carving a buried room) leaves the surface alone.
+               in if z ≥ oldTop
+                  then lc' { lcFlora = dropFloraAt lx ly (lcFlora lc') }
+                  else lc'
 
 -- | Replay every edit recorded for this chunk, in stored order.
 --   Defensive `HM.lookup` — chunks with no edits round-trip unchanged.
@@ -179,6 +217,49 @@ replayEdits edits lc = case HM.lookup (lcCoord lc) edits of
     Just es → foldl (flip applyEdit) lc es
 
 -- Helpers ---------------------------------------------------------
+
+-- | Highest index in a column's material vector holding a non-air
+--   (≠ 0) cell, or -1 if the column is entirely air. Top-level (not a
+--   nested where) to dodge the Strict-pragma let-binder panic.
+topSolidIndex ∷ VU.Vector Word8 → Int
+topSolidIndex mats = go (VU.length mats - 1)
+  where go k | k < 0           = -1
+             | mats VU.! k ≠ 0 = k
+             | otherwise       = go (k - 1)
+
+-- | Drop any flora rooted on local tile (lx, ly).
+dropFloraAt ∷ Int → Int → FloraChunkData → FloraChunkData
+dropFloraAt lx ly fcd = FloraChunkData
+    [ fi | fi ← fcdInstances fcd
+         , fromIntegral (fiTileX fi) ≠ lx ∨ fromIntegral (fiTileY fi) ≠ ly ]
+
+-- | After a WeSetCell write, re-derive the column's surface state: trim
+--   trailing air so the top cell is solid (matches generator output and
+--   anything that reads the column top directly), then set the chunk's
+--   terrain-surface (topmost non-air z) and rendered-surface (max with
+--   any fluid) maps for this column. The top-of-column edits maintain
+--   these inline; WeSetCell is the only caller that needs the rescan.
+recomputeColumnSurface ∷ Int → ColumnTiles → LoadedChunk → LoadedChunk
+recomputeColumnSurface idx col lc =
+    let start = ctStartZ col
+        len   = VU.length (ctMats col)
+        hi    = topSolidIndex (ctMats col)
+        col'  | hi ≡ len - 1 = col            -- already solid-topped
+              | otherwise     = col            -- trim trailing air (hi+1 = 0 ⇒ empty)
+                  { ctMats   = VU.take (hi + 1) (ctMats col)
+                  , ctSlopes = VU.take (hi + 1) (ctSlopes col)
+                  , ctVeg    = VU.take (hi + 1) (ctVeg col)
+                  }
+        terrainTopZ = start + hi               -- start - 1 when fully air
+        curFluid    = lcFluidMap lc V.! idx
+        newSurface  = case curFluid of
+            Just fc → max terrainTopZ (fcSurface fc)
+            Nothing → terrainTopZ
+    in lc
+        { lcTiles             = lcTiles lc V.// [(idx, col')]
+        , lcTerrainSurfaceMap = lcTerrainSurfaceMap lc VU.// [(idx, terrainTopZ)]
+        , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, newSurface)]
+        }
 
 edgeBelongsTo ∷ Int → Int → LoadedChunk → Bool
 edgeBelongsTo gx gy lc =

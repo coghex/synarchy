@@ -22,6 +22,10 @@
 local stats = require("scripts.unit_stats")
 local movementSpeed = require("scripts.movement_speed")
 local injuries = require("scripts.injuries")
+local thermo   = require("scripts.thermo")
+local salts    = require("scripts.salts")
+local cardio   = require("scripts.cardio")
+local brain    = require("scripts.brain")
 
 local unitResources = {}
 
@@ -131,7 +135,10 @@ local config = {
             -- baseline metabolism + sweat is ~2.5 L/day; here we run
             -- a bit higher to make the gameplay loop visible without
             -- accelerating into the "constantly drinking" zone.
-            drain_constant  = 0.01,
+            -- Proportional to max_hydration so the depletion TIME is the
+            -- same for any body size. Calibrated to the old absolute
+            -- 0.01 L/s at the human max_hydration of ~42 L (0.01/42).
+            drain_constant_frac = 0.01 / 42,
             -- No regen: hydration only restored by drinking events
             -- (separate API, not yet wired).
             collapse_threshold = 0.2,
@@ -184,6 +191,24 @@ local config = {
             kill_on_zero           = true,
             -- No organ_failure_check — wildlife doesn't (yet) have
             -- the body-composition catabolism layer that drives it.
+        },
+    },
+    -- Red squirrel: same minimal stamina model as the bear so flight
+    -- sprints and the (rare) combat drain land somewhere. Tiny prey —
+    -- no hunger/hydration/organ-failure layer.
+    red_squirrel = {
+        stamina = {
+            max_from               = "max_stamina",
+            speed_drain            = true,
+            move_regen_factor      = 0.5,
+            drain_walking          = 0.1,
+            regen_factor_walking   = 0.12,
+            regen_factor_idle      = 0.5,
+            regen_factor_collapsed = 0.3,
+            regen_factor_crouching = 0.5,
+            collapse_threshold     = 0.1,
+            revive_threshold       = 0.5,
+            kill_on_zero           = true,
         },
     },
 }
@@ -412,8 +437,13 @@ local function tickStarvation(uid, dt)
     local h    = unit.getStat(uid, "height")
     if not (body and lean and fat and h) then return end
 
-    local minFat  = 0.44 * h * h
-    local minLean = 4.4  * h * h
+    -- Frame-proportional viability floors (match seedBodyComposition's
+    -- minFatFrac/minLeanFrac). frame_mass = the stable structural size,
+    -- so these scale correctly for any creature; fall back to the old
+    -- height-only formula for units seeded before frame_mass existed.
+    local frame   = unit.getStat(uid, "frame_mass")
+    local minFat  = frame and (0.02 * frame) or (0.44 * h * h)
+    local minLean = frame and (0.20 * frame) or (4.4  * h * h)
 
     -- Respiratory failure: sharp death when skeletal muscle (which
     -- includes the diaphragm) hits its floor.
@@ -516,7 +546,13 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
     -- the walking multiplier internally), so the drain code just
     -- reads the authoritative burn rate.
     local isMoving = (activity == "walking" or activity == "running")
-    local drainConstant = params.drain_constant or 0
+    -- Constant drain: an absolute term (drain_constant) plus a
+    -- mass-proportional term (drain_constant_frac × this resource's max).
+    -- The proportional form keeps depletion TIME size-invariant for pools
+    -- that scale with body mass (hydration), so tiny and giant creatures
+    -- run dry over the same game-time instead of small ones dying instantly.
+    local drainConstant = (params.drain_constant or 0)
+                        + (params.drain_constant_frac or 0) * maxVal
     local drainMetabolic = 0
     if params.drain_metabolic then
         drainMetabolic = stats.get(uid, "metabolism_rate") or 0
@@ -638,6 +674,11 @@ local function checkRevive(uid, defConfig)
     -- disabling leg break) stays down until the wound heals below the
     -- threshold — same hysteresis idea as the blood gate below.
     if injuries.isIncapacitated(uid) then return end
+
+    -- Consciousness gate. A unit knocked out by heat stroke / hypoxia / salt
+    -- imbalance stays down until consciousness recovers (hysteresis: collapse
+    -- at <0.15, rise at ≥0.40 — see brain.lua).
+    if not brain.canRise(uid) then return end
 
     -- Blood-loss gate. The combat wound subsystem
     -- (Combat.Wounds.tickOneUnit) collapses a unit when blood drops
@@ -774,7 +815,9 @@ local function tickInjuries(uid, info, pose)
     --   * conscious but legs gone         → Crawling (drags itself along)
     --   * recovered enough to walk        → stand back up
     if not (info and info.knockedDown) then
-        if injuries.isUnconscious(uid) then
+        if injuries.isUnconscious(uid) or brain.isUnconscious(uid) then
+            -- Out cold: from a concussion OR from physiological derangement
+            -- (heat stroke / hypoxia / salt imbalance dropping consciousness).
             if pose ~= "collapsed" then unit.collapse(uid) end
         elseif injuries.cannotWalk(uid) then
             -- Conscious + can't walk: crawl. Covers both dropping from
@@ -810,8 +853,11 @@ end
 --   recover  — meter drained per second when below deadband
 --   cause    — fallback death-cause label (woundless / systemic)
 local FAILURE_METERS = {
-    -- HYPOXIA: total airway/lung loss → suffocation (~3 "minutes").
-    { stat = "hypoxia", driver = injuries.pulmonaryFailure,
+    -- HYPOXIA: low blood oxygen → suffocation. Now driven by cardio (blood_oxygen
+    -- = lungs × perfusion), MAX'd with the direct lung path — so the combat
+    -- lung-damage death is preserved AND circulatory hypoxia (massive blood
+    -- loss, severe cold-bradycardia) can suffocate a unit too.
+    { stat = "hypoxia", driver = cardio.hypoxiaFailure,
       fillSec = 180, deadband = 0.5,  recover = 0.08, cause = "suffocation" },
     -- NEURO: catastrophic brain trauma → nervous-system shutdown (fast).
     { stat = "neuro",   driver = injuries.neuroFailure,
@@ -823,6 +869,27 @@ local FAILURE_METERS = {
     -- hepatic encephalopathy / renal failure) — the slow walk-away death.
     { stat = "organ",   driver = injuries.organFailure,
       fillSec = 600, deadband = 0.45, recover = 0.04, cause = "organ failure" },
+    -- SEPSIS: untreated/dirty open wounds get infected (woundInfection,
+    -- grown in Combat.Wounds) and the infection spreads systemically — the
+    -- slow walk-away death the medical kit's antiseptic (prevention) and
+    -- antibiotics (cure) exist to stop. Slow fill (a survival window).
+    { stat = "sepsis",  driver = injuries.sepsisFailure,
+      fillSec = 480, deadband = 0.45, recover = 0.05, cause = "sepsis" },
+    -- HYPOTHERMIA: core body temperature dropped into the danger zone (the
+    -- arctic-acolyte death). core_temp is advanced by thermo.tick each tick;
+    -- this meter integrates the time spent freezing, so a unit can be rescued
+    -- by warming it before the meter tops out.
+    { stat = "hypothermia",  driver = thermo.hypothermiaFailure,
+      fillSec = 90, deadband = 0.0, recover = 0.08, cause = "hypothermia" },
+    -- HYPERTHERMIA: core body temperature climbed into the danger zone (the
+    -- desert-acolyte death — heat stroke). Same survival-window shape.
+    { stat = "hyperthermia", driver = thermo.hyperthermiaFailure,
+      fillSec = 60, deadband = 0.0, recover = 0.10, cause = "heat stroke" },
+    -- SALT IMBALANCE: sodium concentration far from the ideal — hyponatremia
+    -- (sweated out + drank only water) or hypernatremia (dehydrated/over-salted)
+    -- → seizure/collapse. Eating (salt) / rebalancing water pulls it back.
+    { stat = "salt_imbalance", driver = salts.imbalanceFailure,
+      fillSec = 120, deadband = 0.0, recover = 0.08, cause = "electrolyte imbalance" },
 }
 
 -- Returns true if a meter killed the unit this tick. Meters tick in order;
@@ -891,6 +958,17 @@ function unitResources.update(dt)
             -- below would otherwise fall straight through to the meters.)
             if pose0 ~= "dead" then
                 tickStance(uid, dt)
+                -- Physiology order: cardio (heart rate + blood oxygen) FIRST so
+                -- circulation reads this tick's heart rate; then thermo (core
+                -- temp + circulation + sweat-salt-drain + frostbite); then salt
+                -- balance. The failure meters read all of these afterward.
+                cardio.tick(uid, dt)
+                thermo.tick(uid, info, dt)
+                salts.tick(uid, dt)
+                -- Brain consciousness reads the above (core_temp, blood_oxygen,
+                -- salt_conc), so it ticks last. Low consciousness → collapse
+                -- (in tickInjuries); checkRevive keeps the unit down until lucid.
+                brain.tick(uid)
                 -- Injuries first: a lethal injury kills the unit (skip the
                 -- rest of its tick); a disabling one collapses it.
                 if not tickInjuries(uid, info, pose0)

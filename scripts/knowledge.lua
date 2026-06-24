@@ -19,6 +19,14 @@ M.REGISTRY = {
         desc = "Stem bleeding with sutures and bandages. The quality of a\n"
             .. "dressing scales with this level and the unit's intelligence.",
     },
+    {
+        id   = "infection_control",
+        name = "Infection Control",
+        icon = "knowledge_infection_control",
+        desc = "Clean wounds and administer antibiotics to fight infection.\n"
+            .. "How much an antibiotic dose cuts infection scales with this\n"
+            .. "level and the unit's intelligence.",
+    },
 }
 
 -- Icon shown for a knowledge the unit hasn't learned.

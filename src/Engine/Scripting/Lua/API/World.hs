@@ -52,6 +52,7 @@ module Engine.Scripting.Lua.API.World
     , worldDeleteTileFn
     , worldSetFluidTileFn
     , worldSetSlopeFn
+    , worldSetCellFn
     ) where
 
 import UPrelude
@@ -1315,6 +1316,45 @@ worldSetFluidTileFn env = do
         _ → do
             Lua.pushboolean False
             return 1
+
+-- | world.setCell(pageId, gx, gy, z, material) → bool
+--   Set the single 3D cell at (gx,gy,z) to a material — the locations
+--   primitive for carving interior air, walls, ceilings, staircases.
+--   `material` is a string name, a numeric id, or "air"/0 to clear the
+--   cell. Queued onto the world thread; lands in the edit log via
+--   WeSetCell so it persists like any player edit. Grows the column up
+--   to reach z; a z below the column floor is dropped (warns). Returns
+--   false when the material can't be resolved.
+worldSetCellFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetCellFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tointeger 2
+    gyArg     ← Lua.tointeger 3
+    zArg      ← Lua.tointeger 4
+    -- 5: material name (string), numeric id, or "air"/0 for air.
+    matName ← Lua.tostring 5
+    matNum  ← Lua.tonumber 5
+    case (pageIdArg, gxArg, gyArg, zArg) of
+        (Just pageIdBS, Just gx, Just gy, Just z) → do
+            registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
+            let mMat = case (matNum, matName) of
+                    (Just (Lua.Number n), _) | n ≥ 0 ∧ n ≤ 255 →
+                        Just (MaterialId (round n))
+                    (_, Just nameBS) → case TE.decodeUtf8 nameBS of
+                        "air" → Just (MaterialId 0)
+                        name  → materialIdByName registry name
+                    _ → Nothing
+            case mMat of
+                Nothing → Lua.pushboolean False >> return 1
+                Just mat → do
+                    let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                    Lua.liftIO $ Q.writeQueue (worldQueue env) $
+                        WorldSetCell pageId
+                            (fromIntegral gx) (fromIntegral gy)
+                            (fromIntegral z) mat
+                    Lua.pushboolean True
+                    return 1
+        _ → Lua.pushboolean False >> return 1
 
 -- | world.setSlope(pageId, gx, gy, z, bits) → bool
 --   Set the walkable-ramp slope bitmask of the tile at (gx,gy,z).

@@ -59,6 +59,20 @@ debugOverlay.terrainButtonId = nil
 debugOverlay.terrainEntries = {}
 debugOverlay.terrainListVisible = false
 debugOverlay.armedTerrainId = nil
+-- Location placement mode. Armed value is a location def name passed to
+-- locations.stamp at the hover tile (stamps a premade room/structure
+-- via world.setCell + content spawns; terrain lands in the edit log).
+debugOverlay.locationButtonId = nil
+debugOverlay.locationEntries = {}
+debugOverlay.locationListVisible = false
+debugOverlay.armedLocation = nil
+-- Structure placement mode. Armed value is a kind name ("wall"/"floor"/
+-- "ceiling"/"post") placed via scripts.structures at the hover tile; walls
+-- go in the clicked quarter of the tile.
+debugOverlay.structureButtonId = nil
+debugOverlay.structureEntries = {}
+debugOverlay.structureListVisible = false
+debugOverlay.armedStructure = nil
 debugOverlay.debugFont = nil
 debugOverlay.visible = false
 debugOverlay.uiCreated = false
@@ -113,6 +127,20 @@ local function destroyTerrainList()
     debugOverlay.terrainEntries = {}
 end
 
+local function destroyLocationList()
+    for _, entry in ipairs(debugOverlay.locationEntries) do
+        if entry.id then label.destroy(entry.id) end
+    end
+    debugOverlay.locationEntries = {}
+end
+
+local function destroyStructureList()
+    for _, entry in ipairs(debugOverlay.structureEntries) do
+        if entry.id then label.destroy(entry.id) end
+    end
+    debugOverlay.structureEntries = {}
+end
+
 local function formatEntry(defName, isArmed)
     if isArmed then return "> " .. defName
     else            return "  " .. defName end
@@ -138,6 +166,20 @@ local function refreshEntries()
         local isArmed = (entry.matId == debugOverlay.armedTerrainId)
         label.setText(entry.id, formatEntry(entry.matName, isArmed))
         label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
+    end
+    for _, entry in ipairs(debugOverlay.locationEntries) do
+        if entry.name then
+            local isArmed = (entry.name == debugOverlay.armedLocation)
+            label.setText(entry.id, formatEntry(entry.name, isArmed))
+            label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
+        end
+    end
+    for _, entry in ipairs(debugOverlay.structureEntries) do
+        if entry.name then
+            local isArmed = (entry.name == debugOverlay.armedStructure)
+            label.setText(entry.id, formatEntry(entry.name, isArmed))
+            label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
+        end
     end
 end
 
@@ -184,6 +226,26 @@ local function terrainButtonY(s)
     local y = itemButtonY(s) + (s.fontSize + s.rowSpacing)
     if debugOverlay.itemListVisible then
         local listRows = math.max(1, #debugOverlay.itemEntries)
+        y = y + listRows * (s.fontSize + s.rowSpacing)
+    end
+    return y
+end
+
+-- Locations button sits below the terrain button (and its open list).
+local function locationButtonY(s)
+    local y = terrainButtonY(s) + (s.fontSize + s.rowSpacing)
+    if debugOverlay.terrainListVisible then
+        local listRows = math.max(1, #debugOverlay.terrainEntries)
+        y = y + listRows * (s.fontSize + s.rowSpacing)
+    end
+    return y
+end
+
+-- Structures button sits below the locations button (and its open list).
+local function structureButtonY(s)
+    local y = locationButtonY(s) + (s.fontSize + s.rowSpacing)
+    if debugOverlay.locationListVisible then
+        local listRows = math.max(1, #debugOverlay.locationEntries)
         y = y + listRows * (s.fontSize + s.rowSpacing)
     end
     return y
@@ -313,6 +375,66 @@ local function rebuildClickableRects()
             end
         end
     end
+
+    -- Locations button rect
+    local lbY = locationButtonY(s)
+    local lr = rowRect(s, lbY, "locations")
+    lr.action = function()
+        if debugOverlay.locationListVisible or debugOverlay.armedLocation then
+            debugOverlay.clearArmedLocation()
+            debugOverlay.closeLocationList()
+        else
+            debugOverlay.openLocationList()
+        end
+    end
+    table.insert(debugOverlay.clickableRects, lr)
+
+    -- Location list entry rects (only if list is open)
+    if debugOverlay.locationListVisible then
+        local baseY = lbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.locationEntries) do
+            if entry.name then
+                local rowY = baseY + (i - 1) * (s.fontSize + s.rowSpacing)
+                local rect = rowRect(s, rowY,
+                                     formatEntry(entry.name, false))
+                local nm = entry.name
+                rect.action = function()
+                    debugOverlay.setArmedLocation(nm)
+                end
+                table.insert(debugOverlay.clickableRects, rect)
+            end
+        end
+    end
+
+    -- Structures button rect
+    local sbY = structureButtonY(s)
+    local sr = rowRect(s, sbY, "structures")
+    sr.action = function()
+        if debugOverlay.structureListVisible or debugOverlay.armedStructure then
+            debugOverlay.clearArmedStructure()
+            debugOverlay.closeStructureList()
+        else
+            debugOverlay.openStructureList()
+        end
+    end
+    table.insert(debugOverlay.clickableRects, sr)
+
+    -- Structure list entry rects (only if list is open)
+    if debugOverlay.structureListVisible then
+        local baseY = sbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.structureEntries) do
+            if entry.name then
+                local rowY = baseY + (i - 1) * (s.fontSize + s.rowSpacing)
+                local rect = rowRect(s, rowY,
+                                     formatEntry(entry.name, false))
+                local nm = entry.name
+                rect.action = function()
+                    debugOverlay.setArmedStructure(nm)
+                end
+                table.insert(debugOverlay.clickableRects, rect)
+            end
+        end
+    end
 end
 
 local function buildItemList()
@@ -400,6 +522,78 @@ local function buildTerrainList()
         })
         table.insert(debugOverlay.terrainEntries,
             { id = lblId, matId = m.id, matName = m.name })
+    end
+end
+
+local function buildLocationList()
+    destroyLocationList()
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local uiscale = scale.get()
+    local locations = require("scripts.locations")
+    local defs = locations.list() or {}
+    local baseY = locationButtonY(s) + s.fontSize
+
+    if #defs == 0 then
+        local lblId = label.new({
+            name     = "location_list_empty",
+            text     = "  (no locations defined)",
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY,
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.locationEntries,
+            { id = lblId, name = nil })
+        return
+    end
+
+    for i, d in ipairs(defs) do
+        local isArmed = (d.name == debugOverlay.armedLocation)
+        local lblId = label.new({
+            name     = "location_entry_" .. d.name,
+            text     = formatEntry(d.name, isArmed),
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = isArmed and COLOR_BRIGHT or COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY + (i - 1) * (s.fontSize + s.rowSpacing),
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.locationEntries,
+            { id = lblId, name = d.name })
+    end
+end
+
+local function buildStructureList()
+    destroyStructureList()
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local uiscale = scale.get()
+    local structures = require("scripts.structures")
+    local kinds = structures.kinds or {}
+    local baseY = structureButtonY(s) + s.fontSize
+
+    for i, kind in ipairs(kinds) do
+        local isArmed = (kind == debugOverlay.armedStructure)
+        local lblId = label.new({
+            name     = "structure_entry_" .. kind,
+            text     = formatEntry(kind, isArmed),
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = isArmed and COLOR_BRIGHT or COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY + (i - 1) * (s.fontSize + s.rowSpacing),
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.structureEntries,
+            { id = lblId, name = kind })
     end
 end
 
@@ -495,10 +689,20 @@ function debugOverlay.createUI()
             label.destroy(debugOverlay.terrainButtonId)
             debugOverlay.terrainButtonId = nil
         end
+        if debugOverlay.locationButtonId then
+            label.destroy(debugOverlay.locationButtonId)
+            debugOverlay.locationButtonId = nil
+        end
+        if debugOverlay.structureButtonId then
+            label.destroy(debugOverlay.structureButtonId)
+            debugOverlay.structureButtonId = nil
+        end
         destroySpawnList()
         destroyFluidList()
         destroyItemList()
         destroyTerrainList()
+        destroyLocationList()
+        destroyStructureList()
     end
 
     local s = scale.applyAll(debugOverlay.baseSizes)
@@ -594,6 +798,43 @@ function debugOverlay.createUI()
         buildTerrainList()
     end
 
+    -- Locations button — below the terrain section, same shifting-layout
+    -- rule via locationButtonY.
+    debugOverlay.locationButtonId = label.new({
+        name     = "location_button",
+        text     = "locations",
+        font     = debugOverlay.debugFont,
+        fontSize = debugOverlay.baseSizes.fontSize,
+        color    = COLOR_DIM,
+        page     = debugOverlay.page,
+        uiscale  = uiscale,
+        x        = s2.margin,
+        y        = locationButtonY(s2),
+        zIndex   = 1000,
+    })
+
+    if debugOverlay.locationListVisible then
+        buildLocationList()
+    end
+
+    -- Structures button — below the locations section.
+    debugOverlay.structureButtonId = label.new({
+        name     = "structure_button",
+        text     = "structures",
+        font     = debugOverlay.debugFont,
+        fontSize = debugOverlay.baseSizes.fontSize,
+        color    = COLOR_DIM,
+        page     = debugOverlay.page,
+        uiscale  = uiscale,
+        x        = s2.margin,
+        y        = structureButtonY(s2),
+        zIndex   = 1000,
+    })
+
+    if debugOverlay.structureListVisible then
+        buildStructureList()
+    end
+
     debugOverlay.uiCreated = true
     rebuildClickableRects()
 end
@@ -620,10 +861,14 @@ function debugOverlay.hide()
     debugOverlay.clearArmedFluid()
     debugOverlay.clearArmedItem()
     debugOverlay.clearArmedTerrain()
+    debugOverlay.clearArmedLocation()
+    debugOverlay.clearArmedStructure()
     debugOverlay.closeSpawnList()
     debugOverlay.closeFluidList()
     debugOverlay.closeItemList()
     debugOverlay.closeTerrainList()
+    debugOverlay.closeLocationList()
+    debugOverlay.closeStructureList()
     debugOverlay.clickableRects = {}
     if debugOverlay.page then UI.hidePage(debugOverlay.page) end
 end
@@ -686,6 +931,34 @@ local function repositionFluidUI()
             end
         end
     end
+    -- Location section trails the terrain section.
+    local lbY = locationButtonY(s)
+    if debugOverlay.locationButtonId then
+        label.setPosition(debugOverlay.locationButtonId, s.margin, lbY)
+    end
+    if debugOverlay.locationListVisible then
+        local baseY = lbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.locationEntries) do
+            if entry.id then
+                label.setPosition(entry.id, s.margin,
+                    baseY + (i - 1) * (s.fontSize + s.rowSpacing))
+            end
+        end
+    end
+    -- Structure section trails the location section.
+    local sbY = structureButtonY(s)
+    if debugOverlay.structureButtonId then
+        label.setPosition(debugOverlay.structureButtonId, s.margin, sbY)
+    end
+    if debugOverlay.structureListVisible then
+        local baseY = sbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.structureEntries) do
+            if entry.id then
+                label.setPosition(entry.id, s.margin,
+                    baseY + (i - 1) * (s.fontSize + s.rowSpacing))
+            end
+        end
+    end
 end
 
 function debugOverlay.openSpawnList()
@@ -710,6 +983,7 @@ function debugOverlay.setArmed(defName)
     debugOverlay.armedFluidType = nil
     debugOverlay.armedItemDef = nil
     debugOverlay.armedTerrainId = nil
+    debugOverlay.armedLocation = nil
     refreshEntries()
 end
 
@@ -742,6 +1016,7 @@ function debugOverlay.setArmedFluid(kind)
     debugOverlay.armedDef = nil
     debugOverlay.armedItemDef = nil
     debugOverlay.armedTerrainId = nil
+    debugOverlay.armedLocation = nil
     refreshEntries()
 end
 
@@ -773,6 +1048,7 @@ function debugOverlay.setArmedItem(defName)
     debugOverlay.armedDef = nil
     debugOverlay.armedFluidType = nil
     debugOverlay.armedTerrainId = nil
+    debugOverlay.armedLocation = nil
     refreshEntries()
 end
 
@@ -786,6 +1062,7 @@ function debugOverlay.openTerrainList()
     if debugOverlay.terrainListVisible then return end
     debugOverlay.terrainListVisible = true
     buildTerrainList()
+    repositionFluidUI()   -- location section below shifts
     rebuildClickableRects()
 end
 
@@ -793,6 +1070,7 @@ function debugOverlay.closeTerrainList()
     if not debugOverlay.terrainListVisible then return end
     debugOverlay.terrainListVisible = false
     destroyTerrainList()
+    repositionFluidUI()   -- location section below shifts
     rebuildClickableRects()
 end
 
@@ -802,12 +1080,77 @@ function debugOverlay.setArmedTerrain(matId)
     debugOverlay.armedDef = nil
     debugOverlay.armedFluidType = nil
     debugOverlay.armedItemDef = nil
+    debugOverlay.armedLocation = nil
     refreshEntries()
 end
 
 function debugOverlay.clearArmedTerrain()
     if debugOverlay.armedTerrainId == nil then return end
     debugOverlay.armedTerrainId = nil
+    refreshEntries()
+end
+
+function debugOverlay.openLocationList()
+    if debugOverlay.locationListVisible then return end
+    debugOverlay.locationListVisible = true
+    buildLocationList()
+    repositionFluidUI()   -- structure section below shifts
+    rebuildClickableRects()
+end
+
+function debugOverlay.closeLocationList()
+    if not debugOverlay.locationListVisible then return end
+    debugOverlay.locationListVisible = false
+    destroyLocationList()
+    repositionFluidUI()   -- structure section below shifts
+    rebuildClickableRects()
+end
+
+function debugOverlay.setArmedLocation(name)
+    debugOverlay.armedLocation = name
+    -- Mutually exclusive with the other arm modes.
+    debugOverlay.armedDef = nil
+    debugOverlay.armedFluidType = nil
+    debugOverlay.armedItemDef = nil
+    debugOverlay.armedTerrainId = nil
+    debugOverlay.armedStructure = nil
+    refreshEntries()
+end
+
+function debugOverlay.clearArmedLocation()
+    if debugOverlay.armedLocation == nil then return end
+    debugOverlay.armedLocation = nil
+    refreshEntries()
+end
+
+function debugOverlay.openStructureList()
+    if debugOverlay.structureListVisible then return end
+    debugOverlay.structureListVisible = true
+    buildStructureList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.closeStructureList()
+    if not debugOverlay.structureListVisible then return end
+    debugOverlay.structureListVisible = false
+    destroyStructureList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.setArmedStructure(name)
+    debugOverlay.armedStructure = name
+    -- Mutually exclusive with the other arm modes.
+    debugOverlay.armedDef = nil
+    debugOverlay.armedFluidType = nil
+    debugOverlay.armedItemDef = nil
+    debugOverlay.armedTerrainId = nil
+    debugOverlay.armedLocation = nil
+    refreshEntries()
+end
+
+function debugOverlay.clearArmedStructure()
+    if debugOverlay.armedStructure == nil then return end
+    debugOverlay.armedStructure = nil
     refreshEntries()
 end
 
@@ -877,6 +1220,12 @@ function debugOverlay.onKeyDown(key)
         if debugOverlay.armedTerrainId then
             debugOverlay.clearArmedTerrain()
         end
+        if debugOverlay.armedLocation then
+            debugOverlay.clearArmedLocation()
+        end
+        if debugOverlay.armedStructure then
+            debugOverlay.clearArmedStructure()
+        end
     end
 end
 
@@ -895,6 +1244,8 @@ function debugOverlay.shutdown()
     destroyFluidList()
     destroyItemList()
     destroyTerrainList()
+    destroyLocationList()
+    destroyStructureList()
     if debugOverlay.spawnButtonId then
         label.destroy(debugOverlay.spawnButtonId)
         debugOverlay.spawnButtonId = nil
@@ -910,6 +1261,14 @@ function debugOverlay.shutdown()
     if debugOverlay.terrainButtonId then
         label.destroy(debugOverlay.terrainButtonId)
         debugOverlay.terrainButtonId = nil
+    end
+    if debugOverlay.locationButtonId then
+        label.destroy(debugOverlay.locationButtonId)
+        debugOverlay.locationButtonId = nil
+    end
+    if debugOverlay.structureButtonId then
+        label.destroy(debugOverlay.structureButtonId)
+        debugOverlay.structureButtonId = nil
     end
     if debugOverlay.fpsLabelId then
         label.destroy(debugOverlay.fpsLabelId)

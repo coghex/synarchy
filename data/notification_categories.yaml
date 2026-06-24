@@ -17,14 +17,18 @@
 #                                payload (set by engine.emitEventAt).
 #                                Skipped if the event was emitted
 #                                without coordinates.
-# coalesce_window — wall-seconds (sub-second OK). When >0, events of
+# coalesce_window — wall-seconds (sub-second OK). When >0, POPUPS of
 #                   this category arriving within the window collapse
 #                   into a single popup line with an (xN) count and
 #                   replace the body text with the most recent
 #                   event's text. Events outside the window add a
 #                   new line to the same popup (up to 10 lines).
-#                   0 or absent = no coalescing (every event spawns
-#                   its own popup).
+#                   0 or absent = no popup coalescing.
+# log_coalesce_window — game-seconds. When >0, identical EVENT-LOG
+#                   entries of this category within the window fold
+#                   into one "(xN)" row. Because this is game-time,
+#                   bursts that happen while paused still coalesce.
+#                   0 or absent = no event-log coalescing.
 
 categories:
   - id: save_load
@@ -32,6 +36,7 @@ categories:
     description: Save and load operations succeeded or failed.
     text_color: [1.0, 1.0, 1.0, 1.0]
     default_settings: { log: true,  popup: true,  pause: false }
+    log_coalesce_window: 0.25
 
   - id: survival_critical
     display_name: Survival (Critical)
@@ -41,6 +46,7 @@ categories:
     # Mass-death events tend to cluster; collapse same-second
     # bursts into a single popup line with an (xN) counter.
     coalesce_window: 1.0
+    log_coalesce_window: 1.0
     buttons:
       - { label: "Go To", action: "go_to" }
       - { label: "OK",    action: "dismiss" }
@@ -51,6 +57,7 @@ categories:
     text_color: [1.0, 0.8, 0.4, 1.0]
     default_settings: { log: true,  popup: true,  pause: false }
     coalesce_window: 1.0
+    log_coalesce_window: 1.0
     buttons:
       - { label: "Go To", action: "go_to" }
       - { label: "OK",    action: "dismiss" }
@@ -63,6 +70,7 @@ categories:
     # Combat ticks rapidly; 2-second window keeps the popup
     # readable without losing the burst signal.
     coalesce_window: 2.0
+    log_coalesce_window: 1.0
     buttons:
       - { label: "Go To", action: "go_to" }
       - { label: "OK",    action: "dismiss" }
@@ -111,6 +119,7 @@ categories:
     # Logged + red (not a popup by default — the player checks the log;
     # flip popup to true here if you want failures to interrupt).
     default_settings: { log: true,  popup: false, pause: false }
+    log_coalesce_window: 1.0
     buttons:
       - { label: "Go To", action: "go_to" }
       - { label: "OK",    action: "dismiss" }

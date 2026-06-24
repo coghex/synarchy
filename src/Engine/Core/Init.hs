@@ -40,9 +40,11 @@ import UI.Types (emptyUIPageManager)
 import Unit.Types (emptyUnitManager)
 import Unit.Sim.Types (emptyUnitThreadState)
 import Building.Types (emptyBuildingManager)
+import Structure.Types (emptyStructureStore)
 import Item.Types (emptyItemManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Substance.Types (emptySubstanceManager)
+import Infection.Types (emptyInfectionManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
@@ -118,6 +120,7 @@ initializeEngineWith logBackend = do
   utsRef ← newIORef emptyUnitThreadState
   statRNGRef ← Random.newStdGen >>= newIORef
   buildingManagerRef ← newIORef emptyBuildingManager
+  structureStoreRef ← newIORef emptyStructureStore
   buildingQueue ← Q.newQueue
   buildingGhostRef ← newIORef Nothing
   combatQueue ← Q.newQueue
@@ -131,6 +134,7 @@ initializeEngineWith logBackend = do
   itemManagerRef  ← newIORef emptyItemManager
   equipmentClassManagerRef ← newIORef emptyEquipmentClassManager
   substanceManagerRef ← newIORef emptySubstanceManager
+  infectionManagerRef ← newIORef emptyInfectionManager
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/), allocate the ring buffer and
   -- popup queue. Both TVars are multi-writer (world/unit/Lua threads
@@ -188,6 +192,7 @@ initializeEngineWith logBackend = do
         , utsRef             = utsRef
         , statRNGRef         = statRNGRef
         , buildingManagerRef = buildingManagerRef
+        , structureStoreRef  = structureStoreRef
         , buildingQueue      = buildingQueue
         , combatQueue        = combatQueue
         , combatEventsRef    = combatEventsRef
@@ -200,6 +205,7 @@ initializeEngineWith logBackend = do
         , itemManagerRef    = itemManagerRef
         , equipmentClassManagerRef = equipmentClassManagerRef
         , substanceManagerRef      = substanceManagerRef
+        , infectionManagerRef      = infectionManagerRef
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef
         , notificationOrder  = notificationOrder

@@ -23,6 +23,7 @@ import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.Combat.Damage as CombatDamage
 import qualified Test.Headless.Combat.Severing as CombatSevering
+import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
@@ -55,6 +56,7 @@ main = hspec $ do
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "Combat.Damage" CombatDamage.spec
     describe "Combat.Severing" CombatSevering.spec
+    describe "Combat.Wounds" CombatWounds.spec
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Input.KeyNames" InputKeyNames.spec

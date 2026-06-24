@@ -258,6 +258,39 @@ function game.onMouseDown(button, x, y)
             return
         end
 
+        -- Debug location-stamp mode: arms a location def name; the click
+        -- stamps that premade structure (room/outpost/...) anchored at the
+        -- hover tile (world.setCell terrain edits + content spawns).
+        if debugOverlay.armedLocation then
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                local hud = require("scripts.hud")
+                local worldId = (hud and hud.worldId) or "test_arena"
+                local locations = require("scripts.locations")
+                locations.stamp(debugOverlay.armedLocation,
+                                math.floor(gx), math.floor(gy), worldId)
+            end
+            return
+        end
+
+        -- Debug structure-placement mode: arms a kind (wall/floor/ceiling/
+        -- post). Floor/ceiling/post place on the clicked tile; a wall goes
+        -- in the clicked QUARTER of the tile (→ its diamond edge).
+        if debugOverlay.armedStructure then
+            -- Derive the tile from the FRACTIONAL hover position (floor), NOT
+            -- getHoverTile: the latter rounds in a ~0.17-tile-shifted space, so
+            -- near a tile border it disagrees with the quarter-corner/edge frac
+            -- (computed from getHoverPos) → posts landed on the wrong tile and
+            -- the floor-gate flaked. floor(hx,hy) keeps tile + corner consistent.
+            local hx, hy = world.getHoverPos()
+            if hx and hy then
+                local structures = require("scripts.structures")
+                structures.placeKind(math.floor(hx), math.floor(hy),
+                                     debugOverlay.armedStructure, hx, hy)
+            end
+            return
+        end
+
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")
@@ -327,6 +360,14 @@ function game.onMouseDown(button, x, y)
         end
         if debugOverlay.armedTerrainId then
             debugOverlay.clearArmedTerrain()
+            return
+        end
+        if debugOverlay.armedLocation then
+            debugOverlay.clearArmedLocation()
+            return
+        end
+        if debugOverlay.armedStructure then
+            debugOverlay.clearArmedStructure()
             return
         end
         -- Storage building right-click → "Contents" menu, regardless
@@ -493,6 +534,75 @@ function game.onMouseDown(button, x, y)
                                         cat = "unit_warning"   -- red; a failed job
                                     end
                                     -- Tag the patient so it shows in their Log.
+                                    engine.emitEventForUnit(cat, msg, targetUid)
+                                end
+                            end,
+                        })
+                        -- Treat infection: administer antibiotics (the CURE)
+                        -- to an infected wound. Greyed until the target has an
+                        -- infected wound AND a kit with antibiotics is on the
+                        -- medic or another selected unit.
+                        local function hasAntibiotics(uid)
+                            for _, it in ipairs(unit.getInventory(uid) or {}) do
+                                if it.kind == "container" then
+                                    for _, r in ipairs(unit.getItemContents(
+                                                  uid, it.defName) or {}) do
+                                        if r.defName == "antibiotics"
+                                           and (r.fill or 0) > 0 then
+                                            return true
+                                        end
+                                    end
+                                end
+                            end
+                            return false
+                        end
+                        -- The cure needs INFECTION-CONTROL knowledge, a
+                        -- different skill from bleed-control; resolve a medic
+                        -- for it independently (may be the same acolyte, who
+                        -- typically knows both).
+                        local infMedic
+                        for _, uid in ipairs(selectedUids) do
+                            if uid ~= targetUid
+                               and unit.getKnowledge(uid, "infection_control") then
+                                infMedic = uid; break
+                            end
+                        end
+                        local abOwner
+                        if infMedic and hasAntibiotics(infMedic) then
+                            abOwner = infMedic
+                        else
+                            for _, uid in ipairs(selectedUids) do
+                                if hasAntibiotics(uid) then abOwner = uid; break end
+                            end
+                        end
+                        local infected = false
+                        for _, w in ipairs(unit.getWounds(targetUid) or {}) do
+                            if (w.infection or 0) >= 0.1 then
+                                infected = true; break
+                            end
+                        end
+                        table.insert(items, {
+                            label   = "Treat infection",
+                            enabled = (infMedic ~= nil) and (abOwner ~= nil)
+                                      and infected,
+                            callback = function()
+                                local res = unit.treatInfection(
+                                    infMedic, targetUid, abOwner)
+                                if res then
+                                    local msg, cat
+                                    if res.ok then
+                                        local pct = math.floor(
+                                            (res.infection or 0) * 100 + 0.5)
+                                        msg = (pct <= 0)
+                                            and "Infection cleared"
+                                            or string.format(
+                                                "Infection cut to %d%%", pct)
+                                        cat = "unit_event"
+                                    else
+                                        msg = "Treatment failed: "
+                                              .. (res.message or "")
+                                        cat = "unit_warning"
+                                    end
                                     engine.emitEventForUnit(cat, msg, targetUid)
                                 end
                             end,

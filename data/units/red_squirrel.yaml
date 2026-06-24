@@ -1,0 +1,577 @@
+units:
+  - name: "red_squirrel"
+    sprite: "assets/textures/units/red_squirrel/animations/idle/south/frame_000.png"
+    portrait: "assets/textures/units/red_squirrel/portrait.png"
+    # Tiny critter. Acolyte = 8 (48px), bear = 16 (92px); the squirrel
+    # sprite is 36px and the animal itself is hand-sized.
+    base_width: 3
+    # Quick, darty top speed in tiles/sec. Below the bear's 6.0 sprint
+    # but well above a human's 3.0 — squirrels bolt in short bursts.
+    max_speed: 5.0
+    # No equipment_class / starting_inventory — wildlife wears/carries
+    # nothing.
+
+    eager_stats: true
+    stats:
+      # A red squirrel is ~0.3 kg of mostly nerves. Almost no raw
+      # strength or toughness; compensates with blistering reflexes
+      # and agility. range gives sigma = range/4.
+      strength:     { base: 0.1,  range: 0.05 }
+      endurance:    { base: 0.6,  range: 0.3 }
+      # Twitchy prey animal — reflexes and agility are its whole game.
+      reflexes:     { base: 2.5,  range: 0.6 }
+      constitution: { base: 0.5,  range: 0.2 }
+      # Per-individual metabolic multiplier (NOT the size effect — body
+      # mass already scales BMR and metabolic heat). A touch above 1.0 for
+      # a lively little animal; kept moderate so thermoregulation sits at a
+      # sane equilibrium rather than running hot.
+      metabolism:   { base: 1.2,  range: 0.3 }
+      # Sharp eyes + ears, constantly scanning for predators.
+      perception:   { base: 2.0,  range: 0.5 }
+      # Combat stats are mostly irrelevant — it's prey, not a fighter.
+      # Nimble paws give moderate dexterity; agility is sky-high;
+      # intelligence and toughness are minimal.
+      dexterity:    { base: 1.0,  range: 0.4 }
+      agility:      { base: 2.5,  range: 0.6 }
+      intelligence: { base: 0.3,  range: 0.2 }
+      toughness:    { base: 0.2,  range: 0.1 }
+      # (`balance` and `climbing` are skills, see below.)
+
+    body:
+      # Body ~20-25 cm at the shoulder on all fours; rears taller.
+      height:  { mean: 0.22, range: 0.06 }   # 0.17..0.27 m
+      # body_mass = 22·height²·bulk (calibrated so human h≈1.8, bulk 1 → ~71 kg).
+      # At this squirrel's 0.22 m frame, bulk 0.28 → ~0.3 kg, a realistic red
+      # squirrel. The physiology stack now scales viability floors and
+      # salt/hydration/thermo rates by body mass, so this tiny mass is fully
+      # coherent and stable (no force-floor). Tissue layers below are authored
+      # thin → still dies in one solid hit.
+      bulk:    { mean: 0.28,  range: 0.06 }
+      bodyfat: { mean: 0.10,  range: 0.06 }
+
+    skills:
+      # Natural attacks (claws/incisors) ride the unarmed class.
+      unarmed:  { base: 15.0, range: 10.0 }
+      # Squirrels are phenomenal balancers and climbers — among the
+      # best of any animal. Start near the cap.
+      balance:  { base: 90.0, range: 10.0 }
+      climbing: { base: 95.0, range:  5.0 }
+      # Elite leaper — a squirrel clears many body-lengths. The lunge is
+      # how it reaches a tall enemy's vulnerable parts (neck/eyes).
+      jumping:  { base: 85.0, range: 10.0 }
+      # Small grip, but clawed + toothed — decent purchase for its size.
+      grappling: { base: 40.0, range: 15.0 }
+
+    # 8-part quadruped, same topology as the bear but scaled to a tiny
+    # animal. Soft-tissue layers are authored at HUMAN-REFERENCE
+    # thicknesses (like the bear); the engine scales them DOWN from the
+    # squirrel's seeded mass, so a hit reaches the vitals almost
+    # immediately. Heights anchored to the ~0.22 m shoulder height.
+    body_parts:
+      - { id: head,         name: "head", parent: neck,  vital: true,
+          area_weight: 0.12, tactical_value: 1.0,
+          bleed_factor: 2.0,
+          height_low: 0.16, height_high: 0.26,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 2 },
+                    { name: skull,  material: bone,   thickness: 2 },
+                    { name: brain,  material: organ,  thickness: 20 } ] }
+      - { id: neck,         name: "neck", parent: torso, vital: true,
+          area_weight: 0.06, tactical_value: 1.0,
+          bleed_factor: 3.0,
+          height_low: 0.14, height_high: 0.18,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 4 },
+                    { name: throat, material: organ,  thickness: 4 } ] }
+      - { id: torso,        name: "torso", parent: null,  vital: true,
+          area_weight: 0.36, tactical_value: 0.8,
+          bleed_factor: 2.0,
+          height_low: 0.06, height_high: 0.20,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 2 },
+                    { name: muscle, material: muscle, thickness: 5 },
+                    { name: ribs,   material: bone,   thickness: 2 },
+                    { name: vitals, material: organ,  thickness: 30 } ] }
+      - { id: l_fore_leg,   name: "left foreleg", parent: torso,
+          area_weight: 0.08, tactical_value: 0.3,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.14,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 3 },
+                    { name: bone,   material: bone,   thickness: 3 } ] }
+      - { id: r_fore_leg,   name: "right foreleg", parent: torso,
+          area_weight: 0.08, tactical_value: 0.3,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.14,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 3 },
+                    { name: bone,   material: bone,   thickness: 3 } ] }
+      - { id: l_hind_leg,   name: "left hind leg", parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.14,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 4 },
+                    { name: bone,   material: bone,   thickness: 3 } ] }
+      - { id: r_hind_leg,   name: "right hind leg", parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.14,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 4 },
+                    { name: bone,   material: bone,   thickness: 3 } ] }
+      - { id: tail,         name: "tail", parent: torso,
+          area_weight: 0.10, tactical_value: 0.1,
+          bleed_factor: 0.5,
+          height_low: 0.10, height_high: 0.30,
+          layers: [ { name: skin,   material: flesh,  thickness: 1 },
+                    { name: fat,    material: fat,    thickness: 1 },
+                    { name: muscle, material: muscle, thickness: 2 },
+                    { name: bone,   material: bone,   thickness: 2 } ] }
+
+    # Just a little fur; the real protection (almost none) is the
+    # mass-scaled tissue above.
+    natural_resistance:
+      slash: 0.05
+      stab:  0.0
+      blunt: 0.05
+
+    # Claws + incisors as a virtual unarmed weapon. Tiny everything;
+    # the rodent incisors (stab) are the only attack with any bite —
+    # famously sharp, but on a 0.3 kg frame they barely hurt anything
+    # larger than another squirrel.
+    natural_weapon:
+      weapon_class:           unarmed
+      effective_blade_length: 3.0
+      attack_cooldown:        0.5
+      wielded_from:           r_fore_leg
+      combo_attack: true
+      slash: { eff: 0.4, material: keratin, blade_length: 1, sharpness: 60,
+               mass: 0.02, length: 4, center_of_mass: 0.7, name: claws }
+      stab:  { eff: 0.7, material: enamel,  blade_length: 2, sharpness: 70,
+               mass: 0.01, length: 2, center_of_mass: 0.6, name: incisors }
+      blunt: { eff: 0.2, material: bone,    impact_area: 4,
+               mass: 0.05, length: 4, center_of_mass: 0.7, name: paw }
+
+    # Per-direction still (first idle frame). SW / W / NW mirror from
+    # SE / E / NE at draw time.
+    directional_sprites:
+      south:      "assets/textures/units/red_squirrel/animations/idle/south/frame_000.png"
+      south-east: "assets/textures/units/red_squirrel/animations/idle/south-east/frame_000.png"
+      east:       "assets/textures/units/red_squirrel/animations/idle/east/frame_000.png"
+      north-east: "assets/textures/units/red_squirrel/animations/idle/north-east/frame_000.png"
+      north:      "assets/textures/units/red_squirrel/animations/idle/north/frame_000.png"
+
+    # Pose-keyed state→animation map. Far simpler than the bear: no
+    # injured set, no rest postures, one attack. Combat anims are
+    # resolved by the engine from these keys (red_squirrel is NOT in
+    # unit_ai's COMBAT_ANIM_SUFFIX, the same as the technomule — so the
+    # state-driven path drives them, no Lua override needed).
+    state_animations:
+      # On-all-fours core
+      standing-idle:         idle
+      standing-walk:         walk
+      standing-run:          run
+      standing-drink:        drink
+      standing-eat:          drink   # one anim covers both
+      standing-death:        death
+      dead-idle:             death   # held on the final frame after kill
+
+      # Combat (single attack — both quick and heavy map to it).
+      standing-combat-idle:  combat_idle
+      standing-attack-quick: attack_quick
+      standing-attack-heavy: attack_quick
+      standing-hit-react:    combat_idle
+
+      # Alert "rear up and look around" pose, driven Lua-side by
+      # red_squirrel_ai via unit.setAnim("alert_idle").
+      stand_on_hind-idle:    alert_idle
+
+      # Climbing. Engine auto-triggers Standing → Climbing on a cliff,
+      # then chains Climbing → Crawling → Standing. The squirrel has no
+      # dedicated crawl/pullup art, so those reuse climbing / idle to
+      # avoid a T-pose fallback.
+      climbing-idle:         climbing
+      climbing-walk:         climbing
+      standing-to-climbing:  climbing
+      climbing-to-crawling:  climbing
+      crawling-idle:         idle
+      crawling-to-standing:  idle
+
+      # Falling. No dedicated art — reuse idle so a dropped squirrel
+      # doesn't snap to T-pose mid-air or on landing.
+      falling-idle:          idle
+      standing-to-falling:   idle
+      falling-to-collapsed:  idle
+
+      # Collapsed (knocked out, rare — usually it just dies).
+      collapsed-idle:        death
+      collapsed-to-standing: idle
+
+    animations:
+      idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/idle/north/frame_007.png"
+      walk:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/walk/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/walk/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/walk/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/walk/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/walk/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/walk/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/walk/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/walk/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/walk/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/walk/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/walk/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/walk/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/walk/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/walk/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/walk/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/walk/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/walk/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/walk/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/walk/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/walk/north/frame_003.png"
+      run:
+        fps: 10
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/run/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/run/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/run/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/run/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/run/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/run/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/run/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/run/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/run/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/run/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/run/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/run/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/run/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/run/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/run/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/run/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/run/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/run/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/run/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/run/north/frame_003.png"
+      drink:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/drink/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/drink/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/drink/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/drink/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/drink/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/drink/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/drink/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/drink/east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/drink/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/drink/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/drink/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/drink/north/frame_005.png"
+      death:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_007.png"
+            - "assets/textures/units/red_squirrel/animations/death/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_007.png"
+            - "assets/textures/units/red_squirrel/animations/death/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_007.png"
+            - "assets/textures/units/red_squirrel/animations/death/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_007.png"
+            - "assets/textures/units/red_squirrel/animations/death/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_005.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_006.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_007.png"
+            - "assets/textures/units/red_squirrel/animations/death/north/frame_008.png"
+      climbing:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/climbing/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south/frame_004.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/climbing/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/south-east/frame_004.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/climbing/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/east/frame_004.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/climbing/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north-east/frame_004.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/climbing/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/climbing/north/frame_004.png"
+      combat_idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/combat_idle/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/combat_idle/north/frame_005.png"
+      attack_quick:
+        fps: 12
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/attack_quick/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/attack_quick/north/frame_005.png"
+      alert_idle:
+        fps: 6
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/red_squirrel/animations/alert_idle/east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north-east/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north-east/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north-east/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north-east/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north-east/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north/frame_000.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north/frame_001.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north/frame_002.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north/frame_003.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north/frame_004.png"
+            - "assets/textures/units/red_squirrel/animations/alert_idle/north/frame_005.png"

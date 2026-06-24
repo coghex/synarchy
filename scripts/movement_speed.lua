@@ -13,6 +13,7 @@
 local M = {}
 
 local injuries = require("scripts.injuries")
+local salts    = require("scripts.salts")
 
 local function clamp(x, lo, hi)
     return math.max(lo, math.min(hi, x))
@@ -29,7 +30,9 @@ end
 function M.sprint(uid)
     local maxsp = unit.getMaxSpeed(uid) or 0
     local agi   = unit.getStat(uid, "agility") or 1.0
-    return maxsp * clamp(agi, 0.3, 3.0) * injuries.speedMultiplier(uid)
+    -- Salt cramps (hyponatremia) slow the whole speed band too, like a limp.
+    return maxsp * clamp(agi, 0.3, 3.0)
+         * injuries.speedMultiplier(uid) * salts.speedMultiplier(uid)
 end
 
 -- Comfort (stamina-neutral cruise): a fraction of sprint set by endurance,

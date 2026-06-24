@@ -5,6 +5,7 @@ items:
     weight: 1.8
     kind: armor
     category: Armor
+    insulation: 1.0   # thick padded wool — warm
     material: pleated_wool  # combat resistance lives in
                             # data/substances/textiles.yaml
     quality:   { min: 70, max: 95 }

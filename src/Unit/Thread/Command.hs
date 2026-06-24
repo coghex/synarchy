@@ -161,6 +161,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , uiFactionId   = factionId
                     , uiWounds      = []
                     , uiScars       = []
+                    , uiImmuneResponse = 0
+                    , uiImmunities  = HM.empty
                     , uiBlood       = bloodSeedFromStats initialStats
                     , uiLastAttackerUid = Nothing
                     , uiLastAttackerAt  = 0
@@ -686,28 +688,51 @@ injurySpeedMult inst =
         raw      = (1 - legCut) * (1 - torsoCut) * bloodMul
     in max 0.1 (min 1.0 raw)
 
+-- Body-composition viability floors, as FRACTIONS of frame mass
+-- (frame = 22·h²·bulk), so they scale to ANY creature size — mouse to
+-- dragon. Calibrated to reproduce the historical height-only human floors
+-- at bulk 1.0: 0.02·(22h²) = 0.44h² and 0.20·(22h²) = 4.4h². The spawn
+-- margins seat a fresh roll comfortably above the death floors and are
+-- themselves frame-proportional (≈ the old flat +1 kg at human scale, but
+-- scaling correctly for tiny/huge bodies instead of swamping them).
+minFatFrac, minLeanFrac, spawnFatMargin, spawnLeanMargin ∷ Float
+minFatFrac      = 0.02
+minLeanFrac     = 0.20
+spawnFatMargin  = 1.7
+spawnLeanMargin = 1.07
+
 seedBodyComposition ∷ HM.HashMap Text Float → HM.HashMap Text Float
 seedBodyComposition rolled =
     case (HM.lookup "height" rolled, HM.lookup "bulk" rolled,
           HM.lookup "bodyfat" rolled) of
         (Just h, Just b, Just f) →
-            let bodyMass  = 22 * h * h * b
+            let bodyMass  = 22 * h * h * b   -- the frame: structural size
                 fatMass0  = bodyMass * f
                 -- Skeletal muscle is ~50 % of non-fat tissue in real
                 -- adult composition; the rest is bones / organs /
                 -- water / skin (lumped together as implicit organ
                 -- mass, never tracked separately).
                 leanMass0 = bodyMass * (1 - f) * 0.5
-                -- Viability clamps: a tall-thin spawn (h=2.2,
-                -- bulk=0.5, bodyfat=0.05) sits right at min_lean(h);
-                -- +1 kg keeps it above the death floor with margin.
-                minFat    = 0.44 * h * h
-                minLean   = 4.4 * h * h
-                fatMass   = max (minFat + 1) fatMass0
-                leanMass  = max (minLean + 1) leanMass0
-                withBody  = HM.insert "body_mass" bodyMass
-                          $ HM.insert "lean_mass" leanMass
-                          $ HM.insert "fat_mass"  fatMass
+                -- Frame-proportional viability floors (see the *Frac /
+                -- *Margin constants above). These scale with the unit's
+                -- own frame mass, so a tiny animal's healthy lean/fat are
+                -- never clamped above its own body mass — body composition
+                -- stays coherent at ANY size (mouse → dragon), which keeps
+                -- every mass-derived quantity (blood = body·0.075,
+                -- max_salt = body·k, BMR = 22·(body−fat)+…) sane. At human
+                -- bulk these reproduce the old 0.44h² / 4.4h² floors.
+                minFat    = minFatFrac  * bodyMass
+                minLean   = minLeanFrac * bodyMass
+                fatMass   = max (minFat  * spawnFatMargin)  fatMass0
+                leanMass  = max (minLean * spawnLeanMargin) leanMass0
+                -- frame_mass = the stable structural reference. body_mass
+                -- can later shrink via catabolism/wasting; frame_mass does
+                -- not, so the organ-failure / starvation death thresholds
+                -- (unit_resources) read it for a size-correct floor.
+                withBody  = HM.insert "frame_mass" bodyMass
+                          $ HM.insert "body_mass"  bodyMass
+                          $ HM.insert "lean_mass"  leanMass
+                          $ HM.insert "fat_mass"   fatMass
                           $ HM.delete "bulk"
                           $ HM.delete "bodyfat" rolled
             in recomputeBodyDerivedStats withBody

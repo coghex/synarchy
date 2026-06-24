@@ -63,7 +63,8 @@ data RegistryEntry = RegistryEntry
     , reTextColor   ∷ !(Float, Float, Float, Float)
     , reDefaults    ∷ !CategorySettings
     , reButtons     ∷ ![ButtonYaml]
-    , reCoalesceWindow ∷ !Double
+    , rePopupCoalesceWindow ∷ !Double
+    , reLogCoalesceWindow   ∷ !Double
     } deriving (Show, Eq, Generic)
 
 instance FromJSON RegistryEntry where
@@ -75,12 +76,13 @@ instance FromJSON RegistryEntry where
         defs    ← v .:? "default_settings"
                     .!= CategorySettings False False False
         btns    ← v .:? "buttons" .!= []
-        cw      ← v .:? "coalesce_window" .!= (0 ∷ Double)
+        popupCw ← v .:? "coalesce_window" .!= (0 ∷ Double)
+        logCw   ← v .:? "log_coalesce_window" .!= (0 ∷ Double)
         col ← case rawCol of
             [r, g, b, a] → return (r, g, b, a)
             _            → fail $ "text_color must be [r,g,b,a]: "
                                     <> T.unpack rid
-        return $ RegistryEntry rid disp desc col defs btns cw
+        return $ RegistryEntry rid disp desc col defs btns popupCw logCw
 
 newtype RegistryFile = RegistryFile { rfCategories ∷ [RegistryEntry] }
     deriving (Show, Eq, Generic)
@@ -172,7 +174,8 @@ mkCategoryCfg logger e overrides = do
         , ccPopup       = csPopup cs
         , ccPause       = csPause cs
         , ccButtons     = buttons
-        , ccCoalesceWindow = reCoalesceWindow e
+        , ccPopupCoalesceWindow = rePopupCoalesceWindow e
+        , ccLogCoalesceWindow   = reLogCoalesceWindow e
         }
 
 -- | Translate the YAML button list into 'PopupButton's, warning on

@@ -58,6 +58,11 @@ units:
       # per completed tile (dig_xp_per_tile in unit_ai params).
       # Acolytes arrive as novice excavators — wide spread.
       mining:  { base: 25.0, range: 30.0 }
+      # Leap/grapple: acolytes arrive untrained — a lunge is a rare,
+      # costly move only a skilled fighter pulls off, so these grow with
+      # XP from a low base rather than starting combat-ready.
+      jumping:   { base: 10.0, range: 10.0 }
+      grappling: { base: 15.0, range: 15.0 }
 
     # Knowledge the acolyte spawns KNOWING (gated training — a unit only
     # advances a knowledge it possesses; others stay "Unknown" until learned
@@ -66,6 +71,7 @@ units:
     # quality of a suture/bandage). Range 40 → wide spread, most in [30,70].
     knowledge:
       bleed_control: { base: 50.0, range: 40.0 }
+      infection_control: { base: 45.0, range: 40.0 }
 
     # 12-part humanoid body. Heights are metres above the foot,
     # calibrated for a 1.8m default body — taller spawns naturally

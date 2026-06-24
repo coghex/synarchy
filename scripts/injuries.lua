@@ -132,6 +132,7 @@ local KIND_ICON = {
     slash      = "cut_injury",
     stab       = "puncture_injury",
     blunt      = "bruise",
+    frostbite  = "frostbite",
 }
 
 -- Region-specific icon overrides, keyed like INJURY_TIERS ("kind|token").
@@ -222,10 +223,13 @@ end
 -- The functional consequences of a wound, as short tooltip bullet lines.
 -- Derived from kind × body region × severity — mirrors the gameplay rules
 -- in speedMultiplier / isIncapacitated / Combat.Wounds / the failure meters.
-function M.effects(kind, part, sev)
+function M.effects(kind, part, sev, infection)
     sev = sev or 0
     local tok = tokenOf(part)
     local e   = {}
+    local inf = infection or 0
+    if inf >= 0.4 then e[#e + 1] = "Festering — risk of sepsis"
+    elseif inf >= 0.1 then e[#e + 1] = "Infected" end
     local legLike = tok:find("leg") or tok:find("foot") or tok:find("thigh")
         or tok:find("shin") or tok:find("knee") or tok:find("sole")
         or tok:find("toe")
@@ -279,25 +283,101 @@ function M.list(uid)
     for _, w in ipairs(ws) do
         local base     = M.name(w.kind, w.part, w.severity)
         local bandaged = (w.bandage or 1) < 1
+        local nec      = w.necrosis or 0
+        local rowIcon  = M.icon(w.kind, w.part)
+        -- Frostbite carries its OWN rot here (frostbite necrosis isn't an
+        -- infection — that's why it's shown in the injuries section, not the
+        -- infections one). Tier the name + swap to the rot icon as it dies.
+        if w.kind == "frostbite" then
+            if     nec >= 0.85 then base = "Gangrenous frostbite"; rowIcon = "rot_injury"
+            elseif nec >= 0.4  then base = "Frostbite (rotting)";  rowIcon = "rot_injury"
+            else                    base = "Frostbite" end
+        end
         -- Dressing label: a makeshift tourniquet reads distinctly from a
         -- proper bandage (it's the crude no-supplies fallback).
         local suffix = ""
         if w.dressing == "tourniquet" then suffix = " (tourniquet)"
         elseif bandaged then suffix = " (bandaged)" end
+        -- Infections are listed in their OWN Status section now (see
+        -- M.infectionList) — the injury row no longer carries an "(infected)"
+        -- suffix. The infection data is still attached for any consumer.
+        local inf    = w.infection or 0
         out[#out + 1] = {
-            name     = base .. suffix,
-            icon     = M.icon(w.kind, w.part),
-            severity = w.severity or 0,
-            label    = M.severityLabel(w.severity or 0),
-            kind     = w.kind,
-            part     = w.part,
-            bandaged = bandaged,
-            dressing = w.dressing or "",
-            seep     = w.bandage or 1,
-            clot     = w.clot or 0,
+            name      = base .. suffix,
+            icon      = rowIcon,
+            severity  = w.severity or 0,
+            label     = M.severityLabel(w.severity or 0),
+            kind      = w.kind,
+            part      = w.part,
+            bandaged  = bandaged,
+            dressing  = w.dressing or "",
+            seep      = w.bandage or 1,
+            clot      = w.clot or 0,
+            necrosis  = nec,
+            infection = inf,
+            clean     = w.clean or false,
+            infectionType = w.infectionType or "",
+            infectionName = w.infectionName or "",
+            infectionIcon = w.infectionIcon or "",
+            infectionCategory = w.infectionCategory or "",
         }
     end
     table.sort(out, function(a, b) return a.severity > b.severity end)
+    return out
+end
+
+-- Infections currently active on a unit, as their own panel-ready list
+-- (worst-first): { name, icon, level, part, kind, category }. A wound is
+-- listed once its infection passes a visibility floor. If the specific bug
+-- isn't typed yet (no world climate), it falls back to a tiered descriptor.
+local INFECTION_VIS = 0.05
+function M.infectionList(uid)
+    local ws = unit.getWounds(uid)
+    if type(ws) ~= "table" then return {} end
+    local out = {}
+    for _, w in ipairs(ws) do
+        local inf = w.infection or 0
+        local nec = w.necrosis or 0
+        -- List a row for an active infection, OR for infection-caused dead
+        -- tissue that persists after a cure (infectionType set). Frostbite rot
+        -- (kind "frostbite", no infectionType) is shown in the INJURIES section
+        -- instead, so it isn't double-listed here.
+        local infectionRot = nec >= 0.05 and (w.infectionType or "") ~= ""
+        if inf >= INFECTION_VIS or infectionRot then
+            local nm = w.infectionName
+            if not nm or nm == "" then
+                if     inf >= 0.7 then nm = "Suppurating infection"
+                elseif inf >= 0.4 then nm = "Festering infection"
+                else                   nm = "Infection" end
+            end
+            -- Necrosis overrides the icon (rot) and tags the name; otherwise a
+            -- high infection reads as festering. Icons: rot_injury (dead
+            -- tissue) > festered_injury (festering) > the bug's own icon.
+            local icon, tag
+            if nec >= 0.5 then
+                icon, tag = "rot_injury", " — gangrenous"
+            elseif nec >= 0.05 then
+                icon, tag = "rot_injury", " — rotting"
+            elseif inf >= 0.4 then
+                icon, tag = "festered_injury", ""
+            else
+                icon = w.infectionIcon
+                if not icon or icon == "" then icon = "bacterial_infection" end
+                tag = ""
+            end
+            out[#out + 1] = {
+                name     = nm .. tag .. " (" .. M.locationName(w.part) .. ")",
+                icon     = icon,
+                level    = math.max(inf, nec),
+                infection = inf,
+                necrosis = nec,
+                part     = w.part,
+                kind     = w.kind,
+                category = w.infectionCategory or "",
+            }
+        end
+    end
+    table.sort(out, function(a, b) return a.level > b.level end)
     return out
 end
 
@@ -533,12 +613,48 @@ function M.organFailure(uid)
     return math.min(1, f)
 end
 
+-- 0..1 SEPSIS — systemic infection from untreated/dirty wounds spreading
+-- to the bloodstream. Driven by the AGGREGATE of each wound's infection
+-- level (woundInfection, grown deterministically in Combat.Wounds on open,
+-- un-disinfected wounds). Saturating: several festering wounds tip into
+-- sepsis faster than one. Antibiotics (unit.treatInfection) drive each
+-- wound's infection down → this falls back below the meter deadband and the
+-- unit recovers. Antiseptic at dressing-time prevents it ever starting.
+function M.sepsisFailure(uid)
+    local ws = unit.getWounds(uid)
+    if type(ws) ~= "table" then return 0 end
+    local load = 0
+    for _, w in ipairs(ws) do
+        local inf = w.infection or 0
+        if inf > 0.2 then load = load + (inf - 0.2) end
+    end
+    -- ~0.8 of accumulated load (≈ one fully-festering wound) → ~0.8 fail.
+    return 1 - math.exp(-load / 0.5)
+end
+
+-- Total active infection across all wounds (sum of woundInfection). Drives the
+-- fever response in thermo.lua (the body raises its temperature to fight it).
+function M.infectionLoad(uid)
+    local ws = unit.getWounds(uid)
+    if type(ws) ~= "table" then return 0 end
+    local load = 0
+    for _, w in ipairs(ws) do load = load + (w.infection or 0) end
+    return load
+end
+
 -- The most plausible / immediate cause of death for a (possibly dead)
 -- unit, from its active wounds. Returns a phrase ("a ruptured heart").
 function M.deathCause(uid)
     local ws = unit.getWounds(uid)
     local best, bestScore = nil, -1
     if type(ws) == "table" then
+        -- Gangrene: heavy dead tissue outranks most causes (a rotting unit
+        -- that dies died of gangrene, whatever meter actually topped out).
+        for _, w in ipairs(ws) do
+            if (w.necrosis or 0) >= 0.6 and 80 > bestScore then
+                best, bestScore = "gangrene", 80
+            end
+        end
         for _, w in ipairs(ws) do
             local wk, wp, wsev = w.kind, tok(w.part), (w.severity or 0)
             for _, c in ipairs(DEATH_CAUSES) do

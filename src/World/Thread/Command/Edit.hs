@@ -4,6 +4,7 @@ module World.Thread.Command.Edit
     , handleWorldDeleteTileCommand
     , handleWorldSetFluidTileCommand
     , handleWorldSetSlopeCommand
+    , handleWorldSetCellCommand
     , handleWorldDigTileCommand
     ) where
 
@@ -197,6 +198,57 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                             "Set slope at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy) <> " z=" <> T.pack (show z)
                               <> " bits=" <> T.pack (show bits)
+
+-- | Set a single 3D cell at (gx, gy, z) to a material (id 0 = air) via
+--   the WeSetCell edit path — the locations primitive for carving
+--   interior air, walls, ceilings, and staircases. Routes through the
+--   edit log so the geometry survives chunk eviction + save/load, exactly
+--   like every other edit. applyEdit grows the column upward to reach z;
+--   a z below the column floor is silently dropped there (replay is
+--   silent on out-of-range), so this handler warns loudly on it.
+handleWorldSetCellCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Int → MaterialId → IO ()
+handleWorldSetCellCommand env logger pageId gx gy z mat = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for set cell: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, (lx, ly)) = globalToChunk gx gy
+                idx  = columnIndex lx ly
+                edit = WeSetCell gx gy z mat
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing →
+                    logWarn logger CatWorld $
+                        "Chunk not loaded for set cell at "
+                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        i   = z - ctStartZ col
+                    if i < 0
+                      then logWarn logger CatWorld $
+                             "Set cell z below column floor at "
+                               <> T.pack (show gx) <> "," <> T.pack (show gy)
+                               <> " z=" <> T.pack (show z)
+                               <> " startZ=" <> T.pack (show (ctStartZ col))
+                      else do
+                        let lc' = applyEdit edit lc
+                        atomicModifyIORef' (wsTilesRef ws) $ \w →
+                            (insertChunk lc' w, ())
+                        atomicModifyIORef' (wsEditsRef ws) $ \es →
+                            (appendEdit coord edit es, ())
+                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        writeIORef (wsZoomQuadCacheRef ws) Nothing
+                        writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- A surface-changing cell write (e.g. a staircase
+                        -- mouth) leaves units floating; re-ground them.
+                        Q.writeQueue (unitQueue env) (UnitReGround gx gy)
+                        logDebug logger CatWorld $
+                            "Set cell at " <> T.pack (show gx) <> ","
+                              <> T.pack (show gy) <> " z=" <> T.pack (show z)
+                              <> " mat=" <> T.pack (show mat)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
 --

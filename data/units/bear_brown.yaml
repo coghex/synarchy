@@ -54,6 +54,10 @@ units:
       # acolyte's 10. Engine adds XP via diminishing-returns curve on
       # each successful climb (see Unit.Thread.Movement.applyClimbXP).
       climbing: { base: 40.0, range: 15.0 }
+      # Bears lunge but aren't true leapers — modest jumping. Their power
+      # is in the grab/maul: strong grappling.
+      jumping:   { base: 25.0, range: 10.0 }
+      grappling: { base: 65.0, range: 20.0 }
 
     # 8-part quadruped body. Heights anchored to shoulder-height 1.4 m.
     # Head sits out front, similar to shoulder height; tail is low and

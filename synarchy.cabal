@@ -158,6 +158,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Spoil
                    Test.Headless.Combat.Damage
                    Test.Headless.Combat.Severing
+                   Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
@@ -407,8 +408,11 @@ library
                      Building.Render
                      Building.Placement
                      Building.HitTest
+                     Structure.Types
+                     Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
+                     Engine.Scripting.Lua.API.Structure
                      Engine.Scripting.Lua.API.Combat
                      Item.Types
                      Item.Roll
@@ -420,6 +424,9 @@ library
                      Substance.Types
                      Engine.Asset.YamlSubstance
                      Engine.Scripting.Lua.API.Substance
+                     Infection.Types
+                     Engine.Asset.YamlInfection
+                     Engine.Scripting.Lua.API.Infection
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types

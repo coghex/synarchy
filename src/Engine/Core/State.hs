@@ -46,9 +46,11 @@ import Unit.Sim.Types (UnitThreadState)
 import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
+import Structure.Types (StructureStore)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
+import Infection.Types (InfectionManager)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
@@ -118,6 +120,9 @@ data EngineEnv = EngineEnv
     --   startup; not tied to the world seed (stats are non-deterministic
     --   across runs by design).
   , buildingManagerRef  ∷ IORef BuildingManager
+  , structureStoreRef   ∷ IORef StructureStore
+    -- ^ Walls / floors / ceilings placed by the structures debug builder.
+    --   In-memory only (no save yet); written from Lua, read on render.
   , buildingQueue       ∷ Q.Queue BuildingCommand
   , combatQueue         ∷ Q.Queue Combat.Types.CombatCommand
     -- ^ Lua / AI → combat thread. Issued via `combat.attack` (and
@@ -166,6 +171,11 @@ data EngineEnv = EngineEnv
     --   properties (density, tensile strength, fracture toughness, …)
     --   that the future combat system will consume. Distinct from the
     --   tile-rendering material system (`World.Material`).
+  , infectionManagerRef ∷ IORef InfectionManager
+    -- ^ Registry of infection defs (staph, gas gangrene, …) loaded from
+    --   data/infections/*.yaml. The wound tick selects one (climate +
+    --   site weighted) when a wound first festers; its aggressiveness /
+    --   curable_by drive growth + cure.
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

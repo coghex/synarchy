@@ -124,6 +124,37 @@ data Wound = Wound
       --   no-supplies fallback — crude, poor seep). Cosmetic/record:
       --   the seep that actually scales bleed is woundBandage. Set by
       --   `unit.treatBleeding`; drives the Status-tab label.
+    , woundInfection ∷ !Float
+      -- ^ infection level 0..1. Grows in the wound tick (Combat.Wounds)
+      --   on an open, undressed wound — proportional to severity and the
+      --   wound kind (deep/dirty stab/severed worst; closed
+      --   fracture/concussion least). An infected wound barely heals and,
+      --   past a threshold, WORSENS (woundHeal reverses → effective
+      --   severity climbs above the inflicted value). DETERMINISTIC: a
+      --   wound marked `woundClean` (disinfected with antiseptic) never
+      --   grows it. Drives the systemic SEPSIS failure-meter (a delayed
+      --   death pathway) and is the thing ANTIBIOTICS cure.
+    , woundClean   ∷ !Bool
+      -- ^ disinfected: True once antiseptic has been applied (during
+      --   treatBleeding, or the antibiotics cure). A clean wound does not
+      --   accumulate `woundInfection`. This is the PREVENTION half of the
+      --   medical loop — promptly cleaning a wound stops infection before
+      --   it starts; antibiotics are the CURE for one that already set in.
+    , woundInfectionType ∷ !Text
+      -- ^ which infection took hold, as an InfectionDef id ("staph",
+      --   "clostridium", …) or "" before any. Selected (weighted-random
+      --   by the wound's site + the local climate) the moment infection
+      --   first festers; drives the per-type growth aggressiveness, the
+      --   cure rule (antibiotics treat only `category: bacterial`), and the
+      --   display name/icon. Data-driven from data/infections/*.yaml.
+    , woundNecrosis  ∷ !Float
+      -- ^ dead tissue 0..1 from a NECROTIC infection (one whose def has the
+      --   "necrosis" effect — gangrene). Accrues while such an infection is
+      --   established (∝ infection level; "gas" rots faster) and is
+      --   PERMANENT (dead tissue never recovers — clearing the infection
+      --   only stops further rot). Raises effective severity; at 1.0 a
+      --   non-vital part rots off (severing cascade), a vital part → death
+      --   by gangrene. Future: a debridement action removes it.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A healed-over wound left as a permanent mark. Descriptive record
@@ -443,6 +474,18 @@ data UnitInstance = UnitInstance
       -- ^ Permanent marks left by severe wounds that finished healing.
       --   Appended by Combat.Wounds at the moment a qualifying wound is
       --   removed. Descriptive only for now.
+    , uiImmuneResponse ∷ !Float
+      -- ^ Systemic immune-response level 0..1 (the body's active fight
+      --   against whatever infections it currently has). Ramps up while any
+      --   wound is infected (accelerating, scaled by constitution), clears
+      --   infection (the second ticker racing infection growth), and decays
+      --   back toward 0 once nothing is infected. Antibiotics nudge it up.
+    , uiImmunities   ∷ !(HM.HashMap Text Float)
+      -- ^ Acquired immunity per infection-type id ("staph" → 0..1). Accrues
+      --   while fighting an infection (∝ response × severity, so a bad/long
+      --   infection leaves more immunity), persists and decays VERY slowly.
+      --   Reduces the foothold + severity of future infections of that type
+      --   (scaled by constitution). Shown in the Status tab via immunity.png.
     , uiBlood       ∷ !Float
       -- ^ Current blood volume in litres. Spawn-time seeded to
       --   body_mass × 0.075 (≈7.5 % real-world ratio). Drained by

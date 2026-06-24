@@ -48,6 +48,7 @@ unitLog.tabClickBoxes = unitLog.tabClickBoxes or {}   -- elemHandle → tabKey
 unitLog.activeTabKey = unitLog.activeTabKey or "all"
 unitLog.contentScroll    = unitLog.contentScroll    or 0
 unitLog.justifyBottom    = true
+unitLog.lastMaxOffset    = unitLog.lastMaxOffset    or 0
 unitLog.syncingScrollbar = false
 unitLog.scrollbarId      = unitLog.scrollbarId      or nil
 
@@ -438,15 +439,18 @@ renderContent = function()
         end
     end
 
-    local total     = #wrapped
-    local maxOffset = math.max(0, total - maxLines)
-    if unitLog.justifyBottom then
+    local total       = #wrapped
+    local maxOffset   = math.max(0, total - maxLines)
+    local wasAtBottom = unitLog.justifyBottom
+        or unitLog.contentScroll >= unitLog.lastMaxOffset
+    if wasAtBottom then
         unitLog.contentScroll = maxOffset
         unitLog.justifyBottom = false
     else
         unitLog.contentScroll =
             math.max(0, math.min(unitLog.contentScroll, maxOffset))
     end
+    unitLog.lastMaxOffset = maxOffset
     if unitLog.scrollbarId then
         unitLog.syncingScrollbar = true
         scrollbar.setContentSize(unitLog.scrollbarId, math.max(total, 1), maxLines)
@@ -583,9 +587,8 @@ end
 
 -- Re-render while visible so new entries appear live. (No stream of its
 -- own to drain — it reads the sibling logs' stores + the event log.)
--- Do NOT force justifyBottom here: that snaps the view to the foot every
--- tick and fights the user scrolling up. renderContent preserves the
--- current scroll offset; justify only happens on open / tab switch.
+-- renderContent keeps following the tail only if the user was already at
+-- the bottom; once they scroll up, their position stays put.
 function unitLog.update(dt)
     if unitLog.visible and unitLog.uiCreated then
         renderContent()

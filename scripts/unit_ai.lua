@@ -28,6 +28,7 @@ package.loaded["scripts.unit_ai"] = unitAi
 
 -- Shared comfort/ordered/sprint speed model (see movement_speed.lua).
 local mv = require("scripts.movement_speed")
+local brain = require("scripts.brain")
 
 -- Report a FAILED job/task to the player as a red unit_warning in the
 -- event log (and the unit's per-unit Log). The engine coalesces
@@ -589,6 +590,9 @@ local function eatExecute(uid, s, params)
     -- consumed regardless — over-feeding loses calories, by design.
     local newHun = math.min(maxHun, hun + food.food.nutrition)
     unit.setStat(uid, "hunger", newHun)
+    -- Food carries salt — the only way to recover from sweat-driven
+    -- hyponatremia (the kidneys can't make sodium). See scripts/salts.lua.
+    require("scripts.salts").mealSalt(uid)
     unit.removeItem(uid, food.defName)
     unit.eat(uid)
 end
@@ -2795,12 +2799,27 @@ end
 -- mostly self-clotted (a wound that's clotting on its own doesn't need
 -- a bandage wasted on it).
 local CLOT_ENOUGH = 0.85
+-- An infected wound past this level wants antibiotics (the cure). Applies
+-- to ANY wound kind (even the skip-kinds: a closed fracture can still
+-- fester), so it's checked outside the bleeder gate.
+local INFECT_TREAT_MIN = 0.15
 local function needsTreatment(uid, minSeep)
     for _, w in ipairs(unit.getWounds(uid) or {}) do
         if not TREAT_SKIP_KINDS[w.kind] and (w.bandage or 1) > minSeep
            and (w.clot or 0) < CLOT_ENOUGH then
             return true
         end
+        if (w.infection or 0) >= INFECT_TREAT_MIN then
+            return true   -- needs antibiotics
+        end
+    end
+    return false
+end
+
+-- Does the patient have an infected wound worth antibiotics?
+local function hasInfection(uid)
+    for _, w in ipairs(unit.getWounds(uid) or {}) do
+        if (w.infection or 0) >= INFECT_TREAT_MIN then return true end
     end
     return false
 end
@@ -3031,11 +3050,26 @@ local function treatExecute(uid, s, params)
     -- bleeding or the kit runs dry; a hard failure drops the claim.
     unit.stop(uid)
     local res = unit.treatBleeding(uid, patient)
-    if res and not res.ok then
-        -- Surface the failed treatment (red, coalesced per patient).
+    if res and not res.ok and res.message ~= "no bleeding wound to treat" then
+        -- Surface the failed treatment (red, coalesced per patient). A
+        -- patient with only an infected (non-bleeding) wound legitimately
+        -- has "no bleeding wound" — that's not a failure, it's the cue to
+        -- give antibiotics below, so don't report it.
         reportFailure(patient, "Treatment failed: "
             .. (res.message or "unknown"))
         s.treatClaim = nil
+    end
+    -- CURE: administer antibiotics to an infected wound (treatBleeding's
+    -- antiseptic step only PREVENTS infection on a fresh dressing; an
+    -- already-infected wound needs the antibiotics cure). Requires the
+    -- INFECTION-CONTROL knowledge; re-fires until the infection is knocked
+    -- down or the kit's pills run out.
+    if hasInfection(patient) and unit.getKnowledge(uid, "infection_control") then
+        local ir = unit.treatInfection(uid, patient)
+        if ir and not ir.ok then
+            reportFailure(patient, "Infection untreated: "
+                .. (ir.message or "unknown"))
+        end
     end
 end
 
@@ -3156,6 +3190,7 @@ unitAi.registerActions("technomule", {
 -- the dispatch loop. Done at load time so all defs are wired by
 -- the time the first tick runs.
 require("scripts.bear_ai")
+require("scripts.red_squirrel_ai")
 
 -----------------------------------------------------------
 -- FOV-based water memory.
@@ -3236,6 +3271,18 @@ local function tickOne(uid, defName)
     local s = ensureState(uid)
     seedInitialGoal(s, defName)
     maintainTask(uid, s)
+
+    -- Delirium: a unit whose consciousness has dropped into the delirious band
+    -- (heat stroke / hypoxia / salt imbalance — not yet unconscious, which
+    -- collapses it) can't act purposefully. It stumbles: aimless slow wander,
+    -- no goals/work/combat. Only re-issue when not already moving (no spam).
+    if brain.isDelirious(uid) then
+        if activity ~= "walking" and activity ~= "running" then
+            wanderExecute(uid, s, params)
+        end
+        s.currentAction = "delirious"
+        return
+    end
 
     -- Stuck-walk watchdog. A unit stuck in walking/running with no
     -- position progress never returns to idle, and the execute gate

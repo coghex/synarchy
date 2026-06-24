@@ -5,6 +5,7 @@ items:
     weight: 0.3
     kind: gauntlets
     category: Armor
+    insulation: 0.15  # warm hands
     material: leather  # combat resistance lives in
                        # data/substances/leathers.yaml under "leather"
     quality:   { min: 60, max: 90 }

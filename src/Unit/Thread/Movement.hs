@@ -175,7 +175,11 @@ tickAllMovement dt env utsRef = do
                                          , woundBandage  = 1.0
                                          , woundClot     = 0.0
                                          , woundHeal     = 0.0
-                                         , woundDressing = "" }
+                                         , woundDressing = ""
+                                         , woundInfection = 0.0
+                                         , woundClean    = False
+                                         , woundInfectionType = ""
+                                         , woundNecrosis = 0.0 }
                                  | i ← injs ]
                         in HM.insert uid (inst { uiWounds = ws <> uiWounds inst }) m
             in (um' { umInstances = foldr applyOne (umInstances um') fallResults }, ())

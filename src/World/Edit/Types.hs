@@ -44,6 +44,16 @@ data WorldEdit
                                            --   No generator path emits this — it exists so test
                                            --   harnesses can author walkable ramps (addTile only
                                            --   ever makes flat tops / cliffs, slope = 0).
+    | WeSetCell !Int !Int !Int !MaterialId -- ^ Set the material of the cell at (gx,gy,z) to an
+                                           --   arbitrary id (id 0 = air). Unlike WeAddTile/
+                                           --   WeDeleteTile this writes a single 3D cell, not the
+                                           --   column top — so it can carve interior air under a
+                                           --   solid ceiling (the locations feature: rooms, walls,
+                                           --   staircases). Grows the column upward to reach z if
+                                           --   needed; z below the column floor is a no-op (no
+                                           --   grow-down — underground rooms never carve below
+                                           --   bedrock). The replay recomputes the column's surface
+                                           --   maps and trims trailing air.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

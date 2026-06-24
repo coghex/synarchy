@@ -48,10 +48,12 @@ import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
+import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
+import Engine.Scripting.Lua.API.Infection
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -158,6 +160,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadItemYaml" (loadItemYamlFn env backendState)
   registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
   registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
+  registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -294,6 +297,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getInventory" (unitGetInventoryFn env)
   registerLuaFunction "getItemContents" (unitGetItemContentsFn env)
   registerLuaFunction "treatBleeding" (unitTreatBleedingFn env)
+  registerLuaFunction "treatInfection" (unitTreatInfectionFn env)
+  registerLuaFunction "frostbite"    (unitFrostbiteFn env)
   registerLuaFunction "injure"       (unitInjureFn env)
   registerLuaFunction "drink"        (unitDrinkFn env)
   registerLuaFunction "eat"          (unitEatFn env)
@@ -320,6 +325,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
                                           (unitGetWoundSeverityOnFn env)
   registerLuaFunction "getWounds"    (unitGetWoundsFn env)
   registerLuaFunction "getScars"     (unitGetScarsFn env)
+  registerLuaFunction "getImmunities" (unitGetImmunitiesFn env)
+  registerLuaFunction "getInsulation" (unitGetInsulationFn env)
   registerLuaFunction "dropEquipmentToGround" (unitDropEquipmentToGroundFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)
@@ -377,6 +384,16 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getStorageWeight"    (buildingGetStorageWeightFn env)
   Lua.setglobal (Lua.Name "building")
 
+  -- Structure global — debug builder for walls / floors / ceilings.
+  -- structure.place(gx,gy,slot,texHandle,faceHandle[,z]) / clear / clearAll / count.
+  Lua.newtable
+  registerLuaFunction "place"    (structurePlaceFn env)
+  registerLuaFunction "clear"    (structureClearFn env)
+  registerLuaFunction "clearAll" (structureClearAllFn env)
+  registerLuaFunction "count"    (structureCountFn env)
+  registerLuaFunction "floorZAt" (structureFloorZAtFn env)
+  Lua.setglobal (Lua.Name "structure")
+
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.
   -- Write: equip / unequip (with kind validation against slot's accepted kind).
@@ -398,6 +415,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "get"      (substanceGetFn env)
   registerLuaFunction "getNames" (substanceGetNamesFn env)
   Lua.setglobal (Lua.Name "substance")
+
+  -- Infection global — read-only access to the infection catalogue
+  -- (staph, gas gangrene, …) loaded from data/infections/*.yaml via
+  -- engine.loadInfectionYaml.
+  Lua.newtable
+  registerLuaFunction "get"      (infectionGetFn env)
+  registerLuaFunction "getNames" (infectionGetNamesFn env)
+  Lua.setglobal (Lua.Name "infection")
 
   Lua.newtable
   registerLuaFunction "listDefs"     (itemListDefsFn env)
@@ -476,6 +501,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "deleteTile" (worldDeleteTileFn env)
   registerLuaFunction "setFluidTile" (worldSetFluidTileFn env)
   registerLuaFunction "setSlope" (worldSetSlopeFn env)
+  registerLuaFunction "setCell" (worldSetCellFn env)
 
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
@@ -487,6 +513,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "waitForChunks" (worldWaitForChunksFn env)
   registerLuaFunction "getHoverTile" (worldGetHoverTileFn env)
   registerLuaFunction "getHoverPos"  (worldGetHoverPosFn env)
+  registerLuaFunction "getClimateAt" (worldGetClimateAtFn env)
 
   Lua.setglobal (Lua.Name "world")
 

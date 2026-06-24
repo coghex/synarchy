@@ -28,6 +28,7 @@
 module Combat.Wounds
     ( tickAllWounds
     , propagateSevering   -- exposed for unit testing
+    , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
     , bleedRateFor        -- current L/sec blood loss (for the info panel)
     , kindBleedFactor     -- per-kind bleed multiplier (treat-action ranking)
     ) where
@@ -46,6 +47,12 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , UnitManager(..), BodyPart(..), Wound(..), Scar(..))
 import Unit.Command.Types (UnitCommand(..))
+import qualified System.Random as Random
+import World.State.Types (WorldManager(..), WorldState(..))
+import World.Generate.Types (WorldGenParams(..))
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import Infection.Types (InfectionManager, InfectionDef(..)
+                       , infectionsForSite, lookupInfection)
 
 -- ----- Tuning constants -----
 
@@ -131,6 +138,191 @@ sleepHealMult = 4.0    -- rest/sleep speed-up (DORMANT — see restMult)
 scarSeverityThreshold ∷ Float
 scarSeverityThreshold = 0.3   -- wounds milder than this heal scar-free
 
+-- ----- Infection -----
+-- A per-wound `woundInfection` (0..1) bar that grows on an OPEN, undressed
+-- wound after a grace period, ∝ effective severity × kind. DETERMINISTIC:
+-- a wound marked `woundClean` (antiseptic-disinfected during treatment)
+-- never grows it — that's the PREVENTION half of the medical loop.
+-- ANTIBIOTICS are the CURE (drive it back down). An infected wound barely
+-- heals and, past `infectionWorsenThreshold`, WORSENS — woundHeal reverses
+-- so effective severity climbs above the inflicted value. Infection feeds
+-- the systemic SEPSIS failure-meter (a delayed death pathway, in
+-- unit_resources.lua), so an untreated dirty wound can kill days/"hours"
+-- after the fight.
+infectionBaseRate ∷ Float
+infectionBaseRate = 0.0016
+-- Calibration (untreated, sev-0.5 slash, kind 1.0): driver 0.3+0.5 = 0.8 →
+-- 0.00128/s → infection 0.5 in ~6.5 min, 1.0 in ~13 min. A clean wound
+-- never starts; antibiotics reverse it (see Units.treatInfectionIO).
+
+infectionGraceSec ∷ Double
+infectionGraceSec = 60   -- a fresh wound isn't infected for the first minute
+
+infectionWorsenThreshold ∷ Float
+infectionWorsenThreshold = 0.6   -- above this, healing reverses (festers)
+
+infectionWorsenRate ∷ Float
+infectionWorsenRate = 0.004   -- how fast a festering wound deteriorates
+
+-- Fever suppression: infection growth × (1 − feverSuppressK·(core−38)), floored.
+-- A febrile body (core > 38°C, raised by the thermo fever response) slows the
+-- infection — the two-way loop that closes the homeostasis arc.
+feverSuppressK ∷ Float
+feverSuppressK = 0.25   -- core 40 → ×0.5 growth; core 41 → floored
+
+feverSuppressFloor ∷ Float
+feverSuppressFloor = 0.30
+
+-- ----- Necrosis (rot / gangrene) -----
+-- A NECROTIC infection (its def has the "necrosis" effect) kills tissue:
+-- woundNecrosis accrues (PERMANENTLY) while the infection is established,
+-- raising effective severity. At 1.0 a non-vital part rots off (severing
+-- cascade); a vital part rotting through kills (gangrene). "gas" (gas
+-- gangrene) rots faster. Clearing the infection stops the rot but the dead
+-- tissue stays — only a future debridement action would remove it.
+necrosisBaseRate ∷ Float
+necrosisBaseRate = 0.004   -- dead tissue/s at infection 1.0 (~4 min to rot off)
+
+necrosisInfThreshold ∷ Float
+necrosisInfThreshold = 0.4   -- infection must be established before tissue rots
+
+gasNecrosisMult ∷ Float
+gasNecrosisMult = 1.6   -- "gas" gangrene rots faster
+
+necrosisDestroyThreshold ∷ Float
+necrosisDestroyThreshold = 1.0   -- non-vital part fully rotted → rots off
+
+necrosisLethalVital ∷ Float
+necrosisLethalVital = 0.85   -- vital part this rotted → death by gangrene
+
+woundHealFloor ∷ Float
+woundHealFloor = -0.5   -- how far a festering wound can worsen past inflicted
+                        -- (effSev = sev0 × (1 − heal), so heal = −0.5 → 1.5×)
+
+-- | Per-kind susceptibility to infection (multiplies the growth rate).
+--   Deep/dirty wounds (punctures, open stumps) fester worst; a closed
+--   fracture or concussion barely can (intact skin); bruises low.
+kindInfectFactor ∷ Text → Float
+kindInfectFactor "stab"       = 1.2   -- deep dirty puncture — worst
+kindInfectFactor "severed"    = 1.3   -- open stump, gangrene
+kindInfectFactor "slash"      = 1.0
+kindInfectFactor "arterial"   = 1.0
+kindInfectFactor "internal"   = 0.6   -- visceral (organFailure also covers it)
+kindInfectFactor "blunt"      = 0.3   -- skin mostly intact
+kindInfectFactor "fracture"   = 0.2   -- closed
+kindInfectFactor "concussion" = 0.0   -- closed head injury, no wound
+kindInfectFactor "frostbite"  = 1.0   -- cold-killed tissue infects readily
+kindInfectFactor _            = 0.8
+
+-- | Climate's effect on how FAST infection sets in: warm + wet → faster,
+--   cold + dry → slower. Range ~0.5 (cold, arid) … ~1.5 (hot, humid).
+--   "moisture" = relative humidity (lcHumidity, 0..1).
+climateOnsetFactor ∷ Maybe LocalClimate → Float
+climateOnsetFactor Nothing  = 1.0   -- no world climate (tests / pre-gen)
+climateOnsetFactor (Just c) =
+    let warmth  = clamp01 (lcTemp c / 35)        -- 0 °C → 0, 35 °C → 1
+        wetness = clamp01 (lcHumidity c)
+    in 0.5 + 0.5 * warmth + 0.5 * wetness
+  where clamp01 x = max 0 (min 1 x)
+
+-- | How well an infection's favourable band matches the local climate, in
+--   [0.1, 1] (floored so a hostile climate still allows *something* — staph
+--   doesn't care). Multiplies the def's base_weight in selection.
+climateMatchWeight ∷ LocalClimate → InfectionDef → Float
+climateMatchWeight c d =
+    bandMatch 0.04 (infTempMin d) (infTempMax d) (lcTemp c)
+  * bandMatch 1.5  (infMoistMin d) (infMoistMax d) (lcHumidity c)
+  where
+    bandMatch falloff lo hi x
+        | x ≥ lo ∧ x ≤ hi = 1.0
+        | otherwise = max 0.1 (1.0 - falloff * (if x < lo then lo - x else x - hi))
+
+-- | Which infection pool a wound draws from: "deep" (anaerobic) if its kind
+--   is a puncture/internal injury OR it sits on a deep body part; else
+--   "surface" (aerobic skin/soft-tissue). (User-chosen rule.)
+woundSiteClass ∷ HM.HashMap T.Text BodyPart → Wound → T.Text
+woundSiteClass parts w
+    | deepKind ∨ deepPart = "deep"
+    | otherwise           = "surface"
+  where
+    deepKind = woundKind w ≡ "stab" ∨ woundKind w ≡ "internal"
+    deepPart = maybe False ((> 0.5) . bpDepth) (HM.lookup (woundPart w) parts)
+
+-- | Weighted-random pick of an infection id from the wound's site pool,
+--   weighted by base_weight × climate match. Returns "" if the pool is
+--   empty (no climate → no selection; the caller leaves the type unset and
+--   growth falls back to aggressiveness 1.0). Consumes the StdGen.
+selectInfectionType
+    ∷ InfectionManager → LocalClimate → T.Text → Random.StdGen
+    → (T.Text, Random.StdGen)
+selectInfectionType mgr clim site gen =
+    let pool    = infectionsForSite site mgr
+        weights = [ (infId d, infBaseWeight d * climateMatchWeight clim d)
+                  | d ← pool ]
+        total   = sum (map snd weights)
+    in if total ≤ 0 then ("", gen)
+       else let (r, gen') = Random.randomR (0, total) gen
+            in (pickWeighted r weights, gen')
+  where
+    pickWeighted _ []            = ""
+    pickWeighted _ [(i, _)]      = i
+    pickWeighted r ((i, wgt):xs)
+        | r ≤ wgt   = i
+        | otherwise = pickWeighted (r - wgt) xs
+
+-- | A chosen infection's growth-aggressiveness multiplier (1.0 if untyped
+--   or unknown).
+aggressivenessOf ∷ InfectionManager → T.Text → Float
+aggressivenessOf _   "" = 1.0
+aggressivenessOf mgr t  = maybe 1.0 infAggressiveness (lookupInfection t mgr)
+
+-- | A chosen infection's infectability multiplier (foothold + resistance to
+--   the immune response). 1.0 if untyped/unknown.
+infectabilityOf ∷ InfectionManager → T.Text → Float
+infectabilityOf _   "" = 1.0
+infectabilityOf mgr t  = maybe 1.0 infInfectability (lookupInfection t mgr)
+
+-- ----- Immunity / the immune-response race -----
+-- Infection progress is a RACE between two tickers: the infection's own
+-- growth (self-accelerating — a bad infection worsens faster), and the
+-- unit's SYSTEMIC immune response (uiImmuneResponse), which ramps up while
+-- any wound is infected and CLEARS infection. Constitution scales the
+-- response; prior acquired immunity (uiImmunities, per type) resists a
+-- bug's foothold; antibiotics nudge the response up. Surviving an infection
+-- accrues immunity (∝ response × severity, integrated over the fight).
+
+selfAccelGain ∷ Float
+selfAccelGain = 1.0    -- growth ×(1 + this×infection): bad infections worsen faster
+
+immuneRampRate ∷ Float
+immuneRampRate = 0.018   -- base immune-response ramp/s (×constitution, accel)
+
+immuneSeed ∷ Float
+immuneSeed = 0.06    -- response-accel floor (a fresh response still begins)
+
+immuneDecayRate ∷ Float
+immuneDecayRate = 0.03   -- response decays/s once nothing is infected
+
+immuneClearRate ∷ Float
+immuneClearRate = 0.013   -- infection cleared per unit of response per s
+
+infectionLoadThreshold ∷ Float
+infectionLoadThreshold = 0.02   -- total infection above which the response ramps
+
+immGainRate ∷ Float
+immGainRate = 0.05   -- acquired immunity gained per (response × infection) per s
+
+immunityDecayRate ∷ Float
+immunityDecayRate = 0.00003   -- acquired immunity fades VERY slowly
+
+immunityFloor ∷ Float
+immunityFloor = 0.001   -- drop immunities below this (keeps the map small)
+
+-- | How much acquired immunity to a type resists it, scaled by constitution.
+--   Capped so immunity never makes a unit perfectly invulnerable.
+immuneResistOf ∷ Float → Float → Float
+immuneResistOf con immLevel = min 0.9 (immLevel * (0.5 + 0.5 * con))
+
 kindBleedFactor ∷ Text → Float
 kindBleedFactor "slash"      = 1.0
 kindBleedFactor "stab"       = 0.6
@@ -147,6 +339,9 @@ kindBleedFactor "concussion" = 0.0
 kindBleedFactor "internal"   = 0.5
 kindBleedFactor "severed"    = 0.6
 kindBleedFactor "arterial"   = 1.2
+-- Frostbite is frozen/dead tissue — barely bleeds (its danger is necrosis +
+-- infection, handled via woundNecrosis + the infection system).
+kindBleedFactor "frostbite"  = 0.05
 kindBleedFactor _            = 0.5
 
 -- | Current total bleed rate (litres/second) for a unit, summed over its
@@ -178,7 +373,7 @@ bleedRateFor def inst =
 data WoundTickOutcome
     = NoChange
     | UnconsciousNow Text   -- worst-bleeding part id
-    | DiedNow Text          -- worst-bleeding part id (= cause)
+    | DiedNow Text Text     -- (part id, cause): exsanguination | gangrene
 
 -- | Tick all units' wounds by `dt` seconds. Designed for the combat
 --   thread to call on its 10 Hz cadence (every 6th 60-Hz iteration).
@@ -187,6 +382,19 @@ data WoundTickOutcome
 tickAllWounds ∷ EngineEnv → Float → IO ()
 tickAllWounds env dt = do
     gt ← readIORef (gameTimeRef env)
+    infMgr ← readIORef (infectionManagerRef env)
+    -- Active world's climate, for per-unit infection selection + onset speed.
+    -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.
+    mClim ← do
+        manager ← readIORef (worldManagerRef env)
+        case wmWorlds manager of
+            ((_, ws):_) → do
+                mp ← readIORef (wsGenParamsRef ws)
+                pure (fmap (\p → (wgpClimateState p, wgpWorldSize p)) mp)
+            [] → pure Nothing
+    -- One independent generator for this tick's infection-type rolls; split
+    -- off statRNGRef (advances the master) so we don't race other consumers.
+    tickGen ← atomicModifyIORef' (statRNGRef env) Random.splitGen
     -- Snapshot-and-clobber would lose any concurrent write to
     -- umInstances (publishToRender, Lua equip/modifier, the per-attack
     -- wound stamp in Combat.Resolution). Do the fold inside the
@@ -195,21 +403,25 @@ tickAllWounds env dt = do
     -- Unit.Thread.publishToRender.
     outcomes ← atomicModifyIORef' (unitManagerRef env) $ \um →
         let defs = umDefs um
-            (updatedMap, os) =
+            (updatedMap, os, _) =
                 HM.foldlWithKey'
-                    (\(acc, xs) uid inst →
+                    (\(acc, xs, gen) uid inst →
                         case HM.lookup (uiDefName inst) defs of
-                            Nothing → (HM.insert uid inst acc, xs)
+                            Nothing → (HM.insert uid inst acc, xs, gen)
                             Just def →
-                                let (inst', outcome) =
-                                        tickOneUnit gt def dt inst
+                                let unitClim = fmap (\(cs, wsz) →
+                                        lookupLocalClimate cs wsz
+                                            (floor (uiGridX inst))
+                                            (floor (uiGridY inst))) mClim
+                                    (inst', outcome, gen') =
+                                        tickOneUnit gt def dt infMgr unitClim gen inst
                                 in case outcome of
                                     NoChange →
-                                        (HM.insert uid inst' acc, xs)
+                                        (HM.insert uid inst' acc, xs, gen')
                                     _ →
                                         ( HM.insert uid inst' acc
-                                        , (uid, outcome) : xs))
-                    (HM.empty, []) (umInstances um)
+                                        , (uid, outcome) : xs, gen'))
+                    (HM.empty, [], tickGen) (umInstances um)
         in (um { umInstances = updatedMap }, os)
 
     logger ← readIORef (loggerRef env)
@@ -219,7 +431,7 @@ tickAllWounds env dt = do
             logDebug logger CatThread $
                 "collapsed: " <> T.pack (show uidRaw)
                     <> " (bleeding from " <> part <> ")"
-        DiedNow part → do
+        DiedNow part cause → do
             Q.writeQueue (unitQueue env) (UnitKill uid)
             let ev = CombatEvent
                     { ceTs       = gt
@@ -227,7 +439,7 @@ tickAllWounds env dt = do
                     , ceAttacker = Nothing
                     , ceTarget   = Just uidRaw
                     , cePayload  = HM.fromList
-                        [ ("cause", "exsanguination")
+                        [ ("cause", cause)
                         , ("part",  part)
                         ]
                     }
@@ -246,23 +458,57 @@ tickAllWounds env dt = do
 --   left unchanged here; the caller enqueues the appropriate
 --   UnitCollapse / UnitKill command.
 tickOneUnit
-    ∷ Double → UnitDef → Float → UnitInstance
-    → (UnitInstance, WoundTickOutcome)
-tickOneUnit gt def dt inst
-    | uiPose inst == "dead" = (inst, NoChange)
-    | null (uiWounds inst)  = (inst, NoChange)
+    ∷ Double → UnitDef → Float → InfectionManager → Maybe LocalClimate
+    → Random.StdGen → UnitInstance
+    → (UnitInstance, WoundTickOutcome, Random.StdGen)
+tickOneUnit gt def dt infMgr mClim gen0 inst
+    | uiPose inst == "dead" = (inst, NoChange, gen0)
+    | null (uiWounds inst)  =
+        -- No wounds → no infection, but the immune response must still wind
+        -- down and acquired immunity fade (else a recovered unit would keep a
+        -- maxed response forever). Skip the allocation when both are already
+        -- at rest (the common case for a healthy unit).
+        if uiImmuneResponse inst ≤ 0 ∧ HM.null (uiImmunities inst)
+          then (inst, NoChange, gen0)
+          else let r'   = max 0 (uiImmuneResponse inst - immuneDecayRate * dt)
+                   imm' = HM.filter (> immunityFloor)
+                        $ HM.map (\v → max 0 (min 1
+                                    (v - immunityDecayRate * dt)))
+                                 (uiImmunities inst)
+               in (inst { uiImmuneResponse = r', uiImmunities = imm' }
+                  , NoChange, gen0)
     | otherwise =
         let parts = HM.fromList [(bpId p, p) | p ← udBodyParts def]
             con   = HM.lookupDefault 1.0 "constitution" (uiStats inst)
             bleedCon = max 0.5 (min 2.0 con)
             healCon  = max 0.3 (min 3.0 con)
+            -- Climate scales how fast infection sets in (warm+wet faster).
+            climateFactor = climateOnsetFactor mClim
+            -- Fever suppression: a high core body temperature (the fever the
+            -- thermo system raises in response to infection) slows infection
+            -- growth — the body cooking the pathogens. core_temp is the stat
+            -- the Lua thermo tick maintains; default 37 if it hasn't ticked yet.
+            coreTemp = HM.lookupDefault 37.0 "core_temp" (uiStats inst)
+            feverSuppress = max feverSuppressFloor
+                              (1 - feverSuppressK * max 0 (coreTemp - 38))
             -- A unit at rest heals faster. DORMANT hook: no unit is
             -- currently "sleeping" (acolytes have no sleep/bed system
             -- yet — only the bear AI uses the word). When one lands,
             -- wire its rest state here and the bonus lights up.
             restMult = if uiPose inst == "sleeping" then sleepHealMult else 1.0
-            (newWounds, totalDrain, worstPart, _worstRate, newScars) =
-                L.foldl' (\(ws, drain, wp, wr, scars) w →
+            -- SYSTEMIC immune response (Ticker B), advanced once per unit.
+            -- Ramps up (accelerating, × constitution) while anything is
+            -- infected; decays back toward 0 once nothing is. The per-wound
+            -- fold below uses this value to CLEAR infection.
+            immMap0   = uiImmunities inst
+            totalLoad = sum (map woundInfection (uiWounds inst))
+            r0        = uiImmuneResponse inst
+            newR | totalLoad > infectionLoadThreshold =
+                       min 1 (r0 + immuneRampRate * con
+                                   * (immuneSeed + r0) * dt)
+                 | otherwise = max 0 (r0 - immuneDecayRate * dt)
+            (newWounds, totalDrain, worstPart, _worstRate, newScars, genFinal, immDelta) =
+                L.foldl' (\(ws, drain, wp, wr, scars, gen, immD) w →
                     let sev0       = woundSeverity w   -- INFLICTED (static)
                         p          = HM.lookup (woundPart w) parts
                         partBleed  = maybe 1.0 bpBleedFactor p
@@ -279,19 +525,96 @@ tickOneUnit gt def dt inst
                         newClot    = min 1 (woundClot w
                                      + clotBaseRate * clotResist
                                        * bandBoost * clotAccel * dt)
+                        -- Advance INFECTION first (deterministic): an open,
+                        -- un-disinfected wound accumulates infection after a
+                        -- grace period, ∝ current effective severity × kind ×
+                        -- the local CLIMATE and the chosen infection's
+                        -- aggressiveness. A clean wound never grows it.
+                        curEff     = sev0 * (1 - woundHeal w)
+                        infAge     = gt - woundAt w
+                        kindInfF   = kindInfectFactor (woundKind w)
+                        eligible   = not (woundClean w)
+                                   ∧ infAge ≥ infectionGraceSec
+                                   ∧ kindInfF > 0
+                        -- Pick the infection TYPE the first tick it festers
+                        -- (weighted-random by site + climate). Needs a world
+                        -- climate; without one (tests/pre-gen) the type stays
+                        -- unset and aggressiveness falls back to 1.0.
+                        (infType, gen') = case mClim of
+                            Just clim
+                                | eligible ∧ woundInfectionType w ≡ "" →
+                                    selectInfectionType infMgr clim
+                                        (woundSiteClass parts w) gen
+                            _ → (woundInfectionType w, gen)
+                        aggr       = aggressivenessOf infMgr infType
+                        infectab   = infectabilityOf infMgr infType
+                        -- Prior acquired immunity to this type resists it.
+                        immResist  = immuneResistOf con
+                                        (HM.lookupDefault 0 infType immMap0)
+                        -- TICKER A — growth: self-accelerating (a bad infection
+                        -- worsens faster), scaled by kind/severity/climate ×
+                        -- the bug's aggressiveness × infectability, RESISTED by
+                        -- prior immunity. Only while eligible (dirty, past grace).
+                        selfAccel  = 1 + selfAccelGain * woundInfection w
+                        infGrow    = if eligible
+                                     then infectionBaseRate * kindInfF
+                                          * (0.3 + curEff) * climateFactor
+                                          * aggr * infectab * selfAccel
+                                          * (1 - immResist) * feverSuppress
+                                     else 0
+                        -- TICKER B — the immune response clears infection. The
+                        -- race: growth vs clearance. A high response overtakes
+                        -- and the infection recedes (→ cleared).
+                        infClear   = immuneClearRate * newR
+                        newInf     = max 0 (min 1
+                                       (woundInfection w + (infGrow - infClear) * dt))
+                        -- Acquired immunity accrues while fighting (∝ response ×
+                        -- current infection), so a bad/long infection leaves
+                        -- more protection. Keyed by the infection type.
+                        immD'      = if infType ≡ "" ∨ woundInfection w ≤ 0
+                                     then immD
+                                     else HM.insertWith (+) infType
+                                            (immGainRate * newR * woundInfection w * dt)
+                                            immD
+                        -- NECROSIS (rot): a necrotic infection (its def has the
+                        -- "necrosis" effect) kills tissue once established. Dead
+                        -- tissue is PERMANENT (only grows). "gas" rots faster.
+                        infEffs    = maybe [] infEffects (lookupInfection infType infMgr)
+                        necGrow    = if "necrosis" `elem` infEffs
+                                        ∧ newInf > necrosisInfThreshold
+                                     then necrosisBaseRate * newInf
+                                          * (if "gas" `elem` infEffs
+                                               then gasNecrosisMult else 1)
+                                     else 0
+                        newNec     = min 1 (woundNecrosis w + necGrow * dt)
                         -- Advance healing. Uniform base rate across kinds
                         -- (severed never heals — the limb is gone),
-                        -- SCALED by clot (an open wound barely mends) and
-                        -- by rest, and gently by constitution. Quite slow.
+                        -- SCALED by clot (an open wound barely mends), by rest,
+                        -- gently by constitution, and GATED by infection (an
+                        -- infected wound barely mends; a festering one — past
+                        -- the worsen threshold — actively deteriorates as
+                        -- woundHeal reverses below zero, so effSev climbs above
+                        -- the inflicted value, capped by woundHealFloor).
                         canHeal    = woundKind w /= "severed"
                         clotHealF  = healClotFloor + (1 - healClotFloor) * newClot
-                        healDelta  = if canHeal
-                            then healBaseRate * clotHealF * restMult * healCon * dt
+                        infHealMlt = max 0 (1 - newInf)
+                        healAdv    = if canHeal
+                            then healBaseRate * clotHealF * restMult * healCon
+                                 * infHealMlt * dt
                             else 0
-                        newHeal    = min 1 (woundHeal w + healDelta)
+                        worsen     = if newInf > infectionWorsenThreshold
+                            then infectionWorsenRate
+                                 * (newInf - infectionWorsenThreshold) * dt
+                            else 0
+                        newHeal    = max woundHealFloor
+                                         (min 1 (woundHeal w + healAdv - worsen))
                         -- Effective severity drops as the wound heals —
-                        -- the single source of "this wound matters less now".
-                        effSev     = sev0 * (1 - newHeal)
+                        -- the single source of "this wound matters less now"
+                        -- (and rises above sev0 when a festering wound's
+                        -- woundHeal goes negative). Necrosis (dead tissue) is a
+                        -- permanent floor: a rotting wound is at least as bad as
+                        -- the fraction of tissue that has died.
+                        effSev     = max (sev0 * (1 - newHeal)) newNec
                         bleedRate  =
                               (effSev * effSev)
                             * kindBleedFactor (woundKind w)
@@ -301,7 +624,10 @@ tickOneUnit gt def dt inst
                             * bleedScale
                             / bleedCon
                         w'         = w { woundClot = newClot
-                                      , woundHeal = newHeal }
+                                      , woundHeal = newHeal
+                                      , woundInfection = newInf
+                                      , woundInfectionType = infType
+                                      , woundNecrosis = newNec }
                         healedOut  = effSev < woundCleanupThreshold
                         (wp', wr') = if bleedRate > wr
                                      then (woundPart w, bleedRate)
@@ -317,14 +643,26 @@ tickOneUnit gt def dt inst
                                      else scars
                     in ( if healedOut then ws else w' : ws
                        , drain + bleedRate * dt
-                       , wp', wr', scars' ))
-                ([], 0.0, "torso", 0.0, [])
+                       , wp', wr', scars', gen', immD' ))
+                ([], 0.0, "torso", 0.0, [], gen0, HM.empty)
                 (uiWounds inst)
+            -- Merge accrued immunity into the unit's map, then decay all
+            -- immunities very slowly; drop negligible entries.
+            mergedImm  = HM.unionWith (+) immMap0 immDelta
+            newImm     = HM.filter (> immunityFloor)
+                       $ HM.map (\v → max 0 (min 1 (v - immunityDecayRate * dt)))
+                                mergedImm
             newBlood   = uiBlood inst - totalDrain
             bodyMass   = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
             maxBlood   = bodyMass * 0.075
             unconsCut  = maxBlood * unconsciousFraction
             newWoundsR = reverse newWounds
+            -- Gangrene death: a VITAL part rotted past the lethal threshold.
+            -- (Non-vital rot-off is handled by propagateSevering below.)
+            gangrenousVital =
+                [ woundPart w | w ← newWoundsR
+                , woundNecrosis w ≥ necrosisLethalVital
+                , maybe False bpVital (HM.lookup (woundPart w) parts) ]
             -- Edge-triggered: fire DiedNow only on the tick blood
             -- crosses zero. Without the `uiBlood inst > 0` guard, a
             -- unit that died last tick (uiBlood = 0) would re-emit
@@ -333,16 +671,19 @@ tickOneUnit gt def dt inst
             -- away. Matches the existing UnconsciousNow gating, which
             -- already checks uiPose ≠ "collapsed" for the same reason.
             outcome
-                | uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart
+                | uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart "exsanguination"
+                | (g:_) ← gangrenousVital        = DiedNow g "gangrene"
                 | newBlood < unconsCut, uiPose inst /= "collapsed"
                                      = UnconsciousNow worstPart
                 | otherwise          = NoChange
             inst' = inst
                 { uiWounds = newWoundsR
                 , uiScars  = newScars <> uiScars inst
+                , uiImmuneResponse = newR
+                , uiImmunities = newImm
                 , uiBlood  = max 0 newBlood
                 }
-        in (propagateSevering def inst', outcome)
+        in (propagateSevering def inst', outcome, genFinal)
 
 -- | Severity at/above which a NON-VITAL part is "destroyed" (pulverised
 --   / cut through). A destroyed part takes its attached children with
@@ -361,12 +702,22 @@ destroyThreshold = 1.0
 propagateSevering ∷ UnitDef → UnitInstance → UnitInstance
 propagateSevering def inst =
     let parts     = udBodyParts def
+        partIdx   = HM.fromList [(bpId p, p) | p ← parts]
         sevOf w   = woundSeverity w
-        destroyed = HS.fromList
+        -- A part is destroyed by a pulverising fracture / a severing cut, OR
+        -- by rotting completely (woundNecrosis ≥ threshold). Necrotic VITAL
+        -- parts are excluded here — they kill via the gangrene death rule in
+        -- tickOneUnit, they don't "fall off".
+        destroyed = HS.fromList $
             [ woundPart w
             | w ← uiWounds inst
             , woundKind w ≡ "fracture" ∨ woundKind w ≡ "severed"
             , sevOf w ≥ destroyThreshold ]
+            ++
+            [ woundPart w
+            | w ← uiWounds inst
+            , woundNecrosis w ≥ necrosisDestroyThreshold
+            , not (maybe False bpVital (HM.lookup (woundPart w) partIdx)) ]
         -- Children whose parent is destroyed and that aren't already
         -- severed.
         alreadySevered = HS.fromList
@@ -382,7 +733,9 @@ propagateSevering def inst =
        else inst { uiWounds =
             [ Wound { woundPart = pid, woundKind = "severed"
                     , woundSeverity = 1.0, woundAt = woundAtNow
-                    , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = "" }
+                    , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = ""
+                    , woundInfection = 0.0, woundClean = False, woundInfectionType = ""
+                    , woundNecrosis = 0.0 }
             | pid ← toSever ] <> uiWounds inst }
   where
     -- Reuse the freshest wound's timestamp (avoids threading gameTime

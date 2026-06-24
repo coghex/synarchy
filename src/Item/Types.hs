@@ -170,6 +170,10 @@ data ItemDef = ItemDef
       -- ^ Stat modifiers conferred while the item is equipped.
       --   Applied via the existing uiModifiers system at equip time;
       --   removed on unequip. Empty list = no buffs.
+    , idInsulation  ∷ !Float
+      -- ^ Thermal insulation added while worn — slows the body's heat loss
+      --   (scripts/thermo.lua sums it over equipped+accessory items via
+      --   unit.getInsulation). 0 for non-clothing. Dress for the climate.
     } deriving (Show, Eq)
 
 -- | Per-unit instance. References its def by name; currentFill is for

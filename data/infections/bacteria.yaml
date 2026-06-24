@@ -1,0 +1,177 @@
+# Infection definitions — the data-driven catalogue of infections a wound
+# can develop. When a wound first festers (woundInfection begins to climb on
+# an open, un-disinfected wound), the engine SELECTS one of these by
+# weighted-random, gated by the wound's SITE and weighted by the local
+# CLIMATE. The local climate also scales how FAST infection sets in
+# (warm + wet → faster; cold + dry → slower).
+#
+# FIELD REFERENCE
+#   id            unique key (stored on the wound as woundInfectionType)
+#   name          display name ("Staph infection")
+#   icon          icon basename in assets/textures/icons/ (bacteria share one)
+#   category      bacterial | parasitic | fungal | viral | prion
+#                 (only `bacterial` is wired now; antibiotics cure ONLY this)
+#   site          which wounds it colonises:
+#                   surface = skin / soft-tissue, aerobic (slash, blunt, graze)
+#                   deep    = punctures / internal / crush, anaerobic
+#                 (a wound is classed deep if kind ∈ {stab, internal} or it
+#                  sits on a deep body part; else surface)
+#   base_weight   intrinsic commonality in its pool (higher = picked more)
+#   climate       favourable band — temp °C [min,max], moisture 0..1 [min,max].
+#                 Inside the band = full selection weight + full onset speed;
+#                 outside it falls off (never hard-zero, so a wound in a hostile
+#                 climate still eventually catches *something*, just rarely).
+#   aggressiveness  multiplies Ticker-A GROWTH speed once established (1.0 = base)
+#   infectability   multiplies the initial foothold + resistance to the immune
+#                   response (how readily it takes hold / how hard to clear).
+#                   The infection's progress is a RACE: growth (aggressiveness ×
+#                   how bad it already is) vs the unit's immune response (ramps
+#                   up over time, scaled by constitution + prior immunity, sped
+#                   by antibiotics). Win → cleared, leaving acquired immunity.
+#   curable_by    treatments that knock it down (only "antibiotics" exists now)
+#   cure_rate     multiplies how much a cure dose reduces it (1.0 = full)
+#   wound_infectable  if false, NEVER selected from a wound (prion: future
+#                     fecal / cannibalism path only)
+#   effects       free-form tags for special effects (DATA-ONLY hooks for now:
+#                   necrosis / gas / fever / neuro / chronic …)
+#   transmissibility  distance (tiles) the infection can spread (0 = none).
+#                     DATA-ONLY now; the transmission sim is a later slice.
+#   transmission  spread-vector tags: airborne | contact | vector | fluid
+#                   | fecal | meat (+ special cases). DATA-ONLY now.
+infections:
+
+  # ---- SURFACE / AEROBIC (skin & soft-tissue wounds) ----
+
+  - id: staph
+    name: "Staph infection"               # Staphylococcus aureus
+    icon: bacterial_infection
+    category: bacterial
+    site: [surface]
+    base_weight: 6.0                       # by far the most common — dominates skin
+    climate: { temp: [-20, 45], moisture: [0.0, 1.0] }   # ubiquitous, climate-blind
+    aggressiveness: 1.0
+    infectability: 1.2
+    curable_by: [antibiotics]
+    cure_rate: 1.0
+    wound_infectable: true
+    effects: []
+    transmissibility: 1.0
+    transmission: [contact]
+
+  - id: strep
+    name: "Strep infection"               # Streptococcus pyogenes
+    icon: bacterial_infection
+    category: bacterial
+    site: [surface]
+    base_weight: 2.5
+    climate: { temp: [-10, 45], moisture: [0.0, 1.0] }   # broad
+    aggressiveness: 1.3                    # can turn aggressive (necrotising)
+    infectability: 1.1
+    curable_by: [antibiotics]
+    cure_rate: 1.0
+    wound_infectable: true
+    effects: [necrosis]
+    transmissibility: 1.0
+    transmission: [contact, fluid]
+
+  - id: ecoli
+    name: "E. coli infection"             # Escherichia coli (enteric, dirty wounds)
+    icon: bacterial_infection
+    category: bacterial
+    site: [surface, deep]
+    base_weight: 1.0
+    climate: { temp: [10, 45], moisture: [0.4, 1.0] }    # warm & moist favoured
+    aggressiveness: 1.1
+    infectability: 1.0
+    curable_by: [antibiotics]
+    cure_rate: 1.0
+    wound_infectable: true
+    effects: []
+    transmissibility: 1.0
+    transmission: [contact, fecal, fluid]
+
+  # ---- DEEP / ANAEROBIC (punctures, internal, crush wounds) ----
+
+  - id: clostridium
+    name: "Gas gangrene"                  # Clostridium perfringens / tetani
+    icon: bacterial_infection
+    category: bacterial
+    site: [deep]
+    base_weight: 3.0                       # soil-borne, common in deep dirty wounds
+    climate: { temp: [5, 45], moisture: [0.2, 1.0] }
+    aggressiveness: 1.7                    # fast, dangerous
+    infectability: 1.5
+    curable_by: [antibiotics]
+    cure_rate: 0.85                        # harder to fully clear
+    wound_infectable: true
+    effects: [necrosis, gas]
+    transmissibility: 0.0                  # environmental, not unit-to-unit
+    transmission: []
+
+  - id: bacteroides
+    name: "Bacteroides infection"         # Bacteroides fragilis
+    icon: bacterial_infection
+    category: bacterial
+    site: [deep]
+    base_weight: 2.0
+    climate: { temp: [-5, 45], moisture: [0.0, 1.0] }    # broad
+    aggressiveness: 1.3
+    infectability: 1.0
+    curable_by: [antibiotics]
+    cure_rate: 1.0
+    wound_infectable: true
+    effects: []
+    transmissibility: 0.0
+    transmission: []
+
+  - id: peptostreptococcus
+    name: "Anaerobic strep"               # Peptostreptococcus
+    icon: bacterial_infection
+    category: bacterial
+    site: [deep]
+    base_weight: 1.5
+    climate: { temp: [-5, 45], moisture: [0.0, 1.0] }
+    aggressiveness: 1.2
+    infectability: 0.9
+    curable_by: [antibiotics]
+    cure_rate: 1.0
+    wound_infectable: true
+    effects: []
+    transmissibility: 0.0
+    transmission: []
+
+  - id: fusobacterium
+    name: "Fusobacterium infection"       # Fusobacterium necrophorum
+    icon: bacterial_infection
+    category: bacterial
+    site: [deep]
+    base_weight: 1.0
+    climate: { temp: [0, 45], moisture: [0.2, 1.0] }
+    aggressiveness: 1.4
+    infectability: 1.1
+    curable_by: [antibiotics]
+    cure_rate: 0.95
+    wound_infectable: true
+    effects: [necrosis]
+    transmissibility: 0.0
+    transmission: []
+
+  # ---- PRION (data-only stub; NEVER triggered from a wound) ----
+  # Future: contracted via the fecal route or eating same-species flesh.
+  # Incurable and effectively fatal. Listed now so the schema is exercised
+  # and the transmission tags are on record.
+  - id: prion_spongiform
+    name: "Spongiform infection"
+    icon: parasitic_infection             # placeholder until prion_infection.png
+    category: prion
+    site: []
+    base_weight: 0.0
+    climate: { temp: [-50, 50], moisture: [0.0, 1.0] }
+    aggressiveness: 0.4                    # slow but inexorable
+    infectability: 0.3
+    curable_by: []                         # incurable
+    cure_rate: 0.0
+    wound_infectable: false               # never from a wound
+    effects: [neuro, chronic]
+    transmissibility: 1.0
+    transmission: [fecal, meat, fluid]

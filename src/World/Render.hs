@@ -39,6 +39,7 @@ import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import Unit.Render (renderUnitQuads)
 import Building.Render (renderBuildingQuads, renderGhostQuad)
+import Structure.Render (renderStructureQuads)
 
 -- * Surface Headroom
 
@@ -147,6 +148,15 @@ updateWorldTiles env = do
                 zSlice = camZSlice camera
             renderBuildingQuads env facing zSlice effDepth tileAlpha
 
+    -- Structures (walls / floors / ceilings) — same iso-sorted quad path
+    -- as buildings, with each piece's own facemap slot.
+    structureQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            let facing = camFacing camera
+                zSlice = camZSlice camera
+            renderStructureQuads env facing zSlice effDepth tileAlpha
+
     ghostQuads ← if tileAlpha ≤ 0.001
         then return V.empty
         else do
@@ -182,6 +192,6 @@ updateWorldTiles env = do
 
     let allQuads = tileQuads <> worldCursorQuads <> spoilQuads
                 <> groundItemQuads
-                <> buildingQuads
+                <> buildingQuads <> structureQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
     return allQuads

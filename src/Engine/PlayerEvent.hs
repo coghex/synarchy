@@ -109,7 +109,7 @@ data CategoryCfg = CategoryCfg
       --   buttons that need event-specific data (e.g. @ActGoTo@) are
       --   silently skipped by the Lua popup module when the event
       --   has no payload.
-    , ccCoalesceWindow ∷ !Double
+    , ccPopupCoalesceWindow ∷ !Double
       -- ^ When >0, repeated events of this category within this
       --   many wall-seconds collapse into the same popup line
       --   (count bumped, text replaced with the most recent
@@ -117,6 +117,11 @@ data CategoryCfg = CategoryCfg
       --   line in the same popup. 0 (default) disables coalescing —
       --   every event spawns a fresh popup. Read by the Lua popup
       --   module via @getNotificationCfg@.
+    , ccLogCoalesceWindow ∷ !Double
+      -- ^ When >0, repeated LOG entries of this category within this
+      --   many GAME-seconds collapse into one event-log row with an
+      --   incremented count. 0 (default) disables log coalescing so
+      --   every emit keeps its own history entry.
     } deriving (Show, Eq, Generic)
 
 -- | The notification registry as held in 'EngineEnv'. Keyed by

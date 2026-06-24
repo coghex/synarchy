@@ -465,7 +465,9 @@ runResolution env logger im sm gt atkRaw tgtRaw mode atk adef tgt tdef = do
                 mkWound (pid, k, s) = Wound
                     { woundPart = pid, woundKind = k
                     , woundSeverity = s, woundAt = gt
-                    , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = "" }
+                    , woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0, woundDressing = ""
+                    , woundInfection = 0.0, woundClean = False, woundInfectionType = ""
+                    , woundNecrosis = 0.0 }
                 wounds = if null dist
                          then [ mkWound (partId, headKind, severity) ]
                          else map mkWound dist

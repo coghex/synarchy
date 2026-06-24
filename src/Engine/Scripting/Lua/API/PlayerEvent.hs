@@ -195,8 +195,8 @@ getNotificationCfgFn env = do
                     Lua.setfield (-2) "action"
                     Lua.rawseti (-2) j
                 Lua.setfield (-2) "buttons"
-                -- coalesceWindow: seconds (0 = disabled)
-                Lua.pushnumber (Lua.Number (ccCoalesceWindow c))
+                -- coalesceWindow: popup wall-seconds (0 = disabled)
+                Lua.pushnumber (Lua.Number (ccPopupCoalesceWindow c))
                 Lua.setfield (-2) "coalesceWindow"
                 Lua.rawseti (-2) i
     return 1
