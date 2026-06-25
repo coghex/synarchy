@@ -80,16 +80,15 @@ worldView.pendingGeneration = false
 -- Init
 -----------------------------------------------------------
 
-function worldView.init(width, height)
-    worldView.fbW = width
-    worldView.fbH = height
-    worldView.allHandles = {}
-
-    -- Count how many textures we need to load
-    local count = 0
-
-    -- Load structural textures
+-- Load the structural world textures (ocean/glacier/lava/blank/notexture
+-- + iso & vegetation facemaps) into worldView.structuralTextures.
+-- Idempotent: returns immediately if already loaded. Carries no
+-- dependency on framebuffer size, so it is safe to call from
+-- sendTexturesToWorld before worldView.init has run (the save-load path).
+function worldView.ensureStructuralTextures()
     local st = worldView.structuralTextures
+    if (st.blankTexture or -1) >= 0 then return end  -- already loaded
+
     st.ocean          = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk.png")
     st.glacier        = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk.png")
     st.lava           = engine.loadTexture("assets/textures/world/zoommap/lava_chunk.png")
@@ -133,6 +132,74 @@ function worldView.init(width, height)
     st.vegSlopeFaceMapNSW      = engine.loadTexture("assets/textures/world/facemap/vegface_slope_nsw.png")
     st.vegSlopeFaceMapESW      = engine.loadTexture("assets/textures/world/facemap/vegface_slope_esw.png")
     st.vegSlopeFaceMapNESW     = engine.loadTexture("assets/textures/world/facemap/vegface_slope_nesw.png")
+end
+
+-- Bind the structural world textures (ocean/blank/facemaps) to a world.
+-- Each world.setTexture busts the world's cached render quads, so calling
+-- this after the structural textures have actually GPU-loaded rebuilds the
+-- cache with valid bindless slots (fixes the magenta interior + missing
+-- facemaps caused by the cache being built before these late loads finished).
+function worldView.rebindStructural(worldId)
+    local st = worldView.structuralTextures
+    world.setTexture(worldId, "ocean",     st.ocean)
+    world.setTexture(worldId, "glacier",   st.glacier)
+    world.setTexture(worldId, "lava",      st.lava)
+    world.setTexture(worldId, "blank",     st.blankTexture)
+    world.setTexture(worldId, "notexture", st.noTexture)
+    world.setTexture(worldId, "iso_facemap",           st.isoFaceMap)
+    world.setTexture(worldId, "iso_slope_facemap_n",   st.isoSlopeFaceMapN)
+    world.setTexture(worldId, "iso_slope_facemap_e",   st.isoSlopeFaceMapE)
+    world.setTexture(worldId, "iso_slope_facemap_ne",  st.isoSlopeFaceMapNE)
+    world.setTexture(worldId, "iso_slope_facemap_s",   st.isoSlopeFaceMapS)
+    world.setTexture(worldId, "iso_slope_facemap_ns",  st.isoSlopeFaceMapNS)
+    world.setTexture(worldId, "iso_slope_facemap_es",  st.isoSlopeFaceMapES)
+    world.setTexture(worldId, "iso_slope_facemap_nes", st.isoSlopeFaceMapNES)
+    world.setTexture(worldId, "iso_slope_facemap_w",   st.isoSlopeFaceMapW)
+    world.setTexture(worldId, "iso_slope_facemap_nw",  st.isoSlopeFaceMapNW)
+    world.setTexture(worldId, "iso_slope_facemap_ew",  st.isoSlopeFaceMapEW)
+    world.setTexture(worldId, "iso_slope_facemap_new", st.isoSlopeFaceMapNEW)
+    world.setTexture(worldId, "iso_slope_facemap_sw",  st.isoSlopeFaceMapSW)
+    world.setTexture(worldId, "iso_slope_facemap_nsw", st.isoSlopeFaceMapNSW)
+    world.setTexture(worldId, "iso_slope_facemap_esw", st.isoSlopeFaceMapESW)
+    world.setTexture(worldId, "iso_slope_facemap_nesw",st.isoSlopeFaceMapNESW)
+    world.setTexture(worldId, "nofacemap",             st.noFaceMap)
+    -- Side face maps
+    world.setTexture(worldId, "side_facemap_left",   st.sideFaceMapLeft)
+    world.setTexture(worldId, "side_facemap_right",  st.sideFaceMapRight)
+    -- Vegetation facemaps
+    world.setTexture(worldId, "veg_facemap",              st.vegFaceMap)
+    world.setTexture(worldId, "veg_slope_facemap_n",      st.vegSlopeFaceMapN)
+    world.setTexture(worldId, "veg_slope_facemap_e",      st.vegSlopeFaceMapE)
+    world.setTexture(worldId, "veg_slope_facemap_ne",     st.vegSlopeFaceMapNE)
+    world.setTexture(worldId, "veg_slope_facemap_s",      st.vegSlopeFaceMapS)
+    world.setTexture(worldId, "veg_slope_facemap_ns",     st.vegSlopeFaceMapNS)
+    world.setTexture(worldId, "veg_slope_facemap_es",     st.vegSlopeFaceMapES)
+    world.setTexture(worldId, "veg_slope_facemap_nes",    st.vegSlopeFaceMapNES)
+    world.setTexture(worldId, "veg_slope_facemap_w",      st.vegSlopeFaceMapW)
+    world.setTexture(worldId, "veg_slope_facemap_nw",     st.vegSlopeFaceMapNW)
+    world.setTexture(worldId, "veg_slope_facemap_ew",     st.vegSlopeFaceMapEW)
+    world.setTexture(worldId, "veg_slope_facemap_new",    st.vegSlopeFaceMapNEW)
+    world.setTexture(worldId, "veg_slope_facemap_sw",     st.vegSlopeFaceMapSW)
+    world.setTexture(worldId, "veg_slope_facemap_nsw",    st.vegSlopeFaceMapNSW)
+    world.setTexture(worldId, "veg_slope_facemap_esw",    st.vegSlopeFaceMapESW)
+    world.setTexture(worldId, "veg_slope_facemap_nesw",   st.vegSlopeFaceMapNESW)
+end
+
+function worldView.init(width, height)
+    worldView.fbW = width
+    worldView.fbH = height
+    worldView.allHandles = {}
+
+    -- Count how many textures we need to load
+    local count = 0
+
+    -- Load structural textures (ocean/blank/facemaps). Extracted into a
+    -- shared idempotent helper so sendTexturesToWorld can guarantee these
+    -- handles exist even when it runs before this init (fresh-session
+    -- save-load) — otherwise structuralTextures.* stay -1 and the terrain
+    -- interior renders as the magenta blank tile.
+    worldView.ensureStructuralTextures()
+    local st = worldView.structuralTextures
 
     for _, handle in pairs(st) do
         worldView.allHandles[handle] = true
@@ -233,6 +300,17 @@ function worldView.createWorld()
         -- materials and vegetation textures sent via sendTexturesToWorld
     })
     worldManager.showWorld()
+
+    -- Structural textures (blank, facemaps) can still be GPU-loading when
+    -- the world's quad cache is first built, baking the undefined/magenta
+    -- slot + empty facemaps. The engine's own post-load cache invalidation
+    -- is unreliable here (it only touches already-visible worlds and races
+    -- the render thread's cache write-back). Re-bind the structural set ONCE
+    -- when world generation reports done (worldView.update polls for it): by
+    -- the time chunk generation finishes the small structural textures have
+    -- loaded, and the world.setTexture re-bind busts the stale quad cache so
+    -- it rebuilds with valid slots.
+    worldView.structuralRebound = false
 end
 
 -----------------------------------------------------------
@@ -300,6 +378,18 @@ end
 function worldView.update(dt)
     if not worldView.visible then return end
     worldManager.update(dt)
+
+    -- One-shot structural re-bind when world generation completes (phase 3).
+    -- Busts the stale quad cache so the interior + facemaps render with the
+    -- now-loaded textures. Polls only until it fires, then stops.
+    if worldView.structuralRebound == false and worldManager.isActive() then
+        local phase = world.getInitProgress()
+        if phase == 3 then
+            worldView.structuralRebound = true
+            local wid = worldManager.getCurrentWorld()
+            if wid then worldView.rebindStructural(wid) end
+        end
+    end
 end
 
 -----------------------------------------------------------
@@ -410,6 +500,14 @@ end
 -----------------------------------------------------------
 
 function worldView.sendTexturesToWorld(worldId)
+    -- Guarantee the structural textures exist before we bind them. The
+    -- save-load path (main_menu.loadAndShowSave) can reach here in a
+    -- fresh session before the world view was ever shown — i.e. before
+    -- uiManager.ensureWorldView lazily ran worldView.init — so without
+    -- this, structuralTextures.* are still -1 and "blank" binds to an
+    -- unloaded handle, rendering the terrain interior as magenta.
+    worldView.ensureStructuralTextures()
+
     if worldView.texturesLoadedCount < worldView.texturesNeeded then
         engine.logWarn("Cannot send textures, not all loaded yet ("
             .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
@@ -418,50 +516,10 @@ function worldView.sendTexturesToWorld(worldId)
 
     engine.logInfo("Sending textures to loaded world: " .. worldId)
 
-    -- Structural
-    local st = worldView.structuralTextures
-    world.setTexture(worldId, "ocean",     st.ocean)
-    world.setTexture(worldId, "glacier",   st.glacier)
-    world.setTexture(worldId, "lava",      st.lava)
-    world.setTexture(worldId, "blank",     st.blankTexture)
-    world.setTexture(worldId, "notexture", st.noTexture)
-    world.setTexture(worldId, "iso_facemap",           st.isoFaceMap)
-    world.setTexture(worldId, "iso_slope_facemap_n",   st.isoSlopeFaceMapN)
-    world.setTexture(worldId, "iso_slope_facemap_e",   st.isoSlopeFaceMapE)
-    world.setTexture(worldId, "iso_slope_facemap_ne",  st.isoSlopeFaceMapNE)
-    world.setTexture(worldId, "iso_slope_facemap_s",   st.isoSlopeFaceMapS)
-    world.setTexture(worldId, "iso_slope_facemap_ns",  st.isoSlopeFaceMapNS)
-    world.setTexture(worldId, "iso_slope_facemap_es",  st.isoSlopeFaceMapES)
-    world.setTexture(worldId, "iso_slope_facemap_nes", st.isoSlopeFaceMapNES)
-    world.setTexture(worldId, "iso_slope_facemap_w",   st.isoSlopeFaceMapW)
-    world.setTexture(worldId, "iso_slope_facemap_nw",  st.isoSlopeFaceMapNW)
-    world.setTexture(worldId, "iso_slope_facemap_ew",  st.isoSlopeFaceMapEW)
-    world.setTexture(worldId, "iso_slope_facemap_new", st.isoSlopeFaceMapNEW)
-    world.setTexture(worldId, "iso_slope_facemap_sw",  st.isoSlopeFaceMapSW)
-    world.setTexture(worldId, "iso_slope_facemap_nsw", st.isoSlopeFaceMapNSW)
-    world.setTexture(worldId, "iso_slope_facemap_esw", st.isoSlopeFaceMapESW)
-    world.setTexture(worldId, "iso_slope_facemap_nesw",st.isoSlopeFaceMapNESW)
-    world.setTexture(worldId, "nofacemap",             st.noFaceMap)
-    -- Side face maps
-    world.setTexture(worldId, "side_facemap_left",   st.sideFaceMapLeft)
-    world.setTexture(worldId, "side_facemap_right",  st.sideFaceMapRight)
-    -- Vegetation facemaps
-    world.setTexture(worldId, "veg_facemap",              st.vegFaceMap)
-    world.setTexture(worldId, "veg_slope_facemap_n",      st.vegSlopeFaceMapN)
-    world.setTexture(worldId, "veg_slope_facemap_e",      st.vegSlopeFaceMapE)
-    world.setTexture(worldId, "veg_slope_facemap_ne",     st.vegSlopeFaceMapNE)
-    world.setTexture(worldId, "veg_slope_facemap_s",      st.vegSlopeFaceMapS)
-    world.setTexture(worldId, "veg_slope_facemap_ns",     st.vegSlopeFaceMapNS)
-    world.setTexture(worldId, "veg_slope_facemap_es",     st.vegSlopeFaceMapES)
-    world.setTexture(worldId, "veg_slope_facemap_nes",    st.vegSlopeFaceMapNES)
-    world.setTexture(worldId, "veg_slope_facemap_w",      st.vegSlopeFaceMapW)
-    world.setTexture(worldId, "veg_slope_facemap_nw",     st.vegSlopeFaceMapNW)
-    world.setTexture(worldId, "veg_slope_facemap_ew",     st.vegSlopeFaceMapEW)
-    world.setTexture(worldId, "veg_slope_facemap_new",    st.vegSlopeFaceMapNEW)
-    world.setTexture(worldId, "veg_slope_facemap_sw",     st.vegSlopeFaceMapSW)
-    world.setTexture(worldId, "veg_slope_facemap_nsw",    st.vegSlopeFaceMapNSW)
-    world.setTexture(worldId, "veg_slope_facemap_esw",    st.vegSlopeFaceMapESW)
-    world.setTexture(worldId, "veg_slope_facemap_nesw",   st.vegSlopeFaceMapNESW)
+    -- Structural (ocean/blank/facemaps). Bound via a shared helper so the
+    -- post-load rebind (worldView.onAssetLoaded) can re-issue exactly these
+    -- bindings to bust a stale quad cache.
+    worldView.rebindStructural(worldId)
 
     -- Vegetation tiles: look up from registry by numeric ID
     -- 17 types × 4 variants = IDs 1..68
