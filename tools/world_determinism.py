@@ -2,8 +2,23 @@
 """World generation determinism checker.
 
 Runs the synarchy --dump command N times for the same seed and verifies
-that the output is byte-identical across runs. If any run differs, reports
-which tiles differ and how.
+that the output is CONTENT-identical across runs: the same set of tiles,
+each with the same field values. If any run differs, reports which tiles
+differ and how.
+
+This is a content check, not a byte check. Tiles and JSON keys are sorted
+into a canonical form before hashing (see `canonical_dump`), so a run
+passes as long as the world *state* is reproducible — regardless of the
+order tiles happen to be laid out in the dump array.
+
+That is deliberate. Dump emission order is already a deterministic
+function of the requested region (app/Main.hs `dumpTilesJSON` iterates
+chunks then tiles in fixed order over settled state), so array order is
+not part of the world-determinism contract this tool guards. The tool
+exists to catch race conditions in chunk *generation* — i.e. content
+drift — and to be a precondition for the pure-pipeline refactor, which
+may legitimately reorder output; a benign reordering should not be
+reported as nondeterminism.
 
 Used to detect race conditions in chunk generation. A passing check is a
 necessary precondition for the pure pipeline refactor.
@@ -56,7 +71,15 @@ def run_dump(seed: int, world_size: int,
 # ----- Canonical hashing ---------------------------------------------------
 
 def canonical_dump(data: list[dict[str, Any]]) -> bytes:
-    """Sort tiles by (x, y) and serialize with sorted keys for stable hashing."""
+    """Canonical content form of a dump, independent of array/key order.
+
+    Sorts tiles by (x, y) and serializes each with sorted keys, so two
+    dumps with identical tile content hash equal even if the tiles appear
+    in a different array order or the JSON objects list their keys in a
+    different order. This defines the "content-identical" relation the
+    checker verifies — see the module docstring for why ordering is
+    normalized rather than enforced.
+    """
     sorted_tiles = sorted(data, key=lambda t: (t["x"], t["y"]))
     return json.dumps(sorted_tiles, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -153,11 +176,11 @@ def main() -> int:
     unique_hashes = set(hashes)
 
     if len(unique_hashes) == 1:
-        print(f"PASS: all {args.runs} runs produced identical output")
-        print(f"  hash: {hashes[0]}")
+        print(f"PASS: all {args.runs} runs produced content-identical output")
+        print(f"  content hash: {hashes[0]}")
         return 0
 
-    print(f"FAIL: {len(unique_hashes)} distinct outputs across {args.runs} runs",
+    print(f"FAIL: {len(unique_hashes)} distinct contents across {args.runs} runs",
           file=sys.stderr)
     print(f"  hashes: {[h[:16] + '...' for h in hashes]}", file=sys.stderr)
 
