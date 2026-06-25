@@ -110,7 +110,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
-        dayOfYear = wdDay worldDate
+        -- Annual-cycle flora wants a year-relative ordinal day, not the
+        -- day-of-month field. Convert through the world calendar (falling
+        -- back to the default calendar when gen params aren't loaded yet).
+        calendar = maybe defaultCalendarConfig wgpCalender paramsM
+        dayOfYear = worldDateToDayOfYear calendar worldDate
 
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
