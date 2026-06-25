@@ -27,6 +27,7 @@ import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
+import qualified Test.Headless.World.Calendar as Calendar
 
 main ∷ IO ()
 main = hspec $ do
@@ -60,3 +61,4 @@ main = hspec $ do
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Input.KeyNames" InputKeyNames.spec
+    describe "World.Calendar" Calendar.spec

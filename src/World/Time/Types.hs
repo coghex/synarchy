@@ -6,6 +6,7 @@ module World.Time.Types
     , advanceWorldTime
     , WorldDate(..)
     , defaultWorldDate
+    , worldDateToDayOfYear
     , CalendarConfig(..)
     , defaultCalendarConfig
     , SunConfig(..)
@@ -56,10 +57,24 @@ advanceWorldTime timeScale dtSeconds (WorldTime h m) =
 
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.
+--
+--   Calendar contract: the simplified world calendar gives every month
+--   the same length ('ccDaysPerMonth'), so a year has
+--   @ccDaysPerMonth * ccMonthsPerYear@ days. The fields below are
+--   /calendar/ components, NOT a year-relative day:
+--
+--     * 'wdMonth' is the month-of-year (@1 .. ccMonthsPerYear@).
+--     * 'wdDay'   is the day-of-/month/ (@1 .. ccDaysPerMonth@).
+--
+--   Anything that needs a year-relative \"ordinal day\" (e.g. flora
+--   annual-cycle stage selection) must convert through
+--   'worldDateToDayOfYear' — passing 'wdDay' directly aliases
+--   day-of-month with day-of-year and can never reach stages past the
+--   first month.
 data WorldDate = WorldDate
     { wdYear  ∷ !Int
-    , wdMonth ∷ !Int   -- ^ 1-12
-    , wdDay   ∷ !Int   -- ^ 1-31
+    , wdMonth ∷ !Int   -- ^ month-of-year, 1 .. ccMonthsPerYear
+    , wdDay   ∷ !Int   -- ^ day-of-month, 1 .. ccDaysPerMonth
     } deriving (Show, Eq)
 
 defaultWorldDate ∷ WorldDate
@@ -68,6 +83,31 @@ defaultWorldDate = WorldDate
     , wdMonth = 1
     , wdDay   = 1
     }
+
+-- | Convert a 'WorldDate' to a zero-based ordinal day-of-year, using the
+--   calendar's fixed month length.
+--
+--   The result is the number of whole days elapsed since the first day
+--   of the year, in @[0 .. daysPerYear - 1]@ where
+--   @daysPerYear = ccDaysPerMonth * ccMonthsPerYear@:
+--
+--     * month 1, day 1   → 0   (first day of the year)
+--     * month 1, day 2   → 1
+--     * the last day     → daysPerYear - 1
+--
+--   Zero-based to match how annual-cycle stage start days are authored
+--   (a stage beginning on the first day of the year uses start day 0).
+--   'wdMonth' and 'wdDay' are clamped into their valid ranges first, so
+--   an out-of-range 'WorldDate' can never produce a negative or
+--   past-end-of-year result. 'wdYear' is ignored: the cycle repeats
+--   every year.
+worldDateToDayOfYear ∷ CalendarConfig → WorldDate → Int
+worldDateToDayOfYear cc (WorldDate _ month day) =
+    let dpm = max 1 (ccDaysPerMonth cc)
+        mpy = max 1 (ccMonthsPerYear cc)
+        m   = max 1 (min mpy month)
+        d   = max 1 (min dpm day)
+    in (m - 1) * dpm + (d - 1)
 
 data CalendarConfig = CalendarConfig
     { ccDaysPerMonth  ∷ !Int      -- ^ e.g. 30

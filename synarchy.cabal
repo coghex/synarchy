@@ -162,6 +162,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Magma.Shape
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
+                   Test.Headless.World.Calendar
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash

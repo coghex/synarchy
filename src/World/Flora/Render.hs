@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Flora.Render
     ( resolveFloraTexture
+    , findActiveCycleStage  -- exported for annual-cycle selection tests
     ) where
 
 import UPrelude
