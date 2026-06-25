@@ -11,7 +11,11 @@ import json
 import subprocess
 import sys
 import argparse
+import os
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import river_thresholds as rt
 
 def parse_args():
     p = argparse.ArgumentParser(description="River placement stress test")
@@ -21,9 +25,13 @@ def parse_args():
     p.add_argument("--region", type=str, default="-4,-4,4,4")
     p.add_argument("--start-seed", type=int, default=1,
                    help="First seed to test")
+    # Thresholds shared with test_river_pour.py via tools/river_thresholds.py.
+    p.add_argument("--max-visible-drops", type=int, default=rt.MAX_VISIBLE_DROPS)
+    p.add_argument("--max-dry-gaps", type=int, default=rt.MAX_DRY_GAPS)
+    p.add_argument("--max-mask-dry", type=int, default=rt.MAX_MASK_DRY)
     return p.parse_args()
 
-def run_one_seed(seed, worldSize, region):
+def run_one_seed(seed, worldSize, region, thresholds):
     """Run dump + analysis for one seed. Returns (passed, stats_dict)."""
     cmd = [
         "cabal", "run", "exe:synarchy", "--",
@@ -93,15 +101,25 @@ def run_one_seed(seed, worldSize, region):
         "mask_dry": mask_dry,
     }
 
-    passed = vis_drops == 0 and dry_gaps <= 20 and mask_dry <= 30
+    passed = (vis_drops <= thresholds["visible_drops"]
+              and dry_gaps <= thresholds["dry_gaps"]
+              and mask_dry <= thresholds["mask_dry"])
     return passed, stats
 
 def main():
     args = parse_args()
     seeds = list(range(args.start_seed, args.start_seed + args.seeds))
+    thresholds = {
+        "visible_drops": args.max_visible_drops,
+        "dry_gaps": args.max_dry_gaps,
+        "mask_dry": args.max_mask_dry,
+    }
 
     print(f"River placement stress test: {len(seeds)} seeds, "
           f"worldSize={args.worldSize}, region={args.region}")
+    print(f"Thresholds: drops<={thresholds['visible_drops']}  "
+          f"dry_gaps<={thresholds['dry_gaps']}  "
+          f"mask_dry<={thresholds['mask_dry']}")
     print("=" * 70)
 
     results = []
@@ -110,7 +128,7 @@ def main():
 
     for i, seed in enumerate(seeds):
         t0 = time.time()
-        passed, stats = run_one_seed(seed, args.worldSize, args.region)
+        passed, stats = run_one_seed(seed, args.worldSize, args.region, thresholds)
         elapsed = time.time() - t0
 
         status = "PASS" if passed else "FAIL"

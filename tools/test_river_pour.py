@@ -22,7 +22,11 @@ import json
 import subprocess
 import sys
 import argparse
+import os
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import river_thresholds as rt
 
 CHUNK_SIZE = 16
 
@@ -37,11 +41,12 @@ def parse_args():
     p.add_argument("--region", type=str, default=None,
                    help="chunk region cx1,cy1,cx2,cy2 (triggers cabal --dump when set without a path)")
     p.add_argument("--verbose", "-v", action="store_true")
-    # Thresholds for pass/fail
-    p.add_argument("--max-visible-drops", type=int, default=0)
-    p.add_argument("--max-dry-gaps", type=int, default=15)
-    p.add_argument("--max-mask-dry", type=int, default=30)
-    p.add_argument("--max-coastal-parallel", type=int, default=5)
+    # Thresholds for pass/fail (shared with test_river_stress.py via
+    # tools/river_thresholds.py — keep them in sync there, not here).
+    p.add_argument("--max-visible-drops", type=int, default=rt.MAX_VISIBLE_DROPS)
+    p.add_argument("--max-dry-gaps", type=int, default=rt.MAX_DRY_GAPS)
+    p.add_argument("--max-mask-dry", type=int, default=rt.MAX_MASK_DRY)
+    p.add_argument("--max-coastal-parallel", type=int, default=rt.MAX_COASTAL_PARALLEL)
     return p.parse_args()
 
 def run_dump(seed, worldSize, region):
