@@ -41,7 +41,7 @@ import qualified Data.Sequence as Seq
 import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
 import Combat.Types (CombatEvent(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Engine.Core.Log (logDebug, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
@@ -386,12 +386,12 @@ tickAllWounds env dt = do
     -- Active world's climate, for per-unit infection selection + onset speed.
     -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.
     mClim ← do
-        manager ← readIORef (worldManagerRef env)
-        case wmWorlds manager of
-            ((_, ws):_) → do
+        mWs ← activeWorldState env
+        case mWs of
+            Just ws → do
                 mp ← readIORef (wsGenParamsRef ws)
                 pure (fmap (\p → (wgpClimateState p, wgpWorldSize p)) mp)
-            [] → pure Nothing
+            Nothing → pure Nothing
     -- One independent generator for this tick's infection-type rolls; split
     -- off statRNGRef (advances the master) so we don't race other consumers.
     tickGen ← atomicModifyIORef' (statRNGRef env) Random.splitGen

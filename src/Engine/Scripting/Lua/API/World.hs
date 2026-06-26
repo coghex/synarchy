@@ -66,7 +66,7 @@ import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Control.Monad (when, forM_)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
@@ -1165,9 +1165,9 @@ worldSetToolModeFn env = do
 --   see the world thread's view of the tool state.
 worldGetToolModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetToolModeFn env = do
-    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, ws):_) → do
+    mWs ← Lua.liftIO $ activeWorldState env
+    case mWs of
+        Just ws → do
             tm ← Lua.liftIO $ readIORef (wsToolModeRef ws)
             let s = case tm of
                     InfoTool    → "info"
@@ -1175,7 +1175,7 @@ worldGetToolModeFn env = do
                     MineTool    → "mine"
             Lua.pushstring s
             return 1
-        [] → do
+        Nothing → do
             Lua.pushnil
             return 1
 
@@ -1189,9 +1189,9 @@ worldGetToolModeFn env = do
 --   the 4th value (stage) is simply ignored by those callers.
 worldGetInitProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetInitProgressFn env = do
-    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, worldState):_) → do
+    mWs ← Lua.liftIO $ activeWorldState env
+    case mWs of
+        Just worldState → do
             phase ← Lua.liftIO $ readIORef (wsLoadPhaseRef worldState)
             case phase of
                 LoadIdle → do
@@ -1215,7 +1215,7 @@ worldGetInitProgressFn env = do
                     Lua.pushinteger 1
                     Lua.pushstring "done"
             return 4
-        [] → do
+        Nothing → do
             Lua.pushinteger 0
             Lua.pushinteger 0
             Lua.pushinteger 0
@@ -1238,16 +1238,16 @@ worldWaitForInitFn env = do
   where
     waitLoop 0 = return ()
     waitLoop n = do
-        manager ← readIORef (worldManagerRef env)
-        case wmWorlds manager of
-            ((_, ws):_) → do
+        mWs ← activeWorldState env
+        case mWs of
+            Just ws → do
                 phase ← readIORef (wsLoadPhaseRef ws)
                 case phase of
                     LoadDone → return ()
                     _        → do
                         threadDelay 250000
                         waitLoop (n - 1)
-            [] → do
+            Nothing → do
                 threadDelay 250000
                 waitLoop (n - 1)
 

@@ -23,7 +23,7 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Directory (doesFileExist)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
@@ -195,13 +195,7 @@ loadItemYamlFn env backendState = do
 -- | Resolve the active (first visible) world's state — ground items
 --   live on the world page being played.
 activeWorld ∷ EngineEnv → IO (Maybe WorldState)
-activeWorld env = do
-    mgr ← readIORef (worldManagerRef env)
-    pure $ case wmVisible mgr of
-        (pid:_) → lookup pid (wmWorlds mgr)
-        []      → case wmWorlds mgr of
-            ((_, ws):_) → Just ws
-            []          → Nothing
+activeWorld = activeWorldState
 
 -- | item.listDefs() → array of {name, displayName, category, weight}
 --   Sorted by name for a stable debug-overlay listing.

@@ -22,7 +22,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldState)
 import World.Types
 import World.Geology.Timeline.Types
 import World.Hydrology.Types
@@ -38,10 +38,10 @@ import World.Generate (globalToChunk, viewDepth)
 -- | Helper: get the first active world's tile data
 getWorldTileData ∷ EngineEnv → IO (Maybe WorldTileData)
 getWorldTileData env = do
-    manager ← readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, ws):_) → Just <$> readIORef (wsTilesRef ws)
-        []          → pure Nothing
+    mWs ← activeWorldState env
+    case mWs of
+        Just ws → Just <$> readIORef (wsTilesRef ws)
+        Nothing → pure Nothing
 
 -- | Helper: the WorldState of the currently VISIBLE world (head of
 --   wmVisible), looked up in wmWorlds. This is the world rendering and
@@ -278,10 +278,10 @@ worldGetAreaFluidFn env = do
 -- | Helper: get the first active world's gen params
 getWorldGenParams ∷ EngineEnv → IO (Maybe WorldGenParams)
 getWorldGenParams env = do
-    manager ← readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, ws):_) → readIORef (wsGenParamsRef ws)
-        []          → pure Nothing
+    mWs ← activeWorldState env
+    case mWs of
+        Just ws → readIORef (wsGenParamsRef ws)
+        Nothing → pure Nothing
 
 -- | world.getClimateAt(gx, gy) → { temp, summerTemp, winterTemp, precip,
 --   humidity, snow } | nil. Region climate sampled (bilinear) at a global
@@ -416,9 +416,9 @@ worldLoadChunksInRegionFn env = do
                          , y ← [min cy1 cy2 .. max cy1 cy2]
                          ]
             count ← Lua.liftIO $ do
-                manager ← readIORef (worldManagerRef env)
-                case wmWorlds manager of
-                    ((_, ws):_) → do
+                mWs ← activeWorldState env
+                case mWs of
+                    Just ws → do
                         -- Filter the requested coords against both the loaded
                         -- tiles and the pending/in-flight queue, race-free
                         -- against the world thread's load handoff.
@@ -446,7 +446,7 @@ worldLoadChunksInRegionFn env = do
                         -- removed (loaded) some coords in between.
                         atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                             (q ++ needed, length needed)
-                    [] → pure 0
+                    Nothing → pure 0
             Lua.pushinteger (fromIntegral count)
             return 1
         _ → do
@@ -477,10 +477,10 @@ worldWaitForChunksFn env = do
                 threadDelay 250000
                 waitLoop (n - 1)
     checkRemaining = do
-        manager ← readIORef (worldManagerRef env)
-        case wmWorlds manager of
-            ((_, ws):_) → length <$> readIORef (wsInitQueueRef ws)
-            []          → pure 0
+        mWs ← activeWorldState env
+        case mWs of
+            Just ws → length <$> readIORef (wsInitQueueRef ws)
+            Nothing → pure 0
 
 -- | world.getHoverTile() → gx, gy or nil
 --   Returns the tile coordinates currently under the mouse cursor in
@@ -489,9 +489,9 @@ worldWaitForChunksFn env = do
 --   isometric tilt, camera facing, elevation, and u-wrap boundary.
 worldGetHoverTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetHoverTileFn env = do
-    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, ws):_) → do
+    mWs ← Lua.liftIO $ activeWorldState env
+    case mWs of
+        Just ws → do
             cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
             case worldHoverTile cs of
                 Just (gx, gy) → do
@@ -501,7 +501,7 @@ worldGetHoverTileFn env = do
                 Nothing → do
                     Lua.pushnil
                     return 1
-        [] → do
+        Nothing → do
             Lua.pushnil
             return 1
 
@@ -513,9 +513,9 @@ worldGetHoverTileFn env = do
 --   to the tile center.
 worldGetHoverPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetHoverPosFn env = do
-    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, ws):_) → do
+    mWs ← Lua.liftIO $ activeWorldState env
+    case mWs of
+        Just ws → do
             cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
             case worldHoverPos cs of
                 Just (hx, hy) → do
@@ -525,7 +525,7 @@ worldGetHoverPosFn env = do
                 Nothing → do
                     Lua.pushnil
                     return 1
-        [] → do
+        Nothing → do
             Lua.pushnil
             return 1
 

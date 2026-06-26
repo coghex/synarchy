@@ -104,7 +104,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -1617,13 +1617,7 @@ unitDropEquipmentToGroundFn env = do
 -- | The active (shown) world, or the first one if none is explicitly
 --   shown. Mirrors the helper in API.Items.
 activeWorldU ∷ EngineEnv → IO (Maybe WorldState)
-activeWorldU env = do
-    mgr ← readIORef (worldManagerRef env)
-    pure $ case wmVisible mgr of
-        (pid:_) → lookup pid (wmWorlds mgr)
-        []      → case wmWorlds mgr of
-            ((_, ws):_) → Just ws
-            []          → Nothing
+activeWorldU = activeWorldState
 
 -- | unit.transferItemToBuilding(uid, bid, defName) → bool. Atomic
 --   move of one ItemInstance from the unit's inventory to the

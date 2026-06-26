@@ -29,7 +29,7 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, GridConfig(..), defaultGridConfig
                   , applyFacingF, gridToScreen)
-import World.Types (wmWorlds, wsTilesRef)
+import World.Types (WorldState, wsTilesRef)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))
 import Structure.Types
@@ -39,13 +39,14 @@ baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
 baseTileH ∷ Float
 baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
-renderStructureQuads ∷ EngineEnv → CameraFacing → Int → Int → Float
+-- | Gather structure quads for ONE world's state. The caller iterates the
+--   visible-world list (same source of truth as the terrain / ground-item /
+--   spoil passes) rather than this picking a world itself — historically it
+--   grabbed the head of @wmWorlds@ and could render a hidden world's
+--   structures over the visible one (#72).
+renderStructureQuads ∷ EngineEnv → WorldState → CameraFacing → Int → Int → Float
                      → IO (V.Vector SortableQuad)
-renderStructureQuads env facing zSlice effDepth tileAlpha = do
-    mgr ← readIORef (worldManagerRef env)
-    case wmWorlds mgr of
-        [] → return V.empty
-        ((_, ws):_) → do
+renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
             td      ← readIORef (wsTilesRef ws)
             handles ← readIORef (texPaletteHandlesRef env)
             -- Gather structures across ALL loaded chunks' overlays, resolving
