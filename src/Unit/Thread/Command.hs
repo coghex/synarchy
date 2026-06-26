@@ -662,9 +662,16 @@ handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
                     -- No frames to play (stride skipped past the whole
                     -- animation, or no transition anim exists): resolve
                     -- immediately to the target pose rather than forcing a
-                    -- one-frame TransitioningTo state.
-                    let ss' = ss { usPose  = target
-                                 , usState = Idle
+                    -- one-frame TransitioningTo state. Clear the move target
+                    -- and local path just like the normal branch — otherwise
+                    -- the unit keeps moving in the same tick after the
+                    -- "instant" pose switch (commands run before
+                    -- tickAllMovement), which can leave e.g. a crouching unit
+                    -- walking.
+                    let ss' = ss { usPose      = target
+                                 , usState     = Idle
+                                 , usTarget    = Nothing
+                                 , usLocalPath = []
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
                 | otherwise →
