@@ -34,7 +34,8 @@ import Engine.Core.State (EngineEnv(..), EngineLifecycle(..)
 import Engine.Core.Types (EngineConfig(..), BootProfile(..))
 import Engine.Core.Thread (shutdownThread)
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
-                                   , SystemError(..), mkErrorContext)
+                                   , SystemError(..), mkErrorContext
+                                   , throwEngineException)
 import qualified Data.Text as T
 import Engine.Core.Log (LogCategory(..), LoggerState(..), LogBackend(..)
                        , shutdownLogger)
@@ -344,7 +345,12 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
         -- Timeout scales with worldSize (gen time grows ~ quadratic
         -- with worldSize, not with plate count). Min 300s for tiny
         -- worlds, plenty of headroom for the largest practical sizes.
-        liftIO $ waitForInit env' (max 300 (worldSize * 4))
+        initOk ← liftIO $ waitForInit env' (max 300 (worldSize * 4))
+        unless initOk $ throwEngineException $ EngineException
+            (ExSystem (TimeoutError
+                "dump: world generation did not complete in time"))
+            "dump aborted before emitting output"
+            mkErrorContext
 
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldShow (WorldPageId "dump"))
@@ -365,7 +371,12 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                         ⧺ show (length needed) ⧺ " chunks"
                 [] → hPutStrLn stderr "dump: no world found"
 
-        liftIO $ waitForChunks env' 300
+        chunksOk ← liftIO $ waitForChunks env' 300
+        unless chunksOk $ throwEngineException $ EngineException
+            (ExSystem (TimeoutError
+                "dump: chunk load did not complete in time"))
+            "dump aborted before emitting output"
+            mkErrorContext
 
         -- Run the sim thread's settle iterations synchronously so the
         -- dump sees a stable state. The sim was paused at the start
@@ -453,7 +464,9 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
   case result of
     Left err → do
-        putStrLn $ displayException err
+        -- Errors go to stderr so a failed dump never pollutes the JSON
+        -- stdout channel with success-shaped output.
+        hPutStrLn stderr $ displayException err
         shutdownThread combatThreadState
         shutdownThread simThreadState
         shutdownThread unitThreadState
@@ -468,35 +481,50 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
 
 -- | Poll until world generation is done. The argument is a timeout in
 --   /seconds/; internally we poll every 250ms (4 iterations per second).
-waitForInit ∷ EngineEnv → Int → IO ()
+--   Returns 'True' on completion, 'False' on timeout so the caller can
+--   fail the dump rather than emit partial output.
+waitForInit ∷ EngineEnv → Int → IO Bool
 waitForInit env seconds = go (seconds * pollsPerSecond)
   where
-    go 0 = hPutStrLn stderr "dump: init timeout"
+    -- Check readiness BEFORE deciding to time out, so a completion that
+    -- lands in the final poll window (after the last sleep) is still
+    -- counted as success rather than a spurious timeout.
     go n = do
         manager ← readIORef (worldManagerRef env)
-        case wmWorlds manager of
+        done ← case wmWorlds manager of
             ((_, ws):_) → do
                 phase ← readIORef (wsLoadPhaseRef ws)
-                case phase of
-                    LoadDone → hPutStrLn stderr "dump: init complete"
-                    _        → threadDelay pollInterval >> go (n - 1)
-            [] → threadDelay pollInterval >> go (n - 1)
+                pure $ case phase of
+                    LoadDone → True
+                    _        → False
+            [] → pure False
+        if done
+            then hPutStrLn stderr "dump: init complete" >> pure True
+            else if n ≤ 0
+                then hPutStrLn stderr "dump: init timeout" >> pure False
+                else threadDelay pollInterval >> go (n - 1)
 
 -- | Poll until chunk init queue is empty. The argument is a timeout in
 --   /seconds/; internally we poll every 250ms (4 iterations per second).
-waitForChunks ∷ EngineEnv → Int → IO ()
+--   Returns 'True' once the queue drains, 'False' on timeout so the
+--   caller can fail the dump rather than emit partial output.
+waitForChunks ∷ EngineEnv → Int → IO Bool
 waitForChunks env seconds = go (seconds * pollsPerSecond)
   where
-    go 0 = hPutStrLn stderr "dump: chunk load timeout"
+    -- Check readiness BEFORE deciding to time out (see 'waitForInit').
     go n = do
         manager ← readIORef (worldManagerRef env)
-        case wmWorlds manager of
+        done ← case wmWorlds manager of
             ((_, ws):_) → do
                 remaining ← length <$> readIORef (wsInitQueueRef ws)
-                if remaining ≡ 0
-                    then hPutStrLn stderr "dump: all chunks loaded"
-                    else threadDelay pollInterval >> go (n - 1)
-            [] → threadDelay pollInterval >> go (n - 1)
+                pure (remaining ≡ 0)
+            [] → pure False
+        if done
+            then hPutStrLn stderr "dump: all chunks loaded" >> pure True
+            else if n ≤ 0
+                then hPutStrLn stderr "dump: chunk load timeout"
+                        >> pure False
+                else threadDelay pollInterval >> go (n - 1)
 
 -- | Poll cadence for the dump-mode wait helpers: a 250ms sleep between
 --   checks, so four polls make up one second of timeout budget.
