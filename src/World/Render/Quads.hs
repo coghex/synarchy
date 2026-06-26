@@ -228,7 +228,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 -- drops over cliff edges
                 !waterSideQuads = if chunkHasFluid
                     then waterSideFaceQuads lookupSlot lookupFmSlot textures facing
-                             coord fluidMap terrainSurfMap zSlice effectiveDepth
+                             coord fluidMap terrainSurfMap
+                             fluidMapLookup terrMapLookup zSlice effectiveDepth
                              zoomAlpha xOffset vb
                     else []
 

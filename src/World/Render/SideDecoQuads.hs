@@ -31,14 +31,19 @@ waterSideFaceQuads ∷ (TextureHandle → Int)
                    → WorldTextures
                    → CameraFacing
                    → ChunkCoord
-                   → V.Vector (Maybe FluidCell)  -- ^ fluid map
-                   → VU.Vector Int               -- ^ terrain surface map
+                   → V.Vector (Maybe FluidCell)  -- ^ this chunk's fluid map
+                   → VU.Vector Int               -- ^ this chunk's terrain surface map
+                   → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
+                                                 -- ^ neighbour-chunk fluid lookup
+                   → (ChunkCoord → Maybe (VU.Vector Int))
+                                                 -- ^ neighbour-chunk terrain lookup
                    → Int → Int                   -- ^ zSlice, effectiveDepth
                    → Float → Float               -- ^ tileAlpha, xOffset
                    → ViewBounds
                    → [SortableQuad]
 waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
-                   fluidMap terrainSurfMap zSlice effDepth tileAlpha xOffset vb =
+                   fluidMap terrainSurfMap fluidLookup terrLookup
+                   zSlice effDepth tileAlpha xOffset vb =
     [ sq
     | lx ← [0 .. chunkSize - 1]
     , ly ← [0 .. chunkSize - 1]
@@ -46,13 +51,13 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
     , Just fc ← [fluidMap V.! idx]
     , fcType fc ≢ Ocean
     , let mySurf = fcSurface fc
-    -- Check each camera-visible cardinal neighbor
+    -- Check each camera-visible cardinal neighbor. A neighbor can sit in
+    -- the adjacent chunk (a waterfall/cliff right at a seam): resolve it
+    -- through the cross-chunk lookup exactly as waterSlopeAt does, so side
+    -- faces don't vanish at chunk boundaries.
     , (nx, ny, isLeftFace) ← neighborDirs facing lx ly
-    , nx ≥ 0, nx < chunkSize, ny ≥ 0, ny < chunkSize
-    , let nIdx = columnIndex nx ny
-          nFluid = fluidMap V.! nIdx
-          nTerrZ = terrainSurfMap VU.! nIdx
-          -- Bottom of the side-face stack depends on neighbor type:
+    , Just (nFluid, nTerrZ) ← [neighborCell nx ny]
+    , let -- Bottom of the side-face stack depends on neighbor type:
           --   Water neighbor: draw from neighbor water surface
           --   Dry neighbor: draw from neighbor terrain surface
           -- A 1-z gap is handled by the sloped water surface tile
@@ -73,6 +78,30 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
                             (fcType fc) gx gy z isLeftFace
                             zSlice effDepth tileAlpha xOffset vb)
     ]
+  where
+    -- Resolve a cardinal neighbor's (fluid cell, terrain surface z),
+    -- following a step out of this chunk into the adjacent one. Returns
+    -- Nothing only when that neighbor chunk isn't loaded — then the drop
+    -- is unknown, so we draw no side face (the same conservative default
+    -- waterSlopeAt uses at an unloaded seam).
+    neighborCell ∷ Int → Int → Maybe (Maybe FluidCell, Int)
+    neighborCell nx ny
+        | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
+            let nIdx = columnIndex nx ny
+            in Just (fluidMap V.! nIdx, terrainSurfMap VU.! nIdx)
+        | otherwise =
+            let ChunkCoord cx cy = coord
+                (cx', lx') = if nx < 0              then (cx - 1, nx + chunkSize)
+                             else if nx ≥ chunkSize then (cx + 1, nx - chunkSize)
+                             else                        (cx, nx)
+                (cy', ly') = if ny < 0              then (cy - 1, ny + chunkSize)
+                             else if ny ≥ chunkSize then (cy + 1, ny - chunkSize)
+                             else                        (cy, ny)
+                ncoord = ChunkCoord cx' cy'
+                nIdx   = columnIndex lx' ly'
+            in case (fluidLookup ncoord, terrLookup ncoord) of
+                   (Just nFM, Just nTM) → Just (nFM V.! nIdx, nTM VU.! nIdx)
+                   _                    → Nothing
 
 -- | Cardinal neighbor directions with face orientation.
 --   Returns (nx, ny, isLeftFace).
