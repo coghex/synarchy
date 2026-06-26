@@ -78,7 +78,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
 
     -- register early so lua can read the loading phase
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
+        -- Dedup by page id: re-initialising an existing page (the common
+        -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
+        -- not stack a second one in wmWorlds (#58).
+        (mgr { wmWorlds = (pageId, worldState)
+                        : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
     
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -285,7 +289,11 @@ handleWorldInitArenaCommand env logger pageId = do
 
     -- Register early so textures sent after this command are routed correctly
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
+        -- Dedup by page id: re-initialising an existing page (the common
+        -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
+        -- not stack a second one in wmWorlds (#58).
+        (mgr { wmWorlds = (pageId, worldState)
+                        : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
 
     -- Arena parameters
     let arenaRadius = 2           -- 5×5 chunks

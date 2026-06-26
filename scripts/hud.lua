@@ -537,10 +537,18 @@ function hud.hide()
     if hud.global_page then
         UI.hidePage(hud.global_page)
     end
-    -- If the log panel happens to be open when the HUD hides
-    -- (e.g. world-view exits to main menu), hide it too so it
-    -- doesn't leak into the next screen.
+    -- If any HUD-owned overlay happens to be open when the HUD hides
+    -- (e.g. world-view exits to main menu), hide it too so it doesn't
+    -- leak into the next screen. Each owns its own modal page / visible
+    -- flag, so hiding the HUD pages above does not cover them:
+    --   * event/combat/injury log panels (#84)
+    --   * notification popups (#85)
+    --   * right-click context menus (#86)
     pcall(function() require("scripts.event_log").hide() end)
+    pcall(function() require("scripts.combat_log").hide() end)
+    pcall(function() require("scripts.injury_log_panel").hide() end)
+    pcall(function() require("scripts.popup").dismissAll() end)
+    pcall(function() require("scripts.ui.context_menu").hide() end)
 
     engine.logDebug("HUD hidden")
 end
