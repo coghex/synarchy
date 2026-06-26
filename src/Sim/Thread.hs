@@ -170,32 +170,47 @@ handleSimCommand env logger simStateRef cmd = do
                 modifyWorld pid (\sws →
                     sws { swsChunks = HM.delete coord (swsChunks sws) }) ss
 
-        SimTerrainModified pid coord mods → do
+        SimChunkEdited pid coord fluidMap terrainMap → do
             let sws = HM.lookupDefault emptySimWorldState pid (ssWorlds ss)
-            case HM.lookup coord (swsChunks sws) of
-                Nothing → pure ()
-                Just scs → do
-                    let terrV' = scsTerrain scs VU.// mods
-                        -- Activate the chunk for volume simulation
-                        activated = activateChunk (scs { scsTerrain = terrV'
-                                                       , scsSettleTicks = 24
-                                                       })
-                        -- Activate the 4 cardinal neighbours too, so dammed
-                        -- water can spill across the chunk seam: the seam
-                        -- exchange pass (Sim.Fluid.Active.reconcileSeams)
-                        -- needs both sides active to have a grid to transfer
-                        -- into. HM.adjust is a no-op for unloaded neighbours;
-                        -- activateChunk is idempotent for already-active ones.
-                        ChunkCoord cx cy = coord
-                        nbrCoords = [ ChunkCoord (cx + 1) cy, ChunkCoord (cx - 1) cy
-                                    , ChunkCoord cx (cy + 1), ChunkCoord cx (cy - 1) ]
-                        withSelf = HM.insert coord activated (swsChunks sws)
-                        withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m)
-                                          withSelf nbrCoords
-                    writeIORef simStateRef $
-                        ss { ssWorlds = HM.insert pid
-                                          (sws { swsChunks = withNbrs })
-                                          (ssWorlds ss) }
+                sz  = chunkSize * chunkSize
+                -- Re-seed from the authoritative post-edit tiles. Build on
+                -- the existing sim chunk if present, else create one (an
+                -- edit can land before the sim has loaded that chunk).
+                base = case HM.lookup coord (swsChunks sws) of
+                    Just scs → scs { scsFluid       = fluidMap
+                                   , scsTerrain     = terrainMap
+                                   , scsGenFluid    = fluidMap
+                                   , scsSettleTicks = 24
+                                   }
+                    Nothing  → SimChunkState
+                        { scsFluid       = fluidMap
+                        , scsTerrain     = terrainMap
+                        , scsGenFluid    = fluidMap
+                        , scsSettleTicks = 24
+                        , scsActive      = False
+                        , scsActiveFluid = V.replicate sz Nothing
+                        , scsEquilTicks  = 0
+                        , scsSideDeco    = VU.replicate sz 0
+                        }
+                -- Force a fresh activation so the volume grid is rebuilt
+                -- from the NEW fluid: activateChunk no-ops on an already-
+                -- active chunk, so clear the flag first. Without this the
+                -- edited chunk kept the new snapshot but never flowed (#60).
+                activated = activateChunk (base { scsActive = False })
+                -- Activate the 4 cardinal neighbours too so dammed water can
+                -- spill across the chunk seam (reconcileSeams needs both
+                -- sides active). HM.adjust is a no-op for unloaded
+                -- neighbours; activateChunk is idempotent for active ones.
+                ChunkCoord cx cy = coord
+                nbrCoords = [ ChunkCoord (cx + 1) cy, ChunkCoord (cx - 1) cy
+                            , ChunkCoord cx (cy + 1), ChunkCoord cx (cy - 1) ]
+                withSelf = HM.insert coord activated (swsChunks sws)
+                withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m)
+                                  withSelf nbrCoords
+            writeIORef simStateRef $
+                ss { ssWorlds = HM.insert pid
+                                  (sws { swsChunks = withNbrs })
+                                  (ssWorlds ss) }
 
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }

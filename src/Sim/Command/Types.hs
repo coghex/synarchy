@@ -26,9 +26,13 @@ data SimCommand
         --   terrain surface map
     | SimChunkUnloaded !WorldPageId !ChunkCoord
         -- ^ Chunk evicted from a world — stop simulating it
-    | SimTerrainModified !WorldPageId !ChunkCoord ![(Int, Int)]
-        -- ^ Terrain changed in a world at local indices:
-        --   [(localIndex, newElevation)]
+    | SimChunkEdited !WorldPageId !ChunkCoord !FluidMap !(VU.Vector Int)
+        -- ^ A live terrain/fluid edit landed in a world's chunk: page id,
+        --   coord, the post-edit fluid map and terrain surface (read from
+        --   the authoritative tiles). Re-seeds the sim chunk AND activates
+        --   it (and its cardinal neighbours) so the new fluid actually
+        --   flows/settles — re-using SimChunkLoaded here left the chunk
+        --   inactive, so edited fluid sat frozen (#60).
     | SimSetTickRate !Int
         -- ^ Tick rate in microseconds (default 100000 = 10Hz). Global.
     | SimPause
@@ -46,9 +50,8 @@ instance Show SimCommand where
     show (SimDeactivateWorld p)   = "SimDeactivateWorld " <> show p
     show (SimChunkLoaded p cc _ _) = "SimChunkLoaded " <> show p <> " " <> show cc
     show (SimChunkUnloaded p cc)  = "SimChunkUnloaded " <> show p <> " " <> show cc
-    show (SimTerrainModified p cc mods) =
-        "SimTerrainModified " <> show p <> " " <> show cc
-            <> " (" <> show (length mods) <> " tiles)"
+    show (SimChunkEdited p cc _ _) =
+        "SimChunkEdited " <> show p <> " " <> show cc
     show (SimSetTickRate r) = "SimSetTickRate " <> show r
     show SimPause  = "SimPause"
     show SimResume = "SimResume"

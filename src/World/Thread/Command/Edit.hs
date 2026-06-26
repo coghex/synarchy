@@ -46,16 +46,16 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
 import World.Thread.Helpers (unWorldPageId)
 
 -- | After a live terrain/fluid edit lands in the chunk, re-seed that
---   chunk's sim state from the now-authoritative tiles by re-emitting
---   'SimChunkLoaded'. Without this the sim keeps running against the
---   pre-edit fluid/terrain and writes its stale result back over the
---   edit (#60). Re-emitting replaces the sim chunk and re-settles it with
---   the new maps; a no-op-ish for an inactive (hidden) world, which
---   re-settles on show.
+--   chunk's sim state from the now-authoritative tiles AND activate it so
+--   the new fluid actually flows. Without the sync the sim runs against
+--   pre-edit fluid/terrain and writes its stale result back over the edit;
+--   without the activation (the old SimChunkLoaded path) the edited chunk
+--   kept the new snapshot but sat frozen because the volume sim only
+--   advances active chunks (#60).
 syncEditToSim ∷ EngineEnv → WorldPageId → LoadedChunk → IO ()
 syncEditToSim env pageId lc =
     Q.writeQueue (simQueue env) $
-        SimChunkLoaded pageId (lcCoord lc)
+        SimChunkEdited pageId (lcCoord lc)
             (lcFluidMap lc) (lcTerrainSurfaceMap lc)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
