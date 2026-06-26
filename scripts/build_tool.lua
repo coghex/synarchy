@@ -511,12 +511,14 @@ function buildTool.handleMouseDown(button, x, y)
     if buildTool.state.mode ~= "placement" then return false end
 
     if button == MOUSE_LEFT then
-        -- Revalidate the live hover at click time rather than trusting the
-        -- cached lastHoverTile. Clicks are dispatched immediately, but the
-        -- cache is only refreshed/cleared on the periodic update() tick, so a
-        -- click that arrives after the cursor leaves the world would otherwise
-        -- place on stale coordinates (issue #66).
-        local gx, gy = world.getHoverTile()
+        -- Hit-test the ACTUAL click coordinates synchronously rather than
+        -- trusting the cached hover tile. getHoverTile()/lastHoverTile are
+        -- only refreshed on the periodic update() tick (hud.update pushes
+        -- the cursor pos every ~0.1s, then the render thread resolves it),
+        -- so a click that arrives after a fast cursor move off-world would
+        -- otherwise place on a stale on-world tile (issue #66). pickTile
+        -- runs the hit-test now against live camera/window/tile state.
+        local gx, gy = world.pickTile(x, y)
         if not gx or not gy then
             buildTool.state.lastHoverTile = nil
             return true

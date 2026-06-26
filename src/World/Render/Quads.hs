@@ -22,11 +22,11 @@ import World.Fluids (FluidCell(..), FluidType(..))
 import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
-import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight
-                  , worldToGrid, worldToGridF)
+import World.Grid (gridToScreen, tileSideHeight, tileWidth)
 import World.Mine.Types (MineDesignation(..))
 import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
+import World.Render.HitTest (pickWorldTile)
 import World.Render.FloraQuads (floraToQuad)
 import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.TileQuads
@@ -384,71 +384,14 @@ renderWorldCursorQuads env worldState tileAlpha = do
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
         vb = computeViewBounds camera fbW fbH effectiveDepth
 
-    -- Hit-test: unproject screen pixel considering elevation.
-    -- For each Z from zSlice down, compute which (gx,gy) would place
-    -- a tile at that Z under the mouse, then check if that tile is solid.
-    -- Always runs (independent of toolMode) so unit-move, info, and any
-    -- other consumer of `worldHoverTile` can see the current tile.
+    -- Hit-test: unproject screen pixel considering elevation. Shared with
+    -- the synchronous Lua pick (@world.pickTile@) so the two can't drift —
+    -- see 'World.Render.HitTest'. Always runs (independent of toolMode) so
+    -- unit-move, info, and any other consumer of `worldHoverTile` can see
+    -- the current tile.
     let hitTest pixX pixY =
-            let aspect = fromIntegral fbW / fromIntegral fbH
-                vw     = zoom * aspect
-                vh     = zoom
-                normX  = fromIntegral pixX / fromIntegral winW
-                normY  = fromIntegral pixY / fromIntegral winH
-                viewX  = (normX * 2.0 - 1.0) * vw
-                viewY  = (normY * 2.0 - 1.0) * vh
-                worldX = viewX + camX
-                worldY = viewY + camY
-                zMin = zSlice - effectiveDepth
-
-                tryZ z
-                  | z < zMin  = Nothing
-                  | otherwise =
-                    let relZ = z - zSlice
-                        adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
-                                       - tileHeight * 0.5
-                        (gx, gy) = worldToGrid facing worldX adjustedWorldY
-                        -- Fractional position in the ITEM/unit
-                        -- convention (tile k spans [k, k+1), center
-                        -- k+0.5). An item's ground anchor at grid
-                        -- (gxF, gyF) renders at exactly
-                        --   y = (faF+fbF)·thdh − relZ·tileSideHeight
-                        --   x = (faF−fbF)·thw
-                        -- so the inverse is worldToGridF of the click
-                        -- with ONLY the relZ elevation shift — no
-                        -- −tileHeight/2 (that constant + rounding is
-                        -- the integer-TILE convention above; reusing
-                        -- it here put spawns half a sprite north).
-                        --
-                        -- NOT clamped into (gx, gy): the tile
-                        -- resolution above rounds in a space shifted
-                        -- ~0.17 tile from the true diamond edge, so
-                        -- near borders the hit tile and the exact
-                        -- position legitimately disagree — clamping
-                        -- produced a sawtooth drift (position dragged
-                        -- toward the stale tile, snapping at the
-                        -- flip). The position is exact on its own;
-                        -- consumers ground it per its OWN tile.
-                        hoverPos = worldToGridF facing worldX
-                            (worldY + fromIntegral relZ * tileSideHeight)
-                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
-                    in case HM.lookup chunkCoord (wtdChunks tileData) of
-                        Nothing → tryZ (z - 1)
-                        Just lc →
-                            let idx = columnIndex lx ly
-                                col = lcTiles lc V.! idx
-                                colLen  = VU.length (ctMats col)
-                                colMinZ = ctStartZ col
-                                i = z - colMinZ
-                            in if i < 0 ∨ i >= colLen
-                               then tryZ (z - 1)
-                               else if ctMats col VU.! i ≠ 0
-                                    then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                                           Just xOff → Just (gx, gy, z, xOff, hoverPos)
-                                           Nothing   → tryZ (z - 1)
-                                    else tryZ (z - 1)
-
-            in tryZ zSlice
+            pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
+                          worldSize effectiveDepth vb tileData pixX pixY
 
     -- Compute hover tile
     let hoverResult = case worldCursorPos cs of

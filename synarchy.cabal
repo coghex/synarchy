@@ -469,6 +469,7 @@ library
                      World.Render.Camera.Types
                      World.Render.ViewBounds
                      World.Render.ChunkCulling
+                     World.Render.HitTest
                      World.Render.Quads
                      World.Render.TileQuads
                      World.Render.FloraQuads
