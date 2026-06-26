@@ -182,9 +182,12 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         totalSteps = 4
 
     -- Register early so the render thread can find this world
-    -- when uploading the zoom atlas (same as init path)
+    -- when uploading the zoom atlas (same as init path). Dedup by page
+    -- id so loading over an existing "main_world" replaces it rather than
+    -- stacking a duplicate entry (#58).
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
+        (mgr { wmWorlds = (pageId, worldState)
+                        : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
 
     -- 1. Restore gen params (the big one — plates, timeline,
     --    ocean map, climate are all inside here)

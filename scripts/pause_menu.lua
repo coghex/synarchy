@@ -282,11 +282,26 @@ end
 function pauseMenu.onExitToMenu()
     engine.logInfo("Pause menu: Exit to Menu")
     local worldManager = require("scripts.world_manager")
+    -- Clear transient build-tool placement so an armed action can't carry
+    -- into the next world (#82).
+    pcall(function() require("scripts.build_tool").exitPlacement() end)
     if worldManager.currentWorld then
         world.hide(worldManager.currentWorld)
-        worldManager.active = false
-        worldManager.currentWorld = nil
     end
+    -- Destroy EVERY world, not just currentWorld — a hidden leftover (e.g.
+    -- a test arena) would otherwise stay in wmWorlds and resolveActiveWorld's
+    -- head-fallback would keep resolving it as the implicit active world
+    -- behind the menu (#58). destroyAll also clears the unit/building
+    -- managers so no entities leak into the next game.
+    world.destroyAll()
+    worldManager.active = false
+    worldManager.currentWorld = nil
+    -- Clear the paused-engine flag so it can't leak into the next game
+    -- (Save auto-pauses; Exit must undo that). pause.set keeps the pause
+    -- module's own state in sync; the explicit setPaused is a belt-and-
+    -- braces in case the module wasn't the one that paused (#58).
+    pcall(function() require("scripts.pause").set(false) end)
+    engine.setPaused(false)
     if pauseMenu.showMenuCallback then
         pauseMenu.showMenuCallback("main")
     end

@@ -3706,6 +3706,11 @@ function unitInfoV2.shutdown()
     if oldWatch then
         oldWatch.suppressed = false
     end
+    -- Also clear the global suppression sentinel. init() sets this when the
+    -- legacy watcher isn't loaded yet, and a LATER require of the watcher
+    -- reads it to start suppressed — so leaving it set keeps the legacy
+    -- panel suppressed forever after v2 shuts down (#87).
+    package.loaded.__unit_info_v2_suppress = nil
 
     -- Restore the shared HUD info panel's visibility — we hid it on
     -- bootstrap so v2 could own the unit-info display.

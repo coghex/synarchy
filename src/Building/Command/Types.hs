@@ -16,4 +16,8 @@ data BuildingCommand
         --   handler trusts these coords. (We do this in the Lua API:
         --   spawn checks canPlaceAt before enqueuing.)
     | BuildingDestroy !BuildingId
+    | BuildingClearAll
+        -- ^ Drop every building instance + selection. Enqueued by
+        --   world.destroyAll so the clear is ordered AFTER any in-flight
+        --   BuildingSpawns on this queue (#58).
     deriving (Show)

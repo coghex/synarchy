@@ -11,6 +11,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
+import World.State.Types (WorldManager(..))
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 
@@ -30,7 +31,13 @@ processAllBuildingCommands env = do
 handleBuildingCommand ∷ EngineEnv → BuildingCommand → IO ()
 handleBuildingCommand env (BuildingSpawn bid defName gx gy gz pageId) = do
     bm ← readIORef (buildingManagerRef env)
+    -- Drop the spawn if its world is gone — a spawn queued before
+    -- world.destroyAll would otherwise re-insert an orphan building into
+    -- the cleared manager after teardown (#58).
+    wmgr ← readIORef (worldManagerRef env)
+    let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (bmDefs bm) of
+        _ | worldGone → pure ()
         Nothing → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatThread $
@@ -68,3 +75,8 @@ handleBuildingCommand env (BuildingDestroy bid) =
                       else bmSelected bm
         in (bm { bmInstances = HM.delete bid (bmInstances bm)
                , bmSelected  = cleared }, ())
+
+handleBuildingCommand env BuildingClearAll =
+    -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
+    atomicModifyIORef' (buildingManagerRef env) $ \bm →
+        (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())

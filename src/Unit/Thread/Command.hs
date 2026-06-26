@@ -47,7 +47,16 @@ processAllUnitCommands env utsRef = do
 handleUnitCommand ∷ EngineEnv → IORef UnitThreadState → UnitCommand → IO ()
 handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId) = do
     um ← readIORef (unitManagerRef env)
+    -- Drop the spawn if its world no longer exists. A spawn queued before
+    -- world.destroyAll (Exit to Menu) would otherwise be drained after
+    -- teardown and re-insert an orphan unit into the cleared manager (#58).
+    wmgr ← readIORef (worldManagerRef env)
+    let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (umDefs um) of
+        _ | worldGone → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatThread
+                "UnitSpawn: dropping spawn for a destroyed world (teardown)"
         Nothing → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatThread $
@@ -217,6 +226,15 @@ handleUnitCommand env utsRef (UnitDestroy uid) = do
             }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
+
+handleUnitCommand env utsRef UnitClearAll = do
+    -- Wipe all units + selection + sim state. Processed in queue order, so
+    -- it runs AFTER any UnitSpawns queued before Exit to Menu — those
+    -- insert first, then this clears, leaving no orphans (#58).
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        (um { umInstances = HM.empty, umSelected = HS.empty }, ())
+    atomicModifyIORef' utsRef $ \uts →
+        (uts { utsSimStates = HM.empty }, ())
 
 handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
     gz ← case mGz of

@@ -2,6 +2,7 @@ module World.Thread.Command.Basic
     ( handleWorldTickCommand
     , handleWorldSetCameraCommand
     , handleWorldDestroyCommand
+    , handleWorldDestroyAllCommand
     ) where
 
 import UPrelude
@@ -15,6 +16,8 @@ import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
+import Unit.Command.Types (UnitCommand(..))
+import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -69,3 +72,31 @@ handleWorldDestroyCommand env logger pageId = do
     writeIORef (worldQuadsRef env) V.empty
 
     logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId
+
+-- | Tear down EVERY world (Exit to Menu). Destroying only the "current"
+--   world left hidden ones (e.g. a leftover test arena) in wmWorlds, and
+--   resolveActiveWorld's head-fallback then kept resolving one as the
+--   implicit active world behind the menu (#58). Clearing wmWorlds makes
+--   the resolver return Nothing (menu state). Also sim-deactivates each
+--   page and resets the global entity managers so no units/buildings from
+--   the old session linger as orphans into the next game.
+handleWorldDestroyAllCommand ∷ EngineEnv → LoggerState → IO ()
+handleWorldDestroyAllCommand env logger = do
+    logInfo logger CatWorld "Destroying all worlds (Exit to Menu)"
+    mgr ← readIORef (worldManagerRef env)
+    -- Drop (not just deactivate) each world's sim state — every world is
+    -- being destroyed, so its chunks are gone for good (#58/#61).
+    forM_ (map fst (wmWorlds mgr)) $ \pid →
+        Q.writeQueue (simQueue env) (SimDropWorld pid)
+    atomicModifyIORef' (worldManagerRef env) $ \m →
+        (m { wmWorlds = [], wmVisible = [] }, ())
+    writeIORef (worldQuadsRef env) V.empty
+    -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
+    -- those threads keep draining their queues through the teardown, so
+    -- clearing the managers here would race any in-flight spawns and let
+    -- them re-insert orphans afterwards. Enqueuing the clears makes them
+    -- run in order, AFTER every pending spawn (#58). The wmWorlds clear
+    -- above also makes the spawn handlers drop late spawns outright.
+    Q.writeQueue (unitQueue env) UnitClearAll
+    Q.writeQueue (buildingQueue env) BuildingClearAll
+    logInfo logger CatWorld "All worlds destroyed"

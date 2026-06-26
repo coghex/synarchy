@@ -49,6 +49,7 @@ module Engine.Scripting.Lua.API.World
     , worldGetInitProgressFn
     , worldWaitForInitFn
     , worldDestroyFn
+    , worldDestroyAllFn
     , worldDeleteTileFn
     , worldSetFluidTileFn
     , worldSetSlopeFn
@@ -1263,6 +1264,15 @@ worldDestroyFn env = do
             Q.writeQueue (worldQueue env) (WorldDestroy pageId)
         Nothing → pure ()
 
+    return 0
+
+-- | world.destroyAll() — tear down every world (Exit to Menu). Clears
+--   wmWorlds/wmVisible (so no hidden world resolves as the implicit active
+--   world behind the menu), sim-deactivates each, and resets the global
+--   unit/building managers. (#58)
+worldDestroyAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldDestroyAllFn env = do
+    Lua.liftIO $ Q.writeQueue (worldQueue env) WorldDestroyAll
     return 0
 
 -- | world.deleteTile(pageId, gx, gy) → bool
