@@ -269,10 +269,12 @@ itemSpawnGroundFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | item.listGround() → array of {id, defName, x, y, fill, quality,
---   condition}
+--   condition, weight}. `weight` is the live total mass (itemTotalWeight:
+--   empty weight + fill + nested contents), not the static def weight.
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
     mWs ← Lua.liftIO $ activeWorld env
+    im  ← Lua.liftIO $ readIORef (itemManagerRef env)
     case mWs of
         Nothing → Lua.pushnil >> return 1
         Just ws → do
@@ -298,9 +300,13 @@ itemListGroundFn env = do
                     Lua.pushnumber (Lua.Number (realToFrac
                         (iiCondition (giInst gi))))
                     Lua.setfield (Lua.nth 2) "condition"
+                    -- True live mass: empty weight + fill (at the
+                    -- container's per-unit fill weight) + everything
+                    -- nested in iiContents, computed recursively. A
+                    -- stocked first-aid kit weighs its contents, not
+                    -- just its empty case.
                     Lua.pushnumber (Lua.Number (realToFrac
-                        (iiWeight (giInst gi)
-                         + iiCurrentFill (giInst gi))))
+                        (itemTotalWeight im (giInst gi))))
                     Lua.setfield (Lua.nth 2) "weight"
                     Lua.rawseti (Lua.nth 2) (fromIntegral i)
             return 1

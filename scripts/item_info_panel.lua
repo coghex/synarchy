@@ -53,8 +53,11 @@ local function pushItemInfo(gid)
     table.insert(lines, nm)
     if d then
         table.insert(lines, "Category: " .. (d.category or "?"))
-        table.insert(lines, "Weight: " .. fmt1(d.weight) .. " kg")
     end
+    -- Live total mass from listGround (itemTotalWeight: empty weight +
+    -- fill + nested contents), so filled containers and stocked kits
+    -- show their real mass — not the static definition weight (d.weight).
+    table.insert(lines, "Weight: " .. fmt1(g.weight) .. " kg")
     table.insert(lines, "Quality: " .. fmt1(g.quality))
     table.insert(lines, "Condition: " .. fmt1(g.condition))
     if g.fill and g.fill > 0 then
