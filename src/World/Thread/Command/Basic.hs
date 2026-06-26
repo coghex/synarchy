@@ -84,8 +84,10 @@ handleWorldDestroyAllCommand ∷ EngineEnv → LoggerState → IO ()
 handleWorldDestroyAllCommand env logger = do
     logInfo logger CatWorld "Destroying all worlds (Exit to Menu)"
     mgr ← readIORef (worldManagerRef env)
+    -- Drop (not just deactivate) each world's sim state — every world is
+    -- being destroyed, so its chunks are gone for good (#58/#61).
     forM_ (map fst (wmWorlds mgr)) $ \pid →
-        Q.writeQueue (simQueue env) (SimDeactivateWorld pid)
+        Q.writeQueue (simQueue env) (SimDropWorld pid)
     atomicModifyIORef' (worldManagerRef env) $ \m →
         (m { wmWorlds = [], wmVisible = [] }, ())
     writeIORef (worldQuadsRef env) V.empty
