@@ -18,9 +18,15 @@ data SimCommand
         --   (tagged with this page id) to the world thread, the sole writer
         --   of 'wsTilesRef'.
     | SimDeactivateWorld !WorldPageId
-        -- ^ Drop one world's sim state (called on WorldHide/WorldDestroy).
-        --   Only that world's chunks/active flag are cleared; other
-        --   simulated worlds are untouched (#55, #61).
+        -- ^ A world was hidden: stop ticking it but KEEP its loaded chunks
+        --   so a later WorldShow can resume simulating them. Dropping the
+        --   chunks here left a hidden→shown world's sim inert, because
+        --   ChunkLoading never re-emits SimChunkLoaded for coords already in
+        --   wsTilesRef. Other worlds are untouched (#55).
+    | SimDropWorld !WorldPageId
+        -- ^ A world was destroyed: discard its sim state entirely (chunks +
+        --   active flag). Used on WorldDestroy / destroyAll, where the
+        --   chunks are gone for good (#61).
     | SimChunkLoaded !WorldPageId !ChunkCoord !FluidMap !(VU.Vector Int)
         -- ^ Chunk loaded in a world: page id, coord, initial fluid map,
         --   terrain surface map
@@ -48,6 +54,7 @@ data SimCommand
 instance Show SimCommand where
     show (SimActivateWorld p)     = "SimActivateWorld " <> show p
     show (SimDeactivateWorld p)   = "SimDeactivateWorld " <> show p
+    show (SimDropWorld p)         = "SimDropWorld " <> show p
     show (SimChunkLoaded p cc _ _) = "SimChunkLoaded " <> show p <> " " <> show cc
     show (SimChunkUnloaded p cc)  = "SimChunkUnloaded " <> show p <> " " <> show cc
     show (SimChunkEdited p cc _ _) =

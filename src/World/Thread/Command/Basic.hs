@@ -55,8 +55,9 @@ handleWorldDestroyCommand env logger pageId = do
 
     -- Tear down this world's simulation state too — destroy used to drop
     -- the page from wmWorlds/wmVisible while leaving its sim chunks behind
-    -- forever (#61). Per-world deactivate touches only this world's sim.
-    Q.writeQueue (simQueue env) (SimDeactivateWorld pageId)
+    -- forever (#61). SimDropWorld discards them (unlike hide, which keeps
+    -- them for a later re-show); only this world's sim is touched.
+    Q.writeQueue (simQueue env) (SimDropWorld pageId)
 
     -- Remove from visible list
     atomicModifyIORef' (worldManagerRef env) $ \mgr →

@@ -144,10 +144,20 @@ handleSimCommand env logger simStateRef cmd = do
             logDebug logger CatWorld $ "Sim: world activated " <> tshow pid
 
         SimDeactivateWorld pid → do
-            -- Drop ONLY this world's sim state; others keep running (#55/#61).
+            -- Hidden: stop ticking but KEEP the chunks so a later show can
+            -- resume them (ChunkLoading won't re-emit SimChunkLoaded for
+            -- already-loaded coords, so dropping them here would leave the
+            -- re-shown world's sim inert). Other worlds untouched (#55).
+            writeIORef simStateRef $
+                ss { ssWorlds = HM.adjust (\sws → sws { swsActive = False })
+                                          pid (ssWorlds ss) }
+            logDebug logger CatWorld $ "Sim: world deactivated " <> tshow pid
+
+        SimDropWorld pid → do
+            -- Destroyed: discard this world's sim state entirely (#61).
             writeIORef simStateRef $
                 ss { ssWorlds = HM.delete pid (ssWorlds ss) }
-            logDebug logger CatWorld $ "Sim: world deactivated " <> tshow pid
+            logDebug logger CatWorld $ "Sim: world dropped " <> tshow pid
 
         SimChunkLoaded pid coord fluidMap terrainMap → do
             let sz = chunkSize * chunkSize
