@@ -5,7 +5,7 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (IORef)
+import Data.IORef (IORef, readIORef)
 import Data.Sequence (Seq)
 import Control.Concurrent.STM.TVar (TVar)
 import System.Random (StdGen)
@@ -52,7 +52,8 @@ import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
 import Infection.Types (InfectionManager)
-import World.Types (WorldCommand, WorldManager, FloraCatalog)
+import World.Types (WorldCommand, WorldManager, FloraCatalog
+                   , WorldState, WorldPageId, wmWorlds, wmVisible)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
 import Sim.Command.Types (SimCommand)
@@ -315,3 +316,31 @@ defaultWindowState = WindowState
   { wsWindowedPos  = (100, 100)
   , wsWindowedSize = (800, 600)
   }
+
+-- | The single canonical "active world" resolution rule. Every read of
+--   "the current world" must go through this (or 'activeWorldState' /
+--   'activeWorldPage') rather than pattern-matching @wmWorlds@/@wmVisible@
+--   inline — historically scattered code grabbed the head of @wmWorlds@
+--   (registration order) and acted on the wrong world (see epic #101).
+--
+--   Rule: the first visible world wins. If none are marked visible (a
+--   brief mid-transition window) fall back to the head of @wmWorlds@.
+--   Returns Nothing when no worlds are registered (main menu) or when the
+--   visible head has no backing 'WorldState' yet (do not silently fall
+--   through to a different world in that case).
+resolveActiveWorld ∷ WorldManager → Maybe (WorldPageId, WorldState)
+resolveActiveWorld mgr = case wmVisible mgr of
+    (pid:_) → (\ws → (pid, ws)) <$> lookup pid (wmWorlds mgr)
+    []      → case wmWorlds mgr of
+        (pw:_) → Just pw
+        []     → Nothing
+
+-- | 'resolveActiveWorld' over the live 'worldManagerRef', returning the
+--   active world's page id together with its state.
+activeWorldPage ∷ EngineEnv → IO (Maybe (WorldPageId, WorldState))
+activeWorldPage env = resolveActiveWorld <$> readIORef (worldManagerRef env)
+
+-- | The active world's 'WorldState' (its page id discarded). The common
+--   case for current-world reads that don't need the page id.
+activeWorldState ∷ EngineEnv → IO (Maybe WorldState)
+activeWorldState env = fmap snd <$> activeWorldPage env

@@ -23,7 +23,7 @@ import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as VU
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import World.Grid
@@ -170,23 +170,25 @@ cameraGotoTileFn env = do
             -- This is a pure computation — no loaded chunks needed.
             manager ← readIORef (worldManagerRef env)
             registry ← readIORef (materialRegistryRef env)
-            forM_ (wmVisible manager) $ \pageId →
-                case lookup pageId (wmWorlds manager) of
-                    Just worldState → do
-                        mParams ← readIORef (wsGenParamsRef worldState)
-                        case mParams of
-                            Just params → do
-                                let seed      = wgpSeed params
-                                    worldSize = wgpWorldSize params
-                                    timeline  = wgpGeoTimeline params
-                                    plates    = generatePlates seed worldSize (wgpPlateCount params)
-                                    (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                                    (finalElev, _) = applyTimelineFast timeline plates worldSize gx gy registry (baseElev, baseMat)
-                                    targetZ = finalElev + surfaceHeadroom
-                                atomicModifyIORef' (cameraRef env) $ \cam →
-                                    (cam { camZSlice = targetZ, camZTracking = True }, ())
-                            Nothing → return ()
-                    Nothing → return ()
+            -- Track the ACTIVE world only (was: loop every visible world,
+            -- last-wins — disagreed with the render-thread z-track and the
+            -- rotation hit-test, #81).
+            case resolveActiveWorld manager of
+                Just (_, worldState) → do
+                    mParams ← readIORef (wsGenParamsRef worldState)
+                    case mParams of
+                        Just params → do
+                            let seed      = wgpSeed params
+                                worldSize = wgpWorldSize params
+                                timeline  = wgpGeoTimeline params
+                                plates    = generatePlates seed worldSize (wgpPlateCount params)
+                                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                                (finalElev, _) = applyTimelineFast timeline plates worldSize gx gy registry (baseElev, baseMat)
+                                targetZ = finalElev + surfaceHeadroom
+                            atomicModifyIORef' (cameraRef env) $ \cam →
+                                (cam { camZSlice = targetZ, camZTracking = True }, ())
+                        Nothing → return ()
+                Nothing → return ()
 
         _ → pure ()
     return 0
@@ -250,11 +252,9 @@ findVisualCenterTile ∷ EngineEnv → CameraFacing → Float → Float → Int
                      → IO (Maybe (Int, Int, Int))
 findVisualCenterTile env facing cx cy zSlice = do
     wm ← readIORef (worldManagerRef env)
-    case wmVisible wm of
-        [] → return Nothing
-        (pageId:_) → case lookup pageId (wmWorlds wm) of
-            Nothing → return Nothing
-            Just ws → do
+    case resolveActiveWorld wm of
+        Nothing → return Nothing
+        Just (_, ws) → do
                 td ← readIORef (wsTilesRef ws)
                 let zMin = zSlice - viewDepth
                     tryZ z
@@ -282,22 +282,19 @@ findVisualCenterTile env facing cx cy zSlice = do
 lookupVisualCenterZ ∷ EngineEnv → CameraFacing → Float → Float → Int → IO (Maybe Int)
 lookupVisualCenterZ env facing cx cy zSlice = do
     wm ← readIORef (worldManagerRef env)
-    go (wmVisible wm) (wmWorlds wm)
+    case resolveActiveWorld wm of
+        Nothing → return Nothing
+        Just (_, ws) → do
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk chunkCoord td of
+                Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
+                Nothing → return Nothing
   where
     -- The visual center is shifted in Y by the height offset.
     -- We approximate by sampling at the camera's grid position
     -- (accurate for flat terrain, close enough for hilly terrain).
     (gx, gy) = worldToGrid facing cx cy
     (chunkCoord, (lx, ly)) = globalToChunk gx gy
-    go [] _ = return Nothing
-    go (pageId:rest) worlds =
-        case lookup pageId worlds of
-            Nothing → go rest worlds
-            Just ws → do
-                td ← readIORef (wsTilesRef ws)
-                case lookupChunk chunkCoord td of
-                    Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
-                    Nothing → go rest worlds
 
 -- | Rotate camera screen position one step clockwise.
 --   Derivation: CW facing rotates the screen axes (a,b) → (b,-a).

@@ -23,7 +23,7 @@ import Engine.Scripting.Lua.DebugServer (DebugCommand(..), startDebugServer, pol
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
 import World.State.Types (wmWorlds, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Event.Types (Event(..))
@@ -307,14 +307,14 @@ runWaitForInit env timeoutSec = loop (timeoutSec * 4) ⌦ \_ → fmtInitProgress
     loop ∷ Int → IO ()
     loop 0 = return ()
     loop n = do
-        mgr ← readIORef (worldManagerRef env)
-        case wmWorlds mgr of
-            ((_, ws):_) → do
+        mWs ← activeWorldState env
+        case mWs of
+            Just ws → do
                 phase ← readIORef (wsLoadPhaseRef ws)
                 case phase of
                     LoadDone → return ()
                     _        → threadDelay 250000 ≫ loop (n - 1)
-            [] → threadDelay 250000 ≫ loop (n - 1)
+            Nothing → threadDelay 250000 ≫ loop (n - 1)
 
 -- | Poll the active world's init queue until empty (or timeout); return
 --   the remaining chunk count (matches 'world.waitForChunks').
@@ -323,10 +323,10 @@ runWaitForChunks env timeoutSec = T.pack ∘ show ⊚ loop (timeoutSec * 4)
   where
     remaining ∷ IO Int
     remaining = do
-        mgr ← readIORef (worldManagerRef env)
-        case wmWorlds mgr of
-            ((_, ws):_) → length ⊚ readIORef (wsInitQueueRef ws)
-            []          → return 0
+        mWs ← activeWorldState env
+        case mWs of
+            Just ws → length ⊚ readIORef (wsInitQueueRef ws)
+            Nothing → return 0
     loop ∷ Int → IO Int
     loop 0 = remaining
     loop n = do
@@ -337,16 +337,16 @@ runWaitForChunks env timeoutSec = T.pack ∘ show ⊚ loop (timeoutSec * 4)
 --   values 'world.getInitProgress' returns: phase, current, total, stage.
 fmtInitProgress ∷ EngineEnv → IO Text
 fmtInitProgress env = do
-    mgr ← readIORef (worldManagerRef env)
-    case wmWorlds mgr of
-        ((_, ws):_) → do
+    mWs ← activeWorldState env
+    case mWs of
+        Just ws → do
             phase ← readIORef (wsLoadPhaseRef ws)
             return $ case phase of
                 LoadIdle           → fmt 0 0 0 "idle"
                 LoadPhase1 c t     → fmt 1 c t "setup"
                 LoadPhase2 rm t    → fmt 2 (t - rm) t "chunks"
                 LoadDone           → fmt 3 1 1 "done"
-        [] → return (fmt 0 0 0 "idle")
+        Nothing → return (fmt 0 0 0 "idle")
   where
     -- Match 'world.getInitProgress' over the console exactly: the stage
     -- string is rendered quoted by 'luaValueToText', so quote it here.

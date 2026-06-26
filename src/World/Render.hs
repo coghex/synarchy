@@ -12,7 +12,8 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.Maybe (isJust)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
+import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..)
+                         , resolveActiveWorld)
 import Engine.Core.Monad (EngineM)
 import Engine.Scene.Base (LayerId(..), ObjectId(..))
 import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
@@ -155,7 +156,13 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderStructureQuads env facing zSlice effDepth tileAlpha
+            stResults ← forM (wmVisible worldManager) $ \pageId →
+                case lookup pageId (wmWorlds worldManager) of
+                    Just worldState →
+                        renderStructureQuads env worldState facing zSlice
+                                             effDepth tileAlpha
+                    Nothing → return V.empty
+            return $ V.concat stResults
 
     ghostQuads ← if tileAlpha ≤ 0.001
         then return V.empty
@@ -172,23 +179,26 @@ updateWorldTiles env = do
         when (not (camZTracking camera)) $
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZTracking = True }, ())
+        -- Track the ACTIVE world's terrain under the camera. Previously this
+        -- looped every visible world and let the LAST one win, disagreeing
+        -- with camera.gotoTile (also last-wins) and findVisualCenterTile
+        -- (first-visible). All three now resolve the one active world (#81).
         worldManager' ← readIORef (worldManagerRef env)
-        forM_ (wmVisible worldManager') $ \pageId →
-            case lookup pageId (wmWorlds worldManager') of
-                Just worldState → do
-                    tileData ← readIORef (wsTilesRef worldState)
-                    let (camX, camY) = camPosition camera
-                        facing = camFacing camera
-                        (gx, gy) = worldToGrid facing camX camY
-                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
-                    case lookupChunk chunkCoord tileData of
-                        Just lc → do
-                            let surfElev = (lcSurfaceMap lc) VU.! columnIndex lx ly
-                                targetZ = surfElev + surfaceHeadroom
-                            atomicModifyIORef' (cameraRef env) $ \cam →
-                                (cam { camZSlice = targetZ }, ())
-                        Nothing → return ()
-                Nothing → return ()
+        case resolveActiveWorld worldManager' of
+            Just (_, worldState) → do
+                tileData ← readIORef (wsTilesRef worldState)
+                let (camX, camY) = camPosition camera
+                    facing = camFacing camera
+                    (gx, gy) = worldToGrid facing camX camY
+                    (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                case lookupChunk chunkCoord tileData of
+                    Just lc → do
+                        let surfElev = (lcSurfaceMap lc) VU.! columnIndex lx ly
+                            targetZ = surfElev + surfaceHeadroom
+                        atomicModifyIORef' (cameraRef env) $ \cam →
+                            (cam { camZSlice = targetZ }, ())
+                    Nothing → return ()
+            Nothing → return ()
 
     let allQuads = tileQuads <> worldCursorQuads <> spoilQuads
                 <> groundItemQuads

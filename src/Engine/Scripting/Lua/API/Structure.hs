@@ -24,7 +24,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldPage, activeWorldState)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, TexPalette(..))
@@ -85,13 +85,13 @@ structurePlaceFn env = do
                                     ( HM.insert texId  (TextureHandle (fromIntegral tex))
                                     $ HM.insert faceId (TextureHandle (fromIntegral face)) m
                                     , () )
-                                mgr ← readIORef (worldManagerRef env)
-                                case wmWorlds mgr of
-                                    ((pageId, _):_) →
+                                mActive ← activeWorldPage env
+                                case mActive of
+                                    Just (pageId, _) →
                                         Q.writeQueue (worldQueue env)
                                             (WorldSetStructure pageId gxi gyi
                                                                slotTag texId faceId z)
-                                    [] → pure ()
+                                    Nothing → pure ()
                             _ → pure ()   -- no paths → not persisted (debug-only)
                     Lua.pushboolean True
                     return 1
@@ -134,15 +134,15 @@ structureCountFn env = do
 --   save/load (replayed from sdEdits).
 structureLoadedCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureLoadedCountFn env = do
-    mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
-    case wmWorlds mgr of
-        ((_, ws):_) → do
+    mWs ← Lua.liftIO $ activeWorldState env
+    case mWs of
+        Just ws → do
             td ← Lua.liftIO $ readIORef (wsTilesRef ws)
             let n = sum [ HM.size (lcStructures lc)
                         | lc ← HM.elems (wtdChunks td) ]
             Lua.pushinteger (fromIntegral n)
             return 1
-        [] → Lua.pushinteger 0 >> return 1
+        Nothing → Lua.pushinteger 0 >> return 1
 
 -- | structure.paletteCount() → int — number of texture paths in the palette
 --   (debug probe for save/restore of the palette).
