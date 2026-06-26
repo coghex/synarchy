@@ -155,6 +155,26 @@ def wait_paused_and_frozen(port: int, page: str, timeout: float = 20.0):
     return paused, ts
 
 
+def stays_frozen_under_race(port: int, page: str, hold: float = 2.5):
+    """Reproduce the queued-unpause race directly: while the world is paused,
+    enqueue a stray WorldSetTimeScale(1.0) — exactly what a Space-press
+    unpause or a speed control would queue, and what could land after a
+    WorldSave. handleWorldSetTimeScaleCommand must refuse to store a running
+    scale while paused. We poll for `hold` seconds (NOT just one sample) so a
+    later-processed command can't slip a nonzero scale in after an early
+    positive. Returns (ok, last_paused, last_ts)."""
+    send(port, f'world.setTimeScale("{page}", 1.0)', expect_result=False)
+    paused, ts = True, 0.0
+    deadline = time.time() + hold
+    while time.time() < deadline:
+        paused = as_bool(send(port, "return engine.isPaused()"))
+        ts = as_float(send(port, f'return world.getTimeScale("{page}")'))
+        if not (paused and ts == 0.0):
+            return False, paused, ts
+        time.sleep(0.3)
+    return True, paused, ts
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9142)
@@ -190,6 +210,13 @@ def main() -> int:
             failures.append(
                 f"after save: expected isPaused=True & timeScale=0, "
                 f"got isPaused={paused} timeScale={ts}")
+        ok, rp, rt = stays_frozen_under_race(args.port, "pausetest")
+        print(f"[save-race] stray setTimeScale while paused -> "
+              f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(
+                f"after save: a stray setTimeScale un-froze a paused world "
+                f"(isPaused={rp} timeScale={rt})")
 
         # 3. Load → world thread must restore paused AND a frozen clock.
         #    Wait for the file to actually land first (saveWorld returns on
@@ -207,6 +234,13 @@ def main() -> int:
             failures.append(
                 f"after load: expected isPaused=True & timeScale=0, "
                 f"got isPaused={paused} timeScale={ts}")
+        ok, rp, rt = stays_frozen_under_race(args.port, "main_world")
+        print(f"[load-race] stray setTimeScale while paused -> "
+              f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(
+                f"after load: a stray setTimeScale un-froze a paused world "
+                f"(isPaused={rp} timeScale={rt})")
     finally:
         try:
             send(args.port, "engine.quit()", timeout=3, expect_result=False)
