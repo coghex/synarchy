@@ -62,20 +62,25 @@ handleWorldShowCommand env logger pageId = do
         logDebug logger CatWorld $
             "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
 
-        -- Activate world in sim thread. The sim no longer holds the tile
-        -- ref — it emits WorldApplyFluids back to the world thread (the sole
-        -- writer of wsTilesRef) — so this is just an "is active" signal.
-        Q.writeQueue (simQueue env) SimActivateWorld
+        -- Activate this world in the sim thread. The sim no longer holds the
+        -- tile ref — it emits WorldApplyFluids back to the world thread (the
+        -- sole writer of wsTilesRef) — so this is just a per-world "is
+        -- active" signal.
+        Q.writeQueue (simQueue env) (SimActivateWorld pageId)
 
 handleWorldHideCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldHideCommand env logger pageId = do
     logDebug logger CatWorld $ "Hiding world: " <> unWorldPageId pageId
 
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        (mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }, ())
+    -- Only deactivate sim for a world that was actually visible. Hiding an
+    -- invalid / already-hidden page is a no-op for sim state, and hiding one
+    -- world never tears down the others' sim (per-world deactivate, #55).
+    wasVisible ← atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        ( mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }
+        , pageId `elem` wmVisible mgr )
 
-    -- Deactivate sim thread
-    Q.writeQueue (simQueue env) SimDeactivateWorld
+    when wasVisible $
+        Q.writeQueue (simQueue env) (SimDeactivateWorld pageId)
 
 handleWorldSetMapModeCommand ∷ EngineEnv → LoggerState → WorldPageId
     → ZoomMapMode → IO ()

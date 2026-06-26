@@ -32,14 +32,18 @@ data FluidWriteback = FluidWriteback
     , fwSideDeco ∷ !(VU.Vector Word8)
     }
 
--- | A batch of fluid writebacks plus an optional ack 'MVar', signalled
---   once the world thread has applied the batch. Runtime ticks pass
---   'Nothing' (fire-and-forget); the dump's synchronous fast-settle
---   passes 'Just' and waits on it so the write lands before it reads.
-data FluidWritebackBatch = FluidWritebackBatch ![FluidWriteback] !(Maybe (MVar ()))
+-- | A batch of fluid writebacks for ONE world plus an optional ack
+--   'MVar', signalled once the world thread has applied the batch. The
+--   'WorldPageId' scopes the batch so the world thread applies it only to
+--   the world that produced it (not every visible world, #59). Runtime
+--   ticks pass 'Nothing' (fire-and-forget); the dump's synchronous
+--   fast-settle passes 'Just' and waits on it so the write lands before
+--   it reads.
+data FluidWritebackBatch =
+    FluidWritebackBatch !WorldPageId ![FluidWriteback] !(Maybe (MVar ()))
 instance Show FluidWritebackBatch where
-    show (FluidWritebackBatch ws _) =
-        "FluidWritebackBatch(" <> show (length ws) <> ")"
+    show (FluidWritebackBatch pid ws _) =
+        "FluidWritebackBatch(" <> show pid <> ", " <> show (length ws) <> ")"
 
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int

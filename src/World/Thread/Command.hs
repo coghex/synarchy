@@ -160,23 +160,24 @@ handleWorldCommand env logger (WorldDestroy pageId)
 handleWorldCommand env _ (WorldApplyFluids batch)
   = handleApplyFluidsCommand env batch
 
--- | Sim → World: apply the sim's fluid writebacks to the visible
---   world's tile data. The world thread is the SOLE writer of
+-- | Sim → World: apply the sim's fluid writebacks to the ORIGINATING
+--   world's tile data, resolved by the batch's page id — not every
+--   visible world (that leaked one world's fluid sim into another that
+--   shared chunk coords, #59). The world thread is the SOLE writer of
 --   'wsTilesRef'; the sim only produces these batches. Acks the batch's
 --   MVar (if any) after applying — the dump's fast-settle waits on it.
 handleApplyFluidsCommand ∷ EngineEnv → FluidWritebackBatch → IO ()
-handleApplyFluidsCommand env (FluidWritebackBatch writebacks mAck) = do
+handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
     when (not (null writebacks)) $ do
         mgr ← readIORef (worldManagerRef env)
-        forM_ (wmVisible mgr) $ \pageId →
-            case lookup pageId (wmWorlds mgr) of
-                Nothing → pure ()
-                Just ws → do
-                    atomicModifyIORef' (wsTilesRef ws) $ \wtd →
-                        (foldl' applyOneWriteback wtd writebacks, ())
-                    writeIORef (wsQuadCacheRef ws)     Nothing
-                    writeIORef (wsZoomQuadCacheRef ws) Nothing
-                    writeIORef (wsBgQuadCacheRef ws)   Nothing
+        case lookup pageId (wmWorlds mgr) of
+            Nothing → pure ()  -- world gone (destroyed/unloaded) — drop the batch
+            Just ws → do
+                atomicModifyIORef' (wsTilesRef ws) $ \wtd →
+                    (foldl' applyOneWriteback wtd writebacks, ())
+                writeIORef (wsQuadCacheRef ws)     Nothing
+                writeIORef (wsZoomQuadCacheRef ws) Nothing
+                writeIORef (wsBgQuadCacheRef ws)   Nothing
     forM_ mAck (`putMVar` ())
 
 -- | Overwrite one chunk's sim-owned fields (fluid + terrain surface +
