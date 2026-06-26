@@ -438,7 +438,6 @@ library
                      Combat.Resolution
                      Combat.Wounds
                      Sim.State.Types
-                     Sim.Fluid.Tick
                      Sim.Fluid.Types
                      Sim.Fluid.Active
                      World.Base
