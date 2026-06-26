@@ -17,7 +17,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import World.Grid (tileWidth, tileHeight, tileSideHeight
@@ -47,8 +47,12 @@ hitTestUnitAt env pixX pixY = do
     camera   ← readIORef (cameraRef env)
     (winW, winH) ← readIORef (windowSizeRef env)
     texSizes ← readIORef (textureSizeRef env)
+    mgr      ← readIORef (worldManagerRef env)
 
-    let instances = umInstances um
+    -- Only the active world's units are clickable (#78).
+    let instances = case resolveActiveWorld mgr of
+            Just (pid, _) → unitsOnPage pid (umInstances um)
+            Nothing       → HM.empty
     if HM.null instances
         then return Nothing
         else do

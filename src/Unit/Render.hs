@@ -25,6 +25,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
+import World.State.Types (wmVisible)
 import Unit.Types
 import Unit.Direction (Direction(..), dirIndex, indexToDir, mirrorDir)
 
@@ -150,7 +151,11 @@ pickFrame now cam inst def
 renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
 renderUnitQuads env facing zSlice effDepth tileAlpha = do
     um ← readIORef (unitManagerRef env)
-    let instances = umInstances um
+    -- Render only units of the VISIBLE worlds — units are world-scoped, so
+    -- a hidden world's units must not draw over the active one (#78).
+    mgr ← readIORef (worldManagerRef env)
+    let visiblePages = HS.fromList (wmVisible mgr)
+        instances = unitsOnPages visiblePages (umInstances um)
         defs      = umDefs um
         selected  = umSelected um
     if HM.null instances

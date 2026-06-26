@@ -330,7 +330,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
-                fromBuildingSnapshot (bmDefs currentBm) (sdBuildings saveData)
+                fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
         writeIORef (buildingManagerRef env) restored
         forM_ orphans $ \bid →
             logWarn logger CatWorld $
@@ -365,7 +365,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
-                fromUnitSnapshot (umDefs currentUm) (sdUnits saveData)
+                fromUnitSnapshot pageId (umDefs currentUm) (sdUnits saveData)
             liveUids = HM.keysSet (umInstances restoredUm)
             -- Drop sim states whose owning unit was orphaned.
             simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)

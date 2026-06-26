@@ -10,6 +10,8 @@ module Building.Types
     , nextBuildingId
     , currentActivity
     , materialsSatisfied
+    , buildingsOnPage
+    , buildingsOnPages
     ) where
 
 import UPrelude
@@ -17,9 +19,11 @@ import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
+import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Unit.Types (Animation(..))
 import Item.Types (ItemInstance)
@@ -87,6 +91,11 @@ data BuildingDef = BuildingDef
 -- | A placed building. anchor = bottom-left corner of the footprint.
 data BuildingInstance = BuildingInstance
     { biDefName    ∷ !Text
+    , biPage       ∷ !WorldPageId
+      -- ^ which world this building belongs to. Runtime-only (not
+      --   serialized — a save holds one world; loaded buildings are
+      --   stamped with the load target page). Scopes placement/render so
+      --   a building in one world never blocks or draws in another (#76).
     , biTexture    ∷ !TextureHandle      -- ^ copied from def
     , biAnchorX    ∷ !Int                -- ^ tile coords (footprint origin)
     , biAnchorY    ∷ !Int
@@ -160,6 +169,20 @@ nextBuildingId ∷ BuildingManager → (BuildingId, BuildingManager)
 nextBuildingId bm =
     let bid = BuildingId (bmNextId bm)
     in (bid, bm { bmNextId = bmNextId bm + 1 })
+
+-- | Buildings belonging to one specific world page (active-world
+--   placement / occupancy scoping, #76).
+buildingsOnPage ∷ WorldPageId
+                → HM.HashMap BuildingId BuildingInstance
+                → HM.HashMap BuildingId BuildingInstance
+buildingsOnPage pid = HM.filter (\bi → biPage bi ≡ pid)
+
+-- | Buildings belonging to any of the given world pages (the visible set,
+--   for rendering).
+buildingsOnPages ∷ HS.HashSet WorldPageId
+                 → HM.HashMap BuildingId BuildingInstance
+                 → HM.HashMap BuildingId BuildingInstance
+buildingsOnPages pages = HM.filter (\bi → HS.member (biPage bi) pages)
 
 -- | Pure derivation of activity. Two modes:
 --
