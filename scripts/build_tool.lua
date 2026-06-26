@@ -483,6 +483,9 @@ function buildTool.update(dt)
     local gx, gy = world.getHoverTile()
     if not gx or not gy then
         building.clearGhost()
+        -- No current hover tile: drop the cached placement target too, so a
+        -- later off-world click can't place on stale coordinates (issue #66).
+        buildTool.state.lastHoverTile = nil
         return
     end
 
