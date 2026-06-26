@@ -17,27 +17,26 @@ import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
 import Data.Bits ((.&.), (.|.), shiftL)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..), FluidCell(..))
-import Sim.State.Types (SimState(..), SimChunkState(..))
+import Sim.State.Types (SimWorldState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
 
 -- | Ticks at equilibrium before a chunk is deactivated.
 equilThreshold ∷ Int
 equilThreshold = 200
 
--- | Run one tick of volume-conserving simulation for all active chunks.
-simulateActiveTick ∷ SimState → SimState
-simulateActiveTick ss
-    | ssPaused ss = ss
-    | otherwise =
-        let chunks = ssChunks ss
+-- | Run one tick of volume-conserving simulation for all active chunks
+--   of ONE world. The engine-level pause guard is the caller's job.
+simulateActiveTick ∷ SimWorldState → SimWorldState
+simulateActiveTick sws =
+        let chunks = swsChunks sws
             activeChunks = HM.filter scsActive chunks
         in if HM.null activeChunks
-           then ss
+           then sws
            else let results = reconcileSeams
                                  (HM.mapWithKey (simulateActiveChunk chunks) activeChunks)
                     dirty = HM.foldlWithKey' (\acc cc (_, changed) →
                         if changed then HS.insert cc acc else acc
-                        ) (ssDirtyChunks ss) results
+                        ) (swsDirtyChunks sws) results
                     -- Merge updated active chunks back, handle deactivation
                     newChunks = HM.foldlWithKey' (\acc cc (scs, changed) →
                         let scs' = if changed
@@ -49,9 +48,9 @@ simulateActiveTick ss
                                     else scs'
                         in HM.insert cc scs'' acc
                         ) chunks results
-                in ss { ssChunks = newChunks
-                      , ssDirtyChunks = dirty
-                      }
+                in sws { swsChunks = newChunks
+                       , swsDirtyChunks = dirty
+                       }
 
 -- | Deactivate a chunk: bake active volumes back to passive fluid.
 deactivateInPlace ∷ SimChunkState → SimChunkState

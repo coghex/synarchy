@@ -1,8 +1,10 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Sim.State.Types
     ( SimState(..)
+    , SimWorldState(..)
     , SimChunkState(..)
     , emptySimState
+    , emptySimWorldState
     ) where
 
 import UPrelude
@@ -11,18 +13,30 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..))
+import World.Page.Types (WorldPageId(..))
 import World.Fluid.Internal (FluidMap)
 import Sim.Fluid.Types (ActiveFluidCell(..))
 
+-- | Simulation state, scoped per world. Each visible/active world owns
+--   an independent 'SimWorldState' (its own chunk map, dirty set and
+--   active flag) keyed by 'WorldPageId', so one world's fluid sim can
+--   never contaminate another's tiles (epic #101 / #59). Tick rate and
+--   the engine-level pause are genuinely global and stay at the top.
 data SimState = SimState
-    { ssChunks      ∷ !(HM.HashMap ChunkCoord SimChunkState)
+    { ssWorlds      ∷ !(HM.HashMap WorldPageId SimWorldState)
     , ssTickRate    ∷ !Int              -- ^ Microseconds between ticks (default 100000)
-    , ssDirtyChunks ∷ !(HS.HashSet ChunkCoord)  -- ^ Chunks modified this tick
-    , ssPaused     ∷ !Bool
-    , ssWorldActive ∷ !Bool
-        -- ^ True between SimActivateWorld and SimDeactivateWorld. The sim
-        --   never holds the world's tile ref — it emits 'WorldApplyFluids'
-        --   to the world thread, the sole writer of 'wsTilesRef'.
+    , ssPaused      ∷ !Bool             -- ^ Engine-level (game) pause, all worlds
+    }
+
+-- | One world's simulation state.
+data SimWorldState = SimWorldState
+    { swsChunks      ∷ !(HM.HashMap ChunkCoord SimChunkState)
+    , swsDirtyChunks ∷ !(HS.HashSet ChunkCoord)  -- ^ Chunks modified this tick
+    , swsActive      ∷ !Bool
+        -- ^ True between SimActivateWorld and SimDeactivateWorld for THIS
+        --   world. The sim never holds the world's tile ref — it emits
+        --   'WorldApplyFluids' (tagged with this world's page id) to the
+        --   world thread, the sole writer of 'wsTilesRef'.
     }
 
 data SimChunkState = SimChunkState
@@ -38,9 +52,14 @@ data SimChunkState = SimChunkState
 
 emptySimState ∷ SimState
 emptySimState = SimState
-    { ssChunks      = HM.empty
+    { ssWorlds      = HM.empty
     , ssTickRate    = 100000  -- 10 Hz
-    , ssDirtyChunks = HS.empty
-    , ssPaused     = False
-    , ssWorldActive = False
+    , ssPaused      = False
+    }
+
+emptySimWorldState ∷ SimWorldState
+emptySimWorldState = SimWorldState
+    { swsChunks      = HM.empty
+    , swsDirtyChunks = HS.empty
+    , swsActive      = False
     }

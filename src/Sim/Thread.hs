@@ -21,11 +21,13 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..)
                         , LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
+import World.Page.Types (WorldPageId(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Command.Types (WorldCommand(..), FluidWriteback(..)
                            , FluidWritebackBatch(..))
 import Sim.Command.Types (SimCommand(..))
-import Sim.State.Types (SimState(..), SimChunkState(..), emptySimState)
+import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
+                       , emptySimState, emptySimWorldState)
 import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, activeToFluidCell)
 import Sim.Fluid.Active (simulateActiveTick)
 
@@ -47,6 +49,12 @@ startSimThread env = do
             error "Sim thread start failure."
         )
     return $ ThreadState stateRef threadId doneVar
+
+-- | True when at least one world is active and holds chunks — i.e. there
+--   is simulation work to do this tick.
+anyLiveWorld ∷ SimState → Bool
+anyLiveWorld ss = any (\sws → swsActive sws ∧ not (HM.null (swsChunks sws)))
+                      (HM.elems (ssWorlds ss))
 
 simLoop ∷ EngineEnv → IORef ThreadControl → IORef SimState → IO ()
 simLoop env stateRef simStateRef = do
@@ -70,19 +78,22 @@ simLoop env stateRef simStateRef = do
 
                 ss ← readIORef simStateRef
 
-                if ssPaused ss ∨ HM.null (ssChunks ss)
-                                ∨ not (ssWorldActive ss)
+                if ssPaused ss ∨ not (anyLiveWorld ss)
                     then do
                         threadDelay (ssTickRate ss)
                         pure True
                     else do
-                        let ss'  = settleNewChunks ss
-                            ss'' = simulateActiveTick ss'
-                        emitDirtyFluids env ss'' Nothing
-                        let ss''' = ss'' { ssDirtyChunks = HS.empty }
-                        writeIORef simStateRef ss'''
+                        -- Tick every active world independently, emit each
+                        -- world's dirty fluids tagged with its page id, then
+                        -- clear the per-world dirty sets.
+                        let ticked = HM.map tickWorld (ssWorlds ss)
+                        forM_ (HM.toList ticked) $ \(pid, sws) →
+                            when (swsActive sws) $
+                                emitWorldDirtyFluids env pid sws Nothing
+                        let cleared = HM.map clearDirty ticked
+                        writeIORef simStateRef ss { ssWorlds = cleared }
 
-                        threadDelay (ssTickRate ss''')
+                        threadDelay (ssTickRate ss)
                         pure True
               )
               (\(e ∷ SomeException) → do
@@ -91,6 +102,15 @@ simLoop env stateRef simStateRef = do
                 pure False
               )
             when ok $ simLoop env stateRef simStateRef
+
+-- | Settle + simulate one world's chunks (a no-op for an inactive world).
+tickWorld ∷ SimWorldState → SimWorldState
+tickWorld sws
+    | not (swsActive sws) = sws
+    | otherwise           = simulateActiveTick (settleNewChunks sws)
+
+clearDirty ∷ SimWorldState → SimWorldState
+clearDirty sws = sws { swsDirtyChunks = HS.empty }
 
 processSimCommands ∷ EngineEnv → LoggerState → IORef SimState → IO ()
 processSimCommands env logger simStateRef = do
@@ -101,25 +121,35 @@ processSimCommands env logger simStateRef = do
             processSimCommands env logger simStateRef
         Nothing → return ()
 
+-- | Apply @f@ to one world's state, creating an empty entry if absent.
+modifyWorld ∷ WorldPageId → (SimWorldState → SimWorldState)
+            → SimState → SimState
+modifyWorld pid f ss =
+    let cur = HM.lookupDefault emptySimWorldState pid (ssWorlds ss)
+    in ss { ssWorlds = HM.insert pid (f cur) (ssWorlds ss) }
+
 handleSimCommand ∷ EngineEnv → LoggerState → IORef SimState → SimCommand → IO ()
 handleSimCommand env logger simStateRef cmd = do
     ss ← readIORef simStateRef
     case cmd of
-        SimActivateWorld → do
-            -- Re-trigger settle so existing chunks get simulated now that writeback is possible
-            let reSettled = HM.map (\scs →
-                    scs { scsSettleTicks = 24 }) (ssChunks ss)
+        SimActivateWorld pid → do
+            -- Re-trigger settle so this world's existing chunks get
+            -- simulated now that writeback is possible.
             writeIORef simStateRef $
-                ss { ssWorldActive = True
-                   , ssChunks = reSettled }
-            logDebug logger CatWorld "Sim: world activated"
+                modifyWorld pid (\sws → sws
+                    { swsActive = True
+                    , swsChunks = HM.map (\scs → scs { scsSettleTicks = 24 })
+                                         (swsChunks sws)
+                    }) ss
+            logDebug logger CatWorld $ "Sim: world activated " <> tshow pid
 
-        SimDeactivateWorld → do
-            writeIORef simStateRef $ emptySimState
-                { ssTickRate = ssTickRate ss }
-            logDebug logger CatWorld "Sim: world deactivated"
+        SimDeactivateWorld pid → do
+            -- Drop ONLY this world's sim state; others keep running (#55/#61).
+            writeIORef simStateRef $
+                ss { ssWorlds = HM.delete pid (ssWorlds ss) }
+            logDebug logger CatWorld $ "Sim: world deactivated " <> tshow pid
 
-        SimChunkLoaded coord fluidMap terrainMap → do
+        SimChunkLoaded pid coord fluidMap terrainMap → do
             let sz = chunkSize * chunkSize
                 scs = SimChunkState
                     { scsFluid       = fluidMap
@@ -132,14 +162,17 @@ handleSimCommand env logger simStateRef cmd = do
                     , scsSideDeco    = VU.replicate sz 0
                     }
             writeIORef simStateRef $
-                ss { ssChunks = HM.insert coord scs (ssChunks ss) }
+                modifyWorld pid (\sws →
+                    sws { swsChunks = HM.insert coord scs (swsChunks sws) }) ss
 
-        SimChunkUnloaded coord → do
+        SimChunkUnloaded pid coord → do
             writeIORef simStateRef $
-                ss { ssChunks = HM.delete coord (ssChunks ss) }
+                modifyWorld pid (\sws →
+                    sws { swsChunks = HM.delete coord (swsChunks sws) }) ss
 
-        SimTerrainModified coord mods → do
-            case HM.lookup coord (ssChunks ss) of
+        SimTerrainModified pid coord mods → do
+            let sws = HM.lookupDefault emptySimWorldState pid (ssWorlds ss)
+            case HM.lookup coord (swsChunks sws) of
                 Nothing → pure ()
                 Just scs → do
                     let terrV' = scsTerrain scs VU.// mods
@@ -156,10 +189,13 @@ handleSimCommand env logger simStateRef cmd = do
                         ChunkCoord cx cy = coord
                         nbrCoords = [ ChunkCoord (cx + 1) cy, ChunkCoord (cx - 1) cy
                                     , ChunkCoord cx (cy + 1), ChunkCoord cx (cy - 1) ]
-                        withSelf = HM.insert coord activated (ssChunks ss)
+                        withSelf = HM.insert coord activated (swsChunks sws)
                         withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m)
                                           withSelf nbrCoords
-                    writeIORef simStateRef $ ss { ssChunks = withNbrs }
+                    writeIORef simStateRef $
+                        ss { ssWorlds = HM.insert pid
+                                          (sws { swsChunks = withNbrs })
+                                          (ssWorlds ss) }
 
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }
@@ -174,67 +210,65 @@ handleSimCommand env logger simStateRef cmd = do
             -- No wsTilesRef re-sync needed: the world sends the FINAL
             -- fluid in SimChunkLoaded (the old post-load seal that this
             -- guarded against was removed), so scsFluid is already fresh.
-            -- Run sim ticks synchronously (no sleeping) until all chunks
-            -- are settled and inactive. Capped at maxIterations as a
-            -- safety net. Explicitly unpause — the dump path pauses the
-            -- sim before chunks load, but simulateActiveTick is a no-op
-            -- while paused, so the synchronous settle below would do
-            -- nothing.
+            -- Run sim ticks synchronously (no sleeping) for every world
+            -- until all its chunks are settled and inactive. Capped at
+            -- maxIterations as a safety net. Explicitly unpause — the dump
+            -- path pauses the sim before chunks load, but simulateActiveTick
+            -- is a no-op while paused, so the synchronous settle below would
+            -- do nothing.
             let maxIterations = 500 ∷ Int
-                ssUnpaused = ss { ssPaused = False }
-                ssSettled = fastSettleAll maxIterations ssUnpaused
+                settled = HM.map (fastSettleWorld maxIterations) (ssWorlds ss)
                 -- Mark every chunk dirty so the whole settled state is
                 -- emitted to the world thread.
-                allCoords = HS.fromList (HM.keys (ssChunks ssSettled))
-                ssDirty = ssSettled { ssDirtyChunks = allCoords
-                                    , ssPaused = True }
-            writeIORef simStateRef (ssDirty { ssDirtyChunks = HS.empty })
-            -- Emit to the world thread (sole writer) and WAIT for it to
-            -- apply before signalling done — the dump reads wsTilesRef
-            -- immediately after.
-            ack ← newEmptyMVar
-            emitDirtyFluids env ssDirty (Just ack)
-            takeMVar ack
+                dirtied = HM.map (\sws →
+                    sws { swsDirtyChunks = HS.fromList (HM.keys (swsChunks sws)) })
+                    settled
+            -- Persist the cleared (post-emit) state.
+            writeIORef simStateRef $
+                ss { ssWorlds = HM.map clearDirty dirtied, ssPaused = True }
+            -- Emit each world's batch and WAIT for the world thread to apply
+            -- it before signalling done — the dump reads wsTilesRef right
+            -- after. One ack per world (dump worlds are typically just one).
+            forM_ (HM.toList dirtied) $ \(pid, sws) → do
+                ack ← newEmptyMVar
+                emitWorldDirtyFluids env pid sws (Just ack)
+                takeMVar ack
             putMVar done ()
             logDebug logger CatWorld "Sim: fast-settled and paused"
 
--- | Run all sim ticks synchronously without sleeping. Stops when no
---   chunks have settle ticks remaining and no chunks are active, or
+tshow ∷ Show a ⇒ a → T.Text
+tshow = T.pack ∘ show
+
+-- | Run all sim ticks synchronously without sleeping for one world. Stops
+--   when no chunk has settle ticks remaining and no chunk is active, or
 --   when the iteration cap is reached.
-fastSettleAll ∷ Int → SimState → SimState
-fastSettleAll = go
+fastSettleWorld ∷ Int → SimWorldState → SimWorldState
+fastSettleWorld = go
   where
-    go 0 ss = ss
-    go n ss
-      | allDone ss = ss
-      | otherwise =
-          let ss'  = settleNewChunks ss
-              ss'' = simulateActiveTick ss'
-          in go (n - 1) ss''
+    go 0 sws = sws
+    go n sws
+      | allDone sws = sws
+      | otherwise   = go (n - 1) (simulateActiveTick (settleNewChunks sws))
 
-    allDone ss =
-        not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss))
-        ∧ not (any scsActive (ssChunks ss))
+    allDone sws =
+        not (any (\scs → scsSettleTicks scs > 0) (swsChunks sws))
+        ∧ not (any scsActive (swsChunks sws))
 
--- | Tick down the per-chunk fast-settle countdown. A freshly loaded or
---   just-edited chunk starts with a non-zero 'scsSettleTicks';
---   'fastSettleAll' iterates until every chunk's countdown has reached 0
---   (and no chunk is active), which is how the synchronous settle knows
---   the world has quiesced. A no-op once all countdowns are 0.
---
---   Pure — shared by the live sim loop and the synchronous fast-settle.
---   (It used to also run the passive fluid pass, hence the old IO copy;
---   that pass was a no-op and has been removed.)
-settleNewChunks ∷ SimState → SimState
-settleNewChunks ss
-    | not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss)) = ss
+-- | Tick down the per-chunk fast-settle countdown for one world. A freshly
+--   loaded or just-edited chunk starts with a non-zero 'scsSettleTicks';
+--   'fastSettleWorld' iterates until every chunk's countdown has reached 0
+--   (and no chunk is active), which is how the synchronous settle knows the
+--   world has quiesced. A no-op once all countdowns are 0.
+settleNewChunks ∷ SimWorldState → SimWorldState
+settleNewChunks sws
+    | not (any (\scs → scsSettleTicks scs > 0) (swsChunks sws)) = sws
     | otherwise =
         let decremented = HM.map (\scs →
                 if scsSettleTicks scs > 0
                     then scs { scsSettleTicks = scsSettleTicks scs - 1 }
                     else scs
-                ) (ssChunks ss)
-        in ss { ssChunks = decremented }
+                ) (swsChunks sws)
+        in sws { swsChunks = decremented }
 
 -- | Activate a passive chunk for volume-based simulation.
 activateChunk ∷ SimChunkState → SimChunkState
@@ -254,31 +288,17 @@ activateChunk scs
                , scsEquilTicks  = 0
                }
 
--- | Deactivate a chunk: bake active fluid back to passive FluidCells.
-deactivateChunk ∷ SimChunkState → SimChunkState
-deactivateChunk scs =
-    let terrV = scsTerrain scs
-        bakedFluid = V.imap (\idx mafc →
-            case mafc of
-                Nothing  → Nothing
-                Just afc → activeToFluidCell (terrV VU.! idx) afc
-            ) (scsActiveFluid scs)
-    in scs { scsActive      = False
-           , scsActiveFluid = V.replicate (V.length bakedFluid) Nothing
-           , scsFluid       = bakedFluid
-           , scsGenFluid    = bakedFluid
-           , scsEquilTicks  = 0
-           }
-
--- | Emit the dirty chunks' fluid results to the WORLD thread (the sole
---   writer of 'wsTilesRef') as a 'WorldApplyFluids' batch — the sim
---   never touches 'wsTilesRef' itself. With 'Just' ack, the world
---   signals it after applying (the synchronous fast-settle waits on it).
-emitDirtyFluids ∷ EngineEnv → SimState → Maybe (MVar ()) → IO ()
-emitDirtyFluids env ss mAck = do
-    let dirty = ssDirtyChunks ss
+-- | Emit one world's dirty chunks' fluid results to the WORLD thread (the
+--   sole writer of 'wsTilesRef') as a 'WorldApplyFluids' batch tagged with
+--   the world's page id, so the world thread applies it ONLY to that world
+--   (#59). The sim never touches 'wsTilesRef' itself. With 'Just' ack, the
+--   world signals it after applying (the synchronous fast-settle waits).
+emitWorldDirtyFluids ∷ EngineEnv → WorldPageId → SimWorldState
+                     → Maybe (MVar ()) → IO ()
+emitWorldDirtyFluids env pid sws mAck = do
+    let dirty = swsDirtyChunks sws
         writebacks = mapMaybe (\cc →
-            case HM.lookup cc (ssChunks ss) of
+            case HM.lookup cc (swsChunks sws) of
                 Nothing  → Nothing
                 Just scs →
                     let newFluid = if scsActive scs
@@ -300,7 +320,7 @@ emitDirtyFluids env ss mAck = do
             ) (HS.toList dirty)
     when (not (null writebacks) ∨ isJust mAck) $
         Q.writeQueue (worldQueue env)
-            (WorldApplyFluids (FluidWritebackBatch writebacks mAck))
+            (WorldApplyFluids (FluidWritebackBatch pid writebacks mAck))
 
 deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)
 deriveFluidMap scs =

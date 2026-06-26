@@ -13,6 +13,8 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
+import qualified Engine.Core.Queue as Q
+import Sim.Command.Types (SimCommand(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -50,14 +52,19 @@ handleWorldSetCameraCommand env logger pageId x y = do
 handleWorldDestroyCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldDestroyCommand env logger pageId = do
     logInfo logger CatWorld $ "Destroying world: " <> unWorldPageId pageId
-    
+
+    -- Tear down this world's simulation state too — destroy used to drop
+    -- the page from wmWorlds/wmVisible while leaving its sim chunks behind
+    -- forever (#61). Per-world deactivate touches only this world's sim.
+    Q.writeQueue (simQueue env) (SimDeactivateWorld pageId)
+
     -- Remove from visible list
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
         (mgr { wmVisible = filter (/= pageId) (wmVisible mgr)
              , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr)
              }, ())
-    
+
     -- Clear world quads so renderer stops drawing the old world
     writeIORef (worldQuadsRef env) V.empty
-    
+
     logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId

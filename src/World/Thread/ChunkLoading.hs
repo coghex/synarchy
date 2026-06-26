@@ -127,12 +127,13 @@ updateChunkLoading env logger = do
                                 -- fluid + terrain (player edits matter).
                                 forM_ newChunks' $ \lc →
                                     Q.writeQueue (simQueue env) $
-                                        SimChunkLoaded (lcCoord lc)
+                                        SimChunkLoaded pageId (lcCoord lc)
                                             (lcFluidMap lc)
                                             (lcTerrainSurfaceMap lc)
                                 -- Notify sim thread of evicted chunks
                                 forM_ evicted $ \cc →
-                                    Q.writeQueue (simQueue env) (SimChunkUnloaded cc)
+                                    Q.writeQueue (simQueue env)
+                                        (SimChunkUnloaded pageId cc)
                                 writeIORef (wsQuadCacheRef worldState) Nothing
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing
@@ -227,7 +228,7 @@ drainInitQueues env logger = do
                         -- settle and never be simulated. (post-replay)
                         forM_ newChunks' $ \lc →
                             Q.writeQueue (simQueue env) $
-                                SimChunkLoaded (lcCoord lc)
+                                SimChunkLoaded pageId (lcCoord lc)
                                     (lcFluidMap lc)
                                     (lcTerrainSurfaceMap lc)
 

@@ -18,7 +18,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..))
-import Sim.State.Types (SimState(..), SimChunkState(..))
+import Sim.State.Types (SimWorldState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
 import Sim.Fluid.Active (simulateActiveTick)
 
@@ -38,38 +38,36 @@ mkChunk active = SimChunkState
     , scsSideDeco    = VU.replicate n 0
     }
 
-mkState ∷ [(ChunkCoord, SimChunkState)] → SimState
-mkState chunks = SimState
-    { ssChunks      = HM.fromList chunks
-    , ssTickRate    = 100000
-    , ssDirtyChunks = HS.empty
-    , ssPaused      = False
-    , ssWorldActive = True
+mkState ∷ [(ChunkCoord, SimChunkState)] → SimWorldState
+mkState chunks = SimWorldState
+    { swsChunks      = HM.fromList chunks
+    , swsDirtyChunks = HS.empty
+    , swsActive      = True
     }
 
 -- | Sum of active-fluid volume across all chunks.
-activeVolume ∷ SimState → Int
+activeVolume ∷ SimWorldState → Int
 activeVolume ss = sum
     [ fromIntegral (afcVolume afc)
-    | scs ← HM.elems (ssChunks ss)
+    | scs ← HM.elems (swsChunks ss)
     , Just afc ← V.toList (scsActiveFluid scs) ]
 
-allActive ∷ SimState → Bool
-allActive ss = all scsActive (HM.elems (ssChunks ss))
+allActive ∷ SimWorldState → Bool
+allActive ss = all scsActive (HM.elems (swsChunks ss))
 
-tick ∷ Int → SimState → SimState
+tick ∷ Int → SimWorldState → SimWorldState
 tick k ss = iterate simulateActiveTick ss !! k
 
 -- | Volume in one chunk (active grid).
-chunkVolume ∷ ChunkCoord → SimState → Int
-chunkVolume cc ss = case HM.lookup cc (ssChunks ss) of
+chunkVolume ∷ ChunkCoord → SimWorldState → Int
+chunkVolume cc ss = case HM.lookup cc (swsChunks ss) of
     Nothing  → 0
     Just scs → sum [ fromIntegral (afcVolume afc)
                    | Just afc ← V.toList (scsActiveFluid scs) ]
 
 -- | Water surface of the cell at (lx,ly) in a chunk (terrain z=0).
-surfAt ∷ ChunkCoord → Int → Int → SimState → Int
-surfAt cc lx ly ss = case HM.lookup cc (ssChunks ss) of
+surfAt ∷ ChunkCoord → Int → Int → SimWorldState → Int
+surfAt cc lx ly ss = case HM.lookup cc (swsChunks ss) of
     Nothing  → 0
     Just scs → case scsActiveFluid scs V.! (ly * chunkSize + lx) of
         Nothing  → 0

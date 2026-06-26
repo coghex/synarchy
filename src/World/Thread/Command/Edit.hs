@@ -19,6 +19,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
+import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
@@ -43,6 +44,19 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
                          , candidateVertices, promotableTiles
                          , debitPromotedTile, tileCornerVertices)
 import World.Thread.Helpers (unWorldPageId)
+
+-- | After a live terrain/fluid edit lands in the chunk, re-seed that
+--   chunk's sim state from the now-authoritative tiles by re-emitting
+--   'SimChunkLoaded'. Without this the sim keeps running against the
+--   pre-edit fluid/terrain and writes its stale result back over the
+--   edit (#60). Re-emitting replaces the sim chunk and re-settles it with
+--   the new maps; a no-op-ish for an inactive (hidden) world, which
+--   re-settles on show.
+syncEditToSim ∷ EngineEnv → WorldPageId → LoadedChunk → IO ()
+syncEditToSim env pageId lc =
+    Q.writeQueue (simQueue env) $
+        SimChunkLoaded pageId (lcCoord lc)
+            (lcFluidMap lc) (lcTerrainSurfaceMap lc)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
 --   Records the edit in the world's edit log so it survives chunk
@@ -89,6 +103,8 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
+                        -- Keep the sim's chunk in step with the new terrain.
+                        syncEditToSim env pageId lc'
                         -- Invalidate all three render caches so the next
                         -- tick rebuilds quads from the modified chunk.
                         writeIORef (wsQuadCacheRef ws)     Nothing
@@ -147,6 +163,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
+                        syncEditToSim env pageId lc'
                         writeIORef (wsQuadCacheRef ws)     Nothing
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -247,6 +264,11 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
+                        -- No syncEditToSim here: a slope bitmask is pure
+                        -- walkability — it changes neither the surface
+                        -- elevation nor fluid the sim reads, so there is no
+                        -- stale sim state to refresh (#60), and re-seeding
+                        -- would needlessly reset an in-flight fluid sim.
                         writeIORef (wsQuadCacheRef ws)     Nothing
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -295,6 +317,7 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                             (insertChunk lc' w, ())
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
+                        syncEditToSim env pageId lc'
                         writeIORef (wsQuadCacheRef ws)     Nothing
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -597,6 +620,10 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
                         (insertChunk lc' w, ())
                     atomicModifyIORef' (wsEditsRef ws) $ \es →
                         (appendEdit coord edit es, ())
+                    -- Re-seed the sim with the placed fluid so it flows /
+                    -- settles instead of being overwritten by stale sim
+                    -- output (#60).
+                    syncEditToSim env pageId lc'
                     writeIORef (wsQuadCacheRef ws)     Nothing
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing
