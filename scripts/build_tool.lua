@@ -480,9 +480,21 @@ function buildTool.update(dt)
     local defName = buildTool.state.selectedDef
     if not defName then return end
 
-    local gx, gy = world.getHoverTile()
+    -- Drive the preview from the SAME synchronous hit-test the placement
+    -- click uses (world.pickTile of the live cursor), not the async
+    -- world.getHoverTile() cache. Otherwise, after a fast cursor move the
+    -- ghost (cache, lagging the ~0.1s UI tick) and the click (live pick)
+    -- could resolve different tiles, so the preview would lie (issue #66).
+    local mx, my = engine.getMousePosition()
+    local gx, gy
+    if mx and my then
+        gx, gy = world.pickTile(mx, my)
+    end
     if not gx or not gy then
         building.clearGhost()
+        -- No current hover tile: drop the cached placement target too, so a
+        -- later off-world click can't place on stale coordinates (issue #66).
+        buildTool.state.lastHoverTile = nil
         return
     end
 
@@ -508,18 +520,31 @@ function buildTool.handleMouseDown(button, x, y)
     if buildTool.state.mode ~= "placement" then return false end
 
     if button == MOUSE_LEFT then
-        local tile = buildTool.state.lastHoverTile
-        if not tile then return true end
+        -- Hit-test the ACTUAL click coordinates synchronously rather than
+        -- trusting the cached hover tile. getHoverTile()/lastHoverTile are
+        -- only refreshed on the periodic update() tick (hud.update pushes
+        -- the cursor pos every ~0.1s, then the render thread resolves it),
+        -- so a click that arrives after a fast cursor move off-world would
+        -- otherwise place on a stale on-world tile (issue #66). pickTile
+        -- runs the hit-test now against live camera/window/tile state.
+        local gx, gy = world.pickTile(x, y)
+        if not gx or not gy then
+            buildTool.state.lastHoverTile = nil
+            return true
+        end
+        local igx = math.floor(gx)
+        local igy = math.floor(gy)
+        buildTool.state.lastHoverTile = { igx, igy }
         local valid = building.canPlaceAt(buildTool.state.selectedDef,
-                                          tile[1], tile[2])
+                                          igx, igy)
         if valid then
             local id = building.spawn(buildTool.state.selectedDef,
-                                      tile[1], tile[2])
+                                      igx, igy)
             if id then
                 engine.logInfo("BuildTool: placed " ..
                     buildTool.state.selectedDef ..
                     " (id=" .. tostring(id) ..
-                    ") at " .. tile[1] .. "," .. tile[2])
+                    ") at " .. igx .. "," .. igy)
             end
             buildTool.exitPlacement()
             if buildTool.hud and buildTool.hud.selectDefaultTool then

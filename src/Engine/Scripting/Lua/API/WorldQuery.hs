@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldWaitForChunksFn
     , worldGetHoverTileFn
     , worldGetHoverPosFn
+    , worldPickTileFn
     , worldGetClimateAtFn
     ) where
 
@@ -28,8 +29,11 @@ import World.Hydrology.Types
 import World.Cursor.Types (CursorState(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import Engine.Graphics.Camera (Camera2D(..))
+import World.Render.HitTest (pickWorldTile)
+import World.Render.ViewBounds (computeViewBounds)
 
-import World.Generate (globalToChunk)
+import World.Generate (globalToChunk, viewDepth)
 
 -- | Helper: get the first active world's tile data
 getWorldTileData ∷ EngineEnv → IO (Maybe WorldTileData)
@@ -38,6 +42,15 @@ getWorldTileData env = do
     case wmWorlds manager of
         ((_, ws):_) → Just <$> readIORef (wsTilesRef ws)
         []          → pure Nothing
+
+-- | Helper: the WorldState of the currently VISIBLE world (head of
+--   wmVisible), looked up in wmWorlds. This is the world rendering and
+--   building operate on; a hidden page can sit at the wmWorlds head, so
+--   the raw head is not a safe proxy for "what the player sees".
+mVisibleWorldState ∷ WorldManager → Maybe WorldState
+mVisibleWorldState manager = case wmVisible manager of
+    (pageId:_) → lookup pageId (wmWorlds manager)
+    []         → Nothing
 
 -- | world.getTerrainAt(gx, gy) → surfaceZ, terrainSurfaceZ or nil
 --   Returns the surface elevation and terrain-only surface elevation.
@@ -513,5 +526,65 @@ worldGetHoverPosFn env = do
                     Lua.pushnil
                     return 1
         [] → do
+            Lua.pushnil
+            return 1
+
+-- | world.pickTile(pixX, pixY) → gx, gy or nil
+--   Synchronous screen-pixel → tile hit-test from the given click
+--   coordinates. Unlike getHoverTile (which reads the cached
+--   worldHoverTile the render thread resolves from the periodically
+--   pushed cursor position), this runs the hit-test NOW against the
+--   live camera + window + tile state, so it reflects exactly where the
+--   passed pixel points this instant. Use it on click paths (e.g. build
+--   placement) where the async hover cache can lag a fast cursor move
+--   off-world and place on a stale tile. Returns nil when the pixel is
+--   off-world / over no solid tile.
+worldPickTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldPickTileFn env = do
+    -- Click coords arrive as Lua numbers (Doubles from GLFW.getCursorPos),
+    -- not integers — parse with tonumber and round, like the other
+    -- screen-coordinate APIs (e.g. setWorldCursorHover).
+    mPx ← Lua.tonumber 1
+    mPy ← Lua.tonumber 2
+    case (mPx, mPy) of
+        (Just px', Just py') → do
+            let px = round px'
+                py = round py'
+            manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+            -- Resolve the VISIBLE world (head of wmVisible), not the raw
+            -- wmWorlds head: rendering and building validation/spawn both
+            -- operate on wmVisible, and a hidden page (e.g. test_arena) can
+            -- sit at the wmWorlds head while main_world is shown. Picking
+            -- against the wrong world would silently desync ghost/placement.
+            case mVisibleWorldState manager of
+                Just ws → do
+                    camera   ← Lua.liftIO $ readIORef (cameraRef env)
+                    tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
+                    paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
+                    (winW, winH) ← Lua.liftIO $ readIORef (windowSizeRef env)
+                    (fbW, fbH)   ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+                    let facing   = camFacing camera
+                        zoom     = camZoom camera
+                        zSlice   = camZSlice camera
+                        (camX, camY) = camPosition camera
+                        worldSize = case paramsM of
+                                      Nothing     → 128
+                                      Just params → wgpWorldSize params
+                        effectiveDepth = min viewDepth
+                                           (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+                        vb = computeViewBounds camera fbW fbH effectiveDepth
+                    case pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
+                                       worldSize effectiveDepth vb tileData px py of
+                        Just (gx, gy, _, _, _) → do
+                            Lua.pushinteger (fromIntegral gx)
+                            Lua.pushinteger (fromIntegral gy)
+                            return 2
+                        Nothing → do
+                            Lua.pushnil
+                            return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
             Lua.pushnil
             return 1

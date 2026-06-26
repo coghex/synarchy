@@ -525,6 +525,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "waitForChunks" (worldWaitForChunksFn env)
   registerLuaFunction "getHoverTile" (worldGetHoverTileFn env)
   registerLuaFunction "getHoverPos"  (worldGetHoverPosFn env)
+  registerLuaFunction "pickTile"     (worldPickTileFn env)
   registerLuaFunction "getClimateAt" (worldGetClimateAtFn env)
 
   Lua.setglobal (Lua.Name "world")
