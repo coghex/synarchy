@@ -27,7 +27,6 @@ import World.Command.Types (WorldCommand(..), FluidWriteback(..)
 import Sim.Command.Types (SimCommand(..))
 import Sim.State.Types (SimState(..), SimChunkState(..), emptySimState)
 import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, activeToFluidCell)
-import Sim.Fluid.Tick (simulateFluidTick)
 import Sim.Fluid.Active (simulateActiveTick)
 
 startSimThread ∷ EngineEnv → IO ThreadState
@@ -77,14 +76,13 @@ simLoop env stateRef simStateRef = do
                         threadDelay (ssTickRate ss)
                         pure True
                     else do
-                        ss' ← settleNewChunks ss
-                        let ss''   = simulateFluidTick ss'
-                            ss'''  = simulateActiveTick ss''
-                        emitDirtyFluids env ss''' Nothing
-                        let ss'''' = ss''' { ssDirtyChunks = HS.empty }
-                        writeIORef simStateRef ss''''
+                        let ss'  = settleNewChunks ss
+                            ss'' = simulateActiveTick ss'
+                        emitDirtyFluids env ss'' Nothing
+                        let ss''' = ss'' { ssDirtyChunks = HS.empty }
+                        writeIORef simStateRef ss'''
 
-                        threadDelay (ssTickRate ss'''')
+                        threadDelay (ssTickRate ss''')
                         pure True
               )
               (\(e ∷ SomeException) → do
@@ -179,8 +177,9 @@ handleSimCommand env logger simStateRef cmd = do
             -- Run sim ticks synchronously (no sleeping) until all chunks
             -- are settled and inactive. Capped at maxIterations as a
             -- safety net. Explicitly unpause — the dump path pauses the
-            -- sim before chunks load but simulateFluidTick is a no-op
-            -- when paused.
+            -- sim before chunks load, but simulateActiveTick is a no-op
+            -- while paused, so the synchronous settle below would do
+            -- nothing.
             let maxIterations = 500 ∷ Int
                 ssUnpaused = ss { ssPaused = False }
                 ssSettled = fastSettleAll maxIterations ssUnpaused
@@ -209,28 +208,33 @@ fastSettleAll = go
     go n ss
       | allDone ss = ss
       | otherwise =
-          let ss'   = settleNewChunksPure ss
-              ss''  = simulateFluidTick ss'
-              ss''' = simulateActiveTick ss''
-          in go (n - 1) ss'''
+          let ss'  = settleNewChunks ss
+              ss'' = simulateActiveTick ss'
+          in go (n - 1) ss''
 
     allDone ss =
         not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss))
         ∧ not (any scsActive (ssChunks ss))
 
--- | Pure version of settleNewChunks for use in synchronous fast-settle.
-settleNewChunksPure ∷ SimState → SimState
-settleNewChunksPure ss =
-    if not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss))
-    then ss
-    else
-        let ss' = simulateFluidTick ss
-            decremented = HM.map (\scs →
+-- | Tick down the per-chunk fast-settle countdown. A freshly loaded or
+--   just-edited chunk starts with a non-zero 'scsSettleTicks';
+--   'fastSettleAll' iterates until every chunk's countdown has reached 0
+--   (and no chunk is active), which is how the synchronous settle knows
+--   the world has quiesced. A no-op once all countdowns are 0.
+--
+--   Pure — shared by the live sim loop and the synchronous fast-settle.
+--   (It used to also run the passive fluid pass, hence the old IO copy;
+--   that pass was a no-op and has been removed.)
+settleNewChunks ∷ SimState → SimState
+settleNewChunks ss
+    | not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss)) = ss
+    | otherwise =
+        let decremented = HM.map (\scs →
                 if scsSettleTicks scs > 0
                     then scs { scsSettleTicks = scsSettleTicks scs - 1 }
                     else scs
-                ) (ssChunks ss')
-        in ss' { ssChunks = decremented }
+                ) (ssChunks ss)
+        in ss { ssChunks = decremented }
 
 -- | Activate a passive chunk for volume-based simulation.
 activateChunk ∷ SimChunkState → SimChunkState
@@ -265,21 +269,6 @@ deactivateChunk scs =
            , scsGenFluid    = bakedFluid
            , scsEquilTicks  = 0
            }
-
--- | Run fast settle ticks for newly loaded chunks.
-settleNewChunks ∷ SimState → IO SimState
-settleNewChunks ss = do
-    let needsSettle = HM.filter (\scs → scsSettleTicks scs > 0) (ssChunks ss)
-    if HM.null needsSettle
-        then return ss
-        else do
-            let ss' = simulateFluidTick ss
-                decremented = HM.map (\scs →
-                    if scsSettleTicks scs > 0
-                        then scs { scsSettleTicks = scsSettleTicks scs - 1 }
-                        else scs
-                    ) (ssChunks ss')
-            return $ ss' { ssChunks = decremented }
 
 -- | Emit the dirty chunks' fluid results to the WORLD thread (the sole
 --   writer of 'wsTilesRef') as a 'WorldApplyFluids' batch — the sim
