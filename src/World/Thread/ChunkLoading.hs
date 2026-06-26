@@ -157,22 +157,38 @@ drainInitQueues env logger = do
                 case mParams of
                     Nothing → return ()
                     Just params → do
-                        -- Atomically claim this tick's batch. The Lua
-                        -- thread appends to this queue concurrently
-                        -- (world.loadChunksInRegion → atomicModifyIORef'
-                        -- in API/WorldQuery.hs); the previous
-                        -- read…generate…write-rest pattern could erase
-                        -- an append that landed in between (lost
-                        -- update — those chunks would silently never
-                        -- generate). This thread is the only consumer,
-                        -- so the claimed batch is exclusively ours.
-                        batch ← atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
-                            (drop maxChunksPerTick q, take maxChunksPerTick q)
+                        -- Claim this tick's batch by PEEKING the front of
+                        -- the queue. The chunks stay enqueued through
+                        -- generation and are removed only once they land in
+                        -- wsTilesRef (below). Keeping them queued means an
+                        -- in-flight chunk is still visible to a concurrent
+                        -- world.loadChunksInRegion (which dedups against the
+                        -- queue), so a repeat call for a still-generating
+                        -- region no longer re-enqueues it (#43). The Lua
+                        -- thread only ever appends and this thread is the
+                        -- sole consumer, so the front batch is stable and the
+                        -- by-coord removal below can't clobber an append that
+                        -- landed during generation (no lost update).
+                        let batch = take maxChunksPerTick remaining
+                        -- Skip coords already in wsTilesRef. The camera-visible
+                        -- loader (updateChunkLoading) loads chunks straight into
+                        -- wsTilesRef without going through this queue, so a coord
+                        -- queued here by loadChunksInRegion may already be loaded
+                        -- by the time we reach it. Regenerating it would overwrite
+                        -- the chunk and emit a duplicate SimChunkLoaded, resetting
+                        -- its sim state. wsTilesRef is the shared "already loaded"
+                        -- source of truth both loaders write and dedup against;
+                        -- both run on this (world) thread, so the snapshot is
+                        -- stable for the rest of the tick. The whole batch
+                        -- (already-loaded + freshly generated) is dropped from the
+                        -- queue below.
+                        td0 ← readIORef (wsTilesRef worldState)
+                        let (_alreadyLoaded, toGen) = partitionChunks batch td0
                         let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq
                                 (generateLoadedChunk registry catalog params)
-                                batch
+                                toGen
 
                         -- Replay player edits onto the fresh chunks
                         -- before inserting. On load, edits restored from
@@ -199,6 +215,17 @@ drainInitQueues env logger = do
                                     ⧺ concatMap chunkNeighbors coords
                                 td5 = applyDigSlopesTd desigs digCoords td''''
                             in (td5, ())
+
+                        -- The batch is now in wsTilesRef, so drop it from the
+                        -- init queue — by coord, which preserves any appends
+                        -- that arrived during generation. Done here, after the
+                        -- insert and before the progress read below, so a
+                        -- chunk is always in the queue OR loaded (never in
+                        -- neither) and LoadDone/LoadPhase2 still see the right
+                        -- remaining count.
+                        let batchSet = HS.fromList batch
+                        atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
+                            (filter (\c → not (c `HS.member` batchSet)) q, ())
 
                         -- Force this batch's chunks (plus the neighbours the
                         -- slope / edge-strata / side-deco passes rebuilt) to

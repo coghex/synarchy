@@ -18,6 +18,7 @@ import qualified HsLua as Lua
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv(..))
@@ -405,10 +406,31 @@ worldLoadChunksInRegionFn env = do
                 manager ← readIORef (worldManagerRef env)
                 case wmWorlds manager of
                     ((_, ws):_) → do
-                        -- Filter out already-loaded chunks
+                        -- Filter the requested coords against both the loaded
+                        -- tiles and the pending/in-flight queue, race-free
+                        -- against the world thread's load handoff.
+                        -- drainInitQueues (Thread/ChunkLoading) keeps a chunk
+                        -- queued for the whole of its generation, then inserts
+                        -- it into wsTilesRef and only AFTER that removes it
+                        -- from this queue — both writes via atomicModifyIORef'.
+                        -- So we must read in the matching order: snapshot the
+                        -- queue FIRST (an atomicModifyIORef' read, which
+                        -- acquires that release), THEN read the tiles. A coord
+                        -- already gone from the queue snapshot is then
+                        -- guaranteed visible in the tile snapshot, so a chunk
+                        -- that is in flight or just-loaded is caught by one
+                        -- snapshot or the other, never missed by both (no
+                        -- duplicate queueing, no inflated count). Reading the
+                        -- tiles first would reopen that window.
+                        pending ← atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q, q)
+                        let queued = HS.fromList pending
                         td ← readIORef (wsTilesRef ws)
-                        let needed = filter (\c → isNothing (lookupChunk c td)) coords
-                        -- Append to init queue
+                        let needed = filter (\c → isNothing (lookupChunk c td)
+                                                ∧ not (HS.member c queued)) coords
+                        -- `needed` is disjoint from the queue snapshot, and the
+                        -- Lua thread is the sole appender, so this append can't
+                        -- introduce a duplicate even if the world thread
+                        -- removed (loaded) some coords in between.
                         atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                             (q ++ needed, length needed)
                     [] → pure 0
