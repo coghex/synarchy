@@ -216,13 +216,29 @@ drainInitQueues env logger = do
                                 td5 = applyDigSlopesTd desigs digCoords td''''
                             in (td5, ())
 
-                        -- The batch is now in wsTilesRef, so drop it from the
-                        -- init queue — by coord, which preserves any appends
-                        -- that arrived during generation. Done here, after the
-                        -- insert and before the progress read below, so a
-                        -- chunk is always in the queue OR loaded (never in
-                        -- neither) and LoadDone/LoadPhase2 still see the right
-                        -- remaining count.
+                        -- Notify the sim thread of the loaded chunks BEFORE
+                        -- dropping the batch from the init queue. The dump
+                        -- path treats an empty init queue as "safe to
+                        -- fast-settle" and enqueues SimFastSettleAll at that
+                        -- point; simQueue is FIFO and SimFastSettleAll only
+                        -- settles chunks already present in sim state, so
+                        -- these SimChunkLoaded messages must be enqueued
+                        -- first — otherwise the final batch can race the
+                        -- settle and never be simulated. (post-replay)
+                        forM_ newChunks' $ \lc →
+                            Q.writeQueue (simQueue env) $
+                                SimChunkLoaded (lcCoord lc)
+                                    (lcFluidMap lc)
+                                    (lcTerrainSurfaceMap lc)
+
+                        -- The batch is now in wsTilesRef AND the sim has been
+                        -- notified, so drop it from the init queue — by coord,
+                        -- which preserves any appends that arrived during
+                        -- generation. Done here, after the insert and before
+                        -- the progress read below, so a chunk is always in the
+                        -- queue OR loaded (never in neither) and
+                        -- LoadDone/LoadPhase2 still see the right remaining
+                        -- count.
                         let batchSet = HS.fromList batch
                         atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
                             (filter (\c → not (c `HS.member` batchSet)) q, ())
@@ -246,13 +262,6 @@ drainInitQueues env logger = do
                             toForce = [ lc | c ← affected
                                            , Just lc ← [lookupChunk c forcedTd] ]
                         _ ← evaluate (rnf toForce)
-
-                        -- Notify sim thread of loaded chunks (post-replay)
-                        forM_ newChunks' $ \lc →
-                            Q.writeQueue (simQueue env) $
-                                SimChunkLoaded (lcCoord lc)
-                                    (lcFluidMap lc)
-                                    (lcTerrainSurfaceMap lc)
 
                         -- Invalidate all render caches so new chunks appear immediately
                         writeIORef (wsQuadCacheRef worldState) Nothing
