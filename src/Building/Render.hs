@@ -6,6 +6,7 @@ module Building.Render
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
@@ -23,6 +24,7 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , worldLayer, GridConfig(..), defaultGridConfig)
 import Unit.Direction (Direction(..))
 import Unit.Types (Animation(..))
+import World.State.Types (wmVisible)
 import Building.Types
 
 baseTileW ∷ Float
@@ -88,7 +90,11 @@ pickBuildingFrame now inst def =
 renderBuildingQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
 renderBuildingQuads env facing zSlice effDepth tileAlpha = do
     bm ← readIORef (buildingManagerRef env)
-    let instances = bmInstances bm
+    -- Render only the visible worlds' buildings — buildings are
+    -- world-scoped so a hidden world's must not draw here (#76).
+    mgr ← readIORef (worldManagerRef env)
+    let visiblePages = HS.fromList (wmVisible mgr)
+        instances = buildingsOnPages visiblePages (bmInstances bm)
         defs      = bmDefs bm
         selected  = bmSelected bm
     if HM.null instances

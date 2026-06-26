@@ -15,7 +15,7 @@ module Building.HitTest
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Grid (tileWidth, tileHeight, tileSideHeight
@@ -38,8 +38,13 @@ hitTestBuildingAt env pixX pixY = do
     camera   ← readIORef (cameraRef env)
     (winW, winH) ← readIORef (windowSizeRef env)
     texSizes ← readIORef (textureSizeRef env)
+    mgr      ← readIORef (worldManagerRef env)
 
-    let instances = bmInstances bm
+    -- Only the active world's buildings are clickable (#76) — matches the
+    -- render scoping; a hidden world's building must not win the hit-test.
+    let instances = case resolveActiveWorld mgr of
+            Just (pid, _) → buildingsOnPage pid (bmInstances bm)
+            Nothing       → HM.empty
     if HM.null instances
         then return Nothing
         else do

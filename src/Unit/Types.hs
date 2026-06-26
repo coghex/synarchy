@@ -15,6 +15,8 @@ module Unit.Types
     , UnitId(..)
     , emptyUnitManager
     , nextUnitId
+    , unitsOnPages
+    , unitsOnPage
     ) where
 
 import UPrelude
@@ -28,6 +30,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Types (ItemInstance(..))
 import Unit.Direction (Direction(..))
+import World.Page.Types (WorldPageId(..))
 
 -- | A single animation: per-direction frame sequences.
 --
@@ -390,6 +393,11 @@ data UnitDef = UnitDef
 --   Engine is agnostic to player vs NPC — Lua drives behavior.
 data UnitInstance = UnitInstance
     { uiDefName    ∷ !Text           -- ^ which UnitDef this came from
+    , uiPage       ∷ !WorldPageId
+      -- ^ which world this unit belongs to. Runtime-only (not serialized
+      --   — a save holds one world; loaded units are stamped with the
+      --   load target page). Scopes queries/selection/render/hit-test so a
+      --   unit spawned in one world never leaks into another (#78).
     , uiTexture    ∷ !TextureHandle  -- ^ current display texture (fallback)
     , uiDirSprites ∷ !(Map.Map Direction TextureHandle)
       -- ^ copied from UnitDef at spawn time
@@ -562,3 +570,16 @@ nextUnitId ∷ UnitManager → (UnitId, UnitManager)
 nextUnitId um =
     let uid = UnitId (umNextId um)
     in (uid, um { umNextId = umNextId um + 1 })
+
+-- | Instances belonging to any of the given world pages — the
+--   world-scoping filter for render (the visible set) and queries.
+unitsOnPages ∷ HS.HashSet WorldPageId
+             → HM.HashMap UnitId UnitInstance
+             → HM.HashMap UnitId UnitInstance
+unitsOnPages pages = HM.filter (\inst → HS.member (uiPage inst) pages)
+
+-- | Instances belonging to one specific world page (the active world).
+unitsOnPage ∷ WorldPageId
+            → HM.HashMap UnitId UnitInstance
+            → HM.HashMap UnitId UnitInstance
+unitsOnPage pid = HM.filter (\inst → uiPage inst ≡ pid)

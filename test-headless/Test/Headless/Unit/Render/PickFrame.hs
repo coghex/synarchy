@@ -14,6 +14,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame, screenDirOf)
 import Unit.Types
+import World.Page.Types (WorldPageId(..))
 
 -- | A texture handle by integer ID, for readable test assertions.
 h ∷ Int → TextureHandle
@@ -56,6 +57,7 @@ mkDef anims = UnitDef
 mkInst ∷ Text → Double → UnitInstance
 mkInst animName start = UnitInstance
     { uiDefName     = "test-unit"
+    , uiPage        = WorldPageId "test"
     , uiTexture     = h 0
     , uiDirSprites  = Map.fromList [(DirS, h 1)]
     , uiBaseWidth   = 0

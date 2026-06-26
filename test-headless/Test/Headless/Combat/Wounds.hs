@@ -12,6 +12,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Types
+import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Combat.Wounds (tickOneUnit)
 import Infection.Types (InfectionManager(..), InfectionDef(..)
@@ -55,7 +56,8 @@ def = UnitDef
 -- bleed can't kill it mid-test (we're testing infection, not death).
 inst ∷ [Wound] → UnitInstance
 inst ws = UnitInstance
-    { uiDefName = "t", uiTexture = TextureHandle 0, uiDirSprites = Map.empty
+    { uiDefName = "t", uiPage = WorldPageId "test"
+    , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
     , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0, uiRealZ = 0
     , uiFacing = DirS, uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1

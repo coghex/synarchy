@@ -6,10 +6,13 @@ module Unit.Command.Types
 import UPrelude
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (Pose(..))
+import World.Page.Types (WorldPageId(..))
 
 data UnitCommand
-    = UnitSpawn !UnitId !Text !Float !Float !Int !Text
-        -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, factionId.
+    = UnitSpawn !UnitId !Text !Float !Float !Int !Text !WorldPageId
+        -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, factionId,
+        --   owning world page (stamped from the active world at spawn so
+        --   the unit is world-scoped, #78).
         --   factionId is the spawn-time-only faction tag (no def-level
         --   default); "player" for player-controlled units, "wildlife"
         --   for everything else. Used by the combat layer for

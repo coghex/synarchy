@@ -28,7 +28,7 @@ processAllBuildingCommands env = do
         Nothing → return ()
 
 handleBuildingCommand ∷ EngineEnv → BuildingCommand → IO ()
-handleBuildingCommand env (BuildingSpawn bid defName gx gy gz) = do
+handleBuildingCommand env (BuildingSpawn bid defName gx gy gz pageId) = do
     bm ← readIORef (buildingManagerRef env)
     case HM.lookup defName (bmDefs bm) of
         Nothing → do
@@ -40,6 +40,7 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz) = do
             now ← readIORef (gameTimeRef env)
             let inst = BuildingInstance
                     { biDefName   = defName
+                    , biPage      = pageId
                     , biTexture   = bdTexture def
                     , biAnchorX   = gx
                     , biAnchorY   = gy

@@ -104,7 +104,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -433,9 +433,18 @@ unitSpawnFn env = do
             result ← Lua.liftIO $ do
                 -- Check def exists
                 um ← readIORef (unitManagerRef env)
-                case HM.lookup name (umDefs um) of
-                    Nothing → return (-1)
-                    Just _ → do
+                -- Resolve the world the unit will belong to (the active
+                -- world). A unit needs a world to live in, so reject the
+                -- spawn when none is active (#78).
+                mActive ← activeWorldPage env
+                case (HM.lookup name (umDefs um), mActive) of
+                    (Nothing, _) → return (-1)
+                    (_, Nothing) → do
+                        logger ← readIORef (loggerRef env)
+                        logWarn logger CatAsset
+                            "unit.spawn: no active world to spawn into"
+                        return (-1)
+                    (Just _, Just (pageId, _)) → do
                         -- Resolve Z
                         gz ← case zArg of
                             Just n  → return (fromIntegral n)
@@ -459,9 +468,10 @@ unitSpawnFn env = do
                             let (uid', um'') = nextUnitId um'
                             in (um'', uid')
 
-                        -- Enqueue spawn command
+                        -- Enqueue spawn command, stamped with the active
+                        -- world so the unit is world-scoped (#78).
                         Q.writeQueue (unitQueue env) $
-                            UnitSpawn uid name gx gy gz factionId
+                            UnitSpawn uid name gx gy gz factionId pageId
 
                         return (fromIntegral (unUnitId uid) ∷ Int)
 
@@ -2263,11 +2273,20 @@ unitGetActivityFn env = do
 -- | unit.getAllIds() — return a Lua array of every live unit's
 --   integer id. Useful for per-tick iteration in scripts that don't
 --   want to parse the human-readable string from unit.list.
+-- | Instances of the ACTIVE world only — the world-scoping boundary for
+--   listing / selection so a unit in another world never leaks into the
+--   current one (#78). Empty when no world is active.
+activeUnits ∷ EngineEnv → IO (HM.HashMap UnitId UnitInstance)
+activeUnits env = do
+    um ← readIORef (unitManagerRef env)
+    mActive ← activeWorldPage env
+    pure $ case mActive of
+        Just (pid, _) → unitsOnPage pid (umInstances um)
+        Nothing       → HM.empty
+
 unitGetAllIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetAllIdsFn env = do
-    ids ← Lua.liftIO $ do
-        um ← readIORef (unitManagerRef env)
-        pure (HM.keys (umInstances um))
+    ids ← Lua.liftIO $ HM.keys <$> activeUnits env
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] ids) $ \(i, uid) → do
         Lua.pushinteger (fromIntegral (unUnitId uid))

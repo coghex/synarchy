@@ -45,7 +45,7 @@ processAllUnitCommands env utsRef = do
         Nothing → return ()
 
 handleUnitCommand ∷ EngineEnv → IORef UnitThreadState → UnitCommand → IO ()
-handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
+handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId) = do
     um ← readIORef (unitManagerRef env)
     case HM.lookup defName (umDefs um) of
         Nothing → do
@@ -131,6 +131,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                                           taggedInventory
             let inst = UnitInstance
                     { uiDefName    = defName
+                    , uiPage       = pageId
                     , uiTexture    = udTexture def
                     , uiDirSprites = udDirSprites def
                     , uiBaseWidth  = udBaseWidth def

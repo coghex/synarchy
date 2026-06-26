@@ -39,7 +39,7 @@ import World.Save.Types (toBuildingSnapshot, fromBuildingSnapshot
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import Building.Types (BuildingManager(..), unBuildingId)
-import Unit.Types (UnitManager(..), unUnitId)
+import Unit.Types (UnitManager(..), unUnitId, unitsOnPage)
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
@@ -92,12 +92,17 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             texPalette ← readIORef (texPaletteRef env)
             -- v4 (Phase 3) additions
             bm        ← readIORef (buildingManagerRef env)
-            let buildings = toBuildingSnapshot bm
+            -- Snapshot only THIS world's buildings/units — the managers are
+            -- global across worlds (#76/#78).
+            let buildings = toBuildingSnapshot pageId bm
             -- v5 (Phase 4) additions
             um        ← readIORef (unitManagerRef env)
             uts       ← readIORef (utsRef env)
-            let units     = toUnitSnapshot um
-                simStates = utsSimStates uts
+            let units     = toUnitSnapshot pageId um
+                -- Keep only the saved world's units' sim states.
+                savedUids = HM.keysSet (unitsOnPage pageId (umInstances um))
+                simStates = HM.filterWithKey (\uid _ → uid `HS.member` savedUids)
+                                             (utsSimStates uts)
 
             case mParams of
                 Nothing →
@@ -330,7 +335,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
-                fromBuildingSnapshot (bmDefs currentBm) (sdBuildings saveData)
+                fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
         writeIORef (buildingManagerRef env) restored
         forM_ orphans $ \bid →
             logWarn logger CatWorld $
@@ -365,7 +370,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
-                fromUnitSnapshot (umDefs currentUm) (sdUnits saveData)
+                fromUnitSnapshot pageId (umDefs currentUm) (sdUnits saveData)
             liveUids = HM.keysSet (umInstances restoredUm)
             -- Drop sim states whose owning unit was orphaned.
             simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)

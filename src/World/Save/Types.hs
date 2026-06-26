@@ -21,6 +21,7 @@ import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import Structure.Palette (TexPalette)
 import World.Generate.Types (WorldGenParams(..))
+import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
@@ -29,9 +30,9 @@ import World.Spoil.Types (SpoilPiles)
 import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
-                      , BuildingManager(..))
+                      , BuildingManager(..), buildingsOnPage)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
-                  , StatModifier(..), Wound(..), Scar(..))
+                  , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Item.Types (ItemInstance(..))
@@ -244,12 +245,15 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
     , bisStorage           ∷ ![ItemInstance]
     } deriving (Show, Serialize, Generic)
 
--- | Build a snapshot from a live BuildingManager. Strips `bmDefs`
---   (regenerated from YAML on next boot, always in memory at load
---   time) and `bmSelected` (resets to Nothing).
-toBuildingSnapshot ∷ BuildingManager → BuildingSnapshot
-toBuildingSnapshot bm = BuildingSnapshot
-    { bsnInstances = HM.map toBuildingInstanceSnapshot (bmInstances bm)
+-- | Build a snapshot from a live BuildingManager, restricted to the world
+--   being saved (@page@). The manager is global across worlds, so an
+--   unfiltered snapshot would serialize other worlds' buildings and stamp
+--   them onto the load target (#76). Strips `bmDefs` (regenerated from
+--   YAML on next boot) and `bmSelected` (resets to Nothing).
+toBuildingSnapshot ∷ WorldPageId → BuildingManager → BuildingSnapshot
+toBuildingSnapshot page bm = BuildingSnapshot
+    { bsnInstances = HM.map toBuildingInstanceSnapshot
+                            (buildingsOnPage page (bmInstances bm))
     , bsnNextId    = bmNextId bm
     }
 
@@ -277,11 +281,15 @@ toBuildingInstanceSnapshot bi = BuildingInstanceSnapshot
 --
 --   Returns (manager, [orphan BuildingId]) so the caller can log
 --   the dropped entries.
-fromBuildingSnapshot ∷ HM.HashMap Text BuildingDef → BuildingSnapshot
+--   @page@ is the world the buildings load into (the load target); every
+--   restored building is stamped with it so the runtime world scoping
+--   holds after a load (#76).
+fromBuildingSnapshot ∷ WorldPageId → HM.HashMap Text BuildingDef
+                     → BuildingSnapshot
                      → (BuildingManager, [BuildingId])
-fromBuildingSnapshot defs snap =
+fromBuildingSnapshot page defs snap =
     let pairs = HM.toList (bsnInstances snap)
-        resolved = [ (bid, fromBuildingInstanceSnapshot d snap')
+        resolved = [ (bid, fromBuildingInstanceSnapshot page d snap')
                    | (bid, snap') ← pairs
                    , Just d ← [HM.lookup (bisDefName snap') defs]
                    ]
@@ -297,10 +305,11 @@ fromBuildingSnapshot defs snap =
                 }
     in (bm, orphans)
 
-fromBuildingInstanceSnapshot ∷ BuildingDef → BuildingInstanceSnapshot
-                             → BuildingInstance
-fromBuildingInstanceSnapshot def s = BuildingInstance
+fromBuildingInstanceSnapshot ∷ WorldPageId → BuildingDef
+                             → BuildingInstanceSnapshot → BuildingInstance
+fromBuildingInstanceSnapshot page def s = BuildingInstance
     { biDefName        = bisDefName s
+    , biPage           = page             -- runtime world scoping (#76)
     , biTexture        = bdTexture def    -- re-resolved
     , biAnchorX        = bisAnchorX s
     , biAnchorY        = bisAnchorY s
@@ -372,9 +381,14 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       --   from body_mass; ticked down by Combat.Wounds bleeding.
     } deriving (Show, Serialize, Generic)
 
-toUnitSnapshot ∷ UnitManager → UnitSnapshot
-toUnitSnapshot um = UnitSnapshot
-    { usnInstances = HM.map toUnitInstanceSnapshot (umInstances um)
+-- | Build a snapshot from a live UnitManager, restricted to the world
+--   being saved (@page@). The manager is global across worlds, so an
+--   unfiltered snapshot would serialize other worlds' units and stamp
+--   them onto the load target (#78).
+toUnitSnapshot ∷ WorldPageId → UnitManager → UnitSnapshot
+toUnitSnapshot page um = UnitSnapshot
+    { usnInstances = HM.map toUnitInstanceSnapshot
+                            (unitsOnPage page (umInstances um))
     , usnNextId    = umNextId um
     }
 
@@ -410,11 +424,14 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
 -- | Restore a UnitManager from a snapshot. Like buildings: instances
 --   whose def is no longer registered get dropped with the orphan
 --   list returned for caller logging. `umSelected` resets to empty.
-fromUnitSnapshot ∷ HM.HashMap Text UnitDef → UnitSnapshot
+--   @page@ is the world the units are loaded into (always the load
+--   target, "main_world"); every restored unit is stamped with it so the
+--   runtime-only world scoping holds after a load (#78).
+fromUnitSnapshot ∷ WorldPageId → HM.HashMap Text UnitDef → UnitSnapshot
                  → (UnitManager, [UnitId])
-fromUnitSnapshot defs snap =
+fromUnitSnapshot page defs snap =
     let pairs = HM.toList (usnInstances snap)
-        resolved = [ (uid, fromUnitInstanceSnapshot d s)
+        resolved = [ (uid, fromUnitInstanceSnapshot page d s)
                    | (uid, s) ← pairs
                    , Just d ← [HM.lookup (uisDefName s) defs]
                    ]
@@ -430,9 +447,11 @@ fromUnitSnapshot defs snap =
                 }
     in (um, orphans)
 
-fromUnitInstanceSnapshot ∷ UnitDef → UnitInstanceSnapshot → UnitInstance
-fromUnitInstanceSnapshot def s = UnitInstance
+fromUnitInstanceSnapshot ∷ WorldPageId → UnitDef → UnitInstanceSnapshot
+                         → UnitInstance
+fromUnitInstanceSnapshot page def s = UnitInstance
     { uiDefName     = uisDefName s
+    , uiPage        = page                -- runtime world scoping (#78)
     , uiTexture     = udTexture def       -- re-resolved
     , uiDirSprites  = udDirSprites def    -- re-resolved
     , uiBaseWidth   = uisBaseWidth s

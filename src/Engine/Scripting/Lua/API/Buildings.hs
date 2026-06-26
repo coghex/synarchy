@@ -39,7 +39,7 @@ import qualified HsLua as Lua
 import Control.Monad (foldM, forM_)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
@@ -177,13 +177,17 @@ buildingSpawnFn env = do
                 gy      = fromIntegral y
             mBid ← Lua.liftIO $ do
                 bm ← readIORef (buildingManagerRef env)
-                case HM.lookup defName (bmDefs bm) of
-                    Nothing  → pure Nothing
-                    Just def → do
+                mActive ← activeWorldPage env
+                case (HM.lookup defName (bmDefs bm), mActive) of
+                    (Just def, Just (pid, _)) → do
                         mWtd ← snapshotVisibleWorldTiles env
                         case mWtd of
                             Nothing  → pure Nothing
-                            Just wtd → case canPlaceAt bm wtd def gx gy of
+                            -- Occupancy scoped to the active world (#76).
+                            Just wtd → case canPlaceAt
+                                    (bm { bmInstances =
+                                            buildingsOnPage pid (bmInstances bm) })
+                                    wtd def gx gy of
                                 NotPlaceable _ → pure Nothing
                                 Placeable → do
                                     let gz = floorZAt wtd gx gy
@@ -192,8 +196,9 @@ buildingSpawnFn env = do
                                                 let (bid', bm'') = nextBuildingId bm'
                                                 in (bm'', bid')
                                     Q.writeQueue (buildingQueue env) $
-                                        BuildingSpawn bid defName gx gy gz
+                                        BuildingSpawn bid defName gx gy gz pid
                                     pure (Just bid)
+                    _ → pure Nothing
             case mBid of
                 Just (BuildingId n) → do
                     Lua.pushinteger (fromIntegral n)
@@ -235,13 +240,21 @@ buildingCanPlaceAtFn env = do
                 gy      = fromIntegral y
             result ← Lua.liftIO $ do
                 bm ← readIORef (buildingManagerRef env)
-                case HM.lookup defName (bmDefs bm) of
-                    Nothing  → pure (NotPlaceable "unknown building")
-                    Just def → do
+                mActive ← activeWorldPage env
+                -- Occupancy is checked only against the ACTIVE world's
+                -- buildings — a building in another world must not block
+                -- placement here (#76).
+                case (HM.lookup defName (bmDefs bm), mActive) of
+                    (Nothing, _) → pure (NotPlaceable "unknown building")
+                    (_, Nothing) → pure (NotPlaceable "no active world")
+                    (Just def, Just (pid, _)) → do
                         mWtd ← snapshotVisibleWorldTiles env
                         case mWtd of
                             Nothing  → pure (NotPlaceable "no world loaded")
-                            Just wtd → pure (canPlaceAt bm wtd def gx gy)
+                            Just wtd → pure (canPlaceAt
+                                (bm { bmInstances =
+                                        buildingsOnPage pid (bmInstances bm) })
+                                wtd def gx gy)
             case result of
                 Placeable → do
                     Lua.pushboolean True
@@ -817,12 +830,14 @@ buildingSelectFn env = do
     case idArg of
         Just n → do
             let bid = BuildingId (fromIntegral n)
+            mActive ← Lua.liftIO $ activeWorldPage env
             Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
-                -- Only select if the id actually exists; otherwise leave
-                -- the previous selection alone.
-                if HM.member bid (bmInstances bm)
-                then (bm { bmSelected = Just bid }, ())
-                else (bm, ())
+                -- Only select a building of the ACTIVE world (#76) that
+                -- still exists; otherwise leave the previous selection.
+                case (mActive, HM.lookup bid (bmInstances bm)) of
+                    (Just (pid, _), Just bi) | biPage bi ≡ pid →
+                        (bm { bmSelected = Just bid }, ())
+                    _ → (bm, ())
         Nothing → pure ()
     return 0
 
@@ -839,8 +854,12 @@ buildingGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetSelectedFn env = do
     mBid ← Lua.liftIO $ do
         bm ← readIORef (buildingManagerRef env)
+        mActive ← activeWorldPage env
         pure $ case bmSelected bm of
-            Just bid | HM.member bid (bmInstances bm) → Just bid
+            Just bid
+                | Just bi      ← HM.lookup bid (bmInstances bm)
+                , Just (pid,_) ← mActive
+                , biPage bi ≡ pid → Just bid
             _ → Nothing
     case mBid of
         Just (BuildingId n) → do
