@@ -43,6 +43,15 @@ getWorldTileData env = do
         ((_, ws):_) → Just <$> readIORef (wsTilesRef ws)
         []          → pure Nothing
 
+-- | Helper: the WorldState of the currently VISIBLE world (head of
+--   wmVisible), looked up in wmWorlds. This is the world rendering and
+--   building operate on; a hidden page can sit at the wmWorlds head, so
+--   the raw head is not a safe proxy for "what the player sees".
+mVisibleWorldState ∷ WorldManager → Maybe WorldState
+mVisibleWorldState manager = case wmVisible manager of
+    (pageId:_) → lookup pageId (wmWorlds manager)
+    []         → Nothing
+
 -- | world.getTerrainAt(gx, gy) → surfaceZ, terrainSurfaceZ or nil
 --   Returns the surface elevation and terrain-only surface elevation.
 worldGetTerrainAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -542,8 +551,13 @@ worldPickTileFn env = do
             let px = round px'
                 py = round py'
             manager ← Lua.liftIO $ readIORef (worldManagerRef env)
-            case wmWorlds manager of
-                ((_, ws):_) → do
+            -- Resolve the VISIBLE world (head of wmVisible), not the raw
+            -- wmWorlds head: rendering and building validation/spawn both
+            -- operate on wmVisible, and a hidden page (e.g. test_arena) can
+            -- sit at the wmWorlds head while main_world is shown. Picking
+            -- against the wrong world would silently desync ghost/placement.
+            case mVisibleWorldState manager of
+                Just ws → do
                     camera   ← Lua.liftIO $ readIORef (cameraRef env)
                     tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
                     paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
@@ -568,7 +582,7 @@ worldPickTileFn env = do
                         Nothing → do
                             Lua.pushnil
                             return 1
-                [] → do
+                Nothing → do
                     Lua.pushnil
                     return 1
         _ → do
