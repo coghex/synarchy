@@ -28,6 +28,7 @@ import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.World.Calendar as Calendar
+import qualified Test.Headless.River.Graph as RiverGraph
 
 main ∷ IO ()
 main = hspec $ do
@@ -62,3 +63,4 @@ main = hspec $ do
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "World.Calendar" Calendar.spec
+    describe "River.Graph" RiverGraph.spec

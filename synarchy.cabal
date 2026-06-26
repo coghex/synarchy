@@ -163,6 +163,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.World.Calendar
+                   Test.Headless.River.Graph
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -533,6 +534,7 @@ library
                      World.Hydrology.River.Tributary
                      World.Hydrology.River.Carving
                      World.Hydrology.River.Common
+                     World.River.Graph
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation

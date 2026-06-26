@@ -10,6 +10,8 @@ module World.River.Graph
       -- * Construction
     , buildRiverGraph
     , emptyRiverGraph
+      -- * Classification (exposed for tests)
+    , classifyMouth
     ) where
 
 import UPrelude
@@ -27,6 +29,7 @@ import World.Geology.Timeline.Types
     , FeatureShape(..), FeatureActivity(..) )
 import Data.Hashable (Hashable(..))
 import World.Constants (seaLevel)
+import World.Geology.Hash (wrappedDeltaUV)
 
 -- * Node identifiers
 
@@ -107,6 +110,7 @@ emptyRiverGraph = RiverGraph HM.empty V.empty HM.empty HM.empty
 buildRiverGraph ∷ GeoTimeline → RiverGraph
 buildRiverGraph timeline =
     let features = gtFeatures timeline
+        worldSize = gtWorldSize timeline
 
         -- Extract active rivers and lakes
         rivers = [ (pfId pf, rp)
@@ -151,7 +155,7 @@ buildRiverGraph timeline =
                 -- Classify the mouth: ocean, lake, or inland
                 mouthElev = if V.null (rpSegments rp) then 0
                             else rsEndElev (V.last (rpSegments rp))
-                sink = classifyMouth mouthElev mouthCoord lakeById
+                sink = classifyMouth worldSize mouthElev mouthCoord lakeById
                 mouthKind = case sink of
                     OceanSink   → Mouth
                     LakeSink _  → LakeInlet
@@ -211,24 +215,44 @@ isActiveFeature pf = case pfActivity pf of
     FDormant → True
     _        → False
 
+-- | Slack factor applied to a lake's nominal radius when testing
+--   whether a river mouth drains into it. A river mouth is recorded at
+--   the shoreline (≈ one radius from the lake centre), so we accept a
+--   little beyond the nominal radius. Matches the 1.25× factor used by
+--   the zoom-map lake indicator ('World.Fluid.Lake.checkLakeRange').
+lakeMouthSlack ∷ Float
+lakeMouthSlack = 1.25
+{-# INLINE lakeMouthSlack #-}
+
 -- | Classify what a river mouth drains into.
-classifyMouth ∷ Int → GeoCoord → HM.HashMap GeoFeatureId LakeParams
+--
+--   A mouth at or below sea level is an 'OceanSink'. Otherwise we test
+--   the mouth against every active lake's footprint (centre + radius,
+--   wrap-aware via 'wrappedDeltaUV'): if it lands inside the (slack-
+--   scaled) radius of one or more lakes it is a 'LakeSink' draining into
+--   the nearest of them. With no lake match an above-sea mouth is an
+--   'InlandSink'. This mirrors the centre+radius proximity test used by
+--   the lake bowl carve ('World.Hydrology.Event') and the zoom-map lake
+--   indicator ('World.Fluid.Lake.checkLakeRange').
+classifyMouth ∷ Int → Int → GeoCoord → HM.HashMap GeoFeatureId LakeParams
               → SinkType
-classifyMouth mouthElev _mouthCoord lakeById
-    -- If mouth elevation is at or below sea level, it's ocean
+classifyMouth worldSize mouthElev mouthCoord lakeById
     | mouthElev ≤ seaLevel = OceanSink
-    -- Check if any lake is near the mouth (within radius)
-    -- For now, use a simple heuristic: if mouth is above sea
-    -- level and no lake match, it's an inland sink.
     | otherwise = case findNearestLake of
-        Just (lid, _) → LakeSink lid
+        Just (_, lid) → LakeSink lid
         Nothing       → InlandSink
   where
-    -- Simple check: any lake whose center is within its own radius
-    -- of the mouth coordinate. A proper spatial query would be
-    -- better but this suffices for graph construction.
-    findNearestLake = Nothing  -- TODO: spatial query against lakes
-    -- This is intentionally left as a stub. Phase 0 doesn't need
-    -- perfect lake detection — the graph structure is correct, and
-    -- lake connections can be refined in Phase 2 when the sim
-    -- actually uses them.
+    GeoCoord mx my = mouthCoord
+    -- Nearest lake (smallest squared distance) whose slack-scaled
+    -- radius contains the mouth. foldl' keeps this single-pass.
+    findNearestLake = foldl' pickCloser Nothing (HM.toList lakeById)
+    pickCloser acc (lid, lk) =
+        let GeoCoord lx ly = lkCenter lk
+            (dx, dy)       = wrappedDeltaUV worldSize mx my lx ly
+            d2             = dx * dx + dy * dy
+            r              = round (fromIntegral (lkRadius lk) * lakeMouthSlack) ∷ Int
+        in if d2 ≤ r * r
+             then case acc of
+                    Just (bestD2, _) | bestD2 ≤ d2 → acc
+                    _                              → Just (d2, lid)
+             else acc
