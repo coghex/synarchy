@@ -640,12 +640,24 @@ handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
                                 let counts = V.length <$> Map.elems (aFrames a)
                                     maxN   = if null counts then 0 else maximum counts
                                     fps    = aFps a
-                                    -- frames shown when stride S = ((n-1) `div` S) + 1,
-                                    -- but a stride larger than the whole animation skips
-                                    -- past every frame and collapses to an instant
-                                    -- (zero-duration) transition.
-                                    visible | s > maxN  = 0
-                                            | otherwise = (maxN - 1) `div` s + 1
+                                    -- The renderer (Unit.Render.pickFrame)
+                                    -- plays strided frames 0, s, 2s, … and
+                                    -- clamps the last step to the destination
+                                    -- frame (maxN-1). It first reaches that
+                                    -- frame at raw step ceil((maxN-1)/s), and
+                                    -- the transition must last ONE interval
+                                    -- longer so that final frame is actually
+                                    -- shown — expiry runs before the render
+                                    -- publish, so a duration that ends exactly
+                                    -- on that step publishes the target pose
+                                    -- over it (truncating non-divisor strides,
+                                    -- e.g. maxN=9, s=3 → 0,3,6,8). A stride
+                                    -- larger than the whole animation has no
+                                    -- in-between frames to show and collapses
+                                    -- to an instant (zero-duration) transition.
+                                    visible
+                                      | s > maxN  = 0
+                                      | otherwise = ((maxN - 1 + s - 1) `div` s) + 1
                                 in if fps > 0 ∧ maxN > 0
                                    then fromIntegral visible / realToFrac fps ∷ Double
                                    else 0
