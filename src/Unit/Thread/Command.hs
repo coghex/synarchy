@@ -640,8 +640,12 @@ handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
                                 let counts = V.length <$> Map.elems (aFrames a)
                                     maxN   = if null counts then 0 else maximum counts
                                     fps    = aFps a
-                                    -- frames shown when stride S = ((n-1) `div` S) + 1
-                                    visible = (maxN - 1) `div` s + 1
+                                    -- frames shown when stride S = ((n-1) `div` S) + 1,
+                                    -- but a stride larger than the whole animation skips
+                                    -- past every frame and collapses to an instant
+                                    -- (zero-duration) transition.
+                                    visible | s > maxN  = 0
+                                            | otherwise = (maxN - 1) `div` s + 1
                                 in if fps > 0 ∧ maxN > 0
                                    then fromIntegral visible / realToFrac fps ∷ Double
                                    else 0
@@ -654,6 +658,15 @@ handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
             Just ss
                 | usPose ss ≡ target → (uts, ())  -- already there
                 | isTransitioning (usState ss) → (uts, ())  -- already mid-transition
+                | duration ≤ 0 →
+                    -- No frames to play (stride skipped past the whole
+                    -- animation, or no transition anim exists): resolve
+                    -- immediately to the target pose rather than forcing a
+                    -- one-frame TransitioningTo state.
+                    let ss' = ss { usPose  = target
+                                 , usState = Idle
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
                 | otherwise →
                     let ss' = ss { usState             = TransitioningTo target
                                  , usTarget            = Nothing
