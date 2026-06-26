@@ -170,11 +170,25 @@ drainInitQueues env logger = do
                         -- by-coord removal below can't clobber an append that
                         -- landed during generation (no lost update).
                         let batch = take maxChunksPerTick remaining
+                        -- Skip coords already in wsTilesRef. The camera-visible
+                        -- loader (updateChunkLoading) loads chunks straight into
+                        -- wsTilesRef without going through this queue, so a coord
+                        -- queued here by loadChunksInRegion may already be loaded
+                        -- by the time we reach it. Regenerating it would overwrite
+                        -- the chunk and emit a duplicate SimChunkLoaded, resetting
+                        -- its sim state. wsTilesRef is the shared "already loaded"
+                        -- source of truth both loaders write and dedup against;
+                        -- both run on this (world) thread, so the snapshot is
+                        -- stable for the rest of the tick. The whole batch
+                        -- (already-loaded + freshly generated) is dropped from the
+                        -- queue below.
+                        td0 ← readIORef (wsTilesRef worldState)
+                        let (_alreadyLoaded, toGen) = partitionChunks batch td0
                         let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq
                                 (generateLoadedChunk registry catalog params)
-                                batch
+                                toGen
 
                         -- Replay player edits onto the fresh chunks
                         -- before inserting. On load, edits restored from
