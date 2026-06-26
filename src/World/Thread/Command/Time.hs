@@ -72,8 +72,19 @@ handleWorldSetTimeScaleCommand env logger pageId scale = do
         <> " to " <> T.pack (show scale) <> " game-min/real-sec"
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
-            writeIORef (wsTimeScaleRef worldState) scale
+        Just worldState → do
+            -- Never store a running scale while the engine is paused. Pause
+            -- and time scale are set through different mechanisms (a
+            -- synchronous enginePausedRef flip vs this queued command), so a
+            -- nonzero scale can be enqueued and then processed AFTER a pause
+            -- has taken effect — e.g. a WorldSetTimeScale landing after a
+            -- WorldSave, or a stale speed control. Applying it would leave
+            -- isPaused() true alongside a nonzero stored scale, the exact
+            -- state #42 is about. The player's chosen speed is held by
+            -- scripts/pause.lua (prevTimeScale) and re-applied on resume,
+            -- where enginePausedRef is already false and this clamp no-ops.
+            paused ← readIORef (enginePausedRef env)
+            writeIORef (wsTimeScaleRef worldState) (if paused then 0 else scale)
         Nothing →
             logDebug logger CatWorld $
                 "World not found for time scale update: " <> unWorldPageId pageId

@@ -69,6 +69,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             WorldTime h m     ← readIORef (wsTimeRef worldState)
             WorldDate y mo d  ← readIORef (wsDateRef worldState)
             tScale    ← readIORef (wsTimeScaleRef worldState)
+            -- Freeze the live world clock to match the auto-pause above.
+            -- 'tScale' (the player's chosen speed) was just captured for
+            -- sdTimeScale, so zeroing wsTimeScaleRef here loses nothing.
+            -- Without this the engine reports paused (enginePausedRef)
+            -- while World.Thread.Time keeps advancing time of day off
+            -- wsTimeScaleRef — i.e. a "paused" world whose clock runs (#42).
+            writeIORef (wsTimeScaleRef worldState) 0
             mapMode   ← readIORef (wsMapModeRef worldState)
             toolMode  ← readIORef (wsToolModeRef worldState)
             -- v2 (Phase 1) additions
@@ -189,7 +196,13 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         (WorldDate (sdDateYear saveData)
                    (sdDateMonth saveData)
                    (sdDateDay saveData))
-    writeIORef (wsTimeScaleRef worldState) (sdTimeScale saveData)
+    -- Keep wsTimeScaleRef synchronized with the restored pause flag: a
+    -- paused save (the normal auto-pause-on-save case) must load with the
+    -- live clock frozen, not running at the player's saved speed. The
+    -- chosen speed is preserved in sdTimeScale and reapplied when the
+    -- player resumes (scripts/pause.lua prevTimeScale) (#42).
+    writeIORef (wsTimeScaleRef worldState)
+        (if sdEnginePaused saveData then 0 else sdTimeScale saveData)
     writeIORef (wsMapModeRef worldState) (sdMapMode saveData)
     writeIORef (wsToolModeRef worldState) (sdToolMode saveData)
     -- v2 (Phase 1): engine-level refs. enginePaused is normally True
