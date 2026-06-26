@@ -218,8 +218,7 @@ isActiveFeature pf = case pfActivity pf of
 -- | Slack factor applied to a lake's nominal radius when testing
 --   whether a river mouth drains into it. A river mouth is recorded at
 --   the shoreline (≈ one radius from the lake centre), so we accept a
---   little beyond the nominal radius. Matches the 1.25× factor used by
---   the zoom-map lake indicator ('World.Fluid.Lake.checkLakeRange').
+--   little beyond the nominal radius.
 lakeMouthSlack ∷ Float
 lakeMouthSlack = 1.25
 {-# INLINE lakeMouthSlack #-}
@@ -232,8 +231,7 @@ lakeMouthSlack = 1.25
 --   scaled) radius of one or more lakes it is a 'LakeSink' draining into
 --   the nearest of them. With no lake match an above-sea mouth is an
 --   'InlandSink'. This mirrors the centre+radius proximity test used by
---   the lake bowl carve ('World.Hydrology.Event') and the zoom-map lake
---   indicator ('World.Fluid.Lake.checkLakeRange').
+--   the lake bowl carve ('World.Hydrology.Event').
 classifyMouth ∷ Int → Int → GeoCoord → HM.HashMap GeoFeatureId LakeParams
               → SinkType
 classifyMouth worldSize mouthElev mouthCoord lakeById

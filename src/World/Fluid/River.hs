@@ -9,8 +9,6 @@
 --
 --     * @riverNearChunk@ — proximity test used by the channel-mask
 --       compute to cull segments that don't overlap a chunk.
---     * @hasAnyRiverQuick@ — fast boolean used by the zoom-map cache
---       to draw river indicators without computing the full chunk.
 --     * @fixupSegmentContinuity@ — geometric/elevation continuity for
 --       the segment polyline. Water surfaces are no longer carried on
 --       segments; we just enforce that @rsEnd / rsEndElev@ of one
@@ -18,7 +16,6 @@
 --       that elevation is monotonically non-increasing downstream.
 module World.Fluid.River
     ( fixupSegmentContinuity
-    , hasAnyRiverQuick
     , riverNearChunk
     ) where
 
@@ -65,16 +62,6 @@ riverNearChunk worldSize chunkGX chunkGY river =
                          dist = sqrt (distX * distX + distY * distY)
                      in dist < fromIntegral margin
         in startNear ∨ endNear ∨ midNear
-
--- | Quick boolean: does this chunk have any river passing near it?
---   Used by the zoom-map cache to draw an indicator without paying
---   the cost of the full chunk fluid compute.
-hasAnyRiverQuick ∷ [RiverParams] → Int → ChunkCoord → Bool
-hasAnyRiverQuick rivers worldSize coord =
-    let ChunkCoord cx cy = coord
-        chunkMinGX = cx * chunkSize
-        chunkMinGY = cy * chunkSize
-    in any (riverNearChunk worldSize chunkMinGX chunkMinGY) rivers
 
 -- * Segment Continuity
 
