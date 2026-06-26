@@ -18,6 +18,7 @@ import qualified HsLua as Lua
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv(..))
@@ -405,12 +406,19 @@ worldLoadChunksInRegionFn env = do
                 manager ← readIORef (worldManagerRef env)
                 case wmWorlds manager of
                     ((_, ws):_) → do
-                        -- Filter out already-loaded chunks
+                        -- Filter out chunks that are already loaded OR
+                        -- already queued. Without the queue check a second
+                        -- call for a still-pending region re-appends every
+                        -- pending coord, duplicating generation work and
+                        -- inflating both the returned count and the
+                        -- waitForChunks backlog. The queue filter runs
+                        -- inside the atomicModify so it sees the live queue.
                         td ← readIORef (wsTilesRef ws)
-                        let needed = filter (\c → isNothing (lookupChunk c td)) coords
-                        -- Append to init queue
                         atomicModifyIORef' (wsInitQueueRef ws) $ \q →
-                            (q ++ needed, length needed)
+                            let queued = HS.fromList q
+                                needed = filter (\c → isNothing (lookupChunk c td)
+                                                    ∧ not (HS.member c queued)) coords
+                            in (q ++ needed, length needed)
                     [] → pure 0
             Lua.pushinteger (fromIntegral count)
             return 1
