@@ -830,12 +830,14 @@ buildingSelectFn env = do
     case idArg of
         Just n → do
             let bid = BuildingId (fromIntegral n)
+            mActive ← Lua.liftIO $ activeWorldPage env
             Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
-                -- Only select if the id actually exists; otherwise leave
-                -- the previous selection alone.
-                if HM.member bid (bmInstances bm)
-                then (bm { bmSelected = Just bid }, ())
-                else (bm, ())
+                -- Only select a building of the ACTIVE world (#76) that
+                -- still exists; otherwise leave the previous selection.
+                case (mActive, HM.lookup bid (bmInstances bm)) of
+                    (Just (pid, _), Just bi) | biPage bi ≡ pid →
+                        (bm { bmSelected = Just bid }, ())
+                    _ → (bm, ())
         Nothing → pure ()
     return 0
 
@@ -852,8 +854,12 @@ buildingGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetSelectedFn env = do
     mBid ← Lua.liftIO $ do
         bm ← readIORef (buildingManagerRef env)
+        mActive ← activeWorldPage env
         pure $ case bmSelected bm of
-            Just bid | HM.member bid (bmInstances bm) → Just bid
+            Just bid
+                | Just bi      ← HM.lookup bid (bmInstances bm)
+                , Just (pid,_) ← mActive
+                , biPage bi ≡ pid → Just bid
             _ → Nothing
     case mBid of
         Just (BuildingId n) → do

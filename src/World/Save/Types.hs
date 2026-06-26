@@ -30,9 +30,9 @@ import World.Spoil.Types (SpoilPiles)
 import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
-                      , BuildingManager(..))
+                      , BuildingManager(..), buildingsOnPage)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
-                  , StatModifier(..), Wound(..), Scar(..))
+                  , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Item.Types (ItemInstance(..))
@@ -245,12 +245,15 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
     , bisStorage           ∷ ![ItemInstance]
     } deriving (Show, Serialize, Generic)
 
--- | Build a snapshot from a live BuildingManager. Strips `bmDefs`
---   (regenerated from YAML on next boot, always in memory at load
---   time) and `bmSelected` (resets to Nothing).
-toBuildingSnapshot ∷ BuildingManager → BuildingSnapshot
-toBuildingSnapshot bm = BuildingSnapshot
-    { bsnInstances = HM.map toBuildingInstanceSnapshot (bmInstances bm)
+-- | Build a snapshot from a live BuildingManager, restricted to the world
+--   being saved (@page@). The manager is global across worlds, so an
+--   unfiltered snapshot would serialize other worlds' buildings and stamp
+--   them onto the load target (#76). Strips `bmDefs` (regenerated from
+--   YAML on next boot) and `bmSelected` (resets to Nothing).
+toBuildingSnapshot ∷ WorldPageId → BuildingManager → BuildingSnapshot
+toBuildingSnapshot page bm = BuildingSnapshot
+    { bsnInstances = HM.map toBuildingInstanceSnapshot
+                            (buildingsOnPage page (bmInstances bm))
     , bsnNextId    = bmNextId bm
     }
 
@@ -378,9 +381,14 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       --   from body_mass; ticked down by Combat.Wounds bleeding.
     } deriving (Show, Serialize, Generic)
 
-toUnitSnapshot ∷ UnitManager → UnitSnapshot
-toUnitSnapshot um = UnitSnapshot
-    { usnInstances = HM.map toUnitInstanceSnapshot (umInstances um)
+-- | Build a snapshot from a live UnitManager, restricted to the world
+--   being saved (@page@). The manager is global across worlds, so an
+--   unfiltered snapshot would serialize other worlds' units and stamp
+--   them onto the load target (#78).
+toUnitSnapshot ∷ WorldPageId → UnitManager → UnitSnapshot
+toUnitSnapshot page um = UnitSnapshot
+    { usnInstances = HM.map toUnitInstanceSnapshot
+                            (unitsOnPage page (umInstances um))
     , usnNextId    = umNextId um
     }
 
