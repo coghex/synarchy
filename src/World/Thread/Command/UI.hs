@@ -39,23 +39,33 @@ import World.Thread.ChunkLoading (maxChunksPerTick)
 handleWorldShowCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldShowCommand env logger pageId = do
     logDebug logger CatWorld $ "Showing world: " <> unWorldPageId pageId
-    
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        if pageId `elem` wmVisible mgr
-        then (mgr, ())
-        else (mgr { wmVisible = pageId : wmVisible mgr }, ())
-    
-    mgr ← readIORef (worldManagerRef env)
-    logDebug logger CatWorld $
-        "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
 
-    -- Activate world in sim thread. The sim no longer holds the tile
-    -- ref — it emits WorldApplyFluids back to the world thread (the sole
-    -- writer of wsTilesRef) — so this is just an "is active" signal.
-    case lookup pageId (wmWorlds mgr) of
-        Just _worldState →
-            Q.writeQueue (simQueue env) SimActivateWorld
-        Nothing → pure ()
+    -- Only worlds that actually exist may enter wmVisible. Inserting a
+    -- nonexistent pageId would poison getActiveWorldId() (which reads the
+    -- head of wmVisible) and silently retarget every current-world API.
+    -- atomicModifyIORef' returns whether the world was found so the
+    -- existence check and the visible-list mutation share one consistent
+    -- snapshot of the manager.
+    found ← atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        case lookup pageId (wmWorlds mgr) of
+            Nothing → (mgr, False)
+            Just _
+                | pageId `elem` wmVisible mgr → (mgr, True)
+                | otherwise →
+                    (mgr { wmVisible = pageId : wmVisible mgr }, True)
+
+    if not found
+    then logWarn logger CatWorld $
+        "Ignoring world.show for nonexistent world: " <> unWorldPageId pageId
+    else do
+        mgr ← readIORef (worldManagerRef env)
+        logDebug logger CatWorld $
+            "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
+
+        -- Activate world in sim thread. The sim no longer holds the tile
+        -- ref — it emits WorldApplyFluids back to the world thread (the sole
+        -- writer of wsTilesRef) — so this is just an "is active" signal.
+        Q.writeQueue (simQueue env) SimActivateWorld
 
 handleWorldHideCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldHideCommand env logger pageId = do
