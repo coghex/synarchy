@@ -532,12 +532,15 @@ worldGetHoverPosFn env = do
 --   off-world / over no solid tile.
 worldPickTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldPickTileFn env = do
-    mPx ← Lua.tointeger 1
-    mPy ← Lua.tointeger 2
+    -- Click coords arrive as Lua numbers (Doubles from GLFW.getCursorPos),
+    -- not integers — parse with tonumber and round, like the other
+    -- screen-coordinate APIs (e.g. setWorldCursorHover).
+    mPx ← Lua.tonumber 1
+    mPy ← Lua.tonumber 2
     case (mPx, mPy) of
         (Just px', Just py') → do
-            let px = fromIntegral px'
-                py = fromIntegral py'
+            let px = round px'
+                py = round py'
             manager ← Lua.liftIO $ readIORef (worldManagerRef env)
             case wmWorlds manager of
                 ((_, ws):_) → do

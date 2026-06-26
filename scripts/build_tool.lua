@@ -480,7 +480,16 @@ function buildTool.update(dt)
     local defName = buildTool.state.selectedDef
     if not defName then return end
 
-    local gx, gy = world.getHoverTile()
+    -- Drive the preview from the SAME synchronous hit-test the placement
+    -- click uses (world.pickTile of the live cursor), not the async
+    -- world.getHoverTile() cache. Otherwise, after a fast cursor move the
+    -- ghost (cache, lagging the ~0.1s UI tick) and the click (live pick)
+    -- could resolve different tiles, so the preview would lie (issue #66).
+    local mx, my = engine.getMousePosition()
+    local gx, gy
+    if mx and my then
+        gx, gy = world.pickTile(mx, my)
+    end
     if not gx or not gy then
         building.clearGhost()
         -- No current hover tile: drop the cached placement target too, so a
