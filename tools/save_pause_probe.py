@@ -20,6 +20,13 @@ handleWorldLoadSaveCommand), which runs asynchronously after the API call
 returns, so each check POLLS until the world thread has processed the
 command (or times out — a timeout is a failure).
 
+This probe checks the stored timescale (getTimeScale == 0). The deeper
+guarantee — that a paused world's clock never advances even if a stray
+WorldSetTimeScale restores a nonzero scale — is enforced engine-side by
+World.Thread.tickWorldTime gating advancement on enginePausedRef, and is
+not separately asserted here (no world-time-of-day getter is exposed to
+the debug console to observe it headless).
+
 Usage:
   python3 tools/save_pause_probe.py [--port 9142] [--seed 42]
 
@@ -34,9 +41,15 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 
 LOG = "/tmp/save_pause_probe_engine.log"
-SAVE_NAME = "probe_pause_save"
+# Unique per run. Saves overwrite in place (World.Save.Serialize), and this
+# probe deletes its save on exit — a fixed name could clobber a real save that
+# happened to share it, and a stale directory from an interrupted run could
+# make a later run falsely pass by loading old data. A fresh random name avoids
+# both, and main() additionally refuses to run if the directory already exists.
+SAVE_NAME = "probe_pause_" + uuid.uuid4().hex[:12]
 
 
 def _results(raw: bytes) -> list[str]:
@@ -148,6 +161,12 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
+    # Never reuse or clobber an existing save directory (belt-and-suspenders
+    # on top of the random SAVE_NAME).
+    save_dir = os.path.join("saves", SAVE_NAME)
+    if os.path.exists(save_dir):
+        sys.exit(f"refusing to run: {save_dir} already exists")
+
     proc = boot(args.port)
     failures: list[str] = []
     try:
@@ -197,8 +216,9 @@ def main() -> int:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             proc.kill()
-        # Clean up the throwaway save this probe created (exact literal path).
-        save_dir = os.path.join("saves", SAVE_NAME)
+        # Clean up the throwaway save this probe created. Safe to delete: the
+        # name is unique to this run and main() refused to start if it already
+        # existed, so nothing here predates us.
         if os.path.isdir(save_dir):
             shutil.rmtree(save_dir, ignore_errors=True)
 
