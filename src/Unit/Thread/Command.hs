@@ -640,8 +640,24 @@ handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
                                 let counts = V.length <$> Map.elems (aFrames a)
                                     maxN   = if null counts then 0 else maximum counts
                                     fps    = aFps a
-                                    -- frames shown when stride S = ((n-1) `div` S) + 1
-                                    visible = (maxN - 1) `div` s + 1
+                                    -- The renderer (Unit.Render.pickFrame)
+                                    -- plays strided frames 0, s, 2s, … and
+                                    -- clamps the last step to the destination
+                                    -- frame (maxN-1). It first reaches that
+                                    -- frame at raw step ceil((maxN-1)/s), and
+                                    -- the transition must last ONE interval
+                                    -- longer so that final frame is actually
+                                    -- shown — expiry runs before the render
+                                    -- publish, so a duration that ends exactly
+                                    -- on that step publishes the target pose
+                                    -- over it (truncating non-divisor strides,
+                                    -- e.g. maxN=9, s=3 → 0,3,6,8). A stride
+                                    -- larger than the whole animation has no
+                                    -- in-between frames to show and collapses
+                                    -- to an instant (zero-duration) transition.
+                                    visible
+                                      | s > maxN  = 0
+                                      | otherwise = ((maxN - 1 + s - 1) `div` s) + 1
                                 in if fps > 0 ∧ maxN > 0
                                    then fromIntegral visible / realToFrac fps ∷ Double
                                    else 0
@@ -654,6 +670,22 @@ handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
             Just ss
                 | usPose ss ≡ target → (uts, ())  -- already there
                 | isTransitioning (usState ss) → (uts, ())  -- already mid-transition
+                | duration ≤ 0 →
+                    -- No frames to play (stride skipped past the whole
+                    -- animation, or no transition anim exists): resolve
+                    -- immediately to the target pose rather than forcing a
+                    -- one-frame TransitioningTo state. Clear the move target
+                    -- and local path just like the normal branch — otherwise
+                    -- the unit keeps moving in the same tick after the
+                    -- "instant" pose switch (commands run before
+                    -- tickAllMovement), which can leave e.g. a crouching unit
+                    -- walking.
+                    let ss' = ss { usPose      = target
+                                 , usState     = Idle
+                                 , usTarget    = Nothing
+                                 , usLocalPath = []
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
                 | otherwise →
                     let ss' = ss { usState             = TransitioningTo target
                                  , usTarget            = Nothing
