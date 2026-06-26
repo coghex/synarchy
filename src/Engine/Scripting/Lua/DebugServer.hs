@@ -42,6 +42,15 @@ data DebugCommand = DebugCommand
 --   serving other connections.
 startDebugServer ∷ Int → (Text → IO (Maybe Text))
                  → IO (Either Text (TQueue DebugCommand))
+startDebugServer 0 _ = do
+    -- Port 0 means dump mode: no TCP listener at all. Binding to port 0
+    -- would ask the OS for an ephemeral port, contradicting the
+    -- "no TCP server" dump-mode contract and opening a network surface.
+    -- Emit the ready marker on stderr (stdout is reserved for JSON) and
+    -- hand back an inert queue that nothing ever feeds.
+    hPutStrLn stderr "READY port=0"
+    hFlush stderr
+    Right <$> atomically newTQueue
 startDebugServer port builtin = do
     cmdQueue ← atomically newTQueue
     r ← try $ do
@@ -63,11 +72,9 @@ startDebugServer port builtin = do
         Right sock → do
             -- Ready signal on stdout — agents can wait for this line
             -- to know the debug console is accepting connections.
-            -- When port=0 (dump mode), write to stderr to keep stdout
-            -- clean for JSON output.
-            let readyHandle = if port ≡ 0 then stderr else stdout
-            hPutStrLn readyHandle ("READY port=" <> show port)
-            hFlush readyHandle
+            -- (Dump mode, port 0, is handled above and never reaches here.)
+            hPutStrLn stdout ("READY port=" <> show port)
+            hFlush stdout
             _ ← forkIO $ acceptLoop sock cmdQueue builtin `finally` close sock
             return (Right cmdQueue)
 
