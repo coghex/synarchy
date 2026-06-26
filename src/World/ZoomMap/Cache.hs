@@ -27,8 +27,6 @@ import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , twoNearestPlates, BoundaryType(..), classifyBoundary)
 import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyOceanFluid)
-import World.Fluid.River (hasAnyRiverQuick)
-import World.Fluid.Lake (hasAnyLakeQuick)
 import World.Fluid.Lake.Types (wlByChunk)
 import qualified Data.HashMap.Strict as HM
 import World.Fluid.Lava (chunkHasLavaQuick)
@@ -85,7 +83,6 @@ buildZoomCache params registry =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
-        features = gtFeatures timeline
         climate = wgpClimateState params
 
         w = halfSize * 2
@@ -121,9 +118,6 @@ buildZoomCache params registry =
                               (wlByChunk (gtWorldLavaPools timeline))
                 chunkOcean = isOceanChunk oceanMap coord
                           ∨ hasAnyOceanFluid worldSize oceanMap coord
-                eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
-                chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
-                chunkLake  = hasAnyLakeQuick features worldSize coord
 
                 -- Vegetation category from climate
                 vegCat = if chunkOcean ∨ winnerMat ≡ 250
@@ -159,8 +153,6 @@ buildZoomCache params registry =
                 , zceElev     = avgElev
                 , zceIsOcean  = chunkOcean
                 , zceHasLava  = chunkLava
-                , zceHasRiver = chunkRiver
-                , zceHasLake  = chunkLake
                 , zceVegCategory = vegCat
                 , zceHasIce  = chunkIce
                 }
@@ -209,7 +201,6 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
-        features = gtFeatures timeline
         climate = wgpClimateState params
 
         w = halfSize * 2
@@ -275,9 +266,6 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                           -- table is authoritative for those.
                           ∨ HM.member coord
                               (wlByChunk (gtWorldLavaPools timeline))
-                eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
-                chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
-                chunkLake  = hasAnyLakeQuick features worldSize coord
                 vegCat = if chunkOcean ∨ winnerMat ≡ 250
                          then 0
                          else vegCategoryFromClimate climate worldSize
@@ -312,8 +300,6 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                     , zceElev     = avgElev
                     , zceIsOcean  = chunkOcean
                     , zceHasLava  = chunkLava
-                    , zceHasRiver = chunkRiver
-                    , zceHasLake  = chunkLake
                     , zceVegCategory = vegCat
                     , zceHasIce  = chunkIce'
                     }
@@ -750,10 +736,3 @@ vegCategoryFromClimate climate worldSize baseGX baseGY matId
            else if temp > 10.0 ∧ precip > 0.4 then 3  -- warm wet
            else if temp > 5.0  ∧ precip > 0.3 then 2  -- temperate
            else 1  -- cool / sparse
-
--- | Extract RiverParams from all HydroEvents in a period's events.
-extractEventRivers' ∷ GeoPeriod → [RiverParams]
-extractEventRivers' period = concatMap go (gpEvents period)
-  where
-    go (HydroEvent (RiverFeature rp)) = [rp]
-    go _ = []

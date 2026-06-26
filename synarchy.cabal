@@ -568,7 +568,6 @@ library
                      World.Fluid.River
                      World.Fluid.Ice
                      World.Fluid.IceLevel
-                     World.Fluid.Lake
                      World.Fluid.Lake.Types
                      World.Fluid.Lake.Identify
                      World.Fluid.River.Types
