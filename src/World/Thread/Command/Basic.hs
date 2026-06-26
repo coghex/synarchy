@@ -16,9 +16,8 @@ import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
-import Unit.Types (UnitManager(..))
-import Building.Types (BuildingManager(..))
-import Unit.Sim.Types (UnitThreadState(..))
+import Unit.Command.Types (UnitCommand(..))
+import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -90,10 +89,12 @@ handleWorldDestroyAllCommand env logger = do
     atomicModifyIORef' (worldManagerRef env) $ \m →
         (m { wmWorlds = [], wmVisible = [] }, ())
     writeIORef (worldQuadsRef env) V.empty
-    -- Reset entity managers (keep defs + id counters, drop instances).
-    atomicModifyIORef' (unitManagerRef env) $ \um →
-        (um { umInstances = HM.empty, umSelected = HS.empty }, ())
-    atomicModifyIORef' (buildingManagerRef env) $ \bm →
-        (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())
-    writeIORef (utsRef env) (UnitThreadState { utsSimStates = HM.empty })
+    -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
+    -- those threads keep draining their queues through the teardown, so
+    -- clearing the managers here would race any in-flight spawns and let
+    -- them re-insert orphans afterwards. Enqueuing the clears makes them
+    -- run in order, AFTER every pending spawn (#58). The wmWorlds clear
+    -- above also makes the spawn handlers drop late spawns outright.
+    Q.writeQueue (unitQueue env) UnitClearAll
+    Q.writeQueue (buildingQueue env) BuildingClearAll
     logInfo logger CatWorld "All worlds destroyed"

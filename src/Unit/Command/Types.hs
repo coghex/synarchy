@@ -79,4 +79,10 @@ data UnitCommand
         --   on that tile to the new surface. Moving units re-ground
         --   themselves on every tile crossing; stationary ones would
         --   otherwise keep a stale z and float mid-air over the hole.
+    | UnitClearAll
+        -- ^ Drop every unit instance + selection + sim state. Enqueued by
+        --   world.destroyAll (Exit to Menu) so the clear is ordered AFTER
+        --   any in-flight UnitSpawns already on this queue — clearing the
+        --   manager from the world thread instead would race those spawns,
+        --   which would re-insert orphans right after teardown (#58).
     deriving (Show)
