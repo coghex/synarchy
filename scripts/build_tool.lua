@@ -511,18 +511,29 @@ function buildTool.handleMouseDown(button, x, y)
     if buildTool.state.mode ~= "placement" then return false end
 
     if button == MOUSE_LEFT then
-        local tile = buildTool.state.lastHoverTile
-        if not tile then return true end
+        -- Revalidate the live hover at click time rather than trusting the
+        -- cached lastHoverTile. Clicks are dispatched immediately, but the
+        -- cache is only refreshed/cleared on the periodic update() tick, so a
+        -- click that arrives after the cursor leaves the world would otherwise
+        -- place on stale coordinates (issue #66).
+        local gx, gy = world.getHoverTile()
+        if not gx or not gy then
+            buildTool.state.lastHoverTile = nil
+            return true
+        end
+        local igx = math.floor(gx)
+        local igy = math.floor(gy)
+        buildTool.state.lastHoverTile = { igx, igy }
         local valid = building.canPlaceAt(buildTool.state.selectedDef,
-                                          tile[1], tile[2])
+                                          igx, igy)
         if valid then
             local id = building.spawn(buildTool.state.selectedDef,
-                                      tile[1], tile[2])
+                                      igx, igy)
             if id then
                 engine.logInfo("BuildTool: placed " ..
                     buildTool.state.selectedDef ..
                     " (id=" .. tostring(id) ..
-                    ") at " .. tile[1] .. "," .. tile[2])
+                    ") at " .. igx .. "," .. igy)
             end
             buildTool.exitPlacement()
             if buildTool.hud and buildTool.hud.selectDefaultTool then
