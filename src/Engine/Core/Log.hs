@@ -25,7 +25,8 @@ module Engine.Core.Log
   , logWarn
   , logThreadWarn
   , logError
-  
+  , logThreadError
+
   -- * Structured logging
   , logDebugS
   , logInfoS
@@ -484,6 +485,10 @@ logThreadWarn ls cat msg = logThreadMessage ls LevelWarn cat msg Map.empty
 logError ∷ (HasCallStack, MonadIO m)
          ⇒ LoggerState → LogCategory → Text → m ()
 logError ls cat msg = logMessage ls LevelError cat msg Map.empty
+
+logThreadError ∷ (HasCallStack, MonadIO m)
+         ⇒ LoggerState → LogCategory → Text → m ()
+logThreadError ls cat msg = logThreadMessage ls LevelError cat msg Map.empty
 
 logDebugS ∷ (HasCallStack, MonadIO m)
           ⇒ LoggerState → LogCategory → Text → [(Text, Text)] → m ()

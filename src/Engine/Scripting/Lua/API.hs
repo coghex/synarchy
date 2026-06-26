@@ -28,7 +28,7 @@ import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn
                                            , destroyFn, getUIScaleFn)
 import Engine.Scripting.Lua.API.YamlTextures (loadMaterialYamlFn, loadVegetationYamlFn
                                              , getTextureHandleFn, loadFloraYamlFn)
-import Engine.Scripting.Lua.API.Log (logInfoFn, logWarnFn, logDebugFn)
+import Engine.Scripting.Lua.API.Log (logInfoFn, logWarnFn, logErrorFn, logDebugFn)
 import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
                                        getMousePositionFn,
                                        isMouseButtonDownFn, getWindowSizeFn, 
@@ -109,6 +109,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "debugThrow"        debugThrowFn
   registerLuaFunction "logInfo"           (logInfoFn env)
   registerLuaFunction "logWarn"           (logWarnFn env)
+  registerLuaFunction "logError"          (logErrorFn env)
   registerLuaFunction "logDebug"          (logDebugFn env)
   registerLuaFunction "showDebug"         (showDebugFn backendState)
   registerLuaFunction "hideDebug"         (hideDebugFn backendState)
