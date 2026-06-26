@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.Log
   , getDebugCategoriesFn
   , logInfoFn
   , logWarnFn
+  , logErrorFn
   , logDebugFn
   ) where
 
@@ -62,6 +63,29 @@ logWarnFn env = do
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
             logThreadWarn logger CatLua fullMsg
+        Nothing → pure ()
+    return 0
+
+logErrorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+logErrorFn env = do
+    msg ← Lua.tostring 1
+    -- Level 2: 0=C function, 1=logErrorFn wrapper, 2=Lua caller
+    mInfo ← getSourceInfo 2
+    let (srcFile, srcLine) = case mInfo of
+            Just info → (siSource info, siCurrentLine info)
+            Nothing   → ("<unknown>", 0)
+        srcFileStripped = dropDir srcFile
+        dropDir ('.':'/':ss) = dropDir ss
+        dropDir ('/':ss)     = ss
+        dropDir (_:ss)       = dropDir ss
+        dropDir _            = ""
+    case msg of
+        Just msgBS → Lua.liftIO $ do
+            logger ← readIORef (loggerRef env)
+            let msgText = TE.decodeUtf8 msgBS
+                fullMsg = "[" <> T.pack srcFileStripped <> ":"
+                              <> T.pack (show srcLine) <> "] " <> msgText
+            logThreadError logger CatLua fullMsg
         Nothing → pure ()
     return 0
 
