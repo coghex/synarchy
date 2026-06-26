@@ -253,7 +253,21 @@ function pauseMenu.onSave()
     engine.logInfo("Pause menu: Save")
     local worldManager = require("scripts.world_manager")
     if worldManager.currentWorld then
-        engine.save(worldManager.currentWorld)
+        -- engine.saveWorld auto-pauses the engine (sets enginePausedRef)
+        -- for a clean snapshot, but it does NOT touch the world
+        -- timescale. Pausing through the pause module first keeps
+        -- enginePausedRef and the world clock (wsTimeScaleRef) in sync —
+        -- otherwise the save leaves a half-paused world (unit/AI ticks
+        -- frozen, but time-of-day still advancing), and a later
+        -- Space-resume restores a stale timescale because prevTimeScale
+        -- was never snapshotted. pause.set captures the player's current
+        -- scale and zeroes the clock so resume returns to it. (Opening
+        -- this menu does not itself pause; the game runs underneath.)
+        require("scripts.pause").set(true)
+        -- Route through the canonical save path (engine.saveWorld with
+        -- validation + async write event). engine.save is not a
+        -- registered API; calling it crashed the Save action.
+        require("scripts.world_view").saveGame()
     end
     pauseMenu.hide()
 end
