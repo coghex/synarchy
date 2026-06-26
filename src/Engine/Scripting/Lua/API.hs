@@ -510,6 +510,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
   registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
+  registerLuaFunction "destroyAll" (worldDestroyAllFn env)
   registerLuaFunction "deleteTile" (worldDeleteTileFn env)
   registerLuaFunction "setFluidTile" (worldSetFluidTileFn env)
   registerLuaFunction "setSlope" (worldSetSlopeFn env)

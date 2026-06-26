@@ -2,6 +2,7 @@ module World.Thread.Command.Basic
     ( handleWorldTickCommand
     , handleWorldSetCameraCommand
     , handleWorldDestroyCommand
+    , handleWorldDestroyAllCommand
     ) where
 
 import UPrelude
@@ -15,6 +16,9 @@ import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
+import Unit.Types (UnitManager(..))
+import Building.Types (BuildingManager(..))
+import Unit.Sim.Types (UnitThreadState(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -69,3 +73,27 @@ handleWorldDestroyCommand env logger pageId = do
     writeIORef (worldQuadsRef env) V.empty
 
     logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId
+
+-- | Tear down EVERY world (Exit to Menu). Destroying only the "current"
+--   world left hidden ones (e.g. a leftover test arena) in wmWorlds, and
+--   resolveActiveWorld's head-fallback then kept resolving one as the
+--   implicit active world behind the menu (#58). Clearing wmWorlds makes
+--   the resolver return Nothing (menu state). Also sim-deactivates each
+--   page and resets the global entity managers so no units/buildings from
+--   the old session linger as orphans into the next game.
+handleWorldDestroyAllCommand ∷ EngineEnv → LoggerState → IO ()
+handleWorldDestroyAllCommand env logger = do
+    logInfo logger CatWorld "Destroying all worlds (Exit to Menu)"
+    mgr ← readIORef (worldManagerRef env)
+    forM_ (map fst (wmWorlds mgr)) $ \pid →
+        Q.writeQueue (simQueue env) (SimDeactivateWorld pid)
+    atomicModifyIORef' (worldManagerRef env) $ \m →
+        (m { wmWorlds = [], wmVisible = [] }, ())
+    writeIORef (worldQuadsRef env) V.empty
+    -- Reset entity managers (keep defs + id counters, drop instances).
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        (um { umInstances = HM.empty, umSelected = HS.empty }, ())
+    atomicModifyIORef' (buildingManagerRef env) $ \bm →
+        (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())
+    writeIORef (utsRef env) (UnitThreadState { utsSimStates = HM.empty })
+    logInfo logger CatWorld "All worlds destroyed"

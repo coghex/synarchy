@@ -286,15 +286,16 @@ function pauseMenu.onExitToMenu()
     -- into the next world (#82).
     pcall(function() require("scripts.build_tool").exitPlacement() end)
     if worldManager.currentWorld then
-        local wname = worldManager.currentWorld
-        world.hide(wname)
-        -- Destroy the world too — hiding alone leaves a hidden page that
-        -- still resolves as the implicit active world behind the menu and
-        -- lingers in wmWorlds (#58).
-        world.destroy(wname)
-        worldManager.active = false
-        worldManager.currentWorld = nil
+        world.hide(worldManager.currentWorld)
     end
+    -- Destroy EVERY world, not just currentWorld — a hidden leftover (e.g.
+    -- a test arena) would otherwise stay in wmWorlds and resolveActiveWorld's
+    -- head-fallback would keep resolving it as the implicit active world
+    -- behind the menu (#58). destroyAll also clears the unit/building
+    -- managers so no entities leak into the next game.
+    world.destroyAll()
+    worldManager.active = false
+    worldManager.currentWorld = nil
     -- Clear the paused-engine flag so it can't leak into the next game
     -- (Save auto-pauses; Exit must undo that). pause.set keeps the pause
     -- module's own state in sync; the explicit setPaused is a belt-and-

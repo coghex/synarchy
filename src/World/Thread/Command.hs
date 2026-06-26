@@ -33,7 +33,8 @@ import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
 import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
-                                  , handleWorldDestroyCommand)
+                                  , handleWorldDestroyCommand
+                                  , handleWorldDestroyAllCommand)
 import World.Thread.Command.Init (handleWorldInitCommand
                                  , handleWorldInitArenaCommand
                                  , handleWorldInitArenaDoneCommand)
@@ -157,6 +158,8 @@ handleWorldCommand env logger (WorldClearStructure pageId gx gy slotTag)
   = handleWorldClearStructureCommand env logger pageId gx gy slotTag
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
+handleWorldCommand env logger WorldDestroyAll
+  = handleWorldDestroyAllCommand env logger
 handleWorldCommand env _ (WorldApplyFluids batch)
   = handleApplyFluidsCommand env batch
 

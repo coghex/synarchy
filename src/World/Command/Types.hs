@@ -140,6 +140,12 @@ data WorldCommand
     | WorldClearStructure WorldPageId Int Int Word8
         -- ^ worldId, gx, gy, slot-tag. Removes a structure piece.
     | WorldDestroy !WorldPageId
+    | WorldDestroyAll
+        -- ^ Tear down EVERY world (Exit to Menu): clears wmWorlds/wmVisible,
+        --   sim-deactivates each page, and resets the global unit/building
+        --   managers. Without this a hidden world (e.g. a leftover arena)
+        --   stays in wmWorlds and resolveActiveWorld's head-fallback keeps
+        --   resolving it as the implicit active world behind the menu (#58).
     | WorldApplyFluids !FluidWritebackBatch
         -- ^ Sim → World: apply the sim's settled/active fluid results to
         --   the visible world's 'wsTilesRef'. The world thread is the
