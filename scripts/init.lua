@@ -310,14 +310,21 @@ function game.onMouseDown(button, x, y)
         -- Gate on isGameplayInputActive(): game.onMouseDown is a broadcast
         -- handler with no focus gate, so a blank click on a non-gameplay
         -- overlay that doesn't take UI focus — pause menu / keep-world
-        -- Settings, both of which bypass hud.hide() — would otherwise arm
-        -- a fresh box-select behind the overlay, defeating the
-        -- cancel()-on-entry teardown (#146). Same predicate the gameplay
-        -- key handlers use (#182). (The single-unit/tile-cursor logic
-        -- below reaching those overlays is the broader #154 concern.)
-        if require("scripts.ui_manager").isGameplayInputActive() then
-            require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+        -- Settings, both of which bypass hud.hide() — or a blank click in
+        -- a menu (which resolves the "active" world to a HIDDEN one via
+        -- resolveActiveWorld's empty-wmVisible fallback) would otherwise
+        -- run box-select AND the single-unit / building / item hit-tests
+        -- below against a world the player can't see (#154 — selecting
+        -- hidden-world entities, stale tile context menus behind the UI).
+        -- Bail before any of that when gameplay input isn't active; the
+        -- box-select cancel()-on-entry teardown depends on the same gate
+        -- (#146). Same predicate the gameplay key handlers use (#182).
+        -- Armed debug-placement modes above keep their own returns —
+        -- their cross-transition teardown is #148, not this gate.
+        if not require("scripts.ui_manager").isGameplayInputActive() then
+            return
         end
+        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
 
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
@@ -401,6 +408,18 @@ function game.onMouseDown(button, x, y)
         end
         if debugOverlay.armedStructure then
             debugOverlay.clearArmedStructure()
+            return
+        end
+        -- #154: every right-click branch below hit-tests buildings / units
+        -- / ground items or issues move orders against the active world. A
+        -- blank right-click on a non-gameplay overlay or in a menu resolves
+        -- to a HIDDEN world (resolveActiveWorld's empty-wmVisible fallback),
+        -- so without this gate a stray right-click could open a context menu
+        -- on a hidden-world entity or move-order a unit the player can't see.
+        -- The armed-mode cancels above run unconditionally (so a stray click
+        -- still dismisses a leaked armed mode, #148); past here we need an
+        -- active, visible world. Same predicate as the left-click gate / #182.
+        if not require("scripts.ui_manager").isGameplayInputActive() then
             return
         end
         -- Storage building right-click → "Contents" menu, regardless
