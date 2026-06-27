@@ -862,6 +862,23 @@ function game.onKeyDown(key)
         if #selected > 0 then
             unit.deselectAll()
         end
+        -- ESC also clears the active cursor (tile/chunk) selection in
+        -- the current view, mirroring hud.onMouseDown's right-click
+        -- clear so tile/chunk selection obeys the same cancel semantics
+        -- as unit selection (#180). clearWorld/ZoomCursorSelect is
+        -- idempotent (no-op when nothing is selected), and the cursor
+        -- poller tears down the dependent tile/chunk info panel — and,
+        -- via the empty onSetInfoText broadcast, the tile-editor popup —
+        -- on the next tick. Gated on hud.visible like onMouseDown so a
+        -- menu-open Esc never acts on a hidden world.
+        local hud = require("scripts.hud")
+        if hud and hud.visible and hud.worldId then
+            if hud.currentView == "zoomed_out" then
+                world.clearZoomCursorSelect(hud.worldId)
+            elseif hud.currentView == "zoomed_in" then
+                world.clearWorldCursorSelect(hud.worldId)
+            end
+        end
     end
 end
 
