@@ -47,52 +47,50 @@ pollCursorInfo env = do
 
                 -- The chunk (zoom-map) and tile (zoomed-in) selections can
                 -- both be set at once, and BOTH drive the panel's
-                -- Basic/Advanced tabs through 'sendHudInfo'. Handling them
-                -- as two independent updates lets a single tick's writes
-                -- fight: e.g. a chunk-select + tile-deselect in the same
-                -- tick would render the chunk's Basic/Advanced and then
-                -- immediately blank it again. So we push ONE coherent HUD
-                -- state per change instead, derived from the combined
-                -- cursor:
+                -- Basic/Advanced tabs through 'sendHudInfo'. Render ONE
+                -- coherent HUD state per change, following the selection the
+                -- user just ACTED on — i.e. the one that changed this tick:
                 --
-                --   * a selected tile owns the panel — Basic/Advanced show
-                --     the tile and the chunk-only Weather/Resources tabs are
-                --     cleared (tile selection routes through the same
-                --     setInfo path and useSchema("tile") is a no-op when
-                --     already on the tile schema, so it cannot clear those
-                --     dynamic tabs on its own — #128);
-                --   * a tile DEselect empties the panel with an explicit
-                --     blank Basic payload — even if a chunk is still
-                --     selected. We must not "restore" the chunk readout
-                --     here: downstream consumers couple their teardown to
-                --     an empty 'onSetInfoText' (the arena tile-editor popup
-                --     only closes on it — scripts/tile_editor.lua), and a
-                --     chunk selection can persist into the zoomed-in view,
-                --     so a non-empty chunk payload would strand that popup.
-                --     This is also what keeps the same-tick chunk-select +
-                --     tile-deselect coherent (one blank, no render-then-blank);
-                --   * otherwise (no tile this tick) a selected chunk shows
-                --     its Basic/Advanced + Weather/Resources, or the panel
-                --     is empty.
+                --   * tile selection changed → it owns the panel. A selected
+                --     tile shows Basic/Advanced and clears the chunk-only
+                --     Weather/Resources tabs (tile selection routes through
+                --     the same setInfo path and useSchema("tile") is a no-op
+                --     when already on the tile schema, so it cannot clear
+                --     those dynamic tabs on its own — #128). A tile DEselect
+                --     empties the panel with an explicit blank Basic payload
+                --     even if a chunk is still selected, because downstream
+                --     teardown couples to that empty 'onSetInfoText' (the
+                --     arena tile-editor popup only closes on it —
+                --     scripts/tile_editor.lua) and we must not strand it.
+                --   * otherwise the chunk selection changed → show it (or
+                --     empty the panel when it was deselected).
+                --
+                -- Reacting to what CHANGED — rather than giving an existing
+                -- tile selection blanket priority — matters because neither
+                -- selection is cleared eagerly: a chunk selection persists
+                -- into the zoomed-in view and a tile selection persists
+                -- (unchanged) after zooming out (issue 135). Prioritising a
+                -- stale tile would re-show old tile info over a chunk the
+                -- user just clicked. Handling a single branch per tick (not
+                -- two independent updates) also avoids the same-tick
+                -- render-then-blank.
                 let worldChanged = curWorld ≢ oldWorld
+                    blankPanel = do
+                        sendHudInfo env "" ""
+                        sendHudWeatherInfo env ""
+                        sendHudResourcesInfo env ""
                 when (curZoom ≢ oldZoom ∨ worldChanged) $
-                    case curWorld of
-                        Just (gx, gy, z) → do
-                            sendTileInfo env worldState mParams gx gy z
-                            sendHudWeatherInfo env ""
-                            sendHudResourcesInfo env ""
-                        Nothing
-                            | worldChanged → do
-                                sendHudInfo env "" ""
+                    if worldChanged
+                        then case curWorld of
+                            Just (gx, gy, z) → do
+                                sendTileInfo env worldState mParams gx gy z
                                 sendHudWeatherInfo env ""
                                 sendHudResourcesInfo env ""
-                            | otherwise → case curZoom of
-                                Just (baseGX, baseGY) →
-                                    sendChunkInfo env worldState mParams baseGX baseGY
-                                Nothing → do
-                                    sendHudInfo env "" ""
-                                    sendHudWeatherInfo env ""
-                                    sendHudResourcesInfo env ""
+                            Nothing → blankPanel
+                        else case curZoom of
+                            Just (baseGX, baseGY) →
+                                sendChunkInfo env worldState mParams baseGX baseGY
+                            Nothing → blankPanel
 
                 let newSnap = CursorSnapshot curZoom curWorld
                 when (newSnap ≢ snap) $

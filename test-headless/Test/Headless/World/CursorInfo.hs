@@ -115,6 +115,24 @@ spec = beforeAll initEnv $ do
         -- ...and show the tile in Basic/Advanced.
         infoBasics msgs `shouldSatisfy` any (T.isInfixOf "Tile (")
 
+    it "clicking a chunk shows the chunk, not a stale still-selected tile" $ \env → do
+        ws ← freshVisibleWorld env
+        -- A tile is selected and already shown (snapshot agrees). Zooming
+        -- out does not clear worldSelectedTile (hud.onScroll only clears
+        -- the panel — issue 135), so the tile lingers in the cursor.
+        writeIORef (wsCursorRef ws)
+            (emptyCursorState { worldSelectedTile = Just (8, 8, 1) })
+        writeIORef (wsCursorSnapshotRef ws)
+            (CursorSnapshot Nothing (Just (8, 8, 1)))
+        -- Now click a chunk in the zoomed-out view: only zoomSelectedPos
+        -- changes; the stale tile is unchanged.
+        modifyIORef' (wsCursorRef ws) (\c → c { zoomSelectedPos = Just (0, 0) })
+        pollCursorInfo env
+        msgs ← drainLua env
+        -- The chunk the user just clicked must win, not the stale tile.
+        infoBasics msgs `shouldSatisfy` any (T.isInfixOf "Chunk (")
+        infoBasics msgs `shouldSatisfy` (not . any (T.isInfixOf "Tile ("))
+
     it "deselecting a tile empties the panel even when a chunk stays selected" $ \env → do
         ws ← freshVisibleWorld env
         -- Established state: chunk + tile both selected, snapshot agrees
