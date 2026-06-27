@@ -155,6 +155,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.Stats
                    Test.Headless.World.Save.Sanitize
+                   Test.Headless.World.CursorInfo
                    Test.Headless.World.Spoil
                    Test.Headless.Combat.Damage
                    Test.Headless.Combat.Severing

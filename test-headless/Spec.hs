@@ -20,6 +20,7 @@ import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
+import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.Combat.Damage as CombatDamage
 import qualified Test.Headless.Combat.Severing as CombatSevering
@@ -57,6 +58,7 @@ main = hspec $ do
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
+    describe "World.CursorInfo" CursorInfo.spec
     describe "World.Spoil" Spoil.spec
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "Combat.Damage" CombatDamage.spec
