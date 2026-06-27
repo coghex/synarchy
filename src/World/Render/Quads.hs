@@ -422,15 +422,25 @@ renderWorldCursorQuads env worldState tileAlpha = do
             Just (_, _, _, _, hp) → Just hp
             Nothing               → Nothing
     cs' ← atomicModifyIORef' (wsCursorRef worldState) $ \current →
-        let mergedSelected = if worldSelectNow current
+        let committedTile = worldSelectNow current ∧ case hoverResult of
+                Just _  → True
+                Nothing → False
+            mergedSelected = if worldSelectNow current
                 then case hoverResult of
                     Just (gx, gy, z, _, _) → Just (gx, gy, z)
                     Nothing                → worldSelectedTile current
                 else worldSelectedTile current
+            -- The newest selection owns the cursor: committing a tile
+            -- selection drops any zoom-map chunk selection, so returning
+            -- to the zoomed-out view shows no stale chunk highlight and
+            -- the two can't coexist (issue #135). Cleared together with
+            -- the tile set in this one atomic write — no blank window.
+            mergedZoom = if committedTile then Nothing else zoomSelectedPos current
             merged = current { worldHoverTile    = newHoverTile
                              , worldHoverPos     = newHoverPos
                              , worldSelectNow    = False
                              , worldSelectedTile = mergedSelected
+                             , zoomSelectedPos   = mergedZoom
                              }
         in (merged, merged)
 

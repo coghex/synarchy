@@ -67,11 +67,13 @@ handleWorldSetZoomCursorSelectCommand env logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
-            -- A new zoom-map chunk selection takes over the cursor state:
-            -- drop any zoomed-in tile selection so the two views can't hold
-            -- stale, divergent selections simultaneously (issue #135).
+            -- Only ARM the selection here. The chunk is resolved from the
+            -- cursor hover at render time (makeCursorQuad), which is also
+            -- where the opposing tile selection is cleared — doing the
+            -- clear here instead would blank the cursor for the frames
+            -- before the commit lands (issue #135).
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { zoomSelectNow = True, worldSelectedTile = Nothing }, ())
+                (cs { zoomSelectNow = True }, ())
         Nothing → pure ()
 handleWorldSetZoomCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldSetZoomCursorDeselectCommand env logger pageId = do
@@ -121,11 +123,13 @@ handleWorldSetWorldCursorSelectCommand env logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
-            -- A new zoomed-in tile selection takes over the cursor state:
-            -- drop any zoom-map chunk selection so the two views can't hold
-            -- stale, divergent selections simultaneously (issue #135).
+            -- Only ARM the selection here. The tile is resolved from the
+            -- cursor hover at render time (renderWorldCursorQuads), which
+            -- is also where the opposing chunk selection is cleared —
+            -- doing the clear here instead would blank the cursor for the
+            -- frames before the commit lands (issue #135).
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { worldSelectNow = True, zoomSelectedPos = Nothing }, ())
+                (cs { worldSelectNow = True }, ())
         Nothing → pure ()
 handleWorldSetWorldCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldSetWorldCursorDeselectCommand env logger pageId = do
@@ -295,8 +299,10 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy = do
                 Nothing → pure ()
                 Just lc → do
                     let z = lcSurfaceMap lc VU.! columnIndex lx ly
-                    -- Like the live info-click path, a new tile selection
-                    -- drops any zoom-map chunk selection (issue #135).
+                    -- This path resolves the tile immediately (no hover
+                    -- round-trip), so the set and the opposing-chunk clear
+                    -- happen in the SAME write — no blank window. A new
+                    -- tile selection drops any chunk selection (issue #135).
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectedTile = Just (gx, gy, z)
                             , zoomSelectedPos   = Nothing }, ())

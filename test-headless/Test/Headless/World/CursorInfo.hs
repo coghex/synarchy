@@ -32,15 +32,12 @@ module Test.Headless.World.CursorInfo (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.Text as T
-import Data.IORef (writeIORef, modifyIORef', readIORef)
+import Data.IORef (writeIORef, modifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread.Cursor (pollCursorInfo)
-import World.Thread.Command.Cursor
-    ( handleWorldSetZoomCursorSelectCommand
-    , handleWorldSetWorldCursorSelectCommand )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.State.Types ( WorldState(..), emptyWorldState
                          , WorldManager(..), CursorSnapshot(..) )
@@ -184,52 +181,25 @@ spec = beforeAll initEnv $ do
         weatherMsgs msgs `shouldSatisfy` elem ""
         resourceMsgs msgs `shouldSatisfy` elem ""
 
-    it "a chunk-select + tile-deselect in one tick empties the panel coherently" $ \env → do
+    it "a chunk-select that clears a lingering tile shows the chunk, coherently (issue #135)" $ \env → do
         ws ← freshVisibleWorld env
-        -- Old state (snapshot): no chunk, a tile selected.
+        -- Old state (snapshot): a tile selected, no chunk.
         writeIORef (wsCursorSnapshotRef ws)
             (CursorSnapshot Nothing (Just (8, 8, 1)))
-        -- New state (cursor): chunk selected, tile gone — BOTH changed.
+        -- New state (cursor): a chunk was just selected, and committing it
+        -- dropped the lingering tile (the render-time select commit clears
+        -- the opposite field — issue #135). BOTH fields changed this tick.
         writeIORef (wsCursorRef ws)
             (emptyCursorState { zoomSelectedPos = Just (0, 0) })
         pollCursorInfo env
         msgs ← drainLua env
-        -- A single coherent blank — NOT a chunk readout rendered and then
-        -- blanked by a competing tile-deselect write (the point-1 race).
-        infoBasics msgs `shouldBe` [""]
-        weatherMsgs msgs `shouldSatisfy` elem ""
-        resourceMsgs msgs `shouldSatisfy` elem ""
-
-    -- Selection mutual-exclusion at the command-handler level (issue
-    -- #135). Above, 'pollCursorInfo' is made robust to a tile and a
-    -- chunk both being selected; these specs verify the deeper fix —
-    -- the select COMMANDS clear the other view's selection, so the
-    -- newest selection owns the cursor state and the two can't coexist
-    -- in the first place. Driving the real handlers (not direct IORef
-    -- writes) is what guards that wiring.
-    it "a new zoom-map chunk selection clears a lingering tile selection (issue #135)" $ \env → do
-        ws ← freshVisibleWorld env
-        logger ← readIORef (loggerRef env)
-        -- A zoomed-in tile is selected; the user now clicks a chunk in
-        -- the zoom-map. The select command must take over the cursor.
-        writeIORef (wsCursorRef ws)
-            (emptyCursorState { worldSelectedTile = Just (8, 8, 1) })
-        handleWorldSetZoomCursorSelectCommand env logger pid
-        cs ← readIORef (wsCursorRef ws)
-        zoomSelectNow cs     `shouldBe` True
-        worldSelectedTile cs `shouldBe` Nothing
-
-    it "a new zoomed-in tile selection clears a lingering chunk selection (issue #135)" $ \env → do
-        ws ← freshVisibleWorld env
-        logger ← readIORef (loggerRef env)
-        -- A zoom-map chunk is selected; the user now info-clicks a tile
-        -- in the zoomed-in view. The select command must take over.
-        writeIORef (wsCursorRef ws)
-            (emptyCursorState { zoomSelectedPos = Just (0, 0) })
-        handleWorldSetWorldCursorSelectCommand env logger pid
-        cs ← readIORef (wsCursorRef ws)
-        worldSelectNow cs  `shouldBe` True
-        zoomSelectedPos cs `shouldBe` Nothing
+        -- The NEWEST selection owns the panel: a single coherent chunk
+        -- readout — NOT a blank (the user did select a chunk) and NOT a
+        -- chunk-then-blank race. A genuine tile DEselect (zoom field
+        -- unchanged) still blanks; that is the spec just above.
+        infoBasics msgs `shouldSatisfy` any (T.isInfixOf "Chunk (")
+        infoBasics msgs `shouldSatisfy` (notElem "")
+        infoBasics msgs `shouldSatisfy` (not . any (T.isInfixOf "Tile ("))
 
     it "deselecting everything empties the panel" $ \env → do
         ws ← freshVisibleWorld env
