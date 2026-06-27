@@ -68,6 +68,7 @@ import Control.Monad (when, forM_)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Structure.Types (emptyChunkStructures)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
@@ -1272,7 +1273,11 @@ worldDestroyFn env = do
 --   unit/building managers. (#58)
 worldDestroyAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldDestroyAllFn env = do
-    Lua.liftIO $ Q.writeQueue (worldQueue env) WorldDestroyAll
+    Lua.liftIO $ do
+        -- Drop the structure read-your-writes staging cache so a stale
+        -- placement can't leak into the next world (exit-to-menu → new game).
+        writeIORef (structureStageRef env) emptyChunkStructures
+        Q.writeQueue (worldQueue env) WorldDestroyAll
     return 0
 
 -- | world.deleteTile(pageId, gx, gy) → bool

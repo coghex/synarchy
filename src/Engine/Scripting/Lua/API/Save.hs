@@ -14,6 +14,7 @@ import Data.Time.Clock (getCurrentTime, addUTCTime)
 import Data.Time.Format (formatTime, defaultTimeLocale)
 import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
+import Structure.Types (emptyChunkStructures)
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
 import World.Save.Serialize (listSaves, saveWorld, loadWorld
@@ -182,6 +183,11 @@ loadSaveFn env = do
                     -- LoadDone. This write is shadowed by the new
                     -- WorldState as soon as the handler runs.
                     Lua.liftIO $ markHeadWorldLoading env
+                    -- Drop the structure read-your-writes staging cache: the
+                    -- loaded world rebuilds lcStructures from its own edits, so
+                    -- any staged placement from the prior world is now stale.
+                    Lua.liftIO $ writeIORef (structureStageRef env)
+                                            emptyChunkStructures
                     Lua.liftIO $ Q.writeQueue (worldQueue env)
                         (WorldLoadSave pageId saveData)
                     Lua.pushboolean True

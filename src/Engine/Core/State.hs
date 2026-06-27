@@ -47,6 +47,7 @@ import Unit.Sim.Types (UnitThreadState)
 import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
+import Structure.Types (ChunkStructures)
 import Structure.Palette (TexPalette)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
@@ -122,6 +123,20 @@ data EngineEnv = EngineEnv
     --   startup; not tied to the world seed (stats are non-deterministic
     --   across runs by design).
   , buildingManagerRef  ∷ IORef BuildingManager
+  , structureStageRef   ∷ IORef ChunkStructures
+    -- ^ Lua-thread write-ahead staging for structure placements. The
+    --   authoritative structure state lives in the per-chunk 'lcStructures'
+    --   overlay (rendered + persisted), but those writes are applied
+    --   asynchronously on the world thread via WeSetStructure. The builder
+    --   (scripts/structures.lua, scripts/locations.lua) places a piece and
+    --   then queries it within the SAME Lua call (floors→posts→walls), so it
+    --   needs read-your-writes. structure.place records the piece here too;
+    --   structure.floorZAt/hasAt consult this first and fall back to the
+    --   authoritative 'lcStructures' — so they see just-placed pieces
+    --   immediately AND stay correct after a save/load replay (when this
+    --   cache is empty). Adds-only: clear/clearAll drop entries here and
+    --   queue the real world command; reads of a just-cleared tile are
+    --   eventually consistent (the builder never clears-then-reads).
   , texPaletteRef       ∷ IORef TexPalette
     -- ^ Save-level texture PALETTE (path↔id). Structure edits store palette
     --   ids; this interns paths → ids at placement and resolves ids → paths
