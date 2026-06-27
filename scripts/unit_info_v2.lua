@@ -2149,7 +2149,10 @@ local function buildItemHint(it, equippedSlot)
         local base = it.weapon.baseSharpness or 0
         local wear = it.sharpness
         local sharp = base
-        if wear and wear > 0 then
+        if wear ~= nil then
+            -- Clamp 10..100 like Combat.Resolution, so a fully-dulled
+            -- edge (wear 0) reads as the dullest case (base * 10), not a
+            -- pristine fallback. Only a missing field falls back to base.
             local w = math.max(10, math.min(100, wear))
             sharp = base * (100.0 / w)
         end
@@ -2526,16 +2529,19 @@ end
 -- Build the per-row stacking key. Returns nil for equipped items so
 -- they never collapse into a stack (each occupies a distinct slot).
 -- Non-equipped items only merge when their defName + quality +
--- condition + sharpness all match exactly — a 100% motor and a 99%
--- motor stay on two rows so the player sees the real spread of
--- conditions, and likewise two weapons with differing edge wear.
+-- condition match exactly — a 100% motor and a 99% motor stay on two
+-- rows so the player sees the real spread of conditions. Sharpness is
+-- added ONLY for weapons (the only items whose tooltip shows it) so two
+-- weapons with differing edge wear likewise split; armor and other gear
+-- also carry a combat-mutated iiSharpness but never display it, so
+-- splitting their rows on it would be an invisible, confusing reason.
 local function stackKey(it)
     if it.equipped then return nil end
     return table.concat({
         it.defName,
         tostring(it.quality   or "_"),
         tostring(it.condition or "_"),
-        tostring(it.sharpness or "_"),
+        it.weapon and tostring(it.sharpness or "_") or "_",
     }, "|")
 end
 
