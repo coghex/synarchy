@@ -167,6 +167,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Calendar
                    Test.Headless.River.Graph
                    Test.Headless.World.Render.SideFace
+                   Test.Headless.World.Render.SlopeBit
                    Test.Headless.Render.ViewportGuard
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields

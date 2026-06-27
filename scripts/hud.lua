@@ -547,6 +547,7 @@ function hud.hide()
     --   * item-contents popup (#100)
     --   * per-unit log overlay (#104)
     --   * cargo inventory popup (#99)
+    --   * main debug overlay (#147)
     -- Ground-item selection (#175) is NOT cleared here: it lives in the
     -- per-world cursor (wsCursorRef) and a Lua deselect resolves through
     -- activeWorld, which head-falls-back to a different registered world
@@ -562,6 +563,7 @@ function hud.hide()
     pcall(function() require("scripts.item_contents_panel").closeIfOpen() end)
     pcall(function() require("scripts.unit_log").hide() end)
     pcall(function() require("scripts.cargo_inventory_panel").closeIfOpen() end)
+    pcall(function() require("scripts.debug").hide() end)
 
     engine.logDebug("HUD hidden")
 end
@@ -693,6 +695,9 @@ function hud.reconcileView()
 
     infoPanel.clear()
     require("scripts.item_contents_panel").closeIfOpen()
+    if newView ~= "zoomed_in" then
+        require("scripts.debug").hide()
+    end
     item.deselect()
 end
 

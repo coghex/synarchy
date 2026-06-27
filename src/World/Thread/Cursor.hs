@@ -20,7 +20,7 @@ import World.Generate (generateLoadedChunk)
 import World.Generate.Types (isArenaParams)
 import World.Geology.Ore (chunkOreCounts)
 import World.Slope (patchEdgeStrata)
-import World.Thread.Helpers (sendHudInfo, sendHudWeatherInfo
+import World.Thread.Helpers (sendHudInfo, sendHudChunkInfo, sendHudWeatherInfo
                             , sendHudResourcesInfo)
 import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
@@ -221,7 +221,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
             Just params → chunkWeatherInfo params cx cy
             Nothing → ""
 
-    sendHudInfo env basicLines advLines
+    sendHudChunkInfo env basicLines advLines
     sendHudWeatherInfo env weatherInfo
 
 -- * chunkWeatherInfo: format weather for a chunk's climate region

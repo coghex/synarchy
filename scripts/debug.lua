@@ -849,7 +849,31 @@ end
 -----------------------------------------------------------
 -- Visibility
 -----------------------------------------------------------
+-- The overlay is only meaningful in the gameplay world view, but F8
+-- keydown is broadcast to every Lua module unconditionally, so without
+-- this gate the user could re-summon the overlay onto Settings, the
+-- pause menu, the zoom map, or the fade zone right after a teardown path
+-- hid it (#147). Refuse to OPEN it outside gameplay; hiding always works.
+function debugOverlay.canShow()
+    local ok, allowed = pcall(function()
+        -- Blocks menus/overlays: Settings, pause menu, main menu, etc.
+        if not require("scripts.ui_manager").isGameplayInputActive() then
+            return false
+        end
+        -- Only the zoomed-in view is gameplay; block the zoom map and
+        -- fade zone. Both the full world view and the test arena drive
+        -- hud.currentView through the same hud.onScroll machinery
+        -- (uiManager.onScroll forwards to it in both views), so this one
+        -- check covers them uniformly.
+        return require("scripts.hud").currentView == "zoomed_in"
+    end)
+    -- Never let the gate itself break F8: fall back to allowing on error.
+    if not ok then return true end
+    return allowed
+end
+
 function debugOverlay.show()
+    if not debugOverlay.canShow() then return end
     if not debugOverlay.uiCreated then debugOverlay.createUI() end
     debugOverlay.visible = true
     if debugOverlay.page then UI.showPage(debugOverlay.page) end

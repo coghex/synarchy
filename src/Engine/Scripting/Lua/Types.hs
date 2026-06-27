@@ -135,7 +135,12 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaDebugHide
             | LuaDebugToggle
             | LuaWorldGenLog Text
-            | LuaHudLogInfo Text Text
+            | LuaHudLogInfo Text Text Text
+              -- ^ HUD info-panel push: basic, advanced, and a SOURCE
+              -- kind ("tile" | "chunk"). The kind lets entity-info
+              -- watchers (unit/building/item panels) tell a real
+              -- zoomed-in tile selection apart from a zoom-map chunk
+              -- selection, which share this same broadcast (issue #133).
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text
             | LuaWorldPreviewReady Int

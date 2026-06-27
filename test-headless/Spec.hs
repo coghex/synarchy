@@ -32,6 +32,7 @@ import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.River.Graph as RiverGraph
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
+import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 
 main ∷ IO ()
@@ -71,4 +72,5 @@ main = hspec $ do
     describe "World.Calendar" Calendar.spec
     describe "River.Graph" RiverGraph.spec
     describe "World.Render.SideFace" RenderSideFace.spec
+    describe "World.Slope.slopeBit" RenderSlopeBit.spec
     describe "Render.ViewportGuard" ViewportGuard.spec

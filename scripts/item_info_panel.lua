@@ -105,8 +105,11 @@ function itemInfoWatch.update(dt)
 end
 
 -- Tile-info broadcast: defer to the tile when one is clicked.
-function itemInfoWatch.onSetInfoText(basic, advanced)
-    if basic and basic ~= "" then
+-- `kind` separates a zoomed-in TILE selection from a zoom-map CHUNK
+-- selection (shared broadcast). Only a tile steals the panel from a
+-- selected ground item; a chunk click leaves it intact (issue #133).
+function itemInfoWatch.onSetInfoText(basic, advanced, kind)
+    if basic and basic ~= "" and kind == "tile" then
         itemInfoWatch.tilePushed = true
         if item.getSelected() then
             item.deselect()
