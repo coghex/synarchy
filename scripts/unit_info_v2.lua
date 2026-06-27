@@ -3578,14 +3578,20 @@ function unitInfoV2.update(dt)
 
     -- Visibility gate. The pane belongs to the zoomed-in gameplay view,
     -- so a selection alone is not enough to show it: it must also hide
-    -- when the gameplay HUD itself is hidden (a menu is open → hud.hide()
-    -- cleared hud.visible) or when the camera isn't in the zoomed-in band
-    -- (zoomed-out map / fade band). Driving show/hide off a single
-    -- predicate keeps it in sync with zoom + menu transitions instead of
-    -- only selection count, so the pane can no longer persist over the
-    -- zoomed-out map or non-gameplay menus (#137).
+    -- when gameplay UI isn't actually active or when the camera isn't in
+    -- the zoomed-in band (zoomed-out map / fade band). Driving show/hide
+    -- off a single predicate keeps it in sync with zoom + menu transitions
+    -- instead of only selection count, so the pane can no longer persist
+    -- over the zoomed-out map or non-gameplay menus (#137).
+    --
+    -- isGameplayInputActive() is the authoritative "gameplay UI is active"
+    -- check (#182): it is false for any non-gameplay currentMenu AND while
+    -- the pause overlay is up. That covers the modal paths that DON'T call
+    -- hud.hide() — pauseMenu.show() and uiManager.showMenu("settings") in
+    -- its keepWorld path — which a bare hud.visible check would miss.
+    local uiManager = require("scripts.ui_manager")
     local want = count > 0
-                 and hud.visible
+                 and uiManager.isGameplayInputActive()
                  and hud.currentView == "zoomed_in"
     if want ~= unitInfoV2.lastWantVisible then
         if want then
@@ -3607,10 +3613,11 @@ function unitInfoV2.onFramebufferResize(width, height)
         -- update tick will see "new" selection and rebuild).
         unitInfoV2.lastSelKey = ""
         -- Re-apply the same visibility gate as update() so a resize while
-        -- a menu is open / the camera is zoomed out doesn't flash the pane
-        -- back on (#137).
+        -- a menu / pause / settings overlay is open or the camera is zoomed
+        -- out doesn't flash the pane back on (#137).
+        local uiManager = require("scripts.ui_manager")
         local want = unitInfoV2.lastSelCount > 0
-                     and hud.visible
+                     and uiManager.isGameplayInputActive()
                      and hud.currentView == "zoomed_in"
         if want then
             UI.showPage(unitInfoV2.page)
