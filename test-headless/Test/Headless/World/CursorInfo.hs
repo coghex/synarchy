@@ -115,10 +115,11 @@ spec = beforeAll initEnv $ do
         -- ...and show the tile in Basic/Advanced.
         infoBasics msgs `shouldSatisfy` any (T.isInfixOf "Tile (")
 
-    it "deselecting a tile restores the chunk readout when a chunk stays selected" $ \env → do
+    it "deselecting a tile empties the panel even when a chunk stays selected" $ \env → do
         ws ← freshVisibleWorld env
         -- Established state: chunk + tile both selected, snapshot agrees
-        -- so only the tile-deselect transition fires this poll.
+        -- so only the tile-deselect transition fires this poll. (A chunk
+        -- selection can persist into the zoomed-in view — issue 135.)
         writeIORef (wsCursorRef ws)
             (emptyCursorState { zoomSelectedPos   = Just (0, 0)
                               , worldSelectedTile = Just (8, 8, 1) })
@@ -128,14 +129,15 @@ spec = beforeAll initEnv $ do
         modifyIORef' (wsCursorRef ws) (\c → c { worldSelectedTile = Nothing })
         pollCursorInfo env
         msgs ← drainLua env
-        -- The chunk readout comes back instead of being blanked, and its
-        -- Weather tab is restored — not a half-cleared HUD.
-        infoBasics msgs `shouldSatisfy` (\bs →
-            not (null bs) ∧ T.isInfixOf "Chunk (" (last bs))
-        weatherMsgs msgs `shouldSatisfy` (\ws' →
-            not (null ws') ∧ last ws' ≢ "")
+        -- An empty Basic payload must be sent (the arena tile-editor popup
+        -- couples its teardown to it — scripts/tile_editor.lua), and the
+        -- chunk readout must NOT come back and strand that popup.
+        infoBasics msgs  `shouldSatisfy` elem ""
+        infoBasics msgs  `shouldSatisfy` (not . any (T.isInfixOf "Chunk ("))
+        weatherMsgs msgs `shouldSatisfy` elem ""
+        resourceMsgs msgs `shouldSatisfy` elem ""
 
-    it "a chunk-select + tile-deselect in one tick renders one coherent chunk readout" $ \env → do
+    it "a chunk-select + tile-deselect in one tick empties the panel coherently" $ \env → do
         ws ← freshVisibleWorld env
         -- Old state (snapshot): no chunk, a tile selected.
         writeIORef (wsCursorSnapshotRef ws)
@@ -145,10 +147,11 @@ spec = beforeAll initEnv $ do
             (emptyCursorState { zoomSelectedPos = Just (0, 0) })
         pollCursorInfo env
         msgs ← drainLua env
-        -- Single coherent chunk readout; the Basic tab is NOT left blank
-        -- by a competing tile-deselect write (the point-1 race).
-        infoBasics msgs `shouldSatisfy` (\bs →
-            not (null bs) ∧ T.isInfixOf "Chunk (" (last bs))
+        -- A single coherent blank — NOT a chunk readout rendered and then
+        -- blanked by a competing tile-deselect write (the point-1 race).
+        infoBasics msgs `shouldBe` [""]
+        weatherMsgs msgs `shouldSatisfy` elem ""
+        resourceMsgs msgs `shouldSatisfy` elem ""
 
     it "deselecting everything empties the panel" $ \env → do
         ws ← freshVisibleWorld env

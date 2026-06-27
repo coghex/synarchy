@@ -61,22 +61,38 @@ pollCursorInfo env = do
                 --     setInfo path and useSchema("tile") is a no-op when
                 --     already on the tile schema, so it cannot clear those
                 --     dynamic tabs on its own — #128);
-                --   * otherwise a selected chunk shows its Basic/Advanced +
-                --     Weather/Resources;
-                --   * otherwise the panel is empty.
-                when (curZoom ≢ oldZoom ∨ curWorld ≢ oldWorld) $
+                --   * a tile DEselect empties the panel with an explicit
+                --     blank Basic payload — even if a chunk is still
+                --     selected. We must not "restore" the chunk readout
+                --     here: downstream consumers couple their teardown to
+                --     an empty 'onSetInfoText' (the arena tile-editor popup
+                --     only closes on it — scripts/tile_editor.lua), and a
+                --     chunk selection can persist into the zoomed-in view,
+                --     so a non-empty chunk payload would strand that popup.
+                --     This is also what keeps the same-tick chunk-select +
+                --     tile-deselect coherent (one blank, no render-then-blank);
+                --   * otherwise (no tile this tick) a selected chunk shows
+                --     its Basic/Advanced + Weather/Resources, or the panel
+                --     is empty.
+                let worldChanged = curWorld ≢ oldWorld
+                when (curZoom ≢ oldZoom ∨ worldChanged) $
                     case curWorld of
                         Just (gx, gy, z) → do
                             sendTileInfo env worldState mParams gx gy z
                             sendHudWeatherInfo env ""
                             sendHudResourcesInfo env ""
-                        Nothing → case curZoom of
-                            Just (baseGX, baseGY) →
-                                sendChunkInfo env worldState mParams baseGX baseGY
-                            Nothing → do
+                        Nothing
+                            | worldChanged → do
                                 sendHudInfo env "" ""
                                 sendHudWeatherInfo env ""
                                 sendHudResourcesInfo env ""
+                            | otherwise → case curZoom of
+                                Just (baseGX, baseGY) →
+                                    sendChunkInfo env worldState mParams baseGX baseGY
+                                Nothing → do
+                                    sendHudInfo env "" ""
+                                    sendHudWeatherInfo env ""
+                                    sendHudResourcesInfo env ""
 
                 let newSnap = CursorSnapshot curZoom curWorld
                 when (newSnap ≢ snap) $
