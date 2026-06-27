@@ -547,6 +547,7 @@ function hud.hide()
     --   * item-contents popup (#100)
     --   * per-unit log overlay (#104)
     --   * cargo inventory popup (#99)
+    --   * main debug overlay (#147)
     pcall(function() require("scripts.event_log").hide() end)
     pcall(function() require("scripts.combat_log").hide() end)
     pcall(function() require("scripts.injury_log_panel").hide() end)
@@ -555,6 +556,7 @@ function hud.hide()
     pcall(function() require("scripts.item_contents_panel").closeIfOpen() end)
     pcall(function() require("scripts.unit_log").hide() end)
     pcall(function() require("scripts.cargo_inventory_panel").closeIfOpen() end)
+    pcall(function() require("scripts.debug").hide() end)
 
     engine.logDebug("HUD hidden")
 end
@@ -636,6 +638,12 @@ function hud.onScroll(dx, dy)
     -- back. Tear it down on every transition, alongside the info-panel
     -- clear, so it never survives a view change (#142).
     local itemContentsPanel = require("scripts.item_contents_panel")
+    -- The main debug overlay owns its own page/visible flag and is only
+    -- meaningful in the zoomed-in gameplay view (FPS, spawn/edit tools
+    -- that act on the hovered world tile). It is not torn down by the
+    -- page swaps below, so hide it whenever we leave the zoomed-in view
+    -- or it lingers over the zoom map / fade zone (#147).
+    local debugOverlay = require("scripts.debug")
     if zoom > zoomFadeEnd then
         if oldView ~= "zoomed_out" and hud.zoom_page and hud.world_page then
             UI.showPage(hud.zoom_page)
@@ -644,6 +652,7 @@ function hud.onScroll(dx, dy)
             -- Clear info panel on zoom transition
             infoPanel.clear()
             itemContentsPanel.closeIfOpen()
+            debugOverlay.hide()
         end
     elseif zoom < zoomFadeStart then
         if oldView ~= "zoomed_in" and hud.zoom_page and hud.world_page then
@@ -664,6 +673,7 @@ function hud.onScroll(dx, dy)
         -- In the fade zone, clear the info panel
         infoPanel.clear()
         itemContentsPanel.closeIfOpen()
+        debugOverlay.hide()
     end
 end
 
