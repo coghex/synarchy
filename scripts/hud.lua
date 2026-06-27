@@ -811,6 +811,16 @@ function hud.reconcileView()
     -- is idempotent (clearGhost no-ops with no ghost; mode resets to
     -- "off"), so cancel any in-progress placement on every band change.
     require("scripts.build_tool").exitPlacement()
+    -- Arena tile-editor popup (#138): the test-arena tile editor lives on
+    -- hud.world_page and was only torn down on empty tile-info broadcasts,
+    -- tool changes, or arena exit. The page swap above only takes it
+    -- off-view, and zoom-map chunk selection produces non-empty HUD info
+    -- text, so neither the band change nor the empty-text clear path
+    -- closed it — it survived off-view and reappeared stale when the world
+    -- page returned. clear() is idempotent (destroyPopup no-ops with no
+    -- popup, and is a no-op outside arena mode), so tear it down on every
+    -- transition.
+    require("scripts.tile_editor").clear()
     if newView ~= "zoomed_in" then
         require("scripts.debug").hide()
     end
