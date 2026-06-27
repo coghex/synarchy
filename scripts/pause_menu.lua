@@ -323,6 +323,13 @@ function pauseMenu.show(opts)
     if opts.showSave ~= nil then
         pauseMenu.showSave = opts.showSave
     end
+    -- The pause menu is a non-gameplay overlay (isGameplayInputActive
+    -- treats it as "menu on top"), but it opens via its own modal page
+    -- without going through hud.hide() or uiManager.showMenu(). Hide the
+    -- F8 debug overlay here too so it doesn't survive onto the pause
+    -- screen, where it would stay visible and clickable (#147). Done
+    -- before createUI so it happens regardless of the pause UI build.
+    pcall(function() require("scripts.debug").hide() end)
     pauseMenu.createUI()
     if pauseMenu.page then
         UI.showPage(pauseMenu.page)
