@@ -554,6 +554,15 @@ function hud.hide()
 end
 
 function hud.onMouseDown(button_num, mx, my)
+    -- Same gate as hud.update: when the HUD is hidden (a menu is open
+    -- over a hidden gameplay view), don't act on the world. currentView
+    -- is preserved across hud.hide() for re-show, so without this a
+    -- blank-area menu click forwarded by uiManager.onMouseDown would
+    -- still call world.setZoomCursorSelect / setWorldCursorSelect (or
+    -- the clear variants) against the hidden world (#153).
+    if not hud.visible then
+        return
+    end
     if hud.currentView == "zoomed_out" then
         if button_num == 1 then
             world.setZoomCursorSelect(hud.worldId)
