@@ -860,13 +860,11 @@ function debugOverlay.canShow()
         if not require("scripts.ui_manager").isGameplayInputActive() then
             return false
         end
-        -- The test arena is also gameplay but drives its own camera and
-        -- never maintains hud.currentView, so exempt it from the zoom
-        -- check (F8 debug is the arena's only debug affordance).
-        local arena = package.loaded["scripts.test_arena"]
-        if arena and arena.visible then return true end
-        -- In the full world view, only the zoomed-in view is gameplay;
-        -- block the zoom map and fade zone.
+        -- Only the zoomed-in view is gameplay; block the zoom map and
+        -- fade zone. Both the full world view and the test arena drive
+        -- hud.currentView through the same hud.onScroll machinery
+        -- (uiManager.onScroll forwards to it in both views), so this one
+        -- check covers them uniformly.
         return require("scripts.hud").currentView == "zoomed_in"
     end)
     -- Never let the gate itself break F8: fall back to allowing on error.
