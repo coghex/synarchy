@@ -849,12 +849,14 @@ end
 -----------------------------------------------------------
 -- Visibility
 -----------------------------------------------------------
--- The overlay is only meaningful in the gameplay world view, but F8
--- keydown is broadcast to every Lua module unconditionally, so without
--- this gate the user could re-summon the overlay onto Settings, the
--- pause menu, the zoom map, or the fade zone right after a teardown path
--- hid it (#147). Refuse to OPEN it outside gameplay; hiding always works.
-function debugOverlay.canShow()
+-- True when the overlay is valid in the CURRENT view: gameplay input is
+-- active (not Settings/pause/main menu/etc.) AND we're zoomed in (not the
+-- zoom map or fade zone). The single source of truth for "should the
+-- overlay be live here", used both to gate F8 opening (canShow) and to
+-- gate the parallel click hit-test (tryClaimClick) so a stale-visible
+-- overlay left behind by a zoom/menu transition can neither be re-opened
+-- nor swallow clicks outside gameplay (#147, #151).
+function debugOverlay.inGameplayView()
     local ok, allowed = pcall(function()
         -- Blocks menus/overlays: Settings, pause menu, main menu, etc.
         if not require("scripts.ui_manager").isGameplayInputActive() then
@@ -867,9 +869,18 @@ function debugOverlay.canShow()
         -- check covers them uniformly.
         return require("scripts.hud").currentView == "zoomed_in"
     end)
-    -- Never let the gate itself break F8: fall back to allowing on error.
+    -- Never let the gate itself break the debug overlay: allow on error.
     if not ok then return true end
     return allowed
+end
+
+-- The overlay is only meaningful in the gameplay world view, but F8
+-- keydown is broadcast to every Lua module unconditionally, so without
+-- this gate the user could re-summon the overlay onto Settings, the
+-- pause menu, the zoom map, or the fade zone right after a teardown path
+-- hid it (#147). Refuse to OPEN it outside gameplay; hiding always works.
+function debugOverlay.canShow()
+    return debugOverlay.inGameplayView()
 end
 
 function debugOverlay.show()
@@ -1188,6 +1199,13 @@ end
 -- uiManager, ...) can all check and skip their work in unison.
 function debugOverlay.tryClaimClick(button, x, y)
     if not debugOverlay.visible then return false end
+    -- Defense in depth (#151): the `visible` flag is cleared by the
+    -- teardown paths (hud.hide / uiManager.showMenu, #147), but if any
+    -- transition ever leaves it set, claiming on `visible` alone lets the
+    -- overlay's rects swallow clicks on the zoom map or a menu opened over
+    -- a hidden world. Gate on the same current-view predicate as F8 so the
+    -- claim path can only fire while the overlay is actually valid here.
+    if not debugOverlay.inGameplayView() then return false end
     if button ~= MOUSE_LEFT then return false end
 
     if debugOverlay.lastClaim
