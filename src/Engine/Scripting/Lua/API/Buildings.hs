@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.Buildings
     , buildingGetInfoFn
     , buildingGetActivityFn
     , buildingListFn
+    , buildingGetActiveIdsFn
     , buildingListDefsFn
     , buildingHitTestAtFn
     , buildingSelectFn
@@ -749,6 +750,26 @@ buildingListFn env = do
                 <> ", " <> T.pack (show (biGridZ inst)) <> ")"
             ) entries
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
+    return 1
+
+-- | building.getActiveIds() — Lua array of every live building's integer
+--   id, scoped to the ACTIVE world page. The world-scoping boundary for
+--   per-tick iteration so a building in another live world never leaks
+--   into the current one (#198), mirroring unit.getAllIds (#78). Empty
+--   when no world is active. Scripts should prefer this over parsing the
+--   global, page-agnostic building.list when they iterate gameplay.
+buildingGetActiveIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetActiveIdsFn env = do
+    ids ← Lua.liftIO $ do
+        bm ← readIORef (buildingManagerRef env)
+        mActive ← activeWorldPage env
+        pure $ case mActive of
+            Just (pid, _) → HM.keys (buildingsOnPage pid (bmInstances bm))
+            Nothing       → []
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] ids) $ \(i, bid) → do
+        Lua.pushinteger (fromIntegral (unBuildingId bid))
+        Lua.rawseti (-2) (fromIntegral i)
     return 1
 
 -- | building.listDefs() — Lua array of tables, one per registered

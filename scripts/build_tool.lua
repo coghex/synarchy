@@ -100,17 +100,12 @@ end
 -- Visibility helpers
 -----------------------------------------------------------
 
--- Parse building.list() into an array of placed building ids. Same
--- shape used by building_spawn.lua's getAllBuildingIds — duplicated
--- here to avoid a cross-module require for one regex.
+-- Active-world placed building ids. building.list() is global across
+-- every live world page, so buildings on hidden/off-world pages used to
+-- pollute this world's build-menu visibility (#198). building.getActiveIds()
+-- is scoped to the active page, matching unit.getAllIds.
 local function getAllBuildingIds()
-    local s = building.list()
-    if not s or s == "No buildings placed" then return {} end
-    local ids = {}
-    for id in s:gmatch("id=(%d+)") do
-        table.insert(ids, tonumber(id))
-    end
-    return ids
+    return building.getActiveIds() or {}
 end
 
 -- Computes which defs the player should currently see in the build
