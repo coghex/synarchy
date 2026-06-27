@@ -14,6 +14,8 @@ module World.Slope
     , slopeToFaceMapIndex
       -- * Constants
     , slopeHardnessThreshold
+      -- * Internals (exposed for testing)
+    , slopeBit
     ) where
 
 import UPrelude
@@ -170,7 +172,24 @@ slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → Bool
 slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap neighborLookup =
     let diff = myZ - neighborZ
-        validDiff = diff ≡ 1
+        -- An unloaded neighbour reads back as 'minBound' (see
+        -- 'neighborElev'); that sentinel must never count as a drop or
+        -- water would slope toward not-yet-generated chunks and off the
+        -- world edge, then flip when the neighbour loads.
+        neighborLoaded = neighborZ ≠ minBound
+
+        -- Dry land keeps the strict single-step terrace rule (one-lower
+        -- neighbour only). A WET tile additionally slopes toward any
+        -- EXPOSED-AIR edge — a loaded neighbour whose surface drops by
+        -- one OR MORE levels. That is the waterfall-lip / water-cliff
+        -- case (issue #222): the source water tile at the top of a fall
+        -- borders a multi-level drop, so 'diff > 1' there; the old
+        -- 'diff ≡ 1' rule left it flat. Tipping the surface toward the
+        -- drop makes the water visibly pour over the lip. Water enclosed
+        -- by equal/higher surfaces (diff ≤ 0) still stays flat.
+        validDiff
+            | myHasFluid = neighborLoaded ∧ diff ≥ 1
+            | otherwise  = diff ≡ 1
 
         (normLx, normLy, neighborCoord) = normalizeCoord coord nlx nly
         hasFluid = case neighborCoord of
