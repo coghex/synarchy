@@ -46,3 +46,32 @@ spec = do
     describe "empty mapping yields all defaults" $
         it "decodes {} to the default profile" $
             decode "{}\n" `shouldBe` Right defaultPathingConfig
+
+    describe "normalizePathingConfig clamps unsafe values" $ do
+        it "raises fall_trigger_drop ≤ 0 to 1 (a 0 makes flat ground a fall)" $ do
+            pcFallTriggerDrop (normalizePathingConfig
+                defaultPathingConfig { pcFallTriggerDrop = 0 }) `shouldBe` 1
+            pcFallTriggerDrop (normalizePathingConfig
+                defaultPathingConfig { pcFallTriggerDrop = -3 }) `shouldBe` 1
+
+        it "clamps negative costs/penalties to 0 (A* needs non-negative weights)" $
+            normalizePathingConfig PathingConfig
+                { pcClimbFactor         = -1.0
+                , pcRampFactor          = -2.0
+                , pcFallFactor          = -3.0
+                , pcFallTriggerDrop     = -1
+                , pcRiverPenalty        = -4.0
+                , pcLakePenalty         = -5.0
+                , pcReplanCostThreshold = -6.0
+                } `shouldBe` PathingConfig
+                { pcClimbFactor         = 0.0
+                , pcRampFactor          = 0.0
+                , pcFallFactor          = 0.0
+                , pcFallTriggerDrop     = 1
+                , pcRiverPenalty        = 0.0
+                , pcLakePenalty         = 0.0
+                , pcReplanCostThreshold = 0.0
+                }
+
+        it "leaves a valid config unchanged" $
+            normalizePathingConfig defaultPathingConfig `shouldBe` defaultPathingConfig

@@ -16,6 +16,7 @@
 module Unit.Pathing.Config
     ( PathingConfig(..)
     , defaultPathingConfig
+    , normalizePathingConfig
     , loadPathingConfig
     ) where
 
@@ -56,6 +57,31 @@ defaultPathingConfig = PathingConfig
     , pcReplanCostThreshold = 5.0
     }
 
+-- | Clamp a parsed config to runtime-safe ranges. Two invariants the
+--   cost/movement code relies on:
+--
+--     * @fall_trigger_drop@ must be ≥ 1. The fall checks are
+--       @drop ≥ pcFallTriggerDrop@; at 0 (or negative) a flat step
+--       (@drop == 0@) reads as a fall, so the planner surcharges level
+--       ground and the mover enters the Falling transition while
+--       walking across same-height tiles.
+--     * every cost/penalty must be ≥ 0. A* (and the greedy stepper's
+--       replan trigger) assume non-negative edge weights; a negative
+--       weight breaks the search's admissibility.
+--
+--   Out-of-range values are clamped (not rejected) so a single bad knob
+--   degrades to a sane default instead of failing engine init.
+normalizePathingConfig ∷ PathingConfig → PathingConfig
+normalizePathingConfig pc = pc
+    { pcClimbFactor         = max 0 (pcClimbFactor pc)
+    , pcRampFactor          = max 0 (pcRampFactor pc)
+    , pcFallFactor          = max 0 (pcFallFactor pc)
+    , pcFallTriggerDrop     = max 1 (pcFallTriggerDrop pc)
+    , pcRiverPenalty        = max 0 (pcRiverPenalty pc)
+    , pcLakePenalty         = max 0 (pcLakePenalty pc)
+    , pcReplanCostThreshold = max 0 (pcReplanCostThreshold pc)
+    }
+
 -- | Per-key optional parse: any omitted key keeps its default. (Using
 --   `.:?`/`.!=` matters — a `.:` on a single missing key would fail the
 --   whole document and silently discard every override.)
@@ -80,7 +106,7 @@ loadPathingConfig logger path = do
         else do
             result ← Yaml.decodeFileEither path
             case result of
-                Right pc → return pc
+                Right pc → return (normalizePathingConfig pc)
                 Left err → do
                     logWarn logger CatInit $ "Error loading pathing config: "
                                            <> T.pack (show err)
