@@ -9,9 +9,11 @@
 -- each module's deserializer with the matching blob.
 --
 -- Modules without persistent state don't need to register. Modules
--- registered without a blob in the saved data are skipped silently
--- (fresh state). Blobs whose name no longer matches a registered
--- module are skipped with a warn (def was removed between sessions).
+-- registered without a blob in the saved data have their deserializer
+-- invoked with a nil blob so they reset to fresh/default state (rather
+-- than keeping stale in-memory state). Blobs whose name no longer
+-- matches a registered module are skipped with a warn (def was removed
+-- between sessions).
 --
 -- Singleton via package.loaded so script reloads + multiple require()s
 -- share the same registry.
@@ -52,17 +54,29 @@ function saveModules.serializeAll()
 end
 
 -- Called from Haskell at load time. blobs is a table { name → string }
--- pulled out of the save file. Each registered module gets its blob
--- (or nil if absent). Unknown blob names are skipped with a warn.
+-- pulled out of the save file. We walk the REGISTRY (not just the
+-- blobs present in the save) so every registered module is restored:
+-- a module absent from the save is handed a nil blob, which its
+-- deserializer treats as fresh/default state. This is what makes the
+-- "missing blob → fresh state" contract hold even when the module
+-- already has live singleton state in memory from a prior load.
+-- Blob names with no matching registered module are reported with a
+-- warn (def was removed between sessions).
 function saveModules.deserializeAll(blobs)
-    if not blobs then return end
-    for name, blob in pairs(blobs) do
-        local fns = saveModules.registry[name]
-        if not fns then
+    blobs = blobs or {}
+    -- Warn about saved blobs that no longer map to a registered module.
+    for name in pairs(blobs) do
+        if not saveModules.registry[name] then
             engine.logWarn("saveModules: no registered module named '"
                 .. name .. "', blob skipped")
-        elseif fns.deserialize then
-            local ok, err = pcall(fns.deserialize, blob)
+        end
+    end
+    -- Restore every registered module. Absent blobs come through as nil
+    -- so the deserializer resets to fresh state instead of inheriting
+    -- whatever happened to be in memory.
+    for name, fns in pairs(saveModules.registry) do
+        if fns.deserialize then
+            local ok, err = pcall(fns.deserialize, blobs[name])
             if not ok then
                 engine.logWarn("saveModules: " .. name
                     .. " deserializer crashed: " .. tostring(err))
