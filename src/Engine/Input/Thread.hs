@@ -21,7 +21,7 @@ import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt, findRightClickableElementAt
-                  , validateFocus)
+                  , findElementAt, validateFocus)
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
 import UI.Types (ElementHandle(..))
@@ -256,18 +256,34 @@ processInput env inpSt event = case event of
             -- below would dispatch a bogus UI/game event. Drop the click.
             if viewportDegenerate winW winH fbW fbH then return ClickSwallowed else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
-              -- Falls through to a normal mouse-down event when nothing
-              -- is shown, so other middle-click behavior (panning, etc.)
-              -- still reaches Lua.
+              -- Otherwise hit-test the UI so a middle-click over ANY UI/
+              -- menu surface can't fall through to gameplay middle-click
+              -- behavior (the loop uses it for camera dragging — see
+              -- Engine.Loop.Camera). Unlike left/right-click (which only
+              -- block on clickable controls), middle-click has no UI
+              -- handler to dispatch to and exists purely to pan the
+              -- camera, so a passive panel under the cursor must block it
+              -- too — hence findElementAt (any sized element) rather than
+              -- findClickableElementAt. Any UI surface under the cursor
+              -- SWALLOWS the click: the camera middle-drag polls
+              -- inpMouseBtns directly (bypassing the route), so only
+              -- ClickSwallowed — which keeps the button out of
+              -- inpMouseBtns — actually stops the drag. Empty (non-UI)
+              -- space still routes the middle-click to the world.
               GLFW.MouseButton'3 →
                 if isTooltipVisible uiMgr
                   then do
                     atomicModifyIORef' (uiManagerRef env) $ \m →
                         (toggleTooltipLock m, ())
                     return ClickSwallowed
-                  else do
-                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
-                    return ClickGame
+                  else case findElementAt mousePos uiMgr of
+                    Just _ → do
+                        logDebug logger CatUI
+                            "Middle-click swallowed by UI surface"
+                        return ClickSwallowed
+                    Nothing → do
+                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        return ClickGame
 
               -- All other buttons: if a tooltip is locked, intercept the
               -- click. Inside the locked box → swallow (the locked
