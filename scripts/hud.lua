@@ -795,6 +795,14 @@ function hud.reconcileView()
     -- cancel() is idempotent (clears Lua state + WorldClearMineAnchor is a
     -- no-op when nothing is pending), so tear it down on every transition.
     require("scripts.mine_tool").cancel()
+    -- Build picker (#143): the picker panel lives on hud.world_page and
+    -- its "picker" mode persists across band changes. The world/zoom page
+    -- swap above only takes it off-view, so a picker opened in zoomed_in
+    -- stays logically alive and reappears stale when the world page is
+    -- next shown. hidePicker() is idempotent (destroyPicker no-ops with
+    -- no panel; mode only resets from "picker"), so tear it down on every
+    -- transition. It deliberately does NOT touch "placement" mode.
+    require("scripts.build_tool").hidePicker()
     if newView ~= "zoomed_in" then
         require("scripts.debug").hide()
     end
