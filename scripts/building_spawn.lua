@@ -259,14 +259,21 @@ end
 -- ids, so a reused bid could inherit stale spawn-rate state.
 --
 -- The signature mirrors the broadcast (onSaveLoaded(orphanUnitIds,
--- orphanBuildingIds)); this module only cares about buildings. We
--- force-prune the exact dropped-building set FIRST -- this matters when an
--- orphaned bid collides with a live off-page building of the same id: the
--- restored blob state belongs to the dropped orphan, so a liveness check
--- alone would wrongly keep it. Then we sweep any state whose bid has no
--- live building. building.getInfo is GLOBAL (all world pages, nil when
--- gone), so buildings on other loaded-but-inactive pages are kept.
-function buildingSpawn.onSaveLoaded(_orphanUnitIds, orphanBuildingIds)
+-- orphanBuildingIds)). We force-prune the exact dropped-building set FIRST
+-- -- this matters when an orphaned bid collides with a live off-page
+-- building of the same id: the restored blob state belongs to the dropped
+-- orphan, so a liveness check alone would wrongly keep it. Then we sweep
+-- any state whose bid has no live building. building.getInfo is GLOBAL
+-- (all world pages, nil when gone), so buildings on other
+-- loaded-but-inactive pages are kept.
+--
+-- Surviving entries also embed a unit reference (s.lastUid, the last unit
+-- spawned, used for spawn-spacing). An orphaned uid there can collide with
+-- a live off-page unit, so scrub it from the orphan-unit set too.
+function buildingSpawn.onSaveLoaded(orphanUnitIds, orphanBuildingIds)
+    local orphanUnitSet = {}
+    for _, uid in ipairs(orphanUnitIds or {}) do orphanUnitSet[uid] = true end
+
     local pruned = 0
     for _, bid in ipairs(orphanBuildingIds or {}) do
         if state[bid] ~= nil then
@@ -280,9 +287,17 @@ function buildingSpawn.onSaveLoaded(_orphanUnitIds, orphanBuildingIds)
             pruned = pruned + 1
         end
     end
-    if pruned > 0 then
+    local scrubbed = 0
+    for _, s in pairs(state) do
+        if s.lastUid ~= nil and orphanUnitSet[s.lastUid] then
+            s.lastUid = nil
+            scrubbed = scrubbed + 1
+        end
+    end
+    if pruned > 0 or scrubbed > 0 then
         engine.logInfo("Building spawn: pruned " .. pruned
-            .. " stale state(s) for buildings dropped on load")
+            .. " stale state(s) and scrubbed " .. scrubbed
+            .. " orphaned reference(s) after load")
     end
 end
 

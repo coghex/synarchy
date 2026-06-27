@@ -3730,24 +3730,74 @@ function unitAi.init(scriptId)
         end)
 end
 
+-- aiState fields on a SURVIVING entry that hold a direct reference to
+-- another entity by raw id. After a load these can point at an id the
+-- engine dropped as an orphan; because a dropped id can collide with a
+-- LIVE off-page entity of the same id, and the per-tick validators
+-- (unit.exists / unit.getInfo / building.getInfo) are global raw lookups
+-- that would pass for that wrong entity, a surviving unit could resume
+-- targeting / delivering to it (#195). So orphaned ids must be scrubbed
+-- out of these fields too, not just deleted as top-level keys.
+-- NB: any NEW aiState field that stores a unit/building id MUST be listed
+-- here, or it silently reintroduces the collision bug.
+local AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
+                                 "notifyTarget", "lungeTarget" }
+local AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
+
+-- Clear any orphaned id out of one surviving state entry. Setting a field
+-- to nil is exactly the self-heal the AI already runs when a target
+-- legitimately vanishes, so the next tick re-decides cleanly. Nested claim
+-- tables are dropped wholesale when their target id is orphaned (the
+-- execute paths treat a nil claim as "release"). Returns #fields cleared.
+local function scrubOrphanRefs(s, orphanUnitSet, orphanBuildingSet)
+    local cleared = 0
+    for _, f in ipairs(AI_UNIT_REF_FIELDS) do
+        local v = s[f]
+        if v ~= nil and orphanUnitSet[v] then s[f] = nil; cleared = cleared + 1 end
+    end
+    for _, f in ipairs(AI_BUILDING_REF_FIELDS) do
+        local v = s[f]
+        if v ~= nil and orphanBuildingSet[v] then s[f] = nil; cleared = cleared + 1 end
+    end
+    if s.treatClaim and orphanUnitSet[s.treatClaim.patient] then
+        s.treatClaim = nil; cleared = cleared + 1
+    end
+    if s.deliveryClaim and orphanBuildingSet[s.deliveryClaim.bid] then
+        s.deliveryClaim = nil; cleared = cleared + 1
+    end
+    if s.deliveryPendingTarget and orphanBuildingSet[s.deliveryPendingTarget.bid] then
+        s.deliveryPendingTarget = nil; cleared = cleared + 1
+    end
+    return cleared
+end
+
 -- Broadcast from the engine once a save has finished loading (#195).
 -- Lua save blobs are restored BEFORE the engine load path runs, and that
--- path can drop "orphan" units whose defs are no longer registered. The
--- restored aiState still holds entries for those dropped ids, so a later
--- id reuse (umNextId is restored from the snapshot) would let a brand-new
--- unit inherit the orphan's stale AI state.
+-- path can drop "orphan" units/buildings whose defs are no longer
+-- registered. The restored aiState still holds entries for those dropped
+-- ids, so a later id reuse (umNextId is restored from the snapshot) would
+-- let a brand-new unit inherit the orphan's stale AI state.
 --
--- orphanUnitIds is the exact set the engine dropped on this load; we
--- force-prune those FIRST, before any liveness test. This matters when an
--- orphaned id collides with a live off-page unit of the same id: the
--- restored blob state belongs to the dropped orphan, not that unit, so a
--- liveness check alone (unit.exists) would wrongly keep it. After that we
--- still sweep any aiState entry with no live unit anywhere (unit.exists is
--- GLOBAL across all world pages, so units on other loaded-but-inactive
--- pages are kept) to catch ids that left no live entity for other reasons.
-function unitAi.onSaveLoaded(orphanUnitIds)
+-- orphanUnitIds / orphanBuildingIds are the exact sets the engine dropped
+-- on this load. We:
+--   1. force-prune top-level aiState[orphanUid] FIRST, before any liveness
+--      test — when an orphaned id collides with a live off-page unit, the
+--      restored blob state belongs to the dropped orphan, so a liveness
+--      check alone (unit.exists) would wrongly keep it;
+--   2. sweep any remaining aiState entry with no live unit anywhere
+--      (unit.exists is GLOBAL across all world pages, so units on other
+--      loaded-but-inactive pages are kept) to catch ids that left no live
+--      entity for other reasons;
+--   3. scrub orphaned ids out of the NESTED reference fields of every
+--      surviving entry (attack/build/delivery/treat targets), so a
+--      survivor can't resume acting on a colliding off-page entity.
+function unitAi.onSaveLoaded(orphanUnitIds, orphanBuildingIds)
+    local orphanUnitSet, orphanBuildingSet = {}, {}
+    for _, uid in ipairs(orphanUnitIds or {})     do orphanUnitSet[uid] = true end
+    for _, bid in ipairs(orphanBuildingIds or {}) do orphanBuildingSet[bid] = true end
+
     local pruned = 0
-    for _, uid in ipairs(orphanUnitIds or {}) do
+    for uid in pairs(orphanUnitSet) do
         if aiState[uid] ~= nil then
             aiState[uid] = nil
             pruned = pruned + 1
@@ -3759,9 +3809,14 @@ function unitAi.onSaveLoaded(orphanUnitIds)
             pruned = pruned + 1
         end
     end
-    if pruned > 0 then
+    local scrubbed = 0
+    for _, s in pairs(aiState) do
+        scrubbed = scrubbed + scrubOrphanRefs(s, orphanUnitSet, orphanBuildingSet)
+    end
+    if pruned > 0 or scrubbed > 0 then
         engine.logInfo("Unit AI: pruned " .. pruned
-            .. " stale AI state(s) for units dropped on load")
+            .. " stale AI state(s) and scrubbed " .. scrubbed
+            .. " orphaned reference(s) after load")
     end
 end
 

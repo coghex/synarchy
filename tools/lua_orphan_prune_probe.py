@@ -253,6 +253,32 @@ def main() -> int:
         else:
             print("PASS: dropped-unit AI state pruned, live-unit state kept")
 
+        # Nested-reference scrub (review #3): a SURVIVING unit can embed an
+        # orphaned id in a nested field (e.g. attackTargetUid). If that id
+        # collides with a live off-page unit, the survivor would resume
+        # targeting the wrong entity. getState() returns the live aiState
+        # table, so plant a fake orphan id in B's attackTargetUid, report it
+        # as an orphan, and assert it's scrubbed while B's entry survives.
+        FAKE = 987654
+        if ok:
+            send(args.port,
+                 f"local s=require('scripts.unit_ai').getState({b}); "
+                 f"if s then s.attackTargetUid={FAKE} end; return 'ok'",
+                 expect_result=False)
+            send(args.port,
+                 f"require('scripts.unit_ai').onSaveLoaded({{{FAKE}}}, {{}}); "
+                 f"return 'ok'", expect_result=False)
+            ref = send(args.port,
+                 f"local s=require('scripts.unit_ai').getState({b}); "
+                 f"return s and tostring(s.attackTargetUid) or 'NOSTATE'")
+            print(f"Nested scrub: B.attackTargetUid after onSaveLoaded -> {ref}")
+            if ref != "nil":
+                print("FAIL: orphaned id embedded in a surviving unit's nested "
+                      "field was NOT scrubbed (review #3)")
+                ok = False
+            else:
+                print("PASS: orphaned nested reference scrubbed from survivor")
+
         # Orphan-set force-prune path (the id-collision case): an orphaned
         # id can collide with a LIVE off-page unit of the same id. The
         # restored blob state belongs to the dropped orphan, so it must be
