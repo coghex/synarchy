@@ -10,7 +10,7 @@ import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified Engine.Core.Queue as Q
-import Data.Time.Clock (getCurrentTime)
+import Data.Time.Clock (getCurrentTime, addUTCTime)
 import Data.Time.Format (formatTime, defaultTimeLocale)
 import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
@@ -23,7 +23,7 @@ import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
                    , LoadPhase(..))
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
 --   sorted newest-first by timestamp.
@@ -118,15 +118,34 @@ saveWorldFn env = do
                                     blobs ← collectLuaBlobs logger
                                     -- Capture the timestamp at API
                                     -- (request) time so two saves
-                                    -- queued back-to-back get
-                                    -- distinct ISO timestamps even
-                                    -- when the world thread later
-                                    -- processes them in the same
-                                    -- wall second.
+                                    -- queued back-to-back get distinct
+                                    -- ISO timestamps even when the world
+                                    -- thread later processes them in the
+                                    -- same wall second. Wall-clock alone
+                                    -- only shrinks the collision window
+                                    -- (two saves in the same microsecond
+                                    -- still tie), so we clamp each
+                                    -- timestamp to strictly exceed the
+                                    -- previous one by ≥1 µs via
+                                    -- lastSaveTimeRef. Formatted at
+                                    -- microsecond precision (%6Q → fixed
+                                    -- 6-digit fraction): a ≥1 µs gap
+                                    -- always bumps the µs-floor, so the
+                                    -- fixed-width strings are strictly
+                                    -- increasing and the lexicographic
+                                    -- save-list sort is exact (#98).
                                     nowText ← Lua.liftIO $ do
-                                        t ← getCurrentTime
+                                        now ← getCurrentTime
+                                        -- 1 µs, matching the %6Q format
+                                        -- resolution.
+                                        let epsilon = 1e-6
+                                        ts ← atomicModifyIORef'
+                                            (lastSaveTimeRef env) $ \prev →
+                                                let next = max now
+                                                      (addUTCTime epsilon prev)
+                                                in (next, next)
                                         return $ T.pack $ formatTime
-                                            defaultTimeLocale "%FT%TZ" t
+                                            defaultTimeLocale "%FT%T%6QZ" ts
                                     Lua.liftIO $ Q.writeQueue
                                         (worldQueue env)
                                         (WorldSave pageId name

@@ -109,12 +109,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                     logWarn logger CatWorld
                         "Cannot save: world has no gen params"
                 Just params → do
-                    -- UTC ISO 8601 second precision, captured at the
-                    -- API request time (see saveWorldFn) — NOT here,
-                    -- so two saves queued back-to-back don't get the
-                    -- same wall-second timestamp from world-thread
-                    -- processing latency. Lexicographic sort by this
-                    -- string is chronologically correct, so the
+                    -- UTC ISO 8601 microsecond precision, captured and
+                    -- monotonically clamped at the API request time (see
+                    -- saveWorldFn) — NOT here, so two saves queued
+                    -- back-to-back don't get the same wall-second
+                    -- timestamp from world-thread processing latency.
+                    -- Lexicographic sort by this fixed-width string is
+                    -- chronologically correct, so the
                     -- Lua-side `a.timestamp > b.timestamp` in
                     -- main_menu works without further wrapping.
                     let meta = SaveMetadata

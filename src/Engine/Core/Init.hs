@@ -10,6 +10,8 @@ module Engine.Core.Init
 import UPrelude
 import qualified Control.Monad.Logger.CallStack as Logger
 import Data.IORef (newIORef)
+import Data.Time.Clock (UTCTime(..))
+import Data.Time.Calendar (fromGregorian)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
@@ -133,6 +135,10 @@ initializeEngineWith logBackend = do
 
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
+  -- Seeded to the POSIX epoch so the first save uses the real wall
+  -- clock; subsequent saves clamp against it for monotonic, distinct
+  -- timestamps (#98).
+  lastSaveTimeRef ← newIORef (UTCTime (fromGregorian 1970 1 1) 0)
   itemManagerRef  ← newIORef emptyItemManager
   equipmentClassManagerRef ← newIORef emptyEquipmentClassManager
   substanceManagerRef ← newIORef emptySubstanceManager
@@ -206,6 +212,7 @@ initializeEngineWith logBackend = do
         , simQueue          = simQueue
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
+        , lastSaveTimeRef   = lastSaveTimeRef
         , itemManagerRef    = itemManagerRef
         , equipmentClassManagerRef = equipmentClassManagerRef
         , substanceManagerRef      = substanceManagerRef

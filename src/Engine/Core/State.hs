@@ -6,6 +6,7 @@ import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef)
+import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
 import Control.Concurrent.STM.TVar (TVar)
 import System.Random (StdGen)
@@ -169,6 +170,15 @@ data EngineEnv = EngineEnv
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
     --   usReviveUntil) reference this clock instead of POSIX wall-time.
     --   Updated by Unit.Thread.unitLoop once per tick.
+  , lastSaveTimeRef    ∷ IORef UTCTime
+    -- ^ Wall-clock time of the most recently issued save (see
+    --   `Engine.Scripting.Lua.API.Save.saveWorldFn`). Each save clamps
+    --   its timestamp to strictly exceed this so back-to-back saves get
+    --   monotonically increasing, microsecond-distinct timestamps even
+    --   within the same wall millisecond — the save list sorts
+    --   newest-first lexicographically and would otherwise misorder ties
+    --   (#98). Seeded to the POSIX epoch so the first save always uses
+    --   the real wall clock.
   , itemManagerRef     ∷ IORef ItemManager
     -- ^ Registry of all item defs loaded from data/items/*.yaml.
     --   Lua's item.loadYaml writes into this; unit spawn reads from
