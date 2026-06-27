@@ -42,6 +42,7 @@ unitInfoV2.outerBoxId    = nil
 unitInfoV2.dividerIds    = {}   -- thin sprite handles for inter-section rules
 unitInfoV2.ownedLabels   = {}   -- label.* IDs to clean up
 unitInfoV2.lastSelCount  = 0
+unitInfoV2.lastWantVisible = false  -- last resolved pane-visibility gate (#137)
 unitInfoV2.whitePixelTex = nil  -- 1×1 white texture for dividers
 unitInfoV2.tabSelectedTex = nil -- shaped backdrop drawn behind the active tab's sprite
 unitInfoV2.subTabSelectedTexSet   = nil  -- 9-patch box set for active sub-tab
@@ -3575,10 +3576,24 @@ function unitInfoV2.update(dt)
         end
     end
 
-    if count > 0 and unitInfoV2.lastSelCount == 0 then
-        UI.showPage(unitInfoV2.page)
-    elseif count == 0 and unitInfoV2.lastSelCount > 0 then
-        UI.hidePage(unitInfoV2.page)
+    -- Visibility gate. The pane belongs to the zoomed-in gameplay view,
+    -- so a selection alone is not enough to show it: it must also hide
+    -- when the gameplay HUD itself is hidden (a menu is open → hud.hide()
+    -- cleared hud.visible) or when the camera isn't in the zoomed-in band
+    -- (zoomed-out map / fade band). Driving show/hide off a single
+    -- predicate keeps it in sync with zoom + menu transitions instead of
+    -- only selection count, so the pane can no longer persist over the
+    -- zoomed-out map or non-gameplay menus (#137).
+    local want = count > 0
+                 and hud.visible
+                 and hud.currentView == "zoomed_in"
+    if want ~= unitInfoV2.lastWantVisible then
+        if want then
+            UI.showPage(unitInfoV2.page)
+        else
+            UI.hidePage(unitInfoV2.page)
+        end
+        unitInfoV2.lastWantVisible = want
     end
     unitInfoV2.lastSelCount = count
 end
@@ -3591,11 +3606,18 @@ function unitInfoV2.onFramebufferResize(width, height)
         -- them for the current selection (lastSelKey reset so the next
         -- update tick will see "new" selection and rebuild).
         unitInfoV2.lastSelKey = ""
-        if unitInfoV2.lastSelCount > 0 then
+        -- Re-apply the same visibility gate as update() so a resize while
+        -- a menu is open / the camera is zoomed out doesn't flash the pane
+        -- back on (#137).
+        local want = unitInfoV2.lastSelCount > 0
+                     and hud.visible
+                     and hud.currentView == "zoomed_in"
+        if want then
             UI.showPage(unitInfoV2.page)
         else
             UI.hidePage(unitInfoV2.page)
         end
+        unitInfoV2.lastWantVisible = want
     end
 end
 
@@ -3756,6 +3778,7 @@ function unitInfoV2.shutdown()
     end
     unitInfoV2.bootstrapped = false
     unitInfoV2.lastSelCount = 0
+    unitInfoV2.lastWantVisible = false
 end
 
 return unitInfoV2
