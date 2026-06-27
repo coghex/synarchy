@@ -58,35 +58,35 @@ pollCursorInfo env = do
             oldWorld = csWorldSel snap
             activeChanged = Just pid ≢ lastActive
 
-        -- The chunk (zoom-map) and tile (zoomed-in) selections can
-        -- both be set at once, and BOTH drive the panel's
-        -- Basic/Advanced tabs through 'sendHudInfo'. Render ONE
-        -- coherent HUD state per change, following the selection the
-        -- user just ACTED on — i.e. the one that changed this tick:
+        -- Both Basic/Advanced tabs are driven through 'sendHudInfo', so
+        -- render ONE coherent HUD state per change, following the
+        -- selection the user just ACTED on this tick. The NEWEST
+        -- selection owns the cursor — the select commit clears the
+        -- opposite field (issue #135), but the clear lands a frame or
+        -- two later (it resolves at render time), so this poll can
+        -- briefly see both set. Order the branches by what the user
+        -- just did rather than by raw field presence:
         --
-        --   * tile selection changed → it owns the panel. A selected
-        --     tile shows Basic/Advanced and clears the chunk-only
-        --     Weather/Resources tabs (tile selection routes through
-        --     the same setInfo path and useSchema("tile") is a no-op
-        --     when already on the tile schema, so it cannot clear
+        --   * a chunk was just SELECTED (zoom field changed to a Just)
+        --     → it owns the panel, even if committing it cleared a
+        --     lingering tile selection in the same tick. This is what
+        --     keeps a chunk click showing chunk info rather than
+        --     blanking on the tile that the commit is about to drop.
+        --   * else the tile selection changed → it owns the panel. A
+        --     selected tile shows Basic/Advanced and clears the
+        --     chunk-only Weather/Resources tabs (tile selection routes
+        --     through the same setInfo path and useSchema("tile") is a
+        --     no-op when already on the tile schema, so it cannot clear
         --     those dynamic tabs on its own — #128). A tile DEselect
-        --     empties the panel with an explicit blank Basic payload
-        --     even if a chunk is still selected, because downstream
-        --     teardown couples to that empty 'onSetInfoText' (the
-        --     arena tile-editor popup only closes on it —
-        --     scripts/tile_editor.lua) and we must not strand it.
-        --   * otherwise the chunk selection changed → show it (or
-        --     empty the panel when it was deselected).
+        --     (zoom field unchanged) empties the panel with an explicit
+        --     blank Basic payload, because downstream teardown couples
+        --     to that empty 'onSetInfoText' (the arena tile-editor
+        --     popup only closes on it — scripts/tile_editor.lua) and we
+        --     must not strand it.
+        --   * else the chunk was deselected → empty the panel.
         --
-        -- Reacting to what CHANGED — rather than giving an existing
-        -- tile selection blanket priority — matters because neither
-        -- selection is cleared eagerly: a chunk selection persists
-        -- into the zoomed-in view and a tile selection persists
-        -- (unchanged) after zooming out (issue 135). Prioritising a
-        -- stale tile would re-show old tile info over a chunk the
-        -- user just clicked. Handling a single branch per tick (not
-        -- two independent updates) also avoids the same-tick
-        -- render-then-blank.
+        -- Handling a single branch per tick (not two independent
+        -- updates) also avoids the same-tick render-then-blank.
         let worldChanged = curWorld ≢ oldWorld
             blankPanel = do
                 sendHudInfo env "" ""
@@ -109,13 +109,21 @@ pollCursorInfo env = do
                     Just (baseGX, baseGY) → showChunk baseGX baseGY
                     Nothing → blankPanel
             else when (curZoom ≢ oldZoom ∨ worldChanged) $
-                if worldChanged
-                    then case curWorld of
-                        Just (gx, gy, z) → showTile gx gy z
-                        Nothing → blankPanel
-                    else case curZoom of
-                        Just (baseGX, baseGY) → showChunk baseGX baseGY
-                        Nothing → blankPanel
+                case curZoom of
+                    -- A chunk was just SELECTED (zoom field changed to a
+                    -- Just): it is the newest action and owns the panel,
+                    -- even if committing it cleared a lingering tile
+                    -- selection in the SAME tick (issue #135 — the select
+                    -- commit clears the opposite field). A genuine tile
+                    -- DEselect leaves the zoom field unchanged and falls
+                    -- through to the tile branch below, so the arena
+                    -- tile-editor popup still tears down on its blank.
+                    Just (baseGX, baseGY)
+                        | curZoom ≢ oldZoom → showChunk baseGX baseGY
+                    _ | worldChanged → case curWorld of
+                            Just (gx, gy, z) → showTile gx gy z
+                            Nothing → blankPanel
+                      | otherwise → blankPanel
 
         let newSnap = CursorSnapshot curZoom curWorld
         when (newSnap ≢ snap) $

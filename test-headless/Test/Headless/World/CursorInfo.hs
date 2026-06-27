@@ -181,21 +181,25 @@ spec = beforeAll initEnv $ do
         weatherMsgs msgs `shouldSatisfy` elem ""
         resourceMsgs msgs `shouldSatisfy` elem ""
 
-    it "a chunk-select + tile-deselect in one tick empties the panel coherently" $ \env → do
+    it "a chunk-select that clears a lingering tile shows the chunk, coherently (issue #135)" $ \env → do
         ws ← freshVisibleWorld env
-        -- Old state (snapshot): no chunk, a tile selected.
+        -- Old state (snapshot): a tile selected, no chunk.
         writeIORef (wsCursorSnapshotRef ws)
             (CursorSnapshot Nothing (Just (8, 8, 1)))
-        -- New state (cursor): chunk selected, tile gone — BOTH changed.
+        -- New state (cursor): a chunk was just selected, and committing it
+        -- dropped the lingering tile (the render-time select commit clears
+        -- the opposite field — issue #135). BOTH fields changed this tick.
         writeIORef (wsCursorRef ws)
             (emptyCursorState { zoomSelectedPos = Just (0, 0) })
         pollCursorInfo env
         msgs ← drainLua env
-        -- A single coherent blank — NOT a chunk readout rendered and then
-        -- blanked by a competing tile-deselect write (the point-1 race).
-        infoBasics msgs `shouldBe` [""]
-        weatherMsgs msgs `shouldSatisfy` elem ""
-        resourceMsgs msgs `shouldSatisfy` elem ""
+        -- The NEWEST selection owns the panel: a single coherent chunk
+        -- readout — NOT a blank (the user did select a chunk) and NOT a
+        -- chunk-then-blank race. A genuine tile DEselect (zoom field
+        -- unchanged) still blanks; that is the spec just above.
+        infoBasics msgs `shouldSatisfy` any (T.isInfixOf "Chunk (")
+        infoBasics msgs `shouldSatisfy` (notElem "")
+        infoBasics msgs `shouldSatisfy` (not . any (T.isInfixOf "Tile ("))
 
     it "deselecting everything empties the panel" $ \env → do
         ws ← freshVisibleWorld env

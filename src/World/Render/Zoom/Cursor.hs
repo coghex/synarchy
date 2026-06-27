@@ -9,7 +9,7 @@ module World.Render.Zoom.Cursor
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, writeIORef, IORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef', IORef)
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
@@ -62,10 +62,24 @@ makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmS
                 pixelToChunkOrigin facing camera winW winH fbW fbH worldSize pixX pixY
 
     cs' ← if zoomSelectNow cs
-           then do let newCs = cs { zoomSelectNow = False
-                                  , zoomSelectedPos = hoverChunk }
-                   writeIORef csRef newCs
-                   return newCs
+           then atomicModifyIORef' csRef $ \current →
+                  -- The newest selection owns the cursor: committing a
+                  -- chunk selection drops any zoomed-in tile selection, so
+                  -- returning to the zoomed-in view shows no stale tile
+                  -- highlight and the two can't coexist (issue #135).
+                  -- Atomic (was a plain write) so it can't clobber a
+                  -- concurrent world-thread cursor update now that it
+                  -- touches worldSelectedTile too.
+                  let committedChunk = case hoverChunk of
+                          Just _  → True
+                          Nothing → False
+                      newCs = current
+                          { zoomSelectNow     = False
+                          , zoomSelectedPos   = hoverChunk
+                          , worldSelectedTile = if committedChunk
+                                then Nothing
+                                else worldSelectedTile current }
+                  in (newCs, newCs)
            else return cs
 
     let selectQuad = makeSelectQuad facing worldSize cs' lookupSlot defFmSlot

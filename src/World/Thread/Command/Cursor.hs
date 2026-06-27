@@ -67,6 +67,11 @@ handleWorldSetZoomCursorSelectCommand env logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
+            -- Only ARM the selection here. The chunk is resolved from the
+            -- cursor hover at render time (makeCursorQuad), which is also
+            -- where the opposing tile selection is cleared — doing the
+            -- clear here instead would blank the cursor for the frames
+            -- before the commit lands (issue #135).
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { zoomSelectNow = True }, ())
         Nothing → pure ()
@@ -118,6 +123,11 @@ handleWorldSetWorldCursorSelectCommand env logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
+            -- Only ARM the selection here. The tile is resolved from the
+            -- cursor hover at render time (renderWorldCursorQuads), which
+            -- is also where the opposing chunk selection is cleared —
+            -- doing the clear here instead would blank the cursor for the
+            -- frames before the commit lands (issue #135).
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { worldSelectNow = True }, ())
         Nothing → pure ()
@@ -289,5 +299,10 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy = do
                 Nothing → pure ()
                 Just lc → do
                     let z = lcSurfaceMap lc VU.! columnIndex lx ly
+                    -- This path resolves the tile immediately (no hover
+                    -- round-trip), so the set and the opposing-chunk clear
+                    -- happen in the SAME write — no blank window. A new
+                    -- tile selection drops any chunk selection (issue #135).
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                        (cs { worldSelectedTile = Just (gx, gy, z) }, ())
+                        (cs { worldSelectedTile = Just (gx, gy, z)
+                            , zoomSelectedPos   = Nothing }, ())
