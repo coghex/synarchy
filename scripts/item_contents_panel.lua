@@ -413,6 +413,12 @@ end
 
 function itemContentsPanel.openFor(uid, defName, mx, my)
     if not uid or not defName then return end
+    -- Don't open for a container that doesn't exist: the unit holds no
+    -- inventory item matching defName. unit.getItemContents returns nil
+    -- in that case; an existing-but-empty container returns a table, so
+    -- this only rejects genuinely missing containers (the popup still
+    -- opens and shows "(empty)" for a real, empty kit).
+    if not unit.getItemContents(uid, defName) then return end
     itemContentsPanel.closeIfOpen()
     local s = itemContentsPanel.state
     s.open    = true
