@@ -144,13 +144,19 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
     camera   ← readIORef (cameraRef env)
     (winW, winH) ← readIORef (windowSizeRef env)
     texSizes ← readIORef (textureSizeRef env)
+    mgr      ← readIORef (worldManagerRef env)
 
     let x1 = realToFrac (min x1d x2d) ∷ Float
         x2 = realToFrac (max x1d x2d) ∷ Float
         y1 = realToFrac (min y1d y2d) ∷ Float
         y2 = realToFrac (max y1d y2d) ∷ Float
 
-        instances = umInstances um
+        -- Only the active world's units are selectable (#125) — mirrors
+        -- the same filter in hitTestUnitAt so box-select and click-select
+        -- agree and drag-select never grabs hidden-page units.
+        instances = case resolveActiveWorld mgr of
+            Just (pid, _) → unitsOnPage pid (umInstances um)
+            Nothing       → HM.empty
         facing  = camFacing camera
         zoom    = camZoom camera
         zSlice  = camZSlice camera
