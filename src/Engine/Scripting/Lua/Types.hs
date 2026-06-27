@@ -135,6 +135,16 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaDebugHide
             | LuaDebugToggle
             | LuaWorldGenLog Text
+              -- | A save finished loading on the world thread. Emitted
+              --   once after units + buildings are written back, so by
+              --   the time the Lua thread processes it the engine entity
+              --   set is authoritative. Lets per-id Lua modules
+              --   (unit_ai, building_spawn) reconcile their state against
+              --   the entities that actually survived the load — orphan
+              --   units/buildings whose defs were dropped leave no live
+              --   entity, so their stale per-id state must be pruned or a
+              --   reused id would inherit it (#195).
+            | LuaSaveLoaded
             | LuaHudLogInfo Text Text
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text

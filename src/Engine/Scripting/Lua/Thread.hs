@@ -580,6 +580,8 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
+  LuaSaveLoaded →
+    broadcastToModules ls "onSaveLoaded" []
   LuaHudLogInfo text1 text2 →
     broadcastToModules ls "onSetInfoText" [ScriptString text1, ScriptString text2]
   LuaHudLogWeatherInfo text →

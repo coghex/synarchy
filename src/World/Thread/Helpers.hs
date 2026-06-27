@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Thread.Helpers
     ( sendGenLog
+    , sendSaveLoaded
     , sendHudInfo
     , sendHudWeatherInfo
     , sendHudResourcesInfo
@@ -16,6 +17,12 @@ import World.Types (WorldPageId(..))
 -- | Send a progress message to Lua
 sendGenLog ∷ EngineEnv → Text → IO ()
 sendGenLog env msg = Q.writeQueue (luaQueue env) (LuaWorldGenLog msg)
+
+-- | Signal Lua that a save finished loading, so per-id modules can
+--   reconcile their state against the entities that survived the load
+--   (#195). Emit only after units + buildings have been written back.
+sendSaveLoaded ∷ EngineEnv → IO ()
+sendSaveLoaded env = Q.writeQueue (luaQueue env) LuaSaveLoaded
 
 -- | Info message to lua's HUD
 sendHudInfo ∷ EngineEnv → Text → Text → IO ()

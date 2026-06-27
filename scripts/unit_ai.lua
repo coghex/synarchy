@@ -3730,6 +3730,29 @@ function unitAi.init(scriptId)
         end)
 end
 
+-- Broadcast from the engine once a save has finished loading (#195).
+-- Lua save blobs are restored BEFORE the engine load path runs, and that
+-- path can drop "orphan" units whose defs are no longer registered. The
+-- restored aiState still holds entries for those dropped ids, so a later
+-- id reuse (umNextId is restored from the snapshot) would let a brand-new
+-- unit inherit the orphan's stale AI state. Reconcile here: drop any
+-- aiState entry whose uid has no live unit. unit.exists is GLOBAL (all
+-- world pages), so units on other loaded-but-inactive pages are kept --
+-- only genuinely dead ids are pruned.
+function unitAi.onSaveLoaded()
+    local pruned = 0
+    for uid in pairs(aiState) do
+        if not unit.exists(uid) then
+            aiState[uid] = nil
+            pruned = pruned + 1
+        end
+    end
+    if pruned > 0 then
+        engine.logInfo("Unit AI: pruned " .. pruned
+            .. " stale AI state(s) for units dropped on load")
+    end
+end
+
 function unitAi.update(dt)
     if require("scripts.pause").isPaused() then return end
     local ids = unit.getAllIds()

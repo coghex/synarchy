@@ -252,6 +252,28 @@ function buildingSpawn.init(scriptId)
         end)
 end
 
+-- Broadcast from the engine once a save has finished loading (#195).
+-- The Lua spawn-state blob is restored before the engine load path runs,
+-- and that path can drop "orphan" buildings whose defs are no longer
+-- registered. Reconcile here: drop any per-building state whose bid has
+-- no live building. building.getInfo is GLOBAL (all world pages, nil when
+-- gone), so buildings on other loaded-but-inactive pages are kept -- only
+-- dropped ids are pruned, preventing a reused bid from inheriting stale
+-- spawn-rate state.
+function buildingSpawn.onSaveLoaded()
+    local pruned = 0
+    for bid in pairs(state) do
+        if not building.getInfo(bid) then
+            state[bid] = nil
+            pruned = pruned + 1
+        end
+    end
+    if pruned > 0 then
+        engine.logInfo("Building spawn: pruned " .. pruned
+            .. " stale state(s) for buildings dropped on load")
+    end
+end
+
 -- Construction progress curve. Solo workers build at 1× the base
 -- rate (R(1)=1 worker-second per real second); coordination bonus
 -- ramps as n² up to 3 workers, then tapers logarithmically so the

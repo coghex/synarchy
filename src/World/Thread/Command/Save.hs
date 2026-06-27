@@ -42,7 +42,7 @@ import Building.Types (BuildingManager(..), unBuildingId, buildingsOnPage)
 import Unit.Types (UnitManager(..), unUnitId, unitsOnPage)
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
-import World.Thread.Helpers (sendGenLog, unWorldPageId)
+import World.Thread.Helpers (sendGenLog, sendSaveLoaded, unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
 import World.Thread.ChunkLoading (maxChunksPerTick)
 
@@ -489,3 +489,10 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         <> T.pack (show totalInitialChunks) <> " chunks, "
         <> "surface at z=" <> T.pack (show surfaceElev)
         <> ": " <> unWorldPageId pageId
+
+    -- Units + buildings are now written back to their managers, so the
+    -- engine entity set is authoritative. Signal Lua so per-id modules
+    -- prune state belonging to entities that did NOT survive the load
+    -- (orphaned defs were dropped above). Without this, a later id reuse
+    -- would inherit the orphan's stale AI / spawn state (#195).
+    sendSaveLoaded env
