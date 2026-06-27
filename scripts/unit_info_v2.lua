@@ -3372,12 +3372,12 @@ local function bootstrap()
     unitInfoV2.subTabUnselectedTexSet =
         boxTextures.load("assets/textures/ui/tabunselected", "tabunselected")
 
-    -- Take over the unit-info display: hide the shared HUD info panel
-    -- entirely while v2 is alive. Tile / building info also stop
-    -- showing until those flows get migrated into v2 too. Hide via
-    -- infoPanel so infoPanel.visible tracks the page (#134) — otherwise
-    -- shutdown can't tell whether the panel should come back.
-    infoPanel.setAllVisible(false)
+    -- Take over the unit-info display: suppress the shared HUD info panel
+    -- entirely while v2 is alive. Tile / building info also stop showing
+    -- until those flows get migrated into v2 too. Suppression (not a bare
+    -- hide) also blocks background info watchers from re-opening the panel
+    -- behind v2, and lets shutdown restore from content (#134).
+    infoPanel.suppress("unit_info_v2")
 end
 
 -----------------------------------------------------------
@@ -3744,11 +3744,12 @@ function unitInfoV2.shutdown()
     -- panel suppressed forever after v2 shuts down (#87).
     package.loaded.__unit_info_v2_suppress = nil
 
-    -- Restore the shared HUD info panel's visibility — we hid it on
-    -- bootstrap so v2 could own the unit-info display. Re-derive from
-    -- content so we only resurface it if it actually has something to
-    -- show (an unconditional show would pop an empty/stale panel, #134).
-    infoPanel.refresh()
+    -- Restore the shared HUD info panel — we suppressed it on bootstrap
+    -- so v2 could own the unit-info display. Releasing re-derives from
+    -- content, so it only resurfaces if it has something to show (an
+    -- unconditional show would pop an empty/stale panel, #134). If the
+    -- HUD is also hidden, its own suppressor keeps the panel down.
+    infoPanel.unsuppress("unit_info_v2")
 
     clearOwned()
     if unitInfoV2.page then

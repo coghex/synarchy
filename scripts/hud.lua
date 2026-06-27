@@ -510,12 +510,12 @@ function hud.show()
     elseif hud.currentView == "zoomed_out" and hud.zoom_page then
         UI.showPage(hud.zoom_page)
     end
-    -- Restore the info panel from its content. hud.hide() hid the page
-    -- (via infoPanel.setAllVisible) but the stored tab text survives, so
-    -- re-derive: show iff there is content, stay hidden otherwise. Going
-    -- through infoPanel keeps page state and infoPanel.visible in sync
-    -- (don't show the page directly here — that desyncs the flag, #134).
-    infoPanel.refresh()
+    -- Release the HUD-hidden suppression and restore the info panel from
+    -- its content (show iff it has something, stay hidden otherwise). The
+    -- stored tab text survives the hide; going through infoPanel keeps the
+    -- page and infoPanel.visible in sync — don't show the page directly
+    -- here, that desyncs the flag (#134).
+    infoPanel.unsuppress("hud")
 
     -- The global page (log toggle button) is always visible during
     -- gameplay regardless of zoom level.
@@ -535,10 +535,11 @@ function hud.hide()
     if hud.zoom_page then
         UI.hidePage(hud.zoom_page)
     end
-    -- Hide via infoPanel so infoPanel.visible stays in sync with the
-    -- page (a direct UI.hidePage here would strand the flag at true and
-    -- the panel would never re-show on hud.show, #134).
-    infoPanel.setAllVisible(false)
+    -- Suppress the info panel while the HUD is hidden. This both hides
+    -- the page and blocks background info watchers (which keep pushing
+    -- text for a still-selected object) from re-opening it over the menu.
+    -- hud.show() releases the suppression and restores from content (#134).
+    infoPanel.suppress("hud")
     if hud.global_page then
         UI.hidePage(hud.global_page)
     end
