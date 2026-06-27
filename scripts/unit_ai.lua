@@ -1996,11 +1996,14 @@ local function remainingUnclaimedNeed(bid, matType, need, delivered, excludeUid)
 end
 
 local function findDeliveryTarget(uid, fromX, fromY, params)
-    local listStr = building.list()
-    if not listStr or listStr == "No buildings placed" then return nil end
+    -- Active-world buildings only — building.list() is global across every
+    -- live world page, so off-world buildings used to leak in as delivery
+    -- targets (#197). building.getActiveIds() is page-scoped, matching the
+    -- active-world unit.getAllIds the actors come from.
+    local ids = building.getActiveIds()
+    if not ids or #ids == 0 then return nil end
     local best, bestD = nil, params.deliver_scan_range
-    for id in listStr:gmatch("id=(%d+)") do
-        local bid = tonumber(id)
+    for _, bid in ipairs(ids) do
         if bid and building.getActivity(bid) == "appearing"
            and not building.areMaterialsSatisfied(bid) then
             local need      = building.getMaterialNeed(bid) or {}
@@ -2233,11 +2236,11 @@ end
 -- at least one more item (current weight < capacity). Returns
 -- {bid, gridX, gridY, tileW, tileH, distance} or nil.
 local function findStorageTarget(fromX, fromY, maxRange)
-    local listStr = building.list()
-    if not listStr or listStr == "No buildings placed" then return nil end
+    -- Active-world buildings only (#197); see findDeliveryTarget.
+    local ids = building.getActiveIds()
+    if not ids or #ids == 0 then return nil end
     local best, bestD = nil, maxRange
-    for id in listStr:gmatch("id=(%d+)") do
-        local bid = tonumber(id)
+    for _, bid in ipairs(ids) do
         if bid and building.getActivity(bid) == "built" then
             local cap = building.getStorageCapacity(bid)
             local used = building.getStorageWeight(bid) or 0
@@ -2361,14 +2364,14 @@ end
 
 -- Returns {bid, gridX, gridY, tileW, tileH, distance} for the
 -- nearest Appearing building with bdBuildWork > 0 within maxRange,
--- or nil. Uses building.list() / getActivity / getBuildRequired /
+-- or nil. Uses building.getActiveIds() / getActivity / getBuildRequired /
 -- getInfo — all cheap on a small N of placed buildings.
 local function findNearestUnbuilt(fromX, fromY, maxRange)
-    local listStr = building.list()
-    if not listStr or listStr == "No buildings placed" then return nil end
+    -- Active-world buildings only (#197); see findDeliveryTarget.
+    local ids = building.getActiveIds()
+    if not ids or #ids == 0 then return nil end
     local best, bestD = nil, maxRange
-    for id in listStr:gmatch("id=(%d+)") do
-        local bid = tonumber(id)
+    for _, bid in ipairs(ids) do
         if bid then
             local activity = building.getActivity(bid)
             local required = building.getBuildRequired(bid)
