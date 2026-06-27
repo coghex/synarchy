@@ -122,11 +122,17 @@ saveWorldFn env = do
                                     -- distinct ISO timestamps even
                                     -- when the world thread later
                                     -- processes them in the same
-                                    -- wall second.
+                                    -- wall second. Millisecond
+                                    -- precision (%3Q → fixed 3-digit
+                                    -- fraction) keeps the string
+                                    -- fixed-width and lexicographically
+                                    -- sortable while distinguishing
+                                    -- saves issued within the same
+                                    -- second (#98).
                                     nowText ← Lua.liftIO $ do
                                         t ← getCurrentTime
                                         return $ T.pack $ formatTime
-                                            defaultTimeLocale "%FT%TZ" t
+                                            defaultTimeLocale "%FT%T%3QZ" t
                                     Lua.liftIO $ Q.writeQueue
                                         (worldQueue env)
                                         (WorldSave pageId name

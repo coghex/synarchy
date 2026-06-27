@@ -107,7 +107,7 @@ data WorldCommand
         --   via the WeAddTile edit path (debug terrain placement —
         --   same machinery spoil promotion uses, so it persists).
     | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
-        -- ^ pageId, save-name, request-timestamp (ISO 8601 second
+        -- ^ pageId, save-name, request-timestamp (ISO 8601 millisecond
         --   precision), Lua-module blobs. The Lua side captures the
         --   timestamp at request time (so two saves queued close
         --   together get distinct timestamps reflecting when the
