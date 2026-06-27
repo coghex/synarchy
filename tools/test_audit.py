@@ -21,6 +21,10 @@ from world_audit import (  # type: ignore
     audit_dump, INT64_MIN, severity_of,
     BUG_CATEGORIES, QUALITY_CATEGORIES, QUALITY_THRESHOLDS,
 )
+from world_check import (  # type: ignore
+    CheckResult, check_issue_summary, check_determinism_status,
+    PASS, FAIL, IMPROVED,
+)
 
 
 # ----- Helpers -------------------------------------------------------------
@@ -560,6 +564,123 @@ def test_determinism_of_audit() -> None:
     expect(a == b and b == c, "audit output not deterministic")
 
 
+# ----- world_check logic tests ---------------------------------------------
+
+def _result() -> CheckResult:
+    return CheckResult(seed=0, world_size=32, region=(0, 0, 0, 0), status=PASS)
+
+
+def test_check_summary_strict_match() -> None:
+    """Deterministic seed whose summary equals the baseline passes."""
+    print("test_check_summary_strict_match")
+    r = _result()
+    base = {"LAKE_HOLE": 4, "FLOATING_LAKE": 300}
+    check_issue_summary([dict(base)], base, {}, strict=True, result=r)
+    expect(r.status == PASS, f"exact match should PASS, got {r.status}: {r.failures}")
+    expect(not r.failures, f"no failures expected, got {r.failures}")
+
+
+def test_check_summary_strict_regression() -> None:
+    """Deterministic count above baseline (under threshold) is a regression."""
+    print("test_check_summary_strict_regression")
+    r = _result()
+    base = {"LAKE_HOLE": 4}
+    check_issue_summary([{"LAKE_HOLE": 5}], base, {}, strict=True, result=r)
+    expect(r.status == FAIL, f"regression should FAIL, got {r.status}")
+    expect(any("regressed above baseline" in f for f in r.failures),
+           f"expected regression message, got {r.failures}")
+
+
+def test_check_summary_strict_improvement() -> None:
+    """Deterministic count below baseline is an improvement, not a failure."""
+    print("test_check_summary_strict_improvement")
+    r = _result()
+    base = {"LAKE_HOLE": 4}
+    check_issue_summary([{"LAKE_HOLE": 2}], base, {}, strict=True, result=r)
+    expect(r.status == IMPROVED, f"improvement should be IMPROVED, got {r.status}")
+    expect(not r.failures, f"no failures expected, got {r.failures}")
+    expect(any("below baseline" in i for i in r.improvements),
+           f"expected improvement message, got {r.improvements}")
+
+
+def test_check_summary_strict_drop_to_zero() -> None:
+    """A baseline category absent from the current summary counts as 0 (improvement)."""
+    print("test_check_summary_strict_drop_to_zero")
+    r = _result()
+    base = {"LAKE_HOLE": 4}
+    check_issue_summary([{}], base, {}, strict=True, result=r)
+    expect(r.status == IMPROVED, f"drop-to-zero should be IMPROVED, got {r.status}")
+    expect(any("LAKE_HOLE" in i for i in r.improvements),
+           f"expected LAKE_HOLE improvement, got {r.improvements}")
+
+
+def test_check_summary_bug_overrides_match() -> None:
+    """A BUG category fails even when the deterministic count matches baseline."""
+    print("test_check_summary_bug_overrides_match")
+    r = _result()
+    base = {"TERRAIN_SPIKE": 2}
+    check_issue_summary([{"TERRAIN_SPIKE": 2}], base, {}, strict=True, result=r)
+    expect(r.status == FAIL, f"nonzero BUG should FAIL despite match, got {r.status}")
+    expect(any("must be 0" in f for f in r.failures),
+           f"expected must-be-0 message, got {r.failures}")
+
+
+def test_check_summary_threshold_overrides() -> None:
+    """Exceeding the QUALITY threshold fails regardless of strict/baseline."""
+    print("test_check_summary_threshold_overrides")
+    over = QUALITY_THRESHOLDS["LAKE_HOLE"] + 1
+    r = _result()
+    # Baseline "matches" the over-threshold value, but the cap still fails.
+    check_issue_summary([{"LAKE_HOLE": over}], {"LAKE_HOLE": over}, {},
+                        strict=True, result=r)
+    expect(r.status == FAIL, f"over-threshold should FAIL, got {r.status}")
+    expect(any("exceeds threshold" in f for f in r.failures),
+           f"expected threshold message, got {r.failures}")
+
+
+def test_check_summary_racy_no_match_required() -> None:
+    """Racy seeds don't require an exact match; under-threshold drift is a note."""
+    print("test_check_summary_racy_no_match_required")
+    r = _result()
+    base = {"LAKE_HOLE": 2}
+    env = {"LAKE_HOLE": {"min": 2, "max": 2}}
+    # 5 != baseline 2, but it's under the threshold (25); racy mode must
+    # not fail on the mismatch (the strict match rule does not apply).
+    check_issue_summary([{"LAKE_HOLE": 5}], base, env, strict=False, result=r)
+    expect(r.status == PASS, f"racy under-threshold mismatch should PASS, got {r.status}")
+    expect(not r.failures, f"racy mode should not fail on mismatch, got {r.failures}")
+
+
+def test_check_determinism_regression() -> None:
+    """A seed that was deterministic and is now racy fails."""
+    print("test_check_determinism_regression")
+    r = _result()
+    check_determinism_status(deterministic_baseline=True, deterministic_now=False,
+                             n_distinct=3, runs=3, result=r)
+    expect(r.status == FAIL, f"determinism regression should FAIL, got {r.status}")
+    expect(any("determinism regression" in f for f in r.failures),
+           f"expected determinism-regression message, got {r.failures}")
+
+
+def test_check_determinism_improvement() -> None:
+    """A seed that was racy and is now deterministic across runs>1 improves."""
+    print("test_check_determinism_improvement")
+    r = _result()
+    check_determinism_status(deterministic_baseline=False, deterministic_now=True,
+                             n_distinct=1, runs=3, result=r)
+    expect(r.status == IMPROVED, f"racy->det should be IMPROVED, got {r.status}")
+
+
+def test_check_determinism_single_run_safe() -> None:
+    """With runs==1 a deterministic baseline can't trip a false regression."""
+    print("test_check_determinism_single_run_safe")
+    r = _result()
+    check_determinism_status(deterministic_baseline=True, deterministic_now=True,
+                             n_distinct=1, runs=1, result=r)
+    expect(r.status == PASS, f"single-run det should stay PASS, got {r.status}")
+    expect(not r.failures, f"no failures expected, got {r.failures}")
+
+
 # ----- Runner --------------------------------------------------------------
 
 def main() -> int:
@@ -589,6 +710,16 @@ def main() -> int:
         test_severity_classification,
         test_wetland_on_slope,
         test_desert_soil_on_slope,
+        test_check_summary_strict_match,
+        test_check_summary_strict_regression,
+        test_check_summary_strict_improvement,
+        test_check_summary_strict_drop_to_zero,
+        test_check_summary_bug_overrides_match,
+        test_check_summary_threshold_overrides,
+        test_check_summary_racy_no_match_required,
+        test_check_determinism_regression,
+        test_check_determinism_improvement,
+        test_check_determinism_single_run_safe,
     ]
 
     for t in tests:
