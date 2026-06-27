@@ -860,22 +860,20 @@ function game.onKeyDown(key)
     --
     -- Unit, building, and ground-item selections all share the same HUD
     -- info-panel ownership system, so Escape clears whichever one is
-    -- active (#177). They are mutually exclusive in practice (selecting
-    -- one deselects the others via the info-panel watchers), but each is
-    -- cleared independently so the cascade can't leave a stray building
-    -- or item selection behind. deselect() is a no-op when nothing is
-    -- selected, so clearing all three unconditionally is safe.
+    -- active (#177). building.deselect()/item.deselect() are called
+    -- unconditionally (matching every other deselection site in this
+    -- file): they are no-ops when nothing is selected, and crucially
+    -- building.getSelected()/item.getSelected() are filtered to the
+    -- active world page while deselect() clears the global selection, so
+    -- guarding on getSelected() would skip a stale off-page selection and
+    -- leave it live when that page is shown again.
     if key == "Escape" then
         local selected = unit.getSelected()
         if #selected > 0 then
             unit.deselectAll()
         end
-        if building.getSelected() then
-            building.deselect()
-        end
-        if item.getSelected() then
-            item.deselect()
-        end
+        building.deselect()
+        item.deselect()
     end
 end
 
