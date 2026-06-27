@@ -70,6 +70,7 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldSetCellCommand
                                  , handleWorldSetStructureCommand
                                  , handleWorldClearStructureCommand
+                                 , handleWorldClearAllStructuresCommand
                                  , handleWorldDigTileCommand
                                  , handleWorldAddTileCommand)
 
@@ -156,6 +157,8 @@ handleWorldCommand env logger (WorldSetStructure pageId gx gy slotTag texId face
   = handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z
 handleWorldCommand env logger (WorldClearStructure pageId gx gy slotTag)
   = handleWorldClearStructureCommand env logger pageId gx gy slotTag
+handleWorldCommand env logger (WorldClearAllStructures pageId)
+  = handleWorldClearAllStructuresCommand env logger pageId
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env logger WorldDestroyAll

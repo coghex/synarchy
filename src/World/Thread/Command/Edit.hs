@@ -7,6 +7,7 @@ module World.Thread.Command.Edit
     , handleWorldSetCellCommand
     , handleWorldSetStructureCommand
     , handleWorldClearStructureCommand
+    , handleWorldClearAllStructuresCommand
     , handleWorldDigTileCommand
     ) where
 
@@ -29,6 +30,7 @@ import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
+import Structure.Types (emptyChunkStructures)
 import World.Material (MaterialProps(..), getMaterialProps
                       , materialIdByName)
 import World.Material.Id (MaterialId(..))
@@ -206,6 +208,13 @@ handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z = 
                         (appendEdit coord edit es, ())
 
 -- | Remove the structure piece at (gx,gy,slot-tag) via WeClearStructure.
+--   Unlike the SET path, the clear is recorded in the per-chunk edit log
+--   ALWAYS — even when the chunk isn't loaded. The piece being cleared may
+--   live only in the persisted edits of an UNLOADED/evicted chunk (its
+--   WeSetStructure), so without recording the clear it would replay back on
+--   reload / after save/load. The live lcStructures overlay is additionally
+--   updated when the chunk happens to be loaded. (Replaying a clear with no
+--   matching set is a harmless no-op — a HM.delete on an absent key.)
 handleWorldClearStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Word8 → IO ()
 handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
@@ -217,6 +226,8 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
         Just ws → do
             let (coord, _) = globalToChunk gx gy
                 edit = WeClearStructure gx gy slotTag
+            atomicModifyIORef' (wsEditsRef ws) $ \es →
+                (appendEdit coord edit es, ())
             td ← readIORef (wsTilesRef ws)
             case lookupChunk coord td of
                 Nothing → pure ()
@@ -224,8 +235,34 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
                     let lc' = applyEdit edit lc
                     atomicModifyIORef' (wsTilesRef ws) $ \w →
                         (insertChunk lc' w, ())
-                    atomicModifyIORef' (wsEditsRef ws) $ \es →
-                        (appendEdit coord edit es, ())
+
+-- | Remove EVERY structure piece in the world. Clears the live per-chunk
+--   'lcStructures' overlay on all loaded chunks AND strips the structure
+--   edits (WeSetStructure / WeClearStructure) from the per-chunk log so they
+--   do not replay on eviction/reload. This is the authoritative "wipe all":
+--   it touches the same overlay + edit-log that rendering and persistence
+--   read, so a cleared world stays cleared after a chunk evicts or a
+--   save/load round-trip. (No quad-cache bust: the structure pass renders
+--   from 'lcStructures' live every frame, never from the cached terrain quads.)
+handleWorldClearAllStructuresCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → IO ()
+handleWorldClearAllStructuresCommand env logger pageId = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for clear all structures: " <> unWorldPageId pageId
+        Just ws → do
+            atomicModifyIORef' (wsTilesRef ws) $ \w →
+                ( w { wtdChunks = HM.map clearChunkStructures (wtdChunks w) }
+                , () )
+            atomicModifyIORef' (wsEditsRef ws) $ \es →
+                (HM.map (filter (not . isStructureEdit)) es, ())
+  where
+    clearChunkStructures lc = lc { lcStructures = emptyChunkStructures }
+    isStructureEdit (WeSetStructure {})   = True
+    isStructureEdit (WeClearStructure {}) = True
+    isStructureEdit _                     = False
 
 -- | Set the walkable-ramp slope bitmask of an existing tile at (gx,gy,z).
 --   Routes through the edit log (WeSetSlope) like every other edit, so a

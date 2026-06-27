@@ -140,6 +140,11 @@ data WorldCommand
         --   into facePaletteId (the BUILDER picks it, not this handler).
     | WorldClearStructure WorldPageId Int Int Word8
         -- ^ worldId, gx, gy, slot-tag. Removes a structure piece.
+    | WorldClearAllStructures WorldPageId
+        -- ^ worldId. Removes EVERY structure piece in the world: clears the
+        --   live per-chunk overlays AND strips all WeSetStructure/
+        --   WeClearStructure edits from the log so they don't replay on
+        --   eviction/reload. The authoritative "wipe all structures".
     | WorldDestroy !WorldPageId
     | WorldDestroyAll
         -- ^ Tear down EVERY world (Exit to Menu): clears wmWorlds/wmVisible,

@@ -12,8 +12,6 @@ module Structure.Types
     ( StructureSlot(..)
     , slotFromText
     , StructurePiece(..)
-    , StructureStore
-    , emptyStructureStore
     , StructurePieceData(..)
     , ChunkStructures
     , emptyChunkStructures
@@ -51,24 +49,20 @@ slotFromText t = case T.toLower t of
     "post_w"  → Just SPostW
     _         → Nothing
 
+-- | A structure piece with RESOLVED runtime texture handles. Built by the
+--   renderer from a 'StructurePieceData' (palette ids → handles) as the input
+--   to the iso-quad builders; not stored anywhere.
 data StructurePiece = StructurePiece
     { spTexture ∷ !TextureHandle   -- ^ the 96×64 sprite
     , spFaceMap ∷ !TextureHandle   -- ^ its facemap (sun shading)
     , spGridZ   ∷ !Int             -- ^ world z it sits at
     } deriving (Show, Eq)
 
--- | Global store, keyed by (gx, gy, slot-tag via fromEnum). One piece
---   per (tile, slot). Mirrors the building manager's flat instance map.
-type StructureStore = HM.HashMap (Int, Int, Int) StructurePiece
-
-emptyStructureStore ∷ StructureStore
-emptyStructureStore = HM.empty
-
 -- | PURE, per-chunk structure piece — texture identity by PALETTE ID (not a
 --   runtime handle), so it can be produced by the pure replay (`applyEdit`) and
 --   live inside a 'LoadedChunk'. The renderer resolves the ids → handles via
 --   the texture palette. (Contrast 'StructurePiece', which holds resolved
---   handles for the old in-memory global store.)
+--   handles for rendering.)
 data StructurePieceData = StructurePieceData
     { spdTexId  ∷ !Int   -- ^ palette id of the sprite texture
     , spdFaceId ∷ !Int   -- ^ palette id of the facemap
