@@ -382,6 +382,7 @@ end
 
 function shell.cmdQuit()
     engine.logDebug("Quit requested from shell")
+    engine.quit()
 end
 
 function shell.rebuildHistoryDisplay()
