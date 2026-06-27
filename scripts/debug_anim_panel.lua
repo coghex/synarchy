@@ -23,6 +23,7 @@
 
 local label = require("scripts.ui.label")
 local scale = require("scripts.ui.scale")
+local debugOverlay = require("scripts.debug")
 
 local panel = package.loaded["scripts.debug_anim_panel"] or {}
 package.loaded["scripts.debug_anim_panel"] = panel
@@ -281,7 +282,11 @@ end
 -----------------------------------------------------------
 
 function panel.tryClaimClick(button, x, y)
-    if not panel.visible then return false end
+    -- Also gate on the overlay here, not just in update(): the panel
+    -- ticks at 0.1s while F8 toggles the overlay off immediately, so a
+    -- quick click in that gap would otherwise be swallowed by the stale
+    -- panel while debug mode is already off.
+    if not panel.visible or not debugOverlay.isVisible() then return false end
     if button ~= MOUSE_LEFT then return false end
 
     -- onMouseDown delivers WINDOW pixels; our rects are in
@@ -334,8 +339,13 @@ function panel.update(dt)
     local sel = unit.getSelected() or {}
     local uid = sel[1]
 
-    if not uid then
+    -- This is a debug tool: only present it when the debug overlay (F8)
+    -- is active. Otherwise the menu would pop on every unit selection in
+    -- normal play. Reset activeUid so it rebuilds cleanly if the overlay
+    -- is toggled back on while the same unit is still selected.
+    if not uid or not debugOverlay.isVisible() then
         if panel.visible then hide() end
+        panel.activeUid = nil
         return
     end
 
