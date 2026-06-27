@@ -803,6 +803,14 @@ function hud.reconcileView()
     -- no panel; mode only resets from "picker"), so tear it down on every
     -- transition. It deliberately does NOT touch "placement" mode.
     require("scripts.build_tool").hidePicker()
+    -- Build placement (#140): once the build tool enters "placement" mode,
+    -- its ghost preview and click handling keep running off the world
+    -- cursor regardless of the HUD view. The page swap above only takes
+    -- the world-page tool UI off-view, so placement stays live in
+    -- zoomed-out / fade-zone and keeps consuming clicks. exitPlacement()
+    -- is idempotent (clearGhost no-ops with no ghost; mode resets to
+    -- "off"), so cancel any in-progress placement on every band change.
+    require("scripts.build_tool").exitPlacement()
     if newView ~= "zoomed_in" then
         require("scripts.debug").hide()
     end
