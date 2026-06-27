@@ -79,6 +79,20 @@ handleWorldHideCommand env logger pageId = do
         ( mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }
         , pageId `elem` wmVisible mgr )
 
+    -- Clear this page's ground-item cursor selection on hide. Selection is
+    -- per-world (wsCursorRef), but the Lua-side deselect resolves through
+    -- activeWorld, which head-falls-back to another registered world once
+    -- this page leaves wmVisible — so a Lua deselect could clear the wrong
+    -- world and leave this one's selection live to repopulate the HUD when
+    -- it's shown again (#175). Doing it here, keyed on the exact pageId
+    -- being hidden, is race-free and always targets the right world.
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { selectedGroundItem = Nothing }, ())
+        Nothing → pure ()
+
     when wasVisible $
         Q.writeQueue (simQueue env) (SimDeactivateWorld pageId)
 

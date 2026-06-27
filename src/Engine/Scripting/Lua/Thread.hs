@@ -584,8 +584,9 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
       , intsToScriptArray survBuildingIds ]
-  LuaHudLogInfo text1 text2 →
-    broadcastToModules ls "onSetInfoText" [ScriptString text1, ScriptString text2]
+  LuaHudLogInfo text1 text2 kind →
+    broadcastToModules ls "onSetInfoText"
+      [ScriptString text1, ScriptString text2, ScriptString kind]
   LuaHudLogWeatherInfo text →
     broadcastToModules ls "onSetWeatherInfo" [ScriptString text]
   LuaHudLogResourcesInfo text →

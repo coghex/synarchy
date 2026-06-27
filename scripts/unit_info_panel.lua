@@ -266,8 +266,13 @@ end
 --
 -- An empty payload means "nothing selected" (e.g. clicking empty
 -- space, or our own clearWorldCursorSelect call). We ignore those.
-function unitInfoWatch.onSetInfoText(basic, advanced)
-    if basic and basic ~= "" then
+--
+-- `kind` distinguishes a real zoomed-in TILE selection from a zoom-map
+-- CHUNK selection — both ride this one broadcast. Only a "tile" should
+-- steal the panel from a unit; a chunk click must leave the unit
+-- selection intact (issue #133).
+function unitInfoWatch.onSetInfoText(basic, advanced, kind)
+    if basic and basic ~= "" and kind == "tile" then
         -- A tile is now the active selection. Two effects:
         --   1. If a unit was selected, defer to the tile and deselect.
         --   2. Mark the panel as owned by the tile-info path. The next

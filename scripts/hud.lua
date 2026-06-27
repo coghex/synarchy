@@ -544,11 +544,26 @@ function hud.hide()
     --   * event/combat/injury log panels (#84)
     --   * notification popups (#85)
     --   * right-click context menus (#86)
+    --   * item-contents popup (#100)
+    --   * per-unit log overlay (#104)
+    --   * cargo inventory popup (#99)
+    --   * main debug overlay (#147)
+    -- Ground-item selection (#175) is NOT cleared here: it lives in the
+    -- per-world cursor (wsCursorRef) and a Lua deselect resolves through
+    -- activeWorld, which head-falls-back to a different registered world
+    -- once this page leaves wmVisible — so it could clear the wrong
+    -- world. The world thread clears it deterministically in
+    -- handleWorldHideCommand, keyed on the exact page being hidden (which
+    -- worldView.hide()/testArena.hide() issue just before this runs).
     pcall(function() require("scripts.event_log").hide() end)
     pcall(function() require("scripts.combat_log").hide() end)
     pcall(function() require("scripts.injury_log_panel").hide() end)
     pcall(function() require("scripts.popup").dismissAll() end)
     pcall(function() require("scripts.ui.context_menu").hide() end)
+    pcall(function() require("scripts.item_contents_panel").closeIfOpen() end)
+    pcall(function() require("scripts.unit_log").hide() end)
+    pcall(function() require("scripts.cargo_inventory_panel").closeIfOpen() end)
+    pcall(function() require("scripts.debug").hide() end)
 
     engine.logDebug("HUD hidden")
 end
@@ -619,37 +634,90 @@ end
 -- manage hud (zoom transitions)
 -----------------------------------------------------------
 
-function hud.onScroll(dx, dy)
+-- Reconcile the HUD view (zoomed_in / zoomed_out / none) with the camera's
+-- actual zoom band, doing the page swap + per-transition teardown exactly
+-- when the band genuinely changes.
+--
+-- This is driven both from hud.update() (every tick) and hud.onScroll()
+-- (the wheel hook). The wheel hook alone is NOT enough: worldView.onScroll
+-- only imparts zoom *velocity*, and the camera crosses the band later in
+-- Engine.Loop.Camera.updateCameraZoom. If the final wheel event carries
+-- enough momentum to coast across the band with no further scroll event,
+-- a wheel-timed teardown never fires. Running it per-tick off the real
+-- zoom closes that gap (#175). It also keeps hud.currentView authoritative
+-- so the HUD page never lags the camera.
+--
+-- Teardown on each real transition:
+--   * infoPanel.clear() — the shared HUD info panel.
+--   * item-contents popup (#142): mounted on hud.world_page, so hiding
+--     the page only takes it off-view; its logical state stays open and
+--     could reappear stale. closeIfOpen() tears it down.
+--   * ground-item selection (#175): per-world cursor state the item
+--     watcher (item_info_panel.update) keeps polling and would use to
+--     repopulate the panel. item.deselect() clears the active world's
+--     selection — and here the world is still the visible/active one, so
+--     activeWorld resolves correctly (unlike the menu-hide path, which is
+--     handled engine-side in handleWorldHideCommand).
+function hud.reconcileView()
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()
     local zoomFadeEnd = camera.getZoomFadeEnd()
-    local oldView = hud.currentView
+
+    local newView
     if zoom > zoomFadeEnd then
-        if oldView ~= "zoomed_out" and hud.zoom_page and hud.world_page then
-            UI.showPage(hud.zoom_page)
-            UI.hidePage(hud.world_page)
-            hud.currentView = "zoomed_out"
-            -- Clear info panel on zoom transition
-            infoPanel.clear()
-        end
+        newView = "zoomed_out"
     elseif zoom < zoomFadeStart then
-        if oldView ~= "zoomed_in" and hud.zoom_page and hud.world_page then
-            UI.showPage(hud.world_page)
-            UI.hidePage(hud.zoom_page)
-            hud.currentView = "zoomed_in"
-            -- Clear info panel on zoom transition
-            infoPanel.clear()
-        end
+        newView = "zoomed_in"
     else
+        newView = "none"
+    end
+
+    local oldView = hud.currentView
+    if newView == oldView then return end
+
+    -- Page swaps are guarded on page existence (pages don't exist before
+    -- createUI / in headless); the teardown below runs on every real
+    -- transition regardless, so selection/info never survive a band change.
+    if newView == "zoomed_out" then
+        if hud.zoom_page then UI.showPage(hud.zoom_page) end
+        if hud.world_page then UI.hidePage(hud.world_page) end
+    elseif newView == "zoomed_in" then
+        if hud.world_page then UI.showPage(hud.world_page) end
+        if hud.zoom_page then UI.hidePage(hud.zoom_page) end
+    else -- "none": in the fade band, hide whichever view page was up
         if oldView == "zoomed_in" and hud.world_page then
             UI.hidePage(hud.world_page)
         elseif oldView == "zoomed_out" and hud.zoom_page then
             UI.hidePage(hud.zoom_page)
         end
-        hud.currentView = "none"
-        -- In the fade zone, clear the info panel
-        infoPanel.clear()
     end
+    hud.currentView = newView
+
+    infoPanel.clear()
+    require("scripts.item_contents_panel").closeIfOpen()
+    if newView ~= "zoomed_in" then
+        require("scripts.debug").hide()
+    end
+    item.deselect()
+end
+
+-- Wheel hook (no UI element under cursor, no shift). Reconcile immediately
+-- so a transition the wheel itself crosses doesn't wait for the next tick.
+--
+-- Gated on hud.visible, same as hud.update()/hud.onMouseDown(): uiManager
+-- still routes game scrolls here in the plain "test_arena" loading/builder
+-- state, where the HUD is hidden (hud.show() only runs for the
+-- "test_arena_view"/"world_view" gameplay states). Without the gate, a
+-- scroll there would run reconcileView()'s item.deselect() against
+-- activeWorld behind the hidden HUD — the very wrong-world clear this
+-- change moves engine-side for the hide path (#175). The per-tick driver
+-- in hud.update() is gated the same way, so reconcile only ever runs while
+-- the HUD owns the view.
+function hud.onScroll(dx, dy)
+    if not hud.visible then
+        return
+    end
+    hud.reconcileView()
 end
 
 -----------------------------------------------------------
@@ -665,6 +733,11 @@ function hud.update(dt)
     if not hud.visible then
         return
     end
+    -- Reconcile the view band against the camera's actual zoom every tick.
+    -- The camera crosses the band in the engine camera loop, which the
+    -- wheel-timed onScroll can miss when momentum coasts past the band
+    -- (#175). Idempotent: returns immediately when the band is unchanged.
+    hud.reconcileView()
     local mx, my = engine.getMousePosition()
     if mx and my then
         if hud.currentView == "zoomed_out" then

@@ -3,6 +3,8 @@ module World.Slope
     ( -- * Slope Computation
       computeChunkSlopes
     , recomputeNeighborSlopes
+    , slopeRecomputeAffected
+    , wrapChunkCoordU
     , patchEdgeStrata
     , chunkNeighbors
       -- * Slope Face Map Generation
@@ -14,6 +16,8 @@ module World.Slope
     , slopeToFaceMapIndex
       -- * Constants
     , slopeHardnessThreshold
+      -- * Internals (exposed for testing)
+    , slopeBit
     ) where
 
 import UPrelude
@@ -170,7 +174,29 @@ slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → Bool
 slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap neighborLookup =
     let diff = myZ - neighborZ
-        validDiff = diff ≡ 1
+
+        -- An absent neighbour (not-yet-loaded chunk, or beyond the world
+        -- edge) reads back as the 'minBound' sentinel from 'neighborElev'.
+        -- It must never count as a drop: water would otherwise slope
+        -- toward nothing. When the neighbour's chunk loads OR evicts, the
+        -- cross-chunk recompute path ('recomputeNeighborSlopes') re-runs
+        -- this border strip, so the slope always reflects the currently
+        -- loaded set — not the load order. Cross-SEAM neighbours resolve
+        -- correctly because that recompute wraps the lookup coord.
+        neighborLoaded = neighborZ ≠ minBound
+
+        -- Dry land keeps the strict single-step terrace rule (a neighbour
+        -- exactly one lower). A WET tile additionally slopes toward any
+        -- EXPOSED-AIR edge — a present neighbour whose surface drops by
+        -- one OR MORE levels. That is the waterfall-lip / water-cliff
+        -- case (issue #222): the source water tile at the top of a fall
+        -- borders a multi-level drop, so 'diff > 1' there; the old
+        -- 'diff ≡ 1' rule left it flat. Tipping the surface toward the
+        -- drop makes the water visibly pour over the lip. Water enclosed
+        -- by equal/higher surfaces (diff ≤ 0) stays flat.
+        validDiff
+            | myHasFluid = neighborLoaded ∧ diff ≥ 1
+            | otherwise  = diff ≡ 1
 
         (normLx, normLy, neighborCoord) = normalizeCoord coord nlx nly
         hasFluid = case neighborCoord of
@@ -379,20 +405,63 @@ generateSideFaceMapRight = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ 
 
 -- * Recompute Neighbor Slopes
 
-recomputeNeighborSlopes ∷ Word64 → MaterialRegistry
+-- | Chunk-level u-axis seam wrap: fold a chunk coord that has crossed the
+--   world's u-seam back into the canonical range chunks are stored under.
+--   Mirrors the wrap applied at chunk insertion (the @wrapChunkU@ in
+--   'World.Thread.ChunkLoading'), so a cross-seam neighbour lookup
+--   resolves the chunk actually stored on the far side instead of missing
+--   it and treating a real adjacency as empty air. Identity for interior
+--   coords and for non-wrapping (arena / zero-size) worlds.
+wrapChunkCoordU ∷ Int → ChunkCoord → ChunkCoord
+wrapChunkCoordU worldSize cc@(ChunkCoord cx cy)
+    | w ≤ 0     = cc
+    | otherwise =
+        let u        = cx - cy
+            v        = cx + cy
+            halfW    = w `div` 2
+            wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+            cx'      = (wrappedU + v) `div` 2
+            cy'      = (v - wrappedU) `div` 2
+        in ChunkCoord cx' cy'
+  where w = (worldSize `div` 2) * 2
+
+-- | The loaded chunks whose border slopes 'recomputeNeighborSlopes' will
+--   rewrite for the given changed coords — the changed chunks themselves
+--   plus their loaded (seam-wrapped) neighbours. Exposed so a caller can
+--   re-apply, over EXACTLY this set, any pass the recompute clobbers
+--   (notably the mid-dig slope masks restored by
+--   'World.Mine.Apply.applyDigSlopesTd'); keying that restore off a
+--   narrower set would silently drop overrides on evicted-neighbour or
+--   wrapped-seam-neighbour tiles.
+slopeRecomputeAffected ∷ Int → [ChunkCoord] → WorldTileData → [ChunkCoord]
+slopeRecomputeAffected worldSize changedCoords wtd =
+    let chunks = wtdChunks wtd
+        wrap = wrapChunkCoordU worldSize
+    in HS.toList $ HS.fromList $
+        [ c | c ← changedCoords, HM.member c chunks ] <>
+        [ nb
+        | chg ← changedCoords
+        , raw ← chunkNeighbors chg
+        , let nb = wrap raw
+        , HM.member nb chunks
+        ]
+
+recomputeNeighborSlopes ∷ Word64 → Int → MaterialRegistry
                         → [ChunkCoord]
                         → WorldTileData
                         → WorldTileData
-recomputeNeighborSlopes seed registry newCoords wtd =
+recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
     let chunks = wtdChunks wtd
-        affected = HS.toList $ HS.fromList $
-            newCoords <>
-            [ neighbor
-            | new ← newCoords
-            , neighbor ← chunkNeighbors new
-            , HM.member neighbor chunks
-            ]
-        neighborLookup coord = case HM.lookup coord chunks of
+        wrap = wrapChunkCoordU worldSize
+        -- 'changedCoords' are chunks whose presence just changed — loaded
+        -- OR evicted. A loaded chunk's own border strip plus its loaded
+        -- neighbours' strips may need re-sloping; an evicted chunk's
+        -- former neighbours must re-slope to drop the slope that pointed
+        -- at it (so the surface depends only on the currently loaded set,
+        -- not load order). Cross-SEAM neighbours live under a wrapped
+        -- coord, so wrap before testing membership and before lookup.
+        affected = slopeRecomputeAffected worldSize changedCoords wtd
+        neighborLookup coord = case HM.lookup (wrap coord) chunks of
             Just lc → Just (lcTerrainSurfaceMap lc)
             Nothing → Nothing
         -- Only the boundary strip can change when a neighbour loads —

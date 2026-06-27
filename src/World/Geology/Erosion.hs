@@ -396,8 +396,7 @@ soilFromClimate temp precip humid snow _srcMat roll
 
     -- Hot + dry desert → transitional
     | temp > blur 25.0 ∧ precip < blur 0.3 =
-        if precip < blur 0.08 then 55          -- sand (hyper-arid)
-        else if precip < blur 0.15 then 55    -- sand (arid)
+        if precip < blur 0.15 then 55          -- sand (arid)
         else if precip < blur 0.2  then 54    -- loamy sand
         else if precip < blur 0.25 then 53    -- sandy loam
         else 52                                -- sandy clay loam

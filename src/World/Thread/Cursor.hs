@@ -10,7 +10,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Fluids (isOceanChunk)
@@ -20,7 +20,7 @@ import World.Generate (generateLoadedChunk)
 import World.Generate.Types (isArenaParams)
 import World.Geology.Ore (chunkOreCounts)
 import World.Slope (patchEdgeStrata)
-import World.Thread.Helpers (sendHudInfo, sendHudWeatherInfo
+import World.Thread.Helpers (sendHudInfo, sendHudChunkInfo, sendHudWeatherInfo
                             , sendHudResourcesInfo)
 import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
@@ -32,69 +32,94 @@ import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
 pollCursorInfo ∷ EngineEnv → IO ()
 pollCursorInfo env = do
     manager ← readIORef (worldManagerRef env)
-    forM_ (wmVisible manager) $ \pageId →
-        case lookup pageId (wmWorlds manager) of
-            Nothing → return ()
-            Just worldState → do
-                cs   ← readIORef (wsCursorRef worldState)
-                snap ← readIORef (wsCursorSnapshotRef worldState)
-                mParams ← readIORef (wsGenParamsRef worldState)
+    -- Only the ACTIVE world drives the HUD. The HUD messages emitted below
+    -- ('sendHudInfo' / weather / resources) carry no page identifier, so
+    -- processing every visible page (the old 'forM_ (wmVisible …)') let a
+    -- non-active visible page processed later in the loop overwrite or clear
+    -- the active world's info (issue #129). Resolve the single active world
+    -- through the canonical rule every other current-world read uses.
+    let mActive = resolveActiveWorld manager
+    -- Detect an active-world switch. world.show/hide swaps 'wmVisible'
+    -- without touching any cursor field, so the per-world snapshot below
+    -- can't see the change; without this the panel keeps showing the
+    -- previous world's text until the cursor next moves (issue #129).
+    lastActive ← readIORef (hudActivePageRef env)
+    let activePid = fst <$> mActive
+    when (activePid ≢ lastActive) $
+        writeIORef (hudActivePageRef env) activePid
+    forM_ mActive $ \(pid, worldState) → do
+        cs   ← readIORef (wsCursorRef worldState)
+        snap ← readIORef (wsCursorSnapshotRef worldState)
+        mParams ← readIORef (wsGenParamsRef worldState)
 
-                let curZoom  = zoomSelectedPos cs
-                    curWorld = worldSelectedTile cs
-                    oldZoom  = csZoomSel snap
-                    oldWorld = csWorldSel snap
+        let curZoom  = zoomSelectedPos cs
+            curWorld = worldSelectedTile cs
+            oldZoom  = csZoomSel snap
+            oldWorld = csWorldSel snap
+            activeChanged = Just pid ≢ lastActive
 
-                -- The chunk (zoom-map) and tile (zoomed-in) selections can
-                -- both be set at once, and BOTH drive the panel's
-                -- Basic/Advanced tabs through 'sendHudInfo'. Render ONE
-                -- coherent HUD state per change, following the selection the
-                -- user just ACTED on — i.e. the one that changed this tick:
-                --
-                --   * tile selection changed → it owns the panel. A selected
-                --     tile shows Basic/Advanced and clears the chunk-only
-                --     Weather/Resources tabs (tile selection routes through
-                --     the same setInfo path and useSchema("tile") is a no-op
-                --     when already on the tile schema, so it cannot clear
-                --     those dynamic tabs on its own — #128). A tile DEselect
-                --     empties the panel with an explicit blank Basic payload
-                --     even if a chunk is still selected, because downstream
-                --     teardown couples to that empty 'onSetInfoText' (the
-                --     arena tile-editor popup only closes on it —
-                --     scripts/tile_editor.lua) and we must not strand it.
-                --   * otherwise the chunk selection changed → show it (or
-                --     empty the panel when it was deselected).
-                --
-                -- Reacting to what CHANGED — rather than giving an existing
-                -- tile selection blanket priority — matters because neither
-                -- selection is cleared eagerly: a chunk selection persists
-                -- into the zoomed-in view and a tile selection persists
-                -- (unchanged) after zooming out (issue 135). Prioritising a
-                -- stale tile would re-show old tile info over a chunk the
-                -- user just clicked. Handling a single branch per tick (not
-                -- two independent updates) also avoids the same-tick
-                -- render-then-blank.
-                let worldChanged = curWorld ≢ oldWorld
-                    blankPanel = do
-                        sendHudInfo env "" ""
-                        sendHudWeatherInfo env ""
-                        sendHudResourcesInfo env ""
-                when (curZoom ≢ oldZoom ∨ worldChanged) $
-                    if worldChanged
-                        then case curWorld of
-                            Just (gx, gy, z) → do
-                                sendTileInfo env worldState mParams gx gy z
-                                sendHudWeatherInfo env ""
-                                sendHudResourcesInfo env ""
-                            Nothing → blankPanel
-                        else case curZoom of
-                            Just (baseGX, baseGY) →
-                                sendChunkInfo env worldState mParams baseGX baseGY
-                            Nothing → blankPanel
+        -- The chunk (zoom-map) and tile (zoomed-in) selections can
+        -- both be set at once, and BOTH drive the panel's
+        -- Basic/Advanced tabs through 'sendHudInfo'. Render ONE
+        -- coherent HUD state per change, following the selection the
+        -- user just ACTED on — i.e. the one that changed this tick:
+        --
+        --   * tile selection changed → it owns the panel. A selected
+        --     tile shows Basic/Advanced and clears the chunk-only
+        --     Weather/Resources tabs (tile selection routes through
+        --     the same setInfo path and useSchema("tile") is a no-op
+        --     when already on the tile schema, so it cannot clear
+        --     those dynamic tabs on its own — #128). A tile DEselect
+        --     empties the panel with an explicit blank Basic payload
+        --     even if a chunk is still selected, because downstream
+        --     teardown couples to that empty 'onSetInfoText' (the
+        --     arena tile-editor popup only closes on it —
+        --     scripts/tile_editor.lua) and we must not strand it.
+        --   * otherwise the chunk selection changed → show it (or
+        --     empty the panel when it was deselected).
+        --
+        -- Reacting to what CHANGED — rather than giving an existing
+        -- tile selection blanket priority — matters because neither
+        -- selection is cleared eagerly: a chunk selection persists
+        -- into the zoomed-in view and a tile selection persists
+        -- (unchanged) after zooming out (issue 135). Prioritising a
+        -- stale tile would re-show old tile info over a chunk the
+        -- user just clicked. Handling a single branch per tick (not
+        -- two independent updates) also avoids the same-tick
+        -- render-then-blank.
+        let worldChanged = curWorld ≢ oldWorld
+            blankPanel = do
+                sendHudInfo env "" ""
+                sendHudWeatherInfo env ""
+                sendHudResourcesInfo env ""
+            showTile gx gy z = do
+                sendTileInfo env worldState mParams gx gy z
+                sendHudWeatherInfo env ""
+                sendHudResourcesInfo env ""
+            showChunk baseGX baseGY =
+                sendChunkInfo env worldState mParams baseGX baseGY
+        if activeChanged
+            -- The active world just changed: repaint the panel with THIS
+            -- world's current selection from scratch (tile owns the panel
+            -- when present, else chunk, else blank) regardless of whether
+            -- its own cursor fields moved.
+            then case curWorld of
+                Just (gx, gy, z) → showTile gx gy z
+                Nothing → case curZoom of
+                    Just (baseGX, baseGY) → showChunk baseGX baseGY
+                    Nothing → blankPanel
+            else when (curZoom ≢ oldZoom ∨ worldChanged) $
+                if worldChanged
+                    then case curWorld of
+                        Just (gx, gy, z) → showTile gx gy z
+                        Nothing → blankPanel
+                    else case curZoom of
+                        Just (baseGX, baseGY) → showChunk baseGX baseGY
+                        Nothing → blankPanel
 
-                let newSnap = CursorSnapshot curZoom curWorld
-                when (newSnap ≢ snap) $
-                    writeIORef (wsCursorSnapshotRef worldState) newSnap
+        let newSnap = CursorSnapshot curZoom curWorld
+        when (newSnap ≢ snap) $
+            writeIORef (wsCursorSnapshotRef worldState) newSnap
 
 -- * sendChunkInfo: zoom-level (chunk) selection
 
@@ -196,7 +221,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
             Just params → chunkWeatherInfo params cx cy
             Nothing → ""
 
-    sendHudInfo env basicLines advLines
+    sendHudChunkInfo env basicLines advLines
     sendHudWeatherInfo env weatherInfo
 
 -- * chunkWeatherInfo: format weather for a chunk's climate region
