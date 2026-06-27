@@ -4,12 +4,15 @@
 -- wires hud.toolToggleId to a real toggle group, and drives the actual
 -- hud.markLoadedToolReset / resetMainWorldToolIfDirty state machine.
 --
--- Guards two review findings:
+-- Guards three review findings:
 --   #5  a main_world load must NOT reset the toolbar while the HUD is
 --       bound to the arena page (the toolbar onChange writes
 --       world.setToolMode(hud.worldId, ...)).
 --   #6  but an arena→menu→load→world_view round-trip (hud.worldId stale
 --       at load time, rebinds to main_world later) must STILL reset.
+--   #7  a load that lands before the toolbar exists at all (debug-console
+--       engine.loadSave from the main menu) must keep the reset pending,
+--       not silently consume a no-op.
 --
 -- Run from the repo root: luajit tools/test_load_tool_reset.lua
 
@@ -28,10 +31,26 @@ package.loaded["scripts.hud.info_panel"] =
 local toggle = require("scripts.ui.toggle")
 local hud    = require("scripts.hud")
 
--- Real toggle group mirroring the toolbar; onChange records the picks
--- (this is the same callback the real toolbar uses to drive
--- world.setToolMode, so a recorded pick == the toolbar fired onChange).
-local fired = {}
+local fired = {}   -- toolbar onChange picks (== world.setToolMode calls)
+local function last() return fired[#fired] end
+local function assert_eq(a, b, msg)
+  if a ~= b then error("FAIL: " .. msg .. " (got " .. tostring(a)
+    .. ", want " .. tostring(b) .. ")") end
+  print("ok: " .. msg)
+end
+
+-- Case 0: a load lands BEFORE any toolbar exists (e.g. a debug-console
+-- engine.loadSave from the main menu — hud.worldId defaults to
+-- "main_world" but toolToggleId is still nil). The reset must NOT be
+-- consumed; the flag has to survive until the toolbar is created. (#7)
+assert(hud.toolToggleId == nil, "precondition: no toolbar yet")
+hud.worldId = "main_world"
+hud.mainWorldToolDirty = false
+hud.markLoadedToolReset()
+assert_eq(hud.mainWorldToolDirty, true,
+  "no toolbar: load keeps the reset pending (flag survives)")
+
+-- Now the first gameplay UI opens and builds the shared toolbar.
 hud.toolToggleId = toggle.new({
   page = "world_page", items = {
     { name = "tool_mine",    texDefault = "m", texSelected = "ms" },
@@ -43,12 +62,10 @@ hud.toolToggleId = toggle.new({
   onChange = function(idx, name) fired[#fired+1] = name end,
 })
 
-local function last() return fired[#fired] end
-local function assert_eq(a, b, msg)
-  if a ~= b then error("FAIL: " .. msg .. " (got " .. tostring(a)
-    .. ", want " .. tostring(b) .. ")") end
-  print("ok: " .. msg)
-end
+-- The pending reset applies on the next main_world resync (hud.show).
+hud.resetMainWorldToolIfDirty()
+assert_eq(last(), "tool_default", "toolbar created: pending reset now applies")
+assert_eq(hud.mainWorldToolDirty, false, "pending reset consumed once applied")
 
 -- Case 1: HUD bound to main_world → load resets the toolbar immediately.
 hud.worldId = "main_world"

@@ -507,9 +507,17 @@ end
 -- ...) and must never reset the arena's tool state on a main_world load.
 -- If the HUD is on another page or hidden when the load lands, the reset
 -- is deferred (mainWorldToolDirty) and consumed the next time the HUD
--- binds to main_world in hud.show. (#103)
+-- binds to main_world in hud.show.
+--
+-- The flag is only CLEARED once the reset can actually be applied — the
+-- toolbar must already exist (created in hud.createUI). A load that lands
+-- before any gameplay UI has opened (e.g. a debug-console engine.loadSave
+-- from the main menu) leaves toolToggleId nil; keep the flag set so the
+-- reset still fires when the toolbar is first shown on main_world, rather
+-- than silently consuming a no-op. (#103)
 function hud.resetMainWorldToolIfDirty()
-    if hud.mainWorldToolDirty and hud.worldId == "main_world" then
+    if hud.mainWorldToolDirty and hud.worldId == "main_world"
+            and hud.toolToggleId then
         hud.mainWorldToolDirty = false
         hud.selectDefaultTool()
     end
