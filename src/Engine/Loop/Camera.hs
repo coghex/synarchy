@@ -13,6 +13,7 @@ import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad (EngineM, liftIO)
 import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
+import Engine.Graphics.Viewport (windowDegenerate)
 import Engine.Input.Types (InputState(..), KeyState(..))
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
@@ -139,6 +140,16 @@ updateCameraMouseDrag = do
             (True, False) →
                 ( cam { camDragging   = True
                       , camDragOrigin = mousePos
+                      , camVelocity   = (0, 0)
+                      }
+                , () )
+
+            -- Zero-size window (a middle-drag surviving into minimize):
+            -- the pixel→world divisions below would corrupt camera
+            -- position/velocity with non-finite values. Hold position and
+            -- re-anchor the drag origin so restore doesn't jump.
+            (True, True) | windowDegenerate winW winH →
+                ( cam { camDragOrigin = mousePos
                       , camVelocity   = (0, 0)
                       }
                 , () )

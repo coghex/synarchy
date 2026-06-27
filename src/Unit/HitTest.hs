@@ -20,6 +20,7 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , applyFacingF, GridConfig(..), defaultGridConfig)
@@ -53,7 +54,9 @@ hitTestUnitAt env pixX pixY = do
     let instances = case resolveActiveWorld mgr of
             Just (pid, _) → unitsOnPage pid (umInstances um)
             Nothing       → HM.empty
-    if HM.null instances
+    -- Zero-size window (minimize): the pixel→world divisions below would
+    -- yield a non-finite click coord. Report "no unit".
+    if windowDegenerate winW winH ∨ HM.null instances
         then return Nothing
         else do
             let facing  = camFacing camera
@@ -199,7 +202,11 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
                let (pixX, pixY) = worldToPixel (unitCenter inst)
                in pixX ≥ x1 ∧ pixX ≤ x2 ∧ pixY ≥ y1 ∧ pixY ≤ y2
 
-    return [uid | (uid, inst) ← HM.toList instances, inRect inst]
+    -- Zero-size window (minimize): the projection above maps every unit
+    -- to a non-finite screen pixel. Select nothing.
+    return $ if windowDegenerate winW winH
+                then []
+                else [uid | (uid, inst) ← HM.toList instances, inRect inst]
 
 -- | Resolve which texture handle the unit displays for a given camera
 --   facing. Duplicated from Unit.Render so HitTest doesn't import the

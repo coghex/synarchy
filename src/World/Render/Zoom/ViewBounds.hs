@@ -9,6 +9,7 @@ module World.Render.Zoom.ViewBounds
 
 import UPrelude
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Viewport (safeAspect)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight,
                    chunkWorldWidth, chunkWorldDiamondHeight)
 import World.Types (chunkSize)
@@ -24,7 +25,9 @@ computeZoomViewBounds ∷ Camera2D → Int → Int → ZoomViewBounds
 computeZoomViewBounds camera fbW fbH =
     let (cx, cy) = camPosition camera
         zoom = camZoom camera
-        aspect = fromIntegral fbW / fromIntegral fbH
+        -- Guard against a zero-size framebuffer (minimize): a raw
+        -- fbW/fbH would feed Infinity/NaN into the culling bounds.
+        aspect = safeAspect fbW fbH
         halfW = zoom * aspect
         halfH = zoom
         padX = chunkWorldWidth * 2.0

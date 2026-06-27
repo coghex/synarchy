@@ -18,6 +18,7 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , applyFacingF, GridConfig(..), defaultGridConfig)
@@ -45,7 +46,9 @@ hitTestBuildingAt env pixX pixY = do
     let instances = case resolveActiveWorld mgr of
             Just (pid, _) → buildingsOnPage pid (bmInstances bm)
             Nothing       → HM.empty
-    if HM.null instances
+    -- Zero-size window (minimize): the pixel→world divisions below would
+    -- yield a non-finite click coord. Report "no building".
+    if windowDegenerate winW winH ∨ HM.null instances
         then return Nothing
         else do
             let facing  = camFacing camera

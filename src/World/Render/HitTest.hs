@@ -17,6 +17,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
+import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import World.Grid (worldToGrid, worldToGridF, tileSideHeight, tileHeight)
@@ -53,7 +54,12 @@ pickWorldTile
     → Int → Int         -- ^ screen pixel x, y
     → Maybe HitResult
 pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
-              worldSize effectiveDepth vb tileData pixX pixY = tryZ zSlice
+              worldSize effectiveDepth vb tileData pixX pixY
+    -- Zero-size window/framebuffer (minimize): the aspect and pixel→norm
+    -- divisions below would unproject to a non-finite world coord and
+    -- pick a garbage tile. Report "no tile" instead.
+    | viewportDegenerate winW winH fbH = Nothing
+    | otherwise = tryZ zSlice
   where
     aspect = fromIntegral fbW / fromIntegral fbH
     vw     = zoom * aspect

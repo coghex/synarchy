@@ -7,6 +7,7 @@ module World.Render.ViewBounds
 
 import UPrelude
 import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Viewport (safeAspect)
 import World.Grid (tileWidth, tileHeight, tileSideHeight)
 import World.Render.Camera (camEpsilon)
 
@@ -23,7 +24,9 @@ computeViewBounds ∷ Camera2D → Int → Int → Int → ViewBounds
 computeViewBounds camera fbW fbH effDepth =
     let (cx, cy) = camPosition camera
         zoom     = camZoom camera
-        aspect   = fromIntegral fbW / fromIntegral fbH
+        -- Guard against a zero-size framebuffer (minimize): a raw
+        -- fbW/fbH would feed Infinity/NaN into the culling bounds.
+        aspect   = safeAspect fbW fbH
         halfW    = zoom * aspect
         halfH    = zoom
         maxHeightPad = fromIntegral effDepth * tileSideHeight
