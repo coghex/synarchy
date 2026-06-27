@@ -460,23 +460,28 @@ clearHeldInput state = state
 --   only fixes button pollers; several drags live entirely in Lua (the
 --   drag-select box, slider / scrollbar knobs) and end only on
 --   @onMouseUp@, so without a synthetic release they stay latched to the
---   cursor when focus returns. Each release fires at the last known
---   cursor position and carries the press's recorded route, so it is
---   indistinguishable from a real release to the Lua handlers.
+--   cursor when focus returns.
+--
+--   Each release fires at the last known cursor position and is routed
+--   'ClickSwallowed' ("swallowed"), NOT the press's original route: a
+--   focus transition cancels held input rather than completing it, so
+--   handlers that act on the release (drag-select committing a unit
+--   selection) skip it on this route, while handlers that merely tear
+--   down drag state (slider / scrollbar / button) ignore the route and
+--   release as usual.
 releaseHeldButtons ∷ EngineEnv → InputState → IO ()
 releaseHeldButtons env inpSt =
     forM_ (heldButtonReleases inpSt) $ \(btn, mx, my, route) →
         Q.writeQueue (luaQueue env) (LuaMouseUpEvent btn mx my route)
 
 -- | The synthetic releases 'releaseHeldButtons' should emit: one per
---   currently-held button, at the last known cursor position, carrying
---   the route its press was recorded with (so Lua sees a normal
---   release). Buttons whose press was swallowed never enter
---   @inpMouseBtns@, so they are correctly skipped.
+--   currently-held button, at the last known cursor position, all routed
+--   'ClickSwallowed' so Lua treats them as a cancel. Buttons whose press
+--   was swallowed never enter @inpMouseBtns@, so they are skipped here.
 heldButtonReleases ∷ InputState
                    → [(GLFW.MouseButton, Double, Double, ClickRoute)]
 heldButtonReleases inpSt =
-    [ (btn, mx, my, Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt))
+    [ (btn, mx, my, ClickSwallowed)
     | (btn, True) ← Map.toList (inpMouseBtns inpSt) ]
   where (mx, my) = inpMousePos inpSt
 

@@ -158,17 +158,23 @@ function dragSelect.onMouseDown(button, x, y)
     dragSelect.currY  = y
 end
 
-function dragSelect.onMouseUp(button, x, y)
+function dragSelect.onMouseUp(button, x, y, downRoute)
     if button ~= 1 then return end
     local wasDragging = (dragSelect.state == "dragging")
     if wasDragging then
-        local ids = unit.hitTestInRect(
-            dragSelect.startX, dragSelect.startY, x, y) or {}
-        if isShiftHeld() then
-            local current = unit.getSelected() or {}
-            unit.setSelection(mergeIds(current, ids))
-        else
-            unit.setSelection(ids)
+        -- A focus-loss / minimize transition arrives as a synthetic
+        -- release routed "swallowed" (Engine.Input.Thread). That cancels
+        -- the drag: tear the box down without committing a selection at
+        -- the stale last-cursor position. A real release commits.
+        if downRoute ~= "swallowed" then
+            local ids = unit.hitTestInRect(
+                dragSelect.startX, dragSelect.startY, x, y) or {}
+            if isShiftHeld() then
+                local current = unit.getSelected() or {}
+                unit.setSelection(mergeIds(current, ids))
+            else
+                unit.setSelection(ids)
+            end
         end
         setEdgesVisible(false)
     end

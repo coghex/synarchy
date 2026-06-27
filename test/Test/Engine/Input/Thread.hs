@@ -73,9 +73,9 @@ spec = do
       it "synthesizes a release per held button at the last cursor pos" $ do
         let s = heldState { inpMousePos = (12.0, 34.0) }
         heldButtonReleases s
-          `shouldBe` [(GLFW.MouseButton'1, 12.0, 34.0, ClickGame)]
+          `shouldBe` [(GLFW.MouseButton'1, 12.0, 34.0, ClickSwallowed)]
 
-      it "carries each press's recorded route" $ do
+      it "routes every release as swallowed (cancel, not commit)" $ do
         let s = heldState
               { inpMousePos    = (5.0, 6.0)
               , inpMouseBtns   = Map.fromList
@@ -84,10 +84,12 @@ spec = do
                   [ (GLFW.MouseButton'1, ClickGame)
                   , (GLFW.MouseButton'2, ClickUI) ]
               }
-        -- Map.toList yields ascending button order ('1 before '2).
+        -- Map.toList yields ascending button order ('1 before '2);
+        -- the original ClickGame/ClickUI routes are deliberately
+        -- replaced with ClickSwallowed.
         heldButtonReleases s `shouldBe`
-          [ (GLFW.MouseButton'1, 5.0, 6.0, ClickGame)
-          , (GLFW.MouseButton'2, 5.0, 6.0, ClickUI) ]
+          [ (GLFW.MouseButton'1, 5.0, 6.0, ClickSwallowed)
+          , (GLFW.MouseButton'2, 5.0, 6.0, ClickSwallowed) ]
 
       it "emits nothing when no button is held" $
         heldButtonReleases defaultInputState `shouldBe` []
