@@ -606,8 +606,8 @@ processLuaMsg env ls stateRef msg = case msg of
       ]
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
---   Used by 'LuaSaveLoaded' to hand the orphaned unit/building ids to
---   the Lua reconcile callback; the Lua side iterates with @ipairs@.
+--   Used by 'LuaSaveLoaded' to hand the surviving loaded-page unit /
+--   building ids to the Lua reconcile callback; it iterates with @ipairs@.
 intsToScriptArray ∷ [Int] → ScriptValue
 intsToScriptArray xs = ScriptTable $
     zipWith (\i x → ( ScriptNumber (fromIntegral (i ∷ Int))

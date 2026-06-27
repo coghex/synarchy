@@ -258,38 +258,33 @@ end
 -- registered. The restored state still holds entries for those dropped
 -- ids, so a reused bid could inherit stale spawn-rate state.
 --
--- The signature mirrors the broadcast (onSaveLoaded(orphanUnitIds,
--- orphanBuildingIds)). We force-prune the exact dropped-building set FIRST
--- -- this matters when an orphaned bid collides with a live off-page
--- building of the same id: the restored blob state belongs to the dropped
--- orphan, so a liveness check alone would wrongly keep it. Then we sweep
--- any state whose bid has no live building. building.getInfo is GLOBAL
--- (all world pages, nil when gone), so buildings on other
--- loaded-but-inactive pages are kept.
+-- The signature mirrors the broadcast (onSaveLoaded(liveUnitIds,
+-- liveBuildingIds)) — the ids that SURVIVED on the loaded page. The
+-- restore clobbers the singleton and repopulates from the loaded blob, so
+-- `state` afterward holds only loaded-page bids; we treat the survivor
+-- list as an allow-list and drop any state[bid] not in it. That covers
+-- missing-def orphans, buildings gone before the save, and any bid now
+-- colliding with a live off-page building (which the global building.getInfo
+-- lookup would otherwise mask).
 --
 -- Surviving entries also embed a unit reference (s.lastUid, the last unit
--- spawned, used for spawn-spacing). An orphaned uid there can collide with
--- a live off-page unit, so scrub it from the orphan-unit set too.
-function buildingSpawn.onSaveLoaded(orphanUnitIds, orphanBuildingIds)
-    local orphanUnitSet = {}
-    for _, uid in ipairs(orphanUnitIds or {}) do orphanUnitSet[uid] = true end
+-- spawned, used for spawn-spacing). Scrub it if that uid didn't survive on
+-- the loaded page, so a colliding off-page unit can't gate spawning.
+function buildingSpawn.onSaveLoaded(liveUnitIds, liveBuildingIds)
+    local liveUnitSet, liveBuildingSet = {}, {}
+    for _, uid in ipairs(liveUnitIds or {})     do liveUnitSet[uid] = true end
+    for _, bid in ipairs(liveBuildingIds or {}) do liveBuildingSet[bid] = true end
 
     local pruned = 0
-    for _, bid in ipairs(orphanBuildingIds or {}) do
-        if state[bid] ~= nil then
-            state[bid] = nil
-            pruned = pruned + 1
-        end
-    end
     for bid in pairs(state) do
-        if not building.getInfo(bid) then
+        if not liveBuildingSet[bid] then
             state[bid] = nil
             pruned = pruned + 1
         end
     end
     local scrubbed = 0
     for _, s in pairs(state) do
-        if s.lastUid ~= nil and orphanUnitSet[s.lastUid] then
+        if s.lastUid ~= nil and not liveUnitSet[s.lastUid] then
             s.lastUid = nil
             scrubbed = scrubbed + 1
         end
@@ -297,7 +292,7 @@ function buildingSpawn.onSaveLoaded(orphanUnitIds, orphanBuildingIds)
     if pruned > 0 or scrubbed > 0 then
         engine.logInfo("Building spawn: pruned " .. pruned
             .. " stale state(s) and scrubbed " .. scrubbed
-            .. " orphaned reference(s) after load")
+            .. " stale reference(s) after load")
     end
 end
 

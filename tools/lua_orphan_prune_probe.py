@@ -253,14 +253,15 @@ def main() -> int:
         else:
             print("PASS: dropped-unit AI state pruned, live-unit state kept")
 
-        # Nested-reference scrub (review #3): a SURVIVING unit can embed an
-        # orphaned id in a nested field (e.g. attackTargetUid). If that id
-        # collides with a live off-page unit, the survivor would resume
-        # targeting the wrong entity. getState() returns the live aiState
-        # table, so plant a fake orphan id in B's attackTargetUid, report it
-        # as an orphan, and assert it's scrubbed while B's entry survives.
-        # Cover both a raw-id field (attackTargetUid) and a nested-TABLE
-        # field (treatPending = {uid=...}, the handoff before treatClaim).
+        # Nested-reference scrub: a SURVIVING unit can embed a stale id in a
+        # nested field (e.g. attackTargetUid). If that id isn't a loaded-page
+        # survivor — gone before save, or colliding with a live off-page
+        # unit — the survivor would resume targeting the wrong entity.
+        # getState() returns the live aiState table, so plant a fake stale id
+        # in B's attackTargetUid + treatPending, then call onSaveLoaded with
+        # B as the ONLY survivor (FAKE absent) and assert the refs are
+        # scrubbed while B's entry stays intact. Covers both a raw-id field
+        # and a nested-TABLE field (treatPending = {uid=...}).
         FAKE = 987654
         if ok:
             send(args.port,
@@ -268,8 +269,9 @@ def main() -> int:
                  f"if s then s.attackTargetUid={FAKE}; "
                  f"s.treatPending={{uid={FAKE}}} end; return 'ok'",
                  expect_result=False)
+            # B survives; FAKE is not in the survivor allow-list.
             send(args.port,
-                 f"require('scripts.unit_ai').onSaveLoaded({{{FAKE}}}, {{}}); "
+                 f"require('scripts.unit_ai').onSaveLoaded({{{b}}}, {{}}); "
                  f"return 'ok'", expect_result=False)
             ref = send(args.port,
                  f"local s=require('scripts.unit_ai').getState({b}); "
@@ -280,36 +282,39 @@ def main() -> int:
             print(f"Nested scrub: B.attackTargetUid -> {ref}, "
                   f"B.treatPending -> {tp}")
             if ref != "nil" or tp != "nil":
-                print("FAIL: orphaned id embedded in a surviving unit's nested "
-                      "field was NOT scrubbed (review #3/#4)")
+                print("FAIL: stale id embedded in a surviving unit's nested "
+                      "field was NOT scrubbed")
+                ok = False
+            elif getstate(args.port, b) != "present":
+                print("FAIL: B's own state was wrongly dropped (B is a survivor)")
                 ok = False
             else:
-                print("PASS: orphaned nested references scrubbed from survivor")
+                print("PASS: stale nested references scrubbed, survivor kept")
 
-        # Orphan-set force-prune path (the id-collision case): an orphaned
-        # id can collide with a LIVE off-page unit of the same id. The
-        # restored blob state belongs to the dropped orphan, so it must be
-        # pruned even though a unit with that id exists. Simulate the engine
-        # reporting B's id as an orphan and assert it's force-pruned while B
-        # itself stays alive (proving the prune keys off the orphan SET, not
-        # liveness).
+        # Allow-list prune (the off-page-collision case): a stale id in the
+        # loaded blob can collide with a LIVE off-page unit. Survival is
+        # decided by the LOADED PAGE, not global liveness, so a top-level
+        # entry must be pruned when its id is NOT among the loaded-page
+        # survivors even though a unit with that id exists. Call onSaveLoaded
+        # with an EMPTY survivor set and assert aiState[B] is pruned while B
+        # itself stays alive.
         if ok:
             send(args.port,
-                 f"require('scripts.unit_ai').onSaveLoaded({{{b}}}, {{}}); "
-                 f"return 'ok'", expect_result=False)
+                 "require('scripts.unit_ai').onSaveLoaded({}, {}); "
+                 "return 'ok'", expect_result=False)
             fb = getstate(args.port, b)
             be = exists(args.port, b)
-            print(f"Force-prune of orphan-id B: aiState[B]={fb}, "
+            print(f"Allow-list prune (B not a survivor): aiState[B]={fb}, "
                   f"unit.exists(B)={'yes' if be else 'no'}")
             if fb != "nil":
-                print("FAIL: an orphaned id colliding with a LIVE unit was "
-                      "NOT force-pruned (collision misattribution, review #2)")
+                print("FAIL: a non-survivor id colliding with a LIVE unit was "
+                      "NOT pruned (would misattribute on cross-session load)")
                 ok = False
             elif not be:
-                print("FAIL: force-prune unexpectedly destroyed the unit")
+                print("FAIL: prune unexpectedly destroyed the unit")
                 ok = False
             else:
-                print("PASS: orphan-id force-pruned even though the unit is live")
+                print("PASS: non-survivor state pruned even though the unit is live")
     finally:
         try:
             send(args.port, "engine.quit()", timeout=3, expect_result=False)
