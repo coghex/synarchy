@@ -489,6 +489,22 @@ function uiManager.onSaveBrowserBack(elemHandle)
     return true
 end
 
+-- Broadcast from the world thread when ANY save finishes loading
+-- (main-menu load, debug-console engine.loadSave, etc. — see
+-- World/Thread/Helpers.sendSaveLoaded). The load path resets the engine
+-- ToolMode to default (World/Thread/Command/Save.hs); reset the HUD
+-- toolbar to match so the visible tool and world.getToolMode() agree
+-- regardless of how the load was triggered. Fresh-session loads rebuild
+-- the toolbar on the default slot anyway (this no-ops harmlessly before
+-- it exists); within-session and debug-console loads keep the Lua
+-- singleton's prior selection, which this clears (and routes onToolMode
+-- to drop any stale picker / mine anchor). (#103)
+function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
+    if hud and hud.selectDefaultTool then
+        hud.selectDefaultTool()
+    end
+end
+
 function uiManager.onCreateWorld()
     handleNonTextBoxClick()
     uiManager.showMenu("create_world")

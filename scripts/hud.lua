@@ -536,19 +536,6 @@ function hud.show()
         UI.showPage(hud.global_page)
     end
 
-    -- A just-loaded world starts on the default tool (engine ToolMode is
-    -- reset on load in World/Thread/Command/Save.hs). Fresh sessions
-    -- rebuild the toolbar on the default slot, but a within-session load
-    -- keeps the Lua singleton's previous selection — reset it here so the
-    -- visible tool matches the engine. The flag is set by
-    -- mainMenu.loadAndShowSave and consumed on the first show after the
-    -- load completes (the HUD is hidden behind the loading screen until
-    -- then, so this is that show). (#103)
-    if hud.pendingLoadToolReset then
-        hud.pendingLoadToolReset = false
-        hud.selectDefaultTool()
-    end
-
     engine.logDebug("HUD shown")
 end
 
