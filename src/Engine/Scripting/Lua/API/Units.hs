@@ -1752,22 +1752,26 @@ unitDepositToCargoFn env = do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8 nameBS
-            -- Capacity pre-check: read-only snapshot.
+            -- Capacity pre-check: read-only snapshot. Weighs the ACTUAL
+            -- ItemInstance that will be popped below (the first match in
+            -- the unit's inventory) via itemTotalWeight, so fill and
+            -- nested contents are counted — the same recursive measure
+            -- used for the items already in storage. A filled container
+            -- or stocked kit can be kilograms heavier than its def mean,
+            -- so checking idWeight here would let it overfill the cargo.
             okFits ← Lua.liftIO $ do
                 bm      ← readIORef (buildingManagerRef env)
                 itemMgr ← readIORef (itemManagerRef env)
+                um      ← readIORef (unitManagerRef env)
                 pure $ fromMaybe False $ do
-                    inst    ← HM.lookup bid (bmInstances bm)
-                    def     ← HM.lookup (biDefName inst) (bmDefs bm)
-                    itemDef ← lookupItemDef defName itemMgr
+                    inst       ← HM.lookup bid (bmInstances bm)
+                    def        ← HM.lookup (biDefName inst) (bmDefs bm)
+                    u          ← HM.lookup uid (umInstances um)
+                    (item, _)  ← popFirstByName defName (uiInventory u)
                     let cap     = bdStorageCapacity def
                         current = sum (map (itemTotalWeight itemMgr)
                                            (biStorage inst))
-                    -- Pre-check uses the def MEAN; the actual item
-                    -- popped below carries its instance weight, so a
-                    -- rolled-heavy instance can overshoot by a hair —
-                    -- acceptable for storage.
-                    pure (cap > 0 ∧ current + idWeight itemDef <= cap)
+                    pure (cap > 0 ∧ current + itemTotalWeight itemMgr item <= cap)
             if not okFits then do
                 Lua.pushboolean False
                 return 1
