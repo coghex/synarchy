@@ -585,6 +585,14 @@ function hud.onMouseDown(button_num, mx, my)
                and building.getSelected() then
                 return
             end
+            -- Same rule for ground items: game.onMouseDown already
+            -- settled the item selection (item.select), and the item
+            -- watcher owns the panel + expects tile-info pushes to
+            -- deselect it. Consume the click here so tile-info doesn't
+            -- race-clobber the item info on the same click (#173).
+            if item and item.getSelected and item.getSelected() then
+                return
+            end
             -- Tile-info popup only fires in info-tool mode. In other
             -- tools, a click that misses a unit just clears any active
             -- selection (game.onMouseDown already did that) and is
