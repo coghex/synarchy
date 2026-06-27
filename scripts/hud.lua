@@ -628,6 +628,12 @@ function hud.onScroll(dx, dy)
     local zoomFadeStart = camera.getZoomFadeStart()
     local zoomFadeEnd = camera.getZoomFadeEnd()
     local oldView = hud.currentView
+    -- The item-contents popup is mounted on hud.world_page, so hiding
+    -- that page on a zoom transition only takes it off-view; its logical
+    -- state stays open and can reappear stale when the world page comes
+    -- back. Tear it down on every transition, alongside the info-panel
+    -- clear, so it never survives a view change (#142).
+    local itemContentsPanel = require("scripts.item_contents_panel")
     if zoom > zoomFadeEnd then
         if oldView ~= "zoomed_out" and hud.zoom_page and hud.world_page then
             UI.showPage(hud.zoom_page)
@@ -635,6 +641,7 @@ function hud.onScroll(dx, dy)
             hud.currentView = "zoomed_out"
             -- Clear info panel on zoom transition
             infoPanel.clear()
+            itemContentsPanel.closeIfOpen()
         end
     elseif zoom < zoomFadeStart then
         if oldView ~= "zoomed_in" and hud.zoom_page and hud.world_page then
@@ -643,6 +650,7 @@ function hud.onScroll(dx, dy)
             hud.currentView = "zoomed_in"
             -- Clear info panel on zoom transition
             infoPanel.clear()
+            itemContentsPanel.closeIfOpen()
         end
     else
         if oldView == "zoomed_in" and hud.world_page then
@@ -653,6 +661,7 @@ function hud.onScroll(dx, dy)
         hud.currentView = "none"
         -- In the fade zone, clear the info panel
         infoPanel.clear()
+        itemContentsPanel.closeIfOpen()
     end
 end
 
