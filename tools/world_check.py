@@ -9,8 +9,15 @@ For each seed:
   2. Runs the audit on the first dump
   3. Compares to the stored baseline:
      - Tile count and elevation stats must match exactly
-     - Fluid stats must match (deterministic seeds) or be within envelope (racy)
-     - Issue summary must match (deterministic) or fall within envelope (racy)
+     - Fluid stats must stay within the baseline envelope (with a
+       tile-count-scaled tolerance for racy shuffling)
+     - Issue summary:
+         * BUG categories must be zero (always)
+         * QUALITY categories must stay under their threshold (always),
+           and for a deterministic seed must additionally MATCH the
+           baseline summary exactly — a count above baseline fails as a
+           regression, below baseline is reported as an improvement
+         * racy seeds only get an informational envelope-drift note
      - Determinism status: improvement is OK, regression is a failure
 
 Exit codes:
@@ -105,6 +112,105 @@ def check_envelope(label: str, current: int, env: dict[str, int] | None,
             result.status = IMPROVED
 
 
+def check_determinism_status(deterministic_baseline: bool, deterministic_now: bool,
+                            n_distinct: int, runs: int, result: CheckResult) -> None:
+    """Apply the determinism-status rule: improvement is OK, regression fails.
+
+    A seed that was deterministic in the baseline but produced more than
+    one distinct output across this run's dumps is a regression (FAIL).
+    A seed that was racy and is now deterministic across runs>1 is an
+    improvement. With runs==1 only a single dump exists, so a regression
+    cannot be observed — pass runs>=2 to exercise this check.
+    """
+    if deterministic_baseline and not deterministic_now:
+        result.status = FAIL
+        result.failures.append(
+            f"determinism regression: baseline deterministic, now "
+            f"{n_distinct} distinct outputs across {runs} runs"
+        )
+    elif not deterministic_baseline and deterministic_now and runs > 1:
+        result.improvements.append(
+            f"determinism status: was racy, now deterministic across {runs} runs"
+        )
+        if result.status == PASS:
+            result.status = IMPROVED
+
+
+def check_issue_summary(current_summaries: list[dict[str, int]],
+                        baseline_summary: dict[str, int],
+                        issue_env: dict[str, Any],
+                        strict: bool, result: CheckResult) -> None:
+    """Check the audit issue summary against the baseline.
+
+    Severity rules (see world_audit.py::BUG_CATEGORIES / QUALITY_CATEGORIES):
+
+      BUG     — any non-zero count fails, always. A baseline cannot bless
+                corruption, so this overrides the match/threshold logic
+                regardless of determinism.
+
+      QUALITY — first, an absolute threshold cap (QUALITY_THRESHOLDS) that
+                fails unconditionally. Under the cap:
+                  strict (deterministic baseline AND deterministic current)
+                    → the count must MATCH the baseline summary exactly.
+                      A count above baseline is a regression (FAIL); below
+                      baseline is an improvement (re-baseline, IMPROVED).
+                  racy
+                    → only an informational envelope-drift note, since the
+                      baseline cannot capture the full race space.
+
+    `strict` should be `deterministic_baseline and deterministic_now`. In
+    that case every current summary is identical, so the max over runs is
+    the single deterministic value.
+    """
+    all_categories: set[str] = set(issue_env.keys()) | set(baseline_summary.keys())
+    for cs in current_summaries:
+        all_categories.update(cs.keys())
+
+    for cat in sorted(all_categories):
+        current_values = [cs.get(cat, 0) for cs in current_summaries]
+        cur_max = max(current_values)
+        sev = severity_of(cat)
+        if sev == "BUG":
+            if cur_max > 0:
+                result.status = FAIL
+                result.failures.append(
+                    f"BUG issue.{cat}: {cur_max} occurrence(s) — must be 0"
+                )
+            continue
+
+        threshold = QUALITY_THRESHOLDS.get(cat, 1000)
+        if cur_max > threshold:
+            result.status = FAIL
+            result.failures.append(
+                f"QUALITY issue.{cat}: {cur_max} exceeds threshold {threshold}"
+            )
+            continue
+
+        if strict:
+            base_val = baseline_summary.get(cat, 0)
+            if cur_max > base_val:
+                result.status = FAIL
+                result.failures.append(
+                    f"QUALITY issue.{cat}: {cur_max} regressed above baseline "
+                    f"{base_val} (deterministic seed — summary must match baseline)"
+                )
+            elif cur_max < base_val:
+                result.improvements.append(
+                    f"issue.{cat}: {cur_max} below baseline {base_val} "
+                    f"(deterministic improvement — re-baseline to lock in)"
+                )
+                if result.status == PASS:
+                    result.status = IMPROVED
+        else:
+            env = issue_env.get(cat)
+            if env is not None:
+                env_max = env.get("max", 0)
+                if cur_max > env_max + max(50, env_max // 4):
+                    result.notes.append(
+                        f"quality drift issue.{cat}: {cur_max} (baseline max {env_max})"
+                    )
+
+
 def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
     seed = entry["seed"]
     world_size = entry["world_size"]
@@ -131,19 +237,9 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
     deterministic_now = len(set(hashes)) == 1
     deterministic_baseline = baseline["determinism"]["deterministic"]
 
-    # Determinism status: informational only. We report changes but don't
-    # fail, since the pipeline is currently racy and classification is
-    # unreliable across runs. After the refactor the check will be strict.
-    if deterministic_baseline and not deterministic_now:
-        result.notes.append(
-            f"determinism status changed: was deterministic, now {len(set(hashes))} distinct outputs"
-        )
-    elif not deterministic_baseline and deterministic_now and runs > 1:
-        result.improvements.append(
-            f"determinism status: was racy, now deterministic across {runs} runs"
-        )
-        if result.status == PASS:
-            result.status = IMPROVED
+    check_determinism_status(
+        deterministic_baseline, deterministic_now, len(set(hashes)), runs, result
+    )
 
     # Audit every dump to get a current envelope
     current_audits = [
@@ -197,45 +293,15 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
             check_envelope(f"fluidStats.{fluid}", cur_min, env,
                            result, tolerance=fluid_tolerance)
 
-    # Issue summary check. Two modes depending on severity (see
-    # world_audit.py::BUG_CATEGORIES / QUALITY_CATEGORIES):
-    #
-    #   BUG     — any non-zero count fails. The check is "must be zero",
-    #             not "must match baseline". Used for unambiguous bugs.
-    #
-    #   QUALITY — fails when count exceeds the configured threshold
-    #             (QUALITY_THRESHOLDS). Baseline envelope drift is
-    #             reported as an informational note, not a failure;
-    #             some drift is expected as generation tunes.
+    # Issue summary check (see check_issue_summary for the full rule).
+    # Deterministic seeds must reproduce the baseline summary exactly;
+    # racy seeds fall back to per-category thresholds.
+    strict_summary = deterministic_baseline and deterministic_now
+    baseline_summary = baseline.get("representativeAudit", {}).get("summary", {})
     issue_env = baseline.get("auditEnvelope", {})
-    all_categories: set[str] = set(issue_env.keys())
-    for cs in current_summaries:
-        all_categories.update(cs.keys())
-
-    for cat in sorted(all_categories):
-        current_values = [cs.get(cat, 0) for cs in current_summaries]
-        cur_max = max(current_values)
-        env = issue_env.get(cat)
-        sev = severity_of(cat)
-        if sev == "BUG":
-            if cur_max > 0:
-                result.status = FAIL
-                result.failures.append(
-                    f"BUG issue.{cat}: {cur_max} occurrence(s) — must be 0"
-                )
-        else:
-            threshold = QUALITY_THRESHOLDS.get(cat, 1000)
-            if cur_max > threshold:
-                result.status = FAIL
-                result.failures.append(
-                    f"QUALITY issue.{cat}: {cur_max} exceeds threshold {threshold}"
-                )
-            elif env is not None:
-                env_max = env.get("max", 0)
-                if cur_max > env_max + max(50, env_max // 4):
-                    result.notes.append(
-                        f"quality drift issue.{cat}: {cur_max} (baseline max {env_max})"
-                    )
+    check_issue_summary(
+        current_summaries, baseline_summary, issue_env, strict_summary, result
+    )
 
     return result
 
