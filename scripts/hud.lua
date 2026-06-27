@@ -544,11 +544,13 @@ function hud.hide()
     --   * event/combat/injury log panels (#84)
     --   * notification popups (#85)
     --   * right-click context menus (#86)
+    --   * item-contents popup (#100)
     pcall(function() require("scripts.event_log").hide() end)
     pcall(function() require("scripts.combat_log").hide() end)
     pcall(function() require("scripts.injury_log_panel").hide() end)
     pcall(function() require("scripts.popup").dismissAll() end)
     pcall(function() require("scripts.ui.context_menu").hide() end)
+    pcall(function() require("scripts.item_contents_panel").closeIfOpen() end)
 
     engine.logDebug("HUD hidden")
 end
