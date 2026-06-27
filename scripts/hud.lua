@@ -640,6 +640,14 @@ end
 -----------------------------------------------------------
 
 function hud.update(dt)
+    -- Don't push hover state while the HUD is hidden (e.g. a menu is
+    -- open over a hidden gameplay view). hud.hide() leaves currentView
+    -- intact so it can be restored on re-show, so this loop would
+    -- otherwise keep mutating the hidden world's cursor/hover behind
+    -- the menu (#153). hud.visible is the authoritative gate.
+    if not hud.visible then
+        return
+    end
     local mx, my = engine.getMousePosition()
     if mx and my then
         if hud.currentView == "zoomed_out" then
