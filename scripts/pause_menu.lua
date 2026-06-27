@@ -285,6 +285,9 @@ function pauseMenu.onExitToMenu()
     -- Clear transient build-tool placement so an armed action can't carry
     -- into the next world (#82).
     pcall(function() require("scripts.build_tool").exitPlacement() end)
+    -- Clear any pending mine-tool anchor so the next world's first click
+    -- doesn't commit a rectangle from a stale origin (#102).
+    pcall(function() require("scripts.mine_tool").cancel() end)
     if worldManager.currentWorld then
         world.hide(worldManager.currentWorld)
     end
