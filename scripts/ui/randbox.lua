@@ -736,6 +736,14 @@ function randbox.setVisible(id, visible)
     if rb.cursorId and not visible then UI.setVisible(rb.cursorId, false) end
     if rb.btnSpriteId then UI.setVisible(rb.btnSpriteId, visible) end
 
+    -- UI.setVisible doesn't cascade to children, so a randbox hovered
+    -- when hidden would come back already highlighted on the next show.
+    -- Clear both hover overlays explicitly when hiding.
+    if not visible then
+        if rb.boxHighlightId then UI.setVisible(rb.boxHighlightId, false) end
+        if rb.btnHighlightId then UI.setVisible(rb.btnHighlightId, false) end
+    end
+
     if not visible and rb.focused then
         randbox.unfocus(id)
     end
