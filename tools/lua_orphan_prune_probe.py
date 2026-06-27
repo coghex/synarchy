@@ -245,7 +245,20 @@ def main() -> int:
         if not wait_save_written(SAVE_NAME):
             print(f"FAIL: save file for '{SAVE_NAME}' never appeared on disk")
             return 1
+        # Unpause first so the load-time freeze is observable: loadSave must
+        # pause the engine synchronously (before queueing WorldLoadSave) so
+        # the Lua loop can't tick script update()s against the half-restored
+        # singletons during the load window.
+        send(args.port, "engine.setPaused(false); return 'ok'", expect_result=False)
         print(f"loadSave -> {send(args.port, f'return engine.loadSave(\"{SAVE_NAME}\")')}")
+        # Right after loadSave returns (world thread hasn't finished the load),
+        # the engine must already be paused — frozen for the load window.
+        load_paused = send(args.port, "return engine.isPaused()")
+        print(f"engine.isPaused() immediately after loadSave -> {load_paused}")
+        if load_paused.strip().lower() not in ("true", "1", "1.0"):
+            print("FAIL: loadSave did not pause the engine; script update()s "
+                  "can race the load reconcile")
+            ok = False
         # Block on init, then let the load settle past LoadDone (the world
         # thread restores units, then enqueues the LuaSaveLoaded broadcast).
         send(args.port, "return world.waitForInit(180)", timeout=190)
