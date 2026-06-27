@@ -52,7 +52,10 @@ import World.Command.Types (WorldCommand(..))
 --   texPath/facePath = the texture PATHS — interned into the save-level
 --   palette + queued as a WeSetStructure edit (the persistent, per-chunk,
 --   evict-survivable path, and the only path that actually places a piece).
---   Omit the paths and nothing is placed. z defaults to 0.
+--   Omit the paths and nothing is placed. z defaults to 0. Returns false (and
+--   does nothing) when the paths are omitted, there is no active world, or the
+--   target chunk isn't loaded — the last because the world thread drops a
+--   structure edit for an unloaded chunk, so staging one would be a phantom.
 structurePlaceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structurePlaceFn env = do
     gxA   ← Lua.tointeger 1
@@ -72,7 +75,7 @@ structurePlaceFn env = do
                         gxi     = fromIntegral gx
                         gyi     = fromIntegral gy
                         slotTag = fromIntegral (fromEnum slot) ∷ Word8
-                    Lua.liftIO $ do
+                    placed ← Lua.liftIO $
                         -- The per-chunk overlay (lcStructures), reached via the
                         -- WeSetStructure edit, is the SINGLE source of truth that
                         -- rendering + persistence read. Intern the PATHS → palette
@@ -96,23 +99,35 @@ structurePlaceFn env = do
                                 mActive ← activeWorldPage env
                                 case mActive of
                                     Just (pageId, ws) → do
-                                        -- Stage the piece in THIS world for
-                                        -- read-your-writes: the world thread
-                                        -- applies WeSetStructure to lcStructures
-                                        -- asynchronously, but the builder queries
-                                        -- this tile within the same Lua call
-                                        -- (floors→posts→walls), so floorZAt/hasAt
-                                        -- must see it now. (See wsStructureStageRef.)
-                                        atomicModifyIORef' (wsStructureStageRef ws) $ \st →
-                                            ( HM.insert (gxi, gyi, slotTag)
-                                                        (StructurePieceData texId faceId z) st
-                                            , () )
-                                        Q.writeQueue (worldQueue env)
-                                            (WorldSetStructure pageId gxi gyi
-                                                               slotTag texId faceId z)
-                                    Nothing → pure ()
-                            _ → pure ()   -- no paths → not persisted (debug-only)
-                    Lua.pushboolean True
+                                        -- Only stage + queue when the target chunk
+                                        -- is loaded: the world thread DROPS a
+                                        -- WeSetStructure for an unloaded chunk
+                                        -- (Edit.hs), so staging one regardless would
+                                        -- leave a phantom that floorZAt/hasAt report
+                                        -- as real though the world never changed
+                                        -- (reachable stamping a room across a chunk
+                                        -- boundary). Return false instead.
+                                        td ← readIORef (wsTilesRef ws)
+                                        let (coord, _) = globalToChunk gxi gyi
+                                        case lookupChunk coord td of
+                                            Nothing → pure False
+                                            Just _  → do
+                                                -- staged for read-your-writes: the
+                                                -- builder queries this tile within
+                                                -- the same Lua call (floors→posts→
+                                                -- walls) before the world thread has
+                                                -- applied it. (See wsStructureStageRef.)
+                                                atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+                                                    ( HM.insert (gxi, gyi, slotTag)
+                                                                (StructurePieceData texId faceId z) st
+                                                    , () )
+                                                Q.writeQueue (worldQueue env)
+                                                    (WorldSetStructure pageId gxi gyi
+                                                                       slotTag texId faceId z)
+                                                pure True
+                                    Nothing → pure False
+                            _ → pure False   -- no paths → nothing placed
+                    Lua.pushboolean placed
                     return 1
         _ → Lua.pushboolean False >> return 1
 
