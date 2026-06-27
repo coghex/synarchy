@@ -14,6 +14,8 @@ import qualified Data.Text as T
 import Data.Char (isControl)
 import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
+import Data.Time.Clock (UTCTime)
+import Data.Time.Format (parseTimeM, formatTime, defaultTimeLocale)
 import Control.Monad (when)
 import System.Directory (createDirectoryIfMissing, listDirectory
                         , doesFileExist, doesDirectoryExist)
@@ -169,9 +171,29 @@ listSaves logger = do
                     "listSaves: skipping " <> T.pack path
                     <> ": " <> T.pack err
                 return []
-            Right sd → return [(name, sdMetadata sd)]
+            Right sd →
+                let meta = sdMetadata sd
+                    meta' = meta { smTimestamp =
+                                     normalizeTimestamp (smTimestamp meta) }
+                in return [(name, meta')]
     decodeListingMeta = do
         h ← S.get
         when (shMagic h ≠ saveMagic) $ fail "bad magic"
         when (shVersion h ≠ currentSaveVersion) $ fail "version mismatch"
         S.get
+
+-- | Canonicalize a save timestamp to the fixed-width microsecond ISO
+--   form (@%FT%T%6QZ@) used by the sort in 'listSaves' and by
+--   @main_menu.lua@. Both consumers compare timestamps as raw strings,
+--   so a legacy save written at second precision (@…32Z@) would sort
+--   ahead of a newer fractional one (@…32.5Z@) purely because @'Z' >
+--   '.'@. Parsing with @%Q@ (which accepts an optional fraction) and
+--   reformatting puts every save — legacy, millisecond, microsecond or
+--   picosecond — into one lexicographically comparable shape. Anything
+--   that fails to parse is left untouched (#98).
+normalizeTimestamp ∷ Text → Text
+normalizeTimestamp ts =
+    case parseTimeM True defaultTimeLocale "%FT%T%QZ" (T.unpack ts) of
+        Just (t ∷ UTCTime) →
+            T.pack $ formatTime defaultTimeLocale "%FT%T%6QZ" t
+        Nothing → ts
