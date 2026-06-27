@@ -853,14 +853,28 @@ function game.onKeyDown(key)
     if mineTool.handleKeyDown(key) then
         return
     end
-    -- ESC clears any active unit selection.
+    -- ESC clears any active gameplay selection.
     -- Doesn't conflict with shell/UI focus: those modes consume ESC
     -- earlier in the input thread (LuaFocusLost / LuaUIEscape) and
     -- never reach this broadcast.
+    --
+    -- Unit, building, and ground-item selections all share the same HUD
+    -- info-panel ownership system, so Escape clears whichever one is
+    -- active (#177). They are mutually exclusive in practice (selecting
+    -- one deselects the others via the info-panel watchers), but each is
+    -- cleared independently so the cascade can't leave a stray building
+    -- or item selection behind. deselect() is a no-op when nothing is
+    -- selected, so clearing all three unconditionally is safe.
     if key == "Escape" then
         local selected = unit.getSelected()
         if #selected > 0 then
             unit.deselectAll()
+        end
+        if building.getSelected() then
+            building.deselect()
+        end
+        if item.getSelected() then
+            item.deselect()
         end
     end
 end
