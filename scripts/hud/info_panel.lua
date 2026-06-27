@@ -82,6 +82,14 @@ infoPanel.activeSchema = "tile"
 infoPanel.activeTab  = "basic"
 infoPanel.visible    = false
 infoPanel.page       = nil
+-- External owners that force the panel hidden regardless of content
+-- (HUD hidden on a menu, unit_info_v2 owning the unit display). Keyed
+-- by reason so independent owners can't clobber each other's intent:
+-- the panel is allowed to show only when this set is empty. While any
+-- suppressor is present, content pushes (background info watchers keep
+-- republishing for a still-selected object) update text but must NOT
+-- re-open the page over the menu / takeover view (#134).
+infoPanel.suppressors = {}
 infoPanel.weatherTabActive   = false  -- whether the weather tab exists
 infoPanel.resourcesTabActive = false  -- whether the resources tab exists
 
@@ -335,16 +343,12 @@ function infoPanel.create(params)
     -- Show only the active tab's labels
     infoPanel.showTab(infoPanel.activeTab)
 
-    -- Start hidden via page visibility
+    -- Start hidden via page visibility, then re-derive from content
+    -- (e.g. rebuild after resize). refresh honors suppression, so a
+    -- rebuild while the HUD is hidden / taken over won't pop the page.
     infoPanel.visible = false
     UI.hidePage(page)
-
-    -- If we already have content (e.g. rebuild after resize), show it
-    if hasContent() then
-        infoPanel.visible = true
-        UI.showPage(page)
-        infoPanel.showTab(infoPanel.activeTab)
-    end
+    infoPanel.refresh()
 
     engine.logDebug("HUD info panel created: maxLines=" .. maxLines)
 end
@@ -382,14 +386,55 @@ end
 -----------------------------------------------------------
 -- Show / hide the entire panel via its dedicated page
 -----------------------------------------------------------
+local function isSuppressed()
+    return next(infoPanel.suppressors) ~= nil
+end
+
+-- Canonical mutator for the panel's page visibility. ALWAYS go through
+-- this (never call UI.showPage/UI.hidePage on infoPanel.page directly)
+-- so the page state and the infoPanel.visible flag can never diverge.
+-- Direct page calls leave infoPanel.visible stale, after which setText's
+-- auto-show is gated on a lie and the panel sticks hidden/shown (#134).
+-- A show request is refused while an external owner is suppressing the
+-- panel, so a background watcher republishing content can't pop the
+-- page over a menu / takeover view; visible stays in lockstep with what
+-- the page actually does.
 function infoPanel.setAllVisible(vis)
     if not infoPanel.page then return end
+    if vis and isSuppressed() then return end
+    infoPanel.visible = vis
     if vis then
         UI.showPage(infoPanel.page)
         infoPanel.showTab(infoPanel.activeTab)
     else
         UI.hidePage(infoPanel.page)
     end
+end
+
+-- Re-derive visibility from current content (honoring suppression).
+-- Used to restore the panel after a suppressor lifts: the stored tab
+-- text survives a hide, so we show iff there is content and stay hidden
+-- otherwise — instead of unconditionally showing (which resurfaces an
+-- empty/stale panel) or never showing (real content hidden forever, the
+-- original #134 stuck-hidden bug).
+function infoPanel.refresh()
+    if not infoPanel.page then return end
+    infoPanel.setAllVisible(hasContent())
+end
+
+-- Force the panel hidden on behalf of an external owner (`reason`) and
+-- remember that owner. Content can still be pushed while suppressed (it
+-- just won't show) and the panel restores when every owner releases.
+function infoPanel.suppress(reason)
+    infoPanel.suppressors[reason] = true
+    infoPanel.setAllVisible(false)
+end
+
+-- Release an external owner's suppression and re-derive visibility. If
+-- another owner still holds suppression the panel stays hidden.
+function infoPanel.unsuppress(reason)
+    infoPanel.suppressors[reason] = nil
+    infoPanel.refresh()
 end
 
 -----------------------------------------------------------
@@ -422,7 +467,6 @@ function infoPanel.setText(tabKey, text)
             if infoPanel.createParams then
                 infoPanel.create(infoPanel.createParams)
                 if hasContent() then
-                    infoPanel.visible = true
                     infoPanel.setAllVisible(true)
                 end
                 return
@@ -433,15 +477,15 @@ function infoPanel.setText(tabKey, text)
     -- Fast path: just update the line labels in place
     infoPanel.refreshTabLines(tabKey)
 
-    -- Auto-show / auto-hide
+    -- Auto-show / auto-hide. setAllVisible owns infoPanel.visible and
+    -- refuses to show while suppressed, so a republish from a background
+    -- watcher updates the text without re-opening the page over a menu.
     if hasContent() then
         if not infoPanel.visible then
-            infoPanel.visible = true
             infoPanel.setAllVisible(true)
         end
     else
         if infoPanel.visible then
-            infoPanel.visible = false
             infoPanel.setAllVisible(false)
         end
     end
