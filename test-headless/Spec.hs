@@ -14,6 +14,7 @@ import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
+import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
 import qualified Test.Headless.Unit.Anim as AnimTest
 import qualified Test.Headless.Unit.Injury as InjuryTest
@@ -53,6 +54,7 @@ main = hspec $ do
     describe "Wrap Seam" WrapSeam.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
+    describe "Unit.Pathing.Config" PathingConfig.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Injury" InjuryTest.spec

@@ -40,7 +40,8 @@ import World.Tile.Types (WorldTileData(..))
 import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
-import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep, replanCostThreshold)
+import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep
+                         , PathingConfig(..))
 import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor, gravity, metresPerZ)
 
@@ -105,6 +106,11 @@ tickAllMovement dt env utsRef = do
     -- so a unit with no stats declared behaves like an unmodified
     -- acolyte against the impact thresholds.
     um ← readIORef (unitManagerRef env)
+    -- Pathing cost tunables (climb/ramp/fall/river/lake penalties +
+    -- replan threshold), loaded once from config/pathing.yaml. Read per
+    -- tick so a future settings UI that mutates the ref takes effect
+    -- live; the read is a single IORef deref.
+    pc ← readIORef (pathingConfigRef env)
     let statsFor uid = case HM.lookup uid (umInstances um) of
             Just inst →
                 -- Gait threshold (absolute tiles/s) from the unit's def:
@@ -126,7 +132,7 @@ tickAllMovement dt env utsRef = do
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
         simStates' = HM.mapWithKey
-                        (\uid ss → tickUnit now dt mWtd (statsFor uid) ss)
+                        (\uid ss → tickUnit pc now dt mWtd (statsFor uid) ss)
                         simStates
 
     -- Climb slip rolls + climb→fall conversions. Two passes that
@@ -365,10 +371,10 @@ snapshotVisibleWorldTiles env = do
             Nothing → pure Nothing
             Just ws → Just <$> readIORef (wsTilesRef ws)
 
-tickUnit ∷ Double → Double → Maybe WorldTileData
+tickUnit ∷ PathingConfig → Double → Double → Maybe WorldTileData
          → UnitMoveStats
          → UnitSimState → UnitSimState
-tickUnit now dt mWtd stats us =
+tickUnit pc now dt mWtd stats us =
     let us1 = handleGetUp now
             $ handleTransitionExpiry now
             $ handlePickupExpiry now
@@ -393,7 +399,7 @@ tickUnit now dt mWtd stats us =
                 let subGoal = case usLocalPath us2 of
                         (p : _) → p
                         []      → (mtTargetX mt, mtTargetY mt)
-                in stepTowardSubGoal now dt mWtd stats us2 mt subGoal
+                in stepTowardSubGoal pc now dt mWtd stats us2 mt subGoal
 
 -- | While the unit is in TransitioningTo Climbing, lerp usRealZ up the
 --   WALL portion of the cliff only — from the base z to the climb-top
@@ -616,12 +622,12 @@ startJump now ss tgx tgy =
           , usLocalPath        = []
           }
 
--- | The Z drop magnitude at which a descent step stops being a
---   "walk off the edge" and becomes a real fall. dz of -1 still
---   plays the regular walking animation; dz of -2 or worse triggers
---   the Standing→Falling transition + impact calc.
-fallTriggerDz ∷ Int
-fallTriggerDz = 2
+-- The Z drop magnitude at which a descent step stops being a "walk off
+-- the edge" and becomes a real fall is now the configurable
+-- `pcFallTriggerDrop` (config/pathing.yaml) — the same knob the cost
+-- function uses, so the planner and the mover agree on what counts as a
+-- fall. dz of -1 still plays the regular walking animation; dz of
+-- -pcFallTriggerDrop or worse triggers the Standing→Falling transition.
 
 -- | Legacy scalar fall impact (dz × mass/50 / toughness). The landing
 --   OUTCOME no longer uses this — falls now go through the `Unit.Fall`
@@ -848,7 +854,8 @@ chainStepDuration = 0.8
 -- | Try to advance toward `subGoal`. If we arrive, pop the waypoint
 --   (or clear the final target). Otherwise, take one step.
 stepTowardSubGoal
-    ∷ Double
+    ∷ PathingConfig
+    → Double
     → Double
     → Maybe WorldTileData
     → UnitMoveStats
@@ -856,7 +863,7 @@ stepTowardSubGoal
     → MoveTarget
     → (Float, Float)
     → UnitSimState
-stepTowardSubGoal now dt mWtd stats us mt (gx, gy) =
+stepTowardSubGoal pc now dt mWtd stats us mt (gx, gy) =
     let dx   = gx - usRealX us
         dy   = gy - usRealY us
         dist = sqrt (dx * dx + dy * dy)
@@ -868,7 +875,7 @@ stepTowardSubGoal now dt mWtd stats us mt (gx, gy) =
         step = effSpeed * realToFrac dt
     in if dist ≤ max step arrivalEpsilon
        then arriveAtSubGoal stats us mt (gx, gy) mWtd
-       else moveToward now stats us mt mWtd dx dy dist step
+       else moveToward pc now stats us mt mWtd dx dy dist step
 
 -- | Top speed (tiles/sec) of a unit dragging itself along on a maimed
 --   body. Slow enough to read as a crawl; the injury speed-multiplier
@@ -915,7 +922,8 @@ arriveAtSubGoal stats us mt (gx, gy) mWtd =
 --   crossing is a cliff (Z step that has no slope ramp), initiate a
 --   climb transition instead of taking the step.
 moveToward
-    ∷ Double             -- now (game time, for transition expiry)
+    ∷ PathingConfig
+    → Double             -- now (game time, for transition expiry)
     → UnitMoveStats
     → UnitSimState
     → MoveTarget
@@ -925,7 +933,7 @@ moveToward
     → Float    -- distance to sub-goal
     → Float    -- step length this tick
     → UnitSimState
-moveToward now stats us mt mWtd dx dy dist step =
+moveToward pc now stats us mt mWtd dx dy dist step =
     let nx   = dx / dist
         ny   = dy / dist
         newX = usRealX us + nx * step
@@ -938,7 +946,7 @@ moveToward now stats us mt mWtd dx dy dist step =
         mCost
             | srcTile ≡ dstTile = Just 0  -- sub-tile motion, no boundary cross
             | otherwise = case mWtd of
-                Just wtd → stepCost wtd srcTile dstTile
+                Just wtd → stepCost pc wtd srcTile dstTile
                 Nothing  → Just 0  -- no world snapshot: don't block
         followingPath = not (null (usLocalPath us))
         -- Cliff and fall detection: only meaningful when actually
@@ -964,14 +972,14 @@ moveToward now stats us mt mWtd dx dy dist step =
                 case (lookupTerrainZ wtd (fst srcTile) (snd srcTile),
                       lookupTerrainZ wtd (fst dstTile) (snd dstTile)) of
                     (Just sz, Just dz)
-                        | sz - dz ≥ fallTriggerDz → Just (sz, dz)
+                        | sz - dz ≥ pcFallTriggerDrop pc → Just (sz, dz)
                     _ → Nothing
             _ → Nothing
     in case mCost of
         Nothing →
-            replan us mt mWtd srcTile
-        Just c | not followingPath ∧ c > replanCostThreshold →
-            replan us mt mWtd srcTile
+            replan pc us mt mWtd srcTile
+        Just c | not followingPath ∧ c > pcReplanCostThreshold pc →
+            replan pc us mt mWtd srcTile
         Just _ → case (mCliff, mFall) of
             (Just (srcZ, dstZ), _) →
                 -- Face the CLIFF, not the unit's walking sub-step.
@@ -1131,15 +1139,16 @@ startFall now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
 --   sits this tick — `usTarget` is preserved so the next tick can
 --   try again ("never gives up").
 replan
-    ∷ UnitSimState
+    ∷ PathingConfig
+    → UnitSimState
     → MoveTarget
     → Maybe WorldTileData
     → (Int, Int)
     → UnitSimState
-replan us mt mWtd srcTile =
+replan pc us mt mWtd srcTile =
     let finalTile = (floor (mtTargetX mt), floor (mtTargetY mt))
         tilePath = case mWtd of
-            Just wtd → localAStar wtd srcTile finalTile defaultMaxRadius
+            Just wtd → localAStar pc wtd srcTile finalTile defaultMaxRadius
             Nothing  → []
         wps = map tileCenter tilePath
     in if null wps
