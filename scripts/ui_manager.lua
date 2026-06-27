@@ -408,6 +408,12 @@ function uiManager.showMenu(menuName, params)
     -- crack via tryClaimClick) on the Settings screen. Hide it on every
     -- menu transition regardless of keepWorld (#147).
     pcall(function() require("scripts.debug").hide() end)
+    -- Same leak for an in-flight drag-select box (#146): the keepWorld
+    -- Settings path skips hud.hide(), so an armed/dragging box would
+    -- survive onto the Settings screen and could commit afterward. cancel()
+    -- abandons it (idempotent) on every menu transition regardless of
+    -- keepWorld.
+    pcall(function() require("scripts.unit_drag_select").cancel() end)
     if uiManager.moduleReady.saveBrowser then saveBrowser.hide() end
     if uiManager.moduleReady.loadingScreen then loadingScreen.hide() end
     if uiManager.moduleReady.testArena and not keepWorld then testArena.hide() end
