@@ -47,7 +47,6 @@ import Unit.Sim.Types (UnitThreadState)
 import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
-import Structure.Types (StructureStore)
 import Structure.Palette (TexPalette)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
@@ -123,9 +122,6 @@ data EngineEnv = EngineEnv
     --   startup; not tied to the world seed (stats are non-deterministic
     --   across runs by design).
   , buildingManagerRef  ∷ IORef BuildingManager
-  , structureStoreRef   ∷ IORef StructureStore
-    -- ^ Walls / floors / ceilings placed by the structures debug builder.
-    --   In-memory only (no save yet); written from Lua, read on render.
   , texPaletteRef       ∷ IORef TexPalette
     -- ^ Save-level texture PALETTE (path↔id). Structure edits store palette
     --   ids; this interns paths → ids at placement and resolves ids → paths

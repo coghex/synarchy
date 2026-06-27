@@ -2,8 +2,12 @@
 -- | Lua API for the structures debug builder (walls / floors / ceilings).
 --   Textures + facemaps are loaded Lua-side via engine.loadTexture (which
 --   returns the raw TextureHandle int); their handles are passed straight
---   into structure.place. The store is a plain in-memory IORef (no save
---   yet) — this is a debug/iteration tool.
+--   into structure.place. All read/write helpers operate on the AUTHORITATIVE
+--   per-chunk 'lcStructures' overlay (the same data rendering + persistence
+--   use), routing writes through the WeSetStructure / WeClearStructure edit
+--   path so they survive chunk eviction and save/load. (The old in-memory
+--   'structureStoreRef' — which rendering never read — has been removed so
+--   there is a single source of truth.)
 module Engine.Scripting.Lua.API.Structure
     ( structurePlaceFn
     , structureClearFn
@@ -19,7 +23,7 @@ module Engine.Scripting.Lua.API.Structure
 
 import UPrelude
 import Data.Word (Word8)
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
@@ -29,18 +33,20 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, TexPalette(..))
 import Control.Monad (forM_)
-import World.Types (wmWorlds, wsTilesRef)
+import World.Types (wsTilesRef)
 import World.Chunk.Types (LoadedChunk(..))
-import World.Tile.Types (WorldTileData(..))
+import World.Tile.Types (WorldTileData(..), lookupChunk)
+import World.Generate.Coordinates (globalToChunk)
 import World.Command.Types (WorldCommand(..))
 
 -- | structure.place(gx, gy, slot, texHandle, faceHandle, z, texPath, facePath)
 --   → bool. slot ∈ "floor"/"ceiling"/"post_n…w"/"wall_ne…sw".
---   texHandle/faceHandle = engine.loadTexture handles (for the in-memory store
---   the debug builder + current render use). texPath/facePath = the texture
---   PATHS — interned into the save-level palette + queued as a WeSetStructure
---   edit (the persistent, per-chunk, evict-survivable path). Omit the paths to
---   place WITHOUT persisting (pure debug). z defaults to 0.
+--   texHandle/faceHandle = engine.loadTexture handles, recorded against the
+--   piece's palette ids so the renderer can resolve it immediately.
+--   texPath/facePath = the texture PATHS — interned into the save-level
+--   palette + queued as a WeSetStructure edit (the persistent, per-chunk,
+--   evict-survivable path, and the only path that actually places a piece).
+--   Omit the paths and nothing is placed. z defaults to 0.
 structurePlaceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structurePlaceFn env = do
     gxA   ← Lua.tointeger 1
@@ -60,16 +66,12 @@ structurePlaceFn env = do
                         gxi     = fromIntegral gx
                         gyi     = fromIntegral gy
                         slotTag = fromIntegral (fromEnum slot) ∷ Word8
-                        piece   = StructurePiece
-                                    (TextureHandle (fromIntegral tex))
-                                    (TextureHandle (fromIntegral face))
-                                    z
-                        key     = (gxi, gyi, fromEnum slot)
                     Lua.liftIO $ do
-                        -- in-memory store (debug builder queries + current render)
-                        atomicModifyIORef' (structureStoreRef env) $ \s →
-                            (HM.insert key piece s, ())
-                        -- persistent path: intern PATHS → palette ids, queue the edit
+                        -- The per-chunk overlay (lcStructures), reached via the
+                        -- WeSetStructure edit, is the SINGLE source of truth that
+                        -- rendering + persistence read. Intern the PATHS → palette
+                        -- ids and queue the edit. Omitting the paths places
+                        -- nothing — there is no separate in-memory debug store.
                         case (texPathA, facePathA) of
                             (Just tp, Just fp) → do
                                 texId  ← atomicModifyIORef' (texPaletteRef env) $ \pal →
@@ -97,7 +99,10 @@ structurePlaceFn env = do
                     return 1
         _ → Lua.pushboolean False >> return 1
 
--- | structure.clear(gx, gy, slot) → bool — remove one piece.
+-- | structure.clear(gx, gy, slot) → bool — remove one piece from the
+--   authoritative overlay via the WeClearStructure edit path (so it stays
+--   cleared after eviction + save/load). Returns false if there is no active
+--   world to queue against.
 structureClearFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureClearFn env = do
     gxA   ← Lua.tointeger 1
@@ -108,25 +113,39 @@ structureClearFn env = do
             case slotFromText (TE.decodeUtf8 slotBS) of
                 Nothing → Lua.pushboolean False >> return 1
                 Just slot → do
-                    let key = (fromIntegral gx, fromIntegral gy, fromEnum slot)
-                    Lua.liftIO $ atomicModifyIORef' (structureStoreRef env) $ \s →
-                        (HM.delete key s, ())
-                    Lua.pushboolean True
+                    let gxi     = fromIntegral gx
+                        gyi     = fromIntegral gy
+                        slotTag = fromIntegral (fromEnum slot) ∷ Word8
+                    ok ← Lua.liftIO $ do
+                        mActive ← activeWorldPage env
+                        case mActive of
+                            Just (pageId, _) → do
+                                Q.writeQueue (worldQueue env)
+                                    (WorldClearStructure pageId gxi gyi slotTag)
+                                pure True
+                            Nothing → pure False
+                    Lua.pushboolean ok
                     return 1
         _ → Lua.pushboolean False >> return 1
 
--- | structure.clearAll() — wipe the whole store.
+-- | structure.clearAll() — wipe every structure piece in the active world
+--   (live overlays + persisted edits) via the WorldClearAllStructures command.
 structureClearAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureClearAllFn env = do
-    Lua.liftIO $ writeIORef (structureStoreRef env) emptyStructureStore
+    Lua.liftIO $ do
+        mActive ← activeWorldPage env
+        case mActive of
+            Just (pageId, _) →
+                Q.writeQueue (worldQueue env) (WorldClearAllStructures pageId)
+            Nothing → pure ()
     return 0
 
--- | structure.count() → int — pieces in the OLD in-memory store (debug verify).
+-- | structure.count() → int — pieces in the authoritative per-chunk overlay
+--   (lcStructures) across all loaded chunks of the active world. (Same as
+--   'structure.loadedCount' — the legacy in-memory store it used to count is
+--   gone.)
 structureCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-structureCountFn env = do
-    s ← Lua.liftIO $ readIORef (structureStoreRef env)
-    Lua.pushinteger (fromIntegral (HM.size s))
-    return 1
+structureCountFn = structureLoadedCountFn
 
 -- | structure.loadedCount() → int — pieces in the PERSISTENT per-chunk overlay
 --   (lcStructures) across all loaded chunks of the active world. Verifies the
@@ -188,21 +207,24 @@ structureSetPaletteHandleFn env = do
 -- | structure.floorZAt(gx, gy) → int|nil — the z of the FLOOR at this tile,
 --   or nil if there is none. Posts are only placeable where a floor exists,
 --   and take the floor's z (so they render on the floor, not the terrain).
+--   Reads the authoritative per-chunk overlay, so it agrees with what is
+--   rendered/persisted (notably after a save/load that replays the edits).
 structureFloorZAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureFloorZAtFn env = do
     gxA ← Lua.tointeger 1
     gyA ← Lua.tointeger 2
     case (gxA, gyA) of
         (Just gx, Just gy) → do
-            s ← Lua.liftIO $ readIORef (structureStoreRef env)
-            let key = (fromIntegral gx, fromIntegral gy, fromEnum SFloor)
-            case HM.lookup key s of
-                Just p  → Lua.pushinteger (fromIntegral (spGridZ p)) >> return 1
-                Nothing → Lua.pushnil >> return 1
+            mSpd ← Lua.liftIO $
+                lookupStructure env (fromIntegral gx) (fromIntegral gy) SFloor
+            case mSpd of
+                Just spd → Lua.pushinteger (fromIntegral (spdGridZ spd)) >> return 1
+                Nothing  → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
 -- | structure.hasAt(gx, gy, slot) → bool — is there a piece at this (tile,
 --   slot)? Used by the wall builder to test for a corner post at a node.
+--   Reads the authoritative per-chunk overlay (see 'structureFloorZAtFn').
 structureHasAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureHasAtFn env = do
     gxA   ← Lua.tointeger 1
@@ -213,8 +235,24 @@ structureHasAtFn env = do
             case slotFromText (TE.decodeUtf8 slotBS) of
                 Nothing → Lua.pushboolean False >> return 1
                 Just slot → do
-                    s ← Lua.liftIO $ readIORef (structureStoreRef env)
-                    let key = (fromIntegral gx, fromIntegral gy, fromEnum slot)
-                    Lua.pushboolean (HM.member key s)
+                    mSpd ← Lua.liftIO $
+                        lookupStructure env (fromIntegral gx) (fromIntegral gy) slot
+                    Lua.pushboolean (maybe False (const True) mSpd)
                     return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | Look up a structure piece in the AUTHORITATIVE per-chunk overlay
+--   ('lcStructures') of the active world — the same data rendering and
+--   persistence read. Nothing if there is no active world, the chunk holding
+--   (gx,gy) isn't loaded, or there is no piece at (gx,gy,slot).
+lookupStructure ∷ EngineEnv → Int → Int → StructureSlot
+                → IO (Maybe StructurePieceData)
+lookupStructure env gx gy slot = do
+    mWs ← activeWorldState env
+    case mWs of
+        Nothing → pure Nothing
+        Just ws → do
+            td ← readIORef (wsTilesRef ws)
+            let (coord, _) = globalToChunk gx gy
+                key = (gx, gy, fromIntegral (fromEnum slot) ∷ Word8)
+            pure $ lookupChunk coord td ⌦ HM.lookup key . lcStructures

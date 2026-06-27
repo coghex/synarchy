@@ -7,6 +7,7 @@ module World.Thread.Command.Edit
     , handleWorldSetCellCommand
     , handleWorldSetStructureCommand
     , handleWorldClearStructureCommand
+    , handleWorldClearAllStructuresCommand
     , handleWorldDigTileCommand
     ) where
 
@@ -29,6 +30,7 @@ import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
+import Structure.Types (emptyChunkStructures)
 import World.Material (MaterialProps(..), getMaterialProps
                       , materialIdByName)
 import World.Material.Id (MaterialId(..))
@@ -226,6 +228,34 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
                         (insertChunk lc' w, ())
                     atomicModifyIORef' (wsEditsRef ws) $ \es →
                         (appendEdit coord edit es, ())
+
+-- | Remove EVERY structure piece in the world. Clears the live per-chunk
+--   'lcStructures' overlay on all loaded chunks AND strips the structure
+--   edits (WeSetStructure / WeClearStructure) from the per-chunk log so they
+--   do not replay on eviction/reload. This is the authoritative "wipe all":
+--   it touches the same overlay + edit-log that rendering and persistence
+--   read, so a cleared world stays cleared after a chunk evicts or a
+--   save/load round-trip. (No quad-cache bust: the structure pass renders
+--   from 'lcStructures' live every frame, never from the cached terrain quads.)
+handleWorldClearAllStructuresCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → IO ()
+handleWorldClearAllStructuresCommand env logger pageId = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for clear all structures: " <> unWorldPageId pageId
+        Just ws → do
+            atomicModifyIORef' (wsTilesRef ws) $ \w →
+                ( w { wtdChunks = HM.map clearChunkStructures (wtdChunks w) }
+                , () )
+            atomicModifyIORef' (wsEditsRef ws) $ \es →
+                (HM.map (filter (not . isStructureEdit)) es, ())
+  where
+    clearChunkStructures lc = lc { lcStructures = emptyChunkStructures }
+    isStructureEdit (WeSetStructure {})   = True
+    isStructureEdit (WeClearStructure {}) = True
+    isStructureEdit _                     = False
 
 -- | Set the walkable-ramp slope bitmask of an existing tile at (gx,gy,z).
 --   Routes through the edit log (WeSetSlope) like every other edit, so a
