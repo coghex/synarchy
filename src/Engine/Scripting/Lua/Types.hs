@@ -135,6 +135,22 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaDebugHide
             | LuaDebugToggle
             | LuaWorldGenLog Text
+              -- | A save finished loading on the world thread. Emitted
+              --   once after units + buildings are written back, so by
+              --   the time the Lua thread processes it the engine entity
+              --   set is authoritative. Lets per-id Lua modules
+              --   (unit_ai, building_spawn) reconcile their state against
+              --   the entities that actually survived the load — orphan
+              --   units/buildings whose defs were dropped leave no live
+              --   entity, so their stale per-id state must be pruned or a
+              --   reused id would inherit it (#195). Carries the loaded
+              --   page's surviving unit ids and building ids. The Lua side
+              --   rebuilds each singleton table as "survivors restored from
+              --   the blob + every other still-live (off-page) entity's
+              --   pre-load state", so a load touches only loaded-page state
+              --   and other live pages are untouched (#191); nested refs are
+              --   scrubbed against the survivor set.
+            | LuaSaveLoaded [Int] [Int]
             | LuaHudLogInfo Text Text Text
               -- ^ HUD info-panel push: basic, advanced, and a SOURCE
               -- kind ("tile" | "chunk"). The kind lets entity-info

@@ -244,12 +244,85 @@ function buildingSpawn.init(scriptId)
     local saveLib  = require("scripts.lib.serialize")
     local saveMods = require("scripts.lib.save_modules")
     saveMods.register("building_spawn",
-        function() return saveLib.serialize(state) end,
+        function()
+            -- Serialize only LIVE buildings' state. `state` is a global
+            -- singleton that can retain entries for buildings destroyed
+            -- before the save; persisting those is unsafe, since on a later
+            -- cross-session load such a bid can collide with a live
+            -- off-page building and onSaveLoaded can't distinguish the
+            -- stale loaded-page leftover from legitimate off-page state.
+            -- building.getInfo is GLOBAL, so live buildings on every page
+            -- are still saved (#195).
+            local live = {}
+            for bid, s in pairs(state) do
+                if building.getInfo(bid) then live[bid] = s end
+            end
+            return saveLib.serialize(live)
+        end,
         function(blob)
+            -- Snapshot the pre-load singleton BEFORE clobbering, so
+            -- onSaveLoaded can restore still-live OFF-PAGE buildings'
+            -- current state instead of the blob's stale copy (#195, #191).
+            buildingSpawn._preLoadState = {}
+            for k, v in pairs(state) do buildingSpawn._preLoadState[k] = v end
             local restored = saveLib.deserialize(blob) or {}
             for k in pairs(state) do state[k] = nil end
             for k, v in pairs(restored) do state[k] = v end
         end)
+end
+
+-- Broadcast from the engine once a save has finished loading (#195).
+-- The Lua spawn-state blob is restored before the engine load path runs,
+-- and that path can drop "orphan" buildings whose defs are no longer
+-- registered. The restored state still holds entries for those dropped
+-- ids, so a reused bid could inherit stale spawn-rate state.
+--
+-- `state` is a global singleton serialized WHOLESALE; the restore clobbered
+-- it with save-time state for buildings on EVERY page, but the engine load
+-- only restores the saved page and preserves other live pages' buildings
+-- (#191). So a load must touch only the loaded page. We rebuild `state` as:
+--   * loaded-page survivor → its restored (blob) state;
+--   * every other still-live building → its PRE-LOAD state (the off-page
+--     building's CURRENT state, not the blob's stale snapshot) — so an
+--     older save can't roll back live off-page spawn-spacing state, and a
+--     stale/colliding bid resolves to the live building's own state;
+--   * everything else (orphans, dead, gone-before-save) → dropped.
+-- The nested s.lastUid (last unit spawned) is scrubbed on loaded-page
+-- survivor entries against the surviving unit set, so a stale/colliding uid
+-- can't gate spawning. Off-page entries keep their pre-load state.
+function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds)
+    local survUnitSet, survBuildingSet = {}, {}
+    for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
+    for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
+
+    local pre = buildingSpawn._preLoadState or {}
+    buildingSpawn._preLoadState = nil
+    local blob = state   -- current contents = the just-restored blob
+
+    local rebuilt = {}
+    for bid in pairs(survBuildingSet) do
+        if blob[bid] ~= nil then rebuilt[bid] = blob[bid] end
+    end
+    for bid, s in pairs(pre) do
+        if not survBuildingSet[bid] and building.getInfo(bid) then
+            rebuilt[bid] = s        -- live off-page building: keep current state
+        end
+    end
+
+    local kept = 0
+    for k in pairs(state) do state[k] = nil end
+    for k, v in pairs(rebuilt) do state[k] = v; kept = kept + 1 end
+
+    local scrubbed = 0
+    for bid, s in pairs(state) do
+        if survBuildingSet[bid] and s.lastUid ~= nil
+           and not survUnitSet[s.lastUid] then
+            s.lastUid = nil
+            scrubbed = scrubbed + 1
+        end
+    end
+    engine.logInfo("Building spawn: reconciled state after load ("
+        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed)")
 end
 
 -- Construction progress curve. Solo workers build at 1× the base

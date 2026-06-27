@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Thread.Helpers
     ( sendGenLog
+    , sendSaveLoaded
     , sendHudInfo
     , sendHudChunkInfo
     , sendHudWeatherInfo
@@ -18,13 +19,25 @@ import World.Types (WorldPageId(..))
 sendGenLog ∷ EngineEnv → Text → IO ()
 sendGenLog env msg = Q.writeQueue (luaQueue env) (LuaWorldGenLog msg)
 
+-- | Signal Lua that a save finished loading, so per-id modules can
+--   reconcile their global singleton state (#195). Carries the loaded
+--   page's surviving unit + building ids. The Lua side rebuilds each
+--   table as "survivors restored from the save blob + every other
+--   still-live (off-page) entity's pre-load state", so a load replaces
+--   only loaded-page state and other live pages are untouched. Emit only
+--   after units + buildings have been written back.
+sendSaveLoaded ∷ EngineEnv → [Int] → [Int] → IO ()
+sendSaveLoaded env survivingUnitIds survivingBuildingIds =
+   Q.writeQueue (luaQueue env)
+       (LuaSaveLoaded survivingUnitIds survivingBuildingIds)
+
 -- | Info message to lua's HUD, tagged with its SOURCE kind so the
 --   entity-info watchers can tell a zoomed-in tile selection ("tile")
 --   apart from a zoom-map chunk selection ("chunk") — both ride this
 --   one broadcast (issue #133).
 sendHudInfoKind ∷ EngineEnv → Text → Text → Text → IO ()
 sendHudInfoKind env kind msgbas msgadv = Q.writeQueue (luaQueue env)
-                                  (LuaHudLogInfo msgbas msgadv kind)
+                                 (LuaHudLogInfo msgbas msgadv kind)
 
 -- | Tile (zoomed-in) info push. Also used for the blank-payload panel
 --   clear; a blank carries no selection so its kind is immaterial.

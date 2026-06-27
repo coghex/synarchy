@@ -3721,13 +3721,136 @@ function unitAi.init(scriptId)
     local saveLib  = require("scripts.lib.serialize")
     local saveMods = require("scripts.lib.save_modules")
     saveMods.register("unit_ai",
-        function() return saveLib.serialize(aiState) end,
+        function()
+            -- Serialize only LIVE units' state. aiState is a global
+            -- singleton that accumulates entries and never drops them when
+            -- a unit is destroyed, so it leaks stale entries for
+            -- gone-before-save units. Persisting those is actively unsafe:
+            -- on a later cross-session load such an id can collide with a
+            -- live off-page entity, and onSaveLoaded then can't tell the
+            -- stale loaded-page leftover from legitimate off-page state
+            -- (the blob isn't page-keyed) — it would keep + misattribute
+            -- it. Dropping dead ids at the source means they never reach
+            -- the blob. unit.exists is GLOBAL, so live units on every page
+            -- are still saved (#195).
+            local live = {}
+            for uid, s in pairs(aiState) do
+                if unit.exists(uid) then live[uid] = s end
+            end
+            return saveLib.serialize(live)
+        end,
         function(blob)
+            -- Snapshot the pre-load singleton BEFORE clobbering. The blob
+            -- holds save-time state for ALL pages, but a load should only
+            -- touch the loaded page; onSaveLoaded uses this snapshot to
+            -- restore still-live OFF-PAGE units' CURRENT state instead of
+            -- the blob's stale copy (#195, #191).
+            unitAi._preLoadState = {}
+            for k, v in pairs(aiState) do unitAi._preLoadState[k] = v end
             local restored = saveLib.deserialize(blob) or {}
             -- Replace in-place so the package.loaded singleton sees it
             for k in pairs(aiState) do aiState[k] = nil end
             for k, v in pairs(restored) do aiState[k] = v end
         end)
+end
+
+-- aiState fields on a surviving entry that hold a direct reference to
+-- another entity by raw id. After a load these can point at an id that did
+-- NOT survive on the loaded page — a missing-def orphan, an entity already
+-- gone before the save (its stale ref was still serialized), or an id that
+-- now collides with a LIVE off-page entity. The per-tick validators
+-- (unit.exists / unit.getInfo / building.getInfo) are GLOBAL raw lookups,
+-- so for a collision they'd pass for the wrong off-page entity and the
+-- survivor would resume targeting / delivering to it (#195). So any ref
+-- whose target isn't in the surviving loaded-page set is scrubbed.
+-- NB: any NEW aiState field that stores a unit/building id MUST be listed
+-- here, or it silently reintroduces the stale-ref bug.
+local AI_UNIT_REF_FIELDS     = { "attackTargetUid", "retreatThreatUid",
+                                 "notifyTarget", "lungeTarget" }
+local AI_BUILDING_REF_FIELDS = { "buildTarget", "storeTarget" }
+
+-- Clear any ref that doesn't point at a surviving loaded-page entity out
+-- of one surviving state entry. Setting a field to nil is exactly the
+-- self-heal the AI already runs when a target legitimately vanishes, so
+-- the next tick re-decides cleanly. Nested claim tables are dropped
+-- wholesale when their target didn't survive (the execute paths treat a
+-- nil claim as "release"). Returns #fields cleared.
+local function scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
+    local cleared = 0
+    for _, f in ipairs(AI_UNIT_REF_FIELDS) do
+        local v = s[f]
+        if v ~= nil and not liveUnitSet[v] then s[f] = nil; cleared = cleared + 1 end
+    end
+    for _, f in ipairs(AI_BUILDING_REF_FIELDS) do
+        local v = s[f]
+        if v ~= nil and not liveBuildingSet[v] then s[f] = nil; cleared = cleared + 1 end
+    end
+    if s.treatClaim and not liveUnitSet[s.treatClaim.patient] then
+        s.treatClaim = nil; cleared = cleared + 1
+    end
+    if s.treatPending and not liveUnitSet[s.treatPending.uid] then
+        s.treatPending = nil; cleared = cleared + 1
+    end
+    if s.deliveryClaim and not liveBuildingSet[s.deliveryClaim.bid] then
+        s.deliveryClaim = nil; cleared = cleared + 1
+    end
+    if s.deliveryPendingTarget and not liveBuildingSet[s.deliveryPendingTarget.bid] then
+        s.deliveryPendingTarget = nil; cleared = cleared + 1
+    end
+    return cleared
+end
+
+-- Broadcast from the engine once a save has finished loading (#195).
+-- The Lua blob is a global singleton serialized WHOLESALE, so the restore
+-- (deserializer above) clobbered aiState with save-time state for units on
+-- EVERY page. But the engine load only restores the saved page and
+-- PRESERVES other live pages' units (#191), so a load must touch only the
+-- loaded page's AI state and leave other pages' state exactly as it was.
+--
+-- survUnitIds are the loaded page's survivors. We rebuild aiState as:
+--   * loaded-page survivor → its restored (blob) state — the save is
+--     authoritative for the page it loaded;
+--   * every other still-live unit → its PRE-LOAD state (the off-page
+--     entity's CURRENT state, NOT the blob's stale snapshot). This both
+--     stops an older save from rolling back live off-page AI memory, and
+--     means any stale/dropped/colliding loaded-page id resolves to the
+--     live entity's own state rather than the blob's — no misattribution;
+--   * everything else (orphans, dead, gone-before-save) → dropped.
+-- Nested refs are then scrubbed on loaded-page survivor entries against the
+-- survivor set: a loaded-page unit can only validly reference a page-mate.
+-- Off-page entries keep their pre-load refs (they weren't reloaded).
+function unitAi.onSaveLoaded(survUnitIds, survBuildingIds)
+    local survUnitSet, survBuildingSet = {}, {}
+    for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
+    for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
+
+    local pre = unitAi._preLoadState or {}
+    unitAi._preLoadState = nil
+    local blob = aiState   -- current contents = the just-restored blob
+
+    local rebuilt = {}
+    for uid in pairs(survUnitSet) do
+        if blob[uid] ~= nil then rebuilt[uid] = blob[uid] end
+    end
+    for uid, s in pairs(pre) do
+        if not survUnitSet[uid] and unit.exists(uid) then
+            rebuilt[uid] = s          -- live off-page unit: keep current state
+        end
+    end
+
+    -- Swap into the singleton in place (preserve table identity).
+    local kept = 0
+    for k in pairs(aiState) do aiState[k] = nil end
+    for k, v in pairs(rebuilt) do aiState[k] = v; kept = kept + 1 end
+
+    local scrubbed = 0
+    for uid, s in pairs(aiState) do
+        if survUnitSet[uid] then
+            scrubbed = scrubbed + scrubStaleRefs(s, survUnitSet, survBuildingSet)
+        end
+    end
+    engine.logInfo("Unit AI: reconciled AI state after load ("
+        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed)")
 end
 
 function unitAi.update(dt)

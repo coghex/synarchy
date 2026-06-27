@@ -170,6 +170,19 @@ loadSaveFn env = do
             case result of
                 Right saveData → do
                     logger ← Lua.liftIO $ readIORef (loggerRef env)
+                    -- Pause the engine BEFORE restoring Lua state, mirroring
+                    -- the save path. The deserializers clobber the per-id
+                    -- singletons and snapshot _preLoadState, but the
+                    -- world-thread merge + onSaveLoaded reconcile only land
+                    -- later; the Lua loop keeps firing script update()s
+                    -- meanwhile (they gate on engine.isPaused()). Without
+                    -- this, an unpaused same-session load would tick against
+                    -- the half-restored singletons before onSaveLoaded —
+                    -- drifting loaded-page state and racing the off-page
+                    -- reconcile. The world thread restores the saved pause
+                    -- state (sdEnginePaused) when it finishes the load, so
+                    -- this is just a freeze for the load window (#195).
+                    Lua.liftIO $ writeIORef (enginePausedRef env) True
                     restoreLuaBlobs logger (sdLuaModules saveData)
                     let pageId = WorldPageId "main_world"
                     -- Synchronously flip the current head world's
