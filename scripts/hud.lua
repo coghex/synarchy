@@ -715,6 +715,14 @@ function hud.reconcileView()
     -- hide() is idempotent (no-op when no menu is open), so dismiss it on
     -- every band change.
     require("scripts.ui.context_menu").hide()
+    -- Mine-designation anchor (#144): a pending first-corner anchor lives in
+    -- mine_tool's Lua state + the world cursor (mineAnchor) and renders a
+    -- preview grid. The tool only acts in zoomed_in, but nothing cleared the
+    -- anchor on a band change, so it survived off-view and could not be
+    -- canceled there (Escape/right-click are gated on the zoomed_in view).
+    -- cancel() is idempotent (clears Lua state + WorldClearMineAnchor is a
+    -- no-op when nothing is pending), so tear it down on every transition.
+    require("scripts.mine_tool").cancel()
     if newView ~= "zoomed_in" then
         require("scripts.debug").hide()
     end
