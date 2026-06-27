@@ -766,6 +766,18 @@ function game.onMouseUp(button, x, y, downRoute)
 end
 
 function game.onKeyDown(key)
+    -- Don't run gameplay key handlers while a menu/overlay is up (#182).
+    -- Menus and overlays don't establish UI focus, so the input thread
+    -- stays in the generic game-keydown path and broadcasts every key to
+    -- all Lua modules — including this one. Gate here on the active view
+    -- so menu-open presses (Space pause-toggle, L log-toggle, build/mine
+    -- Escape, selection-clear, etc.) can't reach the world underneath.
+    -- Menu-level Escape still works: it's handled by uiManager.onUIEscape
+    -- on a separate broadcast that this gate doesn't touch.
+    if not require("scripts.ui_manager").isGameplayInputActive() then
+        return
+    end
+
     -- Space toggles pause first — works regardless of tool mode or
     -- selection state, and shouldn't be eaten by a tool's local
     -- handler.
