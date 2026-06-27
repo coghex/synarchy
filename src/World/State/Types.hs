@@ -25,6 +25,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
+import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import Item.Ground (GroundItems, emptyGroundItems)
@@ -77,6 +78,18 @@ data WorldState = WorldState
       --   World.Spoil.Types). Written by the world thread's dig
       --   handler; read by the spoil render pass. Persisted in
       --   saves (sdSpoilPiles, v34).
+    , wsStructureStageRef ∷ IORef ChunkStructures
+      -- ^ Lua-thread write-ahead staging for THIS world's structure
+      --   placements. The authoritative structure state is the per-chunk
+      --   'lcStructures' overlay (rendered + persisted), but those writes
+      --   apply asynchronously on the world thread via WeSetStructure. The
+      --   builder (scripts/structures.lua, scripts/locations.lua) places a
+      --   piece then queries it within the SAME Lua call (floors→posts→
+      --   walls), so structure.place records it here and structure.floorZAt/
+      --   hasAt consult it before falling back to lcStructures —
+      --   read-your-writes without a second authority. Per-world so it can't
+      --   leak across worlds (it dies with the WorldState, and a reloaded
+      --   world gets a fresh empty one); never saved.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -106,6 +119,7 @@ emptyWorldState = do
     wsMineDesignationsRef ← newIORef HM.empty
     wsGroundItemsRef ← newIORef emptyGroundItems
     wsSpoilRef ← newIORef emptySpoilPiles
+    wsStructureStageRef ← newIORef emptyChunkStructures
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
@@ -114,7 +128,7 @@ emptyWorldState = do
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsOreSurveyRef wsMineDesignationsRef
-                        wsGroundItemsRef wsSpoilRef
+                        wsGroundItemsRef wsSpoilRef wsStructureStageRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

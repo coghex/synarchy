@@ -10,9 +10,10 @@
 --
 --   Those edits apply asynchronously on the world thread, but the builder
 --   places a piece and queries it within the same Lua call (floors→posts→
---   walls), so the read helpers consult a Lua-thread 'structureStageRef'
---   write-ahead cache first and fall back to 'lcStructures' — giving
---   read-your-writes without a second authority (see 'structureStageRef').
+--   walls), so the read helpers consult the active world's per-world
+--   'wsStructureStageRef' write-ahead cache first and fall back to
+--   'lcStructures' — read-your-writes without a second authority. Per-world
+--   so a placement can't leak across worlds (see 'wsStructureStageRef').
 module Engine.Scripting.Lua.API.Structure
     ( structurePlaceFn
     , structureClearFn
@@ -38,7 +39,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, TexPalette(..))
 import Control.Monad (forM_)
-import World.Types (wsTilesRef)
+import World.Types (wsTilesRef, wsStructureStageRef)
 import World.Chunk.Types (LoadedChunk(..))
 import World.Tile.Types (WorldTileData(..), lookupChunk)
 import World.Generate.Coordinates (globalToChunk)
@@ -92,18 +93,20 @@ structurePlaceFn env = do
                                     ( HM.insert texId  (TextureHandle (fromIntegral tex))
                                     $ HM.insert faceId (TextureHandle (fromIntegral face)) m
                                     , () )
-                                -- Stage the piece for read-your-writes: the world
-                                -- thread applies WeSetStructure to lcStructures
-                                -- asynchronously, but the builder queries this tile
-                                -- within the same Lua call (floors→posts→walls), so
-                                -- floorZAt/hasAt must see it now. (See structureStageRef.)
-                                atomicModifyIORef' (structureStageRef env) $ \st →
-                                    ( HM.insert (gxi, gyi, slotTag)
-                                                (StructurePieceData texId faceId z) st
-                                    , () )
                                 mActive ← activeWorldPage env
                                 case mActive of
-                                    Just (pageId, _) →
+                                    Just (pageId, ws) → do
+                                        -- Stage the piece in THIS world for
+                                        -- read-your-writes: the world thread
+                                        -- applies WeSetStructure to lcStructures
+                                        -- asynchronously, but the builder queries
+                                        -- this tile within the same Lua call
+                                        -- (floors→posts→walls), so floorZAt/hasAt
+                                        -- must see it now. (See wsStructureStageRef.)
+                                        atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+                                            ( HM.insert (gxi, gyi, slotTag)
+                                                        (StructurePieceData texId faceId z) st
+                                            , () )
                                         Q.writeQueue (worldQueue env)
                                             (WorldSetStructure pageId gxi gyi
                                                                slotTag texId faceId z)
@@ -131,13 +134,13 @@ structureClearFn env = do
                         gyi     = fromIntegral gy
                         slotTag = fromIntegral (fromEnum slot) ∷ Word8
                     ok ← Lua.liftIO $ do
-                        -- drop any staged add (no-op if not staged) so a re-query
-                        -- doesn't surface the just-cleared piece via the cache
-                        atomicModifyIORef' (structureStageRef env) $ \st →
-                            (HM.delete (gxi, gyi, slotTag) st, ())
                         mActive ← activeWorldPage env
                         case mActive of
-                            Just (pageId, _) → do
+                            Just (pageId, ws) → do
+                                -- drop any staged add (no-op if not staged) so a
+                                -- re-query doesn't surface the just-cleared piece
+                                atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+                                    (HM.delete (gxi, gyi, slotTag) st, ())
                                 Q.writeQueue (worldQueue env)
                                     (WorldClearStructure pageId gxi gyi slotTag)
                                 pure True
@@ -152,10 +155,10 @@ structureClearFn env = do
 structureClearAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureClearAllFn env = do
     Lua.liftIO $ do
-        writeIORef (structureStageRef env) emptyChunkStructures
         mActive ← activeWorldPage env
         case mActive of
-            Just (pageId, _) →
+            Just (pageId, ws) → do
+                writeIORef (wsStructureStageRef ws) emptyChunkStructures
                 Q.writeQueue (worldQueue env) (WorldClearAllStructures pageId)
             Nothing → pure ()
     return 0
@@ -166,14 +169,15 @@ structureClearAllFn env = do
 --   world thread hasn't applied yet). Agrees with floorZAt/hasAt.
 structureCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureCountFn env = do
-    st  ← Lua.liftIO $ readIORef (structureStageRef env)
     mWs ← Lua.liftIO $ activeWorldState env
-    lcMap ← case mWs of
-        Just ws → do
-            td ← Lua.liftIO $ readIORef (wsTilesRef ws)
-            pure $ HM.unions [ lcStructures lc | lc ← HM.elems (wtdChunks td) ]
-        Nothing → pure HM.empty
-    Lua.pushinteger (fromIntegral (HM.size (HM.union st lcMap)))
+    n ← case mWs of
+        Just ws → Lua.liftIO $ do
+            st ← readIORef (wsStructureStageRef ws)
+            td ← readIORef (wsTilesRef ws)
+            let lcMap = HM.unions [ lcStructures lc | lc ← HM.elems (wtdChunks td) ]
+            pure $ HM.size (HM.union st lcMap)
+        Nothing → pure 0
+    Lua.pushinteger (fromIntegral n)
     return 1
 
 -- | structure.loadedCount() → int — pieces in the PERSISTENT per-chunk overlay
@@ -281,15 +285,15 @@ structureHasAtFn env = do
 lookupStructure ∷ EngineEnv → Int → Int → StructureSlot
                 → IO (Maybe StructurePieceData)
 lookupStructure env gx gy slot = do
-    let key = (gx, gy, fromIntegral (fromEnum slot) ∷ Word8)
-    st ← readIORef (structureStageRef env)
-    case HM.lookup key st of
-        Just spd → pure (Just spd)
-        Nothing  → do
-            mWs ← activeWorldState env
-            case mWs of
-                Nothing → pure Nothing
-                Just ws → do
+    mWs ← activeWorldState env
+    case mWs of
+        Nothing → pure Nothing
+        Just ws → do
+            let key = (gx, gy, fromIntegral (fromEnum slot) ∷ Word8)
+            st ← readIORef (wsStructureStageRef ws)
+            case HM.lookup key st of
+                Just spd → pure (Just spd)
+                Nothing  → do
                     td ← readIORef (wsTilesRef ws)
                     let (coord, _) = globalToChunk gx gy
                     pure $ lookupChunk coord td ⌦ HM.lookup key . lcStructures
