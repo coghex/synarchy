@@ -256,18 +256,30 @@ processInput env inpSt event = case event of
             -- below would dispatch a bogus UI/game event. Drop the click.
             if viewportDegenerate winW winH fbW fbH then return ClickSwallowed else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
-              -- Falls through to a normal mouse-down event when nothing
-              -- is shown, so other middle-click behavior (panning, etc.)
-              -- still reaches Lua.
+              -- Otherwise hit-test the UI like the other buttons so a
+              -- middle-click over a UI/menu surface can't fall through to
+              -- gameplay middle-click behavior (the loop uses it for
+              -- camera dragging — see Engine.Loop.Camera). A clickable
+              -- element under the cursor SWALLOWS the click: there is no
+              -- middle-click UI handler to dispatch to, and the camera
+              -- middle-drag polls inpMouseBtns directly (bypassing the
+              -- route), so only ClickSwallowed — which keeps the button
+              -- out of inpMouseBtns — actually stops the drag. Empty UI
+              -- space still routes the middle-click to the world.
               GLFW.MouseButton'3 →
                 if isTooltipVisible uiMgr
                   then do
                     atomicModifyIORef' (uiManagerRef env) $ \m →
                         (toggleTooltipLock m, ())
                     return ClickSwallowed
-                  else do
-                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
-                    return ClickGame
+                  else case findClickableElementAt mousePos uiMgr of
+                    Just _ → do
+                        logDebug logger CatUI
+                            "Middle-click swallowed by clickable UI element"
+                        return ClickSwallowed
+                    Nothing → do
+                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        return ClickGame
 
               -- All other buttons: if a tooltip is locked, intercept the
               -- click. Inside the locked box → swallow (the locked
