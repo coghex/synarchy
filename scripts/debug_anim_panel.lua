@@ -289,6 +289,14 @@ function panel.tryClaimClick(button, x, y)
     if not panel.visible or not debugOverlay.isVisible() then return false end
     if button ~= MOUSE_LEFT then return false end
 
+    -- Gate on the current view too (#152): the panel is only interactive in
+    -- the gameplay (zoomed-in) world view. If it survived into the zoom map,
+    -- a menu, the pause screen, or the fade zone, its rows must NOT swallow a
+    -- click meant for that screen — panel.visible / overlay-visible alone don't
+    -- catch those states. Reuses the same gameplay-view test the overlay uses
+    -- to decide it can open (gameplay input active AND currentView zoomed_in).
+    if not debugOverlay.canShow() then return false end
+
     -- onMouseDown delivers WINDOW pixels; our rects are in
     -- FRAMEBUFFER pixels. Convert before AABB-test (same fix as
     -- `debug.lua`).
