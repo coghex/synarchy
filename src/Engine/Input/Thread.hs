@@ -324,6 +324,12 @@ processInput env inpSt event = case event of
                                         "Right-click consumed by clickable UI element (no handler)"
                                     return ClickUI
                                 Nothing → do
+                                    -- A right-click that misses all UI clears
+                                    -- focus before reaching gameplay, exactly
+                                    -- like the left-click miss path above —
+                                    -- otherwise a focused textbox/dropdown
+                                    -- keeps capturing the keyboard.
+                                    Q.writeQueue lq LuaUIFocusLost
                                     Q.writeQueue lq (LuaMouseDownEvent btn x y)
                                     return ClickGame
 
