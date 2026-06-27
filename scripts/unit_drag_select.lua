@@ -169,11 +169,23 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
         if downRoute ~= "swallowed" then
             local ids = unit.hitTestInRect(
                 dragSelect.startX, dragSelect.startY, x, y) or {}
+            local final
             if isShiftHeld() then
                 local current = unit.getSelected() or {}
-                unit.setSelection(mergeIds(current, ids))
+                final = mergeIds(current, ids)
             else
-                unit.setSelection(ids)
+                final = ids
+            end
+            unit.setSelection(final)
+            -- A drag that establishes a unit selection must clear the
+            -- item/building domains: ground-item selection is mutually
+            -- exclusive with unit/building selection (World.Cursor.Types),
+            -- enforced by the click routing. The box can start over an
+            -- item/building, so clear the other domains whenever we end
+            -- up with units selected — matching scripts/init.lua.
+            if #final > 0 then
+                item.deselect()
+                building.deselect()
             end
         end
         setEdgesVisible(false)
