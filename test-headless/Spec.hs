@@ -27,6 +27,7 @@ import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
+import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.River.Graph as RiverGraph
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
@@ -63,6 +64,7 @@ main = hspec $ do
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Input.KeyNames" InputKeyNames.spec
+    describe "UI.Tooltip" UITooltip.spec
     describe "World.Calendar" Calendar.spec
     describe "River.Graph" RiverGraph.spec
     describe "World.Render.SideFace" RenderSideFace.spec

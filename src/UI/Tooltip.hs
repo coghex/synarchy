@@ -17,6 +17,8 @@ module UI.Tooltip
   , isTooltipLocked
   , isTooltipVisible
   , isPointInLockedTooltip
+    -- * Exposed for testing
+  , rebuildVisuals
   ) where
 
 import UPrelude
@@ -242,23 +244,27 @@ rebuildVisuals pageH content fontCache mgr0 =
         style = ttsStyle tts
         sz = computeBoxSize fontCache style content
         (boxW, boxH) = sz
-        -- Box: only created when a box-texture set is configured. An
-        -- unset handle (= 0) means the game hasn't called
-        -- setTooltipStyle{ boxTextures = ... } yet — render text/sprites
-        -- as floating instead of warning every frame.
+        -- Box: a geometry element for the tooltip panel is ALWAYS
+        -- created, sized to the full content box. When a box-texture set
+        -- is configured it renders as the textured backdrop; when not
+        -- (the game hasn't called setTooltipStyle{ boxTextures = ... }),
+        -- it's an invisible 'RenderNone' element so the text/sprites
+        -- still appear to float, but the panel's bounds remain tracked.
+        -- Keeping it present even when boxless gives a locked tooltip a
+        -- correct click-swallow region (#117).
         (boxHandle, mgr2) =
-            if not (isBoxTextureSet (tsBoxTextures style))
-              then (Nothing, mgr1)
-              else
-                let (h, m1) = createBox "__tooltip_bg" boxW boxH
-                                 (tsBoxTextures style)
-                                 (tsBoxTileSize style)
-                                 (tsBgColor style)
-                                 0  -- overflow
-                                 pageH mgr1
-                    m2 = addElementToPage pageH h 0 0 m1
-                    m3 = setElementZIndex h 0 m2
-                in (Just h, m3)
+            let (h, m1) =
+                  if isBoxTextureSet (tsBoxTextures style)
+                    then createBox "__tooltip_bg" boxW boxH
+                             (tsBoxTextures style)
+                             (tsBoxTileSize style)
+                             (tsBgColor style)
+                             0  -- overflow
+                             pageH mgr1
+                    else createElement "__tooltip_bg" boxW boxH pageH mgr1
+                m2 = addElementToPage pageH h 0 0 m1
+                m3 = setElementZIndex h 0 m2
+            in (Just h, m3)
         -- Title text; created only when both text and a valid font
         -- are present.
         (textHandle, mgr3) = case ttText content of
@@ -613,8 +619,12 @@ isTooltipVisible ∷ UIPageManager → Bool
 isTooltipVisible mgr = isJust (ttsActiveContent (upmTooltip mgr))
 
 -- | Bounds (x, y, w, h) of the locked tooltip's background box.
---   Returns Nothing when the tooltip isn't locked, or when it's
---   locked without a background box (style with no box-textures set).
+--   Returns Nothing when the tooltip isn't locked. The box geometry
+--   element is always present while a tooltip is shown — even for styles
+--   with no box-textures set, where it is an invisible 'RenderNone'
+--   element carrying the same (position, size) as a textured box would
+--   (see 'rebuildVisuals'). That keeps a locked, boxless tooltip's
+--   click-swallow region correct (#117) instead of collapsing to nothing.
 lockedTooltipBox ∷ UIPageManager → Maybe (Float, Float, Float, Float)
 lockedTooltipBox mgr =
     let tts = upmTooltip mgr
