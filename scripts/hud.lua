@@ -393,9 +393,17 @@ function hud.createUI()
         menuFont   = hud.menuFont,
         buttonSize = hud.baseSizes.buttonSize,
         selectDefaultTool = function()
-            -- Default tool is at index 3 in the items list above
-            -- (after tool_mine at 1 and tool_build at 2).
-            toggle.select(hud.toolToggleId, 3)
+            -- Switch back to the default tool (index 3, after tool_mine
+            -- at 1 and tool_build at 2). Must go through
+            -- applyOptionByName, not a bare toggle.select: toggle.select
+            -- is visual-only and does NOT fire the toolbar onChange, so
+            -- the engine-side ToolMode would stay BuildTool after a
+            -- placement/cancel/Escape (HUD icon flips to default, but
+            -- world.getToolMode() and the next save still report "build").
+            -- applyOptionByName mirrors a real user pick: it selects the
+            -- tool_default slot AND fires onChange → world.setToolMode
+            -- ("tool_default") → DefaultTool. (#103)
+            toggle.applyOptionByName(hud.toolToggleId, "tool_default")
         end,
     })
 
