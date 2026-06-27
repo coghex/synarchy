@@ -10,6 +10,11 @@
 --   * Player info-clicks a tile → onTileSelected      (popup shown / refreshed)
 --   * Player info-clicks another tile → onTileSelected (popup refreshes coords)
 --   * Player clears tile selection (info panel empties) → onSetInfoText("") → hide
+--   * Player selects a CHUNK (zoom-map) → onSetInfoText(_,_,"chunk") → hide
+--     (the popup is a zoomed-in tile tool; a chunk selection means the
+--      tile is no longer the focus, and the selection commit clears the
+--      underlying tile — issue #135 — so the popup must not linger and
+--      reappear stale when the zoomed-in page is shown again)
 --   * Player leaves info tool → onToolMode("tool_default") → hide
 --   * test_arena exits → setArenaActive(false)        (popup torn down, disarmed)
 --
@@ -196,11 +201,15 @@ function tileEditor.onToolMode(itemName)
     destroyPopup()
 end
 
--- Broadcast from the engine when the tile-info text changes.
--- Empty `basic` means "tile selection cleared" — couple our popup
--- visibility to that signal as user-spec 5 requires.
-function tileEditor.onSetInfoText(basic, advanced)
-    if not basic or basic == "" then
+-- Broadcast from the engine when the HUD info text changes. `kind` is
+-- "tile" | "chunk" (the selection that produced it). Empty `basic` means
+-- "tile selection cleared" — couple our popup visibility to that signal
+-- as user-spec 5 requires. A "chunk" payload means a zoom-map chunk was
+-- selected, which clears the underlying tile (issue #135); the popup is a
+-- zoomed-in tile tool, so tear it down too rather than let it reappear
+-- stale when the zoomed-in page is next shown.
+function tileEditor.onSetInfoText(basic, advanced, kind)
+    if not basic or basic == "" or kind == "chunk" then
         destroyPopup()
     end
 end
