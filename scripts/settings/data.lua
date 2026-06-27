@@ -18,6 +18,12 @@ data.tooltipDwellMin = 0
 data.tooltipDwellMax = 1000
 data.tooltipHintDelayMin = 0
 data.tooltipHintDelayMax = 1000
+-- Snapshots of the last saved tooltip values, used by revert().
+-- These (like savedBrightness) capture the saved state because dwell/hint
+-- are live-previewed to the engine, so getTooltipDwellMs()/getTooltipHintDelayMs()
+-- return the just-edited values, not what we should revert to.
+data.savedTooltipDwellMs = nil
+data.savedTooltipHintDelayMs = nil
 
 -- Standard resolutions
 data.resolutions = {
@@ -138,8 +144,10 @@ function data.loadDefaults()
     data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
     data.current.tooltipHintDelayMs = engine.getTooltipHintDelayMs() or 400
 
-    -- Snapshot brightness for revert
+    -- Snapshot brightness/tooltip values for revert
     data.savedBrightness = data.current.brightness
+    data.savedTooltipDwellMs = data.current.tooltipDwellMs
+    data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
 
     -- Push all values to engine via individual setters
     engine.setResolution(data.current.width, data.current.height)
@@ -240,6 +248,8 @@ function data.reload()
     data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
     data.current.tooltipHintDelayMs = engine.getTooltipHintDelayMs() or 400
     data.savedBrightness = data.current.brightness
+    data.savedTooltipDwellMs = data.current.tooltipDwellMs
+    data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
 end
 
 -----------------------------------------------------------
@@ -387,6 +397,11 @@ function data.save(widgetValues)
     engine.logInfo("Saving settings...")
     local result = data.apply(widgetValues)
     engine.saveVideoConfig()
+    -- Refresh revert snapshots so a later revert restores these saved values,
+    -- not the pre-save ones.
+    data.savedBrightness = data.current.brightness
+    data.savedTooltipDwellMs = data.current.tooltipDwellMs
+    data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
     engine.logInfo("Settings saved.")
     return result
 end
@@ -425,12 +440,12 @@ function data.revert()
         engine.setTextureFilter(savedTextureFilter)
     end
 
-    local savedDwell = engine.getTooltipDwellMs() or 400
+    local savedDwell = data.savedTooltipDwellMs or 400
     if data.current.tooltipDwellMs ~= savedDwell then
         engine.setTooltipDwellMs(savedDwell)
     end
 
-    local savedHintDelay = engine.getTooltipHintDelayMs() or 400
+    local savedHintDelay = data.savedTooltipHintDelayMs or 400
     if data.current.tooltipHintDelayMs ~= savedHintDelay then
         engine.setTooltipHintDelayMs(savedHintDelay)
     end
@@ -442,7 +457,7 @@ function data.revert()
     data.current.vsync         = vs
     data.current.frameLimit    = frameLimit
     data.current.msaa          = msaa or 1
-    data.current.brightness    = savedBrightness
+    data.current.brightness    = revertBrightness
     data.current.pixelSnap     = savedPixelSnap
     data.current.textureFilter = savedTextureFilter
     data.current.tooltipDwellMs = savedDwell
