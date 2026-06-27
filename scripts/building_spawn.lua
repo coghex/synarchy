@@ -244,7 +244,21 @@ function buildingSpawn.init(scriptId)
     local saveLib  = require("scripts.lib.serialize")
     local saveMods = require("scripts.lib.save_modules")
     saveMods.register("building_spawn",
-        function() return saveLib.serialize(state) end,
+        function()
+            -- Serialize only LIVE buildings' state. `state` is a global
+            -- singleton that can retain entries for buildings destroyed
+            -- before the save; persisting those is unsafe, since on a later
+            -- cross-session load such a bid can collide with a live
+            -- off-page building and onSaveLoaded can't distinguish the
+            -- stale loaded-page leftover from legitimate off-page state.
+            -- building.getInfo is GLOBAL, so live buildings on every page
+            -- are still saved (#195).
+            local live = {}
+            for bid, s in pairs(state) do
+                if building.getInfo(bid) then live[bid] = s end
+            end
+            return saveLib.serialize(live)
+        end,
         function(blob)
             local restored = saveLib.deserialize(blob) or {}
             for k in pairs(state) do state[k] = nil end

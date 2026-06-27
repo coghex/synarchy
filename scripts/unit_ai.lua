@@ -3721,7 +3721,24 @@ function unitAi.init(scriptId)
     local saveLib  = require("scripts.lib.serialize")
     local saveMods = require("scripts.lib.save_modules")
     saveMods.register("unit_ai",
-        function() return saveLib.serialize(aiState) end,
+        function()
+            -- Serialize only LIVE units' state. aiState is a global
+            -- singleton that accumulates entries and never drops them when
+            -- a unit is destroyed, so it leaks stale entries for
+            -- gone-before-save units. Persisting those is actively unsafe:
+            -- on a later cross-session load such an id can collide with a
+            -- live off-page entity, and onSaveLoaded then can't tell the
+            -- stale loaded-page leftover from legitimate off-page state
+            -- (the blob isn't page-keyed) — it would keep + misattribute
+            -- it. Dropping dead ids at the source means they never reach
+            -- the blob. unit.exists is GLOBAL, so live units on every page
+            -- are still saved (#195).
+            local live = {}
+            for uid, s in pairs(aiState) do
+                if unit.exists(uid) then live[uid] = s end
+            end
+            return saveLib.serialize(live)
+        end,
         function(blob)
             local restored = saveLib.deserialize(blob) or {}
             -- Replace in-place so the package.loaded singleton sees it

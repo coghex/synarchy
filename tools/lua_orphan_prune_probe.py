@@ -214,7 +214,28 @@ def main() -> int:
             return 1
         leaked = getstate(args.port, a)
         print(f"After destroy: unit.exists(A)=no, aiState[A]={leaked} "
-              f"(lingering = the leak)")
+              f"(lingering in memory = the leak)")
+
+        # Serializer filter: even though aiState[A] lingers in memory, the
+        # SAVE blob must exclude it. Otherwise, on a cross-session load, A's
+        # dead loaded-page id could collide with a live off-page unit and be
+        # misattributed (onSaveLoaded can't tell stale loaded-page leftovers
+        # from off-page state — the blob isn't page-keyed). Run the registered
+        # serializer and confirm A is filtered out while B is kept.
+        blobcheck = send(args.port,
+            "local sm=require('scripts.lib.save_modules'); "
+            "local ser=require('scripts.lib.serialize'); "
+            "local r=ser.deserialize(sm.serializeAll().unit_ai) or {}; "
+            "local ha,hb=false,false; "
+            f"for k in pairs(r) do local n=tonumber(k); "
+            f"if n=={a} then ha=true elseif n=={b} then hb=true end end; "
+            "return (ha and 'present' or 'absent')..','..(hb and 'present' or 'absent')")
+        print(f"Serialized blob: A={blobcheck.split(',')[0]}, "
+              f"B={blobcheck.split(',')[-1]}")
+        if blobcheck != "absent,present":
+            print("FAIL: destroyed unit A leaked into the save blob (or B "
+                  "missing) — serializer filter not working")
+            ok = False
 
         # Save + load. The engine fires onSaveLoaded after the load
         # settles; the reconcile should prune A while keeping B.
