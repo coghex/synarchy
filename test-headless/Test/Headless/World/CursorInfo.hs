@@ -4,33 +4,41 @@
 --   The shared HUD info panel carries four tabs. Basic/Advanced are
 --   owned by whichever selection is active; the dynamic Weather and
 --   Resources tabs belong ONLY to chunk (zoom-map) selection. Both
---   chunk and tile selection route their Basic/Advanced text through
---   the same 'sendHudInfo' path, and on the Lua side
+--   chunk and tile selection push their Basic/Advanced text through the
+--   same 'sendHudInfo' path, and on the Lua side
 --   @infoPanel.useSchema("tile")@ is a no-op when already on the tile
 --   schema — so a tile readout cannot clear the Weather/Resources tabs
 --   on its own. The bug (#128): after a chunk selection populated those
 --   tabs, switching to a zoomed-in tile left them visible with stale
 --   chunk data.
 --
---   The fix lives in 'pollCursorInfo': a tile-selection change now also
---   pushes empty Weather/Resources so those tabs disappear. On tile
---   DEselect it only clears them when no chunk is still selected, so a
---   simultaneous tile-clear + chunk-select transition can't clobber the
---   chunk's freshly-pushed tabs.
+--   The fix lives in 'pollCursorInfo', which now renders ONE coherent
+--   HUD state per change from the combined cursor (a selected tile owns
+--   the panel and clears the chunk-only tabs; otherwise a selected
+--   chunk shows its tabs; otherwise the panel is empty) rather than two
+--   independent updates that could fight inside a single tick.
 --
 --   These specs drive the real 'pollCursorInfo' against a hand-built
 --   visible world (no world thread, so the polling is deterministic)
---   and assert the exact 'LuaMsg's queued for the Lua HUD.
+--   and assert the exact 'LuaMsg's queued for the Lua HUD. The world is
+--   given gen params with an empty climate grid so a chunk selection
+--   produces a NON-EMPTY Weather tab ("No climate data") — that is what
+--   makes the dynamic tab "active", i.e. the realistic stale-tab
+--   precondition the tile selection then has to clear. (Seed 0 marks
+--   the params as an arena world, which keeps the Resources survey off
+--   the transient chunk-generation path so the specs stay cheap.)
 module Test.Headless.World.CursorInfo (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.Text as T
 import Data.IORef (writeIORef, modifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread.Cursor (pollCursorInfo)
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.State.Types ( WorldState(..), emptyWorldState
                          , WorldManager(..), CursorSnapshot(..) )
 import World.Cursor.Types (CursorState(..), emptyCursorState)
@@ -38,6 +46,13 @@ import World.Page.Types (WorldPageId(..))
 
 pid ∷ WorldPageId
 pid = WorldPageId "cursor_info_test"
+
+-- | Gen params whose climate grid is empty, so 'chunkWeatherInfo'
+--   yields a non-empty "No climate data" Weather tab. Seed 0 flags it
+--   as an arena world so the Resources survey skips transient chunk
+--   generation.
+testParams ∷ WorldGenParams
+testParams = defaultWorldGenParams { wgpSeed = 0 }
 
 -- | Drain every queued Lua message (non-blocking).
 drainLua ∷ EngineEnv → IO [LuaMsg]
@@ -49,59 +64,102 @@ drainLua env = go []
             Nothing → pure (reverse acc)
             Just x  → go (x : acc)
 
--- | A fresh empty world, registered as the sole visible page, with the
---   Lua queue drained so the next 'pollCursorInfo' starts clean.
+weatherMsgs ∷ [LuaMsg] → [Text]
+weatherMsgs msgs = [t | LuaHudLogWeatherInfo t ← msgs]
+
+resourceMsgs ∷ [LuaMsg] → [Text]
+resourceMsgs msgs = [t | LuaHudLogResourcesInfo t ← msgs]
+
+-- | Basic-tab text of every Basic/Advanced push, in order.
+infoBasics ∷ [LuaMsg] → [Text]
+infoBasics msgs = [b | LuaHudLogInfo b _ ← msgs]
+
+-- | A fresh empty world (with climate-less gen params), registered as
+--   the sole visible page, Lua queue drained so the next
+--   'pollCursorInfo' starts clean.
 freshVisibleWorld ∷ EngineEnv → IO WorldState
 freshVisibleWorld env = do
     ws ← emptyWorldState
+    writeIORef (wsGenParamsRef ws) (Just testParams)
     writeIORef (worldManagerRef env) (WorldManager [(pid, ws)] [pid])
     _ ← drainLua env
     pure ws
 
+-- | Select chunk (0,0) and poll, returning the queued messages.
+selectChunk ∷ EngineEnv → WorldState → IO [LuaMsg]
+selectChunk env ws = do
+    modifyIORef' (wsCursorRef ws) (\c → c { zoomSelectedPos = Just (0, 0) })
+    pollCursorInfo env
+    drainLua env
+
 spec ∷ Spec
 spec = beforeAll initEnv $ do
 
-    it "tile selection clears the chunk Weather and Resources tabs" $ \env → do
+    it "a chunk selection activates the Weather tab" $ \env → do
         ws ← freshVisibleWorld env
-        -- Chunk selection first: this is what populates Weather/Resources.
-        modifyIORef' (wsCursorRef ws) (\c → c { zoomSelectedPos = Just (0, 0) })
-        pollCursorInfo env
-        _ ← drainLua env  -- discard the chunk-selection messages
-        -- Now select a zoomed-in tile.
-        modifyIORef' (wsCursorRef ws) (\c → c { worldSelectedTile = Just (5, 5, 1) })
+        msgs ← selectChunk env ws
+        -- Precondition for the #128 scenario: the dynamic Weather tab is
+        -- non-empty (here "No climate data"), i.e. genuinely active.
+        weatherMsgs msgs `shouldSatisfy` any (≢ "")
+
+    it "tile selection clears the active Weather and Resources tabs" $ \env → do
+        ws ← freshVisibleWorld env
+        _ ← selectChunk env ws  -- Weather tab now active
+        -- Switch to a zoomed-in tile.
+        modifyIORef' (wsCursorRef ws) (\c → c { worldSelectedTile = Just (8, 8, 1) })
         pollCursorInfo env
         msgs ← drainLua env
-        -- The tile readout must wipe the dynamic chunk tabs.
-        msgs `shouldSatisfy` elem (LuaHudLogWeatherInfo "")
-        msgs `shouldSatisfy` elem (LuaHudLogResourcesInfo "")
+        -- The tile readout must wipe the chunk-only tabs...
+        weatherMsgs msgs  `shouldSatisfy` elem ""
+        resourceMsgs msgs `shouldSatisfy` elem ""
+        -- ...and show the tile in Basic/Advanced.
+        infoBasics msgs `shouldSatisfy` any (T.isInfixOf "Tile (")
 
-    it "tile deselect does NOT clear chunk tabs while a chunk stays selected" $ \env → do
+    it "deselecting a tile restores the chunk readout when a chunk stays selected" $ \env → do
         ws ← freshVisibleWorld env
-        -- Start with both a chunk and a tile selected; snapshot agrees so
-        -- only the tile-deselect transition fires this poll.
+        -- Established state: chunk + tile both selected, snapshot agrees
+        -- so only the tile-deselect transition fires this poll.
         writeIORef (wsCursorRef ws)
             (emptyCursorState { zoomSelectedPos   = Just (0, 0)
-                              , worldSelectedTile = Just (5, 5, 1) })
+                              , worldSelectedTile = Just (8, 8, 1) })
         writeIORef (wsCursorSnapshotRef ws)
-            (CursorSnapshot (Just (0, 0)) (Just (5, 5, 1)))
+            (CursorSnapshot (Just (0, 0)) (Just (8, 8, 1)))
         -- Deselect the tile only.
         modifyIORef' (wsCursorRef ws) (\c → c { worldSelectedTile = Nothing })
         pollCursorInfo env
         msgs ← drainLua env
-        -- Only the Basic/Advanced clear; the chunk's tabs are left alone.
-        msgs `shouldBe` [LuaHudLogInfo "" ""]
+        -- The chunk readout comes back instead of being blanked, and its
+        -- Weather tab is restored — not a half-cleared HUD.
+        infoBasics msgs `shouldSatisfy` (\bs →
+            not (null bs) ∧ T.isInfixOf "Chunk (" (last bs))
+        weatherMsgs msgs `shouldSatisfy` (\ws' →
+            not (null ws') ∧ last ws' ≢ "")
 
-    it "tile deselect clears chunk tabs when no chunk is selected" $ \env → do
+    it "a chunk-select + tile-deselect in one tick renders one coherent chunk readout" $ \env → do
         ws ← freshVisibleWorld env
-        writeIORef (wsCursorRef ws)
-            (emptyCursorState { worldSelectedTile = Just (5, 5, 1) })
+        -- Old state (snapshot): no chunk, a tile selected.
         writeIORef (wsCursorSnapshotRef ws)
-            (CursorSnapshot Nothing (Just (5, 5, 1)))
-        modifyIORef' (wsCursorRef ws) (\c → c { worldSelectedTile = Nothing })
+            (CursorSnapshot Nothing (Just (8, 8, 1)))
+        -- New state (cursor): chunk selected, tile gone — BOTH changed.
+        writeIORef (wsCursorRef ws)
+            (emptyCursorState { zoomSelectedPos = Just (0, 0) })
         pollCursorInfo env
         msgs ← drainLua env
-        msgs `shouldSatisfy` elem (LuaHudLogWeatherInfo "")
-        msgs `shouldSatisfy` elem (LuaHudLogResourcesInfo "")
+        -- Single coherent chunk readout; the Basic tab is NOT left blank
+        -- by a competing tile-deselect write (the point-1 race).
+        infoBasics msgs `shouldSatisfy` (\bs →
+            not (null bs) ∧ T.isInfixOf "Chunk (" (last bs))
+
+    it "deselecting everything empties the panel" $ \env → do
+        ws ← freshVisibleWorld env
+        writeIORef (wsCursorSnapshotRef ws)
+            (CursorSnapshot Nothing (Just (8, 8, 1)))
+        writeIORef (wsCursorRef ws) emptyCursorState
+        pollCursorInfo env
+        msgs ← drainLua env
+        infoBasics msgs  `shouldSatisfy` elem ""
+        weatherMsgs msgs `shouldSatisfy` elem ""
+        resourceMsgs msgs `shouldSatisfy` elem ""
 
   where
     initEnv ∷ IO EngineEnv

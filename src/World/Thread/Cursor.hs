@@ -45,37 +45,38 @@ pollCursorInfo env = do
                     oldZoom  = csZoomSel snap
                     oldWorld = csWorldSel snap
 
-                when (curZoom ≢ oldZoom) $ do
-                    case curZoom of
-                        Nothing → do
-                            sendHudInfo env "" ""
-                            sendHudWeatherInfo env ""
-                            sendHudResourcesInfo env ""
-                        Just (baseGX, baseGY) →
-                            sendChunkInfo env worldState mParams baseGX baseGY
-
-                -- Tile (zoomed-in) selection owns only the Basic/Advanced
-                -- tabs; the Weather/Resources tabs belong to chunk (zoom-map)
-                -- selection. Tile selection routes through the same
-                -- sendHudInfo/setInfo path as chunk selection, and
-                -- useSchema("tile") is a no-op when already on the tile
-                -- schema, so it cannot clear those dynamic tabs on its own.
-                -- Explicitly wipe them here so a tile readout never leaves a
-                -- prior chunk's Weather/Resources tabs visible. On deselect
-                -- we only wipe them when no chunk is still selected, so a
-                -- simultaneous tile-clear + chunk-select transition doesn't
-                -- clobber the chunk's freshly-pushed tabs.
-                when (curWorld ≢ oldWorld) $ do
+                -- The chunk (zoom-map) and tile (zoomed-in) selections can
+                -- both be set at once, and BOTH drive the panel's
+                -- Basic/Advanced tabs through 'sendHudInfo'. Handling them
+                -- as two independent updates lets a single tick's writes
+                -- fight: e.g. a chunk-select + tile-deselect in the same
+                -- tick would render the chunk's Basic/Advanced and then
+                -- immediately blank it again. So we push ONE coherent HUD
+                -- state per change instead, derived from the combined
+                -- cursor:
+                --
+                --   * a selected tile owns the panel — Basic/Advanced show
+                --     the tile and the chunk-only Weather/Resources tabs are
+                --     cleared (tile selection routes through the same
+                --     setInfo path and useSchema("tile") is a no-op when
+                --     already on the tile schema, so it cannot clear those
+                --     dynamic tabs on its own — #128);
+                --   * otherwise a selected chunk shows its Basic/Advanced +
+                --     Weather/Resources;
+                --   * otherwise the panel is empty.
+                when (curZoom ≢ oldZoom ∨ curWorld ≢ oldWorld) $
                     case curWorld of
-                        Nothing → do
-                            sendHudInfo env "" ""
-                            when (isNothing curZoom) $ do
-                                sendHudWeatherInfo env ""
-                                sendHudResourcesInfo env ""
                         Just (gx, gy, z) → do
                             sendTileInfo env worldState mParams gx gy z
                             sendHudWeatherInfo env ""
                             sendHudResourcesInfo env ""
+                        Nothing → case curZoom of
+                            Just (baseGX, baseGY) →
+                                sendChunkInfo env worldState mParams baseGX baseGY
+                            Nothing → do
+                                sendHudInfo env "" ""
+                                sendHudWeatherInfo env ""
+                                sendHudResourcesInfo env ""
 
                 let newSnap = CursorSnapshot curZoom curWorld
                 when (newSnap ≢ snap) $
