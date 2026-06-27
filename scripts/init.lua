@@ -853,7 +853,7 @@ function game.onKeyDown(key)
     if mineTool.handleKeyDown(key) then
         return
     end
-    -- ESC clears any active gameplay selection.
+    -- ESC clears any active gameplay selection / cursor.
     -- Doesn't conflict with shell/UI focus: those modes consume ESC
     -- earlier in the input thread (LuaFocusLost / LuaUIEscape) and
     -- never reach this broadcast.
@@ -862,11 +862,12 @@ function game.onKeyDown(key)
     -- info-panel ownership system, so Escape clears whichever one is
     -- active (#177). building.deselect()/item.deselect() are called
     -- unconditionally (matching every other deselection site in this
-    -- file): they are no-ops when nothing is selected, and crucially
-    -- building.getSelected()/item.getSelected() are filtered to the
-    -- active world page while deselect() clears the global selection, so
-    -- guarding on getSelected() would skip a stale off-page selection and
-    -- leave it live when that page is shown again.
+    -- file): they are no-ops when nothing is selected, and
+    -- building.getSelected() in particular is filtered to the active
+    -- world page while building.deselect() clears the underlying global
+    -- building selection, so guarding on getSelected() would skip a
+    -- stale off-page building selection and leave it live when that page
+    -- is shown again.
     if key == "Escape" then
         local selected = unit.getSelected()
         if #selected > 0 then
@@ -874,6 +875,26 @@ function game.onKeyDown(key)
         end
         building.deselect()
         item.deselect()
+        -- ESC also clears the active cursor (tile/chunk) selection so it
+        -- obeys the same cancel semantics as unit selection (#180). Both
+        -- the world-tile (zoomed-in) and zoom-map chunk (zoomed-out)
+        -- selections are cleared unconditionally rather than gating on
+        -- hud.currentView: a selection made in one view persists in the
+        -- engine cursor state across a zoom (and through the mid-fade
+        -- band where currentView is "none"), so a view-gated clear would
+        -- miss it there (e.g. select a tile, stop in the fade zone, press
+        -- Escape — the old selection would survive). clearWorld/
+        -- ZoomCursorSelect is idempotent (no-op when nothing is
+        -- selected), so clearing both is safe. The cursor poller tears
+        -- down the dependent tile/chunk info panel — and, via the empty
+        -- onSetInfoText broadcast, the tile-editor popup — on the next
+        -- tick. Gated on hud.visible like onMouseDown so a menu-open Esc
+        -- never acts on a hidden world.
+        local hud = require("scripts.hud")
+        if hud and hud.visible and hud.worldId then
+            world.clearWorldCursorSelect(hud.worldId)
+            world.clearZoomCursorSelect(hud.worldId)
+        end
     end
 end
 
