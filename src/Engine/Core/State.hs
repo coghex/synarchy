@@ -92,6 +92,12 @@ data EngineEnv = EngineEnv
   , uiManagerRef        ∷ IORef UIPageManager
   , focusManagerRef     ∷ IORef FocusManager
   , worldManagerRef     ∷ IORef WorldManager
+  -- | The page id whose selection the global HUD info panel currently
+  --   reflects. 'pollCursorInfo' uses it to force a HUD refresh when the
+  --   active world changes (e.g. world.show/hide swaps 'wmVisible' without
+  --   touching any cursor field, so the per-world snapshot alone can't
+  --   detect the switch — issue #129).
+  , hudActivePageRef    ∷ IORef (Maybe WorldPageId)
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))

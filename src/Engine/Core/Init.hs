@@ -103,6 +103,7 @@ initializeEngineWith logBackend = do
                                            (fromIntegral (vcHeight videoConfig))
   uiManagerRef ← newIORef emptyUIPageManager
   worldManagerRef ← newIORef emptyWorldManager
+  hudActivePageRef ← newIORef Nothing
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
@@ -181,6 +182,7 @@ initializeEngineWith logBackend = do
         , uiCameraRef        = uiCameraRef
         , uiManagerRef       = uiManagerRef
         , worldManagerRef    = worldManagerRef
+        , hudActivePageRef   = hudActivePageRef
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
