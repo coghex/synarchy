@@ -320,10 +320,25 @@ processInput env inpSt event = case event of
                             -- the right-click to the world.
                             Nothing → case findClickableElementAt mousePos uiMgr' of
                                 Just _ → do
+                                    -- Consumed by a clickable control with no
+                                    -- right-click handler (e.g. an ordinary
+                                    -- button). Left-clicking such a control
+                                    -- clears textbox/dropdown focus via the
+                                    -- dispatched click event; the right-click
+                                    -- has no event to ride, so clear focus
+                                    -- explicitly here, otherwise a focused
+                                    -- widget stays captured.
+                                    Q.writeQueue lq LuaUIFocusLost
                                     logDebug logger CatUI
                                         "Right-click consumed by clickable UI element (no handler)"
                                     return ClickUI
                                 Nothing → do
+                                    -- A right-click that misses all UI clears
+                                    -- focus before reaching gameplay, exactly
+                                    -- like the left-click miss path above —
+                                    -- otherwise a focused textbox/dropdown
+                                    -- keeps capturing the keyboard.
+                                    Q.writeQueue lq LuaUIFocusLost
                                     Q.writeQueue lq (LuaMouseDownEvent btn x y)
                                     return ClickGame
 
