@@ -212,21 +212,19 @@ local function tickOne(bid, info)
 end
 
 -----------------------------------------------------------
--- Iteration: scan all buildings. building.list() returns a string,
--- so we parse it. A real Lua-array API for buildings would be cleaner
--- — add `building.getAllIds()` when there's a second consumer.
+-- Iteration: scan the buildings on the ACTIVE world page only.
+-- building.getActiveIds() is the world-scoping boundary (#198) — it
+-- never returns a building from another live world page. Ticking the
+-- global, page-agnostic building.list() instead would advance
+-- construction on off-world buildings and, worse, route any unit they
+-- spawn into the active world because unit.spawn stamps the active
+-- page rather than the building's own (#196). Scoping the scan to the
+-- active page keeps the building and its spawned unit on the same
+-- world. Returns empty when no world is active.
 -----------------------------------------------------------
 
-local function getAllBuildingIds()
-    -- Quick & dirty parse of building.list()'s "id=N defName ..." lines.
-    -- Replace with a proper API call when one exists.
-    local s = building.list()
-    if not s or s == "No buildings placed" then return {} end
-    local ids = {}
-    for id in s:gmatch("id=(%d+)") do
-        table.insert(ids, tonumber(id))
-    end
-    return ids
+local function getActiveBuildingIds()
+    return building.getActiveIds() or {}
 end
 
 -----------------------------------------------------------
@@ -293,7 +291,7 @@ end
 
 function buildingSpawn.update(dt)
     if require("scripts.pause").isPaused() then return end
-    local ids = getAllBuildingIds()
+    local ids = getActiveBuildingIds()
     if #ids == 0 then return end
     for _, bid in ipairs(ids) do
         local info = building.getInfo(bid)
