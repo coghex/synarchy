@@ -328,17 +328,22 @@ function game.onMouseDown(button, x, y)
             local gid = item.hitTestAt(x, y)
             if gid then
                 item.select(gid)
-                if not shift then
-                    unit.deselectAll()
-                    building.deselect()
-                end
+                -- Ground-item selection is mutually exclusive with
+                -- unit/building selection (see World.Cursor.Types). Items
+                -- are single-select, so Shift carries no additive meaning
+                -- here — always clear the other domains, even on Shift.
+                unit.deselectAll()
+                building.deselect()
             else
                 -- No item. Try a building.
                 local bid = building.hitTestAt(x, y)
                 if bid then
                     building.select(bid)
+                    -- Buildings are single-select and mutually exclusive
+                    -- with unit/item selection; clear the others
+                    -- unconditionally (Shift adds units, not buildings).
                     item.deselect()
-                    if not shift then unit.deselectAll() end
+                    unit.deselectAll()
                 else
                     -- Click missed everything. With Shift held, keep
                     -- the current selection (so shift-dragging from
