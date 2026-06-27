@@ -282,7 +282,11 @@ end
 -----------------------------------------------------------
 
 function panel.tryClaimClick(button, x, y)
-    if not panel.visible then return false end
+    -- Also gate on the overlay here, not just in update(): the panel
+    -- ticks at 0.1s while F8 toggles the overlay off immediately, so a
+    -- quick click in that gap would otherwise be swallowed by the stale
+    -- panel while debug mode is already off.
+    if not panel.visible or not debugOverlay.isVisible() then return false end
     if button ~= MOUSE_LEFT then return false end
 
     -- onMouseDown delivers WINDOW pixels; our rects are in
