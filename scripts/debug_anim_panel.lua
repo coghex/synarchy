@@ -352,6 +352,10 @@ function panel.update(dt)
 end
 
 function panel.shutdown()
+    -- Clear any armed preview first so the affected unit is unfrozen and
+    -- un-force-looped — otherwise unloading the panel mid-preview leaves
+    -- the unit stuck (frozen + force-looped) with no way to recover.
+    disarm()
     destroyPage()
     engine.logInfo("DebugAnimPanel: shut down")
 end
