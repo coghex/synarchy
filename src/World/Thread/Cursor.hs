@@ -38,7 +38,16 @@ pollCursorInfo env = do
     -- non-active visible page processed later in the loop overwrite or clear
     -- the active world's info (issue #129). Resolve the single active world
     -- through the canonical rule every other current-world read uses.
-    forM_ (resolveActiveWorld manager) $ \(_pid, worldState) → do
+    let mActive = resolveActiveWorld manager
+    -- Detect an active-world switch. world.show/hide swaps 'wmVisible'
+    -- without touching any cursor field, so the per-world snapshot below
+    -- can't see the change; without this the panel keeps showing the
+    -- previous world's text until the cursor next moves (issue #129).
+    lastActive ← readIORef (hudActivePageRef env)
+    let activePid = fst <$> mActive
+    when (activePid ≢ lastActive) $
+        writeIORef (hudActivePageRef env) activePid
+    forM_ mActive $ \(pid, worldState) → do
         cs   ← readIORef (wsCursorRef worldState)
         snap ← readIORef (wsCursorSnapshotRef worldState)
         mParams ← readIORef (wsGenParamsRef worldState)
@@ -47,6 +56,7 @@ pollCursorInfo env = do
             curWorld = worldSelectedTile cs
             oldZoom  = csZoomSel snap
             oldWorld = csWorldSel snap
+            activeChanged = Just pid ≢ lastActive
 
         -- The chunk (zoom-map) and tile (zoomed-in) selections can
         -- both be set at once, and BOTH drive the panel's
@@ -82,18 +92,30 @@ pollCursorInfo env = do
                 sendHudInfo env "" ""
                 sendHudWeatherInfo env ""
                 sendHudResourcesInfo env ""
-        when (curZoom ≢ oldZoom ∨ worldChanged) $
-            if worldChanged
-                then case curWorld of
-                    Just (gx, gy, z) → do
-                        sendTileInfo env worldState mParams gx gy z
-                        sendHudWeatherInfo env ""
-                        sendHudResourcesInfo env ""
+            showTile gx gy z = do
+                sendTileInfo env worldState mParams gx gy z
+                sendHudWeatherInfo env ""
+                sendHudResourcesInfo env ""
+            showChunk baseGX baseGY =
+                sendChunkInfo env worldState mParams baseGX baseGY
+        if activeChanged
+            -- The active world just changed: repaint the panel with THIS
+            -- world's current selection from scratch (tile owns the panel
+            -- when present, else chunk, else blank) regardless of whether
+            -- its own cursor fields moved.
+            then case curWorld of
+                Just (gx, gy, z) → showTile gx gy z
+                Nothing → case curZoom of
+                    Just (baseGX, baseGY) → showChunk baseGX baseGY
                     Nothing → blankPanel
-                else case curZoom of
-                    Just (baseGX, baseGY) →
-                        sendChunkInfo env worldState mParams baseGX baseGY
-                    Nothing → blankPanel
+            else when (curZoom ≢ oldZoom ∨ worldChanged) $
+                if worldChanged
+                    then case curWorld of
+                        Just (gx, gy, z) → showTile gx gy z
+                        Nothing → blankPanel
+                    else case curZoom of
+                        Just (baseGX, baseGY) → showChunk baseGX baseGY
+                        Nothing → blankPanel
 
         let newSnap = CursorSnapshot curZoom curWorld
         when (newSnap ≢ snap) $
