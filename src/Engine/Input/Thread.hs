@@ -320,6 +320,15 @@ processInput env inpSt event = case event of
                             -- the right-click to the world.
                             Nothing → case findClickableElementAt mousePos uiMgr' of
                                 Just _ → do
+                                    -- Consumed by a clickable control with no
+                                    -- right-click handler (e.g. an ordinary
+                                    -- button). Left-clicking such a control
+                                    -- clears textbox/dropdown focus via the
+                                    -- dispatched click event; the right-click
+                                    -- has no event to ride, so clear focus
+                                    -- explicitly here, otherwise a focused
+                                    -- widget stays captured.
+                                    Q.writeQueue lq LuaUIFocusLost
                                     logDebug logger CatUI
                                         "Right-click consumed by clickable UI element (no handler)"
                                     return ClickUI
