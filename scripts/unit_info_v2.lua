@@ -2139,10 +2139,14 @@ local function buildItemHint(it, equippedSlot)
             string.format("condition: %d%%", math.floor(it.condition + 0.5))
     end
     if it.weapon then
+        -- Per-instance sharpness (combat wear dulls iiSharpness); fall
+        -- back to the def's base only when the backend didn't supply
+        -- the live instance value.
+        local sharp = it.sharpness or it.weapon.baseSharpness or 0
         hintLines[#hintLines + 1] = string.format(
             "length %.0fcm  ·  sharpness %d",
             it.weapon.bladeLength or 0,
-            math.floor((it.weapon.baseSharpness or 0) + 0.5))
+            math.floor(sharp + 0.5))
         hintLines[#hintLines + 1] = string.format(
             "stab %.2f  ·  slash %.2f  ·  blunt %.2f",
             it.weapon.stabEffectiveness or 0,
@@ -2435,6 +2439,7 @@ local function collectInventoryAndEquipment(uid)
             quality      = it.quality,
             condition    = it.condition,
             weapon       = it.weapon,
+            sharpness    = it.sharpness,
             buffs        = it.buffs,
             unequippable = it.unequippable,
             equipped     = false,
@@ -2468,6 +2473,7 @@ local function collectInventoryAndEquipment(uid)
                 quality       = it.quality,
                 condition     = it.condition,
                 weapon        = it.weapon,
+                sharpness     = it.sharpness,
                 equipped      = true,
                 equippedSlot  = slotId,
             }
@@ -2491,6 +2497,7 @@ local function collectInventoryAndEquipment(uid)
             quality        = it.quality,
             condition      = it.condition,
             weapon         = it.weapon,
+            sharpness      = it.sharpness,
             buffs          = it.buffs,
             unequippable   = it.unequippable,
             equipped       = true,
