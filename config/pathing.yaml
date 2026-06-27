@@ -1,0 +1,44 @@
+# Unit pathing cost tunables.
+#
+# These weights drive how units choose routes: the cost of a single
+# grid step is the horizontal distance plus the modifiers below. The
+# planner (local A*) and the greedy mover both read the same numbers,
+# so they always agree on what a route costs.
+#
+# Every key is optional — an omitted key keeps its built-in default
+# (shown here), and a missing or malformed file falls back to all
+# defaults, so deleting this file is harmless. Edit a value and restart
+# to retune routing without recompiling.
+
+# Cost added per +1 z of a CLIFF climb (a vertical face). High enough
+# that units prefer flat detours; low enough that they'll climb when
+# nothing else is available.
+climb_factor: 10.0
+
+# Cost added per +1 z of a WALKABLE RAMP (a 1-z step the tile slopes up
+# to). Barely above flat so units walk up gentle slopes instead of
+# detouring around them or treating them as cliffs.
+ramp_factor: 0.5
+
+# Base of the exponential fall cost on a real fall: cost = fall_factor
+# ** drop. A 2-z drop costs fall_factor², a 3-z drop fall_factor³ — so
+# the planner avoids damaging drops in favour of any reasonable detour.
+fall_factor: 5.0
+
+# Drop magnitude (in z) at which a descent stops being a free walk-off
+# and becomes a costed/transitioned fall. A drop smaller than this is a
+# normal step-down; this drop or worse triggers the fall transition.
+fall_trigger_drop: 2
+
+# Cost added for wading one river tile. Rivers are passable at a
+# penalty (ocean and lava are impassable, not tunable here).
+river_penalty: 8.0
+
+# Cost added for wading one lake tile. Slightly higher than rivers
+# since lakes are usually deeper.
+lake_penalty: 12.0
+
+# Greedy-step cost above which the mover triggers a local A* detour to
+# look for a flatter route. Lower = pickier units (more replanning);
+# higher = greedier units that climb whatever is in their direct line.
+replan_cost_threshold: 5.0

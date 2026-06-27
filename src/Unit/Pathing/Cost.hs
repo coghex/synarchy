@@ -33,14 +33,9 @@ module Unit.Pathing.Cost
     , lookupFluidType
     , lookupSlopeAt
     , isCliffStep
-    -- * Tunables (constants for now; future: load from config)
-    , climbFactor
-    , rampFactor
-    , fallFactor
-    , fallTriggerDrop
-    , riverPenalty
-    , lakePenalty
-    , replanCostThreshold
+    -- * Tunables (loaded from config/pathing.yaml; see "Unit.Pathing.Config")
+    , PathingConfig(..)
+    , defaultPathingConfig
     ) where
 
 import UPrelude
@@ -53,62 +48,7 @@ import World.Types (WorldTileData(..), LoadedChunk(..), columnIndex, lookupChunk
 import World.Chunk.Types (ColumnTiles(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Generate (globalToChunk)
-
--- * Tunables
---
--- These are placeholder values to start with. Tune after seeing units
--- actually navigate. They live here so Phase D's threshold trigger
--- imports from the same place as the cost function itself.
-
--- | Cost added per +1 z of a CLIFF climb (a vertical face, per
---   `isCliffStep`). A 1-z cliff costs ~`climbFactor` on top of the
---   horizontal distance. High enough that units prefer flat detours;
---   low enough that they'll climb when nothing else is available.
-climbFactor ∷ Float
-climbFactor = 10.0
-
--- | Cost added per +1 z of a WALKABLE RAMP (a 1-z step whose tile has a
---   slope bit toward the source — `isCliffStep` is False). Barely above
---   flat so the planner walks up gentle slopes instead of detouring
---   around them or treating them as cliffs. This is what keeps the cost
---   layer (A*) in agreement with the movement layer, which already
---   walks ramps via `isCliffStep`.
-rampFactor ∷ Float
-rampFactor = 0.5
-
--- | Base for fall cost on a REAL fall (drop ≥ `fallTriggerDrop`):
---   `fallCost = fallFactor ** drop`, exponential in height. A 2-z drop
---   is `fallFactor²`, a 3-z drop `fallFactor³` — steep enough that the
---   planner takes any reasonable detour rather than a damaging fall.
---   Drops below the trigger (a single step down) cost nothing: they're
---   a free walk-off, matching the movement layer's `fallTriggerDz`.
-fallFactor ∷ Float
-fallFactor = 5.0
-
--- | Drop magnitude (in z) at which a descent stops being a free
---   step-down and becomes a costed fall. Mirrors
---   `Unit.Thread.Movement.fallTriggerDz` (kept as a local constant to
---   avoid a Cost↔Movement import cycle — Movement imports Cost).
-fallTriggerDrop ∷ Int
-fallTriggerDrop = 2
-
--- | Cost added for stepping into a river/lake tile. River and lake
---   are wadeable — high cost but not impassable. Ocean and lava are
---   `Nothing`.
-riverPenalty ∷ Float
-riverPenalty = 8.0
-
--- | Lake-crossing penalty. Slightly higher than rivers since lakes
---   are usually deeper.
-lakePenalty ∷ Float
-lakePenalty = 12.0
-
--- | If a greedy step's cost exceeds this, the mover triggers a local
---   A* to look for a flatter alternative. Lower = more replanning
---   (units pickier about route), higher = greedier (units climb
---   anything in their direct line).
-replanCostThreshold ∷ Float
-replanCostThreshold = 5.0
+import Unit.Pathing.Config (PathingConfig(..), defaultPathingConfig)
 
 -- * Cost function
 
@@ -125,12 +65,12 @@ replanCostThreshold = 5.0
 --   `Nothing` — units can't path into unloaded territory. This
 --   enforces the "movement clamped to loaded chunks" rule
 --   bottom-up.
-stepCost ∷ WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
-stepCost wtd (sgx, sgy) (dgx, dgy) = do
+stepCost ∷ PathingConfig → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
+stepCost pc wtd (sgx, sgy) (dgx, dgy) = do
     srcZ <- lookupTerrainZ wtd sgx sgy
     dstZ <- lookupTerrainZ wtd dgx dgy
     let fluidAtDst = lookupFluidType wtd dgx dgy
-    fluidCost <- fluidPenalty fluidAtDst
+    fluidCost <- fluidPenalty pc fluidAtDst
     -- No-corner-cutting: a diagonal step grazes the two axis-aligned
     -- neighbours of the source tile. Reject the step if either neighbour
     -- is impassable (Ocean/Lava/unloaded chunk), so a mover can't slip
@@ -142,7 +82,7 @@ stepCost wtd (sgx, sgy) (dgx, dgy) = do
     -- in its walk animation.)
     let isDiagonal = sgx ≢ dgx ∧ sgy ≢ dgy
         cornerBlocked = isDiagonal
-                      ∧ not (passable wtd dgx sgy ∧ passable wtd sgx dgy)
+                      ∧ not (passable pc wtd dgx sgy ∧ passable pc wtd sgx dgy)
     if cornerBlocked
       then Nothing
       else
@@ -157,14 +97,14 @@ stepCost wtd (sgx, sgy) (dgx, dgy) = do
             -- just walk up.
             climb  = if dz > 0
                      then if isCliffStep wtd (sgx, sgy) (dgx, dgy) srcZ dstZ
-                          then climbFactor * fromIntegral dz
-                          else rampFactor  * fromIntegral dz
+                          then pcClimbFactor pc * fromIntegral dz
+                          else pcRampFactor  pc * fromIntegral dz
                      else 0
             -- Downward: a single step is a free walk-off; a real fall
-            -- (drop ≥ fallTriggerDrop) costs an exponential in height so
+            -- (drop ≥ pcFallTriggerDrop) costs an exponential in height so
             -- the planner avoids damaging drops.
-            fall   = if negate dz ≥ fallTriggerDrop
-                     then fallFactor ** fromIntegral (negate dz)
+            fall   = if negate dz ≥ pcFallTriggerDrop pc
+                     then pcFallFactor pc ** fromIntegral (negate dz)
                      else 0
         in pure $! horizD + climb + fall + fluidCost
 
@@ -172,23 +112,23 @@ stepCost wtd (sgx, sgy) (dgx, dgy) = do
 --   is loaded (terrain z resolves) and its fluid isn't a non-wadeable
 --   barrier (Ocean/Lava). Used by the no-corner-cutting gate in
 --   `stepCost` to test the two axis-neighbours a diagonal step grazes.
-passable ∷ WorldTileData → Int → Int → Bool
-passable wtd gx gy =
+passable ∷ PathingConfig → WorldTileData → Int → Int → Bool
+passable pc wtd gx gy =
     case lookupTerrainZ wtd gx gy of
         Nothing → False
-        Just _  → case fluidPenalty (lookupFluidType wtd gx gy) of
+        Just _  → case fluidPenalty pc (lookupFluidType wtd gx gy) of
             Just _  → True
             Nothing → False
 
 -- | Map fluid type at the destination to a step-cost modifier.
 --   Ocean and lava are non-traversable (`Nothing`); rivers and lakes
 --   are wadeable at a penalty. Dry tiles add 0.
-fluidPenalty ∷ Maybe FluidType → Maybe Float
-fluidPenalty Nothing       = Just 0
-fluidPenalty (Just Ocean)  = Nothing
-fluidPenalty (Just Lava)   = Nothing
-fluidPenalty (Just River)  = Just riverPenalty
-fluidPenalty (Just Lake)   = Just lakePenalty
+fluidPenalty ∷ PathingConfig → Maybe FluidType → Maybe Float
+fluidPenalty _  Nothing       = Just 0
+fluidPenalty _  (Just Ocean)  = Nothing
+fluidPenalty _  (Just Lava)   = Nothing
+fluidPenalty pc (Just River)  = Just (pcRiverPenalty pc)
+fluidPenalty pc (Just Lake)   = Just (pcLakePenalty pc)
 
 -- * World lookups
 
