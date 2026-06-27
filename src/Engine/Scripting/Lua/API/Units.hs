@@ -367,21 +367,17 @@ loadUnitYamlFn env backendState = do
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
 
-lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
-lookupSurfaceZ env gx gy = do
-    wm ← readIORef (worldManagerRef env)
-    go (wmVisible wm) (wmWorlds wm)
-  where
-    (chunkCoord, (lx, ly)) = globalToChunk gx gy
-    go [] _ = return Nothing
-    go (pageId:rest) worlds =
-        case lookup pageId worlds of
-            Nothing → go rest worlds
-            Just ws → do
-                td ← readIORef (wsTilesRef ws)
-                case lookupChunk chunkCoord td of
-                    Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
-                    Nothing → go rest worlds
+-- | Surface Z at a tile in ONE specific world. The unit's height must
+--   come from the same page the unit is stamped into — walking wmVisible
+--   instead can read another page's terrain (or 0) when more than one
+--   world is live, which reintroduces #196 as a wrong-height spawn.
+surfaceZInWorld ∷ WorldState → Int → Int → IO (Maybe Int)
+surfaceZInWorld ws gx gy = do
+    let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+    td ← readIORef (wsTilesRef ws)
+    pure $ case lookupChunk chunkCoord td of
+        Just lc → Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
+        Nothing → Nothing
 
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
@@ -460,14 +456,18 @@ unitSpawnFn env = do
                         logWarn logger CatAsset
                             "unit.spawn: no world to spawn into"
                         return (-1)
-                    (Just _, Just (pageId, _)) → do
-                        -- Resolve Z
+                    (Just _, Just (pageId, ws)) → do
+                        -- Resolve Z from the SAME page the unit is stamped
+                        -- into (ws), not whatever world happens to be
+                        -- visible — otherwise an explicit pageId could be
+                        -- stamped correctly yet take another page's height
+                        -- (or 0) when several worlds are live (#196).
                         gz ← case zArg of
                             Just n  → return (fromIntegral n)
                             Nothing → do
                                 let gxi = floor gx ∷ Int
                                     gyi = floor gy ∷ Int
-                                mSurf ← lookupSurfaceZ env gxi gyi
+                                mSurf ← surfaceZInWorld ws gxi gyi
                                 case mSurf of
                                     Just z  → return z
                                     Nothing → do
