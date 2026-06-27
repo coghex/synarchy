@@ -343,6 +343,13 @@ equipmentGetLoadoutFn env = do
                         Lua.pushnumber
                             (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        -- Instance sharpness, not the def's base —
+                        -- combat wear dulls the equipped weapon
+                        -- (iiSharpness); the tooltip must show the live
+                        -- value (matches unit.getInventory).
+                        Lua.pushnumber
+                            (Lua.Number (realToFrac (iiSharpness inst)))
+                        Lua.setfield (-2) "sharpness"
                         -- Gate quality / condition on def specs so
                         -- canteens / rations don't show "100%" they
                         -- never had.
@@ -422,6 +429,11 @@ pushItemInstance inst itemMgr = do
     Lua.setfield (-2) "defName"
     Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
     Lua.setfield (-2) "currentFill"
+    -- Instance sharpness, not the def's base — combat wear dulls the
+    -- worn weapon (iiSharpness), and the inventory/loadout tooltip
+    -- must show the live value, mirroring unit.getInventory.
+    Lua.pushnumber (Lua.Number (realToFrac (iiSharpness inst)))
+    Lua.setfield (-2) "sharpness"
     -- Quality / condition only surface when the def declares them —
     -- items like canteens / rations don't have these qualities and
     -- shouldn't show "100%" in tooltips.

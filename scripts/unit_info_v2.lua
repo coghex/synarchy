@@ -2139,10 +2139,27 @@ local function buildItemHint(it, equippedSlot)
             string.format("condition: %d%%", math.floor(it.condition + 0.5))
     end
     if it.weapon then
+        -- Live effective sharpness on the def's engineering scale
+        -- (lower = sharper), so distinct weapons stay distinct and a
+        -- worn edge reads correctly. `it.sharpness` is the instance's
+        -- 0..100 edge-wear % (100 = factory edge); mirror combat's
+        -- derivation: effective = base * 100/wear (wear clamped 10..100,
+        -- matching Combat.Resolution). Falls back to the raw base when
+        -- the backend didn't supply the instance wear value.
+        local base = it.weapon.baseSharpness or 0
+        local wear = it.sharpness
+        local sharp = base
+        if wear ~= nil then
+            -- Clamp 10..100 like Combat.Resolution, so a fully-dulled
+            -- edge (wear 0) reads as the dullest case (base * 10), not a
+            -- pristine fallback. Only a missing field falls back to base.
+            local w = math.max(10, math.min(100, wear))
+            sharp = base * (100.0 / w)
+        end
         hintLines[#hintLines + 1] = string.format(
             "length %.0fcm  ·  sharpness %d",
             it.weapon.bladeLength or 0,
-            math.floor((it.weapon.baseSharpness or 0) + 0.5))
+            math.floor(sharp + 0.5))
         hintLines[#hintLines + 1] = string.format(
             "stab %.2f  ·  slash %.2f  ·  blunt %.2f",
             it.weapon.stabEffectiveness or 0,
@@ -2172,7 +2189,11 @@ local function computeEquipKey(uid, clsName, loadout, accessories)
     if loadout then
         local pairsT = {}
         for slotId, item in pairs(loadout) do
+            -- Include instance sharpness so an equipped weapon dulled by
+            -- combat wear rebuilds (and its tooltip refreshes) without
+            -- needing an unrelated equipment change.
             pairsT[#pairsT + 1] = slotId .. "=" .. (item.defName or "?")
+                                  .. "@" .. tostring(item.sharpness or 0)
         end
         table.sort(pairsT)
         parts[#parts + 1] = table.concat(pairsT, ";")
@@ -2182,6 +2203,7 @@ local function computeEquipKey(uid, clsName, loadout, accessories)
         for i, it in ipairs(accessories) do
             accPart[#accPart + 1] = i .. ":" .. (it.defName or "?")
                                     .. "@" .. tostring(it.condition or 0)
+                                    .. "/" .. tostring(it.sharpness or 0)
         end
         parts[#parts + 1] = table.concat(accPart, ";")
     end
@@ -2435,6 +2457,7 @@ local function collectInventoryAndEquipment(uid)
             quality      = it.quality,
             condition    = it.condition,
             weapon       = it.weapon,
+            sharpness    = it.sharpness,
             buffs        = it.buffs,
             unequippable = it.unequippable,
             equipped     = false,
@@ -2468,6 +2491,7 @@ local function collectInventoryAndEquipment(uid)
                 quality       = it.quality,
                 condition     = it.condition,
                 weapon        = it.weapon,
+                sharpness     = it.sharpness,
                 equipped      = true,
                 equippedSlot  = slotId,
             }
@@ -2491,6 +2515,7 @@ local function collectInventoryAndEquipment(uid)
             quality        = it.quality,
             condition      = it.condition,
             weapon         = it.weapon,
+            sharpness      = it.sharpness,
             buffs          = it.buffs,
             unequippable   = it.unequippable,
             equipped       = true,
@@ -2504,14 +2529,19 @@ end
 -- Build the per-row stacking key. Returns nil for equipped items so
 -- they never collapse into a stack (each occupies a distinct slot).
 -- Non-equipped items only merge when their defName + quality +
--- condition all match exactly — a 100% motor and a 99% motor stay
--- on two rows so the player sees the real spread of conditions.
+-- condition match exactly — a 100% motor and a 99% motor stay on two
+-- rows so the player sees the real spread of conditions. Sharpness is
+-- added ONLY for weapons (the only items whose tooltip shows it) so two
+-- weapons with differing edge wear likewise split; armor and other gear
+-- also carry a combat-mutated iiSharpness but never display it, so
+-- splitting their rows on it would be an invisible, confusing reason.
 local function stackKey(it)
     if it.equipped then return nil end
     return table.concat({
         it.defName,
         tostring(it.quality   or "_"),
         tostring(it.condition or "_"),
+        it.weapon and tostring(it.sharpness or "_") or "_",
     }, "|")
 end
 
@@ -2587,6 +2617,7 @@ local function computeInvKey(uid, activeTab, items)
         parts[#parts + 1] = it.defName .. "/" .. tostring(it.currentFill)
             .. "/" .. (it.equipped and "e" or "i")
             .. "/" .. tostring(it.stackCount or 1)
+            .. "/" .. tostring(it.sharpness or 0)
     end
     return table.concat(parts, "|")
 end
