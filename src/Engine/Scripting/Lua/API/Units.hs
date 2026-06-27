@@ -1681,12 +1681,29 @@ unitTransferItemToBuildingFn env = do
                                                             (bmInstances bm) }
                                        , True)
                     unless delivered $ do
-                        logger ← Lua.liftIO $ readIORef (loggerRef env)
-                        Lua.liftIO $ logWarn logger CatThread $
-                            "transferItemToBuilding: building "
-                            <> T.pack (show nB)
-                            <> " gone between pop and deliver — "
-                            <> defName <> " lost"
+                        -- Destination vanished between pop and deliver:
+                        -- roll the popped instance back into the unit's
+                        -- inventory so the move stays all-or-nothing
+                        -- instead of dropping the item on the floor.
+                        restored ← Lua.liftIO $
+                            atomicModifyIORef' (unitManagerRef env) $ \um →
+                                case HM.lookup uid (umInstances um) of
+                                    Nothing → (um, False)
+                                    Just u →
+                                        let u' = u { uiInventory =
+                                                       item : uiInventory u }
+                                        in (um { umInstances = HM.insert uid u'
+                                                                (umInstances um) }
+                                           , True)
+                        unless restored $ do
+                            logger ← Lua.liftIO $ readIORef (loggerRef env)
+                            Lua.liftIO $ logWarn logger CatThread $
+                                "transferItemToBuilding: building "
+                                <> T.pack (show nB)
+                                <> " gone between pop and deliver and unit "
+                                <> T.pack (show nU)
+                                <> " also vanished — "
+                                <> defName <> " lost"
                     Lua.pushboolean delivered
                     return 1
         _ → do
@@ -1800,12 +1817,29 @@ unitDepositToCargoFn env = do
                                                         (bmInstances bm) }
                                            , True)
                         unless ok $ do
-                            logger ← Lua.liftIO $ readIORef (loggerRef env)
-                            Lua.liftIO $ logWarn logger CatThread $
-                                "depositToCargo: building "
-                                <> T.pack (show nB)
-                                <> " gone between pop and deposit — "
-                                <> defName <> " lost"
+                            -- Destination building vanished between pop
+                            -- and deposit: restore the popped instance to
+                            -- the unit's inventory (all-or-nothing).
+                            restored ← Lua.liftIO $
+                                atomicModifyIORef' (unitManagerRef env) $ \um →
+                                    case HM.lookup uid (umInstances um) of
+                                        Nothing → (um, False)
+                                        Just u →
+                                            let u' = u { uiInventory =
+                                                           item : uiInventory u }
+                                            in (um { umInstances =
+                                                       HM.insert uid u'
+                                                         (umInstances um) }
+                                               , True)
+                            unless restored $ do
+                                logger ← Lua.liftIO $ readIORef (loggerRef env)
+                                Lua.liftIO $ logWarn logger CatThread $
+                                    "depositToCargo: building "
+                                    <> T.pack (show nB)
+                                    <> " gone between pop and deposit and unit "
+                                    <> T.pack (show nU)
+                                    <> " also vanished — "
+                                    <> defName <> " lost"
                         Lua.pushboolean ok
                         return 1
         _ → do
@@ -1855,12 +1889,28 @@ unitWithdrawFromCargoFn env = do
                                                             (umInstances um) }
                                        , True)
                     unless ok $ do
-                        logger ← Lua.liftIO $ readIORef (loggerRef env)
-                        Lua.liftIO $ logWarn logger CatThread $
-                            "withdrawFromCargo: unit "
-                            <> T.pack (show nU)
-                            <> " gone between pop and append — "
-                            <> defName <> " lost"
+                        -- Destination unit vanished between pop and
+                        -- append: restore the popped instance to the
+                        -- building's storage (all-or-nothing).
+                        restored ← Lua.liftIO $
+                            atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                                case HM.lookup bid (bmInstances bm) of
+                                    Nothing → (bm, False)
+                                    Just inst →
+                                        let inst' = inst
+                                                { biStorage = item : biStorage inst }
+                                        in (bm { bmInstances = HM.insert bid inst'
+                                                                  (bmInstances bm) }
+                                           , True)
+                        unless restored $ do
+                            logger ← Lua.liftIO $ readIORef (loggerRef env)
+                            Lua.liftIO $ logWarn logger CatThread $
+                                "withdrawFromCargo: unit "
+                                <> T.pack (show nU)
+                                <> " gone between pop and append and building "
+                                <> T.pack (show nB)
+                                <> " also vanished — "
+                                <> defName <> " lost"
                     Lua.pushboolean ok
                     return 1
         _ → do
