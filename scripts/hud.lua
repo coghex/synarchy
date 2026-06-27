@@ -698,7 +698,20 @@ end
 
 -- Wheel hook (no UI element under cursor, no shift). Reconcile immediately
 -- so a transition the wheel itself crosses doesn't wait for the next tick.
+--
+-- Gated on hud.visible, same as hud.update()/hud.onMouseDown(): uiManager
+-- still routes game scrolls here in the plain "test_arena" loading/builder
+-- state, where the HUD is hidden (hud.show() only runs for the
+-- "test_arena_view"/"world_view" gameplay states). Without the gate, a
+-- scroll there would run reconcileView()'s item.deselect() against
+-- activeWorld behind the hidden HUD — the very wrong-world clear this
+-- change moves engine-side for the hide path (#175). The per-tick driver
+-- in hud.update() is gated the same way, so reconcile only ever runs while
+-- the HUD owns the view.
 function hud.onScroll(dx, dy)
+    if not hud.visible then
+        return
+    end
     hud.reconcileView()
 end
 
