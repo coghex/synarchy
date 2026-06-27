@@ -392,19 +392,7 @@ function hud.createUI()
         boxTexSet  = hud.boxTexSet,
         menuFont   = hud.menuFont,
         buttonSize = hud.baseSizes.buttonSize,
-        selectDefaultTool = function()
-            -- Switch back to the default tool (index 3, after tool_mine
-            -- at 1 and tool_build at 2). Must go through
-            -- applyOptionByName, not a bare toggle.select: toggle.select
-            -- is visual-only and does NOT fire the toolbar onChange, so
-            -- the engine-side ToolMode would stay BuildTool after a
-            -- placement/cancel/Escape (HUD icon flips to default, but
-            -- world.getToolMode() and the next save still report "build").
-            -- applyOptionByName mirrors a real user pick: it selects the
-            -- tool_default slot AND fires onChange → world.setToolMode
-            -- ("tool_default") → DefaultTool. (#103)
-            toggle.applyOptionByName(hud.toolToggleId, "tool_default")
-        end,
+        selectDefaultTool = hud.selectDefaultTool,
     })
 
     -- Mine tool: needs the hud reference for worldId / current view.
@@ -486,6 +474,27 @@ function hud.createUI()
 end
 
 -----------------------------------------------------------
+-- Tool selection
+-----------------------------------------------------------
+
+-- Switch the toolbar back to the default tool. Routes through
+-- applyOptionByName, NOT a bare toggle.select: toggle.select is
+-- visual-only and skips the toolbar onChange, so the engine-side
+-- ToolMode would stay on the previous tool (e.g. BuildTool after a
+-- placement/cancel/Escape — HUD icon flips to default, but
+-- world.getToolMode() and the next save still report "build").
+-- applyOptionByName mirrors a real user pick: it selects the
+-- tool_default slot AND fires onChange → world.setToolMode
+-- (..., "tool_default") → DefaultTool, and routes onToolMode so any
+-- stale picker / mine anchor is cleared. Used by the build tool's
+-- auto-exit and by the post-load reset in hud.show. (#103)
+function hud.selectDefaultTool()
+    if hud.toolToggleId then
+        toggle.applyOptionByName(hud.toolToggleId, "tool_default")
+    end
+end
+
+-----------------------------------------------------------
 -- Show / Hide
 -----------------------------------------------------------
 
@@ -525,6 +534,19 @@ function hud.show()
     -- gameplay regardless of zoom level.
     if hud.global_page then
         UI.showPage(hud.global_page)
+    end
+
+    -- A just-loaded world starts on the default tool (engine ToolMode is
+    -- reset on load in World/Thread/Command/Save.hs). Fresh sessions
+    -- rebuild the toolbar on the default slot, but a within-session load
+    -- keeps the Lua singleton's previous selection — reset it here so the
+    -- visible tool matches the engine. The flag is set by
+    -- mainMenu.loadAndShowSave and consumed on the first show after the
+    -- load completes (the HUD is hidden behind the loading screen until
+    -- then, so this is that show). (#103)
+    if hud.pendingLoadToolReset then
+        hud.pendingLoadToolReset = false
+        hud.selectDefaultTool()
     end
 
     engine.logDebug("HUD shown")

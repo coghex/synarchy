@@ -371,6 +371,10 @@ function mainMenu.loadAndShowSave(saveName)
     worldManager.currentWorld = "main_world"
     worldManager.active = true
     worldView.loadedFromSave = true
+    -- A loaded world comes up on the default tool; tell the HUD to reset
+    -- its toolbar to match the engine's reset ToolMode on the first show
+    -- after the load completes (consumed in hud.show). (#103)
+    require("scripts.hud").pendingLoadToolReset = true
 
     worldView.sendTexturesToWorld("main_world")
     world.show("main_world")

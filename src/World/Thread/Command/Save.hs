@@ -36,6 +36,7 @@ import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Save.Serialize (saveWorld)
 import World.Save.Types (toBuildingSnapshot, fromBuildingSnapshot
                         , toUnitSnapshot, fromUnitSnapshot)
+import World.Tool.Types (ToolMode(DefaultTool))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import Building.Types (BuildingManager(..), unBuildingId, buildingsOnPage)
@@ -213,7 +214,15 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef (wsTimeScaleRef worldState)
         (if sdEnginePaused saveData then 0 else sdTimeScale saveData)
     writeIORef (wsMapModeRef worldState) (sdMapMode saveData)
-    writeIORef (wsToolModeRef worldState) (sdToolMode saveData)
+    -- A loaded world starts on the default tool, NOT the tool that was
+    -- active at save time. The HUD toolbar always comes up on the
+    -- default slot after a load (fresh sessions rebuild it there;
+    -- within-session loads reset it Lua-side — scripts/hud.lua
+    -- pendingLoadToolReset), so the engine ToolMode must match or
+    -- world.getToolMode() and the toolbar would disagree. sdToolMode is
+    -- still recorded at save time (above) but intentionally not restored
+    -- here. (#103)
+    writeIORef (wsToolModeRef worldState) DefaultTool
     -- v2 (Phase 1): engine-level refs. enginePaused is normally True
     -- here (auto-pause-on-save), so the loaded world starts paused
     -- and the player has to explicitly resume. gameTime restoration
