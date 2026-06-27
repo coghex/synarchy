@@ -174,9 +174,12 @@ local function tickOne(bid, info)
 
     -- Units produced by player-built portal buildings are player-
     -- controlled. Pass faction explicitly so the spawn-time-only
-    -- faction system gets the right tag.
+    -- faction system gets the right tag. Pass the building's OWN page
+    -- (info.page) so the unit lands in the building's world even if the
+    -- active page changes between the active-page scan and this call
+    -- (#196) — unit.spawn otherwise stamps the active page.
     local newUid = unit.spawn(unitType, spawnX, spawnY,
-                              nil, "player")
+                              nil, "player", info.page)
     if not newUid then
         engine.logWarn("BuildingSpawn: unit.spawn failed at "
             .. spawnX .. "," .. spawnY)

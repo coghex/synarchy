@@ -105,6 +105,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
 import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
+import World.Page.Types (WorldPageId(..))
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -385,12 +386,19 @@ lookupSurfaceZ env gx gy = do
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
 --
---   Signature: unit.spawn(defName, gx, gy, [gz], [factionId])
+--   Signature: unit.spawn(defName, gx, gy, [gz], [factionId], [pageId])
 --   factionId is the spawn-time faction tag — "player" for player-
 --   controlled, "wildlife" for everything else. Defaults to
 --   "wildlife" when omitted. The arg can sit at slot 4 (when gz is
 --   omitted) or slot 5 (when both are supplied); both shapes work
 --   so callers don't have to pass an explicit nil for gz.
+--   pageId (slot 6) optionally pins the spawn to a specific live world
+--   page instead of the active one. A building spawning a unit must
+--   pass its OWN page here: scoping the caller's per-tick scan to the
+--   active page is not enough, because the active page can change (a
+--   queued world.show/hide on the world thread) between the scan and
+--   this call, which would otherwise route the unit into the wrong
+--   world (#196). Omitted → the active world, as before.
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
     nameArg     ← Lua.tostring 1
@@ -409,6 +417,7 @@ unitSpawnFn env = do
         Lua.TypeString → Lua.tostring 4
         _              → return Nothing
     factionArg5 ← Lua.tostring 5
+    pageArg6    ← Lua.tostring 6
 
     case nameArg of
         Nothing → do
@@ -433,16 +442,23 @@ unitSpawnFn env = do
             result ← Lua.liftIO $ do
                 -- Check def exists
                 um ← readIORef (unitManagerRef env)
-                -- Resolve the world the unit will belong to (the active
-                -- world). A unit needs a world to live in, so reject the
-                -- spawn when none is active (#78).
-                mActive ← activeWorldPage env
+                -- Resolve the world the unit will belong to. An explicit
+                -- pageId (slot 6) pins it to that live page; otherwise it
+                -- defaults to the active world (#78). A unit needs a world
+                -- to live in, so reject the spawn when the target page
+                -- doesn't resolve to a live world.
+                mActive ← case pageArg6 of
+                    Just pbs → do
+                        let pid = WorldPageId (TE.decodeUtf8 pbs)
+                        wm ← readIORef (worldManagerRef env)
+                        pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
+                    Nothing  → activeWorldPage env
                 case (HM.lookup name (umDefs um), mActive) of
                     (Nothing, _) → return (-1)
                     (_, Nothing) → do
                         logger ← readIORef (loggerRef env)
                         logWarn logger CatAsset
-                            "unit.spawn: no active world to spawn into"
+                            "unit.spawn: no world to spawn into"
                         return (-1)
                     (Just _, Just (pageId, _)) → do
                         -- Resolve Z
