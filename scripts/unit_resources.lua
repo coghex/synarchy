@@ -359,6 +359,24 @@ end
 -----------------------------------------------------------
 function unitResources.init(scriptId)
     engine.logInfo("Unit resources tick initializing...")
+    -- Save hook: this module keeps two uid-keyed caches —
+    -- `unitAlertState` (starvation/dehydration warning debounce) and
+    -- `droppedSlots` (one-shot disabled-hand drop suppression). Both
+    -- are transient debounce state with nothing worth persisting, so
+    -- we register NO serializer (no blob is written into the save).
+    -- The deserializer is what matters: a load replaces unitManagerRef
+    -- from the snapshot and can rewind umNextId, so the same uid can be
+    -- reused by a different unit. Clearing the caches on every load
+    -- (deserializeAll invokes registered deserializers with a nil blob
+    -- when no blob is present) prevents stale suppression state from
+    -- attaching to a reused id. We clear IN-PLACE because the tables
+    -- are upvalues captured by checkSurvivalAlerts / emitDeathAlert /
+    -- dropDisabledHandWeapons; reassigning would orphan those closures.
+    local saveMods = require("scripts.lib.save_modules")
+    saveMods.register("unit_resources", nil, function(_blob)
+        for k in pairs(unitAlertState) do unitAlertState[k] = nil end
+        for k in pairs(droppedSlots)   do droppedSlots[k]   = nil end
+    end)
 end
 
 -----------------------------------------------------------
