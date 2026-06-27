@@ -56,6 +56,7 @@ import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
+import Unit.Pathing.Config (PathingConfig)
 import Sim.Command.Types (SimCommand)
 
 data EngineEnv = EngineEnv
@@ -159,6 +160,12 @@ data EngineEnv = EngineEnv
     --   each frame and draws an alpha-blended (and possibly red-tinted)
     --   sprite at the hovered tile.
   , worldGenConfigRef   ∷ IORef WorldGenConfig
+  , pathingConfigRef    ∷ IORef PathingConfig
+    -- ^ Unit pathing cost tunables (climb/ramp/fall/river/lake
+    --   penalties + replan threshold), loaded from
+    --   @config/pathing.yaml@ at init (defaults if absent). In an IORef
+    --   so a future settings UI can retune routing live; the movement
+    --   tick rereads it each tick.
   , simQueue           ∷ Q.Queue SimCommand
   , enginePausedRef    ∷ IORef Bool
     -- ^ Global pause flag. When True, threads that advance simulated

@@ -50,6 +50,7 @@ import Infection.Types (emptyInfectionManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
+import Unit.Pathing.Config (loadPathingConfig)
 
 data EngineInitResult = EngineInitResult
   { eirEnv ∷ EngineEnv }
@@ -131,6 +132,8 @@ initializeEngineWith logBackend = do
   injuryEventsRef ← newIORef Combat.Types.emptyEventQueue
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
+  pathingConfig ← loadPathingConfig logger "config/pathing.yaml"
+  pathingConfigRef ← newIORef pathingConfig
 
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
@@ -208,6 +211,7 @@ initializeEngineWith logBackend = do
         , injuryEventsRef    = injuryEventsRef
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
+        , pathingConfigRef   = pathingConfigRef
         , simQueue          = simQueue
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef

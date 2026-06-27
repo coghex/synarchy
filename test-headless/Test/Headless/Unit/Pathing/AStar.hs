@@ -15,6 +15,12 @@ import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
 import Structure.Types (emptyChunkStructures)
 import Unit.Pathing.AStar
+import Unit.Pathing.Cost (PathingConfig, defaultPathingConfig)
+
+-- A* cost comes from the pathing config; the tests use the default
+-- profile (the historical hard-coded weights).
+pc ∷ PathingConfig
+pc = defaultPathingConfig
 
 flatChunk ∷ Int → LoadedChunk
 flatChunk terrZ =
@@ -76,13 +82,13 @@ spec = do
             let wtd = worldWith (flatChunk 5)
 
             it "src == dst → empty path" $
-                localAStar wtd (3, 3) (3, 3) 16 `shouldBe` []
+                localAStar pc wtd (3, 3) (3, 3) 16 `shouldBe` []
 
             it "one cardinal step" $
-                localAStar wtd (3, 3) (4, 3) 16 `shouldBe` [(4, 3)]
+                localAStar pc wtd (3, 3) (4, 3) 16 `shouldBe` [(4, 3)]
 
             it "corner-to-corner of chunk uses 15 diagonal steps" $ do
-                let path = localAStar wtd (0, 0) (15, 15) 32
+                let path = localAStar pc wtd (0, 0) (15, 15) 32
                 length path `shouldBe` 15
                 last path `shouldBe` (15, 15)
 
@@ -95,7 +101,7 @@ spec = do
                 onLava (x, y) = x ≡ 8 ∧ y > 0 ∧ y < 15
 
             it "routes around the lava wall" $ do
-                let path = localAStar wtd (5, 5) (12, 5) 32
+                let path = localAStar pc wtd (5, 5) (12, 5) 32
                 any onLava path `shouldBe` False
                 last path `shouldBe` (12, 5)
 
@@ -105,7 +111,7 @@ spec = do
                     if lx ≡ 8 then (10, Just Lava) else (5, Nothing)
 
             it "returns a partial path that ends at the wall" $ do
-                let path = localAStar wtd (5, 5) (12, 5) 16
+                let path = localAStar pc wtd (5, 5) (12, 5) 16
                 case path of
                     [] → expectationFailure "expected partial progress toward wall"
                     _  → let (lx, _) = last path
@@ -115,7 +121,7 @@ spec = do
             let wtd = worldWith (flatChunk 5)
 
             it "tiny radius yields a path that stops at the bound" $ do
-                let path = localAStar wtd (0, 0) (15, 15) 3
+                let path = localAStar pc wtd (0, 0) (15, 15) 3
                 length path `shouldBe` 3
                 last path `shouldBe` (3, 3)
 
@@ -133,7 +139,7 @@ spec = do
                        else (5, Nothing)
 
             it "prefers the flat passage at ly=0 over climbing the ridge" $ do
-                let path = localAStar wtd (5, 5) (12, 5) 32
+                let path = localAStar pc wtd (5, 5) (12, 5) 32
                 -- Path must include at least one tile at ly=0.
                 any (\(_, y) → y ≡ 0) path `shouldBe` True
                 last path `shouldBe` (12, 5)

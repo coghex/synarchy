@@ -149,6 +149,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
+                   Test.Headless.Unit.Pathing.Config
                    Test.Headless.Unit.Render.PickFrame
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Injury
@@ -196,6 +197,8 @@ test-suite synarchy-test-headless
                 , deepseq
                 , random
                 , linear
+                , bytestring
+                , yaml
     default-language: GHC2024
     if flag(dev)
       if os(darwin)
@@ -401,6 +404,7 @@ library
                      Unit.Selection
                      Unit.HitTest
                      Unit.LineOfSight
+                     Unit.Pathing.Config
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
                      Unit.Fall
