@@ -1009,7 +1009,16 @@ QUALITY_THRESHOLDS = {
                                   # "floating lake" (deep water column)
                                   # count rises. High-variance metric,
                                   # recalibrated 2026-06-08.
-    "FLOATING_LAVA":        100,  # not observed in baselines
+    "FLOATING_LAVA":        450,  # observed max 301 (seed 1337): a deep
+                                  # but FULLY CONTAINED lava pool (lava
+                                  # pools v3) — every dry tile bordering
+                                  # the pool sits at or above the lava
+                                  # surface, so nothing is perched/spilling;
+                                  # the metric just measures column depth,
+                                  # exactly like FLOATING_LAKE. The old 100
+                                  # ("not observed") predated deep lava
+                                  # pools. 1.5× obs-max per the calibration
+                                  # policy above. Recalibrated 2026-06-27.
     "FLOATING_RIVER":       300,  # not observed in baselines
     "FLOATING_FLUID":       300,  # generic fallback
     "ISLAND_1TILE":         100,  # not observed; small islands possible
