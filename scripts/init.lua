@@ -306,7 +306,18 @@ function game.onMouseDown(button, x, y)
         -- shielded for free. It doesn't consume the click — the
         -- single-unit selection / tile-cursor logic below still runs;
         -- the drag only takes over on mouse-up if it passes threshold.
-        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+        --
+        -- Gate on isGameplayInputActive(): game.onMouseDown is a broadcast
+        -- handler with no focus gate, so a blank click on a non-gameplay
+        -- overlay that doesn't take UI focus — pause menu / keep-world
+        -- Settings, both of which bypass hud.hide() — would otherwise arm
+        -- a fresh box-select behind the overlay, defeating the
+        -- cancel()-on-entry teardown (#146). Same predicate the gameplay
+        -- key handlers use (#182). (The single-unit/tile-cursor logic
+        -- below reaching those overlays is the broader #154 concern.)
+        if require("scripts.ui_manager").isGameplayInputActive() then
+            require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+        end
 
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")

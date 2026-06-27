@@ -330,6 +330,11 @@ function pauseMenu.show(opts)
     -- screen, where it would stay visible and clickable (#147). Done
     -- before createUI so it happens regardless of the pause UI build.
     pcall(function() require("scripts.debug").hide() end)
+    -- Same story for an in-flight drag-select box (#146): the pause menu
+    -- bypasses hud.hide(), so an armed/dragging box would survive onto
+    -- the pause screen and could commit afterward. cancel() abandons it
+    -- (idempotent no-op when idle).
+    pcall(function() require("scripts.unit_drag_select").cancel() end)
     pauseMenu.createUI()
     if pauseMenu.page then
         UI.showPage(pauseMenu.page)

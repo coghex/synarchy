@@ -570,6 +570,11 @@ function hud.hide()
     pcall(function() require("scripts.unit_log").hide() end)
     pcall(function() require("scripts.cargo_inventory_panel").closeIfOpen() end)
     pcall(function() require("scripts.debug").hide() end)
+    -- Active drag-select box (#146): its overlay page is independent of
+    -- the HUD pages hidden above, so a box in progress when the HUD
+    -- hides (e.g. world-view exits to a menu) would leak across the
+    -- transition. cancel() abandons it without committing a selection.
+    pcall(function() require("scripts.unit_drag_select").cancel() end)
 
     engine.logDebug("HUD hidden")
 end
@@ -715,6 +720,13 @@ function hud.reconcileView()
     -- hide() is idempotent (no-op when no menu is open), so dismiss it on
     -- every band change.
     require("scripts.ui.context_menu").hide()
+    -- Active drag-select box (#146): the rect lives on its own
+    -- "drag_select_overlay" page, so the world/zoom page swap above
+    -- never touches it. An armed/dragging box would otherwise survive
+    -- the band change and resume or commit against the wrong view.
+    -- cancel() is idempotent (no-op when idle), so abandon any in-flight
+    -- box on every band change.
+    require("scripts.unit_drag_select").cancel()
     -- Mine-designation anchor (#144): a pending first-corner anchor lives in
     -- mine_tool's Lua state + the world cursor (mineAnchor) and renders a
     -- preview grid. The tool only acts in zoomed_in, but nothing cleared the

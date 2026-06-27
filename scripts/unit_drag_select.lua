@@ -202,6 +202,23 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
     dragSelect.state = "idle"
 end
 
+-- Idempotent teardown of an in-progress drag. Drops back to "idle" and
+-- hides the rect overlay WITHOUT committing a selection — the box is
+-- abandoned, not finished. Safe to call when already idle (no-op).
+--
+-- Called on view transitions (hud.reconcileView on zoom, hud.hide on
+-- menu): the overlay lives on its own "drag_select_overlay" page, so
+-- neither the world/zoom page swap nor the HUD-page hide touches it.
+-- Without this, an armed/dragging box survives the transition and could
+-- resume or commit later against the wrong view (#146).
+function dragSelect.cancel()
+    if dragSelect.state == "idle" then return end
+    if dragSelect.edgeIds then
+        setEdgesVisible(false)
+    end
+    dragSelect.state = "idle"
+end
+
 function dragSelect.shutdown()
     if dragSelect.edgeIds then
         for _, id in pairs(dragSelect.edgeIds) do
