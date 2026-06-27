@@ -1575,6 +1575,28 @@ popFirstByName name (x:xs)
     | otherwise          = fmap (\(it, rest) → (it, x:rest))
                                 (popFirstByName name xs)
 
+-- | Like 'popFirstByName' but also reports the 0-based index the item
+--   was removed from. Cross-owner transfers carry this so a failed
+--   move can splice the instance back at its ORIGINAL position rather
+--   than the front — UI (unit.getInventory / building.getStorage) and
+--   gameplay rely on stable insertion order, so a rolled-back transfer
+--   must leave the source list byte-for-byte unchanged.
+popFirstByNameIx ∷ Text → [ItemInstance]
+                → Maybe (ItemInstance, Int, [ItemInstance])
+popFirstByNameIx = go 0
+  where
+    go _ _    [] = Nothing
+    go i name (x:xs)
+        | iiDefName x ≡ name = Just (x, i, xs)
+        | otherwise          = fmap (\(it, j, rest) → (it, j, x:rest))
+                                    (go (i + 1) name xs)
+
+-- | Insert @x@ at index @i@. If @i@ is past the end (the list shrank
+--   under a concurrent edit between pop and rollback) it appends —
+--   graceful degradation, never a crash.
+insertAt ∷ Int → a → [a] → [a]
+insertAt i x xs = let (pre, post) = splitAt i xs in pre ++ x : post
+
 -- | unit.dropEquipmentToGround(uid, slotId) → bool
 --
 -- Removes whatever is equipped in `slotId` and drops it on the ground at
@@ -1654,18 +1676,18 @@ unitTransferItemToBuildingFn env = do
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, Nothing)
                     Just u →
-                        case popFirstByName defName (uiInventory u) of
+                        case popFirstByNameIx defName (uiInventory u) of
                             Nothing → (um, Nothing)
-                            Just (item, newInv) →
+                            Just (item, ix, newInv) →
                                 let u' = u { uiInventory = newInv }
                                 in (um { umInstances = HM.insert uid u'
                                                                 (umInstances um) }
-                                   , Just item)
+                                   , Just (item, ix))
             case mItem of
                 Nothing → do
                     Lua.pushboolean False
                     return 1
-                Just item → do
+                Just (item, ix) → do
                     delivered ← Lua.liftIO $
                         atomicModifyIORef' (buildingManagerRef env) $ \bm →
                             case HM.lookup bid (bmInstances bm) of
@@ -1682,16 +1704,19 @@ unitTransferItemToBuildingFn env = do
                                        , True)
                     unless delivered $ do
                         -- Destination vanished between pop and deliver:
-                        -- roll the popped instance back into the unit's
-                        -- inventory so the move stays all-or-nothing
-                        -- instead of dropping the item on the floor.
+                        -- splice the popped instance back into the
+                        -- unit's inventory at its ORIGINAL index so the
+                        -- move stays all-or-nothing — list order is
+                        -- gameplay/UI-visible, so a rollback must leave
+                        -- the source unchanged, not move the item.
                         restored ← Lua.liftIO $
                             atomicModifyIORef' (unitManagerRef env) $ \um →
                                 case HM.lookup uid (umInstances um) of
                                     Nothing → (um, False)
                                     Just u →
                                         let u' = u { uiInventory =
-                                                       item : uiInventory u }
+                                                       insertAt ix item
+                                                         (uiInventory u) }
                                         in (um { umInstances = HM.insert uid u'
                                                                 (umInstances um) }
                                            , True)
@@ -1793,18 +1818,18 @@ unitDepositToCargoFn env = do
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
                         Just u →
-                            case popFirstByName defName (uiInventory u) of
+                            case popFirstByNameIx defName (uiInventory u) of
                                 Nothing → (um, Nothing)
-                                Just (item, newInv) →
+                                Just (item, ix, newInv) →
                                     let u' = u { uiInventory = newInv }
                                     in (um { umInstances = HM.insert uid u'
                                                             (umInstances um) }
-                                       , Just item)
+                                       , Just (item, ix))
                 case mItem of
                     Nothing → do
                         Lua.pushboolean False
                         return 1
-                    Just item → do
+                    Just (item, ix) → do
                         ok ← Lua.liftIO $
                             atomicModifyIORef' (buildingManagerRef env) $ \bm →
                                 case HM.lookup bid (bmInstances bm) of
@@ -1818,15 +1843,17 @@ unitDepositToCargoFn env = do
                                            , True)
                         unless ok $ do
                             -- Destination building vanished between pop
-                            -- and deposit: restore the popped instance to
-                            -- the unit's inventory (all-or-nothing).
+                            -- and deposit: splice the popped instance back
+                            -- into the unit's inventory at its ORIGINAL
+                            -- index (all-or-nothing; order is visible).
                             restored ← Lua.liftIO $
                                 atomicModifyIORef' (unitManagerRef env) $ \um →
                                     case HM.lookup uid (umInstances um) of
                                         Nothing → (um, False)
                                         Just u →
                                             let u' = u { uiInventory =
-                                                           item : uiInventory u }
+                                                           insertAt ix item
+                                                             (uiInventory u) }
                                             in (um { umInstances =
                                                        HM.insert uid u'
                                                          (umInstances um) }
@@ -1866,18 +1893,18 @@ unitWithdrawFromCargoFn env = do
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
                     Just inst →
-                        case popFirstByName defName (biStorage inst) of
+                        case popFirstByNameIx defName (biStorage inst) of
                             Nothing → (bm, Nothing)
-                            Just (item, newStorage) →
+                            Just (item, ix, newStorage) →
                                 let inst' = inst { biStorage = newStorage }
                                 in (bm { bmInstances = HM.insert bid inst'
                                                           (bmInstances bm) }
-                                   , Just item)
+                                   , Just (item, ix))
             case mItem of
                 Nothing → do
                     Lua.pushboolean False
                     return 1
-                Just item → do
+                Just (item, ix) → do
                     ok ← Lua.liftIO $
                         atomicModifyIORef' (unitManagerRef env) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -1890,15 +1917,17 @@ unitWithdrawFromCargoFn env = do
                                        , True)
                     unless ok $ do
                         -- Destination unit vanished between pop and
-                        -- append: restore the popped instance to the
-                        -- building's storage (all-or-nothing).
+                        -- append: splice the popped instance back into
+                        -- the building's storage at its ORIGINAL index
+                        -- (all-or-nothing; storage order is visible).
                         restored ← Lua.liftIO $
                             atomicModifyIORef' (buildingManagerRef env) $ \bm →
                                 case HM.lookup bid (bmInstances bm) of
                                     Nothing → (bm, False)
                                     Just inst →
                                         let inst' = inst
-                                                { biStorage = item : biStorage inst }
+                                                { biStorage = insertAt ix item
+                                                                (biStorage inst) }
                                         in (bm { bmInstances = HM.insert bid inst'
                                                                   (bmInstances bm) }
                                            , True)
