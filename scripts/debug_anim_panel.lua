@@ -351,7 +351,16 @@ function panel.update(dt)
     -- is active. Otherwise the menu would pop on every unit selection in
     -- normal play. Reset activeUid so it rebuilds cleanly if the overlay
     -- is toggled back on while the same unit is still selected.
-    if not uid or not debugOverlay.isVisible() then
+    --
+    -- Also gate on debugOverlay.canShow() (gameplay input active AND the
+    -- zoomed-in world view) — the same test the click handler uses (#152).
+    -- The panel is only meaningful in the zoomed-in gameplay view, but it
+    -- is driven purely by unit selection, so without this it could linger
+    -- over the zoom map, the fade band, or a menu while a unit stays
+    -- selected (#145). Tying it directly to the gameplay view keeps it
+    -- from depending on the overlay's own teardown (#147) firing first,
+    -- and makes update() symmetric with tryClaimClick().
+    if not uid or not debugOverlay.isVisible() or not debugOverlay.canShow() then
         if panel.visible then hide() end
         panel.activeUid = nil
         return
