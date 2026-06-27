@@ -131,8 +131,12 @@ end
 -----------------------------------------------------------
 -- Tile-info broadcast: defer to tile when one is clicked
 -----------------------------------------------------------
-function buildingInfoWatch.onSetInfoText(basic, advanced)
-    if basic and basic ~= "" then
+-- `kind` separates a zoomed-in TILE selection from a zoom-map CHUNK
+-- selection (they share this broadcast). Only a tile should steal the
+-- panel from a selected building; a chunk click leaves it intact
+-- (issue #133).
+function buildingInfoWatch.onSetInfoText(basic, advanced, kind)
+    if basic and basic ~= "" and kind == "tile" then
         buildingInfoWatch.tilePushed = true
         if building.getSelected() then
             building.deselect()
