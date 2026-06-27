@@ -428,6 +428,12 @@ function game.onMouseDown(button, x, y)
                     { label = "Info",
                       callback = function()
                           unit.select(targetUid)
+                          -- Mirror the left-click unit-selection path:
+                          -- selecting a unit takes over the info panel,
+                          -- so clear any building/item selection to keep
+                          -- the shared HUD panel from flickering schemas.
+                          building.deselect()
+                          item.deselect()
                       end },
                 }
                 -- Filter selection down to player-commandable
