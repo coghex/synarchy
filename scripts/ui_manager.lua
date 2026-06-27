@@ -1,5 +1,14 @@
 -- UI Manager - coordinates all UI pages
-local uiManager = {}
+--
+-- Singleton via package.loaded so a require() (e.g. game.onKeyDown's
+-- isGameplayInputActive gate, #182) sees the SAME instance the engine
+-- loadScript'd and broadcasts to. engine.loadScript uses dofile, which
+-- does not populate package.loaded; without this self-registration a
+-- require would re-execute the file as a fresh module (currentMenu reset
+-- to "main") with its own disconnected state. Init loadScripts this
+-- module last, so the dofile instance is the live one require resolves.
+local uiManager = package.loaded["scripts.ui_manager"] or {}
+package.loaded["scripts.ui_manager"] = uiManager
 
 local boxTextures = require("scripts.ui.box_textures")
 local boxTexSet = nil
@@ -1502,6 +1511,25 @@ end
 -----------------------------------------------------------
 -- Key Input Forwarding
 -----------------------------------------------------------
+
+-- True only when the player is in a gameplay view with no blocking
+-- menu/overlay on top. Gameplay key handlers (init.lua game.onKeyDown)
+-- gate on this (#182): ordinary menus/overlays don't take UI focus, so
+-- the input thread can't divert keys away from gameplay for us — keys
+-- still broadcast to every Lua module. currentMenu is the authoritative
+-- view, and the pause menu is an overlay shown while currentMenu stays
+-- world_view/test_arena_view, so it has to be checked explicitly.
+-- Menu-level keys (e.g. Escape closing a menu) are unaffected: they go
+-- through uiManager.onUIEscape, a separate broadcast.
+function uiManager.isGameplayInputActive()
+    if currentMenu ~= "world_view" and currentMenu ~= "test_arena_view" then
+        return false
+    end
+    if pauseMenu and pauseMenu.visible then
+        return false
+    end
+    return true
+end
 
 function uiManager.onKeyDown(key)
     if key == "F7" then
