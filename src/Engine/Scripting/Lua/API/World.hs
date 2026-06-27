@@ -1160,7 +1160,7 @@ worldSetToolModeFn env = do
         _ → pure ()
     return 0
 
--- | world.getToolMode() → "info" | "default" | "mine" | nil
+-- | world.getToolMode() → "info" | "default" | "mine" | "build" | nil
 --   Returns the current tool mode for the first visible world, or nil
 --   if no world is active. Reads `wsToolModeRef` directly so callers
 --   see the world thread's view of the tool state.
@@ -1174,6 +1174,7 @@ worldGetToolModeFn env = do
                     InfoTool    → "info"
                     DefaultTool → "default"
                     MineTool    → "mine"
+                    BuildTool   → "build"
             Lua.pushstring s
             return 1
         Nothing → do
