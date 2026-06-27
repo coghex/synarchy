@@ -17,6 +17,8 @@ module UI.Tooltip
   , isTooltipLocked
   , isTooltipVisible
   , isPointInLockedTooltip
+    -- * Exposed for testing
+  , rebuildVisuals
   ) where
 
 import UPrelude
