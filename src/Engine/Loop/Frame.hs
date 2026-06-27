@@ -238,12 +238,17 @@ updateUniformBufferForFrame win frameIdx camera = do
                     FaceNorth → 2.0
                     FaceEast → 3.0
             let uboData = UBO identity (createViewMatrix camera)
-                              (createProjectionMatrix camera 
+                              (createProjectionMatrix camera
                                   (fromIntegral fbWidth) (fromIntegral fbHeight))
                               (createUIViewMatrix uiCamera)
                               (createUIProjectionMatrix uiCamera)
                               (brightnessToMultiplier brightness)
-                              (fromIntegral fbWidth) (fromIntegral fbHeight)
+                              -- Clamp to ≥1: the pixel-snap shader divides
+                              -- by screenW/screenH, so a zero-size (minimize)
+                              -- framebuffer would otherwise produce non-finite
+                              -- vertex positions.
+                              (fromIntegral (max 1 fbWidth))
+                              (fromIntegral (max 1 fbHeight))
                               (if pixelSnap then 1.0 else 0.0)
                               sunAngle
                               ambientLight

@@ -13,6 +13,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Input.Types (InputState(..), inpMousePos, inpMouseBtns)
 import Engine.Input.Bindings (checkKeyDown, isActionDown)
 import Engine.Graphics.Camera (Camera2D(..), camZoom, camPosition)
+import Engine.Graphics.Viewport (viewportDegenerate)
 import Engine.Core.State (EngineEnv(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
@@ -101,9 +102,10 @@ getWorldCoordFn env backendState = do
         camera ← readIORef (cameraRef env)
         (winW, winH) ← readIORef (windowSizeRef env)
         (fbW, fbH) ← readIORef (framebufferSizeRef env)
-        -- Minimized window: sizes are 0 and the divisions below would
-        -- hand NaN to Lua camera math. Report "no coordinate" instead.
-        if winW ≤ 0 ∨ winH ≤ 0 ∨ fbH ≤ 0
+        -- Minimized window: a zero-size window/framebuffer makes the
+        -- divisions below hand NaN (zero height) or a centerline-collapsed
+        -- coord (zero width) to Lua camera math. Report "no coordinate".
+        if viewportDegenerate winW winH fbW fbH
           then return Nothing
           else do
             let aspect = fromIntegral fbW / fromIntegral fbH

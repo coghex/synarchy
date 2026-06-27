@@ -14,6 +14,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Viewport (viewportDegenerate)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import World.Types
 import World.Grid (gridToWorld, worldToGrid, zoomMapLayer)
@@ -21,7 +22,12 @@ import World.Grid (gridToWorld, worldToGrid, zoomMapLayer)
 -- | Convert pixel coords to chunk-aligned grid origin, or Nothing if off-map
 pixelToChunkOrigin ∷ CameraFacing → Camera2D → Int → Int → Int → Int → Int
                    → Int → Int → Maybe (Int, Int)
-pixelToChunkOrigin facing camera winW winH fbW fbH worldSize pixX pixY =
+pixelToChunkOrigin facing camera winW winH fbW fbH worldSize pixX pixY
+  -- Zero-size window/framebuffer (minimize): the divisions below would
+  -- unproject to a non-finite (or centerline-collapsed) world coord.
+  -- Report "off-map" / no chunk.
+  | viewportDegenerate winW winH fbW fbH = Nothing
+  | otherwise =
     let aspect = fromIntegral fbW / fromIntegral fbH
         zoom   = camZoom camera
         viewW  = zoom * aspect

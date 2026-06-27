@@ -29,6 +29,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.YamlTextures (lookupTextureName)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
+import Engine.Graphics.Viewport (windowDegenerate)
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , renderFlagSelected)
@@ -276,14 +277,16 @@ hitTestGroundItemAt ∷ EngineEnv → WorldState → Double → Double
                     → IO (Maybe Int)
 hitTestGroundItemAt env worldState pixX pixY = do
     gis ← readIORef (wsGroundItemsRef worldState)
-    if HM.null (gisItems gis)
+    (winW, winH) ← readIORef (windowSizeRef env)
+    -- Zero-size window (minimize): the pixel→world divisions below would
+    -- yield a non-finite click coord. Report "no item".
+    if HM.null (gisItems gis) ∨ windowDegenerate winW winH
       then return Nothing
       else do
         camera   ← readIORef (cameraRef env)
         tileData ← readIORef (wsTilesRef worldState)
         im       ← readIORef (itemManagerRef env)
         texSizes ← readIORef (textureSizeRef env)
-        (winW, winH) ← readIORef (windowSizeRef env)
 
         let facing = camFacing camera
             zoom   = camZoom camera

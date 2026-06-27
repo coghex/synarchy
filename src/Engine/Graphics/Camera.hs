@@ -88,10 +88,16 @@ createUIViewMatrix _ =
 -- | UI camera projection matrix (pixel coordinates, origin at top-left, Y down - Vulkan style)
 -- Vulkan NDC: X [-1,1] left to right, Y [-1,1] top to bottom
 createUIProjectionMatrix ∷ UICamera → M44 Float
+createUIProjectionMatrix uiCam
+    -- Zero-size framebuffer (minimized window): the 2/(right-left) and
+    -- 2/(bottom-top) scales below are 2/width and 2/height, which would
+    -- write Infinity/NaN into the per-frame UBO. Hand back identity until
+    -- a real size arrives on restore.
+    | uiCamWidth uiCam ≤ 0 ∨ uiCamHeight uiCam ≤ 0 = identity
 createUIProjectionMatrix uiCam =
     let width  = uiCamWidth uiCam
         height = uiCamHeight uiCam
-        
+
         -- For Vulkan: Y=0 (top) -> NDC -1, Y=height (bottom) -> NDC +1
         -- So we use top=0, bottom=height but need to flip the sign
         left   = 0
@@ -132,6 +138,12 @@ createViewMatrix camera =
     in rotationMat !*! translateMat
 
 createProjectionMatrix ∷ Camera2D → Float → Float → M44 Float
+createProjectionMatrix camera width height
+    -- Zero-size framebuffer (minimized window): aspect = width/height and
+    -- the 2/(right-left) scale would feed Infinity/NaN into the per-frame
+    -- UBO (height 0 → NaN, width 0 → a degenerate centerline projection).
+    -- Hand back identity until a real size arrives on restore.
+    | width ≤ 0 ∨ height ≤ 0 = identity
 createProjectionMatrix camera width height =
     let aspect = width / height
         zoom = max 0.1 (camZoom camera)  -- Prevent zero or negative zoom

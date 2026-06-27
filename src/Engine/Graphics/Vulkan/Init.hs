@@ -284,7 +284,10 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           (createUIViewMatrix uiCamera)
           (createUIProjectionMatrix uiCamera)
           (brightnessToMultiplier brightnessInt)
-          (fromIntegral width) (fromIntegral height)
+          -- Clamp to ≥1: the pixel-snap shader divides by screenW/screenH,
+          -- so a zero-size (minimize) framebuffer would otherwise produce
+          -- non-finite vertex positions.
+          (fromIntegral (max 1 width)) (fromIntegral (max 1 height))
           (if pixelSnap then 1.0 else 0.0)
           sunAngle
           ambientLight

@@ -166,6 +166,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Calendar
                    Test.Headless.River.Graph
                    Test.Headless.World.Render.SideFace
+                   Test.Headless.Render.ViewportGuard
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -192,6 +193,7 @@ test-suite synarchy-test-headless
                 , unordered-containers
                 , deepseq
                 , random
+                , linear
     default-language: GHC2024
     if flag(dev)
       if os(darwin)
@@ -261,6 +263,7 @@ library
                      Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
+                     Engine.Graphics.Viewport
                      Engine.Graphics.Types
                      Engine.Graphics.Config
                      Engine.Graphics.Vulkan.Base
