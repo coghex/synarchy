@@ -172,24 +172,35 @@ slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → Bool
 slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap neighborLookup =
     let diff = myZ - neighborZ
-        -- An unloaded neighbour reads back as 'minBound' (see
-        -- 'neighborElev'); that sentinel must never count as a drop or
-        -- water would slope toward not-yet-generated chunks and off the
-        -- world edge, then flip when the neighbour loads.
-        neighborLoaded = neighborZ ≠ minBound
 
-        -- Dry land keeps the strict single-step terrace rule (one-lower
-        -- neighbour only). A WET tile additionally slopes toward any
-        -- EXPOSED-AIR edge — a loaded neighbour whose surface drops by
+        -- Is the neighbour inside THIS chunk (local coords in range), as
+        -- opposed to across a chunk boundary?
+        inChunk = nlx ≥ 0 ∧ nlx < chunkSize ∧ nly ≥ 0 ∧ nly < chunkSize
+
+        -- Dry land keeps the strict single-step terrace rule (a neighbour
+        -- exactly one lower). A WET tile additionally slopes toward an
+        -- EXPOSED-AIR edge — an IN-CHUNK neighbour whose surface drops by
         -- one OR MORE levels. That is the waterfall-lip / water-cliff
         -- case (issue #222): the source water tile at the top of a fall
         -- borders a multi-level drop, so 'diff > 1' there; the old
         -- 'diff ≡ 1' rule left it flat. Tipping the surface toward the
-        -- drop makes the water visibly pour over the lip. Water enclosed
-        -- by equal/higher surfaces (diff ≤ 0) still stays flat.
+        -- drop makes the water visibly pour over the lip.
+        --
+        -- The exposed-air rule is deliberately restricted to IN-CHUNK
+        -- drops. A cross-chunk neighbour can be unloaded (reads back as
+        -- the 'minBound' sentinel from 'neighborElev'), can evict without
+        -- triggering a slope recompute, and is looked up by raw (un-
+        -- wrapped) coords — so keying the new slope on it would make the
+        -- surface depend on chunk load order (popping) and miss the
+        -- u-wrap seam. In-chunk neighbours are always present alongside
+        -- the tile, so the decision is load-order-independent and seam-
+        -- safe. Cross-chunk drops keep the existing single-step ('diff ≡
+        -- 1') behaviour, which the cross-chunk recompute path already
+        -- handles. Water enclosed by equal/higher surfaces (diff ≤ 0)
+        -- stays flat.
         validDiff
-            | myHasFluid = neighborLoaded ∧ diff ≥ 1
-            | otherwise  = diff ≡ 1
+            | myHasFluid ∧ inChunk = diff ≥ 1
+            | otherwise            = diff ≡ 1
 
         (normLx, normLy, neighborCoord) = normalizeCoord coord nlx nly
         hasFluid = case neighborCoord of
