@@ -646,7 +646,17 @@ function hud.onMouseDown(button_num, mx, my)
     -- blank-area menu click forwarded by uiManager.onMouseDown would
     -- still call world.setZoomCursorSelect / setWorldCursorSelect (or
     -- the clear variants) against the hidden world (#153).
-    if not hud.visible then
+    --
+    -- hud.visible alone isn't enough (#154): the pause menu and keep-world
+    -- Settings open as overlays that bypass hud.hide(), so hud.visible
+    -- stays true while the world sits behind a non-gameplay menu. A blank
+    -- click forwarded here would still set/clear the zoom/world cursor
+    -- behind that overlay. isGameplayInputActive() is false for those
+    -- overlays (it treats pause as "menu on top"), so gate on it too —
+    -- the same predicate game.onMouseDown uses for the matching left/
+    -- right gameplay gates.
+    if not hud.visible
+       or not require("scripts.ui_manager").isGameplayInputActive() then
         return
     end
     if hud.currentView == "zoomed_out" then
