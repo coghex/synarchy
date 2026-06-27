@@ -18,6 +18,7 @@ import Engine.Input.Types
 import Engine.Input.Callback
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Window.Types (Window(..))
+import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt, findRightClickableElementAt
                   , validateFocus)
@@ -249,11 +250,11 @@ processInput env inpSt event = case event of
             uiMgr ← readIORef (uiManagerRef env)
             let mousePos = (mouseX, mouseY)
 
-            -- Minimized window: winW/winH are 0, so the scale
-            -- division above yields NaN/Infinity coords. Drop the
-            -- click rather than feed NaN into hit-tests and Lua
-            -- camera math.
-            if not (winW > 0 ∧ winH > 0) then return ClickSwallowed else case btn of
+            -- Zero-size window/framebuffer (minimize): winW/winH = 0 makes
+            -- the scale division yield NaN/Infinity, and fbW/fbH = 0
+            -- collapses the scaled coord to (0,0) — either way the hit-test
+            -- below would dispatch a bogus UI/game event. Drop the click.
+            if viewportDegenerate winW winH fbW fbH then return ClickSwallowed else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
               -- Falls through to a normal mouse-down event when nothing
               -- is shown, so other middle-click behavior (panning, etc.)
@@ -369,8 +370,8 @@ processInput env inpSt event = case event of
                 mouseY = realToFrac rawY * scaleY
             
             uiMgr ← readIORef (uiManagerRef env)
-            -- Same minimized-window guard as the click path above.
-            when (winW > 0 ∧ winH > 0) $ case findClickableElementAt (mouseX, mouseY) uiMgr of
+            -- Same zero-size window/framebuffer guard as the click path.
+            when (not (viewportDegenerate winW winH fbW fbH)) $ case findClickableElementAt (mouseX, mouseY) uiMgr of
                 Just (elemHandle, _callback) → do
                     logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
                     Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)
