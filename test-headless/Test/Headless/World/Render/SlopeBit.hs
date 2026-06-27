@@ -26,9 +26,12 @@ import UPrelude
 import Test.Hspec
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Data.List (sort)
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
-import World.Slope (slopeBit, wrapChunkCoordU)
+import World.Tile.Types (WorldTileData, emptyWorldTileData, insertChunk)
+import World.Generate.Arena (generateFlatChunk)
+import World.Slope (slopeBit, wrapChunkCoordU, slopeRecomputeAffected)
 
 -- | One chunk's fluid map: all-empty, with the listed cells set wet.
 fluidMapWith ∷ [((Int, Int), FluidCell)] → V.Vector (Maybe FluidCell)
@@ -58,6 +61,11 @@ wetNeighborMap = fluidMapWith [((6, 5), FluidCell Lake 9)]
 
 nbr ∷ (Int, Int)
 nbr = (6, 5)
+
+-- | A WorldTileData holding (flat) chunks at exactly the given coords;
+--   'slopeRecomputeAffected' only inspects which coords are present.
+tileWith ∷ [ChunkCoord] → WorldTileData
+tileWith = foldr (insertChunk . generateFlatChunk) emptyWorldTileData
 
 spec ∷ Spec
 spec = do
@@ -90,3 +98,20 @@ spec = do
       wrapChunkCoordU 64 (ChunkCoord 16 (-16)) `shouldBe` ChunkCoord (-16) 16
     it "is the identity for a non-wrapping (zero-size) world" $
       wrapChunkCoordU 0 (ChunkCoord 5 7) `shouldBe` ChunkCoord 5 7
+
+  -- The set the slope recompute rewrites — and which the dig-slope restore
+  -- (applyDigSlopesTd) must cover exactly, or border dig masks are lost.
+  describe "slopeRecomputeAffected (recompute = dig-restore set)" $ do
+    it "includes a loaded chunk and its loaded neighbours" $
+      sort (slopeRecomputeAffected 0 [ChunkCoord 0 0] (tileWith [ChunkCoord 0 0, ChunkCoord 1 0]))
+        `shouldBe` sort [ChunkCoord 0 0, ChunkCoord 1 0]
+    it "includes the loaded neighbour of an EVICTED (absent) chunk, not the chunk itself" $
+      -- changed = an evicted coord (not in the tile data); its loaded
+      -- neighbour must still be re-sloped (and re-dig-masked).
+      slopeRecomputeAffected 0 [ChunkCoord 5 5] (tileWith [ChunkCoord 4 5])
+        `shouldBe` [ChunkCoord 4 5]
+    it "resolves a wrapped cross-SEAM neighbour" $
+      -- east neighbour of the seam chunk (31,0) is raw (32,0), which wraps
+      -- to (0,32) under w=64; the affected set must find it by wrap.
+      sort (slopeRecomputeAffected 64 [ChunkCoord 31 0] (tileWith [ChunkCoord 31 0, ChunkCoord 0 32]))
+        `shouldBe` sort [ChunkCoord 31 0, ChunkCoord 0 32]

@@ -27,7 +27,7 @@ import World.Generate (generateLoadedChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Grid (zoomFadeEnd)
-import World.Slope (recomputeNeighborSlopes, wrapChunkCoordU, patchEdgeStrata, chunkNeighbors)
+import World.Slope (recomputeNeighborSlopes, slopeRecomputeAffected, wrapChunkCoordU, patchEdgeStrata, chunkNeighbors)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
 import World.Generate.Types (WorldGenParams(..), isArenaParams)
@@ -108,9 +108,10 @@ updateChunkLoading env logger = do
                                         -- (e.g. a waterfall lip) is dropped —
                                         -- the surface reflects the currently
                                         -- loaded set, not the load order.
+                                        changed = coords ⧺ evictedCoords
                                         td''' = recomputeNeighborSlopes seed
                                                   (wgpWorldSize params) registry
-                                                  (coords ⧺ evictedCoords) td''
+                                                  changed td''
                                         td3b   = patchEdgeStrata coords td'''
                                         -- sealCrossChunkRivers removed: mask-based
                                         -- river seeding produces consistent edges
@@ -120,10 +121,13 @@ updateChunkLoading env logger = do
                                         td''''' = computeSideDecos seed coords td3b
                                         -- Mid-dig slope overrides (must follow the
                                         -- slope recompute, which would erase them).
-                                        -- Neighbours included: the recompute also
-                                        -- rebuilds THEIR border strips.
-                                        digCoords = coords
-                                            ⧺ concatMap chunkNeighbors coords
+                                        -- Restore over EXACTLY the set the
+                                        -- recompute touched (incl. evicted-
+                                        -- neighbour and wrapped-seam-neighbour
+                                        -- chunks), or border dig masks there are
+                                        -- silently lost.
+                                        digCoords = slopeRecomputeAffected
+                                            (wgpWorldSize params) changed td''
                                         td6 = applyDigSlopesTd desigs digCoords td'''''
                                     in (td6, evictedCoords)
                                 -- Notify sim thread of loaded chunks. Use
@@ -215,10 +219,12 @@ drainInitQueues env logger = do
                                 td2b  = patchEdgeStrata coords td''
                                 td'''' = computeSideDecos seed coords td2b
                                 -- Mid-dig slope overrides (after the slope
-                                -- recompute, which would erase them; the
-                                -- recompute also touches neighbours' strips).
-                                digCoords = coords
-                                    ⧺ concatMap chunkNeighbors coords
+                                -- recompute, which would erase them). Restore
+                                -- over EXACTLY the recomputed set — including
+                                -- wrapped-seam neighbours — not just raw
+                                -- neighbours.
+                                digCoords = slopeRecomputeAffected
+                                    (wgpWorldSize params) coords td'
                                 td5 = applyDigSlopesTd desigs digCoords td''''
                             in (td5, ())
 

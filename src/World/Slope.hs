@@ -3,6 +3,7 @@ module World.Slope
     ( -- * Slope Computation
       computeChunkSlopes
     , recomputeNeighborSlopes
+    , slopeRecomputeAffected
     , wrapChunkCoordU
     , patchEdgeStrata
     , chunkNeighbors
@@ -424,6 +425,27 @@ wrapChunkCoordU worldSize cc@(ChunkCoord cx cy)
         in ChunkCoord cx' cy'
   where w = (worldSize `div` 2) * 2
 
+-- | The loaded chunks whose border slopes 'recomputeNeighborSlopes' will
+--   rewrite for the given changed coords — the changed chunks themselves
+--   plus their loaded (seam-wrapped) neighbours. Exposed so a caller can
+--   re-apply, over EXACTLY this set, any pass the recompute clobbers
+--   (notably the mid-dig slope masks restored by
+--   'World.Mine.Apply.applyDigSlopesTd'); keying that restore off a
+--   narrower set would silently drop overrides on evicted-neighbour or
+--   wrapped-seam-neighbour tiles.
+slopeRecomputeAffected ∷ Int → [ChunkCoord] → WorldTileData → [ChunkCoord]
+slopeRecomputeAffected worldSize changedCoords wtd =
+    let chunks = wtdChunks wtd
+        wrap = wrapChunkCoordU worldSize
+    in HS.toList $ HS.fromList $
+        [ c | c ← changedCoords, HM.member c chunks ] <>
+        [ nb
+        | chg ← changedCoords
+        , raw ← chunkNeighbors chg
+        , let nb = wrap raw
+        , HM.member nb chunks
+        ]
+
 recomputeNeighborSlopes ∷ Word64 → Int → MaterialRegistry
                         → [ChunkCoord]
                         → WorldTileData
@@ -438,14 +460,7 @@ recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
         -- at it (so the surface depends only on the currently loaded set,
         -- not load order). Cross-SEAM neighbours live under a wrapped
         -- coord, so wrap before testing membership and before lookup.
-        affected = HS.toList $ HS.fromList $
-            changedCoords <>
-            [ nb
-            | chg ← changedCoords
-            , raw ← chunkNeighbors chg
-            , let nb = wrap raw
-            , HM.member nb chunks
-            ]
+        affected = slopeRecomputeAffected worldSize changedCoords wtd
         neighborLookup coord = case HM.lookup (wrap coord) chunks of
             Just lc → Just (lcTerrainSurfaceMap lc)
             Nothing → Nothing
