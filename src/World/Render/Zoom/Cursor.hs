@@ -24,8 +24,9 @@ pixelToChunkOrigin ∷ CameraFacing → Camera2D → Int → Int → Int → Int
                    → Int → Int → Maybe (Int, Int)
 pixelToChunkOrigin facing camera winW winH fbW fbH worldSize pixX pixY
   -- Zero-size window/framebuffer (minimize): the divisions below would
-  -- unproject to a non-finite world coord. Report "off-map" / no chunk.
-  | viewportDegenerate winW winH fbH = Nothing
+  -- unproject to a non-finite (or centerline-collapsed) world coord.
+  -- Report "off-map" / no chunk.
+  | viewportDegenerate winW winH fbW fbH = Nothing
   | otherwise =
     let aspect = fromIntegral fbW / fromIntegral fbH
         zoom   = camZoom camera

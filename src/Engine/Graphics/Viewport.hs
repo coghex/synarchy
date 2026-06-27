@@ -29,17 +29,24 @@ import UPrelude
 windowDegenerate ∷ Int → Int → Bool
 windowDegenerate winW winH = winW ≤ 0 ∨ winH ≤ 0
 
--- | True when the window OR the framebuffer height is zero-size. Used by
---   the paths that normalize by the window size AND derive their aspect
---   ratio from the framebuffer (the world tile pick and the zoom-map
---   chunk pick).
-viewportDegenerate ∷ Int → Int → Int → Bool
-viewportDegenerate winW winH fbH = windowDegenerate winW winH ∨ fbH ≤ 0
+-- | True when the window OR the framebuffer is zero-size. Used by the
+--   paths that normalize by the window size AND derive their aspect ratio
+--   from the framebuffer (the world tile pick and the zoom-map chunk
+--   pick). Either framebuffer dimension being non-positive counts as
+--   degenerate, matching the engine's own minimize test in
+--   'Engine.Graphics.Vulkan.Recreate' (@width ≡ 0 ∨ height ≡ 0@): a
+--   zero-WIDTH framebuffer collapses the aspect to 0 and folds the whole
+--   view onto a centerline, which is just as wrong as a NaN from a
+--   zero-height divide.
+viewportDegenerate ∷ Int → Int → Int → Int → Bool
+viewportDegenerate winW winH fbW fbH =
+    windowDegenerate winW winH ∨ fbW ≤ 0 ∨ fbH ≤ 0
 
 -- | Aspect ratio (framebuffer width / height) guarded against a zero-size
---   framebuffer; returns 1 rather than @Infinity@/@NaN@ so culling and
---   view-bounds math stay finite during a minimize/restore transition.
+--   framebuffer; returns 1 rather than @Infinity@/@NaN@ (zero height) or a
+--   view-collapsing 0 (zero width) so culling and view-bounds math stay
+--   finite and non-degenerate during a minimize/restore transition.
 safeAspect ∷ Int → Int → Float
 safeAspect fbW fbH
-    | fbH ≤ 0   = 1.0
-    | otherwise = fromIntegral fbW / fromIntegral fbH
+    | fbW ≤ 0 ∨ fbH ≤ 0 = 1.0
+    | otherwise         = fromIntegral fbW / fromIntegral fbH

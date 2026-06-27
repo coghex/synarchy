@@ -56,9 +56,9 @@ pickWorldTile
 pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
               worldSize effectiveDepth vb tileData pixX pixY
     -- Zero-size window/framebuffer (minimize): the aspect and pixel→norm
-    -- divisions below would unproject to a non-finite world coord and
-    -- pick a garbage tile. Report "no tile" instead.
-    | viewportDegenerate winW winH fbH = Nothing
+    -- divisions below would unproject to a non-finite (or centerline-
+    -- collapsed) world coord and pick a garbage tile. Report "no tile".
+    | viewportDegenerate winW winH fbW fbH = Nothing
     | otherwise = tryZ zSlice
   where
     aspect = fromIntegral fbW / fromIntegral fbH
