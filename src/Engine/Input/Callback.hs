@@ -25,8 +25,10 @@ setupCallbacks window el queue = do
         (Just $ resizeCallback queue)
     GLFW.setFramebufferSizeCallback window
         (Just $ framebufferSizeCallback queue)
-    GLFW.setWindowFocusCallback window 
+    GLFW.setWindowFocusCallback window
         (Just $ focusCallback queue)
+    GLFW.setWindowIconifyCallback window
+        (Just $ iconifyCallback queue)
 
 clearGLFWCallbacks ∷ GLFW.Window → IO ()
 clearGLFWCallbacks window = do
@@ -38,6 +40,7 @@ clearGLFWCallbacks window = do
     GLFW.setWindowSizeCallback window Nothing
     GLFW.setFramebufferSizeCallback window Nothing
     GLFW.setWindowFocusCallback window Nothing
+    GLFW.setWindowIconifyCallback window Nothing
 
 -- | Discard user-intent input (keys, chars, clicks, scroll) unless the
 --   engine is running, to prevent stale events queued during startup.
@@ -83,6 +86,10 @@ framebufferSizeCallback queue _win w h =
 focusCallback ∷ Queue InputEvent → GLFW.Window → Bool → IO ()
 focusCallback queue _win focused =
     writeQueue queue $ InputWindowEvent $ WindowFocus focused
+
+iconifyCallback ∷ Queue InputEvent → GLFW.Window → Bool → IO ()
+iconifyCallback queue _win iconified =
+    writeQueue queue $ InputWindowEvent $ WindowMinimize iconified
 
 emptyCallback ∷ IO ()
 emptyCallback = return ()

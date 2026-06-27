@@ -431,8 +431,27 @@ updateKeyState state key keyState mods = state
             }
 
 updateWindowState ∷ InputState → WindowEvent → InputState
-updateWindowState state (WindowFocus focused) = state { inpWindowFocused = focused }
+updateWindowState state (WindowFocus focused)
+    -- Losing focus (alt-tab, minimize) can swallow the matching key/
+    -- button release events, so drop all held state — otherwise a drag
+    -- or a held modifier stays logically down until some later release
+    -- happens to arrive. Regaining focus only flips the flag.
+    | focused   = state { inpWindowFocused = True }
+    | otherwise = (clearHeldInput state) { inpWindowFocused = False }
+updateWindowState state (WindowMinimize minimized)
+    | minimized = clearHeldInput state
+    | otherwise = state
 updateWindowState state _ = state
+
+-- | Clear all held mouse-button and key state. Used on focus-loss /
+--   minimize transitions, where the OS may never deliver the releases
+--   that would normally clear it. Cursor position is left untouched.
+clearHeldInput ∷ InputState → InputState
+clearHeldInput state = state
+    { inpKeyStates   = Map.empty
+    , inpMouseBtns   = Map.empty
+    , inpMouseRoutes = Map.empty
+    }
 
 isKeyDown ∷ GLFW.KeyState → Bool
 isKeyDown GLFW.KeyState'Pressed   = True

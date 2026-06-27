@@ -2,8 +2,27 @@ module Test.Engine.Input.Thread (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
-import Engine.Input.Thread (shouldTrackKeyStateWhileTextFocused)
+import Engine.Input.Thread (shouldTrackKeyStateWhileTextFocused, updateWindowState)
+import Engine.Input.Types
+
+-- | An input state with a key and a mouse button logically held down,
+--   as if a drag / held modifier were in progress.
+heldState ∷ InputState
+heldState = defaultInputState
+    { inpKeyStates = Map.fromList
+        [ (GLFW.Key'LeftShift, defaultKeyState { keyPressed = True }) ]
+    , inpMouseBtns = Map.fromList
+        [ (GLFW.MouseButton'1, True) ]
+    , inpMouseRoutes = Map.fromList
+        [ (GLFW.MouseButton'1, ClickGame) ]
+    }
+
+allReleased ∷ InputState → Bool
+allReleased s = Map.null (inpKeyStates s)
+              ∧ Map.null (inpMouseBtns s)
+              ∧ Map.null (inpMouseRoutes s)
 
 spec ∷ Spec
 spec = do
@@ -28,3 +47,23 @@ spec = do
           GLFW.KeyState'Released `shouldBe` True
         shouldTrackKeyStateWhileTextFocused GLFW.Key'LeftShift
           GLFW.KeyState'Released `shouldBe` True
+
+    describe "updateWindowState" $ do
+      it "clears held key/button state when focus is lost" $ do
+        let s = updateWindowState heldState (WindowFocus False)
+        inpWindowFocused s `shouldBe` False
+        allReleased s `shouldBe` True
+
+      it "clears held key/button state when minimized" $ do
+        allReleased (updateWindowState heldState (WindowMinimize True))
+          `shouldBe` True
+
+      it "keeps held state on focus gain (only flips the flag)" $ do
+        let s = updateWindowState heldState { inpWindowFocused = False }
+                                  (WindowFocus True)
+        inpWindowFocused s `shouldBe` True
+        allReleased s `shouldBe` False
+
+      it "leaves state untouched on restore from minimize" $ do
+        allReleased (updateWindowState heldState (WindowMinimize False))
+          `shouldBe` False
