@@ -345,12 +345,29 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             -- pages' buildings intact — a wholesale write dropped them.
             offPage = HM.difference (bmInstances currentBm)
                                     (buildingsOnPage pageId (bmInstances currentBm))
+            -- An off-page id that collides with a restored (loaded-page)
+            -- id can't share the global map: the loaded save wins and the
+            -- off-page building is dropped. Unreachable in normal play
+            -- (one global id counter per session keeps live ids disjoint);
+            -- only a cross-session load of an *older* save can hit it.
+            -- Logged below so it's diagnosable, not silent. Full
+            -- resolution needs re-keying (breaks Lua per-id blobs) — that
+            -- lands with epic #214 / #218.
+            collidingB = HM.intersection offPage (bmInstances restored)
             merged  = restored
                 { bmInstances = HM.union (bmInstances restored) offPage
                 -- Don't let the saved counter reuse an off-page id.
                 , bmNextId    = max (bmNextId restored) (bmNextId currentBm)
                 }
         writeIORef (buildingManagerRef env) merged
+        case HM.size collidingB of
+            0 → pure ()
+            n → logWarn logger CatWorld $
+                    "Save load: " <> T.pack (show n)
+                    <> " off-page building id(s) collided with the loaded "
+                    <> "page and were dropped (ids: "
+                    <> T.pack (show (map unBuildingId (HM.keys collidingB)))
+                    <> ") — see #214"
         forM_ orphans $ \bid →
             logWarn logger CatWorld $
                 "Save load: dropping building id="
@@ -395,6 +412,10 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             offPageU    = HM.difference (umInstances currentUm)
                                         (unitsOnPage pageId (umInstances currentUm))
             offPageUids = HM.keysSet offPageU
+            -- Same collision caveat as buildings above: a colliding
+            -- off-page unit id loses to the loaded save and is dropped
+            -- (logged below). Cross-session-old-save only; resolved by #214.
+            collidingU  = HM.intersection offPageU (umInstances restoredUm)
             mergedUm    = restoredUm
                 { umInstances = HM.union (umInstances restoredUm) offPageU
                 -- Don't let the saved counter reuse an off-page id.
@@ -406,6 +427,14 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             let keptSim = HM.filterWithKey (\uid _ → uid `HS.member` offPageUids)
                                            (utsSimStates old)
             in (UnitThreadState { utsSimStates = HM.union simStates' keptSim }, ())
+        case HM.size collidingU of
+            0 → pure ()
+            n → logWarn logger CatWorld $
+                    "Save load: " <> T.pack (show n)
+                    <> " off-page unit id(s) collided with the loaded "
+                    <> "page and were dropped (ids: "
+                    <> T.pack (show (map unUnitId (HM.keys collidingU)))
+                    <> ") — see #214"
         forM_ orphanUnits $ \uid →
             logWarn logger CatWorld $
                 "Save load: dropping unit id="
