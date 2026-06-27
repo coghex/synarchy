@@ -72,7 +72,14 @@ resourceMsgs msgs = [t | LuaHudLogResourcesInfo t ← msgs]
 
 -- | Basic-tab text of every Basic/Advanced push, in order.
 infoBasics ∷ [LuaMsg] → [Text]
-infoBasics msgs = [b | LuaHudLogInfo b _ ← msgs]
+infoBasics msgs = [b | LuaHudLogInfo b _ _ ← msgs]
+
+-- | (Basic-tab text, source kind) of every Basic/Advanced push, in
+--   order. The kind ("tile" | "chunk") is what unit/building/item
+--   watchers gate on so a zoom-map chunk click doesn't drop their
+--   zoomed-in selection (issue #133).
+infoBasicKinds ∷ [LuaMsg] → [(Text, Text)]
+infoBasicKinds msgs = [(b, k) | LuaHudLogInfo b _ k ← msgs]
 
 -- | A fresh empty world (with climate-less gen params), registered as
 --   the sole visible page, Lua queue drained so the next
@@ -101,6 +108,25 @@ spec = beforeAll initEnv $ do
         -- Precondition for the #128 scenario: the dynamic Weather tab is
         -- non-empty (here "No climate data"), i.e. genuinely active.
         weatherMsgs msgs `shouldSatisfy` any (≢ "")
+
+    it "tags a chunk push 'chunk' and a tile push 'tile' (issue #133)" $ \env → do
+        ws ← freshVisibleWorld env
+        -- A zoom-map chunk selection must tag its Basic/Advanced push
+        -- "chunk", never "tile" — the unit/building/item watchers only
+        -- drop their zoomed-in selection on a "tile" push, so this is
+        -- what keeps a chunk click from clobbering that selection.
+        chunkMsgs ← selectChunk env ws
+        infoBasicKinds chunkMsgs `shouldSatisfy`
+            any (\(b, k) → T.isInfixOf "Chunk (" b ∧ k ≡ "chunk")
+        infoBasicKinds chunkMsgs `shouldSatisfy`
+            (not . any (\(_, k) → k ≡ "tile"))
+        -- A real zoomed-in tile selection tags its push "tile".
+        modifyIORef' (wsCursorRef ws)
+            (\c → c { worldSelectedTile = Just (8, 8, 1) })
+        pollCursorInfo env
+        tileMsgs ← drainLua env
+        infoBasicKinds tileMsgs `shouldSatisfy`
+            any (\(b, k) → T.isInfixOf "Tile (" b ∧ k ≡ "tile")
 
     it "tile selection clears the active Weather and Resources tabs" $ \env → do
         ws ← freshVisibleWorld env
