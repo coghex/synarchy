@@ -38,7 +38,7 @@ import World.Save.Types (toBuildingSnapshot, fromBuildingSnapshot
                         , toUnitSnapshot, fromUnitSnapshot)
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
-import Building.Types (BuildingManager(..), unBuildingId)
+import Building.Types (BuildingManager(..), unBuildingId, buildingsOnPage)
 import Unit.Types (UnitManager(..), unUnitId, unitsOnPage)
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
@@ -340,7 +340,17 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
                 fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
-        writeIORef (buildingManagerRef env) restored
+            -- #191: the snapshot owns only THIS page. Replace just this
+            -- page's slice of the global manager and keep other live
+            -- pages' buildings intact — a wholesale write dropped them.
+            offPage = HM.difference (bmInstances currentBm)
+                                    (buildingsOnPage pageId (bmInstances currentBm))
+            merged  = restored
+                { bmInstances = HM.union (bmInstances restored) offPage
+                -- Don't let the saved counter reuse an off-page id.
+                , bmNextId    = max (bmNextId restored) (bmNextId currentBm)
+                }
+        writeIORef (buildingManagerRef env) merged
         forM_ orphans $ \bid →
             logWarn logger CatWorld $
                 "Save load: dropping building id="
@@ -379,9 +389,23 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             -- Drop sim states whose owning unit was orphaned.
             simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
                                           (sdUnitSimStates saveData)
-        writeIORef (unitManagerRef env) restoredUm
-        atomicModifyIORef' (utsRef env) $ \_ →
-            (UnitThreadState { utsSimStates = simStates' }, ())
+            -- #191: keep units (and their sim states) belonging to OTHER
+            -- live pages; replace only this page's slice of the global
+            -- manager. A wholesale write dropped off-page units.
+            offPageU    = HM.difference (umInstances currentUm)
+                                        (unitsOnPage pageId (umInstances currentUm))
+            offPageUids = HM.keysSet offPageU
+            mergedUm    = restoredUm
+                { umInstances = HM.union (umInstances restoredUm) offPageU
+                -- Don't let the saved counter reuse an off-page id.
+                , umNextId    = max (umNextId restoredUm) (umNextId currentUm)
+                }
+        writeIORef (unitManagerRef env) mergedUm
+        atomicModifyIORef' (utsRef env) $ \old →
+            -- Preserve off-page units' sim states; replace this page's.
+            let keptSim = HM.filterWithKey (\uid _ → uid `HS.member` offPageUids)
+                                           (utsSimStates old)
+            in (UnitThreadState { utsSimStates = HM.union simStates' keptSim }, ())
         forM_ orphanUnits $ \uid →
             logWarn logger CatWorld $
                 "Save load: dropping unit id="
