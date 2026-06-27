@@ -336,7 +336,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- center chunk's terrain matches what the player saw at save time;
     -- buildings landing in not-yet-loaded chunks will simply not render
     -- until those chunks come in via drainInitQueues.
-    (bSurvivingIds, bOrphanIds) ← do
+    bSurvivingIds ← do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
                 fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
@@ -382,16 +382,14 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                     "Save load: dropped " <> T.pack (show n)
                     <> " building" <> (if n == 1 then "" else "s")
                     <> " (def no longer registered)"
-        -- Hand Lua two loaded-page sets: the building ids that SURVIVED
-        -- (successfully restored) and the ORPHANS (claimed by this page's
-        -- snapshot but dropped — def gone). building_spawn force-prunes the
-        -- orphans (collision-safe), keeps survivors, and keeps any other id
-        -- only if it's a still-live OFF-PAGE building — so it strips stale
-        -- loaded-page leftovers without dropping other live pages' state
-        -- (#195).
-        pure ( map (fromIntegral . unBuildingId)
-                   (HM.keys (bmInstances restored)) ∷ [Int]
-             , map (fromIntegral . unBuildingId) orphans ∷ [Int] )
+        -- Hand Lua the building ids that SURVIVED on the loaded page (the
+        -- successfully restored set). building_spawn rebuilds its state as
+        -- "survivors restored from the save blob + every other still-live
+        -- (off-page) building's PRE-LOAD state", so a load only touches the
+        -- loaded page and other live pages keep their current state (#195,
+        -- #191). `orphans` is consumed for the logging/toast above only.
+        pure (map (fromIntegral . unBuildingId)
+                  (HM.keys (bmInstances restored)) ∷ [Int])
 
     -- v5 (Phase 4): restore units + sim state. Same orphan handling as
     -- buildings; sim states for orphaned uids are dropped.
@@ -408,7 +406,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- imperceptible. A future reader that requires stricter consistency
     -- (e.g. asserts simStates ⊆ umInstances) would need either an
     -- explicit lock or merging both refs into a single IORef.
-    (uSurvivingIds, uOrphanIds) ← do
+    uSurvivingIds ← do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
                 fromUnitSnapshot pageId (umDefs currentUm) (sdUnits saveData)
@@ -456,17 +454,15 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                     "Save load: dropped " <> T.pack (show n)
                     <> " unit" <> (if n == 1 then "" else "s")
                     <> " (def no longer registered)"
-        -- Hand Lua two loaded-page sets: the unit ids that SURVIVED
-        -- (liveUids = the loaded page's restored set) and the ORPHANS
-        -- (claimed by this page's snapshot but dropped — def gone). unit_ai
-        -- force-prunes the orphans (collision-safe: a dropped id can
-        -- collide with a live off-page unit, so liveness alone would keep
-        -- it), keeps survivors, and keeps any other top-level entry only if
-        -- it's a still-live OFF-PAGE unit — preserving other live pages'
-        -- AI state. Nested refs are scrubbed against the survivor set
-        -- (a loaded-page unit can only validly reference a page-mate) (#195).
-        pure ( map (fromIntegral . unUnitId) (HS.toList liveUids) ∷ [Int]
-             , map (fromIntegral . unUnitId) orphanUnits ∷ [Int] )
+        -- Hand Lua the unit ids that SURVIVED on the loaded page (liveUids
+        -- = the loaded page's restored set). unit_ai rebuilds aiState as
+        -- "survivors restored from the save blob + every other still-live
+        -- (off-page) unit's PRE-LOAD state", so a load only touches the
+        -- loaded page and other live pages keep their current AI state
+        -- (#195, #191). Nested refs are scrubbed against the survivor set
+        -- (a loaded-page unit can only validly reference a page-mate).
+        -- `orphanUnits` is consumed for the logging/toast above only.
+        pure (map (fromIntegral . unUnitId) (HS.toList liveUids) ∷ [Int])
 
     -- 6. Set camera z-slice from saved camera position. elevationAtGlobal
     -- takes grid coords (gx, gy), not world coords — go through
@@ -512,13 +508,14 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         <> ": " <> unWorldPageId pageId
 
     -- Units + buildings are now written back to their managers, so the
-    -- engine entity set is authoritative. Signal Lua with both the loaded
-    -- page's SURVIVORS and its ORPHANS so per-id modules can reconcile
-    -- correctly. The Lua blob is a global singleton serialized wholesale,
-    -- so it can carry both loaded-page ids and OFF-PAGE ids (other live
-    -- pages' state). The reconcile must therefore: keep survivors;
-    -- force-prune orphans (a dropped loaded-page id can collide with a
-    -- live off-page entity, so global liveness alone would misattribute
-    -- its stale state); and keep any other id only if it's a still-live
-    -- off-page entity — preserving other live pages' state (#195, #191).
-    sendSaveLoaded env uSurvivingIds bSurvivingIds uOrphanIds bOrphanIds
+    -- engine entity set is authoritative. Signal Lua with the loaded
+    -- page's SURVIVORS. The Lua blob is a global singleton serialized
+    -- wholesale, so it carries OFF-PAGE ids too (other live pages' state).
+    -- The reconcile rebuilds each table as "survivors restored from the
+    -- blob + every other still-live entity's PRE-LOAD state", so the load
+    -- replaces only loaded-page state and other live pages are untouched
+    -- (#195, #191). Off-page state is taken from the pre-load snapshot,
+    -- never the blob's stale copy, which also means a dropped/orphan or
+    -- gone-before-save id that collides with a live off-page entity uses
+    -- that entity's own state, never the blob's — no misattribution.
+    sendSaveLoaded env uSurvivingIds bSurvivingIds

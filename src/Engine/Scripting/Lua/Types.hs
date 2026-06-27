@@ -143,14 +143,14 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   the entities that actually survived the load — orphan
               --   units/buildings whose defs were dropped leave no live
               --   entity, so their stale per-id state must be pruned or a
-              --   reused id would inherit it (#195). Carries four loaded-
-              --   page id lists — surviving unit ids, surviving building
-              --   ids, orphan unit ids, orphan building ids. The Lua side
-              --   keeps survivors, force-prunes orphans (collision-safe),
-              --   and keeps any other singleton entry only if it's a
-              --   still-live off-page entity (preserving other live pages'
-              --   state); nested refs are scrubbed against the survivor set.
-            | LuaSaveLoaded [Int] [Int] [Int] [Int]
+              --   reused id would inherit it (#195). Carries the loaded
+              --   page's surviving unit ids and building ids. The Lua side
+              --   rebuilds each singleton table as "survivors restored from
+              --   the blob + every other still-live (off-page) entity's
+              --   pre-load state", so a load touches only loaded-page state
+              --   and other live pages are untouched (#191); nested refs are
+              --   scrubbed against the survivor set.
+            | LuaSaveLoaded [Int] [Int]
             | LuaHudLogInfo Text Text
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text

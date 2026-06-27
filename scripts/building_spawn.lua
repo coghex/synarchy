@@ -260,6 +260,11 @@ function buildingSpawn.init(scriptId)
             return saveLib.serialize(live)
         end,
         function(blob)
+            -- Snapshot the pre-load singleton BEFORE clobbering, so
+            -- onSaveLoaded can restore still-live OFF-PAGE buildings'
+            -- current state instead of the blob's stale copy (#195, #191).
+            buildingSpawn._preLoadState = {}
+            for k, v in pairs(state) do buildingSpawn._preLoadState[k] = v end
             local restored = saveLib.deserialize(blob) or {}
             for k in pairs(state) do state[k] = nil end
             for k, v in pairs(restored) do state[k] = v end
@@ -272,38 +277,42 @@ end
 -- registered. The restored state still holds entries for those dropped
 -- ids, so a reused bid could inherit stale spawn-rate state.
 --
--- The `state` table is a global singleton serialized WHOLESALE, so after a
--- load (cleared + repopulated from the blob, then the engine merge restores
--- the saved page's buildings and preserves other live pages' #191) it
--- legitimately holds both loaded-page entries and live OFF-PAGE buildings.
--- Signature mirrors the broadcast: four loaded-page sets (survivors +
--- orphans, units + buildings). Per top-level entry bid:
---   * survivor          → keep;
---   * loaded-page orphan → force-prune (a dropped bid can collide with a
---     live off-page building, so building.getInfo alone would mask it);
---   * otherwise          → keep iff a live off-page building, else prune.
--- The nested s.lastUid (last unit spawned, used for spawn-spacing) is
--- scrubbed only on loaded-page SURVIVOR entries, against the surviving unit
--- set, so a stale/colliding uid can't gate spawning. Off-page entries are
--- left untouched.
-function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds,
-                                    orphanUnitIds, orphanBuildingIds)
+-- `state` is a global singleton serialized WHOLESALE; the restore clobbered
+-- it with save-time state for buildings on EVERY page, but the engine load
+-- only restores the saved page and preserves other live pages' buildings
+-- (#191). So a load must touch only the loaded page. We rebuild `state` as:
+--   * loaded-page survivor → its restored (blob) state;
+--   * every other still-live building → its PRE-LOAD state (the off-page
+--     building's CURRENT state, not the blob's stale snapshot) — so an
+--     older save can't roll back live off-page spawn-spacing state, and a
+--     stale/colliding bid resolves to the live building's own state;
+--   * everything else (orphans, dead, gone-before-save) → dropped.
+-- The nested s.lastUid (last unit spawned) is scrubbed on loaded-page
+-- survivor entries against the surviving unit set, so a stale/colliding uid
+-- can't gate spawning. Off-page entries keep their pre-load state.
+function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds)
     local survUnitSet, survBuildingSet = {}, {}
-    local orphanBuildingSet = {}
-    for _, uid in ipairs(survUnitIds or {})       do survUnitSet[uid] = true end
-    for _, bid in ipairs(survBuildingIds or {})   do survBuildingSet[bid] = true end
-    for _, bid in ipairs(orphanBuildingIds or {}) do orphanBuildingSet[bid] = true end
+    for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
+    for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
 
-    local pruned = 0
-    for bid in pairs(state) do
-        if survBuildingSet[bid] then
-            -- loaded-page survivor: keep
-        elseif orphanBuildingSet[bid] or not building.getInfo(bid) then
-            state[bid] = nil
-            pruned = pruned + 1
-        end
-        -- else: live off-page building's state → keep
+    local pre = buildingSpawn._preLoadState or {}
+    buildingSpawn._preLoadState = nil
+    local blob = state   -- current contents = the just-restored blob
+
+    local rebuilt = {}
+    for bid in pairs(survBuildingSet) do
+        if blob[bid] ~= nil then rebuilt[bid] = blob[bid] end
     end
+    for bid, s in pairs(pre) do
+        if not survBuildingSet[bid] and building.getInfo(bid) then
+            rebuilt[bid] = s        -- live off-page building: keep current state
+        end
+    end
+
+    local kept = 0
+    for k in pairs(state) do state[k] = nil end
+    for k, v in pairs(rebuilt) do state[k] = v; kept = kept + 1 end
+
     local scrubbed = 0
     for bid, s in pairs(state) do
         if survBuildingSet[bid] and s.lastUid ~= nil
@@ -312,11 +321,8 @@ function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds,
             scrubbed = scrubbed + 1
         end
     end
-    if pruned > 0 or scrubbed > 0 then
-        engine.logInfo("Building spawn: pruned " .. pruned
-            .. " stale state(s) and scrubbed " .. scrubbed
-            .. " stale reference(s) after load")
-    end
+    engine.logInfo("Building spawn: reconciled state after load ("
+        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed)")
 end
 
 -- Construction progress curve. Solo workers build at 1× the base

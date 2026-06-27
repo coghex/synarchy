@@ -274,16 +274,15 @@ def main() -> int:
         else:
             print("PASS: dropped-unit AI state pruned, live-unit state kept")
 
-        # onSaveLoaded signature: (survUnitIds, survBuildingIds,
-        # orphanUnitIds, orphanBuildingIds).
+        # onSaveLoaded signature: (survUnitIds, survBuildingIds).
         ai = "require('scripts.unit_ai')"
 
         # (i) Nested-reference scrub on a loaded-page survivor: a survivor can
         # embed a stale id in a nested field (attackTargetUid / treatPending).
         # A loaded-page unit can only validly reference a page-mate, so an id
-        # outside the survivor set (gone-before-save or off-page collision)
-        # must be scrubbed. Plant fakes in B, call onSaveLoaded with B as the
-        # only survivor, assert refs cleared while B's entry stays intact.
+        # outside the survivor set is stale and must be scrubbed. Plant fakes
+        # in B, call onSaveLoaded with B as the only survivor, assert refs
+        # cleared while B's entry stays intact.
         FAKE = 987654
         if ok:
             send(args.port,
@@ -291,8 +290,7 @@ def main() -> int:
                  f"if s then s.attackTargetUid={FAKE}; "
                  f"s.treatPending={{uid={FAKE}}} end; return 'ok'",
                  expect_result=False)
-            send(args.port,
-                 f"{ai}.onSaveLoaded({{{b}}}, {{}}, {{}}, {{}}); return 'ok'",
+            send(args.port, f"{ai}.onSaveLoaded({{{b}}}, {{}}); return 'ok'",
                  expect_result=False)
             ref = send(args.port, f"local s={ai}.getState({b}); "
                  f"return s and tostring(s.attackTargetUid) or 'NOSTATE'")
@@ -308,45 +306,49 @@ def main() -> int:
             else:
                 print("PASS: stale nested references scrubbed, survivor kept")
 
-        # (ii) Off-page preservation (regression guard): a live unit NOT in
-        # the loaded page's survivor/orphan sets stands in for a live off-page
-        # unit whose state rode along in the wholesale blob. It must be KEPT
-        # (a pure allow-list would wrongly drop it). Empty all four sets; B is
-        # live → keep.
+        # (ii) Off-page state must NOT be rolled back by an older save, and a
+        # stale blob id must NOT be kept. This drives the REAL blob-restore
+        # path (the registered deserializer), not just onSaveLoaded:
+        #   * mark B's live state (probeMarker),
+        #   * run the deserializer with a STALE blob (B without the marker +
+        #     a fake dead id) — it snapshots pre-load, clobbers, loads stale,
+        #   * onSaveLoaded with B as NON-survivor (i.e. B is "off-page").
+        # Expect: B keeps its pre-load marker (not the blob's stale copy), and
+        # the fake dead id from the blob is dropped.
+        DEAD = 998877
         if ok:
             send(args.port,
-                 f"{ai}.onSaveLoaded({{}}, {{}}, {{}}, {{}}); return 'ok'",
-                 expect_result=False)
-            fb = getstate(args.port, b)
-            print(f"Off-page keep (B live, not loaded-page): aiState[B]={fb}")
-            if fb != "present":
-                print("FAIL: live off-page unit's state was wrongly dropped "
-                      "(regresses keep-other-pages-intact, review #6)")
-                ok = False
-            else:
-                print("PASS: live off-page state preserved")
-
-        # (iii) Orphan force-prune (collision-safe): a loaded-page orphan id
-        # can collide with a LIVE off-page unit. It must be pruned via the
-        # orphan set even though unit.exists is true. Report B as an orphan
-        # unit; assert aiState[B] pruned while B stays alive.
-        if ok:
+                 f"local s={ai}.getState({b}); if s then s.probeMarker=777 end; "
+                 f"return 'ok'", expect_result=False)
             send(args.port,
-                 f"{ai}.onSaveLoaded({{}}, {{}}, {{{b}}}, {{}}); return 'ok'",
+                 "local sm=require('scripts.lib.save_modules'); "
+                 "local ser=require('scripts.lib.serialize'); "
+                 f"local stale=ser.serialize({{[{b}]={{currentAction='idle'}},"
+                 f"[{DEAD}]={{currentAction='attack'}}}}); "
+                 "sm.registry.unit_ai.deserialize(stale); return 'ok'",
                  expect_result=False)
-            fb = getstate(args.port, b)
+            # B is live but NOT a loaded-page survivor → treated as off-page.
+            send(args.port, f"{ai}.onSaveLoaded({{}}, {{}}); return 'ok'",
+                 expect_result=False)
+            mk = send(args.port, f"local s={ai}.getState({b}); "
+                 f"return s and tostring(s.probeMarker) or 'NOSTATE'")
+            dead = send(args.port, f"local s={ai}.getState({DEAD}); "
+                 f"return s and 'present' or 'nil'")
             be = exists(args.port, b)
-            print(f"Orphan force-prune (B orphan, live): aiState[B]={fb}, "
-                  f"unit.exists(B)={'yes' if be else 'no'}")
-            if fb != "nil":
-                print("FAIL: loaded-page orphan colliding with a LIVE unit was "
-                      "NOT force-pruned (collision misattribution)")
+            print(f"Blob-restore reconcile: B.probeMarker -> {mk}, "
+                  f"dead-id state -> {dead}, B alive -> {'yes' if be else 'no'}")
+            if mk != "777":
+                print("FAIL: live off-page unit's state was rolled back to the "
+                      "save blob (lost pre-load state, review)")
+                ok = False
+            elif dead != "nil":
+                print("FAIL: a stale blob id with no live entity was kept")
                 ok = False
             elif not be:
-                print("FAIL: prune unexpectedly destroyed the unit")
+                print("FAIL: reconcile unexpectedly destroyed the unit")
                 ok = False
             else:
-                print("PASS: orphan force-pruned even though the unit is live")
+                print("PASS: off-page pre-load state preserved, stale blob id dropped")
     finally:
         try:
             send(args.port, "engine.quit()", timeout=3, expect_result=False)
