@@ -256,15 +256,6 @@ local function unitCoords(info)
     return math.floor(info.gridX or 0), math.floor(info.gridY or 0)
 end
 
--- uid:slot we've already emptied by a disabling injury (drop a maimed
--- hand's weapon exactly once). Declared here so emitDeathAlert can clear
--- it on death; populated by dropDisabledHandWeapons below.
-local droppedSlots = {}
-local function clearDropState(uid)
-    droppedSlots[uid .. ":left_hand"]  = nil
-    droppedSlots[uid .. ":right_hand"] = nil
-end
-
 -- `channel` is optional: pass "injury" for a WOUND-caused death (it also
 -- lands in the injury/medical log). Pure survival deaths (starvation /
 -- thirst) omit it and stay event-only — they aren't injuries.
@@ -290,7 +281,6 @@ local function emitDeathAlert(uid, cause, channel)
     -- the same uid (engine reassigns ids on destroy/spawn) doesn't
     -- inherit stale state.
     unitAlertState[uid] = nil
-    clearDropState(uid)
 end
 
 local function emitWarningAlert(uid, info, msg)
@@ -743,8 +733,16 @@ end
 -----------------------------------------------------------
 local GRIP_DISABLERS = { hand = true, palm = true, forearm = true, arm = true }
 local HAND_SLOT = { ["l_"] = "left_hand", ["r_"] = "right_hand" }
--- (droppedSlots + clearDropState are declared above emitDeathAlert.)
 
+-- Drop the weapon held in any grip slot that a disabling wound has
+-- maimed. This runs every injury tick and is self-correcting: the drop
+-- only fires when a weapon is actually present (dropEquipmentToGround
+-- returns false on an empty slot, and reads/writes the same unit
+-- instance the loadout query does), so an emptied hand no-ops on
+-- subsequent ticks. A weapon re-equipped into the still-disabled slot
+-- later is dropped again — there is no one-shot guard to suppress it
+-- (issue #193: a stale per-slot flag used to let a re-equipped weapon
+-- stay in a severed hand forever).
 local function dropDisabledHandWeapons(uid)
     local ws = unit.getWounds(uid)
     if type(ws) ~= "table" then return end
@@ -756,27 +754,21 @@ local function dropDisabledHandWeapons(uid)
             local disabling = GRIP_DISABLERS[tokn]
                 and (w.kind == "severed"
                      or (w.kind == "fracture" and (w.severity or 0) >= 0.85))
-            local key = uid .. ":" .. slot
-            if disabling and not droppedSlots[key] then
+            if disabling then
                 local lo   = equipment.getLoadout(uid)
                 local held = lo and lo[slot]
-                if held then
-                    if unit.dropEquipmentToGround(uid, slot) then
-                        droppedSlots[key] = true
-                        local info = unit.getInfo(uid)
-                        if info then
-                            local gx, gy = unitCoords(info)
-                            local msg = unitLabel(info) .. " drops "
-                                .. (held.displayName or held.defName or "a weapon")
-                            if gx and gy then
-                                engine.emitEventForUnit("unit_event", msg, uid, gx, gy)
-                            else
-                                engine.emitEventForUnit("unit_event", msg, uid)
-                            end
+                if held and unit.dropEquipmentToGround(uid, slot) then
+                    local info = unit.getInfo(uid)
+                    if info then
+                        local gx, gy = unitCoords(info)
+                        local msg = unitLabel(info) .. " drops "
+                            .. (held.displayName or held.defName or "a weapon")
+                        if gx and gy then
+                            engine.emitEventForUnit("unit_event", msg, uid, gx, gy)
+                        else
+                            engine.emitEventForUnit("unit_event", msg, uid)
                         end
                     end
-                else
-                    droppedSlots[key] = true          -- nothing to drop; stop rechecking
                 end
             end
         end
