@@ -336,7 +336,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- center chunk's terrain matches what the player saw at save time;
     -- buildings landing in not-yet-loaded chunks will simply not render
     -- until those chunks come in via drainInitQueues.
-    do
+    bOrphanIds ← do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
                 fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
@@ -382,6 +382,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                     "Save load: dropped " <> T.pack (show n)
                     <> " building" <> (if n == 1 then "" else "s")
                     <> " (def no longer registered)"
+        -- Hand the orphaned building ids to Lua so building_spawn can drop
+        -- their stale per-id state (#195).
+        pure (map (fromIntegral . unBuildingId) orphans ∷ [Int])
 
     -- v5 (Phase 4): restore units + sim state. Same orphan handling as
     -- buildings; sim states for orphaned uids are dropped.
@@ -398,7 +401,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- imperceptible. A future reader that requires stricter consistency
     -- (e.g. asserts simStates ⊆ umInstances) would need either an
     -- explicit lock or merging both refs into a single IORef.
-    do
+    uOrphanIds ← do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
                 fromUnitSnapshot pageId (umDefs currentUm) (sdUnits saveData)
@@ -446,6 +449,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                     "Save load: dropped " <> T.pack (show n)
                     <> " unit" <> (if n == 1 then "" else "s")
                     <> " (def no longer registered)"
+        -- Hand the orphaned unit ids to Lua so unit_ai can drop their
+        -- stale per-id AI state (#195).
+        pure (map (fromIntegral . unUnitId) orphanUnits ∷ [Int])
 
     -- 6. Set camera z-slice from saved camera position. elevationAtGlobal
     -- takes grid coords (gx, gy), not world coords — go through
@@ -492,7 +498,12 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
 
     -- Units + buildings are now written back to their managers, so the
     -- engine entity set is authoritative. Signal Lua so per-id modules
-    -- prune state belonging to entities that did NOT survive the load
-    -- (orphaned defs were dropped above). Without this, a later id reuse
-    -- would inherit the orphan's stale AI / spawn state (#195).
-    sendSaveLoaded env
+    -- prune state belonging to entities that did NOT survive the load:
+    -- the explicit orphan-id sets (defs dropped above) PLUS a
+    -- global-liveness sweep on the Lua side. The orphan sets matter
+    -- because an orphaned id can collide with a live off-page entity of
+    -- the same id — a liveness check alone would then wrongly keep the
+    -- orphan's restored blob state and misattribute it. Without this, a
+    -- later id reuse would inherit the orphan's stale AI / spawn state
+    -- (#195).
+    sendSaveLoaded env uOrphanIds bOrphanIds

@@ -252,6 +252,31 @@ def main() -> int:
             ok = False
         else:
             print("PASS: dropped-unit AI state pruned, live-unit state kept")
+
+        # Orphan-set force-prune path (the id-collision case): an orphaned
+        # id can collide with a LIVE off-page unit of the same id. The
+        # restored blob state belongs to the dropped orphan, so it must be
+        # pruned even though a unit with that id exists. Simulate the engine
+        # reporting B's id as an orphan and assert it's force-pruned while B
+        # itself stays alive (proving the prune keys off the orphan SET, not
+        # liveness).
+        if ok:
+            send(args.port,
+                 f"require('scripts.unit_ai').onSaveLoaded({{{b}}}, {{}}); "
+                 f"return 'ok'", expect_result=False)
+            fb = getstate(args.port, b)
+            be = exists(args.port, b)
+            print(f"Force-prune of orphan-id B: aiState[B]={fb}, "
+                  f"unit.exists(B)={'yes' if be else 'no'}")
+            if fb != "nil":
+                print("FAIL: an orphaned id colliding with a LIVE unit was "
+                      "NOT force-pruned (collision misattribution, review #2)")
+                ok = False
+            elif not be:
+                print("FAIL: force-prune unexpectedly destroyed the unit")
+                ok = False
+            else:
+                print("PASS: orphan-id force-pruned even though the unit is live")
     finally:
         try:
             send(args.port, "engine.quit()", timeout=3, expect_result=False)

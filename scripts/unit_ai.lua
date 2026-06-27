@@ -3735,12 +3735,24 @@ end
 -- path can drop "orphan" units whose defs are no longer registered. The
 -- restored aiState still holds entries for those dropped ids, so a later
 -- id reuse (umNextId is restored from the snapshot) would let a brand-new
--- unit inherit the orphan's stale AI state. Reconcile here: drop any
--- aiState entry whose uid has no live unit. unit.exists is GLOBAL (all
--- world pages), so units on other loaded-but-inactive pages are kept --
--- only genuinely dead ids are pruned.
-function unitAi.onSaveLoaded()
+-- unit inherit the orphan's stale AI state.
+--
+-- orphanUnitIds is the exact set the engine dropped on this load; we
+-- force-prune those FIRST, before any liveness test. This matters when an
+-- orphaned id collides with a live off-page unit of the same id: the
+-- restored blob state belongs to the dropped orphan, not that unit, so a
+-- liveness check alone (unit.exists) would wrongly keep it. After that we
+-- still sweep any aiState entry with no live unit anywhere (unit.exists is
+-- GLOBAL across all world pages, so units on other loaded-but-inactive
+-- pages are kept) to catch ids that left no live entity for other reasons.
+function unitAi.onSaveLoaded(orphanUnitIds)
     local pruned = 0
+    for _, uid in ipairs(orphanUnitIds or {}) do
+        if aiState[uid] ~= nil then
+            aiState[uid] = nil
+            pruned = pruned + 1
+        end
+    end
     for uid in pairs(aiState) do
         if not unit.exists(uid) then
             aiState[uid] = nil

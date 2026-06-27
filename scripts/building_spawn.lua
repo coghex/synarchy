@@ -255,13 +255,25 @@ end
 -- Broadcast from the engine once a save has finished loading (#195).
 -- The Lua spawn-state blob is restored before the engine load path runs,
 -- and that path can drop "orphan" buildings whose defs are no longer
--- registered. Reconcile here: drop any per-building state whose bid has
--- no live building. building.getInfo is GLOBAL (all world pages, nil when
--- gone), so buildings on other loaded-but-inactive pages are kept -- only
--- dropped ids are pruned, preventing a reused bid from inheriting stale
--- spawn-rate state.
-function buildingSpawn.onSaveLoaded()
+-- registered. The restored state still holds entries for those dropped
+-- ids, so a reused bid could inherit stale spawn-rate state.
+--
+-- The signature mirrors the broadcast (onSaveLoaded(orphanUnitIds,
+-- orphanBuildingIds)); this module only cares about buildings. We
+-- force-prune the exact dropped-building set FIRST -- this matters when an
+-- orphaned bid collides with a live off-page building of the same id: the
+-- restored blob state belongs to the dropped orphan, so a liveness check
+-- alone would wrongly keep it. Then we sweep any state whose bid has no
+-- live building. building.getInfo is GLOBAL (all world pages, nil when
+-- gone), so buildings on other loaded-but-inactive pages are kept.
+function buildingSpawn.onSaveLoaded(_orphanUnitIds, orphanBuildingIds)
     local pruned = 0
+    for _, bid in ipairs(orphanBuildingIds or {}) do
+        if state[bid] ~= nil then
+            state[bid] = nil
+            pruned = pruned + 1
+        end
+    end
     for bid in pairs(state) do
         if not building.getInfo(bid) then
             state[bid] = nil

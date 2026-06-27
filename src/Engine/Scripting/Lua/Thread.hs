@@ -580,8 +580,10 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
-  LuaSaveLoaded →
-    broadcastToModules ls "onSaveLoaded" []
+  LuaSaveLoaded orphanUnitIds orphanBuildingIds →
+    broadcastToModules ls "onSaveLoaded"
+      [ intsToScriptArray orphanUnitIds
+      , intsToScriptArray orphanBuildingIds ]
   LuaHudLogInfo text1 text2 →
     broadcastToModules ls "onSetInfoText" [ScriptString text1, ScriptString text2]
   LuaHudLogWeatherInfo text →
@@ -602,6 +604,15 @@ processLuaMsg env ls stateRef msg = case msg of
       , buttonsToScriptValue buttons
       , coordsToScriptValue mCoords
       ]
+
+-- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
+--   Used by 'LuaSaveLoaded' to hand the orphaned unit/building ids to
+--   the Lua reconcile callback; the Lua side iterates with @ipairs@.
+intsToScriptArray ∷ [Int] → ScriptValue
+intsToScriptArray xs = ScriptTable $
+    zipWith (\i x → ( ScriptNumber (fromIntegral (i ∷ Int))
+                    , ScriptNumber (fromIntegral x) ))
+            [1..] xs
 
 -- | Build a Lua array @{ {label=..., action=...}, ... }@ from the
 --   button list carried by 'LuaShowPopup'. Lua-side popup module

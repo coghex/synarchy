@@ -143,8 +143,11 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   the entities that actually survived the load — orphan
               --   units/buildings whose defs were dropped leave no live
               --   entity, so their stale per-id state must be pruned or a
-              --   reused id would inherit it (#195).
-            | LuaSaveLoaded
+              --   reused id would inherit it (#195). Carries the orphaned
+              --   (dropped) unit ids and building ids respectively, so the
+              --   Lua side can force-prune them even when an orphaned id
+              --   collides with a live off-page entity of the same id.
+            | LuaSaveLoaded [Int] [Int]
             | LuaHudLogInfo Text Text
             | LuaHudLogWeatherInfo Text
             | LuaHudLogResourcesInfo Text
