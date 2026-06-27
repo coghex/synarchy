@@ -652,6 +652,8 @@ end
 --   * item-contents popup (#142): mounted on hud.world_page, so hiding
 --     the page only takes it off-view; its logical state stays open and
 --     could reappear stale. closeIfOpen() tears it down.
+--   * right-click context menu (#139): own modal page, anchored to the
+--     click target; hide() it so it can't survive over the wrong view.
 --   * ground-item selection (#175): per-world cursor state the item
 --     watcher (item_info_panel.update) keeps polling and would use to
 --     repopulate the panel. item.deselect() clears the active world's
@@ -695,6 +697,13 @@ function hud.reconcileView()
 
     infoPanel.clear()
     require("scripts.item_contents_panel").closeIfOpen()
+    -- Right-click context menu (#139): it lives on its own modal page and
+    -- is anchored to the tile/unit/item under the click in the zoomed-in
+    -- view. Hiding the world/zoom pages above only takes it off-view; its
+    -- logical state stays open and it can reappear over the wrong view.
+    -- hide() is idempotent (no-op when no menu is open), so dismiss it on
+    -- every band change.
+    require("scripts.ui.context_menu").hide()
     if newView ~= "zoomed_in" then
         require("scripts.debug").hide()
     end
