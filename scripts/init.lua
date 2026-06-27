@@ -294,6 +294,20 @@ function game.onMouseDown(button, x, y)
             return
         end
 
+        -- Arm unit drag-select. Forward-only (handle*, not a broadcast)
+        -- so it sits in THIS ordered claim chain: every guard above —
+        -- the debug overlay / anim panel / build tool / mine tool, AND
+        -- the debug armed-placement modes (spawn / item / fluid /
+        -- terrain / location / structure) that each `return` above —
+        -- has already consumed and bailed on its own click. So a click
+        -- eaten by any of them can no longer also start a background
+        -- box-selection (#114). Placed below those returns rather than
+        -- enumerating the armed* fields, so a future armed mode stays
+        -- shielded for free. It doesn't consume the click — the
+        -- single-unit selection / tile-cursor logic below still runs;
+        -- the drag only takes over on mouse-up if it passes threshold.
+        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")
