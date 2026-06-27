@@ -382,14 +382,31 @@ end
 -----------------------------------------------------------
 -- Show / hide the entire panel via its dedicated page
 -----------------------------------------------------------
+-- Canonical mutator for the panel's page visibility. ALWAYS go through
+-- this (never call UI.showPage/UI.hidePage on infoPanel.page directly)
+-- so the page state and the infoPanel.visible flag can never diverge.
+-- Direct page calls leave infoPanel.visible stale, after which setText's
+-- auto-show is gated on a lie and the panel sticks hidden/shown (#134).
 function infoPanel.setAllVisible(vis)
     if not infoPanel.page then return end
+    infoPanel.visible = vis
     if vis then
         UI.showPage(infoPanel.page)
         infoPanel.showTab(infoPanel.activeTab)
     else
         UI.hidePage(infoPanel.page)
     end
+end
+
+-- Re-derive visibility from current content. Use this to restore the
+-- panel after an external hide (HUD hide/show, unit_info_v2 takeover):
+-- the stored tab text survives a hide, so we can show iff there is
+-- content and stay hidden otherwise — instead of unconditionally
+-- showing (which resurfaces an empty/stale panel) or never showing
+-- (which leaves real content hidden forever). See #134.
+function infoPanel.refresh()
+    if not infoPanel.page then return end
+    infoPanel.setAllVisible(hasContent())
 end
 
 -----------------------------------------------------------

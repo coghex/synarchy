@@ -15,6 +15,7 @@
 -- selection identity changes.
 
 local hud         = require("scripts.hud")
+local infoPanel   = require("scripts.hud.info_panel")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
@@ -3373,10 +3374,10 @@ local function bootstrap()
 
     -- Take over the unit-info display: hide the shared HUD info panel
     -- entirely while v2 is alive. Tile / building info also stop
-    -- showing until those flows get migrated into v2 too.
-    if hud.info_page then
-        UI.hidePage(hud.info_page)
-    end
+    -- showing until those flows get migrated into v2 too. Hide via
+    -- infoPanel so infoPanel.visible tracks the page (#134) — otherwise
+    -- shutdown can't tell whether the panel should come back.
+    infoPanel.setAllVisible(false)
 end
 
 -----------------------------------------------------------
@@ -3744,10 +3745,10 @@ function unitInfoV2.shutdown()
     package.loaded.__unit_info_v2_suppress = nil
 
     -- Restore the shared HUD info panel's visibility — we hid it on
-    -- bootstrap so v2 could own the unit-info display.
-    if hud and hud.info_page then
-        UI.showPage(hud.info_page)
-    end
+    -- bootstrap so v2 could own the unit-info display. Re-derive from
+    -- content so we only resurface it if it actually has something to
+    -- show (an unconditional show would pop an empty/stale panel, #134).
+    infoPanel.refresh()
 
     clearOwned()
     if unitInfoV2.page then
