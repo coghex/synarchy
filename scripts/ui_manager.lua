@@ -499,8 +499,16 @@ end
 -- it exists); within-session and debug-console loads keep the Lua
 -- singleton's prior selection, which this clears (and routes onToolMode
 -- to drop any stale picker / mine anchor). (#103)
+--
+-- Scope: a load ALWAYS targets the "main_world" page
+-- (Engine/Scripting/Lua/API/Save.hs), so only reset when the HUD's
+-- toolbar is actually bound to main_world. The toolbar onChange writes
+-- world.setToolMode(hud.worldId, ...); if the HUD is currently on the
+-- arena page (test_arena_view sets hud.worldId = "test_arena"), a
+-- debug-console load of the hidden main_world must NOT reset the arena's
+-- tool/mine/build state.
 function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
-    if hud and hud.selectDefaultTool then
+    if hud and hud.selectDefaultTool and hud.worldId == "main_world" then
         hud.selectDefaultTool()
     end
 end
