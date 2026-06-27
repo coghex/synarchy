@@ -311,9 +311,20 @@ processInput env inpSt event = case event of
                                 logDebug logger CatUI $
                                     "UI element right-clicked: " <> callback
                                 return ClickUI
-                            Nothing → do
-                                Q.writeQueue lq (LuaMouseDownEvent btn x y)
-                                return ClickGame
+                            -- No right-click handler under the cursor. If
+                            -- an ordinary clickable control is still there,
+                            -- consume the click so it can't fall through to
+                            -- gameplay (mirrors the left-click blocking
+                            -- semantics); only truly empty UI space routes
+                            -- the right-click to the world.
+                            Nothing → case findClickableElementAt mousePos uiMgr' of
+                                Just _ → do
+                                    logDebug logger CatUI
+                                        "Right-click consumed by clickable UI element (no handler)"
+                                    return ClickUI
+                                Nothing → do
+                                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                                    return ClickGame
 
                       _ → do
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
