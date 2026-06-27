@@ -105,6 +105,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
 import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
+import World.Page.Types (WorldPageId(..))
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -366,31 +367,34 @@ loadUnitYamlFn env backendState = do
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
 
-lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
-lookupSurfaceZ env gx gy = do
-    wm ← readIORef (worldManagerRef env)
-    go (wmVisible wm) (wmWorlds wm)
-  where
-    (chunkCoord, (lx, ly)) = globalToChunk gx gy
-    go [] _ = return Nothing
-    go (pageId:rest) worlds =
-        case lookup pageId worlds of
-            Nothing → go rest worlds
-            Just ws → do
-                td ← readIORef (wsTilesRef ws)
-                case lookupChunk chunkCoord td of
-                    Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
-                    Nothing → go rest worlds
+-- | Surface Z at a tile in ONE specific world. The unit's height must
+--   come from the same page the unit is stamped into — walking wmVisible
+--   instead can read another page's terrain (or 0) when more than one
+--   world is live, which reintroduces #196 as a wrong-height spawn.
+surfaceZInWorld ∷ WorldState → Int → Int → IO (Maybe Int)
+surfaceZInWorld ws gx gy = do
+    let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+    td ← readIORef (wsTilesRef ws)
+    pure $ case lookupChunk chunkCoord td of
+        Just lc → Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
+        Nothing → Nothing
 
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
 --
---   Signature: unit.spawn(defName, gx, gy, [gz], [factionId])
+--   Signature: unit.spawn(defName, gx, gy, [gz], [factionId], [pageId])
 --   factionId is the spawn-time faction tag — "player" for player-
 --   controlled, "wildlife" for everything else. Defaults to
 --   "wildlife" when omitted. The arg can sit at slot 4 (when gz is
 --   omitted) or slot 5 (when both are supplied); both shapes work
 --   so callers don't have to pass an explicit nil for gz.
+--   pageId (slot 6) optionally pins the spawn to a specific live world
+--   page instead of the active one. A building spawning a unit must
+--   pass its OWN page here: scoping the caller's per-tick scan to the
+--   active page is not enough, because the active page can change (a
+--   queued world.show/hide on the world thread) between the scan and
+--   this call, which would otherwise route the unit into the wrong
+--   world (#196). Omitted → the active world, as before.
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
     nameArg     ← Lua.tostring 1
@@ -409,6 +413,7 @@ unitSpawnFn env = do
         Lua.TypeString → Lua.tostring 4
         _              → return Nothing
     factionArg5 ← Lua.tostring 5
+    pageArg6    ← Lua.tostring 6
 
     case nameArg of
         Nothing → do
@@ -433,25 +438,36 @@ unitSpawnFn env = do
             result ← Lua.liftIO $ do
                 -- Check def exists
                 um ← readIORef (unitManagerRef env)
-                -- Resolve the world the unit will belong to (the active
-                -- world). A unit needs a world to live in, so reject the
-                -- spawn when none is active (#78).
-                mActive ← activeWorldPage env
+                -- Resolve the world the unit will belong to. An explicit
+                -- pageId (slot 6) pins it to that live page; otherwise it
+                -- defaults to the active world (#78). A unit needs a world
+                -- to live in, so reject the spawn when the target page
+                -- doesn't resolve to a live world.
+                mActive ← case pageArg6 of
+                    Just pbs → do
+                        let pid = WorldPageId (TE.decodeUtf8 pbs)
+                        wm ← readIORef (worldManagerRef env)
+                        pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
+                    Nothing  → activeWorldPage env
                 case (HM.lookup name (umDefs um), mActive) of
                     (Nothing, _) → return (-1)
                     (_, Nothing) → do
                         logger ← readIORef (loggerRef env)
                         logWarn logger CatAsset
-                            "unit.spawn: no active world to spawn into"
+                            "unit.spawn: no world to spawn into"
                         return (-1)
-                    (Just _, Just (pageId, _)) → do
-                        -- Resolve Z
+                    (Just _, Just (pageId, ws)) → do
+                        -- Resolve Z from the SAME page the unit is stamped
+                        -- into (ws), not whatever world happens to be
+                        -- visible — otherwise an explicit pageId could be
+                        -- stamped correctly yet take another page's height
+                        -- (or 0) when several worlds are live (#196).
                         gz ← case zArg of
                             Just n  → return (fromIntegral n)
                             Nothing → do
                                 let gxi = floor gx ∷ Int
                                     gyi = floor gy ∷ Int
-                                mSurf ← lookupSurfaceZ env gxi gyi
+                                mSurf ← surfaceZInWorld ws gxi gyi
                                 case mSurf of
                                     Just z  → return z
                                     Nothing → do

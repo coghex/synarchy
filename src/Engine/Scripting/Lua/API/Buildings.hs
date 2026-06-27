@@ -41,6 +41,7 @@ import Control.Monad (foldM, forM_)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
@@ -374,6 +375,12 @@ buildingGetInfoFn env = do
                     Lua.setfield (-2) "tileH"
                     Lua.pushnumber (Lua.Number (realToFrac (biSpawnedAt inst)))
                     Lua.setfield (-2) "spawnedAt"
+                    -- The world page this building lives on (#76). Lets a
+                    -- caller bind follow-up actions (e.g. unit.spawn) to the
+                    -- building's own page instead of the active page (#196).
+                    Lua.pushstring (TE.encodeUtf8 (case biPage inst of
+                        WorldPageId p → p))
+                    Lua.setfield (-2) "page"
                     return 1
 
 -- | building.setSpawnRemaining(bid, n) — initialize the spawn-roster
