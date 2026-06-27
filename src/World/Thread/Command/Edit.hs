@@ -208,6 +208,13 @@ handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z = 
                         (appendEdit coord edit es, ())
 
 -- | Remove the structure piece at (gx,gy,slot-tag) via WeClearStructure.
+--   Unlike the SET path, the clear is recorded in the per-chunk edit log
+--   ALWAYS — even when the chunk isn't loaded. The piece being cleared may
+--   live only in the persisted edits of an UNLOADED/evicted chunk (its
+--   WeSetStructure), so without recording the clear it would replay back on
+--   reload / after save/load. The live lcStructures overlay is additionally
+--   updated when the chunk happens to be loaded. (Replaying a clear with no
+--   matching set is a harmless no-op — a HM.delete on an absent key.)
 handleWorldClearStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Word8 → IO ()
 handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
@@ -219,6 +226,8 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
         Just ws → do
             let (coord, _) = globalToChunk gx gy
                 edit = WeClearStructure gx gy slotTag
+            atomicModifyIORef' (wsEditsRef ws) $ \es →
+                (appendEdit coord edit es, ())
             td ← readIORef (wsTilesRef ws)
             case lookupChunk coord td of
                 Nothing → pure ()
@@ -226,8 +235,6 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
                     let lc' = applyEdit edit lc
                     atomicModifyIORef' (wsTilesRef ws) $ \w →
                         (insertChunk lc' w, ())
-                    atomicModifyIORef' (wsEditsRef ws) $ \es →
-                        (appendEdit coord edit es, ())
 
 -- | Remove EVERY structure piece in the world. Clears the live per-chunk
 --   'lcStructures' overlay on all loaded chunks AND strips the structure
