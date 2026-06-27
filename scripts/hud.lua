@@ -26,6 +26,12 @@ hud.worldId = "main_world" -- default overridden per-context
 hud.mapToggleId  = nil   -- map-mode toggle (bottom-right, zoom_page)
 hud.toolToggleId = nil   -- tool-mode toggle (bottom-left, world_page)
 
+-- Set when a save load has reset main_world's engine ToolMode to default
+-- but the shared toolbar wasn't bound to main_world at the time (HUD on
+-- the arena page, or hidden in a menu). Consumed the next time the HUD
+-- binds to main_world and shows. See hud.markLoadedToolReset. (#103)
+hud.mainWorldToolDirty = false
+
 -- Log icon (top-left HUD button). The slot icon shows the current
 -- log mode; expanded option strip shows the alternate mode.
 hud.logToggleId       = nil    -- toggle group handle
@@ -392,11 +398,7 @@ function hud.createUI()
         boxTexSet  = hud.boxTexSet,
         menuFont   = hud.menuFont,
         buttonSize = hud.baseSizes.buttonSize,
-        selectDefaultTool = function()
-            -- Default tool is at index 3 in the items list above
-            -- (after tool_mine at 1 and tool_build at 2).
-            toggle.select(hud.toolToggleId, 3)
-        end,
+        selectDefaultTool = hud.selectDefaultTool,
     })
 
     -- Mine tool: needs the hud reference for worldId / current view.
@@ -478,6 +480,59 @@ function hud.createUI()
 end
 
 -----------------------------------------------------------
+-- Tool selection
+-----------------------------------------------------------
+
+-- Switch the toolbar back to the default tool. Routes through
+-- applyOptionByName, NOT a bare toggle.select: toggle.select is
+-- visual-only and skips the toolbar onChange, so the engine-side
+-- ToolMode would stay on the previous tool (e.g. BuildTool after a
+-- placement/cancel/Escape — HUD icon flips to default, but
+-- world.getToolMode() and the next save still report "build").
+-- applyOptionByName mirrors a real user pick: it selects the
+-- tool_default slot AND fires onChange → world.setToolMode
+-- (..., "tool_default") → DefaultTool, and routes onToolMode so any
+-- stale picker / mine anchor is cleared. Used by the build tool's
+-- auto-exit and by the post-load reset in hud.show. (#103)
+function hud.selectDefaultTool()
+    if hud.toolToggleId then
+        toggle.applyOptionByName(hud.toolToggleId, "tool_default")
+    end
+end
+
+-- A save load ALWAYS targets the main_world page and resets its engine
+-- ToolMode to default (World/Thread/Command/Save.hs). Mirror that into
+-- the shared toolbar — but only while the toolbar is actually bound to
+-- main_world, since its onChange writes world.setToolMode(hud.worldId,
+-- ...) and must never reset the arena's tool state on a main_world load.
+-- If the HUD is on another page or hidden when the load lands, the reset
+-- is deferred (mainWorldToolDirty) and consumed the next time the HUD
+-- binds to main_world in hud.show.
+--
+-- The flag is only CLEARED once the reset can actually be applied — the
+-- toolbar must already exist (created in hud.createUI). A load that lands
+-- before any gameplay UI has opened (e.g. a debug-console engine.loadSave
+-- from the main menu) leaves toolToggleId nil; keep the flag set so the
+-- reset still fires when the toolbar is first shown on main_world, rather
+-- than silently consuming a no-op. (#103)
+function hud.resetMainWorldToolIfDirty()
+    if hud.mainWorldToolDirty and hud.worldId == "main_world"
+            and hud.toolToggleId then
+        hud.mainWorldToolDirty = false
+        hud.selectDefaultTool()
+    end
+end
+
+-- Called (via uiManager.onSaveLoaded) whenever any save finishes loading.
+-- Flags the main_world toolbar for a default-tool reset and applies it
+-- immediately if the HUD is already on main_world; otherwise it waits for
+-- the next main_world bind. (#103)
+function hud.markLoadedToolReset()
+    hud.mainWorldToolDirty = true
+    hud.resetMainWorldToolIfDirty()
+end
+
+-----------------------------------------------------------
 -- Show / Hide
 -----------------------------------------------------------
 
@@ -522,6 +577,11 @@ function hud.show()
     if hud.global_page then
         UI.showPage(hud.global_page)
     end
+
+    -- If a save was loaded while the HUD was bound elsewhere (arena) or
+    -- hidden in a menu, the main_world toolbar reset was deferred until
+    -- the HUD next binds to main_world — apply it now. (#103)
+    hud.resetMainWorldToolIfDirty()
 
     engine.logDebug("HUD shown")
 end

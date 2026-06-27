@@ -495,6 +495,27 @@ function uiManager.onSaveBrowserBack(elemHandle)
     return true
 end
 
+-- Broadcast from the world thread when ANY save finishes loading
+-- (main-menu load, debug-console engine.loadSave, etc. — see
+-- World/Thread/Helpers.sendSaveLoaded). A load ALWAYS targets the
+-- "main_world" page (Engine/Scripting/Lua/API/Save.hs) and resets its
+-- engine ToolMode to default (World/Thread/Command/Save.hs); mirror that
+-- into the shared HUD toolbar so the visible tool and world.getToolMode()
+-- agree, regardless of how the load was triggered.
+--
+-- hud.markLoadedToolReset applies the reset now if the HUD is already
+-- bound to main_world, otherwise defers it until the next main_world bind
+-- (consumed in hud.show). This both avoids clobbering the arena's tool
+-- state on a main_world load (the toolbar onChange writes
+-- world.setToolMode(hud.worldId, ...)) AND still resets the toolbar after
+-- an arena→menu→load→world_view round-trip, where hud.worldId is stale
+-- ("test_arena") at load time and only rebinds to main_world later. (#103)
+function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
+    if hud and hud.markLoadedToolReset then
+        hud.markLoadedToolReset()
+    end
+end
+
 function uiManager.onCreateWorld()
     handleNonTextBoxClick()
     uiManager.showMenu("create_world")
