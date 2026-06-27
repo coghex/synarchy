@@ -67,8 +67,11 @@ handleWorldSetZoomCursorSelectCommand env logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
+            -- A new zoom-map chunk selection takes over the cursor state:
+            -- drop any zoomed-in tile selection so the two views can't hold
+            -- stale, divergent selections simultaneously (issue #135).
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { zoomSelectNow = True }, ())
+                (cs { zoomSelectNow = True, worldSelectedTile = Nothing }, ())
         Nothing → pure ()
 handleWorldSetZoomCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldSetZoomCursorDeselectCommand env logger pageId = do
@@ -118,8 +121,11 @@ handleWorldSetWorldCursorSelectCommand env logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
+            -- A new zoomed-in tile selection takes over the cursor state:
+            -- drop any zoom-map chunk selection so the two views can't hold
+            -- stale, divergent selections simultaneously (issue #135).
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { worldSelectNow = True }, ())
+                (cs { worldSelectNow = True, zoomSelectedPos = Nothing }, ())
         Nothing → pure ()
 handleWorldSetWorldCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldSetWorldCursorDeselectCommand env logger pageId = do
@@ -289,5 +295,8 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy = do
                 Nothing → pure ()
                 Just lc → do
                     let z = lcSurfaceMap lc VU.! columnIndex lx ly
+                    -- Like the live info-click path, a new tile selection
+                    -- drops any zoom-map chunk selection (issue #135).
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                        (cs { worldSelectedTile = Just (gx, gy, z) }, ())
+                        (cs { worldSelectedTile = Just (gx, gy, z)
+                            , zoomSelectedPos   = Nothing }, ())

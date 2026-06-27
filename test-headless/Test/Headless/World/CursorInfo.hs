@@ -32,12 +32,15 @@ module Test.Headless.World.CursorInfo (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.Text as T
-import Data.IORef (writeIORef, modifyIORef')
+import Data.IORef (writeIORef, modifyIORef', readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread.Cursor (pollCursorInfo)
+import World.Thread.Command.Cursor
+    ( handleWorldSetZoomCursorSelectCommand
+    , handleWorldSetWorldCursorSelectCommand )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.State.Types ( WorldState(..), emptyWorldState
                          , WorldManager(..), CursorSnapshot(..) )
@@ -196,6 +199,37 @@ spec = beforeAll initEnv $ do
         infoBasics msgs `shouldBe` [""]
         weatherMsgs msgs `shouldSatisfy` elem ""
         resourceMsgs msgs `shouldSatisfy` elem ""
+
+    -- Selection mutual-exclusion at the command-handler level (issue
+    -- #135). Above, 'pollCursorInfo' is made robust to a tile and a
+    -- chunk both being selected; these specs verify the deeper fix —
+    -- the select COMMANDS clear the other view's selection, so the
+    -- newest selection owns the cursor state and the two can't coexist
+    -- in the first place. Driving the real handlers (not direct IORef
+    -- writes) is what guards that wiring.
+    it "a new zoom-map chunk selection clears a lingering tile selection (issue #135)" $ \env → do
+        ws ← freshVisibleWorld env
+        logger ← readIORef (loggerRef env)
+        -- A zoomed-in tile is selected; the user now clicks a chunk in
+        -- the zoom-map. The select command must take over the cursor.
+        writeIORef (wsCursorRef ws)
+            (emptyCursorState { worldSelectedTile = Just (8, 8, 1) })
+        handleWorldSetZoomCursorSelectCommand env logger pid
+        cs ← readIORef (wsCursorRef ws)
+        zoomSelectNow cs     `shouldBe` True
+        worldSelectedTile cs `shouldBe` Nothing
+
+    it "a new zoomed-in tile selection clears a lingering chunk selection (issue #135)" $ \env → do
+        ws ← freshVisibleWorld env
+        logger ← readIORef (loggerRef env)
+        -- A zoom-map chunk is selected; the user now info-clicks a tile
+        -- in the zoomed-in view. The select command must take over.
+        writeIORef (wsCursorRef ws)
+            (emptyCursorState { zoomSelectedPos = Just (0, 0) })
+        handleWorldSetWorldCursorSelectCommand env logger pid
+        cs ← readIORef (wsCursorRef ws)
+        worldSelectNow cs  `shouldBe` True
+        zoomSelectedPos cs `shouldBe` Nothing
 
     it "deselecting everything empties the panel" $ \env → do
         ws ← freshVisibleWorld env
