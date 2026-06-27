@@ -658,6 +658,10 @@ end
 --   * item-contents popup (#142): mounted on hud.world_page, so hiding
 --     the page only takes it off-view; its logical state stays open and
 --     could reappear stale. closeIfOpen() tears it down.
+--   * cargo-inventory popup (#141): same story as the item-contents
+--     popup — mounted on hud.world_page, so a band change only hides the
+--     page while state.open stays true and the popup reappears stale on
+--     return. closeIfOpen() (idempotent) tears it down on every band change.
 --   * right-click context menu (#139): own modal page, anchored to the
 --     click target; hide() it so it can't survive over the wrong view.
 --   * ground-item selection (#175): per-world cursor state the item
@@ -703,6 +707,7 @@ function hud.reconcileView()
 
     infoPanel.clear()
     require("scripts.item_contents_panel").closeIfOpen()
+    require("scripts.cargo_inventory_panel").closeIfOpen()
     -- Right-click context menu (#139): it lives on its own modal page and
     -- is anchored to the tile/unit/item under the click in the zoomed-in
     -- view. Hiding the world/zoom pages above only takes it off-view; its
