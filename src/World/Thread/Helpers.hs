@@ -19,16 +19,19 @@ sendGenLog ∷ EngineEnv → Text → IO ()
 sendGenLog env msg = Q.writeQueue (luaQueue env) (LuaWorldGenLog msg)
 
 -- | Signal Lua that a save finished loading, so per-id modules can
---   reconcile their state against the entities that survived the load
---   (#195). Carries the unit + building ids that SURVIVED on the loaded
---   page (the successfully restored set); the Lua side keeps state/refs
---   only for those and scrubs everything else (missing-def orphans, ids
---   gone before the save, and ids colliding with a live off-page
---   entity). Emit only after units + buildings have been written back.
-sendSaveLoaded ∷ EngineEnv → [Int] → [Int] → IO ()
-sendSaveLoaded env survivingUnitIds survivingBuildingIds =
+--   reconcile their global singleton state (#195). Carries, for the
+--   loaded page, the unit + building ids that SURVIVED (successfully
+--   restored) and the ORPHANS (claimed by the snapshot but dropped). The
+--   Lua side keeps survivors, force-prunes orphans (collision-safe), and
+--   keeps any other id only if it's a still-live off-page entity — so
+--   other live pages' state is preserved. Emit only after units +
+--   buildings have been written back.
+sendSaveLoaded ∷ EngineEnv → [Int] → [Int] → [Int] → [Int] → IO ()
+sendSaveLoaded env survivingUnitIds survivingBuildingIds
+                   orphanUnitIds orphanBuildingIds =
     Q.writeQueue (luaQueue env)
-        (LuaSaveLoaded survivingUnitIds survivingBuildingIds)
+        (LuaSaveLoaded survivingUnitIds survivingBuildingIds
+                       orphanUnitIds orphanBuildingIds)
 
 -- | Info message to lua's HUD
 sendHudInfo ∷ EngineEnv → Text → Text → IO ()

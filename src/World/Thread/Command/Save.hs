@@ -336,7 +336,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- center chunk's terrain matches what the player saw at save time;
     -- buildings landing in not-yet-loaded chunks will simply not render
     -- until those chunks come in via drainInitQueues.
-    bSurvivingIds ← do
+    (bSurvivingIds, bOrphanIds) ← do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
                 fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
@@ -382,13 +382,16 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                     "Save load: dropped " <> T.pack (show n)
                     <> " building" <> (if n == 1 then "" else "s")
                     <> " (def no longer registered)"
-        -- Hand Lua the building ids that SURVIVED on the loaded page (the
-        -- successfully restored entities). building_spawn keeps only those
-        -- and scrubs everything else — not just missing-def orphans but
-        -- also ids that were already gone before the save and any id that
-        -- now collides with a live off-page building (#195).
-        pure (map (fromIntegral . unBuildingId)
-                  (HM.keys (bmInstances restored)) ∷ [Int])
+        -- Hand Lua two loaded-page sets: the building ids that SURVIVED
+        -- (successfully restored) and the ORPHANS (claimed by this page's
+        -- snapshot but dropped — def gone). building_spawn force-prunes the
+        -- orphans (collision-safe), keeps survivors, and keeps any other id
+        -- only if it's a still-live OFF-PAGE building — so it strips stale
+        -- loaded-page leftovers without dropping other live pages' state
+        -- (#195).
+        pure ( map (fromIntegral . unBuildingId)
+                   (HM.keys (bmInstances restored)) ∷ [Int]
+             , map (fromIntegral . unBuildingId) orphans ∷ [Int] )
 
     -- v5 (Phase 4): restore units + sim state. Same orphan handling as
     -- buildings; sim states for orphaned uids are dropped.
@@ -405,7 +408,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- imperceptible. A future reader that requires stricter consistency
     -- (e.g. asserts simStates ⊆ umInstances) would need either an
     -- explicit lock or merging both refs into a single IORef.
-    uSurvivingIds ← do
+    (uSurvivingIds, uOrphanIds) ← do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
                 fromUnitSnapshot pageId (umDefs currentUm) (sdUnits saveData)
@@ -453,13 +456,17 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                     "Save load: dropped " <> T.pack (show n)
                     <> " unit" <> (if n == 1 then "" else "s")
                     <> " (def no longer registered)"
-        -- Hand Lua the unit ids that SURVIVED on the loaded page (the
-        -- successfully restored entities — liveUids is exactly the loaded
-        -- page's restored set, orphans already dropped). unit_ai keeps only
-        -- those and scrubs everything else: missing-def orphans, ids gone
-        -- before the save, and any id colliding with a live off-page unit
-        -- (#195).
-        pure (map (fromIntegral . unUnitId) (HS.toList liveUids) ∷ [Int])
+        -- Hand Lua two loaded-page sets: the unit ids that SURVIVED
+        -- (liveUids = the loaded page's restored set) and the ORPHANS
+        -- (claimed by this page's snapshot but dropped — def gone). unit_ai
+        -- force-prunes the orphans (collision-safe: a dropped id can
+        -- collide with a live off-page unit, so liveness alone would keep
+        -- it), keeps survivors, and keeps any other top-level entry only if
+        -- it's a still-live OFF-PAGE unit — preserving other live pages'
+        -- AI state. Nested refs are scrubbed against the survivor set
+        -- (a loaded-page unit can only validly reference a page-mate) (#195).
+        pure ( map (fromIntegral . unUnitId) (HS.toList liveUids) ∷ [Int]
+             , map (fromIntegral . unUnitId) orphanUnits ∷ [Int] )
 
     -- 6. Set camera z-slice from saved camera position. elevationAtGlobal
     -- takes grid coords (gx, gy), not world coords — go through
@@ -505,14 +512,13 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         <> ": " <> unWorldPageId pageId
 
     -- Units + buildings are now written back to their managers, so the
-    -- engine entity set is authoritative. Signal Lua with the ids that
-    -- SURVIVED on the loaded page so per-id modules keep state/refs only
-    -- for those and scrub everything else. An allow-list (survivors), not
-    -- a deny-list (orphans), is required: the restored Lua blob can carry
-    -- ids that were already gone before the save, and on a cross-session
-    -- load those can collide with a live off-page entity of the same id —
-    -- a global-liveness check would then wrongly keep the stale state and
-    -- misattribute it. The wholesale blob restore clears the singleton
-    -- first, so after load it holds only loaded-page ids; filtering to the
-    -- loaded-page survivors drops nothing legitimate (#195).
-    sendSaveLoaded env uSurvivingIds bSurvivingIds
+    -- engine entity set is authoritative. Signal Lua with both the loaded
+    -- page's SURVIVORS and its ORPHANS so per-id modules can reconcile
+    -- correctly. The Lua blob is a global singleton serialized wholesale,
+    -- so it can carry both loaded-page ids and OFF-PAGE ids (other live
+    -- pages' state). The reconcile must therefore: keep survivors;
+    -- force-prune orphans (a dropped loaded-page id can collide with a
+    -- live off-page entity, so global liveness alone would misattribute
+    -- its stale state); and keep any other id only if it's a still-live
+    -- off-page entity — preserving other live pages' state (#195, #191).
+    sendSaveLoaded env uSurvivingIds bSurvivingIds uOrphanIds bOrphanIds

@@ -3777,37 +3777,50 @@ local function scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
 end
 
 -- Broadcast from the engine once a save has finished loading (#195).
--- Lua save blobs are restored (wholesale: the singleton is cleared and
--- repopulated from the loaded page's blob) BEFORE the engine load path
--- runs. That path then keeps only the entities that survive on the loaded
--- page, dropping missing-def orphans. The restored aiState can still hold
--- entries — and nested refs — for ids that did NOT survive (orphans, or
--- entities already gone when the save was taken). On a cross-session load
--- those ids can collide with a live off-page entity preserved by the
--- merge, and the global validators would then misattribute the stale
--- state to the wrong entity.
+-- The Lua blob is a global singleton serialized WHOLESALE, so it carries
+-- state for units on EVERY live page, not just the saved one. On load it's
+-- restored (cleared + repopulated from the blob) before the engine merge,
+-- which restores the saved page's units and PRESERVES other live pages'
+-- units (#191). So afterward aiState legitimately contains both loaded-page
+-- entries and live OFF-PAGE entries — the reconcile must keep the latter.
 --
--- liveUnitIds / liveBuildingIds are the ids that SURVIVED on the loaded
--- page (the successfully restored set). Because the restore clobbers the
--- singleton, aiState afterward holds only loaded-page ids, so we can treat
--- this as an allow-list: keep state/refs only for survivors, scrub the
--- rest. This subsumes the missing-def-orphan, gone-before-save, and
--- off-page-collision cases without relying on global liveness.
-function unitAi.onSaveLoaded(liveUnitIds, liveBuildingIds)
-    local liveUnitSet, liveBuildingSet = {}, {}
-    for _, uid in ipairs(liveUnitIds or {})     do liveUnitSet[uid] = true end
-    for _, bid in ipairs(liveBuildingIds or {}) do liveBuildingSet[bid] = true end
+-- Args are four loaded-page sets: survivors + orphans, for units and
+-- buildings. Per top-level entry uid:
+--   * survivor          → keep (it was restored on the loaded page);
+--   * loaded-page orphan → force-prune — a dropped id can collide with a
+--     live off-page unit, so global liveness alone would keep its stale
+--     state and misattribute it;
+--   * otherwise          → keep iff still globally live (a live OFF-PAGE
+--     unit's state), else prune (gone before save / dead).
+-- Nested refs are then scrubbed only on loaded-page SURVIVOR entries,
+-- against the survivor set: a loaded-page unit can only validly reference a
+-- page-mate, so a ref outside that set (orphan, gone-before-save, or
+-- off-page collision) is stale. Off-page entries are left untouched — they
+-- weren't reloaded and their refs point within their own page.
+function unitAi.onSaveLoaded(survUnitIds, survBuildingIds,
+                             orphanUnitIds, orphanBuildingIds)
+    local survUnitSet, survBuildingSet = {}, {}
+    local orphanUnitSet, orphanBuildingSet = {}, {}
+    for _, uid in ipairs(survUnitIds or {})       do survUnitSet[uid] = true end
+    for _, bid in ipairs(survBuildingIds or {})   do survBuildingSet[bid] = true end
+    for _, uid in ipairs(orphanUnitIds or {})     do orphanUnitSet[uid] = true end
+    for _, bid in ipairs(orphanBuildingIds or {}) do orphanBuildingSet[bid] = true end
 
     local pruned = 0
     for uid in pairs(aiState) do
-        if not liveUnitSet[uid] then
+        if survUnitSet[uid] then
+            -- loaded-page survivor: keep
+        elseif orphanUnitSet[uid] or not unit.exists(uid) then
             aiState[uid] = nil
             pruned = pruned + 1
         end
+        -- else: live off-page unit's state → keep
     end
     local scrubbed = 0
-    for _, s in pairs(aiState) do
-        scrubbed = scrubbed + scrubStaleRefs(s, liveUnitSet, liveBuildingSet)
+    for uid, s in pairs(aiState) do
+        if survUnitSet[uid] then
+            scrubbed = scrubbed + scrubStaleRefs(s, survUnitSet, survBuildingSet)
+        end
     end
     if pruned > 0 or scrubbed > 0 then
         engine.logInfo("Unit AI: pruned " .. pruned

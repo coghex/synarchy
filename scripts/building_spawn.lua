@@ -258,33 +258,42 @@ end
 -- registered. The restored state still holds entries for those dropped
 -- ids, so a reused bid could inherit stale spawn-rate state.
 --
--- The signature mirrors the broadcast (onSaveLoaded(liveUnitIds,
--- liveBuildingIds)) — the ids that SURVIVED on the loaded page. The
--- restore clobbers the singleton and repopulates from the loaded blob, so
--- `state` afterward holds only loaded-page bids; we treat the survivor
--- list as an allow-list and drop any state[bid] not in it. That covers
--- missing-def orphans, buildings gone before the save, and any bid now
--- colliding with a live off-page building (which the global building.getInfo
--- lookup would otherwise mask).
---
--- Surviving entries also embed a unit reference (s.lastUid, the last unit
--- spawned, used for spawn-spacing). Scrub it if that uid didn't survive on
--- the loaded page, so a colliding off-page unit can't gate spawning.
-function buildingSpawn.onSaveLoaded(liveUnitIds, liveBuildingIds)
-    local liveUnitSet, liveBuildingSet = {}, {}
-    for _, uid in ipairs(liveUnitIds or {})     do liveUnitSet[uid] = true end
-    for _, bid in ipairs(liveBuildingIds or {}) do liveBuildingSet[bid] = true end
+-- The `state` table is a global singleton serialized WHOLESALE, so after a
+-- load (cleared + repopulated from the blob, then the engine merge restores
+-- the saved page's buildings and preserves other live pages' #191) it
+-- legitimately holds both loaded-page entries and live OFF-PAGE buildings.
+-- Signature mirrors the broadcast: four loaded-page sets (survivors +
+-- orphans, units + buildings). Per top-level entry bid:
+--   * survivor          → keep;
+--   * loaded-page orphan → force-prune (a dropped bid can collide with a
+--     live off-page building, so building.getInfo alone would mask it);
+--   * otherwise          → keep iff a live off-page building, else prune.
+-- The nested s.lastUid (last unit spawned, used for spawn-spacing) is
+-- scrubbed only on loaded-page SURVIVOR entries, against the surviving unit
+-- set, so a stale/colliding uid can't gate spawning. Off-page entries are
+-- left untouched.
+function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds,
+                                    orphanUnitIds, orphanBuildingIds)
+    local survUnitSet, survBuildingSet = {}, {}
+    local orphanBuildingSet = {}
+    for _, uid in ipairs(survUnitIds or {})       do survUnitSet[uid] = true end
+    for _, bid in ipairs(survBuildingIds or {})   do survBuildingSet[bid] = true end
+    for _, bid in ipairs(orphanBuildingIds or {}) do orphanBuildingSet[bid] = true end
 
     local pruned = 0
     for bid in pairs(state) do
-        if not liveBuildingSet[bid] then
+        if survBuildingSet[bid] then
+            -- loaded-page survivor: keep
+        elseif orphanBuildingSet[bid] or not building.getInfo(bid) then
             state[bid] = nil
             pruned = pruned + 1
         end
+        -- else: live off-page building's state → keep
     end
     local scrubbed = 0
-    for _, s in pairs(state) do
-        if s.lastUid ~= nil and not liveUnitSet[s.lastUid] then
+    for bid, s in pairs(state) do
+        if survBuildingSet[bid] and s.lastUid ~= nil
+           and not survUnitSet[s.lastUid] then
             s.lastUid = nil
             scrubbed = scrubbed + 1
         end
