@@ -144,12 +144,21 @@ function dragSelect.update(dt)
     end
 end
 
-function dragSelect.onMouseDown(button, x, y)
+-- Arm the drag. Forward-only: called from game.onMouseDown (init.lua)
+-- AFTER the ordered tool/overlay claim guards (debug overlay, debug
+-- anim panel, build tool, mine tool) have each had their crack and
+-- returned early on a consumed click. That single ordered decision is
+-- the only thing that arms drag-select now, so a click already eaten by
+-- one of those handlers can no longer start a background box-selection
+-- (#114).
+--
+-- Named handle* (not on*) deliberately: this module is engine-loaded
+-- (loadScript), so an on*-named function would ALSO fire on every engine
+-- broadcast — independent of the ordered guards above, which was the
+-- bug. handle* keeps it forward-only (same convention as build_tool /
+-- mine_tool / debug.lua's tryClaimClick).
+function dragSelect.handleMouseDown(button, x, y)
     if button ~= 1 then return end
-    -- Defer to debug overlay's parallel hit-test; if it claims the
-    -- click, we don't start a drag from a debug UI element.
-    local debugOverlay = require("scripts.debug")
-    if debugOverlay.tryClaimClick(button, x, y) then return end
 
     dragSelect.state  = "pressed"
     dragSelect.startX = x

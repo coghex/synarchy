@@ -195,6 +195,15 @@ function game.onMouseDown(button, x, y)
         return
     end
 
+    -- Arm unit drag-select. Forward-only (handle*, not a broadcast) so
+    -- it sits in THIS ordered claim chain: every guard above has already
+    -- returned on a consumed click, so a click eaten by the debug
+    -- overlay / anim panel / build tool / mine tool can no longer also
+    -- start a background box-selection (#114). It doesn't consume the
+    -- click — the single-unit selection / tile-cursor logic below still
+    -- runs; the drag only takes over on mouse-up if it passes threshold.
+    require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+
     if button == MOUSE_LEFT then
         -- Debug spawn mode: if armed, this click is a spawn, not a
         -- selection. Spawn at the hovered tile and stay armed.
