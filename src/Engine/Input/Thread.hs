@@ -390,10 +390,12 @@ processInput env inpSt event = case event of
             logDebug logger CatInput $ "Framebuffer resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
             writeIORef (framebufferSizeRef env) (w, h)
             Q.writeQueue (luaQueue env) (LuaFramebufferResize w h)
-          WindowFocus focused →
+          WindowFocus focused → do
             logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
-          WindowMinimize minimized →
+            unless focused $ releaseHeldButtons env inpSt
+          WindowMinimize minimized → do
             logDebug logger CatInput $ "Window minimize event: minimized=" <> T.pack (show minimized)
+            when minimized $ releaseHeldButtons env inpSt
           -- Currently never emitted (the GLFW close request is polled
           -- via shouldClose in the main loop, not routed as an input
           -- event); handled here so the match stays total if it is.
@@ -452,6 +454,31 @@ clearHeldInput state = state
     , inpMouseBtns   = Map.empty
     , inpMouseRoutes = Map.empty
     }
+
+-- | Emit the mouse-up events the OS swallows on a focus-loss / minimize
+--   transition. The Haskell @inpMouseBtns@ clear (see 'clearHeldInput')
+--   only fixes button pollers; several drags live entirely in Lua (the
+--   drag-select box, slider / scrollbar knobs) and end only on
+--   @onMouseUp@, so without a synthetic release they stay latched to the
+--   cursor when focus returns. Each release fires at the last known
+--   cursor position and carries the press's recorded route, so it is
+--   indistinguishable from a real release to the Lua handlers.
+releaseHeldButtons ∷ EngineEnv → InputState → IO ()
+releaseHeldButtons env inpSt =
+    forM_ (heldButtonReleases inpSt) $ \(btn, mx, my, route) →
+        Q.writeQueue (luaQueue env) (LuaMouseUpEvent btn mx my route)
+
+-- | The synthetic releases 'releaseHeldButtons' should emit: one per
+--   currently-held button, at the last known cursor position, carrying
+--   the route its press was recorded with (so Lua sees a normal
+--   release). Buttons whose press was swallowed never enter
+--   @inpMouseBtns@, so they are correctly skipped.
+heldButtonReleases ∷ InputState
+                   → [(GLFW.MouseButton, Double, Double, ClickRoute)]
+heldButtonReleases inpSt =
+    [ (btn, mx, my, Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt))
+    | (btn, True) ← Map.toList (inpMouseBtns inpSt) ]
+  where (mx, my) = inpMousePos inpSt
 
 isKeyDown ∷ GLFW.KeyState → Bool
 isKeyDown GLFW.KeyState'Pressed   = True

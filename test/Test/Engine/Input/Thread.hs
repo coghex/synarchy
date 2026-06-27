@@ -4,7 +4,8 @@ import UPrelude
 import Test.Hspec
 import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
-import Engine.Input.Thread (shouldTrackKeyStateWhileTextFocused, updateWindowState)
+import Engine.Input.Thread
+  (shouldTrackKeyStateWhileTextFocused, updateWindowState, heldButtonReleases)
 import Engine.Input.Types
 
 -- | An input state with a key and a mouse button logically held down,
@@ -67,3 +68,26 @@ spec = do
       it "leaves state untouched on restore from minimize" $ do
         allReleased (updateWindowState heldState (WindowMinimize False))
           `shouldBe` False
+
+    describe "heldButtonReleases" $ do
+      it "synthesizes a release per held button at the last cursor pos" $ do
+        let s = heldState { inpMousePos = (12.0, 34.0) }
+        heldButtonReleases s
+          `shouldBe` [(GLFW.MouseButton'1, 12.0, 34.0, ClickGame)]
+
+      it "carries each press's recorded route" $ do
+        let s = heldState
+              { inpMousePos    = (5.0, 6.0)
+              , inpMouseBtns   = Map.fromList
+                  [ (GLFW.MouseButton'1, True), (GLFW.MouseButton'2, True) ]
+              , inpMouseRoutes = Map.fromList
+                  [ (GLFW.MouseButton'1, ClickGame)
+                  , (GLFW.MouseButton'2, ClickUI) ]
+              }
+        -- Map.toList yields ascending button order ('1 before '2).
+        heldButtonReleases s `shouldBe`
+          [ (GLFW.MouseButton'1, 5.0, 6.0, ClickGame)
+          , (GLFW.MouseButton'2, 5.0, 6.0, ClickUI) ]
+
+      it "emits nothing when no button is held" $
+        heldButtonReleases defaultInputState `shouldBe` []
