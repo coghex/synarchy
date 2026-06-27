@@ -28,31 +28,58 @@ from __future__ import annotations
 
 import argparse
 import glob
+import os
+import shutil
 import socket
 import subprocess
 import sys
 import time
+import uuid
 
 LOG = "/tmp/orphan_prune_engine.log"
+# Unique per run, deleted on exit. A fixed name could clobber a real save
+# and a stale dir from an interrupted run could make a later run falsely
+# pass by loading old data; main() also refuses to run if the dir exists.
+SAVE_NAME = "probe_orphan_" + uuid.uuid4().hex[:12]
 
 
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
+def _results(raw: bytes) -> list[str]:
+    # The console emits a "synarchy debug console\n> " banner on connect and
+    # a trailing "> " prompt; both yield EMPTY "> " lines. The real answer is
+    # the non-empty "> <value>" line, so filter the empties out.
+    out = raw.decode(errors="replace")
+    return [ln[2:].strip() for ln in out.splitlines()
+            if ln.startswith("> ") and ln[2:].strip()]
+
+
+def send(port: int, lua: str, timeout: float = 10.0,
+         expect_result: bool = True) -> str:
+    """Run one Lua line over the debug console and return its result.
+
+    With expect_result (a `return ...` command) we read until a non-empty
+    "> value" line appears, waiting up to `timeout` — this skips the banner
+    and survives server-side BLOCKING calls like world.waitForInit /
+    waitForChunks, which emit nothing until they unblock. Fire-and-forget
+    commands (no return) pass expect_result=False and just drain briefly.
+    """
     with socket.create_connection(("localhost", port), timeout=timeout) as s:
         s.sendall((lua + "\n").encode())
         chunks: list[bytes] = []
-        s.settimeout(0.3)
+        s.settimeout(timeout)
         try:
             while True:
                 b = s.recv(4096)
                 if not b:
                     break
                 chunks.append(b)
+                if expect_result and _results(b"".join(chunks)):
+                    break               # got the real result past the banner
+                if not expect_result:
+                    s.settimeout(0.3)   # drain remainder then idle out
         except socket.timeout:
             pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
+    vals = _results(b"".join(chunks))
+    return (vals[-1] if vals else "").strip('"')
 
 
 def boot(port: int) -> subprocess.Popen:
@@ -92,6 +119,19 @@ def bootstrap_defs(port: int) -> None:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
 
 
+def wait_save_written(name: str, timeout: float = 30.0) -> bool:
+    """Block until the save file lands on disk. saveWorld() returns as soon
+    as the WorldSave command is QUEUED; loading before the file exists
+    would 'Save not found' or read a stale dir from a previous run."""
+    path = os.path.join("saves", name, "world.synworld")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.isfile(path):
+            return True
+        time.sleep(0.3)
+    return False
+
+
 def find_flat(port: int) -> tuple[int, int] | None:
     """Find two adjacent dry equal-z land tiles for two spawns."""
     lua = (
@@ -129,13 +169,17 @@ def main() -> int:
     ap.add_argument("--size", type=int, default=64)
     args = ap.parse_args()
 
+    save_dir = os.path.join("saves", SAVE_NAME)
+    if os.path.exists(save_dir):
+        sys.exit(f"refusing to run: {save_dir} already exists")
+
     proc = boot(args.port)
     ok = True
     try:
         bootstrap_defs(args.port)
         send(args.port, f"world.init('arena', {args.seed}, {args.size}, 3); return 'ok'")
         send(args.port, "return world.waitForInit(180)", timeout=190)
-        send(args.port, "world.show('arena'); return 'ok'")
+        send(args.port, "world.show('arena'); return 'ok'", expect_result=False)
         send(args.port, "return world.loadChunksInRegion(-2,-2,2,2)")
         send(args.port, "return world.waitForChunks(60)", timeout=70)
 
@@ -160,7 +204,7 @@ def main() -> int:
             return 1
 
         # Destroy A. It's queued — wait until the unit thread drops it.
-        send(args.port, f"unit.destroy({a}); return 'ok'")
+        send(args.port, f"unit.destroy({a}); return 'ok'", expect_result=False)
         for _ in range(20):
             if not exists(args.port, a):
                 break
@@ -174,12 +218,18 @@ def main() -> int:
 
         # Save + load. The engine fires onSaveLoaded after the load
         # settles; the reconcile should prune A while keeping B.
-        send(args.port, "return engine.saveWorld('arena','orphan_test')")
-        send(args.port, "return engine.loadSave('orphan_test')")
-        # Wait for the load to settle (world thread restores units, then
-        # enqueues the LuaSaveLoaded broadcast). Re-show the loaded page.
+        print(f"saveWorld -> {send(args.port, f'return engine.saveWorld(\"arena\",\"{SAVE_NAME}\")')}")
+        # saveWorld returns on enqueue — wait for the file to actually land
+        # before loading, or loadSave races the write / reads a stale dir.
+        if not wait_save_written(SAVE_NAME):
+            print(f"FAIL: save file for '{SAVE_NAME}' never appeared on disk")
+            return 1
+        print(f"loadSave -> {send(args.port, f'return engine.loadSave(\"{SAVE_NAME}\")')}")
+        # Block on init, then let the load settle past LoadDone (the world
+        # thread restores units, then enqueues the LuaSaveLoaded broadcast).
+        send(args.port, "return world.waitForInit(180)", timeout=190)
         time.sleep(2.0)
-        send(args.port, "world.show('main_world'); return 'ok'")
+        send(args.port, "world.show('main_world'); return 'ok'", expect_result=False)
 
         # Poll until the reconcile has run (aiState[A] pruned) or timeout.
         pruned = False
@@ -204,13 +254,17 @@ def main() -> int:
             print("PASS: dropped-unit AI state pruned, live-unit state kept")
     finally:
         try:
-            send(args.port, "engine.quit(); return 'bye'", timeout=3)
-        except Exception:
+            send(args.port, "engine.quit()", timeout=3, expect_result=False)
+        except OSError:
             pass
         try:
-            proc.wait(timeout=10)
-        except Exception:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
             proc.kill()
+        # Clean up the throwaway save. Safe: the name is unique to this run
+        # and main() refused to start if the dir already existed.
+        if os.path.isdir(save_dir):
+            shutil.rmtree(save_dir, ignore_errors=True)
 
     return 0 if ok else 1
 
