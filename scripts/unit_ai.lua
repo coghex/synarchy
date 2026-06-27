@@ -3762,6 +3762,9 @@ local function scrubOrphanRefs(s, orphanUnitSet, orphanBuildingSet)
     if s.treatClaim and orphanUnitSet[s.treatClaim.patient] then
         s.treatClaim = nil; cleared = cleared + 1
     end
+    if s.treatPending and orphanUnitSet[s.treatPending.uid] then
+        s.treatPending = nil; cleared = cleared + 1
+    end
     if s.deliveryClaim and orphanBuildingSet[s.deliveryClaim.bid] then
         s.deliveryClaim = nil; cleared = cleared + 1
     end

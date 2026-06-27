@@ -259,11 +259,14 @@ def main() -> int:
         # targeting the wrong entity. getState() returns the live aiState
         # table, so plant a fake orphan id in B's attackTargetUid, report it
         # as an orphan, and assert it's scrubbed while B's entry survives.
+        # Cover both a raw-id field (attackTargetUid) and a nested-TABLE
+        # field (treatPending = {uid=...}, the handoff before treatClaim).
         FAKE = 987654
         if ok:
             send(args.port,
                  f"local s=require('scripts.unit_ai').getState({b}); "
-                 f"if s then s.attackTargetUid={FAKE} end; return 'ok'",
+                 f"if s then s.attackTargetUid={FAKE}; "
+                 f"s.treatPending={{uid={FAKE}}} end; return 'ok'",
                  expect_result=False)
             send(args.port,
                  f"require('scripts.unit_ai').onSaveLoaded({{{FAKE}}}, {{}}); "
@@ -271,13 +274,17 @@ def main() -> int:
             ref = send(args.port,
                  f"local s=require('scripts.unit_ai').getState({b}); "
                  f"return s and tostring(s.attackTargetUid) or 'NOSTATE'")
-            print(f"Nested scrub: B.attackTargetUid after onSaveLoaded -> {ref}")
-            if ref != "nil":
+            tp = send(args.port,
+                 f"local s=require('scripts.unit_ai').getState({b}); "
+                 f"return s and tostring(s.treatPending) or 'NOSTATE'")
+            print(f"Nested scrub: B.attackTargetUid -> {ref}, "
+                  f"B.treatPending -> {tp}")
+            if ref != "nil" or tp != "nil":
                 print("FAIL: orphaned id embedded in a surviving unit's nested "
-                      "field was NOT scrubbed (review #3)")
+                      "field was NOT scrubbed (review #3/#4)")
                 ok = False
             else:
-                print("PASS: orphaned nested reference scrubbed from survivor")
+                print("PASS: orphaned nested references scrubbed from survivor")
 
         # Orphan-set force-prune path (the id-collision case): an orphaned
         # id can collide with a LIVE off-page unit of the same id. The
