@@ -400,6 +400,14 @@ function uiManager.showMenu(menuName, params)
         if uiManager.moduleReady.worldView then worldView.hide() end
         if uiManager.moduleReady.hud then hud.hide() end
     end
+    -- The main debug overlay is only meaningful in the gameplay world
+    -- view and is never torn down by the menu's own pages. hud.hide()
+    -- handles it, but Settings opened from a game view keeps the HUD
+    -- alive (keepWorld) and so skips that path — leaving the F8 overlay
+    -- visible AND clickable (uiManager.onMouseDown still gives it first
+    -- crack via tryClaimClick) on the Settings screen. Hide it on every
+    -- menu transition regardless of keepWorld (#147).
+    pcall(function() require("scripts.debug").hide() end)
     if uiManager.moduleReady.saveBrowser then saveBrowser.hide() end
     if uiManager.moduleReady.loadingScreen then loadingScreen.hide() end
     if uiManager.moduleReady.testArena and not keepWorld then testArena.hide() end
