@@ -53,7 +53,9 @@ function mineTool.handleMouseDown(button, x, y)
     if not active() then return false end
 
     if button == MOUSE_LEFT then
-        local gx, gy = world.getHoverTile()
+        -- Live pick at the click coords, not the 0.1s-cached hover, so a
+        -- fast move-then-click anchors/commits on the clicked tile (#123).
+        local gx, gy = world.pickTile(x, y)
         if not gx or not gy then
             -- Clicked off-world: swallow so the click doesn't fall
             -- through, but don't disturb a pending anchor.

@@ -659,8 +659,31 @@ function hud.onMouseDown(button_num, mx, my)
        or not require("scripts.ui_manager").isGameplayInputActive() then
         return
     end
+    -- Recover window-pixel click coords. uiManager.onMouseDown forwards
+    -- mx,my already scaled into FRAMEBUFFER space, but the synchronous
+    -- pickers (world.pickTile) and the zoom-cursor hit-test
+    -- (pixelToChunkOrigin, fed by setZoomCursorHover) both expect WINDOW
+    -- pixels — the same space engine.getMousePosition() reports. Convert
+    -- back so a click resolves at the actual click position rather than
+    -- the 0.1s-stale cached hover the select APIs would otherwise read
+    -- (#123).
+    local cx, cy = mx, my
+    do
+        local ww, wh   = engine.getWindowSize()
+        local fbW, fbH = engine.getFramebufferSize()
+        if fbW and fbH and fbW > 0 and fbH > 0 then
+            cx = mx * (ww / fbW)
+            cy = my * (wh / fbH)
+        end
+    end
     if hud.currentView == "zoomed_out" then
         if button_num == 1 then
+            -- Refresh the zoom-cursor position to the actual click coords
+            -- before arming the select. The chunk is committed from
+            -- zoomCursorPos at render time (makeCursorQuad); without this
+            -- it would commit the periodically-cached hover, so a fast
+            -- move-then-click selected the previously hovered chunk (#123).
+            world.setZoomCursorHover(hud.worldId, cx, cy)
             world.setZoomCursorSelect(hud.worldId)
         elseif button_num == 2 then
             world.clearZoomCursorSelect(hud.worldId)
@@ -696,12 +719,19 @@ function hud.onMouseDown(button_num, mx, my)
             if world.getToolMode and world.getToolMode() ~= "info" then
                 return
             end
-            world.setWorldCursorSelect(hud.worldId)
-            -- Refresh the tile-editor popup at the just-selected
-            -- tile. Gated internally by arenaMode so non-arena worlds
-            -- silently no-op.
-            local gx, gy = world.getHoverTile()
+            -- Live pick at the click coords, then select that tile
+            -- directly. setWorldCursorSelect would arm a select that
+            -- commits from the 0.1s-cached worldHoverTile at render time,
+            -- so a fast move-then-click selected the previously hovered
+            -- tile; pickTile resolves the tile under the click NOW and
+            -- world.selectTile sets it in one shot (also dropping any
+            -- chunk selection, #135) (#123).
+            local gx, gy = world.pickTile(cx, cy)
             if gx and gy then
+                world.selectTile(hud.worldId, gx, gy)
+                -- Refresh the tile-editor popup at the just-selected
+                -- tile. Gated internally by arenaMode so non-arena worlds
+                -- silently no-op.
                 local tileEditor = require("scripts.tile_editor")
                 tileEditor.onTileSelected(gx, gy)
             end
