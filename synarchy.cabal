@@ -343,6 +343,7 @@ library
                      Engine.Scripting.Lua.API.PlayerEvent
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
+                     Engine.Scripting.Lua.API.Keybinds
                      Engine.Scripting.Lua.API.Text
                      Engine.Scripting.Lua.API.Focus
                      Engine.Scripting.Lua.API.Shell

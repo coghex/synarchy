@@ -33,7 +33,10 @@ import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
                                        getMousePositionFn,
                                        isMouseButtonDownFn, getWindowSizeFn, 
                                        getFramebufferSizeFn, getWorldCoordFn)
-import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn, 
+import Engine.Scripting.Lua.API.Keybinds (getKeybindsFn, setActionKeysFn,
+                                          addActionKeyFn, removeActionKeyFn,
+                                          saveKeybindsFn, loadDefaultKeybindsFn)
+import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
                                        getTextFn, getTextWidthFn)
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
                                         releaseFocusFn, getFocusIdFn)
@@ -173,7 +176,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getWindowSize"     (getWindowSizeFn env backendState)
   registerLuaFunction "getFramebufferSize" (getFramebufferSizeFn env backendState)
   registerLuaFunction "getWorldCoord"     (getWorldCoordFn env backendState)
-  
+
+  registerLuaFunction "getKeybinds"        (getKeybindsFn env)
+  registerLuaFunction "setActionKeys"      (setActionKeysFn env)
+  registerLuaFunction "addActionKey"       (addActionKeyFn env)
+  registerLuaFunction "removeActionKey"    (removeActionKeyFn env)
+  registerLuaFunction "saveKeybinds"       (saveKeybindsFn env)
+  registerLuaFunction "loadDefaultKeybinds" (loadDefaultKeybindsFn env)
+
   registerLuaFunction "loadFont"     (loadFontFn env backendState)
   registerLuaFunction "spawnText"    (spawnTextFn env backendState)
   registerLuaFunction "setText"      (setTextFn env)
