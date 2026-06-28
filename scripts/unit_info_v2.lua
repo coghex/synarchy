@@ -3414,12 +3414,16 @@ local function bootstrap()
     unitInfoV2.subTabUnselectedTexSet =
         boxTextures.load("assets/textures/ui/tabunselected", "tabunselected")
 
-    -- Take over the unit-info display: suppress the shared HUD info panel
-    -- entirely while v2 is alive. Tile / building info also stop showing
-    -- until those flows get migrated into v2 too. Suppression (not a bare
-    -- hide) also blocks background info watchers from re-opening the panel
-    -- behind v2, and lets shutdown restore from content (#134).
-    infoPanel.suppress("unit_info_v2")
+    -- Take over the unit-info display. The legacy unit watcher
+    -- (unit_info_panel.lua) already self-suppresses via the
+    -- __unit_info_v2_suppress sentinel, so it never pushes unit content
+    -- into the shared HUD info panel while v2 is loaded. We do NOT blanket-
+    -- suppress that shared panel here: it is still the renderer for tile /
+    -- building / ground-item info, which must keep showing (#136). Instead
+    -- suppression is driven dynamically in update() — the shared panel is
+    -- hidden only while v2's pane is actually on screen (a unit is
+    -- selected), so the two can never visually overlap, and released the
+    -- moment the pane hides so tile/building/item readouts reappear.
 end
 
 -----------------------------------------------------------
@@ -3657,8 +3661,16 @@ function unitInfoV2.update(dt)
     if want ~= unitInfoV2.lastWantVisible then
         if want then
             UI.showPage(unitInfoV2.page)
+            -- Pane is coming up over the right edge: hide the shared HUD
+            -- info panel so a lingering tile/building/item readout can't
+            -- overlap it (#136). Released again the moment the pane hides.
+            infoPanel.suppress("unit_info_v2")
         else
             UI.hidePage(unitInfoV2.page)
+            -- Pane gone: let the shared panel render tile/building/item
+            -- info again (refresh re-derives from content + any other
+            -- suppressors, so it only resurfaces if it has something).
+            infoPanel.unsuppress("unit_info_v2")
         end
         unitInfoV2.lastWantVisible = want
     end
@@ -3682,8 +3694,10 @@ function unitInfoV2.onFramebufferResize(width, height)
                      and hud.currentView == "zoomed_in"
         if want then
             UI.showPage(unitInfoV2.page)
+            infoPanel.suppress("unit_info_v2")
         else
             UI.hidePage(unitInfoV2.page)
+            infoPanel.unsuppress("unit_info_v2")
         end
         unitInfoV2.lastWantVisible = want
     end
