@@ -27,10 +27,9 @@ import Data.IORef (readIORef)
 import Data.Maybe (mapMaybe)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.YamlTextures (lookupTextureName)
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import Engine.Graphics.Viewport (windowDegenerate)
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , renderFlagSelected)
 import Engine.Scene.Types (SortableQuad(..))
@@ -161,24 +160,19 @@ renderGroundItemQuads env worldState tileAlpha = do
         texSizes ← readIORef (textureSizeRef env)
         paramsM  ← readIORef (wsGenParamsRef worldState)
         cs       ← readIORef (wsCursorRef worldState)
-        mBindless ← readIORef (textureSystemRef env)
         (fbW, fbH) ← readIORef (framebufferSizeRef env)
-        defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
         -- The broken-weapon overlay, registered by name during item
         -- loading (Lua/API/Items). Absent until items load.
         nameReg ← readIORef (textureNameRegistryRef env)
         let mBrokenTex = lookupTextureName "broken_equipment" nameReg
 
-        let lookupSlot texHandle = fromIntegral $ case mBindless of
-                Just bindless → getTextureSlotIndex texHandle bindless
-                Nothing       → 0
-            -- Neutral face-map slot. The world-layer shader masks
-            -- every quad by its face-map sample; passing raw slot 0
-            -- here samples whatever texture happens to live at
-            -- bindless index 0 and renders the item invisible (the
-            -- bug that hid all ground items in the GUI). Same value
-            -- units and flora pass.
-            defFmSlot = fromIntegral defFmSlotWord ∷ Float
+        -- Bake the STABLE texture-handle id; the bindless shader resolves
+        -- it to a live slot at draw time (#286). -1 = default face map:
+        -- the world-layer shader masks every quad by its face-map sample,
+        -- so this routes to the neutral default (the value units / flora
+        -- pass) instead of whatever lives at bindless index 0.
+        let lookupSlot texHandle = fromIntegral (toInt texHandle)
+            defFmSlot = -1 ∷ Float
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera

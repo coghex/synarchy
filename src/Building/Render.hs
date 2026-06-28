@@ -12,13 +12,12 @@ import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                           , renderFlagSelected)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, GridConfig(..), defaultGridConfig)
@@ -106,12 +105,13 @@ renderBuildingQuads env facing zSlice effDepth tileAlpha = do
             now ← readIORef (gameTimeRef env)
             texSizes ← readIORef (textureSizeRef env)
             mBts ← readIORef (textureSystemRef env)
-            defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
             case mBts of
                 Nothing → return V.empty
-                Just bts → do
-                    let lookupSlot h = getTextureSlotIndex h bts
-                        defFmSlot = fromIntegral defFmSlotWord
+                Just _bts → do
+                    -- Stable handle id resolved in the shader (#286);
+                    -- -1 = default face map (no directional face map).
+                    let lookupSlot h = fromIntegral (toInt h) ∷ Word32
+                        defFmSlot = -1 ∷ Float
                         quads = V.fromList
                             $ HM.foldlWithKey' (\acc bid inst →
                                 let mDef  = HM.lookup (biDefName inst) defs
@@ -249,12 +249,13 @@ renderGhostQuad env facing zSlice = do
                 Just def → do
                     texSizes ← readIORef (textureSizeRef env)
                     mBts ← readIORef (textureSystemRef env)
-                    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
                     case mBts of
                         Nothing → return V.empty
-                        Just bts →
-                            let lookupSlot h = getTextureSlotIndex h bts
-                                defFmSlot = fromIntegral defFmSlotWord
+                        Just _bts →
+                            -- Stable handle id resolved in the shader (#286);
+                            -- -1 = default face map.
+                            let lookupSlot h = fromIntegral (toInt h) ∷ Word32
+                                defFmSlot = -1 ∷ Float
                                 texHandle = bdTexture def
                                 (texW, texH) = case HM.lookup texHandle texSizes of
                                     Just (w, h) → (fromIntegral w, fromIntegral h)

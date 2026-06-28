@@ -375,15 +375,12 @@ function mainMenu.loadAndShowSave(saveName)
     worldView.sendTexturesToWorld("main_world")
 
     -- Arm the one-shot gen-complete structural rebind, exactly as
-    -- worldView.createWorld does. The world's quad cache bakes each tile's
-    -- bindless texture slot in at build time; if the structural textures
-    -- (blank tile, facemaps) are still GPU-loading when that cache is first
-    -- built, it bakes the magenta "undefined" slot and the engine's load-time
-    -- invalidation doesn't reliably heal it in the live flow. worldView.update
-    -- re-binds the structural set once world generation reports done (phase 3)
-    -- — by then they've loaded — busting the stale cache. Without this a
-    -- loaded save renders a magenta interior / missing facemaps (#64).
-    worldView.structuralRebound = false
+    -- worldView.createWorld does. (#286) The quad cache no longer bakes a
+    -- volatile bindless slot — vertices carry stable texture-handle ids and
+    -- the shader resolves them at draw time — so structural textures that
+    -- finish loading after the cache is built are picked up automatically.
+    -- The old phase-3 structural re-bind one-shot is therefore gone; the
+    -- save-load texture handles are still sent via worldView.sendTexturesToWorld.
 
     world.show("main_world")
 

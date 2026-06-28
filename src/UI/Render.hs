@@ -10,7 +10,7 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.IORef (readIORef)
-import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), FontHandle(..), toInt)
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
@@ -19,7 +19,6 @@ import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..), fromBindlessHandle)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatch(..))
 import UI.Types
@@ -44,12 +43,13 @@ uiLayerToLayerId ∷ UILayer → Int → LayerId
 uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $
     uiLayerBase + uiLayerBand layer zIndex
 
--- | Look up the bindless slot index for a texture handle
+-- | Bake the STABLE texture-handle id (#286). The bindless UI fragment
+--   shader resolves it to a live slot at draw time via the handle→slot
+--   table, exactly like the world path — so UI quads can't encode a stale
+--   slot. (Was: resolve to the bindless slot here, which now mismatches
+--   the shader and sampled the wrong texture.)
 lookupTextureSlot ∷ BindlessTextureSystem → TextureHandle → Float
-lookupTextureSlot bindless texHandle =
-    case Map.lookup texHandle (btsHandleMap bindless) of
-        Just bth → fromIntegral $ fromBindlessHandle bth
-        Nothing  → 0.0
+lookupTextureSlot _ texHandle = fromIntegral (toInt texHandle)
 
 mergeLayeredTextItems ∷ Map.Map LayerId (V.Vector RenderItem)
                       → Map.Map LayerId (V.Vector RenderItem)

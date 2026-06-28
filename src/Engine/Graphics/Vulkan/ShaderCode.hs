@@ -113,6 +113,7 @@ bindlessVertexShaderCode = [vert|
         float sunAngle;
         float ambientLight;
         float cameraFacing;
+        float defaultFaceMapSlot;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -124,6 +125,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 6) out float fragAmbientLight;
     layout(location = 7) out float fragCameraFacing;
     layout(location = 8) out flat uint fragRenderFlags;
+    layout(location = 9) out flat int fragDefaultFaceMapSlot;
 
     void main() {
         vec4 worldPos = ubo.model * vec4(inPosition.xy, 0.0, 1.0);
@@ -139,6 +141,8 @@ bindlessVertexShaderCode = [vert|
 
         fragTexCoord = inTexCoord;
         fragColor = inColor;
+        // inTexIndex / inFaceMapIndex now carry a STABLE texture-handle id
+        // (#286), resolved to a live bindless slot in the fragment shader.
         fragTexIndex = int(inTexIndex);
         fragBrightness = ubo.brightness;
         fragFaceMapIndex = int(inFaceMapIndex);
@@ -146,6 +150,7 @@ bindlessVertexShaderCode = [vert|
         fragAmbientLight = ubo.ambientLight;
         fragCameraFacing = ubo.cameraFacing;
         fragRenderFlags = inRenderFlags;
+        fragDefaultFaceMapSlot = int(ubo.defaultFaceMapSlot);
     }
 |]
 
@@ -166,13 +171,29 @@ bindlessFragmentShaderCode = [frag|
     layout(location = 6) in float fragAmbientLight;
     layout(location = 7) in float fragCameraFacing;
     layout(location = 8) in flat uint fragRenderFlags;
+    layout(location = 9) in flat int fragDefaultFaceMapSlot;
 
     layout(set = 1, binding = 0) uniform sampler2D textures[16384];
+
+    // Handle→slot table (#286). Vertices carry a STABLE texture-handle id;
+    // this maps it to the live bindless slot at draw time, so cached
+    // geometry can never encode a stale/recycled slot. HANDLE_TABLE_SIZE
+    // MUST match 'handleSlotTableSize' in Texture.Bindless.
+    const int HANDLE_TABLE_SIZE = 65536;
+    layout(set = 1, binding = 1, std430) readonly buffer HandleSlotTable {
+        uint handleToSlot[HANDLE_TABLE_SIZE];
+    };
+
+    int resolveSlot(int handleId) {
+        if (handleId < 0 || handleId >= HANDLE_TABLE_SIZE) return 0;
+        return int(handleToSlot[handleId]);
+    }
 
     layout(location = 0) out vec4 outColor;
 
     void main() {
-        vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
+        int texSlot = resolveSlot(fragTexIndex);
+        vec4 texColor = texture(textures[nonuniformEXT(texSlot)], fragTexCoord);
 
         // Selection outline: bit 0 of renderFlags.
         // For each fragment, sample the 4 cardinal neighbor texels (one
@@ -180,12 +201,12 @@ bindlessFragmentShaderCode = [frag|
         // neighbor is opaque, this is an edge — emit pure white.
         // Otherwise fall through to normal shading.
         if ((fragRenderFlags & 1u) != 0u) {
-            vec2 texSize = vec2(textureSize(textures[nonuniformEXT(fragTexIndex)], 0));
+            vec2 texSize = vec2(textureSize(textures[nonuniformEXT(texSlot)], 0));
             vec2 px = 1.0 / texSize;
-            float aN = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2(0.0, -px.y)).a;
-            float aS = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2(0.0,  px.y)).a;
-            float aW = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2(-px.x, 0.0)).a;
-            float aE = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2( px.x, 0.0)).a;
+            float aN = texture(textures[nonuniformEXT(texSlot)], fragTexCoord + vec2(0.0, -px.y)).a;
+            float aS = texture(textures[nonuniformEXT(texSlot)], fragTexCoord + vec2(0.0,  px.y)).a;
+            float aW = texture(textures[nonuniformEXT(texSlot)], fragTexCoord + vec2(-px.x, 0.0)).a;
+            float aE = texture(textures[nonuniformEXT(texSlot)], fragTexCoord + vec2( px.x, 0.0)).a;
             float maxN = max(max(aN, aS), max(aW, aE));
             if (texColor.a < 0.5 && maxN >= 0.5) {
                 outColor = vec4(1.0, 1.0, 1.0, 1.0);
@@ -193,7 +214,11 @@ bindlessFragmentShaderCode = [frag|
             }
         }
 
-        vec4 faceMapSample = texture(textures[nonuniformEXT(fragFaceMapIndex)], fragTexCoord);
+        // Face map: a handle resolving to slot 0 (unregistered) falls back
+        // to the default face map — the old 'lookupFmSlot' rule, now here.
+        int fmSlot = resolveSlot(fragFaceMapIndex);
+        if (fmSlot == 0) fmSlot = fragDefaultFaceMapSlot;
+        vec4 faceMapSample = texture(textures[nonuniformEXT(fmSlot)], fragTexCoord);
         vec3 faceRaw = faceMapSample.rgb;
         float faceAlpha = faceMapSample.a;
 
@@ -303,10 +328,19 @@ bindlessUIFragmentShaderCode = [frag|
 
     layout(set = 1, binding = 0) uniform sampler2D textures[16384];
 
+    // Handle→slot table (#286) — same buffer the world fragment shader
+    // reads; fragTexIndex carries a stable texture-handle id.
+    const int HANDLE_TABLE_SIZE = 65536;
+    layout(set = 1, binding = 1, std430) readonly buffer HandleSlotTable {
+        uint handleToSlot[HANDLE_TABLE_SIZE];
+    };
+
     layout(location = 0) out vec4 outColor;
 
     void main() {
-        vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
+        int texSlot = (fragTexIndex >= 0 && fragTexIndex < HANDLE_TABLE_SIZE)
+                    ? int(handleToSlot[fragTexIndex]) : 0;
+        vec4 texColor = texture(textures[nonuniformEXT(texSlot)], fragTexCoord);
         vec4 color = texColor * fragColor;
         color.rgb *= fragBrightness;
         outColor = color;

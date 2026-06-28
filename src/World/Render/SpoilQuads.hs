@@ -26,7 +26,7 @@ import Data.IORef (readIORef)
 import Data.Maybe (mapMaybe)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
+import Engine.Asset.Handle (toInt)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Generate (viewDepth)
@@ -70,17 +70,14 @@ renderSpoilQuads env worldState tileAlpha = do
         tileData ← readIORef (wsTilesRef worldState)
         textures ← readIORef (wsTexturesRef worldState)
         paramsM  ← readIORef (wsGenParamsRef worldState)
-        mBindless ← readIORef (textureSystemRef env)
-        defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
         (fbW, fbH) ← readIORef (framebufferSizeRef env)
 
-        let lookupSlot texHandle = fromIntegral $ case mBindless of
-                Just bindless → getTextureSlotIndex texHandle bindless
-                Nothing       → 0
-            defFmSlot = fromIntegral defFmSlotWord ∷ Float
-            lookupFmSlot texHandle =
-                let s = lookupSlot texHandle ∷ Float
-                in if s ≡ 0 then defFmSlot else s
+        -- Bake STABLE handle ids (tile + its face map); the bindless
+        -- shader resolves them to live slots at draw time, and applies
+        -- the default-face-map fallback when a face-map handle is
+        -- unregistered (slot 0) (#286).
+        let lookupSlot texHandle = fromIntegral (toInt texHandle) ∷ Float
+            lookupFmSlot texHandle = fromIntegral (toInt texHandle) ∷ Float
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera

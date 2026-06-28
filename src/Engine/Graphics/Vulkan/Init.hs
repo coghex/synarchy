@@ -292,6 +292,7 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           sunAngle
           ambientLight
           facing
+          0  -- default face-map slot; set per-frame (#286)
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
@@ -302,7 +303,7 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
                (brightnessToMultiplier brightnessInt)
                (fromIntegral width) (fromIntegral height)
                (if pixelSnap then 1.0 else 0.0)
-               sunAngle ambientLight facing)
+               sunAngle ambientLight facing 0)
       pure (buffer, memory)
   
   modify $ \s → s { graphicsState = (graphicsState s) {
