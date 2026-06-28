@@ -11,6 +11,7 @@ module Location.Types
 
 import UPrelude
 import GHC.Generics (Generic)
+import Data.List (sortOn)
 
 -- | One piece of content a location places when it is stamped — a
 --   building, unit, or ground item, addressed by its raw id string.
@@ -41,9 +42,11 @@ data LocationDef = LocationDef
     } deriving (Show, Eq, Generic)
 
 -- | Engine-wide registry of location defs loaded from data/locations/.
---   Stored as an ordered list (not a HashMap) so 'allLocations' /
---   'locations.listDefs' enumerate in registration order — the debug
---   overlay and any future menu render rows deterministically.
+--   Stored as a list; 'allLocations' returns it sorted by id so the
+--   readback ('locations.listDefs' / the debug overlay list) is
+--   deterministic across runs and machines — file load order is
+--   OS-dependent (engine.listFiles → listDirectory) and must not leak
+--   into the visible ordering.
 newtype LocationRegistry = LocationRegistry
     { lrDefs ∷ [LocationDef]
     } deriving (Show, Eq)
@@ -65,5 +68,6 @@ lookupLocation lid (LocationRegistry defs) =
         (d:_) → Just d
         []    → Nothing
 
+-- | All defs, sorted by id (deterministic; see 'LocationRegistry').
 allLocations ∷ LocationRegistry → [LocationDef]
-allLocations = lrDefs
+allLocations = sortOn ldId . lrDefs
