@@ -2538,13 +2538,16 @@ end
 -- rows so the player sees the real spread of conditions. currentFill is
 -- in the key so two canteens with different fill split into separate
 -- rows (the fill is shown per row, and each row targets its own
--- instance — #67). Sharpness is added ONLY for weapons (the only items
--- whose tooltip shows it) so two weapons with differing edge wear
--- likewise split; armor and other gear also carry a combat-mutated
--- iiSharpness but never display it, so splitting their rows on it would
--- be an invisible, confusing reason. Items that DO merge are
--- interchangeable, so acting on the stack's representative instanceId is
--- always correct.
+-- instance — #67). weight is in the key too: raw gems roll a
+-- per-instance weight, the row shows weight×stackCount, and the "Store"
+-- action targets a representative — so a 0.05 kg and a 0.09 kg garnet
+-- must stay on separate rows rather than merge and mis-report their
+-- weight. Sharpness is added ONLY for weapons (the only items whose
+-- tooltip shows it) so two weapons with differing edge wear likewise
+-- split; armor and other gear also carry a combat-mutated iiSharpness
+-- but never display it, so splitting their rows on it would be an
+-- invisible, confusing reason. Items that DO merge are interchangeable,
+-- so acting on the stack's representative instanceId is always correct.
 local function stackKey(it)
     if it.equipped then return nil end
     return table.concat({
@@ -2552,6 +2555,7 @@ local function stackKey(it)
         tostring(it.quality     or "_"),
         tostring(it.condition   or "_"),
         tostring(it.currentFill or "_"),
+        tostring(it.weight      or "_"),
         it.weapon and tostring(it.sharpness or "_") or "_",
     }, "|")
 end
@@ -2629,6 +2633,7 @@ local function computeInvKey(uid, activeTab, items)
             .. "/" .. (it.equipped and "e" or "i")
             .. "/" .. tostring(it.stackCount or 1)
             .. "/" .. tostring(it.sharpness or 0)
+            .. "/" .. tostring(it.weight or 0)
     end
     return table.concat(parts, "|")
 end
