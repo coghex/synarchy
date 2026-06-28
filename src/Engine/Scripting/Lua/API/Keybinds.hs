@@ -200,10 +200,11 @@ loadDefaultKeybindsFn env = do
     return 1
 
 -- | engine.keyMatchesAction(key, action) → bool
---   True when an event key name (as delivered to onKeyDown) is bound to the
---   action. Resolves merged/side-specific modifier aliases engine-side
---   (e.g. event "Shift" matches a bound "LeftShift"), so edge-triggered Lua
---   handlers can dispatch a key press through the binding table correctly.
+--   True when the key that triggered an onKeyDown event is bound to the
+--   action. Disambiguates merged modifier names against the live input
+--   state (so a side-specific binding "LeftShift" matches only a held left
+--   shift), letting edge-triggered Lua handlers dispatch through the binding
+--   table the same way isActionDown polls it.
 keyMatchesActionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 keyMatchesActionFn env = do
     keyArg ← Lua.tostring 1
@@ -212,8 +213,9 @@ keyMatchesActionFn env = do
         (Just keyBS, Just actionBS) → do
             matches ← Lua.liftIO $ do
                 bindings ← readIORef (keyBindingsRef env)
+                inputSt  ← readIORef (inputStateRef env)
                 return $ keyMatchesAction (TE.decodeUtf8 keyBS)
-                                          (TE.decodeUtf8 actionBS) bindings
+                                          (TE.decodeUtf8 actionBS) bindings inputSt
             Lua.pushboolean matches
         _ → Lua.pushboolean False
     return 1

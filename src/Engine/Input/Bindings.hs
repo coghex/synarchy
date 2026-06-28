@@ -128,20 +128,28 @@ isActionDown action bindings state =
 getKeysForAction ∷ Text → KeyBindings → Maybe [Text]
 getKeysForAction = Map.lookup
 
--- | True when an event key name (canonical, as delivered to Lua's
---   @onKeyDown@) refers to the same physical key as any key bound to the
---   action. Compares *resolved GLFW keys*, so a merged event name
---   (@"Shift"@) matches a side-specific binding (@"LeftShift"@) and vice
---   versa — which a raw name compare would miss. Used for edge-triggered
---   actions (rotate, z-reset), where the specific pressed key must match
---   rather than polling whether the action is held ('isActionDown').
-keyMatchesAction ∷ Text → Text → KeyBindings → Bool
-keyMatchesAction keyName action bindings =
+-- | True when the key that just triggered an @onKeyDown@ event is bound to
+--   the action. Used for edge-triggered actions (rotate, z-reset), where the
+--   specific pressed key must match rather than polling whether the action
+--   is held ('isActionDown').
+--
+--   Lua's @onKeyDown@ receives the *merged* key name ("Shift" for either
+--   side, see 'keyToText'), which alone can't honor a side-specific binding
+--   like @LeftShift@. We disambiguate against the live 'InputState': of the
+--   GLFW keys the event name covers, keep only those actually held, so the
+--   match is side-specific in exactly the way 'isActionDown'/'checkKeyDown'
+--   are. If none are recorded as held (a release/timing edge), we fall back
+--   to all candidates so a genuine press is never dropped.
+keyMatchesAction ∷ Text → Text → KeyBindings → InputState → Bool
+keyMatchesAction keyName action bindings st =
     case Map.lookup action bindings of
         Just boundKeys →
-            let evKeys = parseKeyName keyName
-            in any (\b → any (`elem` evKeys) (parseKeyName b)) boundKeys
+            let candidates = parseKeyName keyName
+                held       = filter isHeld candidates
+                effective  = if null held then candidates else held
+            in any (\b → any (`elem` effective) (parseKeyName b)) boundKeys
         Nothing → False
+  where isHeld g = maybe False keyPressed (Map.lookup g (inpKeyStates st))
 
 -- | GLFW keys a key name matches. The canonical vocabulary is
 --   'keyToText' (what Lua's onKeyDown/onKeyUp report), inverted via

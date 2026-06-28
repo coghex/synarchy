@@ -112,18 +112,32 @@ spec = do
     describe "keyMatchesAction (edge-trigger dispatch)" $ do
         let b = Map.fromList [ ("rotateCCW", ["Q"])
                              , ("altAction", ["LeftShift"]) ]
-        it "matches the bound key by name" $
-            keyMatchesAction "Q" "rotateCCW" b `shouldBe` True
+        it "matches the bound key by name (key held)" $
+            keyMatchesAction "Q" "rotateCCW" b (heldState [GLFW.Key'Q])
+                `shouldBe` True
 
         it "does not match a different key" $
-            keyMatchesAction "E" "rotateCCW" b `shouldBe` False
-
-        it "matches a merged event name against a side-specific binding" $
-            -- onKeyDown delivers "Shift" for either shift; binding is "LeftShift".
-            keyMatchesAction "Shift" "altAction" b `shouldBe` True
+            keyMatchesAction "E" "rotateCCW" b (heldState [GLFW.Key'E])
+                `shouldBe` False
 
         it "is false for an unbound action" $
-            keyMatchesAction "Q" "noSuchAction" b `shouldBe` False
+            keyMatchesAction "Q" "noSuchAction" b (heldState [GLFW.Key'Q])
+                `shouldBe` False
+
+        -- onKeyDown only ever delivers the merged "Shift"; the held side in
+        -- the input state disambiguates a side-specific binding (#275).
+        it "honors a side-specific binding: left shift held matches LeftShift" $
+            keyMatchesAction "Shift" "altAction" b (heldState [GLFW.Key'LeftShift])
+                `shouldBe` True
+
+        it "honors a side-specific binding: right shift held does NOT match LeftShift" $
+            keyMatchesAction "Shift" "altAction" b (heldState [GLFW.Key'RightShift])
+                `shouldBe` False
+
+        it "falls back to all candidates when nothing is recorded as held" $
+            -- A press whose key state hasn't landed yet still dispatches.
+            keyMatchesAction "Shift" "altAction" b (heldState [])
+                `shouldBe` True
 
     describe "save round-trip" $
         it "encodes then decodes back to the same bindings" $ do
