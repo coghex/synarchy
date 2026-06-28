@@ -745,6 +745,13 @@ end
 --     selection — and here the world is still the visible/active one, so
 --     activeWorld resolves correctly (unlike the menu-hide path, which is
 --     handled engine-side in handleWorldHideCommand).
+--   * chunk/tile cursor selection (#132): zoomSelectedPos (zoom-map chunk)
+--     and worldSelectedTile (zoomed-in tile) also live in the per-world
+--     cursor. infoPanel.clear() blanks the panel, but the selection itself
+--     survives the band change, and pollCursorInfo only republishes on a
+--     selection *change* — so without clearing it the highlight stays set
+--     while the panel stays empty. clearZoom/WorldCursorSelect tear both
+--     down with the panel.
 function hud.reconcileView()
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()
@@ -835,6 +842,20 @@ function hud.reconcileView()
         require("scripts.debug").hide()
     end
     item.deselect()
+    -- Chunk/tile cursor selection (#132): the zoom-map chunk selection
+    -- (zoomSelectedPos) and zoomed-in tile selection (worldSelectedTile)
+    -- both live in the per-world cursor (wsCursorRef), independent of the
+    -- HUD pages swapped above. The info panel is cleared on this transition
+    -- (infoPanel.clear() above), but pollCursorInfo only republishes when
+    -- the selection *changes* — so a selection that survives the band change
+    -- unchanged leaves the highlight logically set while the panel stays
+    -- blank until the user re-selects. Clear both selections here, exactly
+    -- like item.deselect() does for the ground-item selection, so the
+    -- highlight and panel tear down together. The clears are keyed on
+    -- hud.worldId (the visible/active world that owns this view, the same id
+    -- onMouseDown uses), and are no-ops when nothing is selected.
+    world.clearZoomCursorSelect(hud.worldId)
+    world.clearWorldCursorSelect(hud.worldId)
 end
 
 -- Wheel hook (no UI element under cursor, no shift). Reconcile immediately
