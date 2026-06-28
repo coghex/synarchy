@@ -312,8 +312,9 @@ data UnitYamlDef = UnitYamlDef
     , uydDirectionalSprites ∷ !(Map.Map Text Text)
       -- ^ optional: direction key ("S","SW",…) → texture path
     , uydPortrait          ∷ !(Maybe Text)
-      -- ^ optional: path to portrait texture for info panel.
-      -- Reserved for future use — parsed and carried but not yet rendered.
+      -- ^ optional: path to portrait texture for the info panel. When
+      --   present it is loaded into `udPortrait` and preferred by the v2
+      --   info pane; defs without it fall back to the live frame texture.
     , uydStateAnimations   ∷ !(Map.Map Text Text)
       -- ^ optional: state name → animation name (e.g. "idle" → "idle-standing")
     , uydAnimations        ∷ !(Map.Map Text UnitYamlAnim)

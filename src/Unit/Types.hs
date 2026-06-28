@@ -324,6 +324,9 @@ data UnitDef = UnitDef
       --   UI. Nothing → the prettified def name is used. Surfaced through
       --   unit.getInfo as `displayName`.
     , udTexture    ∷ !TextureHandle                   -- ^ default sprite handle
+    , udPortrait   ∷ !(Maybe TextureHandle)
+      -- ^ optional authored portrait for the info panel (YAML `portrait:`).
+      --   Nothing → the UI falls back to the unit's live animation frame.
     , udDirSprites ∷ !(Map.Map Direction TextureHandle)
       -- ^ directional sprite overrides (may be empty)
     , udBaseWidth  ∷ !Float                           -- ^ ground contact diameter

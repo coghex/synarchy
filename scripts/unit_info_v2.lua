@@ -3611,10 +3611,13 @@ function unitInfoV2.update(dt)
         label.setText(unitInfoV2.headerActionLabelId, text)
     end
 
-    -- Refresh every visible tab's texture from its unit's current
-    -- animation frame. Skip setSpriteTexture when the handle hasn't
-    -- changed to avoid needless mutations. We only animate VISIBLE
-    -- tabs — scrolled-off tabs would just thrash invisibly.
+    -- Refresh every visible tab's portrait. Prefer the unit def's
+    -- authored portrait (static), falling back to the live animation
+    -- frame for defs that ship no `portrait:`. Skip setSpriteTexture
+    -- when the handle hasn't changed to avoid needless mutations — for
+    -- an authored portrait this means it's set once and then left
+    -- alone. We only refresh VISIBLE tabs — scrolled-off tabs would
+    -- just thrash invisibly.
     if unitInfoV2.tabLayout and #unitInfoV2.tabs > 0 then
         local visible = unitInfoV2.tabLayout.visibleCount
         local first   = unitInfoV2.scrollOffset + 1
@@ -3622,7 +3625,10 @@ function unitInfoV2.update(dt)
         for i = first, last do
             local tab = unitInfoV2.tabs[i]
             if tab then
-                local tex = unit.getFrameTexture(tab.uid)
+                local tex = unit.getPortraitTexture(tab.uid)
+                if not tex or tex == 0 then
+                    tex = unit.getFrameTexture(tab.uid)
+                end
                 if tex and tex > 0 and tex ~= tab.lastTex then
                     UI.setSpriteTexture(tab.spriteId, tex)
                     tab.lastTex = tex

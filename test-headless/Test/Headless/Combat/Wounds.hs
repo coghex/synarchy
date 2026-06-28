@@ -36,7 +36,7 @@ mgrWith effs = InfectionManager (HM.fromList [("bug", d)])
 def ∷ UnitDef
 def = UnitDef
     { udName = "t", udNamePool = Nothing, udDisplayName = Nothing
-    , udTexture = TextureHandle 0, udDirSprites = Map.empty
+    , udTexture = TextureHandle 0, udPortrait = Nothing, udDirSprites = Map.empty
     , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
     , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
     , udStatTemplates = HM.empty, udBodyTemplates = HM.empty

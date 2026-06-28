@@ -35,6 +35,7 @@ mkDef anims = UnitDef
     , udNamePool      = Nothing
     , udDisplayName   = Nothing
     , udTexture       = h 0
+    , udPortrait      = Nothing
     , udDirSprites    = Map.fromList [(DirS, h 1)]
     , udBaseWidth     = 0
     , udMaxSpeed      = 1.0
