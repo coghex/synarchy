@@ -18,6 +18,8 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
+import World.Page.Types (WorldPageId(WorldPageId))
+import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand)
 import Structure.Types (emptyChunkStructures)
 import World.Constants (seaLevel)
 import World.Generate (generateChunk, cameraChunkCoord)
@@ -56,6 +58,36 @@ dedupPages = go HS.empty
         go seen (p : ps)
             | p `HS.member` seen = go seen ps
             | otherwise          = p : go (HS.insert p seen) ps
+
+-- | Map every saved page's id to a UNIQUE restore id. The active page (id ==
+--   @activeId@) maps to the load target @target@ (always "main_world", the
+--   documented convention Lua/headless code assumes); every other page keeps
+--   its own id unless that id is already taken — e.g. a non-active page
+--   literally named "main_world" would otherwise collide with the active
+--   remap and silently overwrite it — in which case it gets a "<id>#N" suffix
+--   so no page is dropped. The active page is reserved first so it owns
+--   @target@.
+assignRestoreIds ∷ WorldPageId → WorldPageId → [WorldPageSave]
+                 → HM.HashMap WorldPageId WorldPageId
+assignRestoreIds target activeId pages =
+    let others = filter ((≢ activeId) . wpsPageId) pages
+        go _    []       = []
+        go used (w : ws) =
+            let rid = uniquePageId used (wpsPageId w)
+            in (wpsPageId w, rid) : go (HS.insert rid used) ws
+    in HM.fromList ((activeId, target) : go (HS.singleton target) others)
+
+-- | First id in the @base, base#2, base#3, …@ sequence not already in @used@.
+--   Terminates because @used@ is finite.
+uniquePageId ∷ HS.HashSet WorldPageId → WorldPageId → WorldPageId
+uniquePageId used base
+    | not (base `HS.member` used) = base
+    | otherwise = pick (2 ∷ Int)
+  where pick n
+            | cand `HS.member` used = pick (n + 1)
+            | otherwise             = cand
+          where cand = WorldPageId
+                    (unWorldPageId base <> "#" <> T.pack (show n))
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
@@ -105,16 +137,20 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 WorldTime h m    ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
                                 tScale    ← readIORef (wsTimeScaleRef ws)
-                                -- Freeze each page's world clock to match the
-                                -- auto-pause above. 'tScale' (the player's
-                                -- chosen speed) is captured for wpsTimeScale
-                                -- first, so zeroing the ref loses nothing.
-                                -- Without this the engine reports paused
-                                -- (enginePausedRef) while World.Thread.Time
-                                -- keeps advancing a page's time of day off its
-                                -- wsTimeScaleRef — a "paused" world whose
-                                -- clock runs (#42).
-                                writeIORef (wsTimeScaleRef ws) 0
+                                -- Freeze ONLY the active page's clock here, to
+                                -- match scripts/pause.lua: its prevTimeScale /
+                                -- resume dance retimes just the active world,
+                                -- so zeroing a background page's wsTimeScaleRef
+                                -- would leave it stuck at 0 once shown (nothing
+                                -- restores it). Drift while paused is already
+                                -- prevented for every page by tickWorldTime,
+                                -- which gates advancement on enginePausedRef and
+                                -- only ticks wmVisible worlds (#42) — so a
+                                -- hidden page can't advance regardless. 'tScale'
+                                -- (the player's chosen speed) is captured for
+                                -- wpsTimeScale first, so this loses nothing.
+                                when (pid ≡ pageId) $
+                                    writeIORef (wsTimeScaleRef ws) 0
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 toolMode  ← readIORef (wsToolModeRef ws)
                                 edits     ← readIORef (wsEditsRef ws)
@@ -224,9 +260,12 @@ handleWorldLoadSaveCommand env logger pageId saveData
     -- for a save whose recorded active id names no page.
     let activeWps   = fromMaybe firstWps (activeWorldPage saveData)
         activeWpsId = wpsPageId activeWps
-        -- Restore-target id for a saved page: the active page → 'pageId'
-        -- (main_world); every other page keeps its own id.
-        restoreId w = if wpsPageId w ≡ activeWpsId then pageId else wpsPageId w
+        -- Restore-target id for each saved page, guaranteed collision-free:
+        -- the active page → 'pageId' (main_world); every other page keeps its
+        -- own id unless it would collide (a non-active page also named
+        -- "main_world"), then a "#N" suffix. See 'assignRestoreIds'.
+        restoreIds  = assignRestoreIds pageId activeWpsId (sdWorlds saveData)
+        restoreId w = HM.lookupDefault (wpsPageId w) (wpsPageId w) restoreIds
         -- Process non-active pages first and the active page LAST so it ends
         -- up at the head of wmWorlds — that keeps 'resolveActiveWorld' (and
         -- hence world.getInitProgress / waitForInit, which poll the active
@@ -280,6 +319,14 @@ handleWorldLoadSaveCommand env logger pageId saveData
 
         logInfo logger CatWorld $ "Restoring saved page: "
             <> unWorldPageId (wpsPageId wps) <> " → " <> unWorldPageId rid
+        -- Loudly flag a forced rename: a non-active page whose saved id
+        -- collided with the active page's main_world remap kept its data but
+        -- restores under a synthetic id (see 'assignRestoreIds').
+        when (not isActive ∧ rid ≢ wpsPageId wps) $
+            logWarn logger CatWorld $
+                "Save load: page '" <> unWorldPageId (wpsPageId wps)
+                <> "' collides with the active page's restore id; restoring it "
+                <> "under '" <> unWorldPageId rid <> "' instead"
 
         worldState ← emptyWorldState
         let phaseRef   = wsLoadPhaseRef worldState
@@ -304,13 +351,16 @@ handleWorldLoadSaveCommand env logger pageId saveData
             (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
         writeIORef (wsDateRef worldState)
             (WorldDate (wpsDateYear wps) (wpsDateMonth wps) (wpsDateDay wps))
-        -- Keep wsTimeScaleRef synchronized with the restored pause flag: a
-        -- paused save (the normal auto-pause-on-save case) must load with the
-        -- live clock frozen, not running at the player's saved speed. The
-        -- chosen speed is preserved in wpsTimeScale and reapplied when the
-        -- player resumes (scripts/pause.lua prevTimeScale) (#42).
+        -- Restore the clock speed. The ACTIVE page mirrors the restored pause
+        -- flag (a paused save — the normal auto-pause-on-save case — loads with
+        -- its clock frozen, not running at the saved speed; scripts/pause.lua
+        -- reapplies prevTimeScale on resume) (#42). BACKGROUND pages keep their
+        -- real saved speed: pause.lua only retimes the active world, so a
+        -- background page forced to 0 would stay frozen once shown. They can't
+        -- drift meanwhile — tickWorldTime only ticks wmVisible worlds and gates
+        -- on enginePausedRef.
         writeIORef (wsTimeScaleRef worldState)
-            (if sdEnginePaused saveData then 0 else wpsTimeScale wps)
+            (if isActive ∧ sdEnginePaused saveData then 0 else wpsTimeScale wps)
         writeIORef (wsMapModeRef worldState) (wpsMapMode wps)
         -- A loaded world starts on the default tool, NOT the tool that was
         -- active at save time. The HUD toolbar always comes up on the default
@@ -547,15 +597,24 @@ handleWorldLoadSaveCommand env logger pageId saveData
                 <> " unit" <> (if n == 1 then "" else "s")
                 <> " (def no longer registered)"
 
-    -- 3. Restore visibility (#217): remap the active id → main_world and keep
-    --    main_world at the head so 'resolveActiveWorld' lands on it. Filter to
-    --    pages that actually registered above (defensive).
-    let remapVis p   = if p ≡ activeWpsId then pageId else p
-        savedVisible = map remapVis (sdVisiblePages saveData)
-        wantVisible  = pageId : filter (/= pageId) savedVisible
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        ( mgr { wmVisible = filter (\p → isJust (lookup p (wmWorlds mgr)))
-                                   (dedupPages wantVisible) }, () )
+    -- 3. Restore visibility (#217) through the proper show/hide handlers so
+    --    their side effects fire — SimActivateWorld for shown pages,
+    --    SimDeactivateWorld + cursor cleanup for hidden ones. A raw wmVisible
+    --    write would skip those, leaving restored-visible pages un-simulated
+    --    and (on a within-session load) now-hidden pages still simulating.
+    --    Each visible page's saved id is remapped through 'restoreIds' (active
+    --    → main_world, plus any collision rename). main_world is forced to the
+    --    head so 'resolveActiveWorld' lands on it; handleWorldShowCommand
+    --    prepends, so we show in reverse to leave main_world first.
+    mgrNow ← readIORef (worldManagerRef env)
+    let remapVis p   = HM.lookupDefault p p restoreIds
+        wantVisible  = filter (\p → isJust (lookup p (wmWorlds mgrNow)))
+                         (dedupPages
+                            (pageId : map remapVis (sdVisiblePages saveData)))
+    -- Hide whatever was visible before (clears stale within-session pages and
+    -- gives showing a clean slate for deterministic head ordering).
+    forM_ (wmVisible mgrNow) $ \p → handleWorldHideCommand env logger p
+    forM_ (reverse wantVisible) $ \p → handleWorldShowCommand env logger p
 
     -- 4. Signal Lua with the SURVIVORS across every restored page (union of
     --    each page's restored set). The Lua blob is a global singleton, so it
