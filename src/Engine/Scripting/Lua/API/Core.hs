@@ -36,6 +36,7 @@ import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import System.Directory (listDirectory, doesDirectoryExist)
 import System.FilePath (takeExtension)
+import Data.List (sort)
 
 
 quitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -231,7 +232,7 @@ resumeScriptFn backendState = do
         _ → return ()
     return 0
 
--- | List files in a directory matching an extension.
+-- | List files in a directory matching an extension, sorted by name.
 --   Returns a Lua array of filenames, or nil if the directory doesn't exist.
 listFilesFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 listFilesFn = do
@@ -248,7 +249,11 @@ listFilesFn = do
                     return 1
                 else do
                     allFiles ← Lua.liftIO $ listDirectory dirPath
-                    let matching = filter (\f → takeExtension f ≡ ext) allFiles
+                    -- listDirectory returns OS-dependent order; sort so
+                    -- callers that care about ordering (e.g. the
+                    -- registration-ordered location registry, #88) load
+                    -- deterministically across runs and machines.
+                    let matching = sort (filter (\f → takeExtension f ≡ ext) allFiles)
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] matching) $ \(i, filename) → do
                         Lua.pushstring (TE.encodeUtf8 (T.pack filename))
