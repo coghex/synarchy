@@ -8,6 +8,7 @@ module Item.Types
     , ItemBuff(..)
     , ItemInstance(..)
     , itemMatches
+    , itemContentsSig
     , itemTotalWeight
     , ItemManager(..)
     , emptyItemManager
@@ -16,6 +17,8 @@ module Item.Types
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
+import Data.List (sort)
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -231,6 +234,27 @@ data ItemInstance = ItemInstance
                                 --   is load-bearing (positional Generic
                                 --   Serialize) — appended for save v55.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | A stable, order-independent signature of an item's nested contents
+--   (#67A). Two ITEM-containers (a first-aid kit, a toolbox) are
+--   interchangeable only if they hold the same things in the same state,
+--   so the inventory / cargo UIs fold this into the row key: kits whose
+--   contents have diverged (one drew a bandage) stop merging and become
+--   individually inspectable / withdrawable rather than collapsing onto a
+--   single representative instance. Empty for ordinary items (no nested
+--   contents), so non-containers and fluid containers stack exactly as
+--   before. Recurses so a kit-in-a-kit is captured too.
+itemContentsSig ∷ ItemInstance → Text
+itemContentsSig inst
+    | null (iiContents inst) = T.empty
+    | otherwise = T.intercalate ";" $ sort
+        [ T.intercalate ":"
+            [ iiDefName c
+            , T.pack (show (iiCurrentFill c))
+            , T.pack (show (iiCondition c))
+            , T.pack (show (iiSharpness c))
+            , itemContentsSig c ]
+        | c ← iiContents inst ]
 
 -- | Target predicate for an inventory action (#67). When the caller
 --   supplies a unique instance id (>0) it wins — the action hits exactly

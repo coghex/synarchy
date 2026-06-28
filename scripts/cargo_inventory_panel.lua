@@ -113,6 +113,9 @@ local function stackKey(it)
         tostring(it.currentFill or "_"),
         tostring(it.weight      or "_"),
         it.weapon and tostring(it.sharpness or "_") or "_",
+        -- Nested-contents signature so two stored kits with diverged
+        -- supplies stay distinct and withdraw targets the right one (#67A).
+        tostring(it.contentsKey or ""),
     }, "|")
 end
 
@@ -151,6 +154,9 @@ local function contentHash(bid)
         parts[#parts + 1] = tostring(it.currentFill or "_")
         parts[#parts + 1] = tostring(it.weight      or "_")
         parts[#parts + 1] = it.weapon and tostring(it.sharpness or "_") or "_"
+        -- Contents signature so a kit whose internal supplies changed
+        -- (a bandage drawn) re-splits/rebuilds the panel (#67A).
+        parts[#parts + 1] = tostring(it.contentsKey or "")
         if i > 200 then break end
     end
     return table.concat(parts, ",")

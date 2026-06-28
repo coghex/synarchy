@@ -29,7 +29,8 @@ import Engine.Asset.YamlEquipment
 import Equipment.Types
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
                    ItemBuff(..), ItemContainer(..),
-                   ItemManager(..), lookupItemDef, itemMatches)
+                   ItemManager(..), lookupItemDef, itemMatches,
+                   itemContentsSig, itemTotalWeight)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
                    UnitDef(..), StatModifier(..))
 
@@ -371,6 +372,8 @@ equipmentGetLoadoutFn env = do
                         Lua.pushnumber
                             (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
+                        Lua.setfield (-2) "contentsKey"
                         -- Instance sharpness, not the def's base —
                         -- combat wear dulls the equipped weapon
                         -- (iiSharpness); the tooltip must show the live
@@ -410,11 +413,12 @@ equipmentGetLoadoutFn env = do
                                 Lua.pushstring
                                     (TE.encodeUtf8 (idMaterial iDef))
                                 Lua.setfield (-2) "material"
-                                -- Instance weight, not the def mean —
-                                -- gems vary per find (matches
-                                -- getCarryingWeight + pushItemInstance).
+                                -- True carried mass (empty + fill + nested
+                                -- contents) — matches getCarryingWeight +
+                                -- pushItemInstance + unit.getInventory.
                                 Lua.pushnumber
-                                    (Lua.Number (realToFrac (iiWeight inst)))
+                                    (Lua.Number (realToFrac
+                                        (itemTotalWeight itemMgr inst)))
                                 Lua.setfield (-2) "weight"
                                 let TextureHandle texInt = idTexture iDef
                                 Lua.pushinteger (fromIntegral texInt)
@@ -461,6 +465,10 @@ pushItemInstance inst itemMgr = do
     Lua.setfield (-2) "instanceId"
     Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
     Lua.setfield (-2) "currentFill"
+    -- Signature of nested contents so item-containers (kits) split by
+    -- internal state in the row key (#67A).
+    Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
+    Lua.setfield (-2) "contentsKey"
     -- Instance sharpness, not the def's base — combat wear dulls the
     -- worn weapon (iiSharpness), and the inventory/loadout tooltip
     -- must show the live value, mirroring unit.getInventory.
@@ -493,8 +501,10 @@ pushItemInstance inst itemMgr = do
             Lua.setfield (-2) "make"
             Lua.pushstring (TE.encodeUtf8 (idMaterial iDef))
             Lua.setfield (-2) "material"
-            -- Instance weight, not the def mean — gems vary per find.
-            Lua.pushnumber (Lua.Number (realToFrac (iiWeight inst)))
+            -- True carried mass (empty case + fill + nested contents) so a
+            -- stocked kit / filled canteen reads its real weight and two
+            -- kits with diverged contents differ visibly (#67A).
+            Lua.pushnumber (Lua.Number (realToFrac (itemTotalWeight itemMgr inst)))
             Lua.setfield (-2) "weight"
             let TextureHandle texInt = idTexture iDef
             Lua.pushinteger (fromIntegral texInt)

@@ -121,7 +121,8 @@ def inventory(port: int, uid: int) -> list[dict]:
                f"local t=unit.getInventory({uid}) or {{}}; "
                "local o={}; for i,it in ipairs(t) do o[i]={defName=it.defName,"
                "instanceId=it.instanceId,quality=it.quality,"
-               "currentFill=it.currentFill} end; return o").strip()
+               "currentFill=it.currentFill,contentsKey=it.contentsKey,"
+               "weight=it.weight} end; return o").strip()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -136,6 +137,15 @@ def as_int(s: str) -> int:
 
 def picks(inv: list[dict]) -> list[dict]:
     return [it for it in inv if it.get("defName") == WEAPON]
+
+
+def contents_rows(port: int, uid: int, def_name: str, inst_id=None) -> int:
+    """unit.getItemContents row count: -1 if nil (no such container), 0 if
+    empty, N>0 if stocked."""
+    arg = f", {inst_id}" if inst_id is not None else ""
+    return as_int(send(port,
+        f"local r=unit.getItemContents({uid}, '{def_name}'{arg}); "
+        "if not r then return -1 end; return #r"))
 
 
 CHECKS: list[tuple[str, bool]] = []
@@ -251,6 +261,43 @@ def main() -> int:
                      if it.get("defName") == "canteen_steel_2l"}
             check("canteen stayed in inventory after rejection", can_id in still,
                   f"canteen ids {sorted(still)}")
+
+        print("\n== CONTAINER DIVERGENCE (#67A) ==")
+        # The technomule spawns with a PRE-STOCKED first_aid_kit. Add a
+        # second (empty) kit and confirm the two same-def containers stay
+        # distinct: different contentsKey, and getItemContents-by-id returns
+        # each kit's own contents instead of collapsing onto a representative.
+        muid = as_int(send(args.port,
+            f"return unit.spawn('technomule', {gx}+0.5, {gy}+0.5, nil, 'debug')"))
+        if muid <= 0:
+            check("spawn technomule", False, f"uid={muid}")
+        else:
+            kits = [it for it in inventory(args.port, muid)
+                    if it.get("defName") == "first_aid_kit"]
+            stocked = kits[0] if kits else None
+            sk = (stocked or {}).get("contentsKey") or ""
+            check("technomule carries a stocked first_aid_kit",
+                  stocked is not None and sk != "",
+                  f"kits={len(kits)} contentsKey={sk[:16]!r}")
+            if stocked and sk != "":
+                stocked_id = stocked["instanceId"]
+                send(args.port, f"return unit.addItem({muid}, 'first_aid_kit', 0)")
+                kits2 = [it for it in inventory(args.port, muid)
+                         if it.get("defName") == "first_aid_kit"]
+                empties = [it for it in kits2 if (it.get("contentsKey") or "") == ""]
+                check("two same-def kits expose DIFFERENT contentsKey",
+                      len(kits2) >= 2 and len(empties) >= 1,
+                      f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits2]}")
+                if empties:
+                    empty_id = empties[0]["instanceId"]
+                    sc = contents_rows(args.port, muid, "first_aid_kit", stocked_id)
+                    ec = contents_rows(args.port, muid, "first_aid_kit", empty_id)
+                    check("getItemContents(stocked id) returns its supplies",
+                          sc > 0, f"rows={sc}")
+                    check("getItemContents(empty id) returns the EMPTY kit",
+                          ec == 0, f"rows={ec}")
+                    check("the diverged kits keep distinct instance ids",
+                          stocked_id != empty_id, f"{stocked_id} vs {empty_id}")
 
         if not args.no_save:
             print("\n== PERSIST (save / load) ==")

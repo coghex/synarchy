@@ -2454,6 +2454,7 @@ local function collectInventoryAndEquipment(uid)
         out[#out + 1] = {
             defName      = it.defName,
             instanceId   = it.instanceId,
+            contentsKey  = it.contentsKey,
             displayName  = it.displayName or it.defName,
             weight       = it.weight or 0,
             category     = it.category or "Misc",
@@ -2489,6 +2490,7 @@ local function collectInventoryAndEquipment(uid)
             out[#out + 1] = {
                 defName       = it.defName,
                 instanceId    = it.instanceId,
+                contentsKey   = it.contentsKey,
                 displayName   = it.displayName or it.defName,
                 weight        = it.weight or 0,
                 category      = it.category or "Misc",
@@ -2514,6 +2516,7 @@ local function collectInventoryAndEquipment(uid)
         out[#out + 1] = {
             defName        = it.defName,
             instanceId     = it.instanceId,
+            contentsKey    = it.contentsKey,
             displayName    = it.displayName or it.defName,
             weight         = it.weight or 0,
             category       = it.category or "Misc",
@@ -2563,6 +2566,10 @@ local function stackKey(it)
         tostring(it.currentFill or "_"),
         tostring(it.weight      or "_"),
         it.weapon and tostring(it.sharpness or "_") or "_",
+        -- Nested-contents signature: two first-aid kits whose internal
+        -- supplies have diverged must NOT merge, so "Contents" / "Store"
+        -- act on the kit the player sees (#67A). Empty for non-containers.
+        tostring(it.contentsKey or ""),
     }, "|")
 end
 
@@ -2646,6 +2653,7 @@ local function computeInvKey(uid, activeTab, items)
             .. "/" .. tostring(it.sharpness or 0)
             .. "/" .. tostring(it.weight or 0)
             .. "/" .. tostring(it.condition or 0)
+            .. "/" .. tostring(it.contentsKey or "")
     end
     return table.concat(parts, "|")
 end

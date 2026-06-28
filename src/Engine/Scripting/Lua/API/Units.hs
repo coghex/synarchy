@@ -134,7 +134,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
-import Item.Types (ItemInstance(..), itemMatches)
+import Item.Types (ItemInstance(..), itemMatches, itemContentsSig)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemWeapon(..), ItemBuff(..)
@@ -3931,9 +3931,13 @@ unitGetInventoryFn env = do
                             displayName = if broken
                                           then baseName <> " (broken)"
                                           else baseName
-                            -- Instance weight, not the def mean — gems
-                            -- vary per find (matches getCarryingWeight).
-                            weight = iiWeight inst
+                            -- True carried mass of THIS instance — empty
+                            -- case + fill + nested contents — so a stocked
+                            -- kit / filled canteen shows its real weight and
+                            -- the inventory footer matches getCarryingWeight,
+                            -- and two kits whose contents diverged read as
+                            -- different weights (#67A).
+                            weight = itemTotalWeight itemMgr inst
                             mContainer = mDef >>= idContainer
                         Lua.pushstring (TE.encodeUtf8 name)
                         Lua.setfield (-2) "defName"
@@ -3952,6 +3956,10 @@ unitGetInventoryFn env = do
                         Lua.setfield (-2) "weight"
                         Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        -- Signature of nested contents so item-containers
+                        -- (kits) split by internal state in the row key (#67A).
+                        Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
+                        Lua.setfield (-2) "contentsKey"
                         -- Only surface quality / condition when the def
                         -- actually declares a spec for them — otherwise
                         -- callers (e.g. inventory tooltip) would show
