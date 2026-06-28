@@ -38,13 +38,19 @@ data KeyBindingConfig = KeyBindingConfig
 
 -- | Backward-compatible parse: each binding value may be either the
 --   legacy scalar form (@moveUp: W@) or the new list form
---   (@moveUp: [Up, W]@). A missing @keybinds@ key falls back to defaults.
+--   (@moveUp: [Up, W]@). The parsed bindings are merged *over*
+--   'defaultKeyBindings' (file entries win), so a config written before
+--   a new action existed still picks up that action's default binding
+--   rather than leaving it unbound. A missing @keybinds@ key falls back
+--   to defaults entirely.
 instance FromJSON KeyBindingConfig where
   parseJSON (Object v) = do
     mRaw ← v .:? "keybinds" ∷ Parser (Maybe (Map.Map T.Text Value))
     case mRaw of
       Nothing  → pure (KeyBindingConfig defaultKeyBindings)
-      Just raw → KeyBindingConfig ⊚ traverse parseKeyList raw
+      Just raw → do
+        parsed ← traverse parseKeyList raw
+        pure (KeyBindingConfig (Map.union parsed defaultKeyBindings))
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
 instance ToJSON KeyBindingConfig where

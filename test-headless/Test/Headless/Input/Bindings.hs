@@ -52,6 +52,18 @@ spec = do
         it "falls back to defaults when keybinds key is absent" $
             parseConfig "{}" `shouldBe` defaultKeyBindings
 
+        it "merges over defaults so a pre-existing config inherits new actions" $ do
+            -- A config written before rotateCW/resetZTracking existed.
+            let b = parseConfig "keybinds:\n  moveUp: W\n  toggleEventLog: L\n"
+            -- File entries win...
+            Map.lookup "moveUp" b         `shouldBe` Just ["W"]
+            Map.lookup "toggleEventLog" b `shouldBe` Just ["L"]
+            -- ...and absent actions fall back to their defaults rather
+            -- than being left unbound.
+            Map.lookup "rotateCW" b       `shouldBe` Just ["E"]
+            Map.lookup "resetZTracking" b `shouldBe` Just ["Home"]
+            Map.lookup "moveLeft" b       `shouldBe` Just ["Left", "A"]
+
     describe "defaults" $ do
         it "binds movement to arrows and WASD" $ do
             Map.lookup "moveUp" defaultKeyBindings    `shouldBe` Just ["Up", "W"]
