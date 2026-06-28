@@ -2191,11 +2191,16 @@ local function computeEquipKey(uid, clsName, loadout, accessories)
     if loadout then
         local pairsT = {}
         for slotId, item in pairs(loadout) do
-            -- Include instance sharpness so an equipped weapon dulled by
-            -- combat wear rebuilds (and its tooltip refreshes) without
-            -- needing an unrelated equipment change.
+            -- Include instance condition AND sharpness so an equipped item
+            -- degraded by wear rebuilds (and its tooltip + broken overlay
+            -- refresh) without needing an unrelated equipment change: a
+            -- weapon dulled in combat changes sharpness, but armor
+            -- (gambeson / gloves / boots) loses condition with no sharpness
+            -- change, and the slot UI shows condition and a condition<=0
+            -- broken overlay. Mirrors the accessory key below.
             pairsT[#pairsT + 1] = slotId .. "=" .. (item.defName or "?")
-                                  .. "@" .. tostring(item.sharpness or 0)
+                                  .. "@" .. tostring(item.condition or 0)
+                                  .. "/" .. tostring(item.sharpness or 0)
         end
         table.sort(pairsT)
         parts[#parts + 1] = table.concat(pairsT, ";")
@@ -2226,8 +2231,9 @@ local function rebuildEquipmentSection()
     local accessories = uid and equipment.getAccessories(uid) or nil
 
     -- Skip if nothing relevant changed since the last build. The hash
-    -- folds in uid + class + every (slot, equipped-item) pair + each
-    -- accessory's def/condition, so any equip/unequip — slot or
+    -- folds in uid + class + every (slot, equipped-item def/condition/
+    -- sharpness) pair + each accessory's def/condition/sharpness, so any
+    -- equip/unequip OR a wear-driven condition/sharpness change — slot or
     -- accessory — invalidates it on the next tick.
     local key = computeEquipKey(uid, clsName, loadout, accessories)
     if key == unitInfoV2.lastEquipKey then return end
