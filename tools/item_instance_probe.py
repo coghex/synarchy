@@ -148,6 +148,16 @@ def contents_rows(port: int, uid: int, def_name: str, inst_id=None) -> int:
         "if not r then return -1 end; return #r"))
 
 
+def content_weight(port: int, uid: int, cont_def: str, inst_id: int,
+                   content_def: str) -> float:
+    """Weight (kg) the Contents view reports for one content type, or -1."""
+    raw = send(port,
+        f"local r=unit.getItemContents({uid}, '{cont_def}', {inst_id}) or {{}}; "
+        f"for _,it in ipairs(r) do if it.defName=='{content_def}' then "
+        "return it.weight end end; return -1")
+    return float(raw.strip().strip('"'))
+
+
 CHECKS: list[tuple[str, bool]] = []
 
 
@@ -315,6 +325,13 @@ def main() -> int:
                           ec == 0, f"rows={ec}")
                     check("the diverged kits keep distinct instance ids",
                           stocked_id != empty_id, f"{stocked_id} vs {empty_id}")
+                    # The 1 L antiseptic bottle must report its FILLED mass
+                    # (0.12 empty + 1.0 L × 1.0 ≈ 1.12 kg), not the empty-bottle
+                    # def weight (0.12).
+                    aw = content_weight(args.port, muid, "first_aid_kit",
+                                        stocked_id, "antiseptic")
+                    check("Contents weight includes bottle fill (~1.12, not 0.12)",
+                          aw > 1.0, f"antiseptic weight={aw}")
 
         if not args.no_save:
             print("\n== PERSIST (save / load) ==")

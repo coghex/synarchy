@@ -3278,10 +3278,13 @@ parseDirKey t = case T.toLower t of
     "south-east" → Just DirSE
     _            → Nothing
 
--- | unit.getItemContents(uid, defName) → array of { defName, displayName,
---   count, fill, condition }, GROUPED by item type (10 bandages → one entry
---   with count=10), for the FIRST inventory item matching `defName` that is
---   an item-container (a first-aid kit / toolbox). Empty table if it holds
+-- | unit.getItemContents(uid, defName[, instanceId]) → array of { defName,
+--   displayName, count, fill, condition, weight, ... }, GROUPED by item type
+--   (10 bandages → one entry with count=10), for the targeted item-container
+--   (the exact instance when an id is given, else the FIRST inventory item
+--   matching `defName`). `weight` is each item's TRUE per-instance mass
+--   (empty case + fill + nested contents), so a filled bottle reports its
+--   real weight, not the empty-bottle def weight. Empty table if it holds
 --   nothing; nil if the unit or that item isn't found.
 unitGetItemContentsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetItemContentsFn env = do
@@ -3313,18 +3316,27 @@ unitGetItemContentsFn env = do
                     -- (rather than the cargo panel's defName+quality+cond
                     -- key) reads fine — tools are count 1, consumables have
                     -- no condition spread.
+                    -- Carry each item's true per-instance mass (empty case +
+                    -- fill + nested contents, via itemTotalWeight) into the
+                    -- group, NOT the static def weight: a filled antiseptic /
+                    -- antibiotics bottle weighs its contents, so the Contents
+                    -- panel must not show the empty-bottle weight. Items in a
+                    -- defName group are identical (consumables are fill 0,
+                    -- bottles are count 1), so keeping the representative's
+                    -- per-item weight is exact and the panel's weight×count
+                    -- gives the right total.
                     let grouped = HM.toList $ HM.fromListWith
-                            (\(c1, f, cond) (c2, _, _) → (c1 + c2, f, cond))
+                            (\(c1, f, cond, w) (c2, _, _, _) → (c1 + c2, f, cond, w))
                             [ ( iiDefName i
-                              , (1 ∷ Int, iiCurrentFill i, iiCondition i) )
+                              , (1 ∷ Int, iiCurrentFill i, iiCondition i
+                                , itemTotalWeight itemMgr i) )
                             | i ← contents ]
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] grouped) $
-                      \(idx, (dname, (cnt, fill, cond))) → do
+                      \(idx, (dname, (cnt, fill, cond, wt))) → do
                         let mDef = lookupItemDef dname itemMgr
                             disp = maybe dname idDisplayName mDef
                             cat  = maybe "Misc" idCategory mDef
-                            wt   = maybe 0 idWeight mDef
                             tex  = maybe (-1) (\d → let TextureHandle t =
                                                           idTexture d in t) mDef
                         Lua.newtable

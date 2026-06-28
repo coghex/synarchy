@@ -271,7 +271,8 @@ local function buildRows(originX, originY, contentW, rows)
             end
         end
 
-        -- Right-aligned weight (base × count).
+        -- Right-aligned weight: per-item TRUE mass (empty + fill + nested
+        -- contents, from itemTotalWeight) × count.
         local wText = string.format("%.2f kg",
             (g.weight or 0) * (g.count or 1))
         local wLbl = label.new({
