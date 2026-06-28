@@ -88,6 +88,7 @@ module Engine.Scripting.Lua.API.Units
     , unitAddItemFn
     , unitGetVisibleTilesFn
     , unitGetFrameTextureFn
+    , unitGetPortraitTextureFn
     ) where
 
 import UPrelude
@@ -174,6 +175,14 @@ loadUnitYamlFn env backendState = do
 
                     handle ← loadAndRegister env backendState lteq
                                  ("unit_" <> name) spritePath
+
+                    -- Load the optional authored portrait (info panel).
+                    -- Nothing → the UI mirrors the live animation frame.
+                    portraitH ← case uydPortrait def of
+                        Nothing → return Nothing
+                        Just p  → Just <$> loadAndRegister env backendState lteq
+                                     ("unit_" <> name <> "_portrait")
+                                     (T.unpack p)
 
                     -- Load directional sprites (if any)
                     dirMap ← foldM (\acc (dirKey, texPath) →
@@ -324,6 +333,7 @@ loadUnitYamlFn env backendState = do
                         unitDef = UnitDef
                             { udName          = name
                             , udTexture       = handle
+                            , udPortrait      = portraitH
                             , udDirSprites    = dirMap
                             , udBaseWidth     = uydBaseWidth def
                             , udMaxSpeed      = uydMaxSpeed def
@@ -4122,6 +4132,32 @@ unitGetFrameTextureFn env = do
                             -- flag from `pickFrame` is consumed by the
                             -- renderer at draw time, not here.
                             Just def → Just (fst (pickFrame now (camFacing cam) inst def))
+            case mTex of
+                Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
+                Nothing → Lua.pushinteger 0
+            return 1
+
+-- | unit.getPortraitTexture(uid) → texture handle integer (0 if the
+--   unit is missing or its def declares no authored `portrait:`).
+--   The info pane prefers this static authored portrait and falls back
+--   to `getFrameTexture` (the live animation frame) when it returns 0.
+unitGetPortraitTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetPortraitTextureFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushinteger 0
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mTex ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing → Nothing
+                    Just inst →
+                        case HM.lookup (uiDefName inst) (umDefs um) of
+                            Nothing  → Nothing
+                            Just def → udPortrait def
             case mTex of
                 Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
                 Nothing → Lua.pushinteger 0

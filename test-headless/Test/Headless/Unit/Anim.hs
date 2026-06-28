@@ -15,6 +15,7 @@ mkDef ∷ HM.HashMap Text Text → UnitDef
 mkDef stateAnims = UnitDef
     { udName          = "t"
     , udTexture       = TextureHandle 0
+    , udPortrait      = Nothing
     , udDirSprites    = Map.empty
     , udBaseWidth     = 0
     , udMaxSpeed      = 1.0

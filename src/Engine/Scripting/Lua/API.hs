@@ -341,6 +341,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "addItem"        (unitAddItemFn env)
   registerLuaFunction "getVisibleTiles" (unitGetVisibleTilesFn env)
   registerLuaFunction "getFrameTexture" (unitGetFrameTextureFn env)
+  registerLuaFunction "getPortraitTexture" (unitGetPortraitTextureFn env)
   registerLuaFunction "addModifier"    (unitAddModifierFn env)
   registerLuaFunction "removeModifier" (unitRemoveModifierFn env)
   registerLuaFunction "getModifiers"   (unitGetModifiersFn env)
