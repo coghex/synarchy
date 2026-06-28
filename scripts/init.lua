@@ -228,6 +228,20 @@ function game.onMouseDown(button, x, y)
             return
         end
 
+        -- #148: defense in depth for the armed debug spawn/edit modes.
+        -- They are only meaningful in the zoomed-in gameplay view, and the
+        -- leave-gameplay transitions already tear them down (hud.hide /
+        -- hud.reconcileView / uiManager.showMenu all call
+        -- debugOverlay.hide()). But gate the armed-click ROUTING on the same
+        -- current-view predicate the overlay uses for F8 and its parallel
+        -- claim (#147/#151) so an armed mode that ever survives a transition
+        -- still can't fire a spawn/edit on the zoom map or under a menu.
+        -- gameplayActive alone (#154) is not enough: it stays true on the
+        -- zoom map / fade band, where these tile-level placements have no
+        -- meaning. When false, fall through to the normal selection logic
+        -- below — only the armed branches are gated, not selection.
+        local debugArmable = debugOverlay.inGameplayView()
+
         -- Debug spawn mode: if armed, this click is a spawn, not a
         -- selection. Spawn at the hovered tile and stay armed.
         --
@@ -238,7 +252,7 @@ function game.onMouseDown(button, x, y)
         -- Production unit sources still pass their canonical
         -- faction (portal spawns → "player"; world-gen wildlife
         -- spawns → "wildlife").
-        if debugOverlay.armedDef then
+        if debugArmable and debugOverlay.armedDef then
             local gx, gy = world.getHoverTile()
             if gx and gy then
                 unit.spawn(debugOverlay.armedDef, gx + 0.5, gy + 0.5,
@@ -252,7 +266,7 @@ function game.onMouseDown(button, x, y)
         -- coords from the fractional hover position; resting height
         -- derives from terrain at render). Tile-center fallback
         -- covers the no-hover edge case.
-        if debugOverlay.armedItemDef then
+        if debugArmable and debugOverlay.armedItemDef then
             local hx, hy = world.getHoverPos()
             if hx and hy then
                 item.spawnGround(debugOverlay.armedItemDef, hx, hy)
@@ -268,7 +282,7 @@ function game.onMouseDown(button, x, y)
 
         -- Debug fluid-spawn mode: arms a kind ("water" / "lava"); the
         -- click places one tile of that fluid on top of the column.
-        if debugOverlay.armedFluidType then
+        if debugArmable and debugOverlay.armedFluidType then
             local gx, gy = world.getHoverTile()
             if gx and gy then
                 local hud = require("scripts.hud")
@@ -282,7 +296,7 @@ function game.onMouseDown(button, x, y)
         -- Debug terrain-placement mode: arms a material id; the click
         -- raises the column at the hover tile one z of that material
         -- (WeAddTile through the edit log — persists like any edit).
-        if debugOverlay.armedTerrainId then
+        if debugArmable and debugOverlay.armedTerrainId then
             local gx, gy = world.getHoverTile()
             if gx and gy then
                 local hud = require("scripts.hud")
@@ -296,7 +310,7 @@ function game.onMouseDown(button, x, y)
         -- Debug location-stamp mode: arms a location def name; the click
         -- stamps that premade structure (room/outpost/...) anchored at the
         -- hover tile (world.setCell terrain edits + content spawns).
-        if debugOverlay.armedLocation then
+        if debugArmable and debugOverlay.armedLocation then
             local gx, gy = world.getHoverTile()
             if gx and gy then
                 local hud = require("scripts.hud")
@@ -311,7 +325,7 @@ function game.onMouseDown(button, x, y)
         -- Debug structure-placement mode: arms a kind (wall/floor/ceiling/
         -- post). Floor/ceiling/post place on the clicked tile; a wall goes
         -- in the clicked QUARTER of the tile (→ its diamond edge).
-        if debugOverlay.armedStructure then
+        if debugArmable and debugOverlay.armedStructure then
             -- Derive the tile from the FRACTIONAL hover position (floor), NOT
             -- getHoverTile: the latter rounds in a ~0.17-tile-shifted space, so
             -- near a tile border it disagrees with the quarter-corner/edge frac
