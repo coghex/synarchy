@@ -429,6 +429,10 @@ function game.onMouseDown(button, x, y)
             debugOverlay.clearArmedItem()
             return
         end
+        if debugOverlay.armedFluidType then
+            debugOverlay.clearArmedFluid()
+            return
+        end
         if debugOverlay.armedTerrainId then
             debugOverlay.clearArmedTerrain()
             return
