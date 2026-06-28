@@ -20,6 +20,8 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
 import World.Geology.Ore (oreMaterialIds)
+import World.Material (getMaterialProps, MaterialProps(..)
+                      , MaterialId(..), MaterialRegistry)
 import World.Geology.Ore.Types (wodByChunk)
 import World.Geology.Timeline.Types (GeoTimeline(..))
 import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
@@ -68,11 +70,16 @@ data DumpLayers = DumpLayers
     , dlFluid    ∷ !Bool
     , dlIce      ∷ !Bool
     , dlOre      ∷ !Bool
+    , dlSlope    ∷ !Bool
     } deriving (Show)
 
--- | All layers enabled (default when --dump has no =value).
+-- | Default layers (when --dump has no =value): the original five. The
+--   slope layer is OPT-IN only (--dump=...,slope) so a bare --dump stays
+--   byte-identical to historical output — the worldgen baselines and the
+--   determinism/audit tools all drive a bare --dump and must not see new
+--   fields.
 allLayers ∷ DumpLayers
-allLayers = DumpLayers True True True True True
+allLayers = DumpLayers True True True True True False
 
 -- | Parse --dump or --dump=layer1,layer2,... from args.
 --   Returns Nothing if --dump not present, Just layers otherwise.
@@ -88,6 +95,7 @@ parseDump (a:rest)
             , dlFluid    = "fluid"    `elem` flags
             , dlIce      = "ice"      `elem` flags
             , dlOre      = "ore"      `elem` flags
+            , dlSlope    = "slope"    `elem` flags
             }
     | otherwise = parseDump rest
 
@@ -402,7 +410,8 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                     let climate = maybe (initClimateState worldSize)
                                      wgpClimateState mParams
                     td ← readIORef (wsTilesRef ws)
-                    let json = dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2
+                    registry ← readIORef (materialRegistryRef env')
+                    let json = dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2
                     -- Phase 1 sanity print: how many lakes did the
                     -- global flood produce, how many chunks they
                     -- touch.
@@ -537,9 +546,9 @@ pollsPerSecond = 1000000 `div` pollInterval
 -- | Dump per-tile data in a chunk region as JSON.
 --   Every tile in the region gets one object. Fields are included
 --   based on the DumpLayers whitelist.
-dumpTilesJSON ∷ DumpLayers → Int → ClimateState → WorldTileData
+dumpTilesJSON ∷ DumpLayers → MaterialRegistry → Int → ClimateState → WorldTileData
               → Int → Int → Int → Int → BS.ByteString
-dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2 =
+dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
     let entries = concatMap dumpChunkTiles
             [ ChunkCoord x y | x ← [cx1..cx2], y ← [cy1..cy2] ]
     in BS.pack $ "[" ⧺ intercalate "," entries ⧺ "]\n"
@@ -614,11 +623,31 @@ dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2 =
                            ⧺ ",\"oreTopZ\":" ⧺ show (ctStartZ col + topOreIdx)
                            ⧺ ",\"oreCount\":" ⧺ show cnt
               | otherwise = ""
+            -- Slope layer: the rendered slope bitmask of the surface
+            -- tile (bit0=N,1=E,2=S,3=W; 0 = flat top). Lets headless
+            -- tools measure how often terrain slopes vs. steps (#224).
+            -- NB: index by terrainZ, not surfZ. The strata vectors
+            -- (ctSlopes/ctMats) are keyed to the TERRAIN surface; surfZ is
+            -- max(terrain, fluid), so on submerged tiles surfZ overshoots
+            -- the stored range and would report a spurious flat/empty bed.
+            -- terrainZ gives the real bed slope + bed material everywhere.
+            slopeFields
+              | dlSlope layers =
+                  let col = lcTiles lc V.! idx
+                      i   = terrainZ - ctStartZ col
+                      sl  = if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+                            then ctSlopes col VU.! i else 0
+                      smat = if i ≥ 0 ∧ i < VU.length (ctMats col)
+                             then ctMats col VU.! i else 0
+                      hard = mpHardness (getMaterialProps registry (MaterialId smat))
+                  in ",\"slope\":" ⧺ show sl
+                   ⧺ ",\"hardness\":" ⧺ show hard
+              | otherwise = ""
             zoneFields =
                   ",\"glacierZone\":" ⧺ boolStr (isGlacierZone worldSize gx gy)
                 ⧺ ",\"beyondGlacier\":" ⧺ boolStr (isBeyondGlacier worldSize gx gy)
         in base ⧺ terrainFields ⧺ matFields ⧺ fluidFields
-                ⧺ iceFields ⧺ oreFields ⧺ zoneFields ⧺ "}"
+                ⧺ iceFields ⧺ oreFields ⧺ slopeFields ⧺ zoneFields ⧺ "}"
 
     fluidTypeStr Ocean = "ocean"
     fluidTypeStr Lake  = "lake"

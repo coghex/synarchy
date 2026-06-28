@@ -155,7 +155,7 @@ cabal run exe:synarchy -- --dump --seed 1337 --worldSize 256 --plates 5 --region
 cabal run exe:synarchy -- --dump=ice,terrain --seed 42 --region -3,-3,3,3 2>/dev/null | python3 analyze.py
 ```
 
-**Layer names:** `terrain` (or `elevation`), `material`, `fluid`, `ice`, `ore`. No argument = all layers.
+**Layer names:** `terrain` (or `elevation`), `material`, `fluid`, `ice`, `ore`. No argument = those five. `slope` is **opt-in only** (`--dump=...,slope`) so a bare `--dump` stays byte-identical to historical output (the worldgen baselines + determinism/audit tools all drive a bare `--dump`).
 
 **Output format:** JSON array with one object per tile in the region. Region coordinates are **chunk coords** (not tile coords).
 
@@ -168,6 +168,7 @@ Per-tile fields (present when layer is enabled):
 | `fluidType`, `fluidSurf` | fluid | "ocean"/"lake"/"river"/"lava" or null |
 | `iceSurf`, `iceMode` | ice | Ice surface Z and "basin"/"drape" or null |
 | `oreId`, `oreTopZ`, `oreCount` | ore | Topmost ore band in the column: material id, its top z, cells of it (null/0 if none) |
+| `slope`, `hardness` | slope | Surface tile slope bitmask (bit0=N,1=E,2=S,3=W; 0=flat) and its surface-material hardness. Drives `tools/slope_report.py` (#224 sloping metric). |
 | `glacierZone`, `beyondGlacier` | always | World boundary flags |
 
 For cross-seed ore statistics (coverage, depth, deposit sizes) use

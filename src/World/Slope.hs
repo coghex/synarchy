@@ -37,6 +37,26 @@ import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..)
 slopeHardnessThreshold ∷ Float
 slopeHardnessThreshold = 0.7
 
+-- | Jaggedness knobs for EXPOSED HARD ROCK (issue #224). The chance a
+--   bare-rock tile gets a semi-random jagged slope is
+--   @clamp01 (base + (hardness − threshold)·hardK + reliefNorm·reliefK)@,
+--   so the harder and steeper the rock, the more broken it reads. These
+--   are the inverse of the soft-terrain roughness taper in
+--   'applyRoughness' (which fades OUT as material softens). Tunable;
+--   render-only, so changing them never touches saved terrain.
+rockJaggedBase ∷ Float
+rockJaggedBase = 0.45
+
+rockJaggedHardK ∷ Float
+rockJaggedHardK = 1.0
+
+rockJaggedReliefK ∷ Float
+rockJaggedReliefK = 0.4
+
+-- | Local relief (in z-levels) at which rock jaggedness saturates.
+rockJaggedReliefMax ∷ Float
+rockJaggedReliefMax = 6.0
+
 tilePixelWidth ∷ Int
 tilePixelWidth = 96
 
@@ -77,8 +97,10 @@ perimeterColumnSet = HS.fromList
 recomputeColumnSlope ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                      → V.Vector (Maybe FluidCell) → Chunk
                      → (ChunkCoord → Maybe (VU.Vector Int))
+                     → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
                      → Int → ColumnTiles → ColumnTiles
-recomputeColumnSlope seed coord surfMap registry fluidMap chunk neighborLookup idx col =
+recomputeColumnSlope seed coord surfMap registry fluidMap chunk
+                     neighborLookup fluidNeighborLookup idx col =
     let lx = idx `mod` chunkSize
         ly = idx `div` chunkSize
         surfZ = surfMap VU.! idx
@@ -88,16 +110,19 @@ recomputeColumnSlope seed coord surfMap registry fluidMap chunk neighborLookup i
                                             surfZ registry
                                             surfMap fluidMap
                                             chunk neighborLookup
+                                            fluidNeighborLookup
             in col { ctSlopes = ctSlopes col VU.// [(i, newSlope)] }
        else col
 
 -- | Recompute every column's surface slope (initial chunk gen).
 computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                    → V.Vector (Maybe FluidCell) → Chunk
-                   → (ChunkCoord → Maybe (VU.Vector Int)) → Chunk
-computeChunkSlopes seed coord surfMap registry fluidMap chunk neighborLookup =
+                   → (ChunkCoord → Maybe (VU.Vector Int))
+                   → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell))) → Chunk
+computeChunkSlopes seed coord surfMap registry fluidMap chunk
+                   neighborLookup fluidNeighborLookup =
     V.imap (recomputeColumnSlope seed coord surfMap registry fluidMap
-                                 chunk neighborLookup) chunk
+                                 chunk neighborLookup fluidNeighborLookup) chunk
 
 -- | Recompute slopes for ONLY the given column indices; all other
 --   columns pass through untouched. Used by 'recomputeNeighborSlopes' to
@@ -108,12 +133,14 @@ computeChunkSlopes seed coord surfMap registry fluidMap chunk neighborLookup =
 computeChunkSlopesCols ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                        → V.Vector (Maybe FluidCell) → Chunk
                        → (ChunkCoord → Maybe (VU.Vector Int))
+                       → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
                        → HS.HashSet Int → Chunk
-computeChunkSlopesCols seed coord surfMap registry fluidMap chunk neighborLookup cols =
+computeChunkSlopesCols seed coord surfMap registry fluidMap chunk
+                       neighborLookup fluidNeighborLookup cols =
     V.imap (\idx col →
         if HS.member idx cols
         then recomputeColumnSlope seed coord surfMap registry fluidMap
-                                  chunk neighborLookup idx col
+                                  chunk neighborLookup fluidNeighborLookup idx col
         else col
     ) chunk
 
@@ -123,8 +150,10 @@ computeTileSlope ∷ Word64 → ChunkCoord
                 → V.Vector (Maybe FluidCell)
                 → Chunk
                 → (ChunkCoord → Maybe (VU.Vector Int))
+                → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
                 → Word8
-computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLookup =
+computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
+                 neighborLookup fluidNeighborLookup =
     let col = tiles V.! columnIndex lx ly
         i = z - ctStartZ col
         matId = if i ≥ 0 ∧ i < VU.length (ctMats col)
@@ -160,13 +189,110 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
         bitS = slopeBit myHasFluid z neighS lx (ly + 1) coord fluidMap neighborLookup
         bitW = slopeBit myHasFluid z neighW (lx - 1) ly coord fluidMap neighborLookup
 
+        -- Is each cardinal neighbour a WET tile? Resolves across chunk
+        -- boundaries via 'fluidNeighborLookup' (the jagged path can fire on
+        -- a multi-level drop, so it must check the bank rule at seams too,
+        -- not just in-chunk). The dry-rock jagged path must never slope a
+        -- dry tile into a water neighbour — it would read as rock dipping
+        -- into the river/lake/sea.
+        wetN = neighborHasFluidAt coord lx (ly - 1) fluidMap fluidNeighborLookup
+        wetE = neighborHasFluidAt coord (lx + 1) ly fluidMap fluidNeighborLookup
+        wetS = neighborHasFluidAt coord lx (ly + 1) fluidMap fluidNeighborLookup
+        wetW = neighborHasFluidAt coord (lx - 1) ly fluidMap fluidNeighborLookup
+
         rawSlope = (if bitN then 1 else 0)
                .|. (if bitE then 2 else 0)
                .|. (if bitS then 4 else 0)
                .|. (if bitW then 8 else 0) ∷ Word8
-    in if not passesHardness ∨ rawSlope ≡ 0 ∨ rawSlope ≡ 15
-       then 0
-       else applyRoughness seed coord lx ly hardness rawSlope
+
+        -- Local relief: the steepest single-neighbour DROP from this tile
+        -- (absent neighbours read back as the minBound sentinel and never
+        -- count). Drives both the bare-rock eligibility (a tile with no
+        -- downhill neighbour is flat-topped and stays blocky) and the
+        -- jaggedness intensity.
+        drops = [ z - nz | nz ← [neighN, neighE, neighS, neighW]
+                         , nz ≠ minBound, nz < z ]
+        maxDrop = if null drops then 0 else maximum drops
+    in if myHasFluid
+       -- Wet tiles (river bed / basin floor) keep the existing rule
+       -- unchanged: the bed slopes to match the water surface, gated the
+       -- same way it always was. Jaggedness is a DRY-rock feature only.
+       then if not passesHardness ∨ rawSlope ≡ 0 ∨ rawSlope ≡ 15
+            then 0
+            else applyRoughness seed coord lx ly hardness rawSlope
+       else if passesHardness
+            -- Soft dry terrain: unchanged terrace rule. Flat biomes have
+            -- no qualifying step and stay flat-topped.
+            then if rawSlope ≡ 0 ∨ rawSlope ≡ 15
+                 then 0
+                 else applyRoughness seed coord lx ly hardness rawSlope
+            -- Exposed hard rock (the material the soft gate bars). #224:
+            -- make mountain flanks slope and peaks read as jagged rock.
+            else rockJaggedSlope seed coord lx ly hardness z maxDrop rawSlope
+                                 neighN neighE neighS neighW wetN wetE wetS wetW
+
+-- | Slope rule for EXPOSED HARD ROCK — material at/above
+--   'slopeHardnessThreshold', which the soft-terrain gate in
+--   'computeTileSlope' otherwise forces flat. Bare rock on mountain
+--   flanks and peaks should read as jagged, broken rock rather than
+--   blocky prisms (issue #224). It dovetails with #225: gentle ground
+--   keeps its soil veneer (soft surface → soft path), so only steep,
+--   soil-shed faces reach this rock path.
+--
+--   Two effects, both gated on the tile having a downhill neighbour
+--   (@maxDrop ≥ 1@) so flat/low rocky ground — plateau tops, rocky flats
+--   — stays blocky and genuinely flat biomes are untouched:
+--
+--     1. Clean single-step flanks slope toward their lower neighbours
+--        ('rawSlope'), so rock mountainsides taper instead of stepping.
+--     2. JAGGEDNESS: with a probability that RISES with hardness and local
+--        relief (the inverse of 'applyRoughness'), override with a
+--        semi-random slope toward ONE strictly-lower neighbour. This
+--        breaks the regular terrace into irregular angular rock, and fires
+--        even where no neighbour is exactly one lower (steep multi-level
+--        faces) — the case the strict terrace rule leaves flat.
+--
+--   The ramp only ever points at a strictly-lower DRY neighbour, so it
+--   stays a geometrically valid (and pathing-walkable) ramp — never a
+--   notch into a higher wall, and never a dry tile dipping into water
+--   (the dry-land bank rule, honoured here via the @wet*@ flags).
+rockJaggedSlope ∷ Word64 → ChunkCoord → Int → Int → Float → Int → Int → Word8
+                → Int → Int → Int → Int
+                → Bool → Bool → Bool → Bool → Word8
+rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
+                neighN neighE neighS neighW wetN wetE wetS wetW
+    | maxDrop < 1 = 0   -- no downhill neighbour: flat-topped rock, blocky
+    | otherwise =
+        let h    = tileHash seed cx cy lx ly
+            roll = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
+            reliefNorm = min 1.0 (fromIntegral maxDrop / rockJaggedReliefMax)
+            jaggedChance = clamp01 $ rockJaggedBase
+                + (hardness - slopeHardnessThreshold) * rockJaggedHardK
+                + reliefNorm * rockJaggedReliefK
+            -- Wet-direction bitmask (seam-aware via the wet* flags).
+            wetMask = (if wetN then 1 else 0) .|. (if wetE then 2 else 0)
+                  .|. (if wetS then 4 else 0) .|. (if wetW then 8 else 0) ∷ Word8
+            -- Candidate ramp directions: strictly-lower cardinal
+            -- neighbours that are NOT wet (bank rule). May be empty if the
+            -- only downhill neighbour is water — then we fall through to
+            -- the dry clean-flank below.
+            cand = [ b | (b, nz, wet) ← [ (1 ∷ Word8, neighN, wetN)
+                                        , (2, neighE, wetE)
+                                        , (4, neighS, wetS)
+                                        , (8, neighW, wetW) ]
+                       , nz ≠ minBound, nz < z, not wet ]
+            -- Clean-flank fallback: rawSlope with any wet directions
+            -- cleared. rawSlope is built by 'slopeBit', whose bank check is
+            -- IN-CHUNK only, so a 1-z lower wet neighbour across a chunk
+            -- seam would otherwise survive in rawSlope and ramp into water.
+            -- (15 `xor` wetMask) is the 4-bit complement of the wet mask.
+            dryFlank = rawSlope .&. (15 `xor` wetMask)
+        in if roll < jaggedChance ∧ not (null cand)
+           then cand !! fromIntegral ((h `shiftR` 8) `mod`
+                                      fromIntegral (length cand))
+           else if dryFlank ≢ 0 ∧ dryFlank ≢ 15
+                then dryFlank   -- clean terrace flank (wet dirs masked out)
+                else 0
 
 slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → V.Vector (Maybe FluidCell)
@@ -232,6 +358,26 @@ normalizeCoord ∷ ChunkCoord → Int → Int → (Int, Int, ChunkCoord)
 normalizeCoord coord lx ly =
     let (c, (lx', ly')) = normalizeToChunk coord lx ly
     in (lx', ly', c)
+
+-- | Does the cardinal neighbour at local (nlx, nly) hold a fluid cell?
+--   In-chunk neighbours read this chunk's 'fluidMap'; out-of-chunk
+--   neighbours resolve through 'fluidNeighborLookup' (the loaded
+--   neighbour's fluid map). A not-yet-loaded neighbour reads back as dry
+--   (Nothing) — exactly like the terrain 'neighborElev' minBound sentinel;
+--   the cross-chunk recompute re-runs this border strip once the neighbour
+--   loads, so the bank rule converges on the loaded set, not load order.
+neighborHasFluidAt ∷ ChunkCoord → Int → Int → V.Vector (Maybe FluidCell)
+                   → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell))) → Bool
+neighborHasFluidAt coord nlx nly fluidMap fluidNeighborLookup
+    | nlx ≥ 0 ∧ nlx < chunkSize ∧ nly ≥ 0 ∧ nly < chunkSize
+        = isJustCell (fluidMap V.! columnIndex nlx nly)
+    | otherwise =
+        let (neighborCoord, (nlx', nly')) = normalizeToChunk coord nlx nly
+        in case fluidNeighborLookup neighborCoord of
+            Just nf → isJustCell (nf V.! columnIndex nlx' nly')
+            Nothing → False
+  where isJustCell (Just _) = True
+        isJustCell Nothing  = False
 
 floorDiv' ∷ Int → Int → Int
 floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
@@ -464,6 +610,11 @@ recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
         neighborLookup coord = case HM.lookup (wrap coord) chunks of
             Just lc → Just (lcTerrainSurfaceMap lc)
             Nothing → Nothing
+        -- Parallel fluid lookup so the dry-rock bank rule (jagged path)
+        -- can see a wet neighbour ACROSS a chunk seam, not just in-chunk.
+        fluidNeighborLookup coord = case HM.lookup (wrap coord) chunks of
+            Just lc → Just (lcFluidMap lc)
+            Nothing → Nothing
         -- Only the boundary strip can change when a neighbour loads —
         -- interior columns read in-chunk data only, so recomputing them
         -- would reproduce their stored value. Restricting to the
@@ -474,7 +625,7 @@ recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
                     let newTiles = computeChunkSlopesCols seed coord
                             (lcTerrainSurfaceMap lc) registry
                             (lcFluidMap lc) (lcTiles lc) neighborLookup
-                            perimeterColumnSet
+                            fluidNeighborLookup perimeterColumnSet
                     in HM.insert coord (lc { lcTiles = newTiles }) acc
                 Nothing → acc
             ) chunks affected
