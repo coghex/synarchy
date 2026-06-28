@@ -221,6 +221,37 @@ def main() -> int:
         check("no-id equip moved a real instance into the slot",
               eq_id2 > 0, f"slot now {eq_id2}")
 
+        print("\n== MISMATCH GUARD (weapon defName + non-weapon id) ==")
+        # Add a canteen (kind: container) and try to equip it into the
+        # weapon slot using a WEAPON defName but the canteen's id. The kind
+        # gate must validate the popped instance, not the defName arg.
+        send(args.port, f"return unit.addItem({uid}, 'canteen_steel_2l', 0.5)")
+        inv3 = inventory(args.port, uid)
+        cans = [it for it in inv3 if it.get("defName") == "canteen_steel_2l"]
+        if not cans:
+            check("canteen present for mismatch test", False, "no canteen")
+        else:
+            can_id = cans[0]["instanceId"]
+            slot_before = as_int(send(args.port,
+                f"local lo=equipment.getLoadout({uid}); "
+                f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
+            res = send(args.port,
+                       f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}', {can_id})")
+            check("equip(weapon defName, canteen id) returns false",
+                  res.strip() == "false", res)
+            slot_after = as_int(send(args.port,
+                f"local lo=equipment.getLoadout({uid}); "
+                f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
+            check("canteen did NOT enter the weapon slot", slot_after != can_id,
+                  f"slot now {slot_after}, canteen {can_id}")
+            check("weapon slot unchanged by the rejected equip",
+                  slot_after == slot_before,
+                  f"before {slot_before} after {slot_after}")
+            still = {it["instanceId"] for it in inventory(args.port, uid)
+                     if it.get("defName") == "canteen_steel_2l"}
+            check("canteen stayed in inventory after rejection", can_id in still,
+                  f"canteen ids {sorted(still)}")
+
         if not args.no_save:
             print("\n== PERSIST (save / load) ==")
             ids_before = sorted({it["instanceId"] for it in picks(inventory(args.port, uid))})

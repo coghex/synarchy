@@ -263,16 +263,25 @@ equipmentEquipFn env = do
     tryEquip um inst itemMgr cls slotId itemNm wantId uid =
         case [s | s ← ecSlots cls, esId s ≡ slotId] of
             []       → (um, False)
-            (slot:_) → case lookupItemDef itemNm itemMgr of
-                Nothing → (um, False)
-                Just iDef
-                    | idKind iDef ≢ esKind slot → (um, False)
-                    | otherwise →
-                        case removeFirstFromInventoryWhere
-                                 (itemMatches wantId itemNm)
-                                 (uiInventory inst) of
-                            (_, Nothing)        → (um, False)
-                            (newInv, Just newI) →
+            (slot:_) →
+                -- Pop the targeted instance FIRST, then validate the kind of
+                -- the item we actually popped — NOT the caller-supplied
+                -- defName. When targeting by instanceId, itemMatches ignores
+                -- defName, so a mismatched (defName, id) pair (e.g.
+                -- equip(slot="right_hand", "steel_dagger", canteenId)) would
+                -- otherwise pass the kind gate on the dagger def yet slot the
+                -- canteen. The pop is a pure computation; `um` is mutated only
+                -- in the success branch below, so every failure here returns
+                -- the ORIGINAL `um` untouched.
+                case removeFirstFromInventoryWhere
+                         (itemMatches wantId itemNm)
+                         (uiInventory inst) of
+                    (_, Nothing)        → (um, False)
+                    (newInv, Just newI) → case lookupItemDef (iiDefName newI) itemMgr of
+                        Nothing → (um, False)
+                        Just iDef
+                            | idKind iDef ≢ esKind slot → (um, False)
+                            | otherwise →
                                 let -- if something is already in the slot,
                                     -- bump it back to the inventory tail
                                     -- so the swap is atomic from Lua's
