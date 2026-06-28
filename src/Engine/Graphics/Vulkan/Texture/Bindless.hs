@@ -14,6 +14,7 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , unregisterTexture
   , setTextureFilter
   , getTextureSlotIndex
+  , handleSlotTableSize
   ) where
 
 import UPrelude
@@ -32,6 +33,7 @@ import Engine.Graphics.Vulkan.Texture.Handle
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..), BindlessConfig(..))
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..))
+import Engine.Graphics.Vulkan.BufferUtils (createVulkanBuffer)
 import Vulkan.Core10
 import Vulkan.Core12
 import Vulkan.Zero
@@ -45,6 +47,24 @@ defaultBindlessConfig = BindlessConfig
   , bcTextureBinding = 0
   , bcDescriptorSet  = 1
   }
+
+-- | Binding index (within 'bcDescriptorSet') of the handle→slot table
+--   storage buffer the fragment shader reads. Slot 0 is the texture
+--   array; slot 1 is this table (#286).
+handleSlotBinding ∷ Word32
+handleSlotBinding = 1
+
+-- | Number of entries in the handle→slot table. The fragment shader
+--   indexes it with a STABLE texture-handle id (not a recyclable slot),
+--   so this MUST cover the handle-id space. Handle ids are dense and
+--   monotonic from 0 ('generateTextureHandle'); world-tile material /
+--   facemap handles are allocated at startup (low ids), so they are
+--   always in range. A handle id beyond this cap resolves to slot 0
+--   (undefined) in the shader — a graceful degrade that can only bite a
+--   transient texture in an extremely long session, never a cached tile.
+--   MUST match @HANDLE_TABLE_SIZE@ in the bindless fragment shaders.
+handleSlotTableSize ∷ Int
+handleSlotTableSize = 65536
 
 -- | Create the bindless texture system
 createBindlessTextureSystem ∷ PhysicalDevice
@@ -75,6 +95,21 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   -- MoltenVK requires all argument buffer slots to be initialized
   initializeAllSlots dev descriptorSet config
     (utImageView undefinedTex) sharedSampler
+
+  -- Handle→slot table storage buffer (#286). Vertices carry a stable
+  -- texture-handle id; the fragment shader indexes this buffer to find
+  -- the live bindless slot, so cached geometry never encodes a volatile
+  -- slot. Zero-initialised so an unregistered handle id resolves to slot
+  -- 0 (undefined); kept current by 'writeHandleSlotEntry'.
+  let tableBytes = fromIntegral (handleSlotTableSize * 4) ∷ DeviceSize
+  (tblMem, tblBuf) ← createVulkanBuffer dev pdev tableBytes
+        BUFFER_USAGE_STORAGE_BUFFER_BIT
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+  zeroPtr ← mapMemory dev tblMem 0 tableBytes zero
+  liftIO $ pokeArray (castPtr zeroPtr) (replicate handleSlotTableSize (0 ∷ Word32))
+  unmapMemory dev tblMem
+  writeHandleSlotDescriptor dev descriptorSet tblBuf
+
   pure $ BindlessTextureSystem
     { btsConfig           = config
     , btsDescriptorPool   = descriptorPool
@@ -87,6 +122,8 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
     , btsTextureSampler   = sharedSampler
     , btsTextureKind      = texKind
     , btsPinned           = Map.empty
+    , btsHandleSlotBuffer = tblBuf
+    , btsHandleSlotMemory = tblMem
     }
 
 -- | Initialize all descriptor slots with the undefined texture
@@ -120,10 +157,15 @@ createBindlessDescriptorPool dev config = do
         { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         , descriptorCount = bcMaxTextures config
         }
-      
+      -- One storage buffer for the handle→slot table (#286, binding 1).
+      tablePoolSize = zero
+        { type' = DESCRIPTOR_TYPE_STORAGE_BUFFER
+        , descriptorCount = 1
+        }
+
       poolInfo = zero
         { maxSets = 1
-        , poolSizes = V.singleton poolSize
+        , poolSizes = V.fromList [poolSize, tablePoolSize]
         , flags = DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT
         }
 
@@ -139,11 +181,15 @@ createBindlessDescriptorSetLayout dev config = do
         DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
         .|. DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
 
+      -- The handle→slot table (binding 1) is a plain storage buffer: not
+      -- update-after-bind (so it needs no extra device feature), written
+      -- once at creation before the set is ever bound, then only its
+      -- CONTENTS change (via mapped memory) — never the descriptor.
       bindingFlagsInfo = zero
-        { bindingFlags = V.singleton bindingFlags
+        { bindingFlags = V.fromList [bindingFlags, zero]
         } ∷ DescriptorSetLayoutBindingFlagsCreateInfo
 
-      binding = zero
+      textureBinding = zero
         { binding = bcTextureBinding config
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         , descriptorCount = bcMaxTextures config
@@ -151,8 +197,16 @@ createBindlessDescriptorSetLayout dev config = do
         , immutableSamplers = V.empty
         }
 
+      tableBinding = zero
+        { binding = handleSlotBinding
+        , descriptorType = DESCRIPTOR_TYPE_STORAGE_BUFFER
+        , descriptorCount = 1
+        , stageFlags = SHADER_STAGE_FRAGMENT_BIT
+        , immutableSamplers = V.empty
+        }
+
       layoutInfo = zero
-        { bindings = V.singleton binding
+        { bindings = V.fromList [textureBinding, tableBinding]
         , flags = DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
         }
         ::& bindingFlagsInfo
@@ -203,6 +257,41 @@ writeDescriptorSlot dev descSet config slotIndex imageView sampler = do
 
   updateDescriptorSets dev (V.singleton $ SomeStruct write) V.empty
 
+-- | Point the handle→slot table descriptor (binding 1) at its storage
+--   buffer. Written once at creation; the buffer object never changes
+--   afterwards (only its contents, via 'writeHandleSlotEntry').
+writeHandleSlotDescriptor ∷ Device → DescriptorSet → Buffer → EngineM ε σ ()
+writeHandleSlotDescriptor dev descSet buf = do
+  let bufInfo = zero
+        { buffer = buf
+        , offset = 0
+        , range  = WHOLE_SIZE
+        } ∷ DescriptorBufferInfo
+
+      write = zero
+        { dstSet = descSet
+        , dstBinding = handleSlotBinding
+        , dstArrayElement = 0
+        , descriptorCount = 1
+        , descriptorType = DESCRIPTOR_TYPE_STORAGE_BUFFER
+        , bufferInfo = V.singleton bufInfo
+        }
+
+  updateDescriptorSets dev (V.singleton $ SomeStruct write) V.empty
+
+-- | Write one @handleToSlot[handleId] = slot@ entry into the table's
+--   mapped memory. Out-of-range handle ids are dropped (they stay at the
+--   zero-initialised slot 0 = undefined). Host-coherent, so no flush.
+writeHandleSlotEntry ∷ Device → BindlessTextureSystem → Int → Word32 → EngineM ε σ ()
+writeHandleSlotEntry dev sys hid slot
+  | hid < 0 ∨ hid ≥ handleSlotTableSize = pure ()
+  | otherwise = do
+      let mem        = btsHandleSlotMemory sys
+          tableBytes = fromIntegral (handleSlotTableSize * 4) ∷ DeviceSize
+      ptr ← mapMemory dev mem 0 tableBytes zero
+      liftIO $ pokeElemOff (castPtr ptr) hid slot
+      unmapMemory dev mem
+
 -- | Register a texture in the bindless system. The atlas/global path:
 --   the slot follows the global filter and is repainted by
 --   'setTextureFilter' on a toggle. Callers pass 'btsTextureSampler'.
@@ -242,6 +331,11 @@ registerTextureImpl pinned dev texHandle imageView sampler system = do
         Just (slot, newAllocator) → do
           writeDescriptorSlot dev (btsDescriptorSet system) (btsConfig system)
             (tsIndex slot) imageView sampler
+          -- Record the handle→slot mapping for the shader (#286). The
+          -- table buffer persists across the immutable system copy, so
+          -- writing through 'system' is correct.
+          let TextureHandle hid = texHandle
+          writeHandleSlotEntry dev system hid (tsIndex slot)
 
           let bindlessHandle = toBindlessHandle slot texHandle
               newHandleMap = Map.insert texHandle bindlessHandle (btsHandleMap system)
@@ -273,6 +367,10 @@ unregisterTexture dev texHandle system = do
         (tsIndex slot)
         (utImageView $ btsUndefinedTexture system)
         (btsTextureSampler system)
+      -- Clear the handle→slot entry so the shader resolves this handle to
+      -- slot 0 (undefined) until it is registered again (#286).
+      let TextureHandle hid = texHandle
+      writeHandleSlotEntry dev system hid 0
 
       let newAllocator = freeSlot slot (btsSlotAllocator system)
           newHandleMap = Map.delete texHandle (btsHandleMap system)

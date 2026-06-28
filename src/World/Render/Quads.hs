@@ -11,11 +11,9 @@ import qualified Data.Vector as V
 import Data.Maybe (isJust)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..))
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Constants (seaLevel)
 import World.Fluids (FluidCell(..), FluidType(..))
@@ -116,15 +114,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
         calendar = maybe defaultCalendarConfig wgpCalender paramsM
         dayOfYear = worldDateToDayOfYear calendar worldDate
 
-    mBindless ← readIORef (textureSystemRef env)
-    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
-    let lookupSlot texHandle = fromIntegral $ case mBindless of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral defFmSlotWord
-        lookupFmSlot texHandle =
-            let s = lookupSlot texHandle
-            in if s ≡ 0 then defFmSlot else fromIntegral s
+    -- Vertices carry a STABLE texture-handle id (#286); the bindless
+    -- fragment shader resolves it to a live slot at draw time, so the
+    -- cache never encodes a recyclable/stale slot. The default-face-map
+    -- fallback (handle → slot 0 → default) now lives in the shader too.
+    let lookupSlot texHandle = fromIntegral (toInt texHandle)
+        lookupFmSlot texHandle = fromIntegral (toInt texHandle)
         worldSize = case paramsM of
                       Nothing → 128
                       Just params → wgpWorldSize params
@@ -364,16 +359,9 @@ renderWorldCursorQuads env worldState tileAlpha = do
     (winW, winH) ← readIORef (windowSizeRef env)
     (fbW, fbH)   ← readIORef (framebufferSizeRef env)
 
-    mBindless    ← readIORef (textureSystemRef env)
-    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
-
-    let lookupSlot texHandle = fromIntegral $ case mBindless of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral defFmSlotWord
-        lookupFmSlot texHandle =
-            let s = lookupSlot texHandle
-            in if s ≡ 0 then defFmSlot else fromIntegral s
+    -- Stable handle ids; resolved to live slots in the shader (#286).
+    let lookupSlot texHandle = fromIntegral (toInt texHandle)
+        lookupFmSlot texHandle = fromIntegral (toInt texHandle)
         facing    = camFacing camera
         zoom      = camZoom camera
         zSlice    = camZSlice camera

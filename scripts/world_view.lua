@@ -300,18 +300,10 @@ function worldView.createWorld()
         -- materials and vegetation textures sent via sendTexturesToWorld
     })
     worldManager.showWorld()
-
-    -- Structural textures (blank, facemaps) can still be GPU-loading when
-    -- the world's quad cache is first built, baking the undefined/magenta
-    -- slot + empty facemaps. The engine's load-time invalidation alone does
-    -- NOT reliably heal this in the live flow (the cache settles at a point
-    -- the per-texture invalidation doesn't re-bump), so we still re-bind the
-    -- structural set ONCE when world generation reports done (worldView.update
-    -- polls for it): by the time chunk generation finishes the small
-    -- structural textures have loaded, and the world.setTexture re-bind busts
-    -- the stale quad cache so it rebuilds with valid slots. (The engine-side
-    -- generation counter from #35 still makes that invalidation race-safe.)
-    worldView.structuralRebound = false
+    -- (#286) No structural re-bind needed: the bindless shader resolves
+    -- texture-handle ids to live slots at draw time, so structural textures
+    -- that finish loading after the quad cache is built are picked up
+    -- automatically — no stale slot can be baked in.
 end
 
 -----------------------------------------------------------
@@ -380,17 +372,12 @@ function worldView.update(dt)
     if not worldView.visible then return end
     worldManager.update(dt)
 
-    -- One-shot structural re-bind when world generation completes (phase 3).
-    -- Busts the stale quad cache so the interior + facemaps render with the
-    -- now-loaded textures. Polls only until it fires, then stops.
-    if worldView.structuralRebound == false and worldManager.isActive() then
-        local phase = world.getInitProgress()
-        if phase == 3 then
-            worldView.structuralRebound = true
-            local wid = worldManager.getCurrentWorld()
-            if wid then worldView.rebindStructural(wid) end
-        end
-    end
+    -- (#286) The phase-3 "structural re-bind" one-shot used to live here to
+    -- heal the magenta interior caused by structural textures loading after
+    -- the quad cache was baked. It is gone: vertices now carry stable
+    -- texture-handle ids and the bindless shader resolves them to live slots
+    -- at draw time, so a late texture load can never leave a stale slot in
+    -- the cache. (rebindStructural remains only as the save-load binder.)
 end
 
 -----------------------------------------------------------

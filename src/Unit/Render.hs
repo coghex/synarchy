@@ -15,13 +15,12 @@ import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                           , renderFlagSelected)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
@@ -167,12 +166,15 @@ renderUnitQuads env facing zSlice effDepth tileAlpha = do
             now ← readIORef (gameTimeRef env)
             texSizes ← readIORef (textureSizeRef env)
             mBts ← readIORef (textureSystemRef env)
-            defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
             case mBts of
                 Nothing → return V.empty
-                Just bts → do
-                    let lookupSlot h = getTextureSlotIndex h bts
-                        defFmSlot = fromIntegral defFmSlotWord
+                Just _bts → do
+                    -- Bake a STABLE texture-handle id; the bindless shader
+                    -- resolves it to a live slot at draw time (#286). -1 =
+                    -- "use the default face map" (units have no directional
+                    -- face map) — the shader maps it to the default slot.
+                    let lookupSlot h = fromIntegral (toInt h) ∷ Word32
+                        defFmSlot = -1 ∷ Float
                         quads = V.fromList
                             $ HM.foldlWithKey' (\acc uid inst →
                                 let isSel = HS.member uid selected

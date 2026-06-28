@@ -13,7 +13,7 @@ import Engine.Graphics.Vulkan.Texture.Slot (TextureSlotAllocator)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle)
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind)
-import Vulkan.Core10 (DescriptorPool, DescriptorSetLayout, DescriptorSet, ImageView, Sampler)
+import Vulkan.Core10 (DescriptorPool, DescriptorSetLayout, DescriptorSet, ImageView, Sampler, Buffer, DeviceMemory)
 
 -- | Configuration for the bindless texture system
 data BindlessConfig = BindlessConfig
@@ -48,6 +48,16 @@ data BindlessTextureSystem = BindlessTextureSystem
     --   'registerPinnedTexture'; the value is the sampler to keep using
     --   (kept alive by the texture's own cache reference while it is
     --   registered).
+  , btsHandleSlotBuffer ∷ !Buffer
+    -- ^ Storage buffer (descriptor set 'bcDescriptorSet', binding 1)
+    --   holding the handle→slot table the fragment shader indexes:
+    --   @handleToSlot[textureHandleId] = bindless slot@. Vertices carry a
+    --   STABLE texture-handle id (not a volatile slot), so the world quad
+    --   cache can never go stale when a late texture loads or a slot is
+    --   recycled (#286). Refreshed by 'uploadHandleSlotTable' whenever the
+    --   handle→slot mapping changes (register / unregister).
+  , btsHandleSlotMemory ∷ !DeviceMemory
+    -- ^ Host-visible/coherent memory backing 'btsHandleSlotBuffer'.
   } deriving (Show)
 
 -- | Configuration for the texture system

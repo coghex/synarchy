@@ -10,13 +10,12 @@ import UPrelude
 import Data.IORef (readIORef, IORef)
 import qualified Data.Vector as V
 import Engine.Core.State (EngineEnv(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Constants (seaLevel)
 import World.Grid (backgroundMapLayer)
@@ -50,12 +49,9 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
 
-    mBindless ← readIORef (textureSystemRef env)
-    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
-    let lookupSlot texHandle = fromIntegral $ case mBindless of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral defFmSlotWord
+    -- Stable handle id resolved in the shader (#286); -1 = default face map.
+    let lookupSlot texHandle = fromIntegral (toInt texHandle)
+        defFmSlot = -1 ∷ Float
         facing = camFacing camera
     case mParams of
         Nothing → return V.empty
