@@ -17,8 +17,7 @@ import qualified HsLua as Lua
 import Engine.Asset.YamlNotifications (writeNotificationOverrides)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.State (EngineEnv(..))
-import Engine.PlayerEvent (CategoryCfg(..), PopupButton(..)
-                          , popupActionTag)
+import Engine.PlayerEvent (CategoryCfg(..))
 import Engine.PlayerEvent.Emit (PlayerEvent(..), emitEvent, emitEventAt
                                , emitEventFull, readEventLog)
 
@@ -39,10 +38,9 @@ emitEventFn env = do
     return 0
 
 -- | @engine.emitEventAt(category, text, gx, gy)@ — fire a popup with
---   a location payload. If the category's YAML buttons include
---   @go_to@, the popup renders a "Go To" button that pans the
---   camera to @(gx, gy)@. Categories without a @go_to@ button
---   ignore the payload.
+--   a location payload. The popup makes that event's line clickable —
+--   clicking it pans the camera to @(gx, gy)@. Events emitted without
+--   coordinates produce non-clickable lines.
 emitEventAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 emitEventAtFn env = do
     catArg  ← Lua.tostring 1
@@ -86,12 +84,10 @@ emitEventForUnitFn env = do
     return 0
 
 -- | @engine.getEventLog()@ — return the event-log ring buffer as a
---   Lua array of @{category, text, gameTime, source, buttons,
---   coords}@ tables, oldest-first. @buttons@ is an array of
---   @{label, action}@ pairs (per the event's resolved category cfg
---   at emit time); @coords@ is either @{x, y}@ or @nil@. Sufficient
---   payload for the event-log panel to re-pop the popup from a row
---   click without a second engine round-trip.
+--   Lua array of @{category, text, gameTime, source, uid, count,
+--   coords}@ tables, oldest-first. @coords@ is either @{x, y}@ or
+--   @nil@. Sufficient payload for the event-log panel to re-pop the
+--   popup from a row click without a second engine round-trip.
 getEventLogFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getEventLogFn env = do
     events ← Lua.liftIO $ readEventLog env
@@ -116,23 +112,9 @@ getEventLogFn env = do
         Lua.pushinteger (fromIntegral (peCount ev))
         Lua.setfield (-2) "count"
 
-        -- buttons array (same shape as getNotificationCfg's buttons
-        -- field) — needed for the event-log panel's row click to
-        -- spawn a popup with the original button set.
-        Lua.newtable
-        forM_ (zip [1..] (peButtons ev)) $ \(j, btn) → do
-            Lua.newtable
-            Lua.pushstring (TE.encodeUtf8 (pbLabel btn))
-            Lua.setfield (-2) "label"
-            Lua.pushstring (TE.encodeUtf8 (popupActionTag (pbAction btn)))
-            Lua.setfield (-2) "action"
-            Lua.rawseti (-2) j
-        Lua.setfield (-2) "buttons"
-
         -- coords: either a {x, y} subtable or nil. nil means the
         -- event was emitted via emitEvent (no location) — repop
-        -- should suppress any 'go_to' buttons just like the first
-        -- spawn did.
+        -- leaves the line non-clickable just like the first spawn did.
         case peCoords ev of
             Just (gx, gy) → do
                 Lua.newtable
@@ -184,17 +166,6 @@ getNotificationCfgFn env = do
                 Lua.pushnumber (Lua.Number (realToFrac a))
                 Lua.setfield (-2) "a"
                 Lua.setfield (-2) "textColor"
-                -- buttons array: { {label, action}, ... }
-                Lua.newtable
-                forM_ (zip [1..] (ccButtons c)) $ \(j, btn) → do
-                    Lua.newtable
-                    Lua.pushstring (TE.encodeUtf8 (pbLabel btn))
-                    Lua.setfield (-2) "label"
-                    Lua.pushstring
-                        (TE.encodeUtf8 (popupActionTag (pbAction btn)))
-                    Lua.setfield (-2) "action"
-                    Lua.rawseti (-2) j
-                Lua.setfield (-2) "buttons"
                 -- coalesceWindow: popup wall-seconds (0 = disabled)
                 Lua.pushnumber (Lua.Number (ccPopupCoalesceWindow c))
                 Lua.setfield (-2) "coalesceWindow"

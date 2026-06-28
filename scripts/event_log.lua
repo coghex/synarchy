@@ -599,7 +599,7 @@ end
 -- elemHandle back to a filteredEvents index, then call the popup
 -- module's onShowPopup directly with the same shape the engine
 -- broadcasts (so the popup re-spawns at the next free slot with the
--- original category color + buttons + coords).
+-- original category color + coords).
 function eventLog.onRowClick(elemHandle)
     local idx = eventLog.rowClickBoxes[elemHandle]
     if not idx then return false end
@@ -622,8 +622,7 @@ function eventLog.onRowClick(elemHandle)
     end
 
     local popupMod = require("scripts.popup")
-    popupMod.onShowPopup(ev.category, ev.text, r, g, b, a,
-                        ev.buttons, ev.coords)
+    popupMod.onShowPopup(ev.category, ev.text, r, g, b, a, ev.coords)
     return true
 end
 

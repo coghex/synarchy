@@ -214,8 +214,8 @@ sleep 0.2
 assert_eq "popup queue grew" "$((PRE_QUEUE + 1))" \
     "require('scripts.popup').queueLength()"
 
-echo "[13] engine.getNotificationCfg returns 8 categories in registry order"
-assert_eq "category count" "8" "#engine.getNotificationCfg()"
+echo "[13] engine.getNotificationCfg returns 10 categories in registry order"
+assert_eq "category count" "10" "#engine.getNotificationCfg()"
 assert_eq "first id is save_load"        "true" \
     "engine.getNotificationCfg()[1].id == 'save_load'"
 assert_eq "second id is survival_critical" "true" \
@@ -254,23 +254,7 @@ sleep 0.2
 assert_eq "save_load.popup restored" "true" \
     "engine.getNotificationCfg()[1].popup"
 
-echo "[17] Category buttons exposed from YAML"
-# save_load has no buttons section in YAML → default [OK]
-assert_eq "save_load has 1 button" "true" \
-    "#engine.getNotificationCfg()[1].buttons == 1"
-assert_eq "save_load button[1] label is OK" "true" \
-    "engine.getNotificationCfg()[1].buttons[1].label == 'OK'"
-assert_eq "save_load button[1] action is dismiss" "true" \
-    "engine.getNotificationCfg()[1].buttons[1].action == 'dismiss'"
-# survival_critical has [Go To, OK] in YAML
-assert_eq "survival_critical has 2 buttons" "true" \
-    "#engine.getNotificationCfg()[2].buttons == 2"
-assert_eq "survival_critical button[1] is Go To" "true" \
-    "engine.getNotificationCfg()[2].buttons[1].action == 'go_to'"
-assert_eq "survival_critical button[2] is OK" "true" \
-    "engine.getNotificationCfg()[2].buttons[2].action == 'dismiss'"
-
-echo "[18] emitEventAt routes coords through the popup queue"
+echo "[17] emitEventAt routes coords through the popup queue"
 # Engine pushes onShowPopup with coords; popup module stashes them
 # in the queued entry for the spawn step.
 lua "engine.setPaused(false)" > /dev/null
@@ -284,11 +268,8 @@ assert_eq "queued entry has coords.x=10" "true" \
     "(function() local q = require('scripts.popup').queue; local e = q[#q]; return e.coords ~= nil and e.coords.x == 10 end)()"
 assert_eq "queued entry has coords.y=20" "true" \
     "(function() local q = require('scripts.popup').queue; local e = q[#q]; return e.coords ~= nil and e.coords.y == 20 end)()"
-# And the buttons array is the survival_critical YAML config.
-assert_eq "queued entry has 2 buttons" "true" \
-    "(function() local q = require('scripts.popup').queue; return #q[#q].buttons == 2 end)()"
 
-echo "[19] emitEvent (no coords) leaves coords nil"
+echo "[18] emitEvent (no coords) leaves coords nil"
 PRE_QUEUE=$(lua "return require('scripts.popup').queueLength()")
 lua "engine.emitEvent('save_load', 'plain save event')" > /dev/null
 sleep 0.2
@@ -297,7 +278,7 @@ assert_eq "queue grew without coords" "$((PRE_QUEUE + 1))" \
 assert_eq "queued entry has no coords" "true" \
     "(function() local q = require('scripts.popup').queue; return q[#q].coords == nil end)()"
 
-echo "[20] engine.realTime returns a POSIX-shaped double"
+echo "[19] engine.realTime returns a POSIX-shaped double"
 # We just check it's a number and >= a sanity floor; the actual
 # value is wall-clock so it shifts every run.
 assert_eq "realTime is a number" "true" \
@@ -305,7 +286,7 @@ assert_eq "realTime is a number" "true" \
 assert_eq "realTime is a recent timestamp" "true" \
     "engine.realTime() > 1700000000"
 
-echo "[21] coalesce_window exposed via getNotificationCfg"
+echo "[20] coalesce_window exposed via getNotificationCfg"
 # save_load has no coalesce_window in YAML → default 0
 assert_eq "save_load coalesceWindow is 0"  "true" \
     "engine.getNotificationCfg()[1].coalesceWindow == 0"
@@ -316,7 +297,7 @@ assert_eq "survival_critical coalesceWindow is 1.0" "true" \
 assert_eq "combat coalesceWindow is 2.0" "true" \
     "math.abs(engine.getNotificationCfg()[4].coalesceWindow - 2.0) < 0.001"
 
-echo "[22] popup module exposes coalesce-test helpers"
+echo "[21] popup module exposes coalesce-test helpers"
 assert_eq "onLineClick is a function" "true" \
     "type(require('scripts.popup').onLineClick) == 'function'"
 assert_eq "activeLineCount is a function" "true" \

@@ -6,6 +6,17 @@ proper events pipeline that the player controls.
 
 Status: design accepted 2026-05-18. Phase 1 ready to implement.
 
+> **Note (2026-06, issue #37):** this is the original design record.
+> The shipped popup diverged from it in a few places. In particular the
+> per-category **popup button** model below (decision #14, the
+> `PopupButton` / `PopupAction` / `go_to` surface) was **retired**:
+> popups now show a single OK button and navigation is done by
+> **clicking a popup line** (which pans the camera to that event's
+> coords, when present). The `buttons:` YAML key and the
+> `PopupButton`/`PopupAction` Haskell types no longer exist. Other
+> sections (coalescing, category header) have also since changed; treat
+> this doc as design history, not a current API reference.
+
 ---
 
 ## 1. Overview
