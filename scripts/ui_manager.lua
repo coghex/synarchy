@@ -1440,6 +1440,14 @@ function uiManager.onUISubmit()
 end
 
 function uiManager.onUIEscape()
+    -- Keybind editor capture takes escape first: cancel the in-progress
+    -- capture (or conflict modal) instead of closing the settings menu.
+    if currentMenu == "settings" and settingsMenu
+       and settingsMenu.isCapturingKey and settingsMenu.isCapturingKey() then
+        settingsMenu.cancelKeyCapture()
+        return true
+    end
+
     -- First, let UI widgets handle escape (close dropdowns, unfocus textboxes)
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onEscape()
@@ -1567,6 +1575,15 @@ function uiManager.isGameplayInputActive()
 end
 
 function uiManager.onKeyDown(key)
+    -- Keybind editor capture: while the Input settings tab is waiting for
+    -- a key, route the next press to it and swallow it (don't let it reach
+    -- gameplay views). The settings menu is a require'd submodule, not a
+    -- broadcast target, so this forward is how capture keys reach it.
+    if currentMenu == "settings" and settingsMenu
+       and settingsMenu.isCapturingKey and settingsMenu.isCapturingKey() then
+        settingsMenu.onKeyCapture(key)
+        return
+    end
     if key == "F7" then
         world.openArena()
     end

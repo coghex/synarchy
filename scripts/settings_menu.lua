@@ -15,7 +15,7 @@ local slider         = require("scripts.ui.slider")
 local data           = require("scripts.settings.data")
 local graphicsTab      = require("scripts.settings.graphics_tab")
 local notificationsTab = require("scripts.settings.notifications_tab")
-local placeholderTab   = require("scripts.settings.placeholder_tab")
+local inputTab         = require("scripts.settings.input_tab")
 
 local settingsMenu = {}
 
@@ -106,28 +106,11 @@ settingsMenu.ownedSliders    = {}
 -- Each entry: { key, name, createFn(params) → rowHandles[] }
 -----------------------------------------------------------
 local tabDefs = {
-    { key = "system",   name = "System",   create = function(p)
-        return placeholderTab.create({
-            name = "system_placeholder",
-            text = "System settings coming soon...",
-            page = p.page, font = p.font, baseSizes = p.baseSizes,
-            uiscale = p.uiscale, s = p.s,
-            contentX = p.contentX, contentY = p.contentY,
-            zContent = Z_CONTENT,
-        })
-    end },
     { key = "graphics", name = "Graphics", create = function(p)
         return graphicsTab.create(p)
     end },
     { key = "input",    name = "Input",    create = function(p)
-        return placeholderTab.create({
-            name = "input_placeholder",
-            text = "Input settings coming soon...",
-            page = p.page, font = p.font, baseSizes = p.baseSizes,
-            uiscale = p.uiscale, s = p.s,
-            contentX = p.contentX, contentY = p.contentY,
-            zContent = Z_CONTENT,
-        })
+        return inputTab.create(p)
     end },
     { key = "notifications", name = "Notifications", create = function(p)
         return notificationsTab.create(p)
@@ -165,6 +148,35 @@ function settingsMenu.onDefaults()
     data.loadDefaults()
     settingsMenu.createUI()
     if settingsMenu.page then UI.showPage(settingsMenu.page) end
+end
+
+-----------------------------------------------------------
+-- Keybind editor (Input tab) glue
+-----------------------------------------------------------
+
+-- Full rebuild after a keybind add/remove so the rows reflect the new
+-- bindings. Passed to the input tab as its `rebuild` callback.
+function settingsMenu.rebuildForKeybinds()
+    settingsMenu.createUI()
+    if settingsMenu.page then UI.showPage(settingsMenu.page) end
+end
+
+-- True while the Input tab is capturing a key (waiting for a press or
+-- showing the conflict modal). ui_manager gates key routing + escape on
+-- this.
+function settingsMenu.isCapturingKey()
+    return inputTab.captureActive and inputTab.captureActive()
+end
+
+-- The next key press while "+" capture is waiting (routed from
+-- ui_manager.onKeyDown).
+function settingsMenu.onKeyCapture(key)
+    if inputTab.onKeyCapture then inputTab.onKeyCapture(key) end
+end
+
+-- Escape during capture (routed from ui_manager.onUIEscape).
+function settingsMenu.cancelKeyCapture()
+    if inputTab.cancelCapture then inputTab.cancelCapture() end
 end
 
 -----------------------------------------------------------
@@ -436,6 +448,14 @@ function settingsMenu.createAllTabs(s, uiscale)
             trackTextbox    = settingsMenu.trackTextbox,
             trackCheckbox   = settingsMenu.trackCheckbox,
             trackDropdown   = settingsMenu.trackDropdown,
+            trackButton     = settingsMenu.trackButton,
+            -- Extras the input (keybind) tab needs for its key buttons
+            -- and capture/conflict popups.
+            panelTexSet     = settingsMenu.panelTexSet,
+            buttonTexSet    = settingsMenu.buttonTexSet,
+            fbW             = settingsMenu.fbW,
+            fbH             = settingsMenu.fbH,
+            rebuild         = settingsMenu.rebuildForKeybinds,
         })
 
         -- Scrollbar if needed
