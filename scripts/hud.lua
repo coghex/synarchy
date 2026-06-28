@@ -621,6 +621,15 @@ function hud.hide()
     -- world. The world thread clears it deterministically in
     -- handleWorldHideCommand, keyed on the exact page being hidden (which
     -- worldView.hide()/testArena.hide() issue just before this runs).
+    --
+    -- Building selection (#176), by contrast, IS cleared here: it is a
+    -- single global id (bmSelected), not a per-world cursor, so deselect()
+    -- has no wrong-world hazard and is a no-op when nothing is selected.
+    -- Suppressing the panel alone is not enough — the building-info watcher
+    -- keeps polling building.getSelected() and re-pushing the selected
+    -- building into the panel's stored content, which hud.show() then
+    -- restores stale. Clearing the selection stops the repopulation.
+    building.deselect()
     pcall(function() require("scripts.event_log").hide() end)
     pcall(function() require("scripts.combat_log").hide() end)
     pcall(function() require("scripts.injury_log_panel").hide() end)
@@ -872,6 +881,15 @@ function hud.reconcileView()
         require("scripts.debug").hide()
     end
     item.deselect()
+    -- Building selection (#176): unlike the per-world cursor selections
+    -- below, building selection is a single global id (bmSelected), so the
+    -- page swap above never touches it and the building-info watcher keeps
+    -- polling building.getSelected() and re-pushing the same building into
+    -- the shared info panel — repopulating it stale after the band change.
+    -- deselect() clears the global selection and is a no-op when nothing is
+    -- selected, matching item.deselect() above; no wrong-world hazard since
+    -- there is no per-world building cursor to resolve through activeWorld.
+    building.deselect()
     -- Chunk/tile cursor selection (#132): the zoom-map chunk selection
     -- (zoomSelectedPos) and zoomed-in tile selection (worldSelectedTile)
     -- both live in the per-world cursor (wsCursorRef), independent of the
