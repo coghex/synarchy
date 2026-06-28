@@ -96,10 +96,12 @@ data ItemArmor = ItemArmor
     } deriving (Show, Eq)
 
 -- | Food properties — items with a Just here restore hunger when
---   eaten. ifNutrition is the kcal value, clamped against the eater's
---   max_hunger (excess is wasted, item is still consumed).
+--   eaten. ifCalories is the kcal value, clamped against the eater's
+--   max_hunger (excess is wasted, item is still consumed). Parsed from a
+--   `nutrition:` sub-object so future macronutrient fields slot in beside
+--   it without a schema/save change.
 data ItemFood = ItemFood
-    { ifNutrition ∷ !Float   -- ^ kcal restored per item consumed
+    { ifCalories ∷ !Float   -- ^ kcal restored per item consumed
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Immutable item definition — one per type loaded from YAML.

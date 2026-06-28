@@ -113,7 +113,7 @@ loadItemYamlFn env backendState = do
                                 })
                             (iydContainer def)
                         food = fmap
-                            (\f → ItemFood { ifNutrition = iyfNutrition f })
+                            (\f → ItemFood { ifCalories = iyfCalories f })
                             (iydFood def)
                         weapon = fmap
                             (\w → ItemWeapon

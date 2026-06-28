@@ -138,6 +138,29 @@ sleepHealMult = 4.0    -- rest/sleep speed-up (DORMANT — see restMult)
 scarSeverityThreshold ∷ Float
 scarSeverityThreshold = 0.3   -- wounds milder than this heal scar-free
 
+-- Calorie gating: a starving body heals slower (the food system's
+-- "starving units heal significantly slower"). The unit's hunger/
+-- max_hunger fraction drives a heal-rate multiplier — full above
+-- calorieHealFloorFrac of the pool, ramping down to calorieHealMin at an
+-- empty stomach. A unit with no hunger pool (wildlife, pre-gen tests)
+-- heals ungated.
+calorieHealFloorFrac ∷ Float
+calorieHealFloorFrac = 0.5
+
+calorieHealMin ∷ Float
+calorieHealMin = 0.25
+
+-- | Heal-rate multiplier from the unit's calorie (hunger) state.
+calorieHealMultiplier ∷ HM.HashMap Text Float → Float
+calorieHealMultiplier stats =
+    let maxH = HM.lookupDefault 0 "max_hunger" stats
+        cur  = HM.lookupDefault 0 "hunger" stats
+    in if maxH ≤ 0 then 1.0
+       else let frac = cur / maxH
+            in if frac ≥ calorieHealFloorFrac then 1.0
+               else calorieHealMin
+                  + (1 - calorieHealMin) * (frac / calorieHealFloorFrac)
+
 -- ----- Infection -----
 -- A per-wound `woundInfection` (0..1) bar that grows on an OPEN, undressed
 -- wound after a grace period, ∝ effective severity × kind. DETERMINISTIC:
@@ -496,6 +519,9 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
             -- yet — only the bear AI uses the word). When one lands,
             -- wire its rest state here and the bonus lights up.
             restMult = if uiPose inst == "sleeping" then sleepHealMult else 1.0
+            -- A starving unit heals slower (calorie gating). Wildlife
+            -- without a hunger pool reads 1.0.
+            calHealMlt = calorieHealMultiplier (uiStats inst)
             -- SYSTEMIC immune response (Ticker B), advanced once per unit.
             -- Ramps up (accelerating, × constitution) while anything is
             -- infected; decays back toward 0 once nothing is. The per-wound
@@ -600,7 +626,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
                         infHealMlt = max 0 (1 - newInf)
                         healAdv    = if canHeal
                             then healBaseRate * clotHealF * restMult * healCon
-                                 * infHealMlt * dt
+                                 * infHealMlt * calHealMlt * dt
                             else 0
                         worsen     = if newInf > infectionWorsenThreshold
                             then infectionWorsenRate
