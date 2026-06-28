@@ -3562,6 +3562,15 @@ function unitInfoV2.update(dt)
     if key ~= unitInfoV2.lastSelKey then
         rebuildTabs(sel)
         unitInfoV2.lastSelKey = key
+        -- Selecting a unit takes ownership of the readout, so clear any
+        -- world-tile cursor selection — exactly as the legacy unit
+        -- watcher did (unit_info_panel.lua), which is suppressed under v2.
+        -- Without this the tile-info watcher keeps a stale tile readout
+        -- alive in the (suppressed) shared panel, which then resurfaces
+        -- the moment the v2 pane hides and we unsuppress it (#136).
+        if count > 0 and hud and hud.worldId then
+            world.clearWorldCursorSelect(hud.worldId)
+        end
     end
 
     -- Stats sub-panel: rebuild content when the active unit OR sub-tab
