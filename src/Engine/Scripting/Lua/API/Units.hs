@@ -104,7 +104,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
-import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
+import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage, freshItemInstanceId)
 import World.Page.Types (WorldPageId(..))
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
@@ -134,7 +134,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
-import Item.Types (ItemInstance(..))
+import Item.Types (ItemInstance(..), itemMatches)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemWeapon(..), ItemBuff(..)
@@ -1520,6 +1520,7 @@ unitAddItemFn env = do
                         cond ← rollItemSpec (idConditionSpec def)
                                             (statRNGRef env)
                         wght ← rollItemWeight def (statRNGRef env)
+                        iid ← freshItemInstanceId env
                         let inst' = ItemInstance
                                 { iiDefName     = defName
                                 , iiCurrentFill = clampedFill
@@ -1528,6 +1529,7 @@ unitAddItemFn env = do
                                 , iiWeight      = wght
                                 , iiSharpness   = 100.0
                                 , iiContents    = []
+                                , iiInstanceId  = iid
                                 }
                         atomicModifyIORef' (unitManagerRef env) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -1612,6 +1614,21 @@ popFirstByNameIx = go 0
 --   graceful degradation, never a crash.
 insertAt ∷ Int → a → [a] → [a]
 insertAt i x xs = let (pre, post) = splitAt i xs in pre ++ x : post
+
+-- | Like 'popFirstByNameIx' but matches on an arbitrary predicate, so a
+--   caller can target a specific 'iiInstanceId' (#67) instead of the
+--   first defName match. Same all-or-nothing index reporting so a
+--   rolled-back transfer can splice the instance back at its original
+--   slot. Pair with 'itemMatches' to get id-then-defName fallback.
+popFirstWhereIx ∷ (ItemInstance → Bool) → [ItemInstance]
+                → Maybe (ItemInstance, Int, [ItemInstance])
+popFirstWhereIx p = go 0
+  where
+    go _ [] = Nothing
+    go i (x:xs)
+        | p x       = Just (x, i, xs)
+        | otherwise = fmap (\(it, j, rest) → (it, j, x:rest))
+                           (go (i + 1) xs)
 
 -- | unit.dropEquipmentToGround(uid, slotId) → bool
 --
@@ -1805,11 +1822,16 @@ unitDepositToCargoFn env = do
     uidArg  ← Lua.tointeger 1
     bidArg  ← Lua.tointeger 2
     nameArg ← Lua.tostring 3
+    -- Optional 4th arg: deposit the EXACT inventory instance (#67), so a
+    -- merged "Store" row stores the canteen the player sees, not the
+    -- first defName match. Absent/0 → first match (AI auto-store).
+    instArg ← Lua.tointeger 4
     case (uidArg, bidArg, nameArg) of
         (Just nU, Just nB, Just nameBS) → do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8 nameBS
+                wantId  = maybe 0 fromIntegral instArg
             -- Capacity pre-check: read-only snapshot. Weighs the ACTUAL
             -- ItemInstance that will be popped below (the first match in
             -- the unit's inventory) via itemTotalWeight, so fill and
@@ -1822,10 +1844,11 @@ unitDepositToCargoFn env = do
                 itemMgr ← readIORef (itemManagerRef env)
                 um      ← readIORef (unitManagerRef env)
                 pure $ fromMaybe False $ do
-                    inst       ← HM.lookup bid (bmInstances bm)
-                    def        ← HM.lookup (biDefName inst) (bmDefs bm)
-                    u          ← HM.lookup uid (umInstances um)
-                    (item, _)  ← popFirstByName defName (uiInventory u)
+                    inst         ← HM.lookup bid (bmInstances bm)
+                    def          ← HM.lookup (biDefName inst) (bmDefs bm)
+                    u            ← HM.lookup uid (umInstances um)
+                    (item, _, _) ← popFirstWhereIx (itemMatches wantId defName)
+                                                   (uiInventory u)
                     let cap     = bdStorageCapacity def
                         current = sum (map (itemTotalWeight itemMgr)
                                            (biStorage inst))
@@ -1838,7 +1861,8 @@ unitDepositToCargoFn env = do
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
                         Just u →
-                            case popFirstByNameIx defName (uiInventory u) of
+                            case popFirstWhereIx (itemMatches wantId defName)
+                                                 (uiInventory u) of
                                 Nothing → (um, Nothing)
                                 Just (item, ix, newInv) →
                                     let u' = u { uiInventory = newInv }
@@ -1904,16 +1928,23 @@ unitWithdrawFromCargoFn env = do
     uidArg  ← Lua.tointeger 1
     bidArg  ← Lua.tointeger 2
     nameArg ← Lua.tostring 3
+    -- Optional 4th arg: withdraw the EXACT stored instance (#67) the
+    -- player clicked in the cargo panel, not the first defName match.
+    -- The id targets an item in the BUILDING's storage (exposed by
+    -- building.getStorage). Absent/0 → first match.
+    instArg ← Lua.tointeger 4
     case (uidArg, bidArg, nameArg) of
         (Just nU, Just nB, Just nameBS) → do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8 nameBS
+                wantId  = maybe 0 fromIntegral instArg
             mItem ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
                     Just inst →
-                        case popFirstByNameIx defName (biStorage inst) of
+                        case popFirstWhereIx (itemMatches wantId defName)
+                                             (biStorage inst) of
                             Nothing → (bm, Nothing)
                             Just (item, ix, newStorage) →
                                 let inst' = inst { biStorage = newStorage }
@@ -3256,17 +3287,22 @@ unitGetItemContentsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetItemContentsFn env = do
     idArg   ← Lua.tointeger 1
     nameArg ← Lua.tostring 2
+    -- Optional 3rd arg: target a specific container instance by id (#67),
+    -- so two same-def kits don't show each other's contents. Absent/0 →
+    -- first inventory item matching defName (AI / tooltip callers).
+    instArg ← Lua.tointeger 3
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
-            let uid  = UnitId (fromIntegral n)
-                want = TE.decodeUtf8 nameBS
+            let uid    = UnitId (fromIntegral n)
+                want   = TE.decodeUtf8 nameBS
+                wantId = maybe 0 fromIntegral instArg
             mRes ← Lua.liftIO $ do
                 um      ← readIORef (unitManagerRef env)
                 itemMgr ← readIORef (itemManagerRef env)
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → Nothing
                     Just inst →
-                        case [ i | i ← uiInventory inst, iiDefName i ≡ want ] of
+                        case [ i | i ← uiInventory inst, itemMatches wantId want i ] of
                             (kit : _) → Just (iiContents kit, itemMgr)
                             []        → Nothing
             case mRes of
@@ -3901,6 +3937,11 @@ unitGetInventoryFn env = do
                             mContainer = mDef >>= idContainer
                         Lua.pushstring (TE.encodeUtf8 name)
                         Lua.setfield (-2) "defName"
+                        -- Process-unique identity so right-click actions
+                        -- (equip / store / contents) target THIS instance,
+                        -- not the first inventory match by defName (#67).
+                        Lua.pushinteger (fromIntegral (iiInstanceId inst))
+                        Lua.setfield (-2) "instanceId"
                         Lua.pushstring (TE.encodeUtf8 displayName)
                         Lua.setfield (-2) "displayName"
                         Lua.pushboolean broken

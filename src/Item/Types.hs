@@ -7,6 +7,7 @@ module Item.Types
     , ItemArmor(..)
     , ItemBuff(..)
     , ItemInstance(..)
+    , itemMatches
     , itemTotalWeight
     , ItemManager(..)
     , emptyItemManager
@@ -212,7 +213,34 @@ data ItemInstance = ItemInstance
                                 --   items. Recursive (a kit could hold a
                                 --   kit); serialised via the same instance.
                                 --   Appended for save v42.
+    , iiInstanceId  ∷ !Word64
+                                -- ^ Process-unique identity for THIS physical
+                                --   item, stamped from a monotonic counter at
+                                --   genuine creation (rolls, spawns) and
+                                --   PRESERVED verbatim through every move
+                                --   (equip / store / withdraw / transfer /
+                                --   drop). Lets the UI target the exact
+                                --   instance the player clicked instead of the
+                                --   first inventory entry matching a defName,
+                                --   so same-def items with different fill /
+                                --   sharpness never act on the wrong one
+                                --   (#67). 0 = unassigned (never minted; only a
+                                --   legacy/default sentinel). The counter is
+                                --   persisted as sdNextItemInstanceId so ids
+                                --   stay unique across save/load. Field order
+                                --   is load-bearing (positional Generic
+                                --   Serialize) — appended for save v55.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | Target predicate for an inventory action (#67). When the caller
+--   supplies a unique instance id (>0) it wins — the action hits exactly
+--   that physical item, so two same-def instances with different fill /
+--   sharpness never get confused. Id 0 means "no id given" (legacy / AI
+--   callers) and falls back to the historical first-match-by-defName.
+itemMatches ∷ Word64 → Text → ItemInstance → Bool
+itemMatches iid name it
+    | iid > 0   = iiInstanceId it ≡ iid
+    | otherwise = iiDefName it ≡ name
 
 -- | Total carried mass of an item (kg), INCLUDING its container
 --   contents, computed recursively. Empty weight (iiWeight) + the mass

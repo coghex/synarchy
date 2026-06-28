@@ -19,7 +19,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
 import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
@@ -549,6 +549,7 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
             qual ← rollItemSpec (idQualitySpec iDef)   (statRNGRef env)
             cond ← rollItemSpec (idConditionSpec iDef) (statRNGRef env)
             wght ← rollItemWeight iDef (statRNGRef env)
+            iid ← freshItemInstanceId env
             let inst = ItemInstance
                     { iiDefName     = defName
                     , iiCurrentFill = 0
@@ -557,6 +558,7 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
                     , iiWeight      = wght
                     , iiSharpness   = 100.0
                     , iiContents    = []
+                    , iiInstanceId  = iid
                     }
             gis ← readIORef (wsGroundItemsRef ws)
             (px, py) ← pickScatterPos env gis

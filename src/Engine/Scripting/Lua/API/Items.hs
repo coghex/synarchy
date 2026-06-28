@@ -23,7 +23,7 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Directory (doesFileExist)
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv(..), activeWorldState, freshItemInstanceId)
 import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
@@ -251,6 +251,7 @@ itemSpawnGroundFn env = do
                 (Just iDef, Just ws) → do
                     wght ← Lua.liftIO $
                         rollItemWeight iDef (statRNGRef env)
+                    iid ← Lua.liftIO $ freshItemInstanceId env
                     let inst = ItemInstance
                             { iiDefName = name
                             , iiCurrentFill = fill
@@ -259,6 +260,7 @@ itemSpawnGroundFn env = do
                             , iiWeight = wght
                             , iiSharpness = 100.0
                             , iiContents = []
+                            , iiInstanceId = iid
                             }
                     gid ← Lua.liftIO $
                         atomicModifyIORef' (wsGroundItemsRef ws) $

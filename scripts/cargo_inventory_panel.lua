@@ -96,14 +96,16 @@ end
 -- Helpers
 -----------------------------------------------------------
 
--- Stack identical entries by exact (defName, quality, condition).
--- Same rule as the unit-info inventory so a 100% motor and a 99%
--- motor remain visually distinct rows.
+-- Stack identical entries by exact (defName, quality, condition, fill).
+-- Same rule as the unit-info inventory so a 100% motor and a 99% motor —
+-- or two canteens at different fill — remain visually distinct rows, and
+-- each row targets its own stored instance on withdraw (#67).
 local function stackKey(it)
     return table.concat({
         it.defName,
-        tostring(it.quality   or "_"),
-        tostring(it.condition or "_"),
+        tostring(it.quality     or "_"),
+        tostring(it.condition   or "_"),
+        tostring(it.currentFill or "_"),
     }, "|")
 end
 
@@ -133,8 +135,11 @@ local function contentHash(bid)
     local parts = { tostring(#stored) }
     for i, it in ipairs(stored) do
         parts[#parts + 1] = it.defName or "?"
-        parts[#parts + 1] = tostring(it.quality   or "_")
-        parts[#parts + 1] = tostring(it.condition or "_")
+        parts[#parts + 1] = tostring(it.quality     or "_")
+        parts[#parts + 1] = tostring(it.condition   or "_")
+        -- Fill in the hash so a fill-only change (e.g. a deposited
+        -- canteen at a new level) forces a panel rebuild (#67).
+        parts[#parts + 1] = tostring(it.currentFill or "_")
         if i > 200 then break end
     end
     return table.concat(parts, ",")
@@ -622,6 +627,7 @@ function cargoInventoryPanel.handleItemRightClick(elemHandle)
 
     local bid     = s.bid
     local defName = row.item.defName
+    local instId  = row.item.instanceId
     local target  = adjacentSelectedUnit(bid)
 
     local items = {}
@@ -631,7 +637,7 @@ function cargoInventoryPanel.handleItemRightClick(elemHandle)
         items[1] = {
             label    = "Withdraw with " .. who,
             callback = function()
-                unit.withdrawFromCargo(target, bid, defName)
+                unit.withdrawFromCargo(target, bid, defName, instId)
                 cargoInventoryPanel.state.lastHash = ""
             end,
         }

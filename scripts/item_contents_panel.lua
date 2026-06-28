@@ -68,6 +68,7 @@ itemContentsPanel.state = itemContentsPanel.state or {
     open        = false,
     uid         = nil,
     defName     = nil,
+    instanceId  = nil,
     mx          = 0,
     my          = 0,
     panelId     = nil,
@@ -94,8 +95,8 @@ end
 
 -- Cheap snapshot we hash to decide whether a rebuild is needed
 -- (contents change when a medic draws a bandage / returns a tool).
-local function contentHash(uid, defName)
-    local rows = unit.getItemContents(uid, defName)
+local function contentHash(uid, defName, instanceId)
+    local rows = unit.getItemContents(uid, defName, instanceId)
     if not rows then return "__gone__" end
     local parts = { tostring(#rows) }
     for _, r in ipairs(rows) do
@@ -352,7 +353,7 @@ end
 -----------------------------------------------------------
 -- Open / refresh
 -----------------------------------------------------------
-local function buildLayout(uid, defName, mx, my)
+local function buildLayout(uid, defName, mx, my, instanceId)
     local s = itemContentsPanel.state
     local h = itemContentsPanel.hud
     if not h or not h.page then return end
@@ -362,7 +363,7 @@ local function buildLayout(uid, defName, mx, my)
             "assets/textures/hud/utility/white.png")
     end
 
-    local rows = unit.getItemContents(uid, defName) or {}
+    local rows = unit.getItemContents(uid, defName, instanceId) or {}
 
     local uiscale = scale.get()
     local panelW  = math.floor(PANEL_W_BASE * uiscale)
@@ -408,38 +409,43 @@ local function buildLayout(uid, defName, mx, my)
     buildTitle(cx, cy, defName, rows)
     buildRows(cx, cy + titleH + subH + 8, cw, rows)
 
-    s.lastHash = contentHash(uid, defName)
+    s.lastHash = contentHash(uid, defName, s.instanceId)
 end
 
-function itemContentsPanel.openFor(uid, defName, mx, my)
+-- instanceId (optional) targets the EXACT container the player clicked,
+-- so two same-def kits don't show each other's contents (#67). Falls
+-- back to first-by-defName when nil.
+function itemContentsPanel.openFor(uid, defName, mx, my, instanceId)
     if not uid or not defName then return end
     -- A new request always tears down the prior popup first (singleton),
     -- so a stale/invalid request never leaves an earlier container's
     -- popup on screen. Close BEFORE the existence guard below.
     itemContentsPanel.closeIfOpen()
     -- Don't open for a container that doesn't exist: the unit holds no
-    -- inventory item matching defName. unit.getItemContents returns nil
-    -- in that case; an existing-but-empty container returns a table, so
-    -- this only rejects genuinely missing containers (the popup still
-    -- opens and shows "(empty)" for a real, empty kit).
-    if not unit.getItemContents(uid, defName) then return end
+    -- inventory item matching defName/instanceId. unit.getItemContents
+    -- returns nil in that case; an existing-but-empty container returns a
+    -- table, so this only rejects genuinely missing containers (the popup
+    -- still opens and shows "(empty)" for a real, empty kit).
+    if not unit.getItemContents(uid, defName, instanceId) then return end
     local s = itemContentsPanel.state
-    s.open    = true
-    s.uid     = uid
-    s.defName = defName
-    s.mx      = mx
-    s.my      = my
-    buildLayout(uid, defName, mx, my)
+    s.open       = true
+    s.uid        = uid
+    s.defName    = defName
+    s.instanceId = instanceId
+    s.mx         = mx
+    s.my         = my
+    buildLayout(uid, defName, mx, my, instanceId)
 end
 
 function itemContentsPanel.closeIfOpen()
     local s = itemContentsPanel.state
     if not s.open then return end
     destroyAll()
-    s.open     = false
-    s.uid      = nil
-    s.defName  = nil
-    s.lastHash = ""
+    s.open       = false
+    s.uid        = nil
+    s.defName    = nil
+    s.instanceId = nil
+    s.lastHash   = ""
 end
 
 function itemContentsPanel.isOpen()
@@ -453,13 +459,13 @@ end
 function itemContentsPanel.update(dt)
     local s = itemContentsPanel.state
     if not s.open or not s.uid or not s.defName then return end
-    local h = contentHash(s.uid, s.defName)
+    local h = contentHash(s.uid, s.defName, s.instanceId)
     if h == "__gone__" then
         itemContentsPanel.closeIfOpen()
         return
     end
     if h ~= s.lastHash then
-        buildLayout(s.uid, s.defName, s.mx, s.my)
+        buildLayout(s.uid, s.defName, s.mx, s.my, s.instanceId)
     end
 end
 

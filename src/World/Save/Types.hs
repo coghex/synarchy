@@ -107,7 +107,7 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 54  -- v54: structure edits (WeSetStructure/WeClearStructure) + sdTexPalette
+currentSaveVersion = 55  -- v55: item-instance identity (iiInstanceId) + sdNextItemInstanceId (#67)
                          -- v52: UnitSimState gains usJumpApex (leap arc state)
                          -- v50: UnitInstance gains uiImmuneResponse + uiImmunities (immunity system)
                          -- v49: Wound gains woundInfectionType (data-driven infections)
@@ -218,6 +218,12 @@ data SaveData = SaveData
         --   on load. Stable ids → no per-object remap. (Structures
         --   themselves ride sdEdits as WeSetStructure — no separate
         --   structure channel.)
+    -- v55 fields (item-instance identity, #67):
+    , sdNextItemInstanceId ∷ !Word64
+        -- ^ Snapshot of 'nextItemInstanceIdRef' at save time. Restored
+        --   (max'd, never lowered) on load so post-load item creation
+        --   continues above every saved 'iiInstanceId' and can't reuse an
+        --   id still held by a loaded item.
     } deriving (Show, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`

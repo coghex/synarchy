@@ -14,7 +14,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.List (foldl')
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
 import Unit.Anim (stateKey)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
@@ -969,6 +969,7 @@ rollInstance env itemMgr name mFill =
                        , _ ← [1 .. max 0 cCount] ]
             contentMaybes ← mapM (\(cn, cf) → rollInstance env itemMgr cn cf) reqs
             let contents = [ c | Just c ← contentMaybes ]
+            iid ← freshItemInstanceId env
             return $ Just ItemInstance
                 { iiDefName     = name
                 , iiCurrentFill = fill
@@ -977,6 +978,7 @@ rollInstance env itemMgr name mFill =
                 , iiWeight      = wght
                 , iiSharpness   = 100.0
                 , iiContents    = contents
+                , iiInstanceId  = iid
                 }
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
@@ -1037,6 +1039,7 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                              (statRNGRef env)
                                     wght ← rollItemWeight iDef
                                              (statRNGRef env)
+                                    iid ← freshItemInstanceId env
                                     return $ HM.insert slotId
                                         ItemInstance
                                           { iiDefName     = itemName
@@ -1046,6 +1049,7 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           , iiWeight      = wght
                                           , iiSharpness   = 100.0
                                           , iiContents    = []
+                                          , iiInstanceId  = iid
                                           }
                                         m
                 ) (return HM.empty) entries
@@ -1110,6 +1114,7 @@ buildStartingAccessories env logger itemMgr names = do
             qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
             cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
             wght ← rollItemWeight def (statRNGRef env)
+            iid ← freshItemInstanceId env
             return $ Just ItemInstance
                 { iiDefName     = name
                 , iiCurrentFill = 0
@@ -1118,6 +1123,7 @@ buildStartingAccessories env logger itemMgr names = do
                 , iiWeight      = wght
                 , iiSharpness   = 100.0
                 , iiContents    = []
+                , iiInstanceId  = iid
                 }
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)

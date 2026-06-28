@@ -84,6 +84,9 @@ initializeEngineWith logBackend = do
   assetPool ← defaultAssetPool
   assetPoolRef ← newIORef assetPool
   nextObjectIdRef ← newIORef 0
+  -- Item-instance ids start at 1 (0 is the "unassigned" sentinel); the
+  -- counter is restored/max'd from sdNextItemInstanceId on load (#67).
+  nextItemInstanceIdRef ← newIORef 1
   texNameRegRef ← newIORef emptyTextureNameRegistry
   
   inputStateRef ← newIORef defaultInputState
@@ -177,6 +180,7 @@ initializeEngineWith logBackend = do
         , assetPoolRef       = assetPoolRef
         , textureNameRegistryRef = texNameRegRef
         , nextObjectIdRef    = nextObjectIdRef
+        , nextItemInstanceIdRef = nextItemInstanceIdRef
         , fontCacheRef       = fontCache
         , inputStateRef      = inputStateRef
         , keyBindingsRef     = keyBindingsRef

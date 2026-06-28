@@ -2447,6 +2447,7 @@ local function collectInventoryAndEquipment(uid)
     for _, it in ipairs(inv) do
         out[#out + 1] = {
             defName      = it.defName,
+            instanceId   = it.instanceId,
             displayName  = it.displayName or it.defName,
             weight       = it.weight or 0,
             category     = it.category or "Misc",
@@ -2481,6 +2482,7 @@ local function collectInventoryAndEquipment(uid)
         if it then
             out[#out + 1] = {
                 defName       = it.defName,
+                instanceId    = it.instanceId,
                 displayName   = it.displayName or it.defName,
                 weight        = it.weight or 0,
                 category      = it.category or "Misc",
@@ -2505,6 +2507,7 @@ local function collectInventoryAndEquipment(uid)
     for i, it in ipairs(accs) do
         out[#out + 1] = {
             defName        = it.defName,
+            instanceId     = it.instanceId,
             displayName    = it.displayName or it.defName,
             weight         = it.weight or 0,
             category       = it.category or "Misc",
@@ -2532,17 +2535,23 @@ end
 -- they never collapse into a stack (each occupies a distinct slot).
 -- Non-equipped items only merge when their defName + quality +
 -- condition match exactly — a 100% motor and a 99% motor stay on two
--- rows so the player sees the real spread of conditions. Sharpness is
--- added ONLY for weapons (the only items whose tooltip shows it) so two
--- weapons with differing edge wear likewise split; armor and other gear
--- also carry a combat-mutated iiSharpness but never display it, so
--- splitting their rows on it would be an invisible, confusing reason.
+-- rows so the player sees the real spread of conditions. currentFill is
+-- in the key so two canteens with different fill split into separate
+-- rows (the fill is shown per row, and each row targets its own
+-- instance — #67). Sharpness is added ONLY for weapons (the only items
+-- whose tooltip shows it) so two weapons with differing edge wear
+-- likewise split; armor and other gear also carry a combat-mutated
+-- iiSharpness but never display it, so splitting their rows on it would
+-- be an invisible, confusing reason. Items that DO merge are
+-- interchangeable, so acting on the stack's representative instanceId is
+-- always correct.
 local function stackKey(it)
     if it.equipped then return nil end
     return table.concat({
         it.defName,
-        tostring(it.quality   or "_"),
-        tostring(it.condition or "_"),
+        tostring(it.quality     or "_"),
+        tostring(it.condition   or "_"),
+        tostring(it.currentFill or "_"),
         it.weapon and tostring(it.sharpness or "_") or "_",
     }, "|")
 end
@@ -3044,7 +3053,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
         items[1] = {
             label    = "Equip",
             callback = function()
-                equipment.equipAccessory(uid, item.defName)
+                equipment.equipAccessory(uid, item.defName, item.instanceId)
                 unitInfoV2.lastInvKey   = nil
                 unitInfoV2.lastEquipKey = nil
             end,
@@ -3061,7 +3070,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
             items[1] = {
                 label    = "Equip",
                 callback = function()
-                    equipment.equip(uid, slotId, item.defName)
+                    equipment.equip(uid, slotId, item.defName, item.instanceId)
                     unitInfoV2.lastInvKey   = nil
                     unitInfoV2.lastEquipKey = nil
                 end,
@@ -3075,7 +3084,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 sub[#sub + 1] = {
                     label    = s.name,
                     callback = function()
-                        equipment.equip(uid, s.id, item.defName)
+                        equipment.equip(uid, s.id, item.defName, item.instanceId)
                         unitInfoV2.lastInvKey   = nil
                         unitInfoV2.lastEquipKey = nil
                     end,
@@ -3100,7 +3109,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                     mx = mx * (fbW / ww)
                     my = my * (fbH / wh)
                 end
-                icp.openFor(uid, item.defName, mx, my)
+                icp.openFor(uid, item.defName, mx, my, item.instanceId)
             end,
         }
     end
@@ -3115,7 +3124,8 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
             items[#items + 1] = {
                 label    = "Store in " .. c.displayName,
                 callback = function()
-                    unit.depositToCargo(uid, c.bid, item.defName)
+                    unit.depositToCargo(uid, c.bid, item.defName,
+                                        item.instanceId)
                     unitInfoV2.lastInvKey = nil
                 end,
             }
@@ -3163,12 +3173,13 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
     for _, it in ipairs(inv) do
         if it.kind == rec.slot.kind then
             local defName    = it.defName
+            local instId     = it.instanceId
             local displayNm  = it.displayName or it.defName
             equipSubmenu[#equipSubmenu + 1] = {
                 label    = displayNm,
                 icon     = it.iconTex,
                 callback = function()
-                    equipment.equip(uid, rec.slotId, defName)
+                    equipment.equip(uid, rec.slotId, defName, instId)
                     unitInfoV2.lastInvKey   = nil
                     unitInfoV2.lastEquipKey = nil
                 end,
