@@ -53,6 +53,7 @@ import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
+import Engine.Scripting.Lua.API.Construct
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
@@ -422,6 +423,22 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "floorZAt" (structureFloorZAtFn env)
   registerLuaFunction "hasAt"    (structureHasAtFn env)
   Lua.setglobal (Lua.Name "structure")
+
+  -- Construction designation tool (#95). Mirrors the mine-designation
+  -- API: the tool drives setAnchor/clearAnchor/designate, the build AI
+  -- (#96) drives getPendingJobs/nearestDesignation/setJobStatus.
+  Lua.newtable
+  registerLuaFunction "setAnchor"          (constructSetAnchorFn env)
+  registerLuaFunction "clearAnchor"        (constructClearAnchorFn env)
+  registerLuaFunction "designate"          (constructDesignateFn env)
+  registerLuaFunction "cancelDesignation"  (constructCancelDesignationFn env)
+  registerLuaFunction "getPendingJobs"     (constructGetPendingJobsFn env)
+  registerLuaFunction "getDesignationAt"   (constructGetDesignationAtFn env)
+  registerLuaFunction "getDesignationCount" (constructGetDesignationCountFn env)
+  registerLuaFunction "nearestDesignation" (constructNearestDesignationFn env)
+  registerLuaFunction "setJobStatus"       (constructSetJobStatusFn env)
+  registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
+  Lua.setglobal (Lua.Name "construction")
 
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.

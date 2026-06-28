@@ -54,7 +54,13 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldSetMineAnchorCommand
                                    , handleWorldClearMineAnchorCommand
                                    , handleWorldDesignateMineCommand
-                                   , handleWorldSetMineDesignateTextureCommand)
+                                   , handleWorldSetMineDesignateTextureCommand
+                                   , handleWorldSetConstructAnchorCommand
+                                   , handleWorldClearConstructAnchorCommand
+                                   , handleWorldDesignateConstructCommand
+                                   , handleWorldCancelConstructCommand
+                                   , handleWorldSetConstructStatusCommand
+                                   , handleWorldSetConstructDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
@@ -129,6 +135,18 @@ handleWorldCommand env logger (WorldDesignateMine pageId gx1 gy1 gx2 gy2)
   = handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2
 handleWorldCommand env logger (WorldSetMineDesignateTexture pageId texHandle)
   = handleWorldSetMineDesignateTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetConstructAnchor pageId gx gy)
+  = handleWorldSetConstructAnchorCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldClearConstructAnchor pageId)
+  = handleWorldClearConstructAnchorCommand env logger pageId
+handleWorldCommand env logger (WorldDesignateConstruct pageId gx1 gy1 gx2 gy2 tgt)
+  = handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
+handleWorldCommand env logger (WorldCancelConstruct pageId gx gy)
+  = handleWorldCancelConstructCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st)
+  = handleWorldSetConstructStatusCommand env logger pageId gx gy st
+handleWorldCommand env logger (WorldSetConstructDesignateTexture pageId cat texHandle)
+  = handleWorldSetConstructDesignateTextureCommand env logger pageId cat texHandle
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
   = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)

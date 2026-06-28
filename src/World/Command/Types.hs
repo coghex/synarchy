@@ -17,6 +17,7 @@ import World.Material.Id (MaterialId(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
+import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
 import World.Save.Types (SaveData(..))
 import World.Texture.Types (WorldTextureType(..))
 import World.Fluid.Types (FluidType(..), FluidCell(..))
@@ -90,6 +91,29 @@ data WorldCommand
         --   surface z; tiles in unloaded chunks are skipped.
     | WorldSetMineDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed designation markers.
+    | WorldSetConstructAnchor WorldPageId Int Int
+        -- ^ Construction tool (#95): first click anchors the designation
+        --   rectangle at (gx, gy). The render pass previews anchor→hover.
+    | WorldClearConstructAnchor WorldPageId
+        -- ^ Construction tool: cancel the pending rectangle (right-click /
+        --   Escape / tool switch).
+    | WorldDesignateConstruct WorldPageId Int Int Int Int ConstructTarget
+        -- ^ Construction tool: second click commits the rectangle
+        --   (gx1,gy1)–(gx2,gy2) for the given build target. Tiles in
+        --   loaded chunks land in wsConstructDesignationsRef with their
+        --   surface z; tiles in unloaded chunks are skipped. Per-z-level
+        --   like mine designation. Building targets only mark the anchor
+        --   tile (a building is one footprint, not a rectangle of them).
+    | WorldCancelConstruct WorldPageId Int Int
+        -- ^ Remove the construction designation at (gx, gy), if any
+        --   (cancel mode / right-click on an existing blueprint).
+    | WorldSetConstructStatus WorldPageId Int Int ConstructStatus
+        -- ^ Build AI (#96): mark a designation Claimed / Complete. A
+        --   Complete designation is removed (the structure/building it
+        --   represents now exists).
+    | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
+        -- ^ Ghost texture for committed construction designations, keyed
+        --   by target category ("structure" | "building").
     | WorldDigTile WorldPageId Int Int Float Float Float Float Float
         -- ^ Apply dig progress to the designated tile at (gx, gy):
         --   pageId gx gy uxPos uyPos amount minerSkill perception.

@@ -28,6 +28,7 @@ import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
+import World.Construct.Types (ConstructDesignations)
 import World.Spoil.Types (SpoilPiles)
 import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -109,7 +110,9 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 59  -- v59: SaveData restructured — per-world state moved off
+currentSaveVersion = 60  -- v60: WorldPageSave gains wpsConstructDesignations
+                         --      (construction designation layer, #95).
+                         -- v59: SaveData restructured — per-world state moved off
                          --      SaveData into a new WorldPageSave record;
                          --      SaveData now holds globals + sdActivePage +
                          --      sdVisiblePages + sdWorlds ([WorldPageSave]).
@@ -188,6 +191,10 @@ data WorldPageSave = WorldPageSave
         -- ^ Mine designations incl. mid-dig corner progress. Restored
         --   straight into wsMineDesignationsRef; markers re-render from
         --   the stored z, so no chunk loading is required first.
+    , wpsConstructDesignations ∷ !ConstructDesignations
+        -- ^ Construction designations (#95): build target + status +
+        --   progress per tile. Like mine designations, ghosts re-render
+        --   from the stored z, so restoration needs no chunk loading.
     , wpsGroundItems  ∷ !GroundItems
         -- ^ Items lying in the world. Full ItemInstances + float
         --   positions; resting height derives from terrain at render,

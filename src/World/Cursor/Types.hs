@@ -38,6 +38,15 @@ data CursorState = CursorState
     -- | Texture for committed mine-designation markers (set from Lua
     --   like the cursor textures; rendered over designated tiles).
     , mineDesignTexture ∷ Maybe TextureHandle
+    -- | Construction-designation tool (#95): first-click anchor tile.
+    --   Mirrors 'mineAnchor' — the render pass previews the
+    --   anchor→hover rectangle until the second click commits it.
+    , constructAnchor ∷ Maybe (Int, Int)
+    -- | Ghost textures for committed construction designations, one per
+    --   target category (structure pieces vs buildings) so the blueprint
+    --   reads differently for each. Set from Lua like the cursor textures.
+    , constructStructTexture ∷ Maybe TextureHandle
+    , constructBuildingTexture ∷ Maybe TextureHandle
     -- | Ground item selected in the world view (white outline +
     --   info panel). Mutually exclusive with unit/building selection
     --   (enforced by the Lua click routing).
@@ -63,5 +72,8 @@ emptyCursorState =
         , worldSelectNow = False
         , mineAnchor = Nothing
         , mineDesignTexture = Nothing
+        , constructAnchor = Nothing
+        , constructStructTexture = Nothing
+        , constructBuildingTexture = Nothing
         , selectedGroundItem = Nothing
         }
