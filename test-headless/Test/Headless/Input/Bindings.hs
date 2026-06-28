@@ -134,10 +134,15 @@ spec = do
             keyMatchesAction "Shift" "altAction" b (heldState [GLFW.Key'RightShift])
                 `shouldBe` False
 
-        it "falls back to all candidates when nothing is recorded as held" $
-            -- A press whose key state hasn't landed yet still dispatches.
-            keyMatchesAction "Shift" "altAction" b (heldState [])
+        it "unambiguous key still matches if its press hasn't landed yet" $
+            -- A fast tap on a single-key event is never dropped.
+            keyMatchesAction "Q" "rotateCCW" b (heldState [])
                 `shouldBe` True
+
+        it "merged modifier with no held side does NOT guess (returns false)" $
+            -- Never fire a side-specific binding on a side we can't confirm.
+            keyMatchesAction "Shift" "altAction" b (heldState [])
+                `shouldBe` False
 
     describe "save round-trip" $
         it "encodes then decodes back to the same bindings" $ do

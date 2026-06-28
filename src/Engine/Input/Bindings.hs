@@ -138,15 +138,24 @@ getKeysForAction = Map.lookup
 --   like @LeftShift@. We disambiguate against the live 'InputState': of the
 --   GLFW keys the event name covers, keep only those actually held, so the
 --   match is side-specific in exactly the way 'isActionDown'/'checkKeyDown'
---   are. If none are recorded as held (a release/timing edge), we fall back
---   to all candidates so a genuine press is never dropped.
+--   are. The input thread publishes the held key to 'InputState' before
+--   queuing the Lua event (see "Engine.Input.Thread"), so the held side is
+--   reliably visible here.
+--
+--   Fallback rule for the degenerate case where no candidate is recorded as
+--   held (a press already released before the Lua thread drained the event):
+--   an *unambiguous* single-key event still matches, so a fast tap is never
+--   dropped; a *merged modifier* (more than one candidate) returns 'False'
+--   rather than guess which side — guessing is exactly the wrong-side bug.
 keyMatchesAction ∷ Text → Text → KeyBindings → InputState → Bool
 keyMatchesAction keyName action bindings st =
     case Map.lookup action bindings of
         Just boundKeys →
             let candidates = parseKeyName keyName
                 held       = filter isHeld candidates
-                effective  = if null held then candidates else held
+                effective  = case (held, candidates) of
+                               ([], [c]) → [c]   -- unambiguous: tap fallback
+                               _         → held  -- else require a held key
             in any (\b → any (`elem` effective) (parseKeyName b)) boundKeys
         Nothing → False
   where isHeld g = maybe False keyPressed (Map.lookup g (inpKeyStates st))
