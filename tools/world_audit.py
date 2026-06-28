@@ -378,14 +378,21 @@ def check_lake_hole(grid: dict[tuple[int, int], dict[str, Any]],
         if len(nbrs) < 4:
             continue
         if all(n["fluidType"] == "lake" for n in nbrs):
-            lake_surf = nbrs[0]["fluidSurf"]
-            # Only a depression below the water line is an unfilled hole;
-            # terrain at/above the surface is a flush islet (not a defect).
-            if lake_surf is None or tile["terrainZ"] >= lake_surf:
+            # A genuine hole is terrain below the LOWEST surrounding lake
+            # surface — water at that level would still flood it. If the
+            # terrain reaches any neighbour's waterline it's a flush
+            # islet/shore/saddle, not a hole. Compare against all four
+            # surfaces collectively so the result is independent of
+            # neighbour ordering (mirrors check_submerged_bump's min()).
+            surfs = [n["fluidSurf"] for n in nbrs if n["fluidSurf"] is not None]
+            if not surfs:
+                continue
+            min_surf = min(surfs)
+            if tile["terrainZ"] >= min_surf:
                 continue
             issues.append(Issue(
                 "LAKE_HOLE", x, y,
-                f"terrainZ={tile['terrainZ']} surrounded by lake (surf={lake_surf})",
+                f"terrainZ={tile['terrainZ']} surrounded by lake (minSurf={min_surf})",
             ))
 
 
