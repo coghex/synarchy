@@ -2631,7 +2631,12 @@ end
 -- depleting canteen redraws when its label needs to change, and
 -- stackCount so consuming one item from a stack of identical rows
 -- (grouped list keeps the same single entry) updates the "×N" label,
--- tab counts, and total-weight footer.
+-- tab counts, and total-weight footer. condition is included so a
+-- wear-degraded item refreshes its "condition: N%" tooltip and its
+-- condition<=0 broken overlay: equipped items merged into the "All" view
+-- are each their own row (stackKey returns nil for them), so a
+-- condition-only drop on equipped armor (gambeson / gloves / boots)
+-- wouldn't otherwise change any other field in this hash.
 local function computeInvKey(uid, activeTab, items)
     local parts = { tostring(uid or ""), activeTab or "" }
     for _, it in ipairs(items) do
@@ -2640,6 +2645,7 @@ local function computeInvKey(uid, activeTab, items)
             .. "/" .. tostring(it.stackCount or 1)
             .. "/" .. tostring(it.sharpness or 0)
             .. "/" .. tostring(it.weight or 0)
+            .. "/" .. tostring(it.condition or 0)
     end
     return table.concat(parts, "|")
 end
