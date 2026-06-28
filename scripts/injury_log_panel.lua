@@ -302,6 +302,8 @@ local DISPLAY_NAMES = {
 local function displayName(uid)
     if not uid then return "?" end
     local info = unit.getInfo(uid)
+    -- A named unit (acolyte) reads as its personal name (#264).
+    if info and info.name and info.name ~= "" then return info.name end
     if info and info.defName then
         local mapped = DISPLAY_NAMES[info.defName]
         if mapped then return mapped end
@@ -318,7 +320,11 @@ local TAB_SHORT_NAMES = {
 local function tabUnitName(uid)
     if not uid then return "Unit" end
     local info = unit.getInfo(uid)
-    local def  = info and info.defName
+    -- Named unit: first token of the personal name keeps the tab short (#264).
+    if info and info.name and info.name ~= "" then
+        return info.name:match("^(%S+)") or info.name
+    end
+    local def = info and info.defName
     if not def then return "Unit" end
     return TAB_SHORT_NAMES[def] or (def:sub(1, 1):upper() .. def:sub(2))
 end

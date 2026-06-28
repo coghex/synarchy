@@ -14,11 +14,13 @@ module Unit.Stats
     , boxMuller
     , effectiveStat
     , applySkillXP
+    , pickName
     ) where
 
 import UPrelude
+import qualified Data.Text as T
 import System.Random (StdGen, randomR)
-import Unit.Types (StatModifier(..))
+import Unit.Types (StatModifier(..), NamePool(..))
 
 -- | One standard-normal sample via Box-Muller. Returns (z, newGen).
 --   Only consumes two uniform draws; the second normal sample of the
@@ -82,3 +84,20 @@ rollStat base range g
                             (base + z * (range / 4))))
                 , g'
                 )
+
+-- | Draw a persistent display name from a name pool (#264). Picks one
+--   `given` name and, if the pool has any, one `family` name, joining
+--   them with a space. An empty given list yields "" (the unit stays
+--   unnamed and falls back to its species label in the UI).
+pickName ∷ NamePool → StdGen → (Text, StdGen)
+pickName pool g0 =
+    case npGiven pool of
+        [] → ("", g0)
+        givens →
+            let (gi, g1)  = randomR (0, length givens - 1) g0
+                given     = givens !! gi
+            in case npFamily pool of
+                [] → (given, g1)
+                fams →
+                    let (fi, g2) = randomR (0, length fams - 1) g1
+                    in (given <> T.pack " " <> (fams !! fi), g2)

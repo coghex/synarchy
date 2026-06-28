@@ -32,6 +32,8 @@ pickTex t cam inst def = fst (pickFrame t cam inst def)
 mkDef ∷ HM.HashMap Text Animation → UnitDef
 mkDef anims = UnitDef
     { udName          = "test-unit"
+    , udNamePool      = Nothing
+    , udDisplayName   = Nothing
     , udTexture       = h 0
     , udDirSprites    = Map.fromList [(DirS, h 1)]
     , udBaseWidth     = 0
@@ -57,6 +59,7 @@ mkDef anims = UnitDef
 mkInst ∷ Text → Double → UnitInstance
 mkInst animName start = UnitInstance
     { uiDefName     = "test-unit"
+    , uiName        = ""
     , uiPage        = WorldPageId "test"
     , uiTexture     = h 0
     , uiDirSprites  = Map.fromList [(DirS, h 1)]

@@ -133,6 +133,8 @@ local DISPLAY_NAMES = {
 local function displayName(uid)
     if not uid then return "?" end
     local info = unit.getInfo(uid)
+    -- A named unit (acolyte) reads as its personal name (#264).
+    if info and info.name and info.name ~= "" then return info.name end
     if info and info.defName then
         local mapped = DISPLAY_NAMES[info.defName]
         if mapped then return mapped end
