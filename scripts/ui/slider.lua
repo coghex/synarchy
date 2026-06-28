@@ -21,7 +21,12 @@ local texLeft  = nil
 local texTrack = nil
 local texRight = nil
 local texKnob  = nil
+local texHighlight = nil
 local assetsLoaded = false
+
+-- Hover overlay colour, matched to the dropdown/list highlight so the
+-- whole UI kit gives the same hover affordance.
+local HIGHLIGHT_COLOR = {0.3, 0.5, 0.8, 0.8}
 
 -- Drag state (only one slider can be dragged at a time)
 local draggingId = nil
@@ -38,6 +43,7 @@ function slider.init()
     texTrack = engine.loadTexture("assets/textures/ui/slider/slidertrack.png")
     texRight = engine.loadTexture("assets/textures/ui/slider/sliderright.png")
     texKnob  = engine.loadTexture("assets/textures/ui/slider/sliderknob.png")
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
 
     assetsLoaded = true
     engine.logDebug("Slider module initialized")
@@ -126,6 +132,8 @@ function slider.new(params)
         trackSpriteId = nil,
         rightCapId    = nil,
         knobSpriteId  = nil,
+        highlightId   = nil,
+        hovered       = false,
     }
 
     -- Clamp default
@@ -177,6 +185,21 @@ function slider.new(params)
     UI.setClickable(sl.knobSpriteId, true)
     UI.setOnClick(sl.knobSpriteId, KNOB_CALLBACK)
 
+    -- Hover highlight: a non-clickable overlay parented to the knob so
+    -- it tracks the knob automatically and resolves its hover target up
+    -- to the clickable knob (no flicker). Hidden until hovered.
+    sl.highlightId = UI.newSprite(
+        sl.name .. "_hl",
+        knobWidth, height,
+        texHighlight,
+        HIGHLIGHT_COLOR[1], HIGHLIGHT_COLOR[2],
+        HIGHLIGHT_COLOR[3], HIGHLIGHT_COLOR[4],
+        sl.page
+    )
+    UI.addChild(sl.knobSpriteId, sl.highlightId, 0, 0)
+    UI.setZIndex(sl.highlightId, 1)
+    UI.setVisible(sl.highlightId, false)
+
     -- Z-indices: track parts share one layer, knob sits above
     if sl.zIndex then
         UI.setZIndex(sl.leftCapId,     sl.zIndex)
@@ -203,6 +226,7 @@ function slider.destroy(id)
         draggingId = nil
     end
 
+    if sl.highlightId   then UI.deleteElement(sl.highlightId) end
     if sl.leftCapId     then UI.deleteElement(sl.leftCapId) end
     if sl.trackSpriteId then UI.deleteElement(sl.trackSpriteId) end
     if sl.rightCapId    then UI.deleteElement(sl.rightCapId) end
@@ -269,6 +293,11 @@ function slider.setVisible(id, visible)
     UI.setVisible(sl.trackSpriteId, visible)
     UI.setVisible(sl.rightCapId, visible)
     UI.setVisible(sl.knobSpriteId, visible)
+    -- Never leave a stale hover highlight on a hidden slider.
+    if not visible then
+        sl.hovered = false
+        UI.setVisible(sl.highlightId, false)
+    end
 end
 
 -----------------------------------------------------------
@@ -393,15 +422,36 @@ function slider.onMouseUp()
 end
 
 -----------------------------------------------------------
--- Hover (visual feedback — optional, stub for now)
+-- Hover (visual feedback)
 -----------------------------------------------------------
 
+-- Resolve a slider id from the knob or track element handle. Hovering
+-- either part highlights the knob — the grabbable affordance.
+function slider.findByElementHandle(elemHandle)
+    for id, sl in pairs(sliders) do
+        if sl.knobSpriteId == elemHandle or sl.trackSpriteId == elemHandle then
+            return id
+        end
+    end
+    return nil
+end
+
 function slider.onHoverEnter(elemHandle)
-    -- Could swap knob texture to a highlighted version
+    local id = slider.findByElementHandle(elemHandle)
+    if id then
+        local sl = sliders[id]
+        sl.hovered = true
+        UI.setVisible(sl.highlightId, true)
+    end
 end
 
 function slider.onHoverLeave(elemHandle)
-    -- Revert knob texture
+    local id = slider.findByElementHandle(elemHandle)
+    if id then
+        local sl = sliders[id]
+        sl.hovered = false
+        UI.setVisible(sl.highlightId, false)
+    end
 end
 
 return slider

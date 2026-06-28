@@ -20,12 +20,37 @@ local OPTION_CALLBACK       = "onToggleOptionClick"
 local groups      = {}   -- groupId -> group data
 local nextGroupId = 1
 
+local texHighlight = nil
+
+-- Hover overlay colour, matched to the dropdown/list highlight so the
+-- whole UI kit gives the same hover affordance.
+local HIGHLIGHT_COLOR = {0.3, 0.5, 0.8, 0.8}
+
 -----------------------------------------------------------
 -- Initialization (call once from ui_manager)
 -----------------------------------------------------------
 
 function toggle.init()
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
     engine.logDebug("Toggle module initialized")
+end
+
+-- Create a hidden hover-highlight overlay parented to a button/option
+-- sprite. As a child it tracks the sprite and resolves its hover target
+-- up to the clickable sprite (no flicker). Returns the overlay handle.
+local function makeHighlight(grp, parentSpriteId, label)
+    local hlId = UI.newSprite(
+        grp.name .. "_hl_" .. label,
+        grp.size, grp.size,
+        texHighlight,
+        HIGHLIGHT_COLOR[1], HIGHLIGHT_COLOR[2],
+        HIGHLIGHT_COLOR[3], HIGHLIGHT_COLOR[4],
+        grp.page
+    )
+    UI.addChild(parentSpriteId, hlId, 0, 0)
+    UI.setZIndex(hlId, 1)
+    UI.setVisible(hlId, false)
+    return hlId
 end
 
 -----------------------------------------------------------
@@ -185,6 +210,8 @@ local function openOptions(grp, btnIdx)
         popup.sprites[rank] = {
             spriteId    = spriteId,
             optionIndex = rank,
+            highlightId = makeHighlight(grp, spriteId,
+                "opt_" .. btnIdx .. "_" .. rank),
         }
     end
 
@@ -288,6 +315,7 @@ function toggle.new(params)
             texSelected = item.texSelected,
             tooltip     = item.tooltip,
             options     = opts,
+            highlightId = makeHighlight(grp, spriteId, (item.name or tostring(i))),
         }
 
         applyButtonTooltip(grp, i)
@@ -547,15 +575,37 @@ function toggle.dismissOpenPopups()
 end
 
 -----------------------------------------------------------
--- Hover (stubs)
+-- Hover (visual feedback)
 -----------------------------------------------------------
 
+-- Resolve the hover-highlight overlay for a button or open-popup option
+-- sprite handle. Returns nil if the handle isn't one of ours.
+local function highlightForHandle(elemHandle)
+    for _, grp in pairs(groups) do
+        for _, btn in ipairs(grp.buttons) do
+            if btn.spriteId == elemHandle then
+                return btn.highlightId
+            end
+        end
+        if grp.openPopup then
+            for _, opt in ipairs(grp.openPopup.sprites) do
+                if opt.spriteId == elemHandle then
+                    return opt.highlightId
+                end
+            end
+        end
+    end
+    return nil
+end
+
 function toggle.onHoverEnter(elemHandle)
-    -- TODO: optional hover highlight
+    local hlId = highlightForHandle(elemHandle)
+    if hlId then UI.setVisible(hlId, true) end
 end
 
 function toggle.onHoverLeave(elemHandle)
-    -- TODO: optional hover unhighlight
+    local hlId = highlightForHandle(elemHandle)
+    if hlId then UI.setVisible(hlId, false) end
 end
 
 -----------------------------------------------------------
