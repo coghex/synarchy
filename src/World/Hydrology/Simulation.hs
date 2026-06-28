@@ -42,6 +42,14 @@ baseSampleSpacing = 4
 --   climate (see `effRiverThreshold`) so river density per area
 --   stays consistent across arid / balanced / wet climates rather
 --   than scaling with per-cell water input (audit #15).
+--
+--   NB (issue #221): do NOT lower this to add inland rivers. Lowering
+--   it admits many *small-catchment* (short) headwaters which, against
+--   the fixed per-age river budget (`maxTotalRivers`), displace the
+--   large-catchment rivers we actually want long — empirically it cut
+--   median river length. Inland origins come from `walkToDivide`
+--   rooting the selected (largest-catchment) rivers at their divides,
+--   not from a lower qualification bar.
 minRiverDrainageCells ∷ Int
 minRiverDrainageCells = 16
 
@@ -73,6 +81,15 @@ maxGridDim = 384
 
 minLakeDepth ∷ Int
 minLakeDepth = 9
+
+-- | Smallest worldSize for which river sources are extended upstream to
+--   their catchment divide (issue #221, see `walkToDivide`). Worlds
+--   below this are too small to host long rivers and pack volcanism
+--   densely enough that the extension breaches calderas; they keep the
+--   original (coastal) source behaviour. 128 is the smallest real
+--   playable world; 32/64 are regression-gate sizes only.
+minExtendWorld ∷ Int
+minExtendWorld = 128
 
 -- * Types
 
@@ -727,13 +744,108 @@ simulateHydrology seed worldSize ageIdx grid climate =
         -- Sort by accumulation descending — biggest rivers first
         sortedSources = sortBy (comparing (Down . (accumVec VU.!))) headwaters
 
+        -- For each cell, the upstream neighbour that contributes the
+        -- most flow (its "main-stem" parent). Built by inverting the
+        -- flow grid: every land cell names one downstream target, so we
+        -- record, per target, the contributor with the largest
+        -- accumulation. O(n).
+        bestUpstream ∷ VU.Vector Int
+        bestUpstream = runST $ do
+            parent  ← VUM.replicate totalSamples (-1)
+            bestAcc ← VUM.replicate totalSamples (minBound ∷ Int)
+            forM_ [0 .. totalSamples - 1] $ \idx → do
+                let d = flowDirVec VU.! idx
+                when (d ≥ 0 ∧ d < totalSamples) $ do
+                    let a = accumVec VU.! idx
+                    cur ← VUM.read bestAcc d
+                    when (a > cur) $ do
+                        VUM.write bestAcc d a
+                        VUM.write parent  d idx
+            VU.unsafeFreeze parent
+
+        -- Walk from a headwater up the main-stem parent chain toward the
+        -- catchment divide (issue #221). A "headwater" is only the cell
+        -- where flow first crossed the river threshold — typically LOW,
+        -- near the wet coastal mountains where precipitation
+        -- concentrates, which is why rivers used to start near the coast
+        -- and stay short. Following the largest upstream contributor
+        -- moves the SOURCE toward the true drainage head, so the river
+        -- originates inland and grows as it descends. This is additive:
+        -- every river is preserved and merely lengthened up its own
+        -- catchment, so small coastal catchments stay short while large
+        -- interior catchments become long — sea-draining rivers reach
+        -- the sea, closed-basin rivers still terminate inland.
+        --
+        -- The walk STOPS on three conditions:
+        --
+        --  1. The next cell upstream is a LAKE / basin cell — its
+        --     depression-filled surface stands `minLakeDepth` or more
+        --     above its raw terrain, i.e. it sits under a lake. Stopping
+        --     here keeps the source BELOW the lake, at the basin's
+        --     outflow, so the river flows *into* the lake rather than
+        --     tracing through and carving it out. This preserves the
+        --     interior lakes (closed-basin drainages stay lakes, as
+        --     intended) and, because those basins are no longer drained,
+        --     stops both the lava that sat beneath them from being
+        --     exposed and the basin-floor valley from being lava-flooded
+        --     (issue #221 — the lake-collapse / lava blow-up that
+        --     extending sources had caused on small volcanic worlds).
+        --
+        --  2. The climb exceeds `maxClimb` above the headwater. This
+        --     keeps the source in the foothills rather than on the
+        --     volcanic peaks, whose fresh headwater valleys the
+        --     lava-pool pour (Magma.Pool floods local depressions to
+        --     their rim) would otherwise bury.
+        --
+        --  3. The usual ridge / off-land / step bounds.
+        --
+        -- The upstream graph is a forest (flow is acyclic) so it cannot
+        -- loop; maxWalk also bounds the cost.
+        maxClimb ∷ Int
+        maxClimb = 40
+        isLakeCell ∷ Int → Bool
+        isLakeCell i = filledElev VU.! i - origElev VU.! i ≥ minLakeDepth
+        walkToDivide ∷ Int → Int
+        walkToDivide start = go start (0 ∷ Int)
+          where
+            maxWalk = 4 * gridW
+            startElev = origElev VU.! start
+            go idx steps
+                | steps ≥ maxWalk = idx
+                | otherwise =
+                    let up = bestUpstream VU.! idx
+                    in if up < 0 ∨ not (landVec VU.! up)
+                          ∨ isLakeCell up
+                          ∨ origElev VU.! up - startElev > maxClimb
+                       then idx
+                       else go up (steps + 1)
+
+        -- Inland-origin source extension is applied only on real-scale
+        -- worlds (issue #221). On tiny worlds (size 32/64 — the
+        -- regression-gate sizes) it is both pointless (a 512–1024-tile
+        -- world can't host a long river) and actively harmful: their
+        -- volcanism is packed densely enough that an extended river
+        -- routes through a caldera, breaches its rim and lets the
+        -- lava-pool pour flood the low terrain — observed as 100s of
+        -- new lava tiles on ground dropped ~160 z (seed 13579 w32),
+        -- which the per-source lake-stop and climb cap can't prevent
+        -- because the breach is mid-course, not at the source. Gating
+        -- to worldSize ≥ `minExtendWorld` confines the feature to the
+        -- worlds it targets (≥128 verified lava-neutral) and leaves the
+        -- small worlds — and the magma system — exactly as they were.
+        extendSources = worldSize ≥ minExtendWorld
+
         riverSources ∷ [(Int, Int, Int, Float)]
         riverSources = map (\idx →
-            let gx = gxVec VU.! idx
-                gy = gyVec VU.! idx
-                elev = origElev VU.! idx
-                -- Accumulation is precipitation-weighted (×10 scale).
-                -- Divide by 10 to normalize, then apply same flow formula.
+            let srcIdx = if extendSources then walkToDivide idx else idx
+                gx = gxVec VU.! srcIdx
+                gy = gyVec VU.! srcIdx
+                elev = origElev VU.! srcIdx
+                -- Flow magnitude characterises the whole river, so it is
+                -- taken from the headwater (where flow first
+                -- concentrated), not the thin divide cell. Accumulation
+                -- is precipitation-weighted (×10 scale); the same flow
+                -- formula as before.
                 flow = fromIntegral (accumVec VU.! idx) * 0.005 + 0.1
             in (gx, gy, elev, flow)
             ) sortedSources

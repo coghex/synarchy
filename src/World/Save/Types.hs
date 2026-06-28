@@ -107,7 +107,8 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 58  -- v58: steep faces shed soil to bare rock in last-age erosion (#225)
+currentSaveVersion = 59  -- v59: river sources extended to catchment divides on ≥128 worlds (#221)
+                         -- v58: steep faces shed soil to bare rock in last-age erosion (#225)
                          -- v57: per-unit name (uisName) (#264)
                          -- v55: despike spike-only convergence pass (#254) — base
                          --      terrain output shifts on regen, so reject older saves
