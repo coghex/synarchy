@@ -181,8 +181,13 @@ processInput env inpSt event = case event of
                 Q.writeQueue (luaQueue env) LuaShellToggle
             when (key ≠ KeyGrave) $ do
                 let lq = luaQueue env
+                -- Carry the exact GLFW key alongside the merged logical key:
+                -- onKeyDown still gets the merged name string, but
+                -- engine.keyMatchesAction uses the precise key to resolve
+                -- which side of a modifier was pressed (race-free, vs. the
+                -- transient shared input state).
                 when (keyState ≡ GLFW.KeyState'Pressed) $
-                    Q.writeQueue lq (LuaKeyDownEvent key)
+                    Q.writeQueue lq (LuaKeyDownEvent key glfwKey)
                 when (keyState ≡ GLFW.KeyState'Released) $
                     Q.writeQueue lq (LuaKeyUpEvent key)
             when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do

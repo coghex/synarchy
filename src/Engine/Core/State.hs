@@ -36,6 +36,7 @@ import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
 import Engine.Input.Types
 import Engine.Input.Bindings
+import qualified Graphics.UI.GLFW as GLFW
 import Engine.Scene.Base
 import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
@@ -93,6 +94,12 @@ data EngineEnv = EngineEnv
   , fontCacheRef        ∷ IORef FontCache
   , inputStateRef       ∷ IORef InputState
   , keyBindingsRef      ∷ IORef KeyBindings
+  -- | The exact GLFW key currently being dispatched to Lua @onKeyDown@,
+  --   set by the Lua thread for the duration of that broadcast and cleared
+  --   after. Lets @engine.keyMatchesAction@ resolve a press to the precise
+  --   physical key (which side of a merged modifier) without racing the
+  --   input thread's shared state. 'Nothing' outside a key-down dispatch.
+  , currentKeyDownRef   ∷ IORef (Maybe GLFW.Key)
   , textBuffersRef      ∷ IORef (Map.Map ObjectId Text)
   , cameraRef           ∷ IORef Camera2D
   , uiCameraRef         ∷ IORef UICamera

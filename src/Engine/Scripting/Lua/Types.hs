@@ -97,7 +97,10 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaMouseUpEvent GLFW.MouseButton Double Double ClickRoute
             | LuaScrollEvent Double Double
             | LuaZSliceScroll Double Double
-            | LuaKeyDownEvent Key
+            -- | Logical (merged) key for the onKeyDown string, plus the
+            --   exact GLFW key so engine.keyMatchesAction can resolve which
+            --   side of a modifier was pressed without racing input state.
+            | LuaKeyDownEvent Key GLFW.Key
             | LuaKeyUpEvent Key
             | LuaShellToggle
             | LuaWindowResize Int Int

@@ -92,6 +92,7 @@ initializeEngineWith logBackend = do
   inputStateRef ← newIORef defaultInputState
   keyBindings ← loadKeyBindings logger "config/keybinds.yaml"
   keyBindingsRef ← newIORef keyBindings
+  currentKeyDownRef ← newIORef Nothing
   
   videoConfig ← loadVideoConfig logger "config/video.yaml"
   videoConfigRef ← newIORef $ videoConfig
@@ -184,6 +185,7 @@ initializeEngineWith logBackend = do
         , fontCacheRef       = fontCache
         , inputStateRef      = inputStateRef
         , keyBindingsRef     = keyBindingsRef
+        , currentKeyDownRef  = currentKeyDownRef
         , textBuffersRef     = textBuffersRef
         , cameraRef          = cameraRef
         , uiCameraRef        = uiCameraRef

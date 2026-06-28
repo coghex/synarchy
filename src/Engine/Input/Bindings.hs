@@ -32,6 +32,35 @@ defaultKeyBindings = Map.fromList
     , ("toggleEventLog", ["L"])
     ]
 
+-- | Actions the engine handles outside the binding table (Escape cascade,
+--   Grave shell toggle — see "Engine.Input.Thread"). Their key lists in the
+--   config are reference-only and never consulted for behavior, so
+--   'sanitizeBindings' leaves them intact while stripping reserved keys from
+--   every *editable* action.
+reservedActions ∷ [Text]
+reservedActions = ["escape", "openShell"]
+
+-- | GLFW keys that must never be reachable through a binding — they are
+--   hardcoded (escape cascade, shell toggle) and reassigning them would
+--   persist a config the runtime cannot honor.
+reservedGLFWKeys ∷ [GLFW.Key]
+reservedGLFWKeys = [GLFW.Key'Escape, GLFW.Key'GraveAccent]
+
+-- | True when a key name resolves (via 'parseKeyName') to a reserved key,
+--   regardless of which alias spelling was used.
+isReservedKeyName ∷ Text → Bool
+isReservedKeyName name = any (`elem` reservedGLFWKeys) (parseKeyName name)
+
+-- | Strip reserved key names from every editable action's key list so a
+--   hand-edited @keybinds.yaml@ can never make Escape/Grave drive an action
+--   (the Lua edit API already refuses them; this closes the file path).
+--   Reserved-action reference entries are left untouched.
+sanitizeBindings ∷ KeyBindings → KeyBindings
+sanitizeBindings = Map.mapWithKey strip
+  where strip action keys
+          | action `elem` reservedActions = keys
+          | otherwise                     = filter (not . isReservedKeyName) keys
+
 data KeyBindingConfig = KeyBindingConfig
     { kbcBindings ∷ KeyBindings
     } deriving (Show, Eq)
@@ -42,7 +71,9 @@ data KeyBindingConfig = KeyBindingConfig
 --   'defaultKeyBindings' (file entries win), so a config written before
 --   a new action existed still picks up that action's default binding
 --   rather than leaving it unbound. A missing @keybinds@ key falls back
---   to defaults entirely.
+--   to defaults entirely. Reserved keys (Escape/Grave) are stripped from
+--   editable actions via 'sanitizeBindings' so a hand-edited file cannot
+--   bind them to gameplay.
 instance FromJSON KeyBindingConfig where
   parseJSON (Object v) = do
     mRaw ← v .:? "keybinds" ∷ Parser (Maybe (Map.Map T.Text Value))
@@ -50,7 +81,7 @@ instance FromJSON KeyBindingConfig where
       Nothing  → pure (KeyBindingConfig defaultKeyBindings)
       Just raw → do
         parsed ← traverse parseKeyList raw
-        pure (KeyBindingConfig (Map.union parsed defaultKeyBindings))
+        pure (KeyBindingConfig (sanitizeBindings (Map.union parsed defaultKeyBindings)))
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
 instance ToJSON KeyBindingConfig where
@@ -96,6 +127,23 @@ isActionDown action bindings state =
 
 getKeysForAction ∷ Text → KeyBindings → Maybe [Text]
 getKeysForAction = Map.lookup
+
+-- | True when the exact GLFW key that triggered an @onKeyDown@ event is
+--   bound to the action. Used for edge-triggered actions (rotate, z-reset),
+--   where the specific pressed key must match rather than polling whether
+--   the action is held ('isActionDown').
+--
+--   Taking the precise 'GLFW.Key' (carried with the key-down event, see
+--   "Engine.Scripting.Lua.Types") rather than a merged name string means
+--   the match is side-exact and needs no shared input-state lookup: a
+--   side-specific binding @LeftShift@ matches only a left shift, a merged
+--   binding @Shift@ matches either, and a fast tap can't be dropped or
+--   mis-attributed by a race with the input thread.
+keyMatchesAction ∷ GLFW.Key → Text → KeyBindings → Bool
+keyMatchesAction glfwKey action bindings =
+    case Map.lookup action bindings of
+        Just boundKeys → any (\b → glfwKey `elem` parseKeyName b) boundKeys
+        Nothing        → False
 
 -- | GLFW keys a key name matches. The canonical vocabulary is
 --   'keyToText' (what Lua's onKeyDown/onKeyUp report), inverted via

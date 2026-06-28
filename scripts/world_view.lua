@@ -445,16 +445,21 @@ end
 -- Key Input
 -----------------------------------------------------------
 
+-- These are edge-triggered: one press = one rotation / one z-reset.
+-- engine.keyMatchesAction resolves the pressed key against the live
+-- binding table engine-side (handling modifier aliases like
+-- Shift/LeftShift), so rebinding via config or the Input settings tab
+-- takes effect immediately without a key→action table in Lua.
 function worldView.onKeyDown(key)
     if not worldView.visible then return end
 
-    if key == "Q" then
+    if engine.keyMatchesAction(key, "rotateCCW") then
         camera.rotateCCW()
         engine.logDebug("Camera rotated CCW, facing=" .. tostring(camera.getFacing()))
-    elseif key == "E" then
+    elseif engine.keyMatchesAction(key, "rotateCW") then
         camera.rotateCW()
         engine.logDebug("Camera rotated CW, facing=" .. tostring(camera.getFacing()))
-    elseif key == "Home" then
+    elseif engine.keyMatchesAction(key, "resetZTracking") then
         camera.setZTracking(true)
         engine.logDebug("Z-slice tracking re-enabled")
     end

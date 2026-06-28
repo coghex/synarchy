@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.API.Keybinds
   , removeActionKeyFn
   , saveKeybindsFn
   , loadDefaultKeybindsFn
+  , keyMatchesActionFn
   ) where
 
 import UPrelude
@@ -23,7 +24,9 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Input.Bindings (KeyBindings, loadKeyBindings, saveKeyBindings)
+import Engine.Input.Bindings
+  ( KeyBindings, loadKeyBindings, saveKeyBindings, keyMatchesAction
+  , reservedActions, parseKeyName )
 import Engine.Input.Types (textToKey)
 
 -- | A key name is bindable when it parses to a real key AND is not one of
@@ -32,13 +35,9 @@ import Engine.Input.Types (textToKey)
 isBindableKey ∷ Text → Bool
 isBindableKey k = k /= "Escape" ∧ k /= "Grave" ∧ isJust (textToKey k)
 
--- | Actions whose keys the engine handles outside the binding table
---   (Escape cascade, Grave shell toggle — see "Engine.Input.Thread").
---   Editing them would persist a config the runtime cannot honor, so the
---   edit functions refuse them outright.
-reservedActions ∷ [Text]
-reservedActions = ["escape", "openShell"]
-
+-- 'reservedActions' (the actions the engine handles outside the binding
+-- table) is defined in "Engine.Input.Bindings" so the loader and the edit
+-- API share one source of truth.
 isEditableAction ∷ Text → Bool
 isEditableAction a = a `notElem` reservedActions
 
@@ -199,4 +198,32 @@ loadDefaultKeybindsFn env = do
         writeIORef (keyBindingsRef env) defaults
         return defaults
     pushBindings bindings
+    return 1
+
+-- | engine.keyMatchesAction(key, action) → bool
+--   True when the key that triggered the current onKeyDown event is bound to
+--   the action. Inside an onKeyDown dispatch it matches the exact physical
+--   key the engine recorded (currentKeyDownRef), so it resolves which side
+--   of a merged modifier was pressed with no race and no dropped tap. The
+--   `key` argument is the merged name the handler received; it is used only
+--   as a fallback if the function is somehow called outside a key-down
+--   dispatch (no recorded key), where each GLFW key the name covers is
+--   tested.
+keyMatchesActionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+keyMatchesActionFn env = do
+    keyArg ← Lua.tostring 1
+    actionArg ← Lua.tostring 2
+    case (keyArg, actionArg) of
+        (Just keyBS, Just actionBS) → do
+            let name   = TE.decodeUtf8 keyBS
+                action = TE.decodeUtf8 actionBS
+            matches ← Lua.liftIO $ do
+                bindings ← readIORef (keyBindingsRef env)
+                mKey     ← readIORef (currentKeyDownRef env)
+                return $ case mKey of
+                    Just g  → keyMatchesAction g action bindings
+                    Nothing → any (\g → keyMatchesAction g action bindings)
+                                  (parseKeyName name)
+            Lua.pushboolean matches
+        _ → Lua.pushboolean False
     return 1

@@ -14,7 +14,8 @@ import Engine.Core.Monad (EngineM, liftIO)
 import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import Engine.Graphics.Viewport (windowDegenerate)
-import Engine.Input.Types (InputState(..), KeyState(..))
+import Engine.Input.Types (InputState(..))
+import Engine.Input.Bindings (isActionDown)
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
 import World.Types (chunkSize, WorldState(..), WorldManager(..), WorldGenParams(..))
@@ -84,19 +85,20 @@ updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do
     env ← ask
     inpSt ← liftIO $ readIORef (inputStateRef env)
+    bindings ← liftIO $ readIORef (keyBindingsRef env)
     dt ← gets (deltaTime . timingState)
     worldSize ← liftIO $ getWorldSize env
 
-    let held k = case Map.lookup k (inpKeyStates inpSt) of
-                     Just ks → keyPressed ks
-                     Nothing → False
+    -- Pan directions are bindable actions (default: arrows + WASD), read
+    -- from the live keybinding table so rebinding changes camera control.
+    let actionDown a = isActionDown a bindings inpSt
 
         dtF = realToFrac dt ∷ Float
 
-        inputX = (if held GLFW.Key'Right then  1 else 0)
-               + (if held GLFW.Key'Left  then -1 else 0)
-        inputY = (if held GLFW.Key'Down  then  1 else 0)
-               + (if held GLFW.Key'Up    then -1 else 0)
+        inputX = (if actionDown "moveRight" then  1 else 0)
+               + (if actionDown "moveLeft"  then -1 else 0)
+        inputY = (if actionDown "moveDown"  then  1 else 0)
+               + (if actionDown "moveUp"    then -1 else 0)
 
     liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
         let (vx, vy) = camVelocity cam
