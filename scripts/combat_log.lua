@@ -363,12 +363,16 @@ local function displayName(uid)
     local info = unit.getInfo(uid)
     -- A named unit (acolyte) reads as its personal name (#264).
     if info and info.name and info.name ~= "" then return info.name end
-    if info and info.defName then
-        local mapped = DISPLAY_NAMES[info.defName]
+    if info then
+        -- Mapped wildlife reads with the definite article in prose
+        -- ("the brown bear"); anything else uses the def's species label
+        -- (display_name / prettified def name) so unmapped units don't
+        -- surface as a raw "Red_squirrel" (#264).
+        local mapped = info.defName and DISPLAY_NAMES[info.defName]
         if mapped then return mapped end
-        -- Capitalise: "acolyte" → "Acolyte"
-        local name = info.defName
-        return name:sub(1, 1):upper() .. name:sub(2)
+        if info.displayName and info.displayName ~= "" then
+            return info.displayName
+        end
     end
     return "unit_" .. tostring(uid)
 end
@@ -404,9 +408,14 @@ local function tabUnitName(uid)
     if info and info.name and info.name ~= "" then
         return info.name:match("^(%S+)") or info.name
     end
-    local def = info and info.defName
+    if not info then return "Unit" end
+    local short = info.defName and TAB_SHORT_NAMES[info.defName]
+    if short then return short end
+    -- Species label (display_name / prettified def name) for unmapped defs.
+    if info.displayName and info.displayName ~= "" then return info.displayName end
+    local def = info.defName
     if not def then return "Unit" end
-    return TAB_SHORT_NAMES[def] or (def:sub(1, 1):upper() .. def:sub(2))
+    return def:sub(1, 1):upper() .. def:sub(2)
 end
 
 local function newBattle(atk, tgt, gameTime)
