@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetHoverTileFn
     , worldGetHoverPosFn
     , worldPickTileFn
+    , worldPickPosFn
     , worldGetClimateAtFn
     ) where
 
@@ -578,6 +579,59 @@ worldPickTileFn env = do
                         Just (gx, gy, _, _, _) → do
                             Lua.pushinteger (fromIntegral gx)
                             Lua.pushinteger (fromIntegral gy)
+                            return 2
+                        Nothing → do
+                            Lua.pushnil
+                            return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.pickPos(pixX, pixY) → hx, hy or nil
+--   Synchronous fractional-position analog of pickTile: the live
+--   screen-pixel → sub-tile hit-test from the given click coordinates
+--   (item/unit convention, tile k spans [k, k+1)). Like pickTile it
+--   runs the hit-test NOW against the live camera + window + tile state
+--   rather than reading the periodically-pushed worldHoverPos cache, so
+--   it reflects exactly where the passed pixel points this instant. Use
+--   it on click paths that place sub-tile content (ground-item / quarter-
+--   corner structure placement) where the async hover cache can lag a
+--   fast cursor move and place at a stale fractional position. Returns
+--   nil when the pixel is off-world / over no solid tile.
+worldPickPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldPickPosFn env = do
+    mPx ← Lua.tonumber 1
+    mPy ← Lua.tonumber 2
+    case (mPx, mPy) of
+        (Just px', Just py') → do
+            let px = round px'
+                py = round py'
+            manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case mVisibleWorldState manager of
+                Just ws → do
+                    camera   ← Lua.liftIO $ readIORef (cameraRef env)
+                    tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
+                    paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
+                    (winW, winH) ← Lua.liftIO $ readIORef (windowSizeRef env)
+                    (fbW, fbH)   ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+                    let facing   = camFacing camera
+                        zoom     = camZoom camera
+                        zSlice   = camZSlice camera
+                        (camX, camY) = camPosition camera
+                        worldSize = case paramsM of
+                                      Nothing     → 128
+                                      Just params → wgpWorldSize params
+                        effectiveDepth = min viewDepth
+                                           (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+                        vb = computeViewBounds camera fbW fbH effectiveDepth
+                    case pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
+                                       worldSize effectiveDepth vb tileData px py of
+                        Just (_, _, _, _, (hx, hy)) → do
+                            Lua.pushnumber (Lua.Number (realToFrac hx))
+                            Lua.pushnumber (Lua.Number (realToFrac hy))
                             return 2
                         Nothing → do
                             Lua.pushnil
