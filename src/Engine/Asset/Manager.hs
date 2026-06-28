@@ -57,7 +57,7 @@ import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.ShaderCode
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture, unregisterTexture)
+import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture, unregisterTexture, writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import qualified Vulkan.Core10 as Vk
@@ -195,6 +195,11 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
               let newBindless = bindless
                     { btsHandleMap = Map.insert texHandle existingBindlessHandle (btsHandleMap bindless) }
               liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+              -- Atlas-share path: the new handle reuses an existing slot
+              -- without going through registerTexture, so sync the shader
+              -- handle→slot table here too (#286).
+              liftIO $ writeHandleSlotEntry newBindless (toInt texHandle)
+                          (tsIndex (bthSlot existingBindlessHandle))
               logDebugM CatAsset $ "New handle " <> T.pack (show texHandle)
                           <> " successfully mapped to existing bindless slot"
             Nothing → logWarnM CatAsset $ "Failed to duplicate handle " <> T.pack (show texHandle)

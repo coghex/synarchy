@@ -8,6 +8,8 @@ module Engine.Graphics.Vulkan.Texture.Types
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import Foreign.Ptr (Ptr)
+import Data.Word (Word32)
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlotAllocator)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle)
@@ -58,6 +60,11 @@ data BindlessTextureSystem = BindlessTextureSystem
     --   handle→slot mapping changes (register / unregister).
   , btsHandleSlotMemory ∷ !DeviceMemory
     -- ^ Host-visible/coherent memory backing 'btsHandleSlotBuffer'.
+  , btsHandleSlotPtr    ∷ !(Ptr Word32)
+    -- ^ Persistent mapping of 'btsHandleSlotMemory' (host-coherent, so no
+    --   flush). 'writeHandleSlotEntry' pokes this directly, so every
+    --   handle→slot mutation site can keep the table current without a
+    --   'Device' or a map/unmap round-trip (#286).
   } deriving (Show)
 
 -- | Configuration for the texture system

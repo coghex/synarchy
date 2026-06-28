@@ -286,6 +286,15 @@ function worldView.createWorld()
         return
     end
 
+    -- Load the structural textures (blank + facemaps) NOW, so the handles
+    -- passed below are real, not the -1 defaults. ensureStructuralTextures
+    -- normally runs in worldView.init, which can fire AFTER createWorld for
+    -- a fresh world — leaving structuralTextures.* at -1, which the shader
+    -- resolves to slot 0 (magenta blank + flat/default facemaps). The old
+    -- phase-3 rebind masked this; with draw-time handle resolution we just
+    -- need valid handles applied once, at creation. Idempotent. (#286)
+    worldView.ensureStructuralTextures()
+
     local wp = worldView.worldParams or {}
     local seed = wp.seed or 42
     local worldSize = wp.worldSize or 128

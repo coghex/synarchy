@@ -15,6 +15,7 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , setTextureFilter
   , getTextureSlotIndex
   , handleSlotTableSize
+  , writeHandleSlotEntry
   ) where
 
 import UPrelude
@@ -105,9 +106,11 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   (tblMem, tblBuf) ← createVulkanBuffer dev pdev tableBytes
         BUFFER_USAGE_STORAGE_BUFFER_BIT
         (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
-  zeroPtr ← mapMemory dev tblMem 0 tableBytes zero
-  liftIO $ pokeArray (castPtr zeroPtr) (replicate handleSlotTableSize (0 ∷ Word32))
-  unmapMemory dev tblMem
+  -- Map persistently (host-coherent): the pointer lives in the system so
+  -- every handle→slot mutation site can poke it directly.
+  tblPtrRaw ← mapMemory dev tblMem 0 tableBytes zero
+  let tblPtr = castPtr tblPtrRaw ∷ Ptr Word32
+  liftIO $ pokeArray tblPtr (replicate handleSlotTableSize (0 ∷ Word32))
   writeHandleSlotDescriptor dev descriptorSet tblBuf
 
   pure $ BindlessTextureSystem
@@ -124,6 +127,7 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
     , btsPinned           = Map.empty
     , btsHandleSlotBuffer = tblBuf
     , btsHandleSlotMemory = tblMem
+    , btsHandleSlotPtr    = tblPtr
     }
 
 -- | Initialize all descriptor slots with the undefined texture
@@ -280,17 +284,16 @@ writeHandleSlotDescriptor dev descSet buf = do
   updateDescriptorSets dev (V.singleton $ SomeStruct write) V.empty
 
 -- | Write one @handleToSlot[handleId] = slot@ entry into the table's
---   mapped memory. Out-of-range handle ids are dropped (they stay at the
---   zero-initialised slot 0 = undefined). Host-coherent, so no flush.
-writeHandleSlotEntry ∷ Device → BindlessTextureSystem → Int → Word32 → EngineM ε σ ()
-writeHandleSlotEntry dev sys hid slot
+--   persistently-mapped, host-coherent memory (no flush). Call this at
+--   EVERY 'btsHandleMap' mutation so the shader-side table stays in sync —
+--   register, unregister, and the atlas-share fast paths that insert a
+--   handle pointing at an existing slot ('Engine.Asset.Manager',
+--   'Engine.Scripting.Lua.Message'). Out-of-range ids are dropped (they
+--   stay at the zero-initialised slot 0 = undefined). #286.
+writeHandleSlotEntry ∷ BindlessTextureSystem → Int → Word32 → IO ()
+writeHandleSlotEntry sys hid slot
   | hid < 0 ∨ hid ≥ handleSlotTableSize = pure ()
-  | otherwise = do
-      let mem        = btsHandleSlotMemory sys
-          tableBytes = fromIntegral (handleSlotTableSize * 4) ∷ DeviceSize
-      ptr ← mapMemory dev mem 0 tableBytes zero
-      liftIO $ pokeElemOff (castPtr ptr) hid slot
-      unmapMemory dev mem
+  | otherwise = pokeElemOff (btsHandleSlotPtr sys) hid slot
 
 -- | Register a texture in the bindless system. The atlas/global path:
 --   the slot follows the global filter and is repainted by
@@ -332,10 +335,10 @@ registerTextureImpl pinned dev texHandle imageView sampler system = do
           writeDescriptorSlot dev (btsDescriptorSet system) (btsConfig system)
             (tsIndex slot) imageView sampler
           -- Record the handle→slot mapping for the shader (#286). The
-          -- table buffer persists across the immutable system copy, so
+          -- table pointer persists across the immutable system copy, so
           -- writing through 'system' is correct.
           let TextureHandle hid = texHandle
-          writeHandleSlotEntry dev system hid (tsIndex slot)
+          liftIO $ writeHandleSlotEntry system hid (tsIndex slot)
 
           let bindlessHandle = toBindlessHandle slot texHandle
               newHandleMap = Map.insert texHandle bindlessHandle (btsHandleMap system)
@@ -370,7 +373,7 @@ unregisterTexture dev texHandle system = do
       -- Clear the handle→slot entry so the shader resolves this handle to
       -- slot 0 (undefined) until it is registered again (#286).
       let TextureHandle hid = texHandle
-      writeHandleSlotEntry dev system hid 0
+      liftIO $ writeHandleSlotEntry system hid 0
 
       let newAllocator = freeSlot slot (btsSlotAllocator system)
           newHandleMap = Map.delete texHandle (btsHandleMap system)
