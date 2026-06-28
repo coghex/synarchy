@@ -11,21 +11,47 @@
 -- `locations.list()` to enumerate these and `locations.stamp(name, gx,
 -- gy, worldId)` when the user clicks the ground. The per-location
 -- geometry (the `builders.*` functions) is authored on top of the
--- terrain primitives below. Phase 3 replaces the hardcoded DEFS with
--- data-driven defs from data/locations/*.yaml.
+-- terrain primitives below. Definitions are now data-driven: they come
+-- from data/locations/*.yaml, loaded at boot via engine.loadLocationYaml
+-- and read back through engine.listLocationDefs (#88).
 
 local locations = {}
 
--- Registry of available locations. `name` is the id passed to stamp();
--- `label` / `note` are for the debug list. Hardcoded for now.
-local DEFS = {
-    { name  = "room_small",
-      label = "room_small",
-      note  = "small underground room: stairs down, walls/floor/ceiling, chest" },
-}
+-----------------------------------------------------------
+-- Definition registry (engine-backed, #88)
+-----------------------------------------------------------
+-- The defs live in the engine LocationRegistry (loaded from
+-- data/locations/*.yaml). We query the engine each call so the list
+-- always reflects what's registered — no local cache to invalidate.
+-- Each engine LocationDef table is:
+--   { id, label, type, builder, anchor={tag,…},
+--     contents={{kind,id,count},…} }.
 
+-- All registered location defs, in registration order.
+function locations.listDefs()
+    return engine.listLocationDefs() or {}
+end
+
+-- A single def by id, or nil.
+function locations.getDef(id)
+    for _, d in ipairs(locations.listDefs()) do
+        if d.id == id then return d end
+    end
+    return nil
+end
+
+-- Debug-overlay list shape: { name=id, label, note }. The overlay keys
+-- armed locations + stamp() on `name`, so name carries the def id.
 function locations.list()
-    return DEFS
+    local out = {}
+    for _, d in ipairs(locations.listDefs()) do
+        out[#out + 1] = {
+            name  = d.id,
+            label = d.label,
+            note  = d.type,
+        }
+    end
+    return out
 end
 
 -----------------------------------------------------------
@@ -139,16 +165,36 @@ function builders.room_small(worldId, gx, gy, withCeiling)
         withCeiling and " (+ceiling)" or ""))
 end
 
--- Stamp location `name`, anchored at tile (gx, gy) on page `worldId`.
--- Returns true if the location id was recognised.
-function locations.stamp(name, gx, gy, worldId)
-    local b = builders[name]
+-- Resolve location `id` to its def, then call the builder it names.
+-- Returns true if the id was recognised and built.
+local function buildAt(id, gx, gy, worldId)
+    local def = locations.getDef(id)
+    if not def then
+        engine.logWarn("locations: unknown location '" .. tostring(id) .. "'")
+        return false
+    end
+    local b = builders[def.builder]
     if not b then
-        engine.logWarn("locations: unknown location '" .. tostring(name) .. "'")
+        engine.logWarn("locations: location '" .. id ..
+            "' names unknown builder '" .. tostring(def.builder) .. "'")
         return false
     end
     b(worldId, math.floor(gx), math.floor(gy))
     return true
+end
+
+-- locations.build(id, gx, gy) — look up the def by id and call its
+-- builder, stamping on the active world page (#88).
+function locations.build(id, gx, gy)
+    local hud = require("scripts.hud")
+    local worldId = (hud and hud.worldId) or "test_arena"
+    return buildAt(id, gx, gy, worldId)
+end
+
+-- Stamp location `id`, anchored at tile (gx, gy) on an explicit page
+-- `worldId`. The debug-overlay entry point (it knows the page).
+function locations.stamp(id, gx, gy, worldId)
+    return buildAt(id, gx, gy, worldId)
 end
 
 return locations

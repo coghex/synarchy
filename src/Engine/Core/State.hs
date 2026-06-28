@@ -52,6 +52,7 @@ import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
 import Infection.Types (InfectionManager)
+import Location.Types (LocationRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible)
 import World.Material (MaterialRegistry)
@@ -213,6 +214,12 @@ data EngineEnv = EngineEnv
     --   data/infections/*.yaml. The wound tick selects one (climate +
     --   site weighted) when a wound first festers; its aggressiveness /
     --   curable_by drive growth + cure.
+  , locationDefsRef    ∷ IORef LocationRegistry
+    -- ^ Registry of location defs (premade structures stamped into the
+    --   world) loaded from data/locations/*.yaml at boot, after items /
+    --   units / buildings. Read back by the `locations` Lua module
+    --   (locations.listDefs / getDef / build). Pure data — content ids
+    --   are resolved at spawn time by the world-gen overlay (#89/#90).
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

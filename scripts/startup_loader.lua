@@ -148,6 +148,9 @@ local function queueNormalProfile()
     addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
+    -- Locations load LAST (their content ids reference the registries
+    -- above; cross-registry resolution lands in #90).
+    addYamlDir("data/locations",  "Loading locations...",  engine.loadLocationYaml)
 
     -- Texture-only phases.
     addTextureDir("assets/textures/icons", "Loading icons...")
@@ -170,6 +173,7 @@ local function queueArenaProfile()
     addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
+    addYamlDir("data/locations",  "Loading locations...",  engine.loadLocationYaml)
 end
 
 function startupLoader.build(profile)

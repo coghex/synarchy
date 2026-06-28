@@ -446,6 +446,9 @@ library
                      Infection.Types
                      Engine.Asset.YamlInfection
                      Engine.Scripting.Lua.API.Infection
+                     Location.Types
+                     Engine.Asset.YamlLocations
+                     Engine.Scripting.Lua.API.Locations
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
