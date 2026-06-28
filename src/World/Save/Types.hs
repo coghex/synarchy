@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Save.Types
     ( SaveData(..)
+    , WorldPageSave(..)
+    , activeWorldPage
     , SaveMetadata(..)
     , SaveHeader(..)
     , saveMagic
@@ -107,7 +109,12 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 58  -- v58: steep faces shed soil to bare rock in last-age erosion (#225)
+currentSaveVersion = 59  -- v59: SaveData restructured — per-world state moved off
+                         --      SaveData into a new WorldPageSave record;
+                         --      SaveData now holds globals + sdActivePage +
+                         --      sdVisiblePages + sdWorlds ([WorldPageSave]).
+                         --      Foundation for one-save-all-pages (#215, epic #214).
+                         -- v58: steep faces shed soil to bare rock in last-age erosion (#225)
                          -- v57: per-unit name (uisName) (#264)
                          -- v55: despike spike-only convergence pass (#254) — base
                          --      terrain output shifts on regen, so reject older saves
@@ -144,53 +151,86 @@ data SaveMetadata = SaveMetadata
     , smTimestamp  ∷ !Text        -- ^ ISO 8601 string
     } deriving (Show, Eq, Serialize, Generic)
 
--- | Everything needed to reconstruct a WorldState.
---   Schema is versioned via the file header — see saveMagic /
---   currentSaveVersion / SaveHeader above. Bump currentSaveVersion
---   whenever this record's layout changes (cereal's Generic encoding
---   is positional, so reordering or inserting a field is breaking).
-data SaveData = SaveData
-    { sdMetadata   ∷ !SaveMetadata
-    , sdGenParams  ∷ !WorldGenParams
-    , sdCameraX    ∷ !Float
-    , sdCameraY    ∷ !Float
-    , sdCameraZoom ∷ !Float
-    , sdCameraFacing ∷ !CameraFacing
-    , sdTimeHour   ∷ !Int
-    , sdTimeMinute ∷ !Int
-    , sdDateYear   ∷ !Int
-    , sdDateMonth  ∷ !Int
-    , sdDateDay    ∷ !Int
-    , sdTimeScale  ∷ !Float
-    , sdMapMode    ∷ !ZoomMapMode
-    , sdToolMode   ∷ !ToolMode
-    -- v2 fields (Phase 1):
-    , sdGameTime     ∷ !Double   -- ^ gameTimeRef value (game-clock seconds).
-    , sdEnginePaused ∷ !Bool     -- ^ enginePausedRef value. Auto-pause-on-save
-                                  --   means this is always True for v2+ saves.
-    -- v3 fields (Phase 2):
-    , sdEdits        ∷ !WorldEdits
+-- | Per-world-page save payload. Everything scoped to a single world
+--   page — terrain gen params, camera, clock, edits, and that page's
+--   buildings/units/sim-states — lives here. A 'SaveData' carries a list
+--   of these ('sdWorlds') plus the genuinely global fields.
+--
+--   Splitting per-world state into its own record is the foundation for
+--   persisting every live world page in one save (epic #214): today
+--   exactly one page (the active world) is written, but the shape already
+--   supports many. Like 'SaveData', this is encoded positionally by
+--   cereal's Generic instance, so any layout change bumps
+--   'currentSaveVersion'.
+data WorldPageSave = WorldPageSave
+    { wpsPageId       ∷ !WorldPageId
+        -- ^ The id this page had at save time. On load the active page
+        --   restores under @main_world@ (see 'sdActivePage'); additional
+        --   pages restore under this id.
+    , wpsGenParams    ∷ !WorldGenParams
+    , wpsCameraX      ∷ !Float
+    , wpsCameraY      ∷ !Float
+    , wpsCameraZoom   ∷ !Float
+    , wpsCameraFacing ∷ !CameraFacing
+    , wpsTimeHour     ∷ !Int
+    , wpsTimeMinute   ∷ !Int
+    , wpsDateYear     ∷ !Int
+    , wpsDateMonth    ∷ !Int
+    , wpsDateDay      ∷ !Int
+    , wpsTimeScale    ∷ !Float
+    , wpsMapMode      ∷ !ZoomMapMode
+    , wpsToolMode     ∷ !ToolMode
+    , wpsEdits        ∷ !WorldEdits
         -- ^ Per-chunk edit log. Restored before chunk regeneration on
         --   load; chunks then replay their edits to recover the player's
         --   modifications. Edits survive eviction during a play session.
-    -- v4 fields (Phase 3):
-    , sdBuildings    ∷ !BuildingSnapshot
-        -- ^ All placed buildings. Restored AFTER edits + center-chunk
-        --   regen so buildings landing on player-edited terrain end up
-        --   at the right z (their saved biGridZ already reflects the
-        --   post-edit terrain at place time, but the chunk needs to
-        --   have replayed its edits first for downstream queries to
-        --   agree).
-    -- v5 fields (Phase 4):
-    , sdUnits        ∷ !UnitSnapshot
-        -- ^ All live unit instances + their stats/skills/modifiers
-        --   /inventory. Restored alongside sim states below.
-    , sdUnitSimStates ∷ !(HM.HashMap UnitId UnitSimState)
+    , wpsMineDesignations ∷ !MineDesignations
+        -- ^ Mine designations incl. mid-dig corner progress. Restored
+        --   straight into wsMineDesignationsRef; markers re-render from
+        --   the stored z, so no chunk loading is required first.
+    , wpsGroundItems  ∷ !GroundItems
+        -- ^ Items lying in the world. Full ItemInstances + float
+        --   positions; resting height derives from terrain at render,
+        --   so restoration needs no chunk loading either.
+    , wpsSpoilPiles   ∷ !SpoilPiles
+        -- ^ Spoil mounds (vertex-keyed partial fills — see
+        --   World.Spoil.Types). Fills are relative to each tile's terrain
+        --   surface; promoted cells live in wpsEdits as WeAddTile, so
+        --   restoration is order-independent.
+    , wpsBuildings    ∷ !BuildingSnapshot
+        -- ^ This page's placed buildings. Restored AFTER edits +
+        --   center-chunk regen so buildings landing on player-edited
+        --   terrain end up at the right z (their saved biGridZ already
+        --   reflects the post-edit terrain at place time, but the chunk
+        --   needs to have replayed its edits first for downstream queries
+        --   to agree).
+    , wpsUnits        ∷ !UnitSnapshot
+        -- ^ This page's live unit instances + their stats/skills/
+        --   modifiers/inventory. Restored alongside the sim states below.
+    , wpsUnitSimStates ∷ !(HM.HashMap UnitId UnitSimState)
         -- ^ Per-unit sim state (position, pose, activity, target, path,
-        --   *Until timers). Saved straight; restored into utsRef on
-        --   EngineEnv (Phase 4 promoted utsRef from the unit-thread
-        --   local to engine-level).
-    -- v6 fields (Phase 5):
+        --   *Until timers) for this page's units. Restored into utsRef on
+        --   EngineEnv.
+    } deriving (Show, Serialize, Generic)
+
+-- | Everything needed to reconstruct the saved game. Per-world state is
+--   carried in 'sdWorlds' (one 'WorldPageSave' per saved page — today
+--   just the active world); the remaining fields are genuinely global,
+--   shared by every page or describing the save as a whole.
+--
+--   Schema is versioned via the file header — see saveMagic /
+--   currentSaveVersion / SaveHeader above. Bump currentSaveVersion
+--   whenever this record's layout (or 'WorldPageSave''s) changes
+--   (cereal's Generic encoding is positional, so reordering or inserting
+--   a field is breaking).
+data SaveData = SaveData
+    { sdMetadata   ∷ !SaveMetadata
+        -- ^ Save-listing metadata (name/seed/size/plates/timestamp),
+        --   describing the primary (active) world.
+    -- Global fields (one per save, shared across all pages):
+    , sdGameTime     ∷ !Double   -- ^ gameTimeRef value (game-clock seconds).
+    , sdEnginePaused ∷ !Bool     -- ^ enginePausedRef value. Auto-pause-on-save
+                                  --   means this is always True for v2+ saves.
     , sdLuaModules   ∷ !(HM.HashMap Text Text)
         -- ^ Per-Lua-module opaque blobs. Each registered module
         --   serializes its state to a string via the Lua
@@ -199,36 +239,39 @@ data SaveData = SaveData
         --   `saveModules.deserializeAll(blobs)` BEFORE the engine-side
         --   restore happens, so AI memory + spawn-sequencer state
         --   line up with the units/buildings the engine then writes.
-    -- v31 fields (mining):
-    , sdMineDesignations ∷ !MineDesignations
-        -- ^ Mine designations incl. mid-dig corner progress. Restored
-        --   straight into wsMineDesignationsRef; markers re-render
-        --   from the stored z, so no chunk loading is required first.
-    -- v32 fields (ground items):
-    , sdGroundItems ∷ !GroundItems
-        -- ^ Items lying in the world. Full ItemInstances + float
-        --   positions; resting height derives from terrain at render,
-        --   so restoration needs no chunk loading either.
-    -- v34 fields (dig yields):
-    , sdSpoilPiles ∷ !SpoilPiles
-        -- ^ Spoil mounds (vertex-keyed partial fills — see
-        --   World.Spoil.Types). Fills are relative to each tile's
-        --   terrain surface; promoted cells live in sdEdits as
-        --   WeAddTile, so restoration is order-independent.
-    -- v54 fields (structure persistence):
     , sdTexPalette ∷ !TexPalette
-        -- ^ Texture path↔id palette. Structure edits in sdEdits store
-        --   palette ids; this resolves them to paths → runtime handles
-        --   on load. Stable ids → no per-object remap. (Structures
-        --   themselves ride sdEdits as WeSetStructure — no separate
-        --   structure channel.)
-    -- v56 fields (item-instance identity, #67):
+        -- ^ Texture path↔id palette. Structure edits in each page's edits
+        --   store palette ids; this resolves them to paths → runtime
+        --   handles on load. Stable ids → no per-object remap.
     , sdNextItemInstanceId ∷ !Word64
         -- ^ Snapshot of 'nextItemInstanceIdRef' at save time. Restored
         --   (max'd, never lowered) on load so post-load item creation
         --   continues above every saved 'iiInstanceId' and can't reuse an
         --   id still held by a loaded item.
+    -- Multi-page fields (#215 / epic #214):
+    , sdActivePage   ∷ !WorldPageId
+        -- ^ The primary/active page at save time. Restores under id
+        --   @main_world@ (the documented convention that existing Lua /
+        --   headless code assumes) regardless of its original id.
+    , sdVisiblePages ∷ ![WorldPageId]
+        -- ^ Pages that were visible (wmVisible) at save time, so the
+        --   loaded game comes up showing what the player last saw.
+    , sdWorlds       ∷ ![WorldPageSave]
+        -- ^ Every saved world page. Today exactly one (the active world);
+        --   #216 will populate this from all of wmWorlds.
     } deriving (Show, Serialize, Generic)
+
+-- | The primary/active world page in a save — the one that restores as
+--   @main_world@. Falls back to the first page if 'sdActivePage' names no
+--   page in 'sdWorlds' (defensive; every real save records a valid active
+--   id). 'Nothing' only for a malformed empty-world save.
+activeWorldPage ∷ SaveData → Maybe WorldPageSave
+activeWorldPage sd =
+    case filter ((≡ sdActivePage sd) . wpsPageId) (sdWorlds sd) of
+        (w:_) → Just w
+        []    → case sdWorlds sd of
+                  (w:_) → Just w
+                  []    → Nothing
 
 -- | Persistable snapshot of `BuildingManager`. Drops `bmDefs`
 --   (regenerated from YAML at boot) and `bmSelected` (transient UI

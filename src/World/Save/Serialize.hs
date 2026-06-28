@@ -86,7 +86,13 @@ saveWorld rawName saveData = case sanitizeSaveName rawName of
                                     }
             encoded    = S.encode header <> S.encode saveData
         BS.writeFile binaryPath encoded
-        saveWorldGenYaml yamlPath (sdGenParams saveData)
+        -- The human-readable companion describes the primary (active)
+        -- world; per-world gen params now live in sdWorlds (#215). A
+        -- well-formed save always has an active page, but tolerate an
+        -- empty one by skipping the yaml rather than crashing the save.
+        case activeWorldPage saveData of
+            Just wps → saveWorldGenYaml yamlPath (wpsGenParams wps)
+            Nothing  → return ()
         return (Right ())
 
 -- | Load a world from disk.
@@ -124,11 +130,39 @@ loadWorld rawName = case sanitizeSaveName rawName of
             fail $ "Save format incompatible: expected v"
                 <> show currentSaveVersion
                 <> ", got v" <> show (shVersion h)
-        S.get
+        -- Validate sdWorlds cardinality at DECODE time so the load API
+        -- fails cleanly (Left → engine.loadSave returns false) before it
+        -- pauses the engine, restores Lua blobs, or marks the head world
+        -- loading. Catching it only in the world-thread handler would
+        -- wedge the session on the loading screen after those side effects.
+        sd ← S.get
+        checkWorldCount sd
 
 mapLeft ∷ Either a b → (a → c) → Either c b
 mapLeft (Left a)  f = Left (f a)
 mapLeft (Right b) _ = Right b
+
+-- | Reject a decoded save whose 'sdWorlds' cardinality this build can't
+--   handle. A valid v59 save carries exactly one page (the active world):
+--   this build's save command writes one and its load handler restores
+--   only the active page (#215). The schema already holds a list to make
+--   room for the all-pages save/load work (#216/#217), but until that
+--   lands we must REFUSE a multi-page v59 file rather than silently load
+--   one page and drop the rest.
+--
+--   Shared by the load decoder ('decodeVersioned') and the listing decoder
+--   ('decodeListingMeta') so 'listSaves' never advertises a save that
+--   'loadWorld' would refuse — otherwise the menu's Continue list could
+--   offer an unloadable save. The all-pages loader (#217) will relax this
+--   to accept N pages.
+checkWorldCount ∷ SaveData → S.Get SaveData
+checkWorldCount sd = case sdWorlds sd of
+    []  → fail "Save contains no world pages (corrupt or truncated file)"
+    [_] → pure sd
+    ws  → fail $ "Save contains " <> show (length ws)
+              <> " world pages, but this build restores only the active"
+              <> " page (multi-page save/load not yet implemented — see"
+              <> " #214). Refusing to load to avoid silently dropping pages."
 
 -- | List available saves (returns metadata only).
 --   Checks both directory-based saves and legacy flat files.
@@ -180,7 +214,10 @@ listSaves logger = do
         h ← S.get
         when (shMagic h ≠ saveMagic) $ fail "bad magic"
         when (shVersion h ≠ currentSaveVersion) $ fail "version mismatch"
-        S.get
+        -- Same cardinality gate as loadWorld so listSaves never lists a
+        -- save engine.loadSave would refuse (empty / multi-page v59).
+        sd ← S.get
+        checkWorldCount sd
 
 -- | Canonicalize a save timestamp to the fixed-width microsecond ISO
 --   form (@%FT%T%6QZ@) used by the sort in 'listSaves' and by
