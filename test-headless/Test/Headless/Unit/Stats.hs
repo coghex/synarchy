@@ -8,8 +8,9 @@ module Test.Headless.Unit.Stats (spec) where
 import UPrelude
 import Test.Hspec
 import System.Random (mkStdGen)
-import Unit.Stats (rollStat, effectiveStat, applySkillXP)
-import Unit.Types (StatModifier(..))
+import qualified Data.Text as T
+import Unit.Stats (rollStat, effectiveStat, applySkillXP, pickName)
+import Unit.Types (StatModifier(..), NamePool(..))
 
 -- | Roll one stat with the given seed and return just the value.
 rollOne ∷ Float → Float → Int → Float
@@ -135,3 +136,23 @@ spec = do
             -- Just verify it doesn't crash / NaN.
             let v = applySkillXP 0.0 1.0
             v `shouldSatisfy` (\x → not (isNaN x) ∧ not (isInfinite x))
+
+    describe "pickName (#264)" $ do
+        let givenFamily = NamePool ["Mira", "Kael"] ["Vellan", "Thorne"]
+            givenOnly   = NamePool ["Pip"] []
+            emptyPool   = NamePool [] []
+            pickOne p s = fst (pickName p (mkStdGen s))
+        it "joins a given and family name with a space" $ do
+            let nm = pickOne givenFamily 1
+            length (T.words nm) `shouldBe` 2
+        it "draws given/family from the declared pools" $ do
+            let nm = pickOne givenFamily 1
+                [g, f] = T.words nm
+            g `shouldSatisfy` (`elem` npGiven givenFamily)
+            f `shouldSatisfy` (`elem` npFamily givenFamily)
+        it "yields a single token when family list is empty" $
+            pickOne givenOnly 5 `shouldBe` "Pip"
+        it "yields \"\" for an empty pool" $
+            pickOne emptyPool 5 `shouldBe` ""
+        it "is deterministic for a given seed" $
+            pickOne givenFamily 42 `shouldBe` pickOne givenFamily 42

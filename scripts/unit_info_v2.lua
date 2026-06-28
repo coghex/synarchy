@@ -62,6 +62,7 @@ unitInfoV2.lastContentUid = nil   -- (uid, subtab) we last built content for
 unitInfoV2.lastContentTab = nil
 
 -- Header
+unitInfoV2.headerNameLabelId   = nil  -- the name row; refreshed per active unit (#264)
 unitInfoV2.headerTypeLabelId   = nil  -- the "acolyte" row; refreshed per active unit
 unitInfoV2.headerActionLabelId = nil  -- the action row; refreshed per active unit from unit_ai
 
@@ -269,6 +270,7 @@ local function clearOwned()
     unitInfoV2.invRows         = {}
     unitInfoV2.lastInvKey      = nil
 
+    unitInfoV2.headerNameLabelId   = nil
     unitInfoV2.headerTypeLabelId   = nil
     unitInfoV2.headerActionLabelId = nil
 
@@ -3285,9 +3287,10 @@ end
 -----------------------------------------------------------
 -- Header: stacks Name / Type / Role / Action rows in a virtual rect.
 -- No box around it; section boundaries are marked by horizontal rules.
--- Name + Role are placeholders (real values aren't implemented yet);
--- Type and Action are live — Type shows the unit's def name, Action
--- shows the current AI action mapped through ACTION_DISPLAY below.
+-- Name (#264), Type and Action are live — Name shows the unit's personal
+-- name (or species label for the unnamed), Type shows the unit's def
+-- name, Action shows the current AI action mapped through ACTION_DISPLAY
+-- below. Role remains a placeholder (see #265).
 -----------------------------------------------------------
 
 -- Map unit_ai action names → human-readable display strings.
@@ -3315,7 +3318,7 @@ local function placeHeader(x, y, w, h)
     local rowH = math.floor(h / #rows)
     local fontSize = 16
     for i, text in ipairs(rows) do
-        local isLive = (i == 2 or i == 4)   -- type + action are real content
+        local isLive = (i == 1 or i == 2 or i == 4)  -- name + type + action are real content
         local lblId = label.new({
             name     = "unit_info_v2_header_row" .. i,
             text     = text,
@@ -3333,7 +3336,9 @@ local function placeHeader(x, y, w, h)
                      + math.floor(fontSize * 0.3)
         UI.addToPage(unitInfoV2.page, lblHandle, x + SECTION_PAD, rowY)
         UI.setZIndex(lblHandle, 12)
-        if i == 2 then
+        if i == 1 then
+            unitInfoV2.headerNameLabelId = lblId
+        elseif i == 2 then
             unitInfoV2.headerTypeLabelId = lblId
         elseif i == 4 then
             unitInfoV2.headerActionLabelId = lblId
@@ -3572,6 +3577,19 @@ function unitInfoV2.update(dt)
     -- by a content-hash so the per-tick redraw is cheap when nothing
     -- has changed.
     rebuildInventorySection()
+
+    -- Header name row (#264): the unit's personal name when it has one,
+    -- else its species label (display_name / prettified def name).
+    if unitInfoV2.activeUid and unitInfoV2.headerNameLabelId then
+        local info = unit.getInfo(unitInfoV2.activeUid)
+        local nameText
+        if info and info.name and info.name ~= "" then
+            nameText = info.name
+        else
+            nameText = (info and info.displayName) or "—"
+        end
+        label.setText(unitInfoV2.headerNameLabelId, nameText)
+    end
 
     -- Header type row: rewrite each tick from the active unit's def.
     -- All units are "acolyte" right now so this is effectively a no-op

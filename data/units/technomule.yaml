@@ -1,5 +1,6 @@
 units:
   - name: "technomule"
+    display_name: "Technomule"
     sprite: "assets/textures/units/technomule/animations/idle/south/frame_000.png"
     # Big pack quadruped — bear-class footprint.
     base_width: 16

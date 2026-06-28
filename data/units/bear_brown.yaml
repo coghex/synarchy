@@ -1,5 +1,8 @@
 units:
   - name: "bear_brown"
+    # No name_pool — wildlife isn't personally named (#264). The species
+    # label below is shown in its place.
+    display_name: "Brown Bear"
     sprite: "assets/textures/units/bear_brown/animations/idle/south/frame_000.png"
     # Bears are wider than humans. Acolyte = 8; bear roughly 2x that.
     base_width: 16

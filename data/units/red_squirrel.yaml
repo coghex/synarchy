@@ -1,5 +1,6 @@
 units:
   - name: "red_squirrel"
+    display_name: "Red Squirrel"
     sprite: "assets/textures/units/red_squirrel/animations/idle/south/frame_000.png"
     portrait: "assets/textures/units/red_squirrel/portrait.png"
     # Tiny critter. Acolyte = 8 (48px), bear = 16 (92px); the squirrel
