@@ -107,7 +107,7 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 56  -- v56: item-instance identity (iiInstanceId) + sdNextItemInstanceId (#67)
+currentSaveVersion = 57  -- v57: steep faces shed soil to bare rock in last-age erosion (#225)
                          -- v55: despike spike-only convergence pass (#254) — base
                          --      terrain output shifts on regen, so reject older saves
                          -- v54: structure edits (WeSetStructure/WeClearStructure) + sdTexPalette
