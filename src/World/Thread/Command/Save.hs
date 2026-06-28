@@ -129,33 +129,42 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , smPlateCount = wgpPlateCount params
                             , smTimestamp  = timestampTxt
                             }
+                        -- Per-world payload for the active page. #216 will
+                        -- build one of these for every page in wmWorlds;
+                        -- today we snapshot only the saved (active) page.
+                        wps = WorldPageSave
+                            { wpsPageId     = pageId
+                            , wpsGenParams  = params
+                            , wpsCameraX    = cx
+                            , wpsCameraY    = cy
+                            , wpsCameraZoom = camZoom cam
+                            , wpsCameraFacing = camFacing cam
+                            , wpsTimeHour   = h
+                            , wpsTimeMinute = m
+                            , wpsDateYear   = y
+                            , wpsDateMonth  = mo
+                            , wpsDateDay    = d
+                            , wpsTimeScale  = tScale
+                            , wpsMapMode    = mapMode
+                            , wpsToolMode   = toolMode
+                            , wpsEdits      = edits
+                            , wpsMineDesignations = mineDesigs
+                            , wpsGroundItems = groundItems
+                            , wpsSpoilPiles  = spoilPiles
+                            , wpsBuildings   = buildings
+                            , wpsUnits       = units
+                            , wpsUnitSimStates = simStates
+                            }
                         sd = SaveData
                             { sdMetadata   = meta
-                            , sdGenParams  = params
-                            , sdCameraX    = cx
-                            , sdCameraY    = cy
-                            , sdCameraZoom = camZoom cam
-                            , sdCameraFacing = camFacing cam
-                            , sdTimeHour   = h
-                            , sdTimeMinute = m
-                            , sdDateYear   = y
-                            , sdDateMonth  = mo
-                            , sdDateDay    = d
-                            , sdTimeScale  = tScale
-                            , sdMapMode    = mapMode
-                            , sdToolMode   = toolMode
                             , sdGameTime     = gameTime
                             , sdEnginePaused = paused
-                            , sdEdits        = edits
-                            , sdBuildings    = buildings
-                            , sdUnits        = units
-                            , sdUnitSimStates = simStates
                             , sdLuaModules   = luaBlobs
-                            , sdMineDesignations = mineDesigs
-                            , sdGroundItems  = groundItems
-                            , sdSpoilPiles   = spoilPiles
                             , sdTexPalette   = texPalette
                             , sdNextItemInstanceId = nextItemId
+                            , sdActivePage   = pageId
+                            , sdVisiblePages = [pageId]
+                            , sdWorlds       = [wps]
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -175,11 +184,20 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
 --   buildTimeline / computeOceanMap / initEarlyClimate steps
 --   because those are already baked into sdGenParams.
 handleWorldLoadSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → SaveData → IO ()
-handleWorldLoadSaveCommand env logger pageId saveData = do
+handleWorldLoadSaveCommand env logger pageId saveData
+  | (firstWps : _) ← sdWorlds saveData = do
     logInfo logger CatWorld $ "Loading save into world: "
         <> unWorldPageId pageId
 
-    let params    = sdGenParams saveData
+    -- #215: per-world state now lives in sdWorlds. Until the load handler
+    -- restores every page (#217), reconstruct only the active page — this
+    -- preserves the historical single-page load behaviour. The pattern
+    -- guard binds 'firstWps' as the fallback for a save whose recorded
+    -- active id is absent (activeWorldPage already prefers the active page).
+    let wps       = case activeWorldPage saveData of
+                      Just w  → w
+                      Nothing → firstWps
+        params    = wpsGenParams wps
         seed      = wgpSeed params
         worldSize = wgpWorldSize params
 
@@ -203,21 +221,21 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
 
     -- 2. Restore mutable game state from the save
     writeIORef (wsCameraRef worldState)
-        (WorldCamera (sdCameraX saveData) (sdCameraY saveData))
+        (WorldCamera (wpsCameraX wps) (wpsCameraY wps))
     writeIORef (wsTimeRef worldState)
-        (WorldTime (sdTimeHour saveData) (sdTimeMinute saveData))
+        (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
     writeIORef (wsDateRef worldState)
-        (WorldDate (sdDateYear saveData)
-                   (sdDateMonth saveData)
-                   (sdDateDay saveData))
+        (WorldDate (wpsDateYear wps)
+                   (wpsDateMonth wps)
+                   (wpsDateDay wps))
     -- Keep wsTimeScaleRef synchronized with the restored pause flag: a
     -- paused save (the normal auto-pause-on-save case) must load with the
     -- live clock frozen, not running at the player's saved speed. The
     -- chosen speed is preserved in sdTimeScale and reapplied when the
     -- player resumes (scripts/pause.lua prevTimeScale) (#42).
     writeIORef (wsTimeScaleRef worldState)
-        (if sdEnginePaused saveData then 0 else sdTimeScale saveData)
-    writeIORef (wsMapModeRef worldState) (sdMapMode saveData)
+        (if sdEnginePaused saveData then 0 else wpsTimeScale wps)
+    writeIORef (wsMapModeRef worldState) (wpsMapMode wps)
     -- A loaded world starts on the default tool, NOT the tool that was
     -- active at save time. The HUD toolbar always comes up on the
     -- default slot after a load (fresh sessions rebuild it there;
@@ -238,17 +256,17 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- v3 (Phase 2): restore edit log BEFORE chunk generation so the
     -- synchronous center chunk + every chunk pulled off the init queue
     -- replay any edits the player had made.
-    writeIORef (wsEditsRef worldState) (sdEdits saveData)
+    writeIORef (wsEditsRef worldState) (wpsEdits wps)
     -- v31 (mining): restore designations (incl. mid-dig corner
     -- progress). Markers render from the stored z, so this needs no
     -- chunk loading to be visible.
-    writeIORef (wsMineDesignationsRef worldState) (sdMineDesignations saveData)
+    writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
     -- v32 (ground items): heights derive from terrain at render, so
     -- restoration is position-only and needs no chunk loading.
-    writeIORef (wsGroundItemsRef worldState) (sdGroundItems saveData)
+    writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
     -- v34 (dig yields): spoil fills are relative to tile surfaces;
     -- promoted cells replay from sdEdits independently.
-    writeIORef (wsSpoilRef worldState) (sdSpoilPiles saveData)
+    writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
     -- v54 (structures): restore the texture palette BEFORE any chunk
     -- replays its WeSetStructure edits, so palette-id → path resolution
     -- is available. Structures themselves ride sdEdits (replayed per chunk).
@@ -305,9 +323,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- wrong chunk for synchronous regen, producing a blank center tile
     -- on load until the async queue catches up.
     let centerCoord@(ChunkCoord camCX camCY) =
-            cameraChunkCoord (sdCameraFacing saveData)
-                             (sdCameraX saveData)
-                             (sdCameraY saveData)
+            cameraChunkCoord (wpsCameraFacing wps)
+                             (wpsCameraX wps)
+                             (wpsCameraY wps)
         (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
@@ -357,7 +375,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     bSurvivingIds ← do
         currentBm ← readIORef (buildingManagerRef env)
         let (restored, orphans) =
-                fromBuildingSnapshot pageId (bmDefs currentBm) (sdBuildings saveData)
+                fromBuildingSnapshot pageId (bmDefs currentBm) (wpsBuildings wps)
             -- #191: the snapshot owns only THIS page. Replace just this
             -- page's slice of the global manager and keep other live
             -- pages' buildings intact — a wholesale write dropped them.
@@ -427,11 +445,11 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     uSurvivingIds ← do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
-                fromUnitSnapshot pageId (umDefs currentUm) (sdUnits saveData)
+                fromUnitSnapshot pageId (umDefs currentUm) (wpsUnits wps)
             liveUids = HM.keysSet (umInstances restoredUm)
             -- Drop sim states whose owning unit was orphaned.
             simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
-                                          (sdUnitSimStates saveData)
+                                          (wpsUnitSimStates wps)
             -- #191: keep units (and their sim states) belonging to OTHER
             -- live pages; replace only this page's slice of the global
             -- manager. A wholesale write dropped off-page units.
@@ -486,9 +504,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- takes grid coords (gx, gy), not world coords — go through
     -- worldToGrid so this matches the convention used everywhere else
     -- (Render.hs:136, Quads.hs:397, etc.).
-    let (camGX, camGY) = worldToGrid (sdCameraFacing saveData)
-                                     (sdCameraX saveData)
-                                     (sdCameraY saveData)
+    let (camGX, camGY) = worldToGrid (wpsCameraFacing wps)
+                                     (wpsCameraX wps)
+                                     (wpsCameraY wps)
         (surfaceElev, _mat) =
             elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
         startZSlice = surfaceElev + surfaceHeadroom
@@ -501,12 +519,12 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- decision at load time.
     atomicModifyIORef' (cameraRef env) $ \_ →
         (Camera2D
-            { camPosition     = (sdCameraX saveData, sdCameraY saveData)
+            { camPosition     = (wpsCameraX wps, wpsCameraY wps)
             , camVelocity     = (0, 0)
-            , camZoom         = sdCameraZoom saveData
+            , camZoom         = wpsCameraZoom wps
             , camZoomVelocity = 0
             , camRotation     = 0
-            , camFacing       = sdCameraFacing saveData
+            , camFacing       = wpsCameraFacing wps
             , camDragging     = False
             , camDragOrigin   = (0, 0)
             , camZSlice       = startZSlice
@@ -537,3 +555,10 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- gone-before-save id that collides with a live off-page entity uses
     -- that entity's own state, never the blob's — no misattribution.
     sendSaveLoaded env uSurvivingIds bSurvivingIds
+
+  | otherwise =
+      -- A well-formed save always records at least the active world page;
+      -- an empty sdWorlds means a corrupt or truncated file. Refuse rather
+      -- than crash the world thread.
+      logError logger CatWorld
+          "Cannot load save: save contains no world pages"

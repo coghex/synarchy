@@ -86,7 +86,13 @@ saveWorld rawName saveData = case sanitizeSaveName rawName of
                                     }
             encoded    = S.encode header <> S.encode saveData
         BS.writeFile binaryPath encoded
-        saveWorldGenYaml yamlPath (sdGenParams saveData)
+        -- The human-readable companion describes the primary (active)
+        -- world; per-world gen params now live in sdWorlds (#215). A
+        -- well-formed save always has an active page, but tolerate an
+        -- empty one by skipping the yaml rather than crashing the save.
+        case activeWorldPage saveData of
+            Just wps → saveWorldGenYaml yamlPath (wpsGenParams wps)
+            Nothing  → return ()
         return (Right ())
 
 -- | Load a world from disk.
