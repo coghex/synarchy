@@ -48,14 +48,28 @@ removeElevationSpikes
     → (VU.Vector Int, VU.Vector MaterialId)
     → (VU.Vector Int, VU.Vector MaterialId)
 removeElevationSpikes threshold maxIters bSize (elevVec, matVec) =
-    (go maxIters elevVec, matVec)
+    (go False spikeConvergeCap (go True maxIters elevVec), matVec)
   where
     area = bSize * bSize
 
-    go 0 ev = ev
-    go n ev =
-        let (ev', changed) = pass ev
-        in if changed then go (n - 1) ev' else ev'
+    -- Two phases. Phase 1 (cliff on) is the existing combined pass:
+    -- isolated-pillar spike removal AND the iteration-limited cliff
+    -- ramp that tames sheer walls. Its `maxIters` budget is deliberately
+    -- small so it doesn't over-flatten mountains (see project_timeline_
+    -- depth). But that same budget can run out mid-ramp on a steep peak:
+    -- the flank below the summit is still being lowered when the cap is
+    -- hit, leaving the summit standing as an isolated pillar (#254: seed
+    -- 1337 kept +16/+19 TERRAIN_SPIKE peaks because the cliff ramp never
+    -- finished re-exposing them). Phase 2 (cliff off) runs spike removal
+    -- ONLY, to convergence: it lowers such residual pillars to
+    -- mxNbr+(threshold-1) but never touches a tile's neighbours, so it
+    -- can't cascade or flatten slopes and settles in 1-2 passes.
+    spikeConvergeCap = 32
+
+    go _       0 ev = ev
+    go cliffOn n ev =
+        let (ev', changed) = pass cliffOn ev
+        in if changed then go cliffOn (n - 1) ev' else ev'
 
     -- Double-buffered: read neighbors from the immutable input `ev`,
     -- write changes to a fresh mutable `em`. This makes each pass
@@ -65,7 +79,7 @@ removeElevationSpikes threshold maxIters bSize (elevVec, matVec) =
     -- spike clusters resolve (audit #20). The outer `go` loop still
     -- iterates until convergence; updates just don't cascade within
     -- a single pass.
-    pass ev = runST $ do
+    pass cliffOn ev = runST $ do
         em ← VUM.new area
         forM_ [0 .. area - 1] $ \i →
             VUM.write em i (ev VU.! i)
@@ -102,7 +116,7 @@ removeElevationSpikes threshold maxIters bSize (elevVec, matVec) =
                     cliffThreshold = 28
                     spikeTarget = if e - mxNbr > threshold
                                   then mxNbr + (threshold - 1) else e
-                    cliffTarget = if e - mnNbr > cliffThreshold
+                    cliffTarget = if cliffOn ∧ e - mnNbr > cliffThreshold
                                   then mnNbr + cliffThreshold else e
                     target = min spikeTarget cliffTarget
                 when (target < e) $ do
