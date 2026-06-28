@@ -14,6 +14,8 @@ import Unit.Types
 mkDef ∷ HM.HashMap Text Text → UnitDef
 mkDef stateAnims = UnitDef
     { udName          = "t"
+    , udNamePool      = Nothing
+    , udDisplayName   = Nothing
     , udTexture       = TextureHandle 0
     , udPortrait      = Nothing
     , udDirSprites    = Map.empty

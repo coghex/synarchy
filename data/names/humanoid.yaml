@@ -1,0 +1,84 @@
+# Name pool for humanoid units (acolytes). Referenced from a unit def's
+# `name_pool: "humanoid"` key. At spawn the engine draws one `given` and
+# (if the list is non-empty) one `family` entry and joins them with a
+# space to form the unit's persistent display name (#264).
+#
+# Both lists are optional and independent: a pool with only `given`
+# yields single-token names; an empty pool yields no name (the unit
+# falls back to its species label in the UI).
+given:
+  - Aldous
+  - Aurelio
+  - Bran
+  - Caspian
+  - Cyriac
+  - Dorian
+  - Edric
+  - Emeric
+  - Fenwick
+  - Gideon
+  - Hadrian
+  - Ignatius
+  - Jorin
+  - Kael
+  - Lazarus
+  - Lucian
+  - Magnus
+  - Nadir
+  - Orrin
+  - Phineas
+  - Quillon
+  - Rafael
+  - Silas
+  - Thaddeus
+  - Tobias
+  - Ulric
+  - Valen
+  - Wystan
+  - Amara
+  - Beatrix
+  - Calla
+  - Despina
+  - Elowen
+  - Fia
+  - Galena
+  - Helena
+  - Isolde
+  - Junia
+  - Liora
+  - Mira
+  - Nerys
+  - Ottoline
+  - Perpetua
+  - Rosalind
+  - Seraphine
+  - Thessaly
+  - Verena
+  - Wilhelmina
+  - Yara
+family:
+  - Ashforth
+  - Brandt
+  - Calvert
+  - Dreghorn
+  - Ellory
+  - Farrow
+  - Greaves
+  - Halloran
+  - Inwood
+  - Jardine
+  - Kessler
+  - Larkspur
+  - Marchetti
+  - Nascimbeni
+  - Orvieto
+  - Pellan
+  - Quennell
+  - Rookwood
+  - Saltire
+  - Thorne
+  - Underhill
+  - Vellan
+  - Wendover
+  - Yorke
+  - Ziegler

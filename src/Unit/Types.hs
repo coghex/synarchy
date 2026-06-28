@@ -9,6 +9,7 @@ module Unit.Types
     , StrikeProfile(..)
     , NaturalResistance(..)
     , defaultNaturalResistance
+    , NamePool(..)
     , UnitDef(..)
     , UnitInstance(..)
     , UnitManager(..)
@@ -299,10 +300,29 @@ data NaturalResistance = NaturalResistance
 defaultNaturalResistance ∷ NaturalResistance
 defaultNaturalResistance = NaturalResistance 0.0 0.0 0.0
 
+-- | A pool of names a unit type can draw from at spawn (#264). `npGiven`
+--   is required for a unit to be named; `npFamily` is optional — a pool
+--   with only given names yields single-token names. An empty pool means
+--   the unit type has no personal names and falls back to its species
+--   label in the UI. Loaded from data/names/<id>.yaml, referenced from a
+--   unit def's `name_pool:` key.
+data NamePool = NamePool
+    { npGiven  ∷ ![Text]
+    , npFamily ∷ ![Text]
+    } deriving (Show, Eq, Generic)
+
 -- | A unit definition (loaded from YAML, immutable after init).
 --   This is the "template" — one per unit type.
 data UnitDef = UnitDef
     { udName       ∷ !Text                            -- ^ e.g. "acolyte"
+    , udNamePool   ∷ !(Maybe NamePool)
+      -- ^ resolved name pool for this unit type, or Nothing if the def
+      --   declares no `name_pool` (animals). When present, spawn draws a
+      --   persistent personal name into `uiName` (#264).
+    , udDisplayName ∷ !(Maybe Text)
+      -- ^ optional human-readable species label ("Brown Bear") for the
+      --   UI. Nothing → the prettified def name is used. Surfaced through
+      --   unit.getInfo as `displayName`.
     , udTexture    ∷ !TextureHandle                   -- ^ default sprite handle
     , udPortrait   ∷ !(Maybe TextureHandle)
       -- ^ optional authored portrait for the info panel (YAML `portrait:`).
@@ -396,6 +416,11 @@ data UnitDef = UnitDef
 --   Engine is agnostic to player vs NPC — Lua drives behavior.
 data UnitInstance = UnitInstance
     { uiDefName    ∷ !Text           -- ^ which UnitDef this came from
+    , uiName       ∷ !Text
+      -- ^ persistent per-unit display name, drawn from the def's name
+      --   pool at spawn (#264). Empty for unnamed units (animals): the
+      --   UI then falls back to the species label. Roundtrips through
+      --   SaveData (v57+).
     , uiPage       ∷ !WorldPageId
       -- ^ which world this unit belongs to. Runtime-only (not serialized
       --   — a save holds one world; loaded units are stamped with the

@@ -650,7 +650,17 @@ function cargoInventoryPanel.handleItemRightClick(elemHandle)
     local items = {}
     if target then
         local info = unit.getInfo(target)
-        local who  = (info and info.defName or "unit")
+        -- Prefer the unit's personal name, else its species label (#264).
+        local who  = "unit"
+        if info then
+            if info.name and info.name ~= "" then
+                who = info.name
+            elseif info.displayName and info.displayName ~= "" then
+                who = info.displayName
+            elseif info.defName then
+                who = info.defName
+            end
+        end
         items[1] = {
             label    = "Withdraw with " .. who,
             callback = function()
