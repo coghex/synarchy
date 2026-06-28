@@ -37,6 +37,26 @@ import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..)
 slopeHardnessThreshold ∷ Float
 slopeHardnessThreshold = 0.7
 
+-- | Jaggedness knobs for EXPOSED HARD ROCK (issue #224). The chance a
+--   bare-rock tile gets a semi-random jagged slope is
+--   @clamp01 (base + (hardness − threshold)·hardK + reliefNorm·reliefK)@,
+--   so the harder and steeper the rock, the more broken it reads. These
+--   are the inverse of the soft-terrain roughness taper in
+--   'applyRoughness' (which fades OUT as material softens). Tunable;
+--   render-only, so changing them never touches saved terrain.
+rockJaggedBase ∷ Float
+rockJaggedBase = 0.45
+
+rockJaggedHardK ∷ Float
+rockJaggedHardK = 1.0
+
+rockJaggedReliefK ∷ Float
+rockJaggedReliefK = 0.4
+
+-- | Local relief (in z-levels) at which rock jaggedness saturates.
+rockJaggedReliefMax ∷ Float
+rockJaggedReliefMax = 6.0
+
 tilePixelWidth ∷ Int
 tilePixelWidth = 96
 
@@ -164,9 +184,80 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
                .|. (if bitE then 2 else 0)
                .|. (if bitS then 4 else 0)
                .|. (if bitW then 8 else 0) ∷ Word8
-    in if not passesHardness ∨ rawSlope ≡ 0 ∨ rawSlope ≡ 15
-       then 0
-       else applyRoughness seed coord lx ly hardness rawSlope
+
+        -- Local relief: the steepest single-neighbour DROP from this tile
+        -- (absent neighbours read back as the minBound sentinel and never
+        -- count). Drives both the bare-rock eligibility (a tile with no
+        -- downhill neighbour is flat-topped and stays blocky) and the
+        -- jaggedness intensity.
+        drops = [ z - nz | nz ← [neighN, neighE, neighS, neighW]
+                         , nz ≠ minBound, nz < z ]
+        maxDrop = if null drops then 0 else maximum drops
+    in if myHasFluid
+       -- Wet tiles (river bed / basin floor) keep the existing rule
+       -- unchanged: the bed slopes to match the water surface, gated the
+       -- same way it always was. Jaggedness is a DRY-rock feature only.
+       then if not passesHardness ∨ rawSlope ≡ 0 ∨ rawSlope ≡ 15
+            then 0
+            else applyRoughness seed coord lx ly hardness rawSlope
+       else if passesHardness
+            -- Soft dry terrain: unchanged terrace rule. Flat biomes have
+            -- no qualifying step and stay flat-topped.
+            then if rawSlope ≡ 0 ∨ rawSlope ≡ 15
+                 then 0
+                 else applyRoughness seed coord lx ly hardness rawSlope
+            -- Exposed hard rock (the material the soft gate bars). #224:
+            -- make mountain flanks slope and peaks read as jagged rock.
+            else rockJaggedSlope seed coord lx ly hardness z maxDrop rawSlope
+                                 neighN neighE neighS neighW
+
+-- | Slope rule for EXPOSED HARD ROCK — material at/above
+--   'slopeHardnessThreshold', which the soft-terrain gate in
+--   'computeTileSlope' otherwise forces flat. Bare rock on mountain
+--   flanks and peaks should read as jagged, broken rock rather than
+--   blocky prisms (issue #224). It dovetails with #225: gentle ground
+--   keeps its soil veneer (soft surface → soft path), so only steep,
+--   soil-shed faces reach this rock path.
+--
+--   Two effects, both gated on the tile having a downhill neighbour
+--   (@maxDrop ≥ 1@) so flat/low rocky ground — plateau tops, rocky flats
+--   — stays blocky and genuinely flat biomes are untouched:
+--
+--     1. Clean single-step flanks slope toward their lower neighbours
+--        ('rawSlope'), so rock mountainsides taper instead of stepping.
+--     2. JAGGEDNESS: with a probability that RISES with hardness and local
+--        relief (the inverse of 'applyRoughness'), override with a
+--        semi-random slope toward ONE strictly-lower neighbour. This
+--        breaks the regular terrace into irregular angular rock, and fires
+--        even where no neighbour is exactly one lower (steep multi-level
+--        faces) — the case the strict terrace rule leaves flat.
+--
+--   The ramp only ever points at a strictly-lower neighbour, so it stays
+--   a geometrically valid (and pathing-walkable) ramp — never a notch
+--   into a higher wall.
+rockJaggedSlope ∷ Word64 → ChunkCoord → Int → Int → Float → Int → Int → Word8
+                → Int → Int → Int → Int → Word8
+rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
+                neighN neighE neighS neighW
+    | maxDrop < 1 = 0   -- no downhill neighbour: flat-topped rock, blocky
+    | otherwise =
+        let h    = tileHash seed cx cy lx ly
+            roll = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
+            reliefNorm = min 1.0 (fromIntegral maxDrop / rockJaggedReliefMax)
+            jaggedChance = clamp01 $ rockJaggedBase
+                + (hardness - slopeHardnessThreshold) * rockJaggedHardK
+                + reliefNorm * rockJaggedReliefK
+            -- Candidate ramp directions: strictly-lower cardinal
+            -- neighbours. maxDrop ≥ 1 guarantees this list is non-empty.
+            cand = [ b | (b, nz) ← [ (1 ∷ Word8, neighN), (2, neighE)
+                                   , (4, neighS), (8, neighW) ]
+                       , nz ≠ minBound, nz < z ]
+        in if roll < jaggedChance ∧ not (null cand)
+           then cand !! fromIntegral ((h `shiftR` 8) `mod`
+                                      fromIntegral (length cand))
+           else if rawSlope ≢ 0 ∧ rawSlope ≢ 15
+                then rawSlope   -- clean terrace flank, no jaggedness roll
+                else 0
 
 slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → V.Vector (Maybe FluidCell)
