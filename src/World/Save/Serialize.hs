@@ -142,27 +142,19 @@ mapLeft ∷ Either a b → (a → c) → Either c b
 mapLeft (Left a)  f = Left (f a)
 mapLeft (Right b) _ = Right b
 
--- | Reject a decoded save whose 'sdWorlds' cardinality this build can't
---   handle. A valid v59 save carries exactly one page (the active world):
---   this build's save command writes one and its load handler restores
---   only the active page (#215). The schema already holds a list to make
---   room for the all-pages save/load work (#216/#217), but until that
---   lands we must REFUSE a multi-page v59 file rather than silently load
---   one page and drop the rest.
+-- | Reject a decoded save with NO world pages (corrupt / truncated). Any
+--   non-empty 'sdWorlds' is accepted: the save command snapshots every live
+--   page (#216) and the load handler restores all of them (#217/#218), so a
+--   multi-page save is fully supported. Only the empty case is rejected, so
+--   the rest of the loader can assume at least one page.
 --
 --   Shared by the load decoder ('decodeVersioned') and the listing decoder
 --   ('decodeListingMeta') so 'listSaves' never advertises a save that
---   'loadWorld' would refuse — otherwise the menu's Continue list could
---   offer an unloadable save. The all-pages loader (#217) will relax this
---   to accept N pages.
+--   'loadWorld' would refuse.
 checkWorldCount ∷ SaveData → S.Get SaveData
 checkWorldCount sd = case sdWorlds sd of
-    []  → fail "Save contains no world pages (corrupt or truncated file)"
-    [_] → pure sd
-    ws  → fail $ "Save contains " <> show (length ws)
-              <> " world pages, but this build restores only the active"
-              <> " page (multi-page save/load not yet implemented — see"
-              <> " #214). Refusing to load to avoid silently dropping pages."
+    [] → fail "Save contains no world pages (corrupt or truncated file)"
+    _  → pure sd
 
 -- | List available saves (returns metadata only).
 --   Checks both directory-based saves and legacy flat files.
@@ -215,7 +207,7 @@ listSaves logger = do
         when (shMagic h ≠ saveMagic) $ fail "bad magic"
         when (shVersion h ≠ currentSaveVersion) $ fail "version mismatch"
         -- Same cardinality gate as loadWorld so listSaves never lists a
-        -- save engine.loadSave would refuse (empty / multi-page v59).
+        -- save engine.loadSave would refuse (only the empty/corrupt case).
         sd ← S.get
         checkWorldCount sd
 
