@@ -239,7 +239,9 @@ function game.onMouseDown(button, x, y)
         -- faction (portal spawns → "player"; world-gen wildlife
         -- spawns → "wildlife").
         if debugOverlay.armedDef then
-            local gx, gy = world.getHoverTile()
+            -- Live pick at the click coords, not the 0.1s-cached hover, so
+            -- a fast move-then-click spawns under the click (#123).
+            local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 unit.spawn(debugOverlay.armedDef, gx + 0.5, gy + 0.5,
                            nil, "debug")
@@ -253,11 +255,12 @@ function game.onMouseDown(button, x, y)
         -- derives from terrain at render). Tile-center fallback
         -- covers the no-hover edge case.
         if debugOverlay.armedItemDef then
-            local hx, hy = world.getHoverPos()
+            -- Live sub-tile pick at the click coords (#123).
+            local hx, hy = world.pickPos(x, y)
             if hx and hy then
                 item.spawnGround(debugOverlay.armedItemDef, hx, hy)
             else
-                local gx, gy = world.getHoverTile()
+                local gx, gy = world.pickTile(x, y)
                 if gx and gy then
                     item.spawnGround(debugOverlay.armedItemDef,
                                      gx + 0.5, gy + 0.5)
@@ -269,7 +272,7 @@ function game.onMouseDown(button, x, y)
         -- Debug fluid-spawn mode: arms a kind ("water" / "lava"); the
         -- click places one tile of that fluid on top of the column.
         if debugOverlay.armedFluidType then
-            local gx, gy = world.getHoverTile()
+            local gx, gy = world.pickTile(x, y)  -- live pick (#123)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local worldId = (hud and hud.worldId) or "test_arena"
@@ -283,7 +286,7 @@ function game.onMouseDown(button, x, y)
         -- raises the column at the hover tile one z of that material
         -- (WeAddTile through the edit log — persists like any edit).
         if debugOverlay.armedTerrainId then
-            local gx, gy = world.getHoverTile()
+            local gx, gy = world.pickTile(x, y)  -- live pick (#123)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local worldId = (hud and hud.worldId) or "test_arena"
@@ -297,7 +300,7 @@ function game.onMouseDown(button, x, y)
         -- stamps that premade structure (room/outpost/...) anchored at the
         -- hover tile (world.setCell terrain edits + content spawns).
         if debugOverlay.armedLocation then
-            local gx, gy = world.getHoverTile()
+            local gx, gy = world.pickTile(x, y)  -- live pick (#123)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local worldId = (hud and hud.worldId) or "test_arena"
@@ -312,12 +315,14 @@ function game.onMouseDown(button, x, y)
         -- post). Floor/ceiling/post place on the clicked tile; a wall goes
         -- in the clicked QUARTER of the tile (→ its diamond edge).
         if debugOverlay.armedStructure then
-            -- Derive the tile from the FRACTIONAL hover position (floor), NOT
-            -- getHoverTile: the latter rounds in a ~0.17-tile-shifted space, so
-            -- near a tile border it disagrees with the quarter-corner/edge frac
-            -- (computed from getHoverPos) → posts landed on the wrong tile and
-            -- the floor-gate flaked. floor(hx,hy) keeps tile + corner consistent.
-            local hx, hy = world.getHoverPos()
+            -- Derive the tile from the FRACTIONAL pick (floor), NOT pickTile:
+            -- the latter rounds in a ~0.17-tile-shifted space, so near a tile
+            -- border it disagrees with the quarter-corner/edge frac (from the
+            -- fractional pick) → posts landed on the wrong tile and the
+            -- floor-gate flaked. floor(hx,hy) keeps tile + corner consistent.
+            -- pickPos runs the hit-test live at the click coords, not the
+            -- 0.1s-cached hover (#123).
+            local hx, hy = world.pickPos(x, y)
             if hx and hy then
                 local structures = require("scripts.structures")
                 structures.placeKind(math.floor(hx), math.floor(hy),
@@ -759,7 +764,9 @@ function game.onMouseDown(button, x, y)
         -- tile cursor — that's fine, it doesn't touch unit selection.
         local selected = unit.getSelected()
         if selected and #selected > 0 then
-            local gx, gy = world.getHoverTile()
+            -- Live pick at the click coords so the move order targets the
+            -- tile under the click, not the 0.1s-cached hover (#123).
+            local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 local tx = gx + 0.5
                 local ty = gy + 0.5
@@ -782,7 +789,10 @@ function game.onMouseDown(button, x, y)
             -- item menu ("Info") as a smoke test of the right-click +
             -- context-menu plumbing; per-target providers replace
             -- this hardcoded list later.
-            local gx, gy = world.getHoverTile()
+            -- Capture the right-clicked tile with a live pick at the click
+            -- coords (the cached hover lags a fast move, and once the menu
+            -- opens the cursor moves off the tile anyway) (#123).
+            local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local contextMenu = require("scripts.ui.context_menu")
