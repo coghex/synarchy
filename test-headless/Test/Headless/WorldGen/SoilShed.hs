@@ -52,8 +52,17 @@ spec = do
             gmIntrusionDepth gm `shouldSatisfy` (≥ 1)
 
         it "still caps a gentle 2-tile slope with soil" $ do
-            -- maxRelief 2 < soilShedRelief 3 → soil survives, just thinner.
+            -- downhill drop 2 < soilShedRelief 3 → soil survives, thinner.
             let gm = run 50 (48, 50, 50, 50)
+            gmMaterialOverride gm `shouldSatisfy` maybe False isSoil
+            gmIntrusionDepth gm `shouldSatisfy` (≥ 1)
+
+        it "keeps soil at the FOOT of a cliff (tall uphill neighbour)" $ do
+            -- The high side of a step sheds; the LOW side (this tile, with
+            -- a neighbour 4 tiles ABOVE it) is a valley floor / cliff base
+            -- where eroded soil settles — its downhill drop is 0, so it
+            -- must keep a soil cap even though the absolute relief is 4.
+            let gm = run 50 (54, 50, 50, 50)
             gmMaterialOverride gm `shouldSatisfy` maybe False isSoil
             gmIntrusionDepth gm `shouldSatisfy` (≥ 1)
 

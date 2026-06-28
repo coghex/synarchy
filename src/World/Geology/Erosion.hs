@@ -232,27 +232,33 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            -- Round toward zero to avoid jitter on small differences
            delta = if abs rawDelta < 0.5 then 0
                    else truncateTowardZero rawDelta
-           -- Local relief: the steepest single-neighbour drop, in tiles.
-           --   Unlike 'slopeNorm' (deviation from the neighbour AVERAGE,
-           --   which a uniformly steep mountainside reads as ~0), this is
-           --   a true local-gradient measure: a 45° face reads ≥1, a cliff
-           --   reads several tiles. It drives ONLY the last-age soil veneer
-           --   (below) — the erosion math keeps using the average-deviation
-           --   slopeNorm so terrain relief is unchanged. (#225)
-           maxRelief = maximum [ abs (elev - nN), abs (elev - nS)
-                               , abs (elev - nE), abs (elev - nW) ] ∷ Int
-           reliefNorm = min 1.0 (fromIntegral maxRelief / 6.0) ∷ Float
+           -- Local downhill drop: how far this tile stands ABOVE its
+           --   lowest cardinal neighbour, in tiles. This is the DOWNHILL
+           --   gradient (the tile being the high side of a step), NOT the
+           --   absolute relief — a tile that merely sits at the FOOT of a
+           --   tall neighbour (a valley floor / cliff base) has a small
+           --   drop and so keeps its soil, which is where eroded material
+           --   is supposed to settle. Unlike 'slopeNorm' (deviation from
+           --   the neighbour AVERAGE, which a uniformly steep mountainside
+           --   reads as ~0), this reads a steep face directly: a 45° face
+           --   drops ≥1, a cliff several tiles. It drives ONLY the last-age
+           --   soil veneer (below) — the erosion math keeps using the
+           --   average-deviation slopeNorm so terrain relief is unchanged.
+           --   (#225)
+           maxDrop = maximum [ elev - nN, elev - nS
+                             , elev - nE, elev - nW ] ∷ Int
+           reliefNorm = min 1.0 (fromIntegral (max 0 maxDrop) / 6.0) ∷ Float
 
            -- Steep faces shed their soil to bare rock (real mountains do
-           -- this — soil's angle of repose is ~30-37°; a tile relief of ≥1
-           -- is already 45°). At/above 'soilShedRelief' tiles of local
-           -- relief the column exposes rock instead of a soil cap; gentler
-           -- ground keeps soil, thinned by steepness. Flat biomes
-           -- (relief 0) are unaffected. The eroded soil still accumulates
-           -- where terrain deposits (delta > 0, valley floors / cliff
-           -- bases) — see the deposition branch. (#225)
+           -- this — soil's angle of repose is ~30-37°; a downhill drop of
+           -- ≥1 is already 45°). At/above 'soilShedRelief' tiles of
+           -- downhill drop the column exposes rock instead of a soil cap;
+           -- gentler ground keeps soil, thinned by steepness. Flat biomes
+           -- (drop 0) and valley floors / cliff bases (the LOW side of a
+           -- step, drop ≤ 0) are unaffected — the eroded soil still
+           -- accumulates there (and via the deposition branch). (#225)
            soilShedRelief = 3 ∷ Int
-           exposeRock = isLastAge ∧ maxRelief ≥ soilShedRelief
+           exposeRock = isLastAge ∧ maxDrop ≥ soilShedRelief
 
            -- Soil depth for last-age: continuous function of relief
            -- instead of discrete thresholds (avoids visible contour lines).
