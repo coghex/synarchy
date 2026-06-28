@@ -1,15 +1,21 @@
 keybinds:
-  # Movement
-  moveUp: W
-  moveDown: S
-  moveLeft: A
-  moveRight: D
+  # Movement — arrows and WASD. Each action accepts a list of keys and
+  # fires when any of them is held.
+  moveUp: [Up, W]
+  moveDown: [Down, S]
+  moveLeft: [Left, A]
+  moveRight: [Right, D]
+
+  # Camera / view
+  rotateCCW: [Q]
+  rotateCW: [E]
+  resetZTracking: [Home]
 
   # System
-  # `escape` is intentionally hardcoded to Escape in the engine —
-  # rebinding the entry here has no effect.
-  escape: Escape
-  openShell: Grave
+  # `escape` and `openShell` are intentionally hardcoded in the engine —
+  # rebinding the entries here has no effect.
+  escape: [Escape]
+  openShell: [Grave]
 
-  # UI panels (alphanumeric, rebind freely)
-  toggleEventLog: L
+  # UI panels (rebind freely)
+  toggleEventLog: [L]

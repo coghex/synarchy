@@ -165,6 +165,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Magma.Shape
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
+                   Test.Headless.Input.Bindings
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.River.Graph

@@ -1,10 +1,18 @@
 keybinds:
-  # Movement
-  moveUp: W
-  moveDown: S
-  moveLeft: A
-  moveRight: D
-  
-  # System
-  escape: Escape
-  openShell:  Grave
+  # Movement — arrows and WASD
+  moveUp: [Up, W]
+  moveDown: [Down, S]
+  moveLeft: [Left, A]
+  moveRight: [Right, D]
+
+  # Camera / view
+  rotateCCW: [Q]
+  rotateCW: [E]
+  resetZTracking: [Home]
+
+  # System (hardcoded in the engine; not editable)
+  escape: [Escape]
+  openShell: [Grave]
+
+  # UI panels
+  toggleEventLog: [L]
