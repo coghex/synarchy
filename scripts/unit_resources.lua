@@ -247,6 +247,13 @@ local DEHYDRATION_REARM_FRAC   = 0.50  -- clear flag when hydration > 50%
 -- today; this is enough to make alert text presentable. If
 -- individual unit names land later this becomes <name>.
 local function unitLabel(info)
+    -- A named unit (acolyte) reads as its personal name (#264); otherwise
+    -- the species label (display_name / prettified def name) so survival
+    -- alerts say "Brown Bear", not "Bear_brown".
+    if info and info.name and info.name ~= "" then return info.name end
+    if info and info.displayName and info.displayName ~= "" then
+        return info.displayName
+    end
     local n = (info and info.defName) or "Unit"
     return n:sub(1, 1):upper() .. n:sub(2)
 end

@@ -298,6 +298,13 @@ instance FromJSON UnitYamlNaturalResistance where
 -- | Only @name@ and @sprite@ are mandatory; everything else has defaults
 data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
+    , uydNamePool          ∷ !(Maybe Text)
+      -- ^ optional: id of the name pool this unit type draws personal
+      --   names from (resolves to data/names/<id>.yaml). Nothing → the
+      --   unit type has no personal names (#264).
+    , uydDisplayName       ∷ !(Maybe Text)
+      -- ^ optional: human-readable species label ("Brown Bear") for the
+      --   UI. Nothing → the prettified def name is used.
     , uydSprite            ∷ !Text       -- ^ path to default sprite texture
     , uydBaseWidth         ∷ !Float      -- ^ ground contact diameter in pixels (0 = point)
     , uydMaxSpeed          ∷ !Float      -- ^ tiles/sec reference top speed at agility 1.0 (default 3.0)
@@ -305,8 +312,9 @@ data UnitYamlDef = UnitYamlDef
     , uydDirectionalSprites ∷ !(Map.Map Text Text)
       -- ^ optional: direction key ("S","SW",…) → texture path
     , uydPortrait          ∷ !(Maybe Text)
-      -- ^ optional: path to portrait texture for info panel.
-      -- Reserved for future use — parsed and carried but not yet rendered.
+      -- ^ optional: path to portrait texture for the info panel. When
+      --   present it is loaded into `udPortrait` and preferred by the v2
+      --   info pane; defs without it fall back to the live frame texture.
     , uydStateAnimations   ∷ !(Map.Map Text Text)
       -- ^ optional: state name → animation name (e.g. "idle" → "idle-standing")
     , uydAnimations        ∷ !(Map.Map Text UnitYamlAnim)
@@ -363,6 +371,8 @@ data UnitYamlDef = UnitYamlDef
 instance FromJSON UnitYamlDef where
     parseJSON = withObject "UnitYamlDef" $ \v → UnitYamlDef
         ⊚ v .:  "name"
+        ⊛ v .:? "name_pool"
+        ⊛ v .:? "display_name"
         ⊛ v .:  "sprite"
         ⊛ v .:? "base_width"          .!= 0.0
         ⊛ v .:? "max_speed"           .!= 3.0

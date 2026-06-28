@@ -107,7 +107,8 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 57  -- v57: steep faces shed soil to bare rock in last-age erosion (#225)
+currentSaveVersion = 58  -- v58: steep faces shed soil to bare rock in last-age erosion (#225)
+                         -- v57: per-unit name (uisName) (#264)
                          -- v55: despike spike-only convergence pass (#254) — base
                          --      terrain output shifts on regen, so reject older saves
                          -- v54: structure edits (WeSetStructure/WeClearStructure) + sdTexPalette
@@ -388,6 +389,9 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
     , uisBlood       ∷ !Float
       -- ^ v16: current blood volume in litres. Spawn-time seeded
       --   from body_mass; ticked down by Combat.Wounds bleeding.
+    , uisName        ∷ !Text
+      -- ^ v57: persistent per-unit display name (#264). "" for unnamed
+      --   units. Appended last — Serialize roundtrip is positional.
     } deriving (Show, Serialize, Generic)
 
 -- | Build a snapshot from a live UnitManager, restricted to the world
@@ -428,6 +432,7 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisImmuneResponse = uiImmuneResponse ui
     , uisImmunities  = uiImmunities ui
     , uisBlood       = uiBlood ui
+    , uisName        = uiName ui
     }
 
 -- | Restore a UnitManager from a snapshot. Like buildings: instances
@@ -460,6 +465,7 @@ fromUnitInstanceSnapshot ∷ WorldPageId → UnitDef → UnitInstanceSnapshot
                          → UnitInstance
 fromUnitInstanceSnapshot page def s = UnitInstance
     { uiDefName     = uisDefName s
+    , uiName        = uisName s
     , uiPage        = page                -- runtime world scoping (#78)
     , uiTexture     = udTexture def       -- re-resolved
     , uiDirSprites  = udDirSprites def    -- re-resolved

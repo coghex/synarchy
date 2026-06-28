@@ -88,6 +88,7 @@ module Engine.Scripting.Lua.API.Units
     , unitAddItemFn
     , unitGetVisibleTilesFn
     , unitGetFrameTextureFn
+    , unitGetPortraitTextureFn
     ) where
 
 import UPrelude
@@ -121,6 +122,8 @@ import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStrike(..),
                                UnitYamlNaturalResistance(..),
                                loadUnitYaml)
+import Engine.Asset.YamlNames (loadNamePool)
+import System.FilePath (takeDirectory, (</>), (<.>))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
@@ -174,6 +177,23 @@ loadUnitYamlFn env backendState = do
 
                     handle ← loadAndRegister env backendState lteq
                                  ("unit_" <> name) spritePath
+
+                    -- Load the optional authored portrait (info panel).
+                    -- Nothing → the UI mirrors the live animation frame.
+                    portraitH ← case uydPortrait def of
+                        Nothing → return Nothing
+                        Just p  → Just <$> loadAndRegister env backendState lteq
+                                     ("unit_" <> name <> "_portrait")
+                                     (T.unpack p)
+
+                    -- Resolve the name pool (#264). The id maps to a
+                    -- file alongside the units dir: data/names/<id>.yaml.
+                    mNamePool ← case uydNamePool def of
+                        Nothing     → return Nothing
+                        Just poolId → do
+                            let poolPath = takeDirectory (takeDirectory filePath)
+                                           </> "names" </> T.unpack poolId <.> "yaml"
+                            Just <$> loadNamePool logger poolPath
 
                     -- Load directional sprites (if any)
                     dirMap ← foldM (\acc (dirKey, texPath) →
@@ -323,7 +343,10 @@ loadUnitYamlFn env backendState = do
                             ]
                         unitDef = UnitDef
                             { udName          = name
+                            , udNamePool      = mNamePool
+                            , udDisplayName   = uydDisplayName def
                             , udTexture       = handle
+                            , udPortrait      = portraitH
                             , udDirSprites    = dirMap
                             , udBaseWidth     = uydBaseWidth def
                             , udMaxSpeed      = uydMaxSpeed def
@@ -366,6 +389,20 @@ loadUnitYamlFn env backendState = do
 
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
+
+-- | Prettify a def name for UI display when no explicit display_name is
+--   set: underscores → spaces, each word capitalised. "bear_brown" →
+--   "Bear Brown", "acolyte" → "Acolyte".
+prettifyDefName ∷ Text → Text
+prettifyDefName = T.unwords . map capWord . T.words . T.map underToSpace
+  where
+    underToSpace c = if c ≡ '_' then ' ' else c
+    capWord w = case T.uncons w of
+        Nothing      → w
+        Just (c, cs) → T.cons (toUpperC c) cs
+    toUpperC c = if c ≥ 'a' ∧ c ≤ 'z'
+                 then toEnum (fromEnum c - 32)
+                 else c
 
 -- | Surface Z at a tile in ONE specific world. The unit's height must
 --   come from the same page the unit is stamped into — walking wmVisible
@@ -2526,6 +2563,15 @@ unitGetInfoFn env = do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
                     Lua.setfield (-2) "defName"
+                    -- Persistent personal name; "" for unnamed units (#264).
+                    Lua.pushstring (TE.encodeUtf8 (uiName inst))
+                    Lua.setfield (-2) "name"
+                    -- Species label: the def's display_name, else a
+                    -- prettified def name ("bear_brown" → "Bear Brown").
+                    Lua.pushstring (TE.encodeUtf8
+                        (fromMaybe (prettifyDefName (uiDefName inst))
+                                   (mDef >>= udDisplayName)))
+                    Lua.setfield (-2) "displayName"
                     Lua.pushnumber (Lua.Number (realToFrac (uiGridX inst)))
                     Lua.setfield (-2) "gridX"
                     Lua.pushnumber (Lua.Number (realToFrac (uiGridY inst)))
@@ -4122,6 +4168,32 @@ unitGetFrameTextureFn env = do
                             -- flag from `pickFrame` is consumed by the
                             -- renderer at draw time, not here.
                             Just def → Just (fst (pickFrame now (camFacing cam) inst def))
+            case mTex of
+                Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
+                Nothing → Lua.pushinteger 0
+            return 1
+
+-- | unit.getPortraitTexture(uid) → texture handle integer (0 if the
+--   unit is missing or its def declares no authored `portrait:`).
+--   The info pane prefers this static authored portrait and falls back
+--   to `getFrameTexture` (the live animation frame) when it returns 0.
+unitGetPortraitTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetPortraitTextureFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushinteger 0
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mTex ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing → Nothing
+                    Just inst →
+                        case HM.lookup (uiDefName inst) (umDefs um) of
+                            Nothing  → Nothing
+                            Just def → udPortrait def
             case mTex of
                 Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
                 Nothing → Lua.pushinteger 0

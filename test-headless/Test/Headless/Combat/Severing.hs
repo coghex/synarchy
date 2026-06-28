@@ -17,7 +17,8 @@ import Combat.Wounds (propagateSevering)
 -- Body: arm → hand → finger chain, so we can watch the loss propagate.
 def ∷ UnitDef
 def = UnitDef
-    { udName = "t", udTexture = TextureHandle 0, udDirSprites = Map.empty
+    { udName = "t", udNamePool = Nothing, udDisplayName = Nothing
+    , udTexture = TextureHandle 0, udPortrait = Nothing, udDirSprites = Map.empty
     , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
     , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
     , udStatTemplates = HM.empty, udBodyTemplates = HM.empty
@@ -41,7 +42,7 @@ def = UnitDef
 
 inst ∷ [Wound] → UnitInstance
 inst ws = UnitInstance
-    { uiDefName = "t", uiPage = WorldPageId "test"
+    { uiDefName = "t", uiName = "", uiPage = WorldPageId "test"
     , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
     , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0, uiRealZ = 0
     , uiFacing = DirS, uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False

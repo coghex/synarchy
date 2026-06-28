@@ -20,7 +20,7 @@ import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
-import Unit.Stats (rollStat)
+import Unit.Stats (rollStat, pickName)
 import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
@@ -107,6 +107,12 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId) =
                         (HM.empty, g0)
                         (udKnowledgeTemplates def)
                 in (g', rolled)
+            -- Persistent personal name (#264): draw from the def's name
+            -- pool if it has one (humanoids); animals stay unnamed ("").
+            initialName ← case udNamePool def of
+                Nothing   → return ""
+                Just pool → atomicModifyIORef' (statRNGRef env) $ \g0 →
+                    let (nm, g') = pickName pool g0 in (g', nm)
             -- Starting inventory: look each entry up in the ItemManager
             -- and build an ItemInstance. Unknown names are dropped
             -- with a warning (load-order issue: items loaded after
@@ -140,6 +146,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId) =
                                           taggedInventory
             let inst = UnitInstance
                     { uiDefName    = defName
+                    , uiName       = initialName
                     , uiPage       = pageId
                     , uiTexture    = udTexture def
                     , uiDirSprites = udDirSprites def
