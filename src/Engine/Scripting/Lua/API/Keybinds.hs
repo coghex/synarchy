@@ -54,30 +54,56 @@ pushBindings bindings = do
             Lua.rawseti (-2) i
         Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 action))
 
+-- | Count every entry in a Lua table (array part *and* associative part)
+--   by full traversal. Reads only key/value *presence*, never converting
+--   a key (lua_tostring on a numeric key mutates it in place and breaks
+--   the following lua_next).
+tableEntryCount ∷ Lua.StackIndex → Lua.LuaE Lua.Exception Int
+tableEntryCount idx = do
+    Lua.pushvalue idx   -- work on a copy so a relative index stays stable
+    Lua.pushnil         -- first key
+    let loop c = do
+          more ← Lua.next (-2)
+          if not more
+            then Lua.pop 1 >> return c   -- pop the table copy; done
+            else Lua.pop 1 >> loop (c + 1)  -- pop value, keep key for next
+    loop (0 ∷ Int)
+
 -- | Strictly read a Lua string array at the given stack index into
 --   @[Text]@. Returns 'Nothing' (caller rejects the whole call) if the
---   argument is not a table or if *any* element is not a string — so a
---   partial/garbage list never produces a partial update. An empty table
---   yields @Just []@ (a valid unbind).
+--   argument is not a table, is not a pure sequence (any non-array /
+--   associative key), or has any non-string element — so a partial or
+--   malformed list never produces a partial update. An empty table yields
+--   @Just []@ (a valid unbind).
+--
+--   The pure-sequence check compares the dense length ('rawlen') against
+--   the total entry count: any extra associative key (e.g. @{ "W", x=1 }@)
+--   or a stray non-array key (e.g. @{ foo = "W" }@) makes the counts
+--   differ and is rejected. The element loop then rejects holes (a nil in
+--   the @1..n@ range) and any non-string value.
 readKeyList ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe [Text])
 readKeyList idx = do
     isT ← Lua.istable idx
     if not isT
       then return Nothing
       else do
-        n ← Lua.rawlen idx
-        let go i acc
-              | i > fromIntegral n = return (Just (reverse acc))
-              | otherwise = do
-                  _ ← Lua.rawgeti idx i
-                  ty ← Lua.ltype (-1)
-                  ms ← if ty ≡ Lua.TypeString then Lua.tostring (-1)
-                                              else return Nothing
-                  Lua.pop 1
-                  case ms of
-                      Just bs → go (i + 1) (TE.decodeUtf8 bs : acc)
-                      Nothing → return Nothing
-        go 1 []
+        n     ← Lua.rawlen idx
+        total ← tableEntryCount idx
+        if total ≠ fromIntegral n
+          then return Nothing   -- associative / mixed table → reject
+          else do
+            let go i acc
+                  | i > fromIntegral n = return (Just (reverse acc))
+                  | otherwise = do
+                      _ ← Lua.rawgeti idx i
+                      ty ← Lua.ltype (-1)
+                      ms ← if ty ≡ Lua.TypeString then Lua.tostring (-1)
+                                                  else return Nothing
+                      Lua.pop 1
+                      case ms of
+                          Just bs → go (i + 1) (TE.decodeUtf8 bs : acc)
+                          Nothing → return Nothing
+            go 1 []
 
 -- | engine.getKeybinds() → { action = { key1, key2, ... }, ... }
 getKeybindsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
