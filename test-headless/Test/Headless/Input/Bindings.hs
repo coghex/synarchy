@@ -109,40 +109,30 @@ spec = do
             let b = parseConfig "keybinds:\n  rotateCW: [Escape]\n"
             isActionDown "rotateCW" b (heldState [GLFW.Key'Escape]) `shouldBe` False
 
-    describe "keyMatchesAction (edge-trigger dispatch)" $ do
+    -- keyMatchesAction takes the *exact* GLFW key the engine recorded for
+    -- the press (carried with the key-down event), so it is side-exact and
+    -- needs no input-state lookup — a fast tap can't be dropped or
+    -- mis-attributed by a race (#275).
+    describe "keyMatchesAction (exact-key edge dispatch)" $ do
         let b = Map.fromList [ ("rotateCCW", ["Q"])
-                             , ("altAction", ["LeftShift"]) ]
-        it "matches the bound key by name (key held)" $
-            keyMatchesAction "Q" "rotateCCW" b (heldState [GLFW.Key'Q])
-                `shouldBe` True
+                             , ("sideAction", ["LeftShift"])
+                             , ("modAction",  ["Shift"]) ]
+        it "matches the bound key" $
+            keyMatchesAction GLFW.Key'Q "rotateCCW" b `shouldBe` True
 
         it "does not match a different key" $
-            keyMatchesAction "E" "rotateCCW" b (heldState [GLFW.Key'E])
-                `shouldBe` False
+            keyMatchesAction GLFW.Key'E "rotateCCW" b `shouldBe` False
 
         it "is false for an unbound action" $
-            keyMatchesAction "Q" "noSuchAction" b (heldState [GLFW.Key'Q])
-                `shouldBe` False
+            keyMatchesAction GLFW.Key'Q "noSuchAction" b `shouldBe` False
 
-        -- onKeyDown only ever delivers the merged "Shift"; the held side in
-        -- the input state disambiguates a side-specific binding (#275).
-        it "honors a side-specific binding: left shift held matches LeftShift" $
-            keyMatchesAction "Shift" "altAction" b (heldState [GLFW.Key'LeftShift])
-                `shouldBe` True
+        it "side-specific binding matches only that side" $ do
+            keyMatchesAction GLFW.Key'LeftShift  "sideAction" b `shouldBe` True
+            keyMatchesAction GLFW.Key'RightShift "sideAction" b `shouldBe` False
 
-        it "honors a side-specific binding: right shift held does NOT match LeftShift" $
-            keyMatchesAction "Shift" "altAction" b (heldState [GLFW.Key'RightShift])
-                `shouldBe` False
-
-        it "unambiguous key still matches if its press hasn't landed yet" $
-            -- A fast tap on a single-key event is never dropped.
-            keyMatchesAction "Q" "rotateCCW" b (heldState [])
-                `shouldBe` True
-
-        it "merged modifier with no held side does NOT guess (returns false)" $
-            -- Never fire a side-specific binding on a side we can't confirm.
-            keyMatchesAction "Shift" "altAction" b (heldState [])
-                `shouldBe` False
+        it "merged binding matches either side" $ do
+            keyMatchesAction GLFW.Key'LeftShift  "modAction" b `shouldBe` True
+            keyMatchesAction GLFW.Key'RightShift "modAction" b `shouldBe` True
 
     describe "save round-trip" $
         it "encodes then decodes back to the same bindings" $ do

@@ -128,37 +128,22 @@ isActionDown action bindings state =
 getKeysForAction ∷ Text → KeyBindings → Maybe [Text]
 getKeysForAction = Map.lookup
 
--- | True when the key that just triggered an @onKeyDown@ event is bound to
---   the action. Used for edge-triggered actions (rotate, z-reset), where the
---   specific pressed key must match rather than polling whether the action
---   is held ('isActionDown').
+-- | True when the exact GLFW key that triggered an @onKeyDown@ event is
+--   bound to the action. Used for edge-triggered actions (rotate, z-reset),
+--   where the specific pressed key must match rather than polling whether
+--   the action is held ('isActionDown').
 --
---   Lua's @onKeyDown@ receives the *merged* key name ("Shift" for either
---   side, see 'keyToText'), which alone can't honor a side-specific binding
---   like @LeftShift@. We disambiguate against the live 'InputState': of the
---   GLFW keys the event name covers, keep only those actually held, so the
---   match is side-specific in exactly the way 'isActionDown'/'checkKeyDown'
---   are. The input thread publishes the held key to 'InputState' before
---   queuing the Lua event (see "Engine.Input.Thread"), so the held side is
---   reliably visible here.
---
---   Fallback rule for the degenerate case where no candidate is recorded as
---   held (a press already released before the Lua thread drained the event):
---   an *unambiguous* single-key event still matches, so a fast tap is never
---   dropped; a *merged modifier* (more than one candidate) returns 'False'
---   rather than guess which side — guessing is exactly the wrong-side bug.
-keyMatchesAction ∷ Text → Text → KeyBindings → InputState → Bool
-keyMatchesAction keyName action bindings st =
+--   Taking the precise 'GLFW.Key' (carried with the key-down event, see
+--   "Engine.Scripting.Lua.Types") rather than a merged name string means
+--   the match is side-exact and needs no shared input-state lookup: a
+--   side-specific binding @LeftShift@ matches only a left shift, a merged
+--   binding @Shift@ matches either, and a fast tap can't be dropped or
+--   mis-attributed by a race with the input thread.
+keyMatchesAction ∷ GLFW.Key → Text → KeyBindings → Bool
+keyMatchesAction glfwKey action bindings =
     case Map.lookup action bindings of
-        Just boundKeys →
-            let candidates = parseKeyName keyName
-                held       = filter isHeld candidates
-                effective  = case (held, candidates) of
-                               ([], [c]) → [c]   -- unambiguous: tap fallback
-                               _         → held  -- else require a held key
-            in any (\b → any (`elem` effective) (parseKeyName b)) boundKeys
-        Nothing → False
-  where isHeld g = maybe False keyPressed (Map.lookup g (inpKeyStates st))
+        Just boundKeys → any (\b → glfwKey `elem` parseKeyName b) boundKeys
+        Nothing        → False
 
 -- | GLFW keys a key name matches. The canonical vocabulary is
 --   'keyToText' (what Lua's onKeyDown/onKeyUp report), inverted via

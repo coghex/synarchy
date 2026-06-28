@@ -181,20 +181,13 @@ processInput env inpSt event = case event of
                 Q.writeQueue (luaQueue env) LuaShellToggle
             when (key ≠ KeyGrave) $ do
                 let lq = luaQueue env
-                when (keyState ≡ GLFW.KeyState'Pressed) $ do
-                    -- Publish the held key to the shared input state BEFORE
-                    -- queuing the Lua key-down event. An onKeyDown handler
-                    -- that resolves the press through the binding table
-                    -- (engine.keyMatchesAction) reads inputStateRef to tell
-                    -- which side of a merged modifier ("Shift") is down; the
-                    -- Lua thread can drain this event before the loop's
-                    -- end-of-tick state write, so without this it would race
-                    -- and read the pre-press state. This is a consistent
-                    -- prefix of the state the loop writes when the tick ends
-                    -- (this thread is the sole writer of inputStateRef).
-                    writeIORef (inputStateRef env)
-                               (updateKeyState inpSt glfwKey keyState mods)
-                    Q.writeQueue lq (LuaKeyDownEvent key)
+                -- Carry the exact GLFW key alongside the merged logical key:
+                -- onKeyDown still gets the merged name string, but
+                -- engine.keyMatchesAction uses the precise key to resolve
+                -- which side of a modifier was pressed (race-free, vs. the
+                -- transient shared input state).
+                when (keyState ≡ GLFW.KeyState'Pressed) $
+                    Q.writeQueue lq (LuaKeyDownEvent key glfwKey)
                 when (keyState ≡ GLFW.KeyState'Released) $
                     Q.writeQueue lq (LuaKeyUpEvent key)
             when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do

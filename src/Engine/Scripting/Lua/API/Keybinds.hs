@@ -25,7 +25,8 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Input.Bindings
-  (KeyBindings, loadKeyBindings, saveKeyBindings, keyMatchesAction, reservedActions)
+  ( KeyBindings, loadKeyBindings, saveKeyBindings, keyMatchesAction
+  , reservedActions, parseKeyName )
 import Engine.Input.Types (textToKey)
 
 -- | A key name is bindable when it parses to a real key AND is not one of
@@ -200,22 +201,29 @@ loadDefaultKeybindsFn env = do
     return 1
 
 -- | engine.keyMatchesAction(key, action) → bool
---   True when the key that triggered an onKeyDown event is bound to the
---   action. Disambiguates merged modifier names against the live input
---   state (so a side-specific binding "LeftShift" matches only a held left
---   shift), letting edge-triggered Lua handlers dispatch through the binding
---   table the same way isActionDown polls it.
+--   True when the key that triggered the current onKeyDown event is bound to
+--   the action. Inside an onKeyDown dispatch it matches the exact physical
+--   key the engine recorded (currentKeyDownRef), so it resolves which side
+--   of a merged modifier was pressed with no race and no dropped tap. The
+--   `key` argument is the merged name the handler received; it is used only
+--   as a fallback if the function is somehow called outside a key-down
+--   dispatch (no recorded key), where each GLFW key the name covers is
+--   tested.
 keyMatchesActionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 keyMatchesActionFn env = do
     keyArg ← Lua.tostring 1
     actionArg ← Lua.tostring 2
     case (keyArg, actionArg) of
         (Just keyBS, Just actionBS) → do
+            let name   = TE.decodeUtf8 keyBS
+                action = TE.decodeUtf8 actionBS
             matches ← Lua.liftIO $ do
                 bindings ← readIORef (keyBindingsRef env)
-                inputSt  ← readIORef (inputStateRef env)
-                return $ keyMatchesAction (TE.decodeUtf8 keyBS)
-                                          (TE.decodeUtf8 actionBS) bindings inputSt
+                mKey     ← readIORef (currentKeyDownRef env)
+                return $ case mKey of
+                    Just g  → keyMatchesAction g action bindings
+                    Nothing → any (\g → keyMatchesAction g action bindings)
+                                  (parseKeyName name)
             Lua.pushboolean matches
         _ → Lua.pushboolean False
     return 1
