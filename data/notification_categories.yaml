@@ -10,13 +10,10 @@
 #   log   — default value of "event log"  checkbox
 #   popup — default value of "popup"      checkbox
 #   pause — default value of "pause"      checkbox
-# buttons        — optional list of {label, action} pairs. Defaults to
-#                  [{OK, dismiss}] if omitted. Action tags:
-#                    dismiss   — close the popup
-#                    go_to     — pan camera to the event's (gx, gy)
-#                                payload (set by engine.emitEventAt).
-#                                Skipped if the event was emitted
-#                                without coordinates.
+# popup buttons   — every popup shows a single OK button. Clicking a
+#                   popup line that carries coords (events emitted via
+#                   engine.emitEventAt) pans the camera there. There are
+#                   no per-category navigation buttons.
 # coalesce_window — wall-seconds (sub-second OK). When >0, POPUPS of
 #                   this category arriving within the window collapse
 #                   into a single popup line with an (xN) count and
@@ -47,9 +44,6 @@ categories:
     # bursts into a single popup line with an (xN) counter.
     coalesce_window: 1.0
     log_coalesce_window: 1.0
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: survival_warning
     display_name: Survival (Warning)
@@ -58,9 +52,6 @@ categories:
     default_settings: { log: true,  popup: true,  pause: false }
     coalesce_window: 1.0
     log_coalesce_window: 1.0
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: combat
     display_name: Combat
@@ -71,18 +62,12 @@ categories:
     # readable without losing the burst signal.
     coalesce_window: 2.0
     log_coalesce_window: 1.0
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: building
     display_name: Building / Construction
     description: Construction progress and completion events.
     text_color: [0.8, 0.9, 1.0, 1.0]
     default_settings: { log: true,  popup: false, pause: false }
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: weather
     display_name: Weather
@@ -95,9 +80,6 @@ categories:
     description: Spawning, recruitment, idle state changes.
     text_color: [1.0, 1.0, 1.0, 1.0]
     default_settings: { log: true,  popup: false, pause: false }
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: unit_event
     display_name: Unit Event
@@ -106,9 +88,6 @@ categories:
     # Logged but never pops up: ambient flavour the player can browse in
     # the event log (or a unit's Log tab), not alerts that interrupt.
     default_settings: { log: true,  popup: false, pause: false }
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: unit_warning
     display_name: Unit Warning
@@ -120,9 +99,6 @@ categories:
     # flip popup to true here if you want failures to interrupt).
     default_settings: { log: true,  popup: false, pause: false }
     log_coalesce_window: 1.0
-    buttons:
-      - { label: "Go To", action: "go_to" }
-      - { label: "OK",    action: "dismiss" }
 
   - id: debug
     display_name: Debug

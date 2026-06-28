@@ -45,11 +45,9 @@ emitEvent env category source eventText =
     emitEventAt env category source eventText Nothing
 
 -- | Like 'emitEvent', but with optional grid coordinates. The
---   coordinates are routed to the Lua popup so 'ActGoTo' buttons can
---   pan the camera. Categories whose YAML 'buttons' include a
---   @go_to@ entry get the button rendered iff the caller passed
---   coords; categories with only @dismiss@ buttons ignore the
---   payload entirely.
+--   coordinates are routed to the Lua popup, which makes that popup
+--   line clickable — clicking pans the camera to @(gx, gy)@. Events
+--   emitted without coords produce non-clickable lines.
 emitEventAt ∷ EngineEnv
             → Text                  -- ^ category id
             → Text                  -- ^ source tag (dev debug)
@@ -87,7 +85,6 @@ emitEventFull env category source eventText mCoords mUid = do
                     , peText     = eventText
                     , peGameTime = now
                     , peSource   = source
-                    , peButtons  = ccButtons cfg
                     , peCoords   = mCoords
                     , peUid      = mUid
                     , peCount    = 1
@@ -98,12 +95,8 @@ emitEventFull env category source eventText mCoords mUid = do
             when (ccPopup cfg) $ do
                 atomically $ modifyTVar' (popupQueueRef env) (|> ev)
                 let (r, g, b, a) = ccTextColor cfg
-                    buttonPairs  = map
-                        (\b → (pbLabel b, popupActionTag (pbAction b)))
-                        (ccButtons cfg)
                 Q.writeQueue (luaQueue env)
-                    (LuaShowPopup category eventText r g b a
-                        buttonPairs mCoords)
+                    (LuaShowPopup category eventText r g b a mCoords)
             when (ccPause cfg) $
                 writeIORef (enginePausedRef env) True
 

@@ -9,9 +9,9 @@
 -- subsequent clicks cycle through additional coords until the
 -- player moves the camera (then the cycle resets).
 --
--- One bottom button: OK, dismisses the popup. The YAML "go_to"
--- buttons are still parsed (so older categories load fine) but no
--- longer rendered — line clicks replace them.
+-- One bottom button: OK, dismisses the popup. Navigation is handled
+-- entirely by clicking a popup line (pans the camera to that event's
+-- coords) — there is no per-category "go_to" button.
 
 local scale  = require("scripts.ui.scale")
 local panel  = require("scripts.ui.panel")
@@ -651,12 +651,11 @@ end
 -- Engine broadcast handler
 -----------------------------------------------------------
 
-function popup.onShowPopup(category, text, r, g, b, a, buttons, coords)
+function popup.onShowPopup(category, text, r, g, b, a, coords)
     local entry = {
         category = category,
         text     = text,
         color    = { r or 1.0, g or 1.0, b or 1.0, a or 1.0 },
-        buttons  = buttons,
         coords   = coords,    -- nil or {x, y}
     }
     -- Coalesce path: if this category has an active popup AND the

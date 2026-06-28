@@ -16,9 +16,7 @@ import Data.Foldable (toList)
 import System.Directory (doesFileExist, createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))
-import Engine.PlayerEvent (NotificationCfg, CategoryCfg(..)
-                          , PopupButton(..), PopupAction(..)
-                          , defaultPopupButtons, parsePopupAction)
+import Engine.PlayerEvent (NotificationCfg, CategoryCfg(..))
 
 -- | Per-category checkbox triple. Used both for registry defaults
 --   (under "default_settings") and for the player's overrides file
@@ -42,19 +40,6 @@ instance ToJSON CategorySettings where
         , "pause" .= csPause cs
         ]
 
--- | One button entry as it appears in the YAML registry under the
---   @buttons:@ list. Two fields: a visible label and an action tag
---   that maps to 'PopupAction' via 'parsePopupAction'.
-data ButtonYaml = ButtonYaml
-    { byLabel  ∷ !Text
-    , byAction ∷ !Text
-    } deriving (Show, Eq, Generic)
-
-instance FromJSON ButtonYaml where
-    parseJSON = withObject "ButtonYaml" $ \v → ButtonYaml
-        ⊚ v .:  "label"
-        ⊛ v .:  "action"
-
 -- | One row of the YAML registry — what's shipped with the game.
 data RegistryEntry = RegistryEntry
     { reId          ∷ !Text
@@ -62,7 +47,6 @@ data RegistryEntry = RegistryEntry
     , reDescription ∷ !Text
     , reTextColor   ∷ !(Float, Float, Float, Float)
     , reDefaults    ∷ !CategorySettings
-    , reButtons     ∷ ![ButtonYaml]
     , rePopupCoalesceWindow ∷ !Double
     , reLogCoalesceWindow   ∷ !Double
     } deriving (Show, Eq, Generic)
@@ -75,14 +59,13 @@ instance FromJSON RegistryEntry where
         rawCol  ← v .:? "text_color"  .!= [1.0, 1.0, 1.0, 1.0]
         defs    ← v .:? "default_settings"
                     .!= CategorySettings False False False
-        btns    ← v .:? "buttons" .!= []
         popupCw ← v .:? "coalesce_window" .!= (0 ∷ Double)
         logCw   ← v .:? "log_coalesce_window" .!= (0 ∷ Double)
         col ← case rawCol of
             [r, g, b, a] → return (r, g, b, a)
             _            → fail $ "text_color must be [r,g,b,a]: "
                                     <> T.unpack rid
-        return $ RegistryEntry rid disp desc col defs btns popupCw logCw
+        return $ RegistryEntry rid disp desc col defs popupCw logCw
 
 newtype RegistryFile = RegistryFile { rfCategories ∷ [RegistryEntry] }
     deriving (Show, Eq, Generic)
@@ -128,9 +111,8 @@ loadNotificationCfg logger registryPath overridesPath = do
             return (HM.empty, [])
         Right (RegistryFile entries) → do
             overrides ← loadOverrides logger overridesPath entries
-            resolvedPairs ← forM entries $ \e → do
-                cfg ← mkCategoryCfg logger e overrides
-                return (reId e, cfg)
+            let resolvedPairs =
+                    [ (reId e, mkCategoryCfg e overrides) | e ← entries ]
             let resolved = HM.fromList resolvedPairs
                 order    = map reId entries
             logInfo logger CatEvent $
@@ -158,14 +140,12 @@ writeNotificationOverrides path cfg = do
 
 -- | Resolve one registry row against the player overrides. Missing
 --   override entry → use registry defaults.
-mkCategoryCfg ∷ LoggerState
-              → RegistryEntry
+mkCategoryCfg ∷ RegistryEntry
               → HM.HashMap Text CategorySettings
-              → IO CategoryCfg
-mkCategoryCfg logger e overrides = do
+              → CategoryCfg
+mkCategoryCfg e overrides =
     let cs = HM.lookupDefault (reDefaults e) (reId e) overrides
-    buttons ← resolveButtons logger e
-    return $ CategoryCfg
+    in CategoryCfg
         { ccId          = reId e
         , ccDisplayName = reDisplayName e
         , ccDescription = reDescription e
@@ -173,34 +153,9 @@ mkCategoryCfg logger e overrides = do
         , ccLog         = csLog   cs
         , ccPopup       = csPopup cs
         , ccPause       = csPause cs
-        , ccButtons     = buttons
         , ccPopupCoalesceWindow = rePopupCoalesceWindow e
         , ccLogCoalesceWindow   = reLogCoalesceWindow e
         }
-
--- | Translate the YAML button list into 'PopupButton's, warning on
---   unknown action tags. An empty list (the YAML default if the
---   @buttons:@ key is omitted) falls back to 'defaultPopupButtons'
---   so every category always renders at least an OK.
-resolveButtons ∷ LoggerState → RegistryEntry → IO [PopupButton]
-resolveButtons logger e
-    | null (reButtons e) = return defaultPopupButtons
-    | otherwise = do
-        resolved ← forM (reButtons e) $ \b →
-            case parsePopupAction (byAction b) of
-                Just act → return $ Just (PopupButton (byLabel b) act)
-                Nothing  → do
-                    logWarn logger CatEvent $
-                        "Notification category '" <> reId e
-                          <> "': unknown button action '"
-                          <> byAction b
-                          <> "'; button '" <> byLabel b
-                          <> "' dropped"
-                    return Nothing
-        let buttons = catMaybes resolved
-        if null buttons
-            then return defaultPopupButtons
-            else return buttons
 
 -- | Load 'config/notifications.yaml' if present, else materialize it
 --   from the registry defaults so the player has a file to edit.
