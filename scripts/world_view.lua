@@ -445,29 +445,21 @@ end
 -- Key Input
 -----------------------------------------------------------
 
--- True when `key` (a canonical key name from onKeyDown) is bound to
--- `action` in the live keybinding table. Reads the table fresh each call
--- so runtime rebinds (Input settings tab) take effect immediately.
-local function keyBoundTo(key, action)
-    local binds = engine.getKeybinds()
-    local keys = binds and binds[action]
-    if not keys then return false end
-    for _, k in ipairs(keys) do
-        if k == key then return true end
-    end
-    return false
-end
-
+-- These are edge-triggered: one press = one rotation / one z-reset.
+-- engine.keyMatchesAction resolves the pressed key against the live
+-- binding table engine-side (handling modifier aliases like
+-- Shift/LeftShift), so rebinding via config or the Input settings tab
+-- takes effect immediately without a key→action table in Lua.
 function worldView.onKeyDown(key)
     if not worldView.visible then return end
 
-    if keyBoundTo(key, "rotateCCW") then
+    if engine.keyMatchesAction(key, "rotateCCW") then
         camera.rotateCCW()
         engine.logDebug("Camera rotated CCW, facing=" .. tostring(camera.getFacing()))
-    elseif keyBoundTo(key, "rotateCW") then
+    elseif engine.keyMatchesAction(key, "rotateCW") then
         camera.rotateCW()
         engine.logDebug("Camera rotated CW, facing=" .. tostring(camera.getFacing()))
-    elseif keyBoundTo(key, "resetZTracking") then
+    elseif engine.keyMatchesAction(key, "resetZTracking") then
         camera.setZTracking(true)
         engine.logDebug("Z-slice tracking re-enabled")
     end

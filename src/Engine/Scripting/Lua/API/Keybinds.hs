@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.API.Keybinds
   , removeActionKeyFn
   , saveKeybindsFn
   , loadDefaultKeybindsFn
+  , keyMatchesActionFn
   ) where
 
 import UPrelude
@@ -23,7 +24,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Input.Bindings (KeyBindings, loadKeyBindings, saveKeyBindings)
+import Engine.Input.Bindings
+  (KeyBindings, loadKeyBindings, saveKeyBindings, keyMatchesAction, reservedActions)
 import Engine.Input.Types (textToKey)
 
 -- | A key name is bindable when it parses to a real key AND is not one of
@@ -32,13 +34,9 @@ import Engine.Input.Types (textToKey)
 isBindableKey ∷ Text → Bool
 isBindableKey k = k /= "Escape" ∧ k /= "Grave" ∧ isJust (textToKey k)
 
--- | Actions whose keys the engine handles outside the binding table
---   (Escape cascade, Grave shell toggle — see "Engine.Input.Thread").
---   Editing them would persist a config the runtime cannot honor, so the
---   edit functions refuse them outright.
-reservedActions ∷ [Text]
-reservedActions = ["escape", "openShell"]
-
+-- 'reservedActions' (the actions the engine handles outside the binding
+-- table) is defined in "Engine.Input.Bindings" so the loader and the edit
+-- API share one source of truth.
 isEditableAction ∷ Text → Bool
 isEditableAction a = a `notElem` reservedActions
 
@@ -199,4 +197,23 @@ loadDefaultKeybindsFn env = do
         writeIORef (keyBindingsRef env) defaults
         return defaults
     pushBindings bindings
+    return 1
+
+-- | engine.keyMatchesAction(key, action) → bool
+--   True when an event key name (as delivered to onKeyDown) is bound to the
+--   action. Resolves merged/side-specific modifier aliases engine-side
+--   (e.g. event "Shift" matches a bound "LeftShift"), so edge-triggered Lua
+--   handlers can dispatch a key press through the binding table correctly.
+keyMatchesActionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+keyMatchesActionFn env = do
+    keyArg ← Lua.tostring 1
+    actionArg ← Lua.tostring 2
+    case (keyArg, actionArg) of
+        (Just keyBS, Just actionBS) → do
+            matches ← Lua.liftIO $ do
+                bindings ← readIORef (keyBindingsRef env)
+                return $ keyMatchesAction (TE.decodeUtf8 keyBS)
+                                          (TE.decodeUtf8 actionBS) bindings
+            Lua.pushboolean matches
+        _ → Lua.pushboolean False
     return 1

@@ -93,6 +93,38 @@ spec = do
         it "is false for an unbound action" $
             isActionDown "noSuchAction" bindings (heldState [GLFW.Key'W]) `shouldBe` False
 
+    describe "reserved keys (#275)" $ do
+        it "strips Escape/Grave when a hand-edited file binds them to actions" $ do
+            let b = parseConfig "keybinds:\n  rotateCW: [Escape]\n  moveUp: [Grave, W]\n"
+            -- Reserved keys removed; surviving real keys kept.
+            Map.lookup "rotateCW" b `shouldBe` Just []
+            Map.lookup "moveUp" b   `shouldBe` Just ["W"]
+
+        it "keeps the reserved-action reference entries intact" $ do
+            let b = parseConfig "keybinds:\n  moveUp: [W]\n"
+            Map.lookup "escape" b    `shouldBe` Just ["Escape"]
+            Map.lookup "openShell" b `shouldBe` Just ["Grave"]
+
+        it "a reserved key bound to an action never drives it" $ do
+            let b = parseConfig "keybinds:\n  rotateCW: [Escape]\n"
+            isActionDown "rotateCW" b (heldState [GLFW.Key'Escape]) `shouldBe` False
+
+    describe "keyMatchesAction (edge-trigger dispatch)" $ do
+        let b = Map.fromList [ ("rotateCCW", ["Q"])
+                             , ("altAction", ["LeftShift"]) ]
+        it "matches the bound key by name" $
+            keyMatchesAction "Q" "rotateCCW" b `shouldBe` True
+
+        it "does not match a different key" $
+            keyMatchesAction "E" "rotateCCW" b `shouldBe` False
+
+        it "matches a merged event name against a side-specific binding" $
+            -- onKeyDown delivers "Shift" for either shift; binding is "LeftShift".
+            keyMatchesAction "Shift" "altAction" b `shouldBe` True
+
+        it "is false for an unbound action" $
+            keyMatchesAction "Q" "noSuchAction" b `shouldBe` False
+
     describe "save round-trip" $
         it "encodes then decodes back to the same bindings" $ do
             let bs = Yaml.encode (KeyBindingConfig defaultKeyBindings)
