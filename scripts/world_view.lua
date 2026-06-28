@@ -300,17 +300,10 @@ function worldView.createWorld()
         -- materials and vegetation textures sent via sendTexturesToWorld
     })
     worldManager.showWorld()
-
-    -- Structural textures (blank, facemaps) can still be GPU-loading when
-    -- the world's quad cache is first built, baking the undefined/magenta
-    -- slot + empty facemaps. The engine's own post-load cache invalidation
-    -- is unreliable here (it only touches already-visible worlds and races
-    -- the render thread's cache write-back). Re-bind the structural set ONCE
-    -- when world generation reports done (worldView.update polls for it): by
-    -- the time chunk generation finishes the small structural textures have
-    -- loaded, and the world.setTexture re-bind busts the stale quad cache so
-    -- it rebuilds with valid slots.
-    worldView.structuralRebound = false
+    -- The engine now rebuilds a world's quad cache by itself when a texture
+    -- it depends on finishes loading (race-safe generation counter, covers
+    -- not-yet-visible worlds — #35), so the structural set no longer needs a
+    -- Lua-side post-gen re-bind to bust a stale cache.
 end
 
 -----------------------------------------------------------
@@ -378,18 +371,6 @@ end
 function worldView.update(dt)
     if not worldView.visible then return end
     worldManager.update(dt)
-
-    -- One-shot structural re-bind when world generation completes (phase 3).
-    -- Busts the stale quad cache so the interior + facemaps render with the
-    -- now-loaded textures. Polls only until it fires, then stops.
-    if worldView.structuralRebound == false and worldManager.isActive() then
-        local phase = world.getInitProgress()
-        if phase == 3 then
-            worldView.structuralRebound = true
-            local wid = worldManager.getCurrentWorld()
-            if wid then worldView.rebindStructural(wid) end
-        end
-    end
 end
 
 -----------------------------------------------------------
@@ -516,9 +497,7 @@ function worldView.sendTexturesToWorld(worldId)
 
     engine.logInfo("Sending textures to loaded world: " .. worldId)
 
-    -- Structural (ocean/blank/facemaps). Bound via a shared helper so the
-    -- post-load rebind (worldView.onAssetLoaded) can re-issue exactly these
-    -- bindings to bust a stale quad cache.
+    -- Structural (ocean/blank/facemaps), bound via the shared helper.
     worldView.rebindStructural(worldId)
 
     -- Vegetation tiles: look up from registry by numeric ID

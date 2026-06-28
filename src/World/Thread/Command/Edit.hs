@@ -109,7 +109,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         syncEditToSim env pageId lc'
                         -- Invalidate all three render caches so the next
                         -- tick rebuilds quads from the modified chunk.
-                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Re-snap any idle unit standing on this tile to
@@ -166,7 +166,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         syncEditToSim env pageId lc'
-                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Units standing on the tile ride up.
@@ -306,7 +306,7 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                         -- elevation nor fluid the sim reads, so there is no
                         -- stale sim state to refresh (#60), and re-seeding
                         -- would needlessly reset an in-flight fluid sim.
-                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         logDebug logger CatWorld $
@@ -355,7 +355,7 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         syncEditToSim env pageId lc'
-                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- A surface-changing cell write (e.g. a staircase
@@ -524,7 +524,7 @@ handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep = do
                                     let lc' = applyDigSlopeToChunk (gx, gy) md' lc
                                     atomicModifyIORef' (wsTilesRef ws) $ \w →
                                         (insertChunk lc' w, ())
-                                    writeIORef (wsQuadCacheRef ws)     Nothing
+                                    bumpQuadCacheGen ws
                                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                                     writeIORef (wsBgQuadCacheRef ws)   Nothing
   where
@@ -624,7 +624,7 @@ promoteFullSpoilTiles env logger pageId ws startV = do
                             (appendEdit coord edit es, ())
                         atomicModifyIORef' (wsSpoilRef ws) $ \sp →
                             (debitPromotedTile tile sp, ())
-                        writeIORef (wsQuadCacheRef ws)     Nothing
+                        bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
                         -- Anything standing on the tile rides up.
@@ -663,7 +663,7 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
                     -- settles instead of being overwritten by stale sim
                     -- output (#60).
                     syncEditToSim env pageId lc'
-                    writeIORef (wsQuadCacheRef ws)     Nothing
+                    bumpQuadCacheGen ws
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing
                     logDebug logger CatWorld $

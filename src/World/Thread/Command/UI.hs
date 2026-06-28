@@ -62,6 +62,13 @@ handleWorldShowCommand env logger pageId = do
         logDebug logger CatWorld $
             "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
 
+        -- Force a quad-cache rebuild when a world becomes visible: a world
+        -- can have been cached while invisible (or before its textures
+        -- finished loading) and the render thread only rebuilds when the
+        -- generation no longer matches. Cheap insurance against showing a
+        -- world with a stale cache (#35).
+        forM_ (lookup pageId (wmWorlds mgr)) bumpQuadCacheGen
+
         -- Activate this world in the sim thread. The sim no longer holds the
         -- tile ref — it emits WorldApplyFluids back to the world thread (the
         -- sole writer of wsTilesRef) — so this is just a per-world "is

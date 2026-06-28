@@ -101,7 +101,7 @@ handleWorldSetTextureCommand env logger pageId texType texHandle = do
             -- (arena fast-boot), keep the new handles but force the next
             -- render to rebuild against them instead of reusing the old
             -- checkerboard-slot cache until the camera happens to move.
-            writeIORef (wsQuadCacheRef worldState) Nothing
+            bumpQuadCacheGen worldState
             writeIORef (wsZoomQuadCacheRef worldState) Nothing
             writeIORef (wsBgQuadCacheRef worldState) Nothing
             logDebug logger CatWorld $ 

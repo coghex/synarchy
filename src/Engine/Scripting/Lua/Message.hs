@@ -57,7 +57,7 @@ import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
 import World.Render.Zoom.Types (ZoomAtlasInfo(..), zoomTileSize)
-import World.State.Types (WorldManager(..), WorldState(..))
+import World.State.Types (WorldManager(..), WorldState(..), bumpQuadCacheGen)
 import qualified Graphics.UI.GLFW as GLFW
 import Vulkan.Core10
 import Vulkan.Zero (zero)
@@ -74,16 +74,20 @@ data TextureUploadPrep = TextureUploadPrep
     , tupCleanImage ∷ !(IO ())
     }
 
-invalidateVisibleWorldRenderCaches ∷ EngineEnv → IO ()
-invalidateVisibleWorldRenderCaches env = do
+-- | Invalidate every loaded world's render caches after a texture load.
+--   Iterates ALL worlds in 'wmWorlds', not just 'wmVisible', so a world
+--   whose dependent textures finish loading *before* it is shown still
+--   refreshes when displayed (the old visible-only sweep missed it). The
+--   close-up quad cache is invalidated via the race-safe generation
+--   counter ('bumpQuadCacheGen'); the zoom/background caches are nulled
+--   directly (they have a single writer and no cross-thread rebuild race).
+invalidateAllWorldRenderCaches ∷ EngineEnv → IO ()
+invalidateAllWorldRenderCaches env = do
     mgr ← readIORef (worldManagerRef env)
-    forM_ (wmVisible mgr) $ \pageId →
-        case lookup pageId (wmWorlds mgr) of
-            Nothing → pure ()
-            Just ws → do
-                writeIORef (wsQuadCacheRef ws) Nothing
-                writeIORef (wsZoomQuadCacheRef ws) Nothing
-                writeIORef (wsBgQuadCacheRef ws) Nothing
+    forM_ (wmWorlds mgr) $ \(_, ws) → do
+        bumpQuadCacheGen ws
+        writeIORef (wsZoomQuadCacheRef ws) Nothing
+        writeIORef (wsBgQuadCacheRef ws) Nothing
 
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
@@ -502,7 +506,7 @@ handleLoadTextureBatch requests = do
     forM_ (reverse cachedReqs) $ \(handle, assetId, atlas) →
         duplicateCachedTextureHandle env handle assetId atlas
 
-    let invalidateVisible = liftIO $ invalidateVisibleWorldRenderCaches env
+    let invalidateRenderCaches = liftIO $ invalidateAllWorldRenderCaches env
 
     when (not (null freshReqs)) $ do
         gs ← gets graphicsState
@@ -606,7 +610,7 @@ handleLoadTextureBatch requests = do
                             logWarnM CatTexture $
                                 "Missing canonical texture for deduped alias: "
                                     <> T.pack (show handle)
-                invalidateVisible
+                invalidateRenderCaches
 
             _ → logWarnM CatTexture "Cannot batch-load textures: Vulkan not ready"
 

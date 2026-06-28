@@ -80,14 +80,23 @@ updateWorldTiles env = do
             quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState → do
+                        -- Snapshot the invalidation generation BEFORE building.
+                        -- A cache is only reusable when its generation still
+                        -- matches; if an invalidation lands while we rebuild,
+                        -- the generation we stamp is already stale and the cache
+                        -- rebuilds next frame (the invalidation is never lost,
+                        -- even though the render thread is the sole writer of
+                        -- wsQuadCacheRef).
+                        curGen ← readIORef (wsQuadCacheGenRef worldState)
                         cached ← readIORef (wsQuadCacheRef worldState)
                         case cached of
-                            Just wqc | not (cameraChanged (wqcCamera wqc) currentSnap) →
+                            Just wqc | wqcGen wqc ≡ curGen
+                                     , not (cameraChanged (wqcCamera wqc) currentSnap) →
                                 return (wqcQuads wqc)
                             _ → do
                                 result ← renderWorldQuads env worldState tileAlpha currentSnap
                                 writeIORef (wsQuadCacheRef worldState) $
-                                    Just (WorldQuadCache currentSnap result)
+                                    Just (WorldQuadCache curGen currentSnap result)
                                 return result
                     Nothing → return V.empty
             return $ V.concat quads

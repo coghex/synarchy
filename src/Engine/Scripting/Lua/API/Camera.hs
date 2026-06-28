@@ -360,7 +360,7 @@ invalidateWorldCaches env = do
     camera ← readIORef (cameraRef env)
     manager ← readIORef (worldManagerRef env)
     forM_ (wmWorlds manager) $ \(_, ws) → do
-        writeIORef (wsQuadCacheRef ws)     Nothing
+        bumpQuadCacheGen ws
         writeIORef (wsZoomQuadCacheRef ws) Nothing
         writeIORef (wsBgQuadCacheRef ws)   Nothing
         writeIORef (wsBakedZoomRef ws)     (V.empty, defaultWorldTextures, FaceSouth)

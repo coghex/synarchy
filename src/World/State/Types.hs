@@ -2,6 +2,7 @@
 module World.State.Types
     ( WorldState(..)
     , emptyWorldState
+    , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
     , CursorSnapshot(..)
@@ -9,7 +10,7 @@ module World.State.Types
     ) where
 
 import UPrelude
-import Data.IORef (IORef, newIORef)
+import Data.IORef (IORef, newIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -40,6 +41,13 @@ data WorldState = WorldState
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
     , wsZoomCacheRef ∷ IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
     , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
+    , wsQuadCacheGenRef ∷ IORef Int
+      -- ^ Invalidation generation for the quad cache. Bumped atomically
+      --   (from any thread) instead of nulling 'wsQuadCacheRef', so a
+      --   cross-thread invalidation can't be clobbered by the render
+      --   thread's read-rebuild-write of the cache. A cache is only valid
+      --   when its 'wqcGen' matches this counter; the render thread is the
+      --   sole writer of 'wsQuadCacheRef'. See 'bumpQuadCacheGen'.
     , wsZoomQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)  -- ^ Cached quads for zoomed-out view
     , wsBgQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)    -- ^ Cached quads for background layer
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
@@ -103,6 +111,7 @@ emptyWorldState = do
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
     zoomCacheRef ← newIORef V.empty
     quadCacheRef  ← newIORef Nothing
+    quadCacheGenRef ← newIORef 0
     zoomQCRef   ← newIORef Nothing
     bgQCRef     ← newIORef Nothing
     bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
@@ -122,13 +131,24 @@ emptyWorldState = do
     wsStructureStageRef ← newIORef emptyChunkStructures
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
-                        quadCacheRef zoomQCRef bgQCRef
+                        quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
+
+-- | Invalidate a world's cached render quads in a thread-safe way.
+--   Bumps the generation counter atomically rather than nulling
+--   'wsQuadCacheRef', so an invalidation from the world/Lua thread can
+--   never be lost to the render thread's read-rebuild-write of the cache:
+--   the render thread stamps each rebuilt cache with the generation it
+--   observed, and a cache whose 'wqcGen' no longer matches is treated as
+--   stale and rebuilt next frame.
+bumpQuadCacheGen ∷ WorldState → IO ()
+bumpQuadCacheGen ws =
+    atomicModifyIORef' (wsQuadCacheGenRef ws) (\g → (g + 1, ()))
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]
