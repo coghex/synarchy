@@ -111,11 +111,19 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         -- looks natural instead of grid-aligned.
         noisyPath = addPathNoise seed riverIdx spacing fullPath
 
-        -- Reject rivers that span more than 1/3 of the world.
-        -- Uses UNWRAPPED (continuous) coordinates to measure actual
-        -- path span, not canonical coordinates (which would show a
-        -- huge span for rivers crossing the wrap boundary).
-        maxSpan = worldTiles `div` 3
+        -- Reject only rivers that span more than HALF the world — a
+        -- continent-spanning river is physical (issue #221: long
+        -- inland-origin rivers were being discarded by the old
+        -- worldTiles/3 cap), but a span beyond half the world is a
+        -- wrap-boundary artifact, not a real course. Uses UNWRAPPED
+        -- (continuous) coordinates to measure actual path span, not
+        -- canonical coordinates (which would show a huge span for rivers
+        -- crossing the wrap boundary). Only relaxed on real-scale worlds
+        -- (≥128), where the upstream source extension produces the long
+        -- rivers this cap was clipping; tiny gate worlds (32/64) keep
+        -- the original /3 bound so their baselines are undisturbed.
+        maxSpan = if worldSize ≥ 128 then worldTiles `div` 2
+                                     else worldTiles `div` 3
         pathTooLong = case (noisyPath, reverse noisyPath) of
             ((sx, sy, _):_, (mx, my, _):_) →
                 abs (mx - sx) > maxSpan ∨ abs (my - sy) > maxSpan
