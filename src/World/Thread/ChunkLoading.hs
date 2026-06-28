@@ -142,7 +142,7 @@ updateChunkLoading env logger = do
                                 forM_ evicted $ \cc →
                                     Q.writeQueue (simQueue env)
                                         (SimChunkUnloaded pageId cc)
-                                writeIORef (wsQuadCacheRef worldState) Nothing
+                                bumpQuadCacheGen worldState
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing
 
@@ -276,7 +276,7 @@ drainInitQueues env logger = do
                         _ ← evaluate (rnf toForce)
 
                         -- Invalidate all render caches so new chunks appear immediately
-                        writeIORef (wsQuadCacheRef worldState) Nothing
+                        bumpQuadCacheGen worldState
                         writeIORef (wsZoomQuadCacheRef worldState) Nothing
                         writeIORef (wsBgQuadCacheRef worldState) Nothing
 

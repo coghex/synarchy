@@ -181,7 +181,7 @@ handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
             Just ws → do
                 atomicModifyIORef' (wsTilesRef ws) $ \wtd →
                     (foldl' applyOneWriteback wtd writebacks, ())
-                writeIORef (wsQuadCacheRef ws)     Nothing
+                bumpQuadCacheGen ws
                 writeIORef (wsZoomQuadCacheRef ws) Nothing
                 writeIORef (wsBgQuadCacheRef ws)   Nothing
     forM_ mAck (`putMVar` ())

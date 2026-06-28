@@ -21,7 +21,8 @@ data WorldCameraSnapshot = WorldCameraSnapshot
     } deriving (Show, Eq)
 
 data WorldQuadCache = WorldQuadCache
-    { wqcCamera ∷ !WorldCameraSnapshot
+    { wqcGen    ∷ !Int                       -- ^ Invalidation generation this cache was built at
+    , wqcCamera ∷ !WorldCameraSnapshot
     , wqcQuads  ∷ !(V.Vector SortableQuad)
     } deriving (Show)
 
