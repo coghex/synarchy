@@ -23,7 +23,7 @@ HARD = 0.7  # slopeHardnessThreshold
 def run_dump(seed, size, radius):
     r = radius
     cmd = ["cabal", "run", "-v0", "exe:synarchy", "--",
-           "--dump=terrain,material,slope",
+           "--dump=terrain,material,fluid,slope",
            "--seed", str(seed), "--worldSize", str(size),
            "--region", f"-{r},-{r},{r},{r}"]
     out = subprocess.run(cmd, capture_output=True, timeout=400)
@@ -60,6 +60,10 @@ def main():
         # dry surface tiles only (slope/hardness fields require slope layer);
         # skip world-edge tiles whose neighbours fall outside the dumped region
         if "slope" not in t:
+            continue
+        # skip wet tiles: jaggedness is a dry-rock feature, and a submerged
+        # bed's slope is the wet-tile rule, not what #224 changed
+        if t.get("fluidType") is not None:
             continue
         # require full 4-neighbourhood inside the region for a valid relief
         if any((t["x"]+dx, t["y"]+dy) not in by_xy

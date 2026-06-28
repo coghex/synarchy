@@ -180,6 +180,15 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
         bitS = slopeBit myHasFluid z neighS lx (ly + 1) coord fluidMap neighborLookup
         bitW = slopeBit myHasFluid z neighW (lx - 1) ly coord fluidMap neighborLookup
 
+        -- Is each cardinal neighbour a WET tile (in-chunk only, mirroring
+        -- 'slopeBit')? The dry-rock jagged path must honour the same bank
+        -- rule as dry land — never slope a dry tile into a water neighbour
+        -- (it would read as rock dipping into the river/lake/sea).
+        wetN = neighborHasFluidAt coord lx (ly - 1) fluidMap
+        wetE = neighborHasFluidAt coord (lx + 1) ly fluidMap
+        wetS = neighborHasFluidAt coord lx (ly + 1) fluidMap
+        wetW = neighborHasFluidAt coord (lx - 1) ly fluidMap
+
         rawSlope = (if bitN then 1 else 0)
                .|. (if bitE then 2 else 0)
                .|. (if bitS then 4 else 0)
@@ -209,7 +218,7 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
             -- Exposed hard rock (the material the soft gate bars). #224:
             -- make mountain flanks slope and peaks read as jagged rock.
             else rockJaggedSlope seed coord lx ly hardness z maxDrop rawSlope
-                                 neighN neighE neighS neighW
+                                 neighN neighE neighS neighW wetN wetE wetS wetW
 
 -- | Slope rule for EXPOSED HARD ROCK — material at/above
 --   'slopeHardnessThreshold', which the soft-terrain gate in
@@ -232,13 +241,15 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
 --        even where no neighbour is exactly one lower (steep multi-level
 --        faces) — the case the strict terrace rule leaves flat.
 --
---   The ramp only ever points at a strictly-lower neighbour, so it stays
---   a geometrically valid (and pathing-walkable) ramp — never a notch
---   into a higher wall.
+--   The ramp only ever points at a strictly-lower DRY neighbour, so it
+--   stays a geometrically valid (and pathing-walkable) ramp — never a
+--   notch into a higher wall, and never a dry tile dipping into water
+--   (the dry-land bank rule, honoured here via the @wet*@ flags).
 rockJaggedSlope ∷ Word64 → ChunkCoord → Int → Int → Float → Int → Int → Word8
-                → Int → Int → Int → Int → Word8
+                → Int → Int → Int → Int
+                → Bool → Bool → Bool → Bool → Word8
 rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
-                neighN neighE neighS neighW
+                neighN neighE neighS neighW wetN wetE wetS wetW
     | maxDrop < 1 = 0   -- no downhill neighbour: flat-topped rock, blocky
     | otherwise =
         let h    = tileHash seed cx cy lx ly
@@ -248,10 +259,15 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
                 + (hardness - slopeHardnessThreshold) * rockJaggedHardK
                 + reliefNorm * rockJaggedReliefK
             -- Candidate ramp directions: strictly-lower cardinal
-            -- neighbours. maxDrop ≥ 1 guarantees this list is non-empty.
-            cand = [ b | (b, nz) ← [ (1 ∷ Word8, neighN), (2, neighE)
-                                   , (4, neighS), (8, neighW) ]
-                       , nz ≠ minBound, nz < z ]
+            -- neighbours that are NOT wet (bank rule). May be empty if the
+            -- only downhill neighbour is water — then we fall through to
+            -- 'rawSlope', which already excludes wet neighbours, so a dry
+            -- rock at a water edge stays blocky.
+            cand = [ b | (b, nz, wet) ← [ (1 ∷ Word8, neighN, wetN)
+                                        , (2, neighE, wetE)
+                                        , (4, neighS, wetS)
+                                        , (8, neighW, wetW) ]
+                       , nz ≠ minBound, nz < z, not wet ]
         in if roll < jaggedChance ∧ not (null cand)
            then cand !! fromIntegral ((h `shiftR` 8) `mod`
                                       fromIntegral (length cand))
@@ -323,6 +339,20 @@ normalizeCoord ∷ ChunkCoord → Int → Int → (Int, Int, ChunkCoord)
 normalizeCoord coord lx ly =
     let (c, (lx', ly')) = normalizeToChunk coord lx ly
     in (lx', ly', c)
+
+-- | Does the cardinal neighbour at local (nlx, nly) hold a fluid cell?
+--   Only IN-CHUNK neighbours are inspected (cross-chunk fluid isn't
+--   visible from this chunk's 'fluidMap') — exactly the convention
+--   'slopeBit' already uses for its dry-land bank rule, so the jagged
+--   path stays consistent with it.
+neighborHasFluidAt ∷ ChunkCoord → Int → Int → V.Vector (Maybe FluidCell) → Bool
+neighborHasFluidAt coord nlx nly fluidMap =
+    let (normLx, normLy, neighborCoord) = normalizeCoord coord nlx nly
+    in case neighborCoord of
+        c | c ≡ coord → case fluidMap V.! columnIndex normLx normLy of
+                            Just _  → True
+                            Nothing → False
+        _ → False
 
 floorDiv' ∷ Int → Int → Int
 floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)

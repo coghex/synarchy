@@ -626,10 +626,15 @@ dumpTilesJSON layers registry worldSize climate td cx1 cy1 cx2 cy2 =
             -- Slope layer: the rendered slope bitmask of the surface
             -- tile (bit0=N,1=E,2=S,3=W; 0 = flat top). Lets headless
             -- tools measure how often terrain slopes vs. steps (#224).
+            -- NB: index by terrainZ, not surfZ. The strata vectors
+            -- (ctSlopes/ctMats) are keyed to the TERRAIN surface; surfZ is
+            -- max(terrain, fluid), so on submerged tiles surfZ overshoots
+            -- the stored range and would report a spurious flat/empty bed.
+            -- terrainZ gives the real bed slope + bed material everywhere.
             slopeFields
               | dlSlope layers =
                   let col = lcTiles lc V.! idx
-                      i   = surfZ - ctStartZ col
+                      i   = terrainZ - ctStartZ col
                       sl  = if i ≥ 0 ∧ i < VU.length (ctSlopes col)
                             then ctSlopes col VU.! i else 0
                       smat = if i ≥ 0 ∧ i < VU.length (ctMats col)
