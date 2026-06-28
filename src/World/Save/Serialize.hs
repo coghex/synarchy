@@ -131,15 +131,27 @@ loadWorld rawName = case sanitizeSaveName rawName of
                 <> show currentSaveVersion
                 <> ", got v" <> show (shVersion h)
         sd ← S.get
-        -- A valid v59+ save always carries at least the active world page.
-        -- Reject an empty sdWorlds at DECODE time so the load API fails
-        -- cleanly (Left → engine.loadSave returns false) before it pauses
-        -- the engine, restores Lua blobs, or marks the head world loading.
-        -- Catching it only in the world-thread handler would wedge the
-        -- session on the loading screen after those side effects (#215).
-        when (null (sdWorlds sd)) $
-            fail "Save contains no world pages (corrupt or truncated file)"
-        pure sd
+        -- Validate sdWorlds cardinality at DECODE time so the load API
+        -- fails cleanly (Left → engine.loadSave returns false) before it
+        -- pauses the engine, restores Lua blobs, or marks the head world
+        -- loading. Catching it only in the world-thread handler would
+        -- wedge the session on the loading screen after those side effects.
+        --
+        -- This build's save command writes exactly one page and its load
+        -- handler restores only the active page (#215). The schema already
+        -- holds a list to make room for the all-pages save/load work
+        -- (#216/#217), but until that lands we must REFUSE a multi-page
+        -- v59 file rather than silently load just one and drop the rest —
+        -- a forward-compat hole if a later v59 writer emits many pages.
+        -- The all-pages loader will relax this to accept N pages.
+        case sdWorlds sd of
+          []  → fail "Save contains no world pages (corrupt or truncated file)"
+          [_] → pure sd
+          ws  → fail $ "Save contains " <> show (length ws)
+                    <> " world pages, but this build restores only the active"
+                    <> " page (multi-page save/load not yet implemented — see"
+                    <> " #214). Refusing to load to avoid silently dropping"
+                    <> " pages."
 
 mapLeft ∷ Either a b → (a → c) → Either c b
 mapLeft (Left a)  f = Left (f a)
