@@ -4,33 +4,60 @@ module Engine.Input.Bindings where
 import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import qualified Data.Yaml as Yaml
-import Data.Aeson ((.:?), (.!=), FromJSON(..), Value(..))
+import Data.Aeson ((.:?), FromJSON(..), ToJSON(..), Value(..), object, (.=))
+import Data.Aeson.Types (Parser)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
 import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug)
 
-type KeyBindings = Map.Map T.Text T.Text
+-- | Each action maps to a **list** of key names; the action fires when
+--   *any* of them is held. Persisted in @keybinds.yaml@ as YAML arrays.
+type KeyBindings = Map.Map T.Text [T.Text]
 
 defaultKeyBindings ∷ KeyBindings
 defaultKeyBindings = Map.fromList
-    [ ("moveUp", "W")
-    , ("moveDown", "S")
-    , ("moveLeft", "A")
-    , ("moveRight", "D")
-    , ("escape", "Escape")
-    , ("shell", "Grave")
-    , ("toggleEventLog", "L")
+    [ ("moveUp",         ["Up", "W"])
+    , ("moveDown",       ["Down", "S"])
+    , ("moveLeft",       ["Left", "A"])
+    , ("moveRight",      ["Right", "D"])
+    , ("rotateCCW",      ["Q"])
+    , ("rotateCW",       ["E"])
+    , ("resetZTracking", ["Home"])
+    -- escape/openShell are engine-hardcoded and NOT editable; kept here
+    -- and in the config for reference only.
+    , ("escape",         ["Escape"])
+    , ("openShell",      ["Grave"])
+    , ("toggleEventLog", ["L"])
     ]
 
 data KeyBindingConfig = KeyBindingConfig
     { kbcBindings ∷ KeyBindings
     } deriving (Show, Eq)
 
+-- | Backward-compatible parse: each binding value may be either the
+--   legacy scalar form (@moveUp: W@) or the new list form
+--   (@moveUp: [Up, W]@). A missing @keybinds@ key falls back to defaults.
 instance FromJSON KeyBindingConfig where
-  parseJSON (Object v) =
-    KeyBindingConfig ⊚ v .:? "keybinds" .!= defaultKeyBindings
+  parseJSON (Object v) = do
+    mRaw ← v .:? "keybinds" ∷ Parser (Maybe (Map.Map T.Text Value))
+    case mRaw of
+      Nothing  → pure (KeyBindingConfig defaultKeyBindings)
+      Just raw → KeyBindingConfig ⊚ traverse parseKeyList raw
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
+
+instance ToJSON KeyBindingConfig where
+  toJSON (KeyBindingConfig bindings) = object ["keybinds" .= bindings]
+
+-- | Parse one binding value: a bare string becomes a singleton list, a
+--   YAML array becomes a list of strings.
+parseKeyList ∷ Value → Parser [T.Text]
+parseKeyList (String s) = pure [s]
+parseKeyList (Array a)  = traverse parseEntry (V.toList a)
+  where parseEntry (String s) = pure s
+        parseEntry _          = fail "keybind list entries must be strings"
+parseKeyList _ = fail "keybind value must be a string or a list of strings"
 
 -- | Load keybindings from a YAML file
 loadKeyBindings ∷ LoggerState → FilePath → IO KeyBindings
@@ -47,14 +74,22 @@ loadKeyBindings logger path = do
             logDebug logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
             return bindings
 
+-- | Save keybindings back to a YAML file as @keybinds:@ arrays.
+saveKeyBindings ∷ LoggerState → FilePath → KeyBindings → IO ()
+saveKeyBindings logger path bindings = do
+    Yaml.encodeFile path (KeyBindingConfig bindings)
+    logInfo logger CatInput $ "Saved keybindings to " <> T.pack path
+                            <> " (" <> T.pack (show (Map.size bindings)) <> " actions)"
+
+-- | True when *any* key bound to the action is currently held.
 isActionDown ∷ Text → KeyBindings → InputState → Bool
 isActionDown action bindings state =
     case Map.lookup action bindings of
-        Just keyName → checkKeyDown keyName state
+        Just keyNames → any (`checkKeyDown` state) keyNames
         Nothing → False
 
-getKeyForAction ∷ Text → KeyBindings → Maybe Text
-getKeyForAction = Map.lookup
+getKeysForAction ∷ Text → KeyBindings → Maybe [Text]
+getKeysForAction = Map.lookup
 
 -- | GLFW keys a key name matches. The canonical vocabulary is
 --   'keyToText' (what Lua's onKeyDown/onKeyUp report), inverted via

@@ -1,0 +1,79 @@
+{-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
+-- | Multi-key binding data-model tests (issue #274). The contract under
+--   test: 'KeyBindings' is action → list-of-keys; the YAML parser accepts
+--   both the legacy scalar form (@moveUp: W@) and the new array form
+--   (@moveUp: [Up, W]@); 'isActionDown' fires when *any* bound key is
+--   held; and the writer round-trips through the reader.
+module Test.Headless.Input.Bindings (spec) where
+
+import UPrelude
+import Test.Hspec
+import Data.ByteString (ByteString)
+import qualified Data.Map as Map
+import qualified Data.Yaml as Yaml
+import qualified Graphics.UI.GLFW as GLFW
+import Engine.Input.Types
+import Engine.Input.Bindings
+
+-- | Input state with exactly the given GLFW keys held down.
+heldState ∷ [GLFW.Key] → InputState
+heldState ks = defaultInputState
+    { inpKeyStates = Map.fromList
+        [(k, defaultKeyState { keyPressed = True }) | k ← ks] }
+
+-- | Parse a keybinds YAML document or fail the test loudly.
+parseConfig ∷ ByteString → KeyBindings
+parseConfig bs = case Yaml.decodeEither' bs of
+    Left err  → error ("decode failed: " ⧺ show err)
+    Right cfg → kbcBindings cfg
+
+spec ∷ Spec
+spec = do
+    describe "config parsing" $ do
+        it "accepts the legacy scalar form (one key per action)" $ do
+            let b = parseConfig "keybinds:\n  moveUp: W\n  toggleEventLog: L\n"
+            Map.lookup "moveUp" b         `shouldBe` Just ["W"]
+            Map.lookup "toggleEventLog" b `shouldBe` Just ["L"]
+
+        it "accepts the new list form (multiple keys per action)" $ do
+            let b = parseConfig "keybinds:\n  moveUp: [Up, W]\n  moveLeft: [Left, A]\n"
+            Map.lookup "moveUp" b   `shouldBe` Just ["Up", "W"]
+            Map.lookup "moveLeft" b `shouldBe` Just ["Left", "A"]
+
+        it "accepts a single-element list" $ do
+            let b = parseConfig "keybinds:\n  rotateCW: [E]\n"
+            Map.lookup "rotateCW" b `shouldBe` Just ["E"]
+
+        it "accepts scalar and list entries mixed in one file" $ do
+            let b = parseConfig "keybinds:\n  moveUp: [Up, W]\n  toggleEventLog: L\n"
+            Map.lookup "moveUp" b         `shouldBe` Just ["Up", "W"]
+            Map.lookup "toggleEventLog" b `shouldBe` Just ["L"]
+
+        it "falls back to defaults when keybinds key is absent" $
+            parseConfig "{}" `shouldBe` defaultKeyBindings
+
+    describe "defaults" $ do
+        it "binds movement to arrows and WASD" $ do
+            Map.lookup "moveUp" defaultKeyBindings    `shouldBe` Just ["Up", "W"]
+            Map.lookup "moveDown" defaultKeyBindings  `shouldBe` Just ["Down", "S"]
+            Map.lookup "moveLeft" defaultKeyBindings  `shouldBe` Just ["Left", "A"]
+            Map.lookup "moveRight" defaultKeyBindings `shouldBe` Just ["Right", "D"]
+
+    describe "isActionDown (any bound key)" $ do
+        let bindings = Map.fromList [("moveUp", ["Up", "W"])]
+        it "fires when the first bound key is held" $
+            isActionDown "moveUp" bindings (heldState [GLFW.Key'Up]) `shouldBe` True
+
+        it "fires when the second bound key is held" $
+            isActionDown "moveUp" bindings (heldState [GLFW.Key'W]) `shouldBe` True
+
+        it "is false when no bound key is held" $
+            isActionDown "moveUp" bindings (heldState [GLFW.Key'S]) `shouldBe` False
+
+        it "is false for an unbound action" $
+            isActionDown "noSuchAction" bindings (heldState [GLFW.Key'W]) `shouldBe` False
+
+    describe "save round-trip" $
+        it "encodes then decodes back to the same bindings" $ do
+            let bs = Yaml.encode (KeyBindingConfig defaultKeyBindings)
+            parseConfig bs `shouldBe` defaultKeyBindings
