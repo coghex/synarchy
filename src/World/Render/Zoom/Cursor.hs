@@ -63,6 +63,16 @@ makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmS
 
     cs' ← if zoomSelectNow cs
            then atomicModifyIORef' csRef $ \current →
+                  -- Re-check the arm flag against 'current' (not the earlier
+                  -- 'cs' read): the world thread can clear zoomSelectNow
+                  -- between that read and this atomic write — e.g.
+                  -- handleWorldHideCommand clearing the selection on hide
+                  -- (#183). Committing off the stale read would clobber that
+                  -- clear and recreate the chunk selection on the now-hidden
+                  -- world. Mirrors the tile path (Render.Quads), which gates
+                  -- its commit on 'worldSelectNow current'.
+                  if not (zoomSelectNow current) then (current, current)
+                  else
                   -- The newest selection owns the cursor: committing a
                   -- chunk selection drops any zoomed-in tile selection, so
                   -- returning to the zoomed-in view shows no stale tile

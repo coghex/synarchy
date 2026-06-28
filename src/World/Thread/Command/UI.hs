@@ -79,18 +79,41 @@ handleWorldHideCommand env logger pageId = do
         ( mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }
         , pageId `elem` wmVisible mgr )
 
-    -- Clear this page's ground-item cursor selection on hide. Selection is
-    -- per-world (wsCursorRef), but the Lua-side deselect resolves through
-    -- activeWorld, which head-falls-back to another registered world once
-    -- this page leaves wmVisible — so a Lua deselect could clear the wrong
-    -- world and leave this one's selection live to repopulate the HUD when
-    -- it's shown again (#175). Doing it here, keyed on the exact pageId
-    -- being hidden, is race-free and always targets the right world.
+    -- Clear this page's cursor selection on hide: the ground-item
+    -- selection (#175) and the zoom-map chunk / zoomed-in tile selection
+    -- (#183). All three live in the per-world cursor (wsCursorRef), but a
+    -- Lua-side deselect resolves through activeWorld, which head-falls-back
+    -- to another registered world once this page leaves wmVisible — so a
+    -- Lua deselect could clear the wrong world and leave this one's
+    -- selection live. For the tile/chunk selection that strands the HUD on
+    -- re-show: resolveActiveWorld still resolves this page (head-fallback
+    -- over wmWorlds), so 'pollCursorInfo' sees no active-world change and
+    -- the cursor snapshot sees no selection change, so it never re-sends
+    -- the info text — leaving a live selection with an empty HUD panel
+    -- (#183). Clearing here, keyed on the exact pageId being hidden, is
+    -- race-free and always targets the right world; the next cursor poll
+    -- then blanks the panel and updates the snapshot to match.
+    --
+    -- Also clear the one-shot ARM flags (zoomSelectNow/worldSelectNow).
+    -- Chunk/tile selection is two-step: setZoomCursorSelect /
+    -- setWorldCursorSelect only set the *Now flag, and the render thread
+    -- commits it into zoomSelectedPos/worldSelectedTile at draw time
+    -- (makeCursorQuad / Render.Quads). A hide that lands after the arm but
+    -- before the commit would leave the flag set, so the first render after
+    -- re-show would re-commit the selection — re-stranding the HUD exactly
+    -- as above. Clearing the flags too matches what the existing
+    -- WorldSetZoomCursorDeselect / WorldSetWorldCursorDeselect handlers do
+    -- (both reset position AND *Now), and is unambiguously correct here: a
+    -- hidden world has no pending selection to commit.
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { selectedGroundItem = Nothing }, ())
+                (cs { selectedGroundItem = Nothing
+                    , zoomSelectedPos    = Nothing
+                    , zoomSelectNow      = False
+                    , worldSelectedTile  = Nothing
+                    , worldSelectNow     = False }, ())
         Nothing → pure ()
 
     when wasVisible $

@@ -163,9 +163,24 @@ function game.onMouseDown(button, x, y)
     -- the input thread; if a UI element ate the click, this never fires.
     local debugOverlay = require("scripts.debug")
 
+    -- #154: this is a focus-less broadcast handler, so a blank click that
+    -- misses every UI element still reaches us even when no gameplay world
+    -- is interactable — in a menu (resolveActiveWorld then falls back to a
+    -- HIDDEN world), or under a non-gameplay overlay that bypasses
+    -- hud.hide() (pause menu / keep-world Settings). isGameplayInputActive()
+    -- is the canonical "the player is driving a visible world" predicate
+    -- (same one the box-select arm #146 and the gameplay key handlers #182
+    -- use). When it's false we must not select, mutate, or move-order the
+    -- world — but a stray RIGHT click is still allowed to *cancel* a leaked
+    -- build / mine / armed-debug mode (their state teardown is #138/#140/
+    -- #148; this gate just keeps blank clicks from ACTING on a hidden world).
+    local gameplayActive = require("scripts.ui_manager").isGameplayInputActive()
+
     -- Debug overlay's parallel hit-test gets first crack. If a debug
     -- rect (spawn button / list entry) eats the click, we stop here
     -- so the click can't fall through into selection / tile-cursor.
+    -- (UI hit-test on a self-hiding overlay — safe to run ungated; it
+    -- returns false whenever the overlay isn't shown.)
     if debugOverlay.tryClaimClick(button, x, y) then
         return
     end
@@ -181,21 +196,52 @@ function game.onMouseDown(button, x, y)
 
     -- Build tool gets first crack at mouse clicks when in placement
     -- mode, so the placement click doesn't fall through into unit
-    -- selection / tile-cursor.
-    local buildTool = require("scripts.build_tool")
-    if buildTool.handleMouseDown(button, x, y) then
-        return
-    end
+    -- selection / tile-cursor. Left-click places (world mutation),
+    -- right-click cancels. #154: when gameplay input is inactive only
+    -- let the right-click cancel through, so a blank left-click can't
+    -- commit a placement onto a hidden/paused world behind an overlay.
+    if gameplayActive or button == MOUSE_RIGHT then
+        local buildTool = require("scripts.build_tool")
+        if buildTool.handleMouseDown(button, x, y) then
+            return
+        end
 
-    -- Mine tool claims clicks while the mine tool mode is active
-    -- (anchor / commit / cancel), so they don't fall through into
-    -- unit selection.
-    local mineTool = require("scripts.mine_tool")
-    if mineTool.handleMouseDown(button, x, y) then
-        return
+        -- Mine tool claims clicks while the mine tool mode is active
+        -- (anchor / commit / cancel), so they don't fall through into
+        -- unit selection. Same left=mutate / right=cancel split, same
+        -- #154 gate as the build tool above.
+        local mineTool = require("scripts.mine_tool")
+        if mineTool.handleMouseDown(button, x, y) then
+            return
+        end
     end
 
     if button == MOUSE_LEFT then
+        -- #154: every left-click branch below either MUTATES the world
+        -- (armed debug spawn / item / fluid / terrain / location /
+        -- structure placement) or SELECTS in it (units / buildings /
+        -- items / tile cursor). None of them is a cancel. So a single
+        -- gate covers them all: a blank left-click on a hidden/paused
+        -- world must do nothing. (Right-click cancels live in the
+        -- MOUSE_RIGHT branch and stay reachable below.)
+        if not gameplayActive then
+            return
+        end
+
+        -- #148: defense in depth for the armed debug spawn/edit modes.
+        -- They are only meaningful in the zoomed-in gameplay view, and the
+        -- leave-gameplay transitions already tear them down (hud.hide /
+        -- hud.reconcileView / uiManager.showMenu all call
+        -- debugOverlay.hide()). But gate the armed-click ROUTING on the same
+        -- current-view predicate the overlay uses for F8 and its parallel
+        -- claim (#147/#151) so an armed mode that ever survives a transition
+        -- still can't fire a spawn/edit on the zoom map or under a menu.
+        -- gameplayActive alone (#154) is not enough: it stays true on the
+        -- zoom map / fade band, where these tile-level placements have no
+        -- meaning. When false, fall through to the normal selection logic
+        -- below — only the armed branches are gated, not selection.
+        local debugArmable = debugOverlay.inGameplayView()
+
         -- Debug spawn mode: if armed, this click is a spawn, not a
         -- selection. Spawn at the hovered tile and stay armed.
         --
@@ -206,8 +252,10 @@ function game.onMouseDown(button, x, y)
         -- Production unit sources still pass their canonical
         -- faction (portal spawns → "player"; world-gen wildlife
         -- spawns → "wildlife").
-        if debugOverlay.armedDef then
-            local gx, gy = world.getHoverTile()
+        if debugArmable and debugOverlay.armedDef then
+            -- Live pick at the click coords, not the 0.1s-cached hover, so
+            -- a fast move-then-click spawns under the click (#123).
+            local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 unit.spawn(debugOverlay.armedDef, gx + 0.5, gy + 0.5,
                            nil, "debug")
@@ -220,12 +268,13 @@ function game.onMouseDown(button, x, y)
         -- coords from the fractional hover position; resting height
         -- derives from terrain at render). Tile-center fallback
         -- covers the no-hover edge case.
-        if debugOverlay.armedItemDef then
-            local hx, hy = world.getHoverPos()
+        if debugArmable and debugOverlay.armedItemDef then
+            -- Live sub-tile pick at the click coords (#123).
+            local hx, hy = world.pickPos(x, y)
             if hx and hy then
                 item.spawnGround(debugOverlay.armedItemDef, hx, hy)
             else
-                local gx, gy = world.getHoverTile()
+                local gx, gy = world.pickTile(x, y)
                 if gx and gy then
                     item.spawnGround(debugOverlay.armedItemDef,
                                      gx + 0.5, gy + 0.5)
@@ -236,8 +285,8 @@ function game.onMouseDown(button, x, y)
 
         -- Debug fluid-spawn mode: arms a kind ("water" / "lava"); the
         -- click places one tile of that fluid on top of the column.
-        if debugOverlay.armedFluidType then
-            local gx, gy = world.getHoverTile()
+        if debugArmable and debugOverlay.armedFluidType then
+            local gx, gy = world.pickTile(x, y)  -- live pick (#123)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local worldId = (hud and hud.worldId) or "test_arena"
@@ -250,8 +299,8 @@ function game.onMouseDown(button, x, y)
         -- Debug terrain-placement mode: arms a material id; the click
         -- raises the column at the hover tile one z of that material
         -- (WeAddTile through the edit log — persists like any edit).
-        if debugOverlay.armedTerrainId then
-            local gx, gy = world.getHoverTile()
+        if debugArmable and debugOverlay.armedTerrainId then
+            local gx, gy = world.pickTile(x, y)  -- live pick (#123)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local worldId = (hud and hud.worldId) or "test_arena"
@@ -264,8 +313,8 @@ function game.onMouseDown(button, x, y)
         -- Debug location-stamp mode: arms a location def name; the click
         -- stamps that premade structure (room/outpost/...) anchored at the
         -- hover tile (world.setCell terrain edits + content spawns).
-        if debugOverlay.armedLocation then
-            local gx, gy = world.getHoverTile()
+        if debugArmable and debugOverlay.armedLocation then
+            local gx, gy = world.pickTile(x, y)  -- live pick (#123)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local worldId = (hud and hud.worldId) or "test_arena"
@@ -279,13 +328,15 @@ function game.onMouseDown(button, x, y)
         -- Debug structure-placement mode: arms a kind (wall/floor/ceiling/
         -- post). Floor/ceiling/post place on the clicked tile; a wall goes
         -- in the clicked QUARTER of the tile (→ its diamond edge).
-        if debugOverlay.armedStructure then
-            -- Derive the tile from the FRACTIONAL hover position (floor), NOT
-            -- getHoverTile: the latter rounds in a ~0.17-tile-shifted space, so
-            -- near a tile border it disagrees with the quarter-corner/edge frac
-            -- (computed from getHoverPos) → posts landed on the wrong tile and
-            -- the floor-gate flaked. floor(hx,hy) keeps tile + corner consistent.
-            local hx, hy = world.getHoverPos()
+        if debugArmable and debugOverlay.armedStructure then
+            -- Derive the tile from the FRACTIONAL pick (floor), NOT pickTile:
+            -- the latter rounds in a ~0.17-tile-shifted space, so near a tile
+            -- border it disagrees with the quarter-corner/edge frac (from the
+            -- fractional pick) → posts landed on the wrong tile and the
+            -- floor-gate flaked. floor(hx,hy) keeps tile + corner consistent.
+            -- pickPos runs the hit-test live at the click coords, not the
+            -- 0.1s-cached hover (#123).
+            local hx, hy = world.pickPos(x, y)
             if hx and hy then
                 local structures = require("scripts.structures")
                 structures.placeKind(math.floor(hx), math.floor(hy),
@@ -306,18 +357,10 @@ function game.onMouseDown(button, x, y)
         -- shielded for free. It doesn't consume the click — the
         -- single-unit selection / tile-cursor logic below still runs;
         -- the drag only takes over on mouse-up if it passes threshold.
-        --
-        -- Gate on isGameplayInputActive(): game.onMouseDown is a broadcast
-        -- handler with no focus gate, so a blank click on a non-gameplay
-        -- overlay that doesn't take UI focus — pause menu / keep-world
-        -- Settings, both of which bypass hud.hide() — would otherwise arm
-        -- a fresh box-select behind the overlay, defeating the
-        -- cancel()-on-entry teardown (#146). Same predicate the gameplay
-        -- key handlers use (#182). (The single-unit/tile-cursor logic
-        -- below reaching those overlays is the broader #154 concern.)
-        if require("scripts.ui_manager").isGameplayInputActive() then
-            require("scripts.unit_drag_select").handleMouseDown(button, x, y)
-        end
+        -- The gameplay-active gate (#154/#146 — a box-select must never
+        -- arm behind a menu / pause overlay) is the early return at the
+        -- top of this MOUSE_LEFT branch, so no per-call check is needed.
+        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
 
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
@@ -391,6 +434,10 @@ function game.onMouseDown(button, x, y)
             debugOverlay.clearArmedItem()
             return
         end
+        if debugOverlay.armedFluidType then
+            debugOverlay.clearArmedFluid()
+            return
+        end
         if debugOverlay.armedTerrainId then
             debugOverlay.clearArmedTerrain()
             return
@@ -401,6 +448,19 @@ function game.onMouseDown(button, x, y)
         end
         if debugOverlay.armedStructure then
             debugOverlay.clearArmedStructure()
+            return
+        end
+        -- #154: every right-click branch below hit-tests buildings / units
+        -- / ground items or issues move orders against the active world. A
+        -- blank right-click on a non-gameplay overlay or in a menu resolves
+        -- to a HIDDEN world (resolveActiveWorld's empty-wmVisible fallback),
+        -- so without this gate a stray right-click could open a context menu
+        -- on a hidden-world entity or move-order a unit the player can't see.
+        -- The armed-mode cancels above (plus the build/mine right-click
+        -- cancels near the top) run while inactive so a stray click still
+        -- dismisses a leaked mode (#138/#140/#148); past here we need an
+        -- active, visible world. Same gate as the MOUSE_LEFT branch / #182.
+        if not gameplayActive then
             return
         end
         -- Storage building right-click → "Contents" menu, regardless
@@ -722,7 +782,9 @@ function game.onMouseDown(button, x, y)
         -- tile cursor — that's fine, it doesn't touch unit selection.
         local selected = unit.getSelected()
         if selected and #selected > 0 then
-            local gx, gy = world.getHoverTile()
+            -- Live pick at the click coords so the move order targets the
+            -- tile under the click, not the 0.1s-cached hover (#123).
+            local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 local tx = gx + 0.5
                 local ty = gy + 0.5
@@ -745,7 +807,10 @@ function game.onMouseDown(button, x, y)
             -- item menu ("Info") as a smoke test of the right-click +
             -- context-menu plumbing; per-target providers replace
             -- this hardcoded list later.
-            local gx, gy = world.getHoverTile()
+            -- Capture the right-clicked tile with a live pick at the click
+            -- coords (the cached hover lags a fast move, and once the menu
+            -- opens the cursor moves off the tile anyway) (#123).
+            local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local contextMenu = require("scripts.ui.context_menu")

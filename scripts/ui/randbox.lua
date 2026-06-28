@@ -34,7 +34,12 @@ local texSetNormal = nil
 local texSetSelected = nil
 local texRandomNormal = nil
 local texRandomClicked = nil
+local texHighlight = nil
 local assetsLoaded = false
+
+-- Hover overlay colour, matched to the dropdown/list highlight so the
+-- whole UI kit gives the same hover affordance.
+local HIGHLIGHT_COLOR = {0.3, 0.5, 0.8, 0.8}
 
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5
@@ -153,6 +158,7 @@ function randbox.init()
     texSetSelected = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
     texRandomNormal = engine.loadTexture("assets/textures/ui/randomize.png")
     texRandomClicked = engine.loadTexture("assets/textures/ui/randomizeclicked.png")
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
 
     -- Seed the RNG
     math.randomseed(os.time())
@@ -206,6 +212,8 @@ function randbox.new(params)
         textId = nil,
         cursorId = nil,
         btnSpriteId = nil,
+        boxHighlightId = nil,
+        btnHighlightId = nil,
         -- State
         focused = false,
     }
@@ -272,6 +280,35 @@ function randbox.new(params)
     -- Text box click focuses for editing
     UI.setClickable(rb.boxId, true)
     UI.setOnClick(rb.boxId, RANDBOX_CALLBACK)
+
+    -- Hover highlights: non-clickable overlays parented to the box and
+    -- the randomize button. As children they resolve their hover target
+    -- up to the clickable parent (no flicker). Hidden until hovered. The
+    -- box overlay (zIndex 0) sits below the text (zIndex 1) so it tints
+    -- the field without obscuring its value.
+    rb.boxHighlightId = UI.newSprite(
+        rb.name .. "_box_hl",
+        rb.inputWidth, rb.height,
+        texHighlight,
+        HIGHLIGHT_COLOR[1], HIGHLIGHT_COLOR[2],
+        HIGHLIGHT_COLOR[3], HIGHLIGHT_COLOR[4],
+        rb.page
+    )
+    UI.addChild(rb.boxId, rb.boxHighlightId, 0, 0)
+    UI.setZIndex(rb.boxHighlightId, 0)
+    UI.setVisible(rb.boxHighlightId, false)
+
+    rb.btnHighlightId = UI.newSprite(
+        rb.name .. "_btn_hl",
+        rb.btnSize, rb.btnSize,
+        texHighlight,
+        HIGHLIGHT_COLOR[1], HIGHLIGHT_COLOR[2],
+        HIGHLIGHT_COLOR[3], HIGHLIGHT_COLOR[4],
+        rb.page
+    )
+    UI.addChild(rb.btnSpriteId, rb.btnHighlightId, 0, 0)
+    UI.setZIndex(rb.btnHighlightId, 1)
+    UI.setVisible(rb.btnHighlightId, false)
 
     -- Position elements
     UI.addToPage(rb.page, rb.boxId, rb.x, rb.y)
@@ -699,6 +736,14 @@ function randbox.setVisible(id, visible)
     if rb.cursorId and not visible then UI.setVisible(rb.cursorId, false) end
     if rb.btnSpriteId then UI.setVisible(rb.btnSpriteId, visible) end
 
+    -- UI.setVisible doesn't cascade to children, so a randbox hovered
+    -- when hidden would come back already highlighted on the next show.
+    -- Clear both hover overlays explicitly when hiding.
+    if not visible then
+        if rb.boxHighlightId then UI.setVisible(rb.boxHighlightId, false) end
+        if rb.btnHighlightId then UI.setVisible(rb.btnHighlightId, false) end
+    end
+
     if not visible and rb.focused then
         randbox.unfocus(id)
     end
@@ -735,13 +780,30 @@ function randbox.onClickOutside(mouseX, mouseY)
 end
 
 -----------------------------------------------------------
--- Hover Handling (placeholder for consistency)
+-- Hover Handling
 -----------------------------------------------------------
 
+-- Resolve the hover-highlight overlay for the box or randomize-button
+-- handle. Returns nil if the handle isn't one of ours.
+local function highlightForHandle(elemHandle)
+    for _, rb in pairs(randboxes) do
+        if rb.boxId == elemHandle then
+            return rb.boxHighlightId
+        elseif rb.btnSpriteId == elemHandle then
+            return rb.btnHighlightId
+        end
+    end
+    return nil
+end
+
 function randbox.onHoverEnter(elemHandle)
+    local hlId = highlightForHandle(elemHandle)
+    if hlId then UI.setVisible(hlId, true) end
 end
 
 function randbox.onHoverLeave(elemHandle)
+    local hlId = highlightForHandle(elemHandle)
+    if hlId then UI.setVisible(hlId, false) end
 end
 
 return randbox

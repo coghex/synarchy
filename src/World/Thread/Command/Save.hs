@@ -91,7 +91,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             spoilPiles ← readIORef (wsSpoilRef worldState)
             -- v54 (structure persistence) additions
             texPalette ← readIORef (texPaletteRef env)
-            -- v55 (item-instance identity, #67): persist the allocator so
+            -- v56 (item-instance identity, #67): persist the allocator so
             -- new items created after a reload keep unique ids.
             nextItemId ← readIORef (nextItemInstanceIdRef env)
             -- v4 (Phase 3) additions
@@ -257,7 +257,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- per run). Clear it so the Lua resolve tick re-loads every palette
     -- texture for THIS session and the renderer can resolve loaded pieces.
     writeIORef (texPaletteHandlesRef env) HM.empty
-    -- v55 (item-instance identity, #67): advance the allocator past every
+    -- v56 (item-instance identity, #67): advance the allocator past every
     -- saved iiInstanceId. max (never lower) so a within-session load over a
     -- session that already minted higher ids can't recycle a live id.
     atomicModifyIORef' (nextItemInstanceIdRef env) $ \cur →

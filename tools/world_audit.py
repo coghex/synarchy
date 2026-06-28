@@ -357,8 +357,13 @@ def check_island_1tile(grid: dict[tuple[int, int], dict[str, Any]],
 
 def check_lake_hole(grid: dict[tuple[int, int], dict[str, Any]],
                     issues: list[Issue]) -> None:
-    """Single dry tiles fully surrounded by lake water. These are
-    "holes" in a lake that should have been filled by equilibration."""
+    """Single dry tiles fully surrounded by lake water whose terrain
+    sits BELOW the lake surface — a genuine "hole" the lake failed to
+    fill by equilibration. A tile whose terrain is AT (==) or above the
+    surface is a flush islet/shoal poking up to the waterline, which is
+    legitimate, not a defect — those are excluded to avoid false
+    positives (a terrain bump that sits below water with only 3 water
+    neighbours is still caught by check_submerged_bump)."""
     for (x, y), tile in grid.items():
         if tile["fluidType"] is not None:
             continue
@@ -373,10 +378,21 @@ def check_lake_hole(grid: dict[tuple[int, int], dict[str, Any]],
         if len(nbrs) < 4:
             continue
         if all(n["fluidType"] == "lake" for n in nbrs):
-            lake_surf = nbrs[0]["fluidSurf"]
+            # A genuine hole is terrain below the LOWEST surrounding lake
+            # surface — water at that level would still flood it. If the
+            # terrain reaches any neighbour's waterline it's a flush
+            # islet/shore/saddle, not a hole. Compare against all four
+            # surfaces collectively so the result is independent of
+            # neighbour ordering (mirrors check_submerged_bump's min()).
+            surfs = [n["fluidSurf"] for n in nbrs if n["fluidSurf"] is not None]
+            if not surfs:
+                continue
+            min_surf = min(surfs)
+            if tile["terrainZ"] >= min_surf:
+                continue
             issues.append(Issue(
                 "LAKE_HOLE", x, y,
-                f"terrainZ={tile['terrainZ']} surrounded by lake (surf={lake_surf})",
+                f"terrainZ={tile['terrainZ']} surrounded by lake (minSurf={min_surf})",
             ))
 
 
@@ -545,7 +561,13 @@ def check_water_water_cliff(grid: dict[tuple[int, int], dict[str, Any]],
     renderer draws side faces between them, making the height
     difference visible as a water cliff inside what should be a
     flat water body. Ocean is excluded (the renderer skips it for
-    side faces). Connected water bodies should have uniform surface."""
+    side faces).
+
+    A 1-z surface step is natural where water flows downhill, so it is
+    excluded when a river is involved — consistent with WATER_CLIFF and
+    MID_RIVER_CLIFF, which both treat a 1-z step as natural. Lakes are
+    equilibrated flat, so a 1-z step between two lake tiles is a real
+    (if minor) artifact and is still flagged."""
     seen = set()
     for (x, y), tile in grid.items():
         if tile["fluidType"] not in ("river", "lake"):
@@ -565,6 +587,10 @@ def check_water_water_cliff(grid: dict[tuple[int, int], dict[str, Any]],
             if nsurf is None:
                 continue
             diff = abs(wsurf - nsurf)
+            # Natural downhill flow: a 1-z step involving a river is
+            # expected, not a cliff. Lake-to-lake 1-z steps stay flagged.
+            if diff == 1 and "river" in (tile["fluidType"], n["fluidType"]):
+                continue
             if diff > 0:
                 seen.add(pair)
                 # Report the higher tile (the side face is drawn on it)
@@ -995,7 +1021,12 @@ QUALITY_THRESHOLDS = {
                                   # 2026-06-11 (was 150, obs max 52).
     "ISOLATED_FLUID":        90,  # observed max 74 (seed 2718; was 77
                                   # even with old constants)
-    "LAKE_HOLE":             25,  # observed max 4
+    "LAKE_HOLE":             25,  # observed max 0 after the terrainZ<surf
+                                  # refinement (#21): flush waterline
+                                  # islets no longer counted, only genuine
+                                  # depressions the lake failed to fill.
+                                  # Threshold kept for headroom against a
+                                  # real unfilled-hole regression.
     "MULTI_ISLAND":          25,  # observed max 4
     "RIVER_CHUNK_GAP":       50,  # observed max 14
     "RIVER_MOUTH_DROP":      50,  # observed max 15
@@ -1027,7 +1058,11 @@ QUALITY_THRESHOLDS = {
     "RIVER_UNDER_TERRAIN":  500,  # observed max 251 (underground rivers OK)
     "WATER_ABOVE_LAND":     300,  # observed max 152 (steep valleys)
     "WATER_CLIFF":          300,  # observed max 152
-    "WATER_WATER_CLIFF":   3500,  # observed max 2425 (stair-step gradient)
+    "WATER_WATER_CLIFF":   3500,  # observed max 2704 (seed 13579) after the
+                                  # #21 refinement: river-involved 1-z steps
+                                  # (natural downhill flow) excluded, lake-to-
+                                  # lake 1-z steps still flagged. Threshold
+                                  # kept; headroom retained against new seeds.
 }
 
 

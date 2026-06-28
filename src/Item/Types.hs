@@ -232,7 +232,7 @@ data ItemInstance = ItemInstance
                                 --   persisted as sdNextItemInstanceId so ids
                                 --   stay unique across save/load. Field order
                                 --   is load-bearing (positional Generic
-                                --   Serialize) — appended for save v55.
+                                --   Serialize) — appended for save v56.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A stable, order-independent signature of an item's nested contents

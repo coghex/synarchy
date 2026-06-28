@@ -621,6 +621,15 @@ function hud.hide()
     -- world. The world thread clears it deterministically in
     -- handleWorldHideCommand, keyed on the exact page being hidden (which
     -- worldView.hide()/testArena.hide() issue just before this runs).
+    --
+    -- Building selection (#176), by contrast, IS cleared here: it is a
+    -- single global id (bmSelected), not a per-world cursor, so deselect()
+    -- has no wrong-world hazard and is a no-op when nothing is selected.
+    -- Suppressing the panel alone is not enough — the building-info watcher
+    -- keeps polling building.getSelected() and re-pushing the selected
+    -- building into the panel's stored content, which hud.show() then
+    -- restores stale. Clearing the selection stops the repopulation.
+    building.deselect()
     pcall(function() require("scripts.event_log").hide() end)
     pcall(function() require("scripts.combat_log").hide() end)
     pcall(function() require("scripts.injury_log_panel").hide() end)
@@ -646,11 +655,44 @@ function hud.onMouseDown(button_num, mx, my)
     -- blank-area menu click forwarded by uiManager.onMouseDown would
     -- still call world.setZoomCursorSelect / setWorldCursorSelect (or
     -- the clear variants) against the hidden world (#153).
-    if not hud.visible then
+    --
+    -- hud.visible alone isn't enough (#154): the pause menu and keep-world
+    -- Settings open as overlays that bypass hud.hide(), so hud.visible
+    -- stays true while the world sits behind a non-gameplay menu. A blank
+    -- click forwarded here would still set/clear the zoom/world cursor
+    -- behind that overlay. isGameplayInputActive() is false for those
+    -- overlays (it treats pause as "menu on top"), so gate on it too —
+    -- the same predicate game.onMouseDown uses for the matching left/
+    -- right gameplay gates.
+    if not hud.visible
+       or not require("scripts.ui_manager").isGameplayInputActive() then
         return
+    end
+    -- Recover window-pixel click coords. uiManager.onMouseDown forwards
+    -- mx,my already scaled into FRAMEBUFFER space, but the synchronous
+    -- pickers (world.pickTile) and the zoom-cursor hit-test
+    -- (pixelToChunkOrigin, fed by setZoomCursorHover) both expect WINDOW
+    -- pixels — the same space engine.getMousePosition() reports. Convert
+    -- back so a click resolves at the actual click position rather than
+    -- the 0.1s-stale cached hover the select APIs would otherwise read
+    -- (#123).
+    local cx, cy = mx, my
+    do
+        local ww, wh   = engine.getWindowSize()
+        local fbW, fbH = engine.getFramebufferSize()
+        if fbW and fbH and fbW > 0 and fbH > 0 then
+            cx = mx * (ww / fbW)
+            cy = my * (wh / fbH)
+        end
     end
     if hud.currentView == "zoomed_out" then
         if button_num == 1 then
+            -- Refresh the zoom-cursor position to the actual click coords
+            -- before arming the select. The chunk is committed from
+            -- zoomCursorPos at render time (makeCursorQuad); without this
+            -- it would commit the periodically-cached hover, so a fast
+            -- move-then-click selected the previously hovered chunk (#123).
+            world.setZoomCursorHover(hud.worldId, cx, cy)
             world.setZoomCursorSelect(hud.worldId)
         elseif button_num == 2 then
             world.clearZoomCursorSelect(hud.worldId)
@@ -686,12 +728,19 @@ function hud.onMouseDown(button_num, mx, my)
             if world.getToolMode and world.getToolMode() ~= "info" then
                 return
             end
-            world.setWorldCursorSelect(hud.worldId)
-            -- Refresh the tile-editor popup at the just-selected
-            -- tile. Gated internally by arenaMode so non-arena worlds
-            -- silently no-op.
-            local gx, gy = world.getHoverTile()
+            -- Live pick at the click coords, then select that tile
+            -- directly. setWorldCursorSelect would arm a select that
+            -- commits from the 0.1s-cached worldHoverTile at render time,
+            -- so a fast move-then-click selected the previously hovered
+            -- tile; pickTile resolves the tile under the click NOW and
+            -- world.selectTile sets it in one shot (also dropping any
+            -- chunk selection, #135) (#123).
+            local gx, gy = world.pickTile(cx, cy)
             if gx and gy then
+                world.selectTile(hud.worldId, gx, gy)
+                -- Refresh the tile-editor popup at the just-selected
+                -- tile. Gated internally by arenaMode so non-arena worlds
+                -- silently no-op.
                 local tileEditor = require("scripts.tile_editor")
                 tileEditor.onTileSelected(gx, gy)
             end
@@ -735,6 +784,13 @@ end
 --     selection — and here the world is still the visible/active one, so
 --     activeWorld resolves correctly (unlike the menu-hide path, which is
 --     handled engine-side in handleWorldHideCommand).
+--   * chunk/tile cursor selection (#132): zoomSelectedPos (zoom-map chunk)
+--     and worldSelectedTile (zoomed-in tile) also live in the per-world
+--     cursor. infoPanel.clear() blanks the panel, but the selection itself
+--     survives the band change, and pollCursorInfo only republishes on a
+--     selection *change* — so without clearing it the highlight stays set
+--     while the panel stays empty. clearZoom/WorldCursorSelect tear both
+--     down with the panel.
 function hud.reconcileView()
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()
@@ -803,10 +859,51 @@ function hud.reconcileView()
     -- no panel; mode only resets from "picker"), so tear it down on every
     -- transition. It deliberately does NOT touch "placement" mode.
     require("scripts.build_tool").hidePicker()
+    -- Build placement (#140): once the build tool enters "placement" mode,
+    -- its ghost preview and click handling keep running off the world
+    -- cursor regardless of the HUD view. The page swap above only takes
+    -- the world-page tool UI off-view, so placement stays live in
+    -- zoomed-out / fade-zone and keeps consuming clicks. exitPlacement()
+    -- is idempotent (clearGhost no-ops with no ghost; mode resets to
+    -- "off"), so cancel any in-progress placement on every band change.
+    require("scripts.build_tool").exitPlacement()
+    -- Arena tile-editor popup (#138): the test-arena tile editor lives on
+    -- hud.world_page and was only torn down on empty tile-info broadcasts,
+    -- tool changes, or arena exit. The page swap above only takes it
+    -- off-view, and zoom-map chunk selection produces non-empty HUD info
+    -- text, so neither the band change nor the empty-text clear path
+    -- closed it — it survived off-view and reappeared stale when the world
+    -- page returned. clear() is idempotent (destroyPopup no-ops with no
+    -- popup, and is a no-op outside arena mode), so tear it down on every
+    -- transition.
+    require("scripts.tile_editor").clear()
     if newView ~= "zoomed_in" then
         require("scripts.debug").hide()
     end
     item.deselect()
+    -- Building selection (#176): unlike the per-world cursor selections
+    -- below, building selection is a single global id (bmSelected), so the
+    -- page swap above never touches it and the building-info watcher keeps
+    -- polling building.getSelected() and re-pushing the same building into
+    -- the shared info panel — repopulating it stale after the band change.
+    -- deselect() clears the global selection and is a no-op when nothing is
+    -- selected, matching item.deselect() above; no wrong-world hazard since
+    -- there is no per-world building cursor to resolve through activeWorld.
+    building.deselect()
+    -- Chunk/tile cursor selection (#132): the zoom-map chunk selection
+    -- (zoomSelectedPos) and zoomed-in tile selection (worldSelectedTile)
+    -- both live in the per-world cursor (wsCursorRef), independent of the
+    -- HUD pages swapped above. The info panel is cleared on this transition
+    -- (infoPanel.clear() above), but pollCursorInfo only republishes when
+    -- the selection *changes* — so a selection that survives the band change
+    -- unchanged leaves the highlight logically set while the panel stays
+    -- blank until the user re-selects. Clear both selections here, exactly
+    -- like item.deselect() does for the ground-item selection, so the
+    -- highlight and panel tear down together. The clears are keyed on
+    -- hud.worldId (the visible/active world that owns this view, the same id
+    -- onMouseDown uses), and are no-ops when nothing is selected.
+    world.clearZoomCursorSelect(hud.worldId)
+    world.clearWorldCursorSelect(hud.worldId)
 end
 
 -- Wheel hook (no UI element under cursor, no shift). Reconcile immediately
