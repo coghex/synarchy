@@ -445,16 +445,29 @@ end
 -- Key Input
 -----------------------------------------------------------
 
+-- True when `key` (a canonical key name from onKeyDown) is bound to
+-- `action` in the live keybinding table. Reads the table fresh each call
+-- so runtime rebinds (Input settings tab) take effect immediately.
+local function keyBoundTo(key, action)
+    local binds = engine.getKeybinds()
+    local keys = binds and binds[action]
+    if not keys then return false end
+    for _, k in ipairs(keys) do
+        if k == key then return true end
+    end
+    return false
+end
+
 function worldView.onKeyDown(key)
     if not worldView.visible then return end
 
-    if key == "Q" then
+    if keyBoundTo(key, "rotateCCW") then
         camera.rotateCCW()
         engine.logDebug("Camera rotated CCW, facing=" .. tostring(camera.getFacing()))
-    elseif key == "E" then
+    elseif keyBoundTo(key, "rotateCW") then
         camera.rotateCW()
         engine.logDebug("Camera rotated CW, facing=" .. tostring(camera.getFacing()))
-    elseif key == "Home" then
+    elseif keyBoundTo(key, "resetZTracking") then
         camera.setZTracking(true)
         engine.logDebug("Z-slice tracking re-enabled")
     end

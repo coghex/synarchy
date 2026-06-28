@@ -71,6 +71,14 @@ spec = do
             Map.lookup "moveLeft" defaultKeyBindings  `shouldBe` Just ["Left", "A"]
             Map.lookup "moveRight" defaultKeyBindings `shouldBe` Just ["Right", "D"]
 
+        -- world_view.onKeyDown resolves these action names against the live
+        -- bindings (issue #275); a rename or default-key change here would
+        -- silently break Q/E rotate + Home z-reset.
+        it "binds camera rotate + z-reset to Q/E/Home" $ do
+            Map.lookup "rotateCCW" defaultKeyBindings      `shouldBe` Just ["Q"]
+            Map.lookup "rotateCW" defaultKeyBindings       `shouldBe` Just ["E"]
+            Map.lookup "resetZTracking" defaultKeyBindings `shouldBe` Just ["Home"]
+
     describe "isActionDown (any bound key)" $ do
         let bindings = Map.fromList [("moveUp", ["Up", "W"])]
         it "fires when the first bound key is held" $
