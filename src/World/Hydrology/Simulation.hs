@@ -18,7 +18,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector.Algorithms.Intro as VA
 import Control.Monad.ST (runST, ST)
-import Control.Monad (forM_, when, filterM)
+import Control.Monad (forM_, when)
 import Data.STRef (newSTRef, readSTRef, modifySTRef')
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Constants (seaLevel)
@@ -804,45 +804,22 @@ simulateHydrology seed worldSize ageIdx grid climate =
         maxClimb ∷ Int
         maxClimb = 40
 
-        -- A grid cell is "in a lake" if it lies anywhere in the flooded
-        -- footprint of a basin that qualifies as a lake — NOT merely if
-        -- its own fill depth reaches `minLakeDepth`. A real lake fills
-        -- its whole basin to one spillway level, so its margins are only
-        -- 1..8 deep while its core is deep; testing per-cell depth would
-        -- miss those shallow shelves and let a headwater be sourced on a
-        -- lake margin and traced out through the lake (issue #221 review).
-        -- So flood-label the connected flooded cells (filledElev >
-        -- origElev, 8-connected like the depression fill) and mark the
-        -- ENTIRE component in-lake when its deepest cell reaches
-        -- minLakeDepth — the same "is a lake" criterion `frLakes` uses,
-        -- applied to the full footprint. Lazy: forced only on the
-        -- ≥128 source-extension path, so small worlds pay nothing.
-        inLakeVec ∷ VU.Vector Bool
-        inLakeVec = runST $ do
-            visited ← VUM.replicate totalSamples False
-            inLake  ← VUM.replicate totalSamples False
-            let flooded i = filledElev VU.! i > origElev VU.! i
-                depthAt i = filledElev VU.! i - origElev VU.! i
-            forM_ [0 .. totalSamples - 1] $ \start → do
-                seen ← VUM.read visited start
-                when (not seen ∧ flooded start) $ do
-                    VUM.write visited start True
-                    let loop []       acc maxD = pure (acc, maxD)
-                        loop (c : cs) acc maxD = do
-                            fresh ← filterM (\n → do
-                                        v ← VUM.read visited n
-                                        pure (not v ∧ flooded n))
-                                    (neighbors c)
-                            forM_ fresh $ \n → VUM.write visited n True
-                            loop (fresh ⧺ cs) (c : acc)
-                                 (max maxD (depthAt c))
-                    (cells, maxD) ← loop [start] [] 0
-                    when (maxD ≥ minLakeDepth) $
-                        forM_ cells $ \c → VUM.write inLake c True
-            VU.unsafeFreeze inLake
-
+        -- A grid cell is "in a lake" if it is a flooded basin cell —
+        -- its depression-filled surface stands above its raw terrain.
+        -- This matches the actual world-lake pipeline, which makes EVERY
+        -- flooded basin a rendered lake/pond (basin tile = filled >
+        -- terrain, kept by area ≥ minBasinTiles = 1 — depth is NOT a
+        -- factor; World.Fluid.Lake.Identify). An earlier per-cell
+        -- `depth ≥ minLakeDepth` test, and even a whole-component test
+        -- gated on the component's deepest cell, both missed shallow
+        -- ponds (max depth 1..8) — which ARE lakes — and let a river be
+        -- sourced inside one and traced/carved out through it (issue
+        -- #221 review). Any flooded land cell is therefore a lake cell;
+        -- `walkToDivide` stops below it and `dropToOutflow` descends a
+        -- flooded headwater to the basin's spill point, so rivers start
+        -- on well-drained ground and flow INTO ponds, never out of them.
         isLakeCell ∷ Int → Bool
-        isLakeCell i = inLakeVec VU.! i
+        isLakeCell i = landVec VU.! i ∧ filledElev VU.! i > origElev VU.! i
         walkToDivide ∷ Int → Int
         walkToDivide start = go start (0 ∷ Int)
           where
