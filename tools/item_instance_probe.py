@@ -262,6 +262,23 @@ def main() -> int:
             check("canteen stayed in inventory after rejection", can_id in still,
                   f"canteen ids {sorted(still)}")
 
+            # Accessory analogue: equipAccessory must also refuse a
+            # non-accessory id (only kind: accessory belongs on uiAccessories).
+            acc_before = as_int(send(args.port,
+                f"return #(equipment.getAccessories({uid}) or {{}})"))
+            ares = send(args.port,
+                f"return equipment.equipAccessory({uid}, 'technogoggles', {can_id})")
+            check("equipAccessory(accessory defName, canteen id) returns false",
+                  ares.strip() == "false", ares)
+            acc_after = as_int(send(args.port,
+                f"return #(equipment.getAccessories({uid}) or {{}})"))
+            check("canteen did NOT enter the accessory list",
+                  acc_after == acc_before, f"accessories {acc_before} -> {acc_after}")
+            still2 = {it["instanceId"] for it in inventory(args.port, uid)
+                      if it.get("defName") == "canteen_steel_2l"}
+            check("canteen still in inventory after accessory rejection",
+                  can_id in still2, f"canteen ids {sorted(still2)}")
+
         print("\n== CONTAINER DIVERGENCE (#67A) ==")
         # The technomule spawns with a PRE-STOCKED first_aid_kit. Add a
         # second (empty) kit and confirm the two same-def containers stay

@@ -547,9 +547,13 @@ pushItemInstance inst itemMgr = do
                     Lua.rawseti (-2) (fromIntegral i)
                 Lua.setfield (-2) "buffs"
 
--- | equipment.equipAccessory(uid, itemDefName) → bool. Moves the
---   first matching inventory item to the end of the unit's accessory
---   list. Returns false if the unit or item doesn't exist.
+-- | equipment.equipAccessory(uid, itemDefName[, instanceId]) → bool.
+--   Moves the matching inventory item (the exact instance when an id is
+--   given, else the first defName match) to the end of the unit's
+--   accessory list. Returns false if the unit or item doesn't exist, or
+--   if the targeted item is not `kind: accessory` — only accessories
+--   belong on uiAccessories, so a non-accessory is rejected with no
+--   mutation (the accessory analogue of equip's slot-kind gate).
 equipmentEquipAccessoryFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 equipmentEquipAccessoryFn env = do
     uidArg  ← Lua.tointeger 1
@@ -573,23 +577,34 @@ equipmentEquipAccessoryFn env = do
                                      (uiInventory inst) of
                                 (_, Nothing) → (um, False)
                                 (newInv, Just newI) →
-                                    -- Apply the accessory's buffs to the
-                                    -- unit's modifier list so combat /
-                                    -- stat display sees them immediately.
-                                    let mods' = case lookupItemDef
-                                                  (iiDefName newI) itemMgr of
-                                          Just d  → applyItemBuffs newI d
+                                    -- Validate the ACTUAL popped instance is an
+                                    -- accessory before it joins uiAccessories —
+                                    -- the kind gate slot-equip has, but for the
+                                    -- accessory list (only `kind: accessory`
+                                    -- items belong there). When targeting by id
+                                    -- the defName arg is advisory, so a
+                                    -- mismatched (defName, id) pair must not
+                                    -- smuggle a canteen/weapon in. The pop is a
+                                    -- pure computation; `um` is mutated only in
+                                    -- the success branch, so a reject leaves it
+                                    -- untouched.
+                                    case lookupItemDef (iiDefName newI) itemMgr of
+                                      Just d | idKind d ≡ "accessory" →
+                                        -- Apply the accessory's buffs to the
+                                        -- unit's modifier list so combat /
+                                        -- stat display sees them immediately.
+                                        let mods' = applyItemBuffs newI d
                                                        (uiModifiers inst)
-                                          Nothing → uiModifiers inst
-                                        inst' = inst
-                                          { uiInventory   = newInv
-                                          , uiAccessories =
-                                              uiAccessories inst ++ [newI]
-                                          , uiModifiers   = mods'
-                                          }
-                                    in (um { umInstances = HM.insert uid inst'
-                                                             (umInstances um) },
-                                        True)
+                                            inst' = inst
+                                              { uiInventory   = newInv
+                                              , uiAccessories =
+                                                  uiAccessories inst ++ [newI]
+                                              , uiModifiers   = mods'
+                                              }
+                                        in (um { umInstances = HM.insert uid inst'
+                                                                 (umInstances um) },
+                                            True)
+                                      _ → (um, False)
             Lua.pushboolean ok
             return 1
         _ → do
