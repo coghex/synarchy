@@ -130,7 +130,16 @@ loadWorld rawName = case sanitizeSaveName rawName of
             fail $ "Save format incompatible: expected v"
                 <> show currentSaveVersion
                 <> ", got v" <> show (shVersion h)
-        S.get
+        sd ← S.get
+        -- A valid v59+ save always carries at least the active world page.
+        -- Reject an empty sdWorlds at DECODE time so the load API fails
+        -- cleanly (Left → engine.loadSave returns false) before it pauses
+        -- the engine, restores Lua blobs, or marks the head world loading.
+        -- Catching it only in the world-thread handler would wedge the
+        -- session on the loading screen after those side effects (#215).
+        when (null (sdWorlds sd)) $
+            fail "Save contains no world pages (corrupt or truncated file)"
+        pure sd
 
 mapLeft ∷ Either a b → (a → c) → Either c b
 mapLeft (Left a)  f = Left (f a)

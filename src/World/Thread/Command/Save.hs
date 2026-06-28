@@ -557,8 +557,9 @@ handleWorldLoadSaveCommand env logger pageId saveData
     sendSaveLoaded env uSurvivingIds bSurvivingIds
 
   | otherwise =
-      -- A well-formed save always records at least the active world page;
-      -- an empty sdWorlds means a corrupt or truncated file. Refuse rather
-      -- than crash the world thread.
+      -- Defense-in-depth: loadWorld already rejects an empty sdWorlds at
+      -- decode time (Serialize.hs), so engine.loadSave fails cleanly before
+      -- queueing this command and this branch is unreachable via the normal
+      -- path. Kept so a future direct caller can't crash the world thread.
       logError logger CatWorld
           "Cannot load save: save contains no world pages"
