@@ -269,21 +269,29 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
             jaggedChance = clamp01 $ rockJaggedBase
                 + (hardness - slopeHardnessThreshold) * rockJaggedHardK
                 + reliefNorm * rockJaggedReliefK
+            -- Wet-direction bitmask (seam-aware via the wet* flags).
+            wetMask = (if wetN then 1 else 0) .|. (if wetE then 2 else 0)
+                  .|. (if wetS then 4 else 0) .|. (if wetW then 8 else 0) ∷ Word8
             -- Candidate ramp directions: strictly-lower cardinal
             -- neighbours that are NOT wet (bank rule). May be empty if the
             -- only downhill neighbour is water — then we fall through to
-            -- 'rawSlope', which already excludes wet neighbours, so a dry
-            -- rock at a water edge stays blocky.
+            -- the dry clean-flank below.
             cand = [ b | (b, nz, wet) ← [ (1 ∷ Word8, neighN, wetN)
                                         , (2, neighE, wetE)
                                         , (4, neighS, wetS)
                                         , (8, neighW, wetW) ]
                        , nz ≠ minBound, nz < z, not wet ]
+            -- Clean-flank fallback: rawSlope with any wet directions
+            -- cleared. rawSlope is built by 'slopeBit', whose bank check is
+            -- IN-CHUNK only, so a 1-z lower wet neighbour across a chunk
+            -- seam would otherwise survive in rawSlope and ramp into water.
+            -- (15 `xor` wetMask) is the 4-bit complement of the wet mask.
+            dryFlank = rawSlope .&. (15 `xor` wetMask)
         in if roll < jaggedChance ∧ not (null cand)
            then cand !! fromIntegral ((h `shiftR` 8) `mod`
                                       fromIntegral (length cand))
-           else if rawSlope ≢ 0 ∧ rawSlope ≢ 15
-                then rawSlope   -- clean terrace flank, no jaggedness roll
+           else if dryFlank ≢ 0 ∧ dryFlank ≢ 15
+                then dryFlank   -- clean terrace flank (wet dirs masked out)
                 else 0
 
 slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
