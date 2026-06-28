@@ -8,6 +8,7 @@ import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
 import qualified Test.Headless.WorldGen.Flatness as Flatness
 import qualified Test.Headless.WorldGen.SoilGate as SoilGate
+import qualified Test.Headless.WorldGen.SoilShed as SoilShed
 import qualified Test.Headless.WorldGen.Exposure as Exposure
 import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
@@ -64,6 +65,7 @@ main = hspec $ do
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.Spoil" Spoil.spec
     describe "WorldGen.SoilGate" SoilGate.spec
+    describe "WorldGen.SoilShed" SoilShed.spec
     describe "Combat.Damage" CombatDamage.spec
     describe "Combat.Severing" CombatSevering.spec
     describe "Combat.Wounds" CombatWounds.spec

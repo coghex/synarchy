@@ -232,14 +232,43 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            -- Round toward zero to avoid jitter on small differences
            delta = if abs rawDelta < 0.5 then 0
                    else truncateTowardZero rawDelta
-           -- Soil depth for last-age: continuous function of slope
+           -- Local downhill drop: how far this tile stands ABOVE its
+           --   lowest cardinal neighbour, in tiles. This is the DOWNHILL
+           --   gradient (the tile being the high side of a step), NOT the
+           --   absolute relief — a tile that merely sits at the FOOT of a
+           --   tall neighbour (a valley floor / cliff base) has a small
+           --   drop and so keeps its soil, which is where eroded material
+           --   is supposed to settle. Unlike 'slopeNorm' (deviation from
+           --   the neighbour AVERAGE, which a uniformly steep mountainside
+           --   reads as ~0), this reads a steep face directly: a 45° face
+           --   drops ≥1, a cliff several tiles. It drives ONLY the last-age
+           --   soil veneer (below) — the erosion math keeps using the
+           --   average-deviation slopeNorm so terrain relief is unchanged.
+           --   (#225)
+           maxDrop = maximum [ elev - nN, elev - nS
+                             , elev - nE, elev - nW ] ∷ Int
+           reliefNorm = min 1.0 (fromIntegral (max 0 maxDrop) / 6.0) ∷ Float
+
+           -- Steep faces shed their soil to bare rock (real mountains do
+           -- this — soil's angle of repose is ~30-37°; a downhill drop of
+           -- ≥1 is already 45°). At/above 'soilShedRelief' tiles of
+           -- downhill drop the column exposes rock instead of a soil cap;
+           -- gentler ground keeps soil, thinned by steepness. Flat biomes
+           -- (drop 0) and valley floors / cliff bases (the LOW side of a
+           -- step, drop ≤ 0) are unaffected — the eroded soil still
+           -- accumulates there (and via the deposition branch). (#225)
+           soilShedRelief = 3 ∷ Int
+           exposeRock = isLastAge ∧ maxDrop ≥ soilShedRelief
+
+           -- Soil depth for last-age: continuous function of relief
            -- instead of discrete thresholds (avoids visible contour lines).
-           -- Steep slopes (>0.8) get no soil; flat terrain gets full depth.
+           -- Steep faces (≥ soilShedRelief) get no soil; flat terrain gets
+           -- full depth; in between it tapers with relief.
            soilDepth
-               | not isLastAge   = 0
-               | slopeNorm > 0.8 = 0
-               | otherwise       = max 1 (round
-                   (4.0 * erodability * (1.0 - slopeNorm) ∷ Float))
+               | not isLastAge = 0
+               | exposeRock    = 0
+               | otherwise     = max 1 (round
+                   (4.0 * erodability * (1.0 - reliefNorm) ∷ Float))
 
            -- Strata thickness bonus: longer ages deposit thicker layers.
            -- A 15-MY age adds 5 bonus tiles, a 1-MY age adds 0.
@@ -250,7 +279,11 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
                                  (fromIntegral duration / 3.0 ∷ Float))
 
        in if delta ≡ 0
-          then if isLastAge ∧ soilDepth > 0
+          then if exposeRock
+               -- Steep last-age face: keep the underlying rock exposed,
+               -- no soil cap, no elevation change. (#225)
+               then noModification
+               else if isLastAge ∧ soilDepth > 0
                then GeoModification
                    { gmElevDelta        = 0
                    , gmMaterialOverride = Just (sedimentFn False)
@@ -264,7 +297,15 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
                    }
                else noModification
           else if delta < 0
-               then if isLastAge ∧ soilDepth > 0
+               then if exposeRock
+                    -- Steep last-age face being eroded: lower it but expose
+                    -- the rock beneath instead of back-filling soil. (#225)
+                    then GeoModification
+                        { gmElevDelta        = delta
+                        , gmMaterialOverride = Nothing
+                        , gmIntrusionDepth   = 0
+                        }
+                    else if isLastAge ∧ soilDepth > 0
                     then GeoModification
                         { gmElevDelta        = delta
                         , gmMaterialOverride = Just (sedimentFn False)
