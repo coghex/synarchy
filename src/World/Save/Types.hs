@@ -107,7 +107,9 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 54  -- v54: structure edits (WeSetStructure/WeClearStructure) + sdTexPalette
+currentSaveVersion = 55  -- v55: despike spike-only convergence pass (#254) — base
+                         --      terrain output shifts on regen, so reject older saves
+                         -- v54: structure edits (WeSetStructure/WeClearStructure) + sdTexPalette
                          -- v52: UnitSimState gains usJumpApex (leap arc state)
                          -- v50: UnitInstance gains uiImmuneResponse + uiImmunities (immunity system)
                          -- v49: Wound gains woundInfectionType (data-driven infections)
