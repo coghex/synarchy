@@ -72,6 +72,11 @@ inputTab.ctx      = nil
 inputTab.capture  = nil
 inputTab.conflict = nil
 inputTab.popup    = nil
+-- Row widget IDs (labels + key/plus buttons) for the current build. Owned
+-- privately (not via the settings-menu global tracking) so the tab can be
+-- torn down and rebuilt in place — see destroyWidgets — without disturbing
+-- the other tabs' widgets.
+inputTab.widgets  = { labelIds = {}, buttonIds = {} }
 
 -----------------------------------------------------------
 -- Helpers
@@ -107,6 +112,15 @@ function inputTab.resetState()
     inputTab.capture  = nil
     inputTab.conflict = nil
     inputTab.popup    = nil
+end
+
+-- Destroy the row labels + key/plus buttons this tab created. Called from
+-- the settings menu both for a full-page teardown (destroyOwned) and for
+-- the in-place Input-tab refresh after a keybind change.
+function inputTab.destroyWidgets()
+    for _, id in ipairs(inputTab.widgets.buttonIds) do button.destroy(id) end
+    for _, id in ipairs(inputTab.widgets.labelIds)  do label.destroy(id)  end
+    inputTab.widgets = { labelIds = {}, buttonIds = {} }
 end
 
 -- Tear down popups + capture state on the current (still-live) page, then
@@ -250,25 +264,27 @@ function inputTab.onKeyCapture(key)
         button.setState(inputTab.capture.plusId, "normal")
     end
 
-    local binds = engine.getKeybinds() or {}
+    -- Match against the engine's alias-aware resolver rather than raw
+    -- string equality: this runs inside the onKeyDown dispatch, so
+    -- engine.keyMatchesAction compares the exact physical key that was
+    -- pressed (currentKeyDownRef) against each action's bindings, and
+    -- correctly treats compatibility aliases (e.g. LeftShift vs the
+    -- merged "Shift") as equal.
 
     -- Already bound to this action → nothing to do.
-    for _, k in ipairs(binds[action] or {}) do
-        if k == key then
-            inputTab.cancelCapture()
-            return
-        end
+    if engine.keyMatchesAction(key, action) then
+        inputTab.cancelCapture()
+        return
     end
 
     -- Bound to another editable action → conflict modal.
     local owner = nil
-    for boundAction, keys in pairs(binds) do
-        if boundAction ~= action and not RESERVED_ACTIONS[boundAction] then
-            for _, k in ipairs(keys) do
-                if k == key then owner = boundAction break end
-            end
+    for _, def in ipairs(inputTab.actions) do
+        if def.action ~= action and not RESERVED_ACTIONS[def.action]
+           and engine.keyMatchesAction(key, def.action) then
+            owner = def.action
+            break
         end
-        if owner then break end
     end
     if owner then
         inputTab.capture  = nil
@@ -309,13 +325,17 @@ end
 
 -- params (settings_menu tab create contract, plus keybind extras):
 --   page, font, baseSizes, uiscale, s, contentX, contentY, contentW,
---   zContent, zWidgets, trackLabel, trackButton,
---   panelTexSet, buttonTexSet, fbW, fbH, rebuild
+--   zContent, zWidgets, panelTexSet, buttonTexSet, fbW, fbH, rebuild
+-- (This tab owns its widgets privately — see inputTab.widgets /
+-- destroyWidgets — so it ignores the shared trackLabel/trackButton.)
 -- Returns: rowHandles[]
 function inputTab.create(params)
     -- A fresh build means a fresh page; forget any stale popup/capture
-    -- handles (handles the resize-mid-capture case).
+    -- handles (handles the resize-mid-capture case). The caller always
+    -- destroys our previous widgets first (destroyOwned or the in-place
+    -- refresh), so just start a clean tracking list.
     inputTab.resetState()
+    inputTab.widgets = { labelIds = {}, buttonIds = {} }
 
     inputTab.ctx = {
         page         = params.page,
@@ -339,8 +359,14 @@ function inputTab.create(params)
     local cw       = params.contentW
     local zContent = params.zContent
     local zWidgets = params.zWidgets
-    local trackLabel  = params.trackLabel  or function(id) return id end
-    local trackButton = params.trackButton or function(id) return id end
+
+    -- Track our widgets privately so the tab can be rebuilt in place.
+    local function trackLabel(id)
+        table.insert(inputTab.widgets.labelIds, id); return id
+    end
+    local function trackButton(id)
+        table.insert(inputTab.widgets.buttonIds, id); return id
+    end
 
     local binds = engine.getKeybinds() or {}
 
