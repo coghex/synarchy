@@ -59,6 +59,7 @@ import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
+import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -169,6 +170,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
   registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
   registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
+  registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env)
+  registerLuaFunction "listLocationDefs" (locationListDefsFn env)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)

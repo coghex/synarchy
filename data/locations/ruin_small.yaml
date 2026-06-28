@@ -1,0 +1,23 @@
+# Location definitions: premade structures stamped into the world.
+#
+# Loaded at boot by engine.loadLocationYaml (after items / units /
+# buildings — locations load LAST so their content ids can be resolved
+# against the other registries later, in #90). Each entry registers a
+# LocationDef; the `builder` names a Lua function in scripts/locations.lua
+# that authors the geometry when the location is stamped.
+#
+# `contents` ids are NOT validated or resolved in this issue (#88) — the
+# content-spawning pass (#90) resolves them at spawn time.
+locations:
+  - id: ruin_small
+    label: "Small Ruin"
+    type: ruin
+    # Lua builder (scripts/locations.lua `builders.room_small`): a 5x5
+    # RCT-style room — floor, corner posts, perimeter walls.
+    builder: room_small
+    # Terrain placement constraint tags read by the world-gen overlay
+    # (#89) to filter candidate chunks. The room wants flat ground.
+    anchor: [flat]
+    # Reference content entry (raw ids, resolved later in #90).
+    contents:
+      - { kind: building, id: cargo_hold_S, count: 1 }
