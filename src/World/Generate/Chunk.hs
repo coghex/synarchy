@@ -1210,8 +1210,15 @@ generateChunk registry catalog params coord =
         noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)
         noNeighborLookup _ = Nothing
 
+        -- Initial single-chunk gen sees no neighbours; the cross-chunk
+        -- slope recompute (recomputeNeighborSlopes) re-slides the border
+        -- strip once neighbours load, supplying the real fluid lookup.
+        noFluidNeighborLookup ∷ ChunkCoord → Maybe (V.Vector (Maybe FluidCell))
+        noFluidNeighborLookup _ = Nothing
+
         slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap registry
                                          fluidMap rawChunk noNeighborLookup
+                                         noFluidNeighborLookup
 
         -- Extract surface material and slope for vegetation computation
         surfaceMatsRaw = VU.generate chunkArea $ \idx →

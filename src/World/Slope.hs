@@ -97,8 +97,10 @@ perimeterColumnSet = HS.fromList
 recomputeColumnSlope ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                      → V.Vector (Maybe FluidCell) → Chunk
                      → (ChunkCoord → Maybe (VU.Vector Int))
+                     → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
                      → Int → ColumnTiles → ColumnTiles
-recomputeColumnSlope seed coord surfMap registry fluidMap chunk neighborLookup idx col =
+recomputeColumnSlope seed coord surfMap registry fluidMap chunk
+                     neighborLookup fluidNeighborLookup idx col =
     let lx = idx `mod` chunkSize
         ly = idx `div` chunkSize
         surfZ = surfMap VU.! idx
@@ -108,16 +110,19 @@ recomputeColumnSlope seed coord surfMap registry fluidMap chunk neighborLookup i
                                             surfZ registry
                                             surfMap fluidMap
                                             chunk neighborLookup
+                                            fluidNeighborLookup
             in col { ctSlopes = ctSlopes col VU.// [(i, newSlope)] }
        else col
 
 -- | Recompute every column's surface slope (initial chunk gen).
 computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                    → V.Vector (Maybe FluidCell) → Chunk
-                   → (ChunkCoord → Maybe (VU.Vector Int)) → Chunk
-computeChunkSlopes seed coord surfMap registry fluidMap chunk neighborLookup =
+                   → (ChunkCoord → Maybe (VU.Vector Int))
+                   → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell))) → Chunk
+computeChunkSlopes seed coord surfMap registry fluidMap chunk
+                   neighborLookup fluidNeighborLookup =
     V.imap (recomputeColumnSlope seed coord surfMap registry fluidMap
-                                 chunk neighborLookup) chunk
+                                 chunk neighborLookup fluidNeighborLookup) chunk
 
 -- | Recompute slopes for ONLY the given column indices; all other
 --   columns pass through untouched. Used by 'recomputeNeighborSlopes' to
@@ -128,12 +133,14 @@ computeChunkSlopes seed coord surfMap registry fluidMap chunk neighborLookup =
 computeChunkSlopesCols ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                        → V.Vector (Maybe FluidCell) → Chunk
                        → (ChunkCoord → Maybe (VU.Vector Int))
+                       → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
                        → HS.HashSet Int → Chunk
-computeChunkSlopesCols seed coord surfMap registry fluidMap chunk neighborLookup cols =
+computeChunkSlopesCols seed coord surfMap registry fluidMap chunk
+                       neighborLookup fluidNeighborLookup cols =
     V.imap (\idx col →
         if HS.member idx cols
         then recomputeColumnSlope seed coord surfMap registry fluidMap
-                                  chunk neighborLookup idx col
+                                  chunk neighborLookup fluidNeighborLookup idx col
         else col
     ) chunk
 
@@ -143,8 +150,10 @@ computeTileSlope ∷ Word64 → ChunkCoord
                 → V.Vector (Maybe FluidCell)
                 → Chunk
                 → (ChunkCoord → Maybe (VU.Vector Int))
+                → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
                 → Word8
-computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLookup =
+computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
+                 neighborLookup fluidNeighborLookup =
     let col = tiles V.! columnIndex lx ly
         i = z - ctStartZ col
         matId = if i ≥ 0 ∧ i < VU.length (ctMats col)
@@ -180,14 +189,16 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
         bitS = slopeBit myHasFluid z neighS lx (ly + 1) coord fluidMap neighborLookup
         bitW = slopeBit myHasFluid z neighW (lx - 1) ly coord fluidMap neighborLookup
 
-        -- Is each cardinal neighbour a WET tile (in-chunk only, mirroring
-        -- 'slopeBit')? The dry-rock jagged path must honour the same bank
-        -- rule as dry land — never slope a dry tile into a water neighbour
-        -- (it would read as rock dipping into the river/lake/sea).
-        wetN = neighborHasFluidAt coord lx (ly - 1) fluidMap
-        wetE = neighborHasFluidAt coord (lx + 1) ly fluidMap
-        wetS = neighborHasFluidAt coord lx (ly + 1) fluidMap
-        wetW = neighborHasFluidAt coord (lx - 1) ly fluidMap
+        -- Is each cardinal neighbour a WET tile? Resolves across chunk
+        -- boundaries via 'fluidNeighborLookup' (the jagged path can fire on
+        -- a multi-level drop, so it must check the bank rule at seams too,
+        -- not just in-chunk). The dry-rock jagged path must never slope a
+        -- dry tile into a water neighbour — it would read as rock dipping
+        -- into the river/lake/sea.
+        wetN = neighborHasFluidAt coord lx (ly - 1) fluidMap fluidNeighborLookup
+        wetE = neighborHasFluidAt coord (lx + 1) ly fluidMap fluidNeighborLookup
+        wetS = neighborHasFluidAt coord lx (ly + 1) fluidMap fluidNeighborLookup
+        wetW = neighborHasFluidAt coord (lx - 1) ly fluidMap fluidNeighborLookup
 
         rawSlope = (if bitN then 1 else 0)
                .|. (if bitE then 2 else 0)
@@ -341,18 +352,24 @@ normalizeCoord coord lx ly =
     in (lx', ly', c)
 
 -- | Does the cardinal neighbour at local (nlx, nly) hold a fluid cell?
---   Only IN-CHUNK neighbours are inspected (cross-chunk fluid isn't
---   visible from this chunk's 'fluidMap') — exactly the convention
---   'slopeBit' already uses for its dry-land bank rule, so the jagged
---   path stays consistent with it.
-neighborHasFluidAt ∷ ChunkCoord → Int → Int → V.Vector (Maybe FluidCell) → Bool
-neighborHasFluidAt coord nlx nly fluidMap =
-    let (normLx, normLy, neighborCoord) = normalizeCoord coord nlx nly
-    in case neighborCoord of
-        c | c ≡ coord → case fluidMap V.! columnIndex normLx normLy of
-                            Just _  → True
-                            Nothing → False
-        _ → False
+--   In-chunk neighbours read this chunk's 'fluidMap'; out-of-chunk
+--   neighbours resolve through 'fluidNeighborLookup' (the loaded
+--   neighbour's fluid map). A not-yet-loaded neighbour reads back as dry
+--   (Nothing) — exactly like the terrain 'neighborElev' minBound sentinel;
+--   the cross-chunk recompute re-runs this border strip once the neighbour
+--   loads, so the bank rule converges on the loaded set, not load order.
+neighborHasFluidAt ∷ ChunkCoord → Int → Int → V.Vector (Maybe FluidCell)
+                   → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell))) → Bool
+neighborHasFluidAt coord nlx nly fluidMap fluidNeighborLookup
+    | nlx ≥ 0 ∧ nlx < chunkSize ∧ nly ≥ 0 ∧ nly < chunkSize
+        = isJustCell (fluidMap V.! columnIndex nlx nly)
+    | otherwise =
+        let (neighborCoord, (nlx', nly')) = normalizeToChunk coord nlx nly
+        in case fluidNeighborLookup neighborCoord of
+            Just nf → isJustCell (nf V.! columnIndex nlx' nly')
+            Nothing → False
+  where isJustCell (Just _) = True
+        isJustCell Nothing  = False
 
 floorDiv' ∷ Int → Int → Int
 floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
@@ -585,6 +602,11 @@ recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
         neighborLookup coord = case HM.lookup (wrap coord) chunks of
             Just lc → Just (lcTerrainSurfaceMap lc)
             Nothing → Nothing
+        -- Parallel fluid lookup so the dry-rock bank rule (jagged path)
+        -- can see a wet neighbour ACROSS a chunk seam, not just in-chunk.
+        fluidNeighborLookup coord = case HM.lookup (wrap coord) chunks of
+            Just lc → Just (lcFluidMap lc)
+            Nothing → Nothing
         -- Only the boundary strip can change when a neighbour loads —
         -- interior columns read in-chunk data only, so recomputing them
         -- would reproduce their stored value. Restricting to the
@@ -595,7 +617,7 @@ recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
                     let newTiles = computeChunkSlopesCols seed coord
                             (lcTerrainSurfaceMap lc) registry
                             (lcFluidMap lc) (lcTiles lc) neighborLookup
-                            perimeterColumnSet
+                            fluidNeighborLookup perimeterColumnSet
                     in HM.insert coord (lc { lcTiles = newTiles }) acc
                 Nothing → acc
             ) chunks affected
