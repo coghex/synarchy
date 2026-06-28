@@ -29,7 +29,8 @@ import Engine.Asset.YamlEquipment
 import Equipment.Types
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
                    ItemBuff(..), ItemContainer(..),
-                   ItemManager(..), lookupItemDef)
+                   ItemManager(..), lookupItemDef, itemMatches,
+                   itemContentsSig, itemTotalWeight)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
                    UnitDef(..), StatModifier(..))
 
@@ -164,12 +165,21 @@ equipmentGetClassNamesFn env = do
 --   @(originalInventory, Nothing)@.
 removeFirstFromInventory ∷ Text → [ItemInstance]
                          → ([ItemInstance], Maybe ItemInstance)
-removeFirstFromInventory defName = go []
+removeFirstFromInventory defName = removeFirstFromInventoryWhere
+                                       (\x → iiDefName x ≡ defName)
+
+-- | 'removeFirstFromInventory' over an arbitrary predicate, so equip can
+--   target a specific 'iiInstanceId' (#67) — the clicked dagger, not the
+--   first one matching its defName. Order of the surviving items is
+--   preserved (the equipped slot is the only thing that moves).
+removeFirstFromInventoryWhere ∷ (ItemInstance → Bool) → [ItemInstance]
+                              → ([ItemInstance], Maybe ItemInstance)
+removeFirstFromInventoryWhere p = go []
   where
     go acc [] = (reverse acc, Nothing)
     go acc (x:xs)
-        | iiDefName x ≡ defName = (reverse acc ++ xs, Just x)
-        | otherwise             = go (x : acc) xs
+        | p x       = (reverse acc ++ xs, Just x)
+        | otherwise = go (x : acc) xs
 
 -- | Effective buff delta after applying condition scaling.
 buffEffectiveDelta ∷ ItemBuff → Float → Float
@@ -218,11 +228,16 @@ equipmentEquipFn env = do
     uidArg   ← Lua.tointeger 1
     slotArg  ← Lua.tostring 2
     itemArg  ← Lua.tostring 3
+    -- Optional 4th arg: equip the EXACT inventory instance (#67) — the
+    -- dagger the player clicked, not the first defName match (which may
+    -- be sharper/duller). Absent/0 → first match.
+    instArg  ← Lua.tointeger 4
     case (uidArg, slotArg, itemArg) of
         (Just n, Just slotBS, Just itemBS) → do
             let uid    = UnitId (fromIntegral n)
                 slotId = TE.decodeUtf8 slotBS
                 itemNm = TE.decodeUtf8 itemBS
+                wantId = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
                 ecMgr   ← readIORef (equipmentClassManagerRef env)
@@ -239,25 +254,35 @@ equipmentEquipFn env = do
                                             Nothing → (um, False)
                                             Just cls →
                                                 tryEquip um inst itemMgr cls
-                                                  slotId itemNm uid
+                                                  slotId itemNm wantId uid
             Lua.pushboolean ok
             return 1
         _ → do
             Lua.pushboolean False
             return 1
   where
-    tryEquip um inst itemMgr cls slotId itemNm uid =
+    tryEquip um inst itemMgr cls slotId itemNm wantId uid =
         case [s | s ← ecSlots cls, esId s ≡ slotId] of
             []       → (um, False)
-            (slot:_) → case lookupItemDef itemNm itemMgr of
-                Nothing → (um, False)
-                Just iDef
-                    | idKind iDef ≢ esKind slot → (um, False)
-                    | otherwise →
-                        case removeFirstFromInventory itemNm
-                                                       (uiInventory inst) of
-                            (_, Nothing)        → (um, False)
-                            (newInv, Just newI) →
+            (slot:_) →
+                -- Pop the targeted instance FIRST, then validate the kind of
+                -- the item we actually popped — NOT the caller-supplied
+                -- defName. When targeting by instanceId, itemMatches ignores
+                -- defName, so a mismatched (defName, id) pair (e.g.
+                -- equip(slot="right_hand", "steel_dagger", canteenId)) would
+                -- otherwise pass the kind gate on the dagger def yet slot the
+                -- canteen. The pop is a pure computation; `um` is mutated only
+                -- in the success branch below, so every failure here returns
+                -- the ORIGINAL `um` untouched.
+                case removeFirstFromInventoryWhere
+                         (itemMatches wantId itemNm)
+                         (uiInventory inst) of
+                    (_, Nothing)        → (um, False)
+                    (newInv, Just newI) → case lookupItemDef (iiDefName newI) itemMgr of
+                        Nothing → (um, False)
+                        Just iDef
+                            | idKind iDef ≢ esKind slot → (um, False)
+                            | otherwise →
                                 let -- if something is already in the slot,
                                     -- bump it back to the inventory tail
                                     -- so the swap is atomic from Lua's
@@ -340,9 +365,15 @@ equipmentGetLoadoutFn env = do
                         Lua.newtable
                         Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
                         Lua.setfield (-2) "defName"
+                        -- Process-unique identity (#67), same as
+                        -- unit.getInventory / pushItemInstance.
+                        Lua.pushinteger (fromIntegral (iiInstanceId inst))
+                        Lua.setfield (-2) "instanceId"
                         Lua.pushnumber
                             (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
+                        Lua.setfield (-2) "contentsKey"
                         -- Instance sharpness, not the def's base —
                         -- combat wear dulls the equipped weapon
                         -- (iiSharpness); the tooltip must show the live
@@ -382,11 +413,12 @@ equipmentGetLoadoutFn env = do
                                 Lua.pushstring
                                     (TE.encodeUtf8 (idMaterial iDef))
                                 Lua.setfield (-2) "material"
-                                -- Instance weight, not the def mean —
-                                -- gems vary per find (matches
-                                -- getCarryingWeight + pushItemInstance).
+                                -- True carried mass (empty + fill + nested
+                                -- contents) — matches getCarryingWeight +
+                                -- pushItemInstance + unit.getInventory.
                                 Lua.pushnumber
-                                    (Lua.Number (realToFrac (iiWeight inst)))
+                                    (Lua.Number (realToFrac
+                                        (itemTotalWeight itemMgr inst)))
                                 Lua.setfield (-2) "weight"
                                 let TextureHandle texInt = idTexture iDef
                                 Lua.pushinteger (fromIntegral texInt)
@@ -427,8 +459,16 @@ pushItemInstance ∷ ItemInstance → ItemManager → Lua.LuaE Lua.Exception ()
 pushItemInstance inst itemMgr = do
     Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
     Lua.setfield (-2) "defName"
+    -- Process-unique identity so the UI can target THIS instance instead
+    -- of the first inventory entry matching defName (#67).
+    Lua.pushinteger (fromIntegral (iiInstanceId inst))
+    Lua.setfield (-2) "instanceId"
     Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
     Lua.setfield (-2) "currentFill"
+    -- Signature of nested contents so item-containers (kits) split by
+    -- internal state in the row key (#67A).
+    Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
+    Lua.setfield (-2) "contentsKey"
     -- Instance sharpness, not the def's base — combat wear dulls the
     -- worn weapon (iiSharpness), and the inventory/loadout tooltip
     -- must show the live value, mirroring unit.getInventory.
@@ -461,8 +501,10 @@ pushItemInstance inst itemMgr = do
             Lua.setfield (-2) "make"
             Lua.pushstring (TE.encodeUtf8 (idMaterial iDef))
             Lua.setfield (-2) "material"
-            -- Instance weight, not the def mean — gems vary per find.
-            Lua.pushnumber (Lua.Number (realToFrac (iiWeight inst)))
+            -- True carried mass (empty case + fill + nested contents) so a
+            -- stocked kit / filled canteen reads its real weight and two
+            -- kits with diverged contents differ visibly (#67A).
+            Lua.pushnumber (Lua.Number (realToFrac (itemTotalWeight itemMgr inst)))
             Lua.setfield (-2) "weight"
             let TextureHandle texInt = idTexture iDef
             Lua.pushinteger (fromIntegral texInt)
@@ -505,44 +547,64 @@ pushItemInstance inst itemMgr = do
                     Lua.rawseti (-2) (fromIntegral i)
                 Lua.setfield (-2) "buffs"
 
--- | equipment.equipAccessory(uid, itemDefName) → bool. Moves the
---   first matching inventory item to the end of the unit's accessory
---   list. Returns false if the unit or item doesn't exist.
+-- | equipment.equipAccessory(uid, itemDefName[, instanceId]) → bool.
+--   Moves the matching inventory item (the exact instance when an id is
+--   given, else the first defName match) to the end of the unit's
+--   accessory list. Returns false if the unit or item doesn't exist, or
+--   if the targeted item is not `kind: accessory` — only accessories
+--   belong on uiAccessories, so a non-accessory is rejected with no
+--   mutation (the accessory analogue of equip's slot-kind gate).
 equipmentEquipAccessoryFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 equipmentEquipAccessoryFn env = do
     uidArg  ← Lua.tointeger 1
     nameArg ← Lua.tostring 2
+    -- Optional 3rd arg: equip the EXACT inventory instance (#67).
+    -- Absent/0 → first defName match.
+    instArg ← Lua.tointeger 3
     case (uidArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid    = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8 nameBS
+                wantId  = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
                 atomicModifyIORef' (unitManagerRef env) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
                         Just inst →
-                            case removeFirstFromInventory defName
-                                                           (uiInventory inst) of
+                            case removeFirstFromInventoryWhere
+                                     (itemMatches wantId defName)
+                                     (uiInventory inst) of
                                 (_, Nothing) → (um, False)
                                 (newInv, Just newI) →
-                                    -- Apply the accessory's buffs to the
-                                    -- unit's modifier list so combat /
-                                    -- stat display sees them immediately.
-                                    let mods' = case lookupItemDef
-                                                  (iiDefName newI) itemMgr of
-                                          Just d  → applyItemBuffs newI d
+                                    -- Validate the ACTUAL popped instance is an
+                                    -- accessory before it joins uiAccessories —
+                                    -- the kind gate slot-equip has, but for the
+                                    -- accessory list (only `kind: accessory`
+                                    -- items belong there). When targeting by id
+                                    -- the defName arg is advisory, so a
+                                    -- mismatched (defName, id) pair must not
+                                    -- smuggle a canteen/weapon in. The pop is a
+                                    -- pure computation; `um` is mutated only in
+                                    -- the success branch, so a reject leaves it
+                                    -- untouched.
+                                    case lookupItemDef (iiDefName newI) itemMgr of
+                                      Just d | idKind d ≡ "accessory" →
+                                        -- Apply the accessory's buffs to the
+                                        -- unit's modifier list so combat /
+                                        -- stat display sees them immediately.
+                                        let mods' = applyItemBuffs newI d
                                                        (uiModifiers inst)
-                                          Nothing → uiModifiers inst
-                                        inst' = inst
-                                          { uiInventory   = newInv
-                                          , uiAccessories =
-                                              uiAccessories inst ++ [newI]
-                                          , uiModifiers   = mods'
-                                          }
-                                    in (um { umInstances = HM.insert uid inst'
-                                                             (umInstances um) },
-                                        True)
+                                            inst' = inst
+                                              { uiInventory   = newInv
+                                              , uiAccessories =
+                                                  uiAccessories inst ++ [newI]
+                                              , uiModifiers   = mods'
+                                              }
+                                        in (um { umInstances = HM.insert uid inst'
+                                                                 (umInstances um) },
+                                            True)
+                                      _ → (um, False)
             Lua.pushboolean ok
             return 1
         _ → do

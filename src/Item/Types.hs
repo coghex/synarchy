@@ -7,6 +7,8 @@ module Item.Types
     , ItemArmor(..)
     , ItemBuff(..)
     , ItemInstance(..)
+    , itemMatches
+    , itemContentsSig
     , itemTotalWeight
     , ItemManager(..)
     , emptyItemManager
@@ -15,6 +17,8 @@ module Item.Types
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
+import Data.List (sort)
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -212,7 +216,55 @@ data ItemInstance = ItemInstance
                                 --   items. Recursive (a kit could hold a
                                 --   kit); serialised via the same instance.
                                 --   Appended for save v42.
+    , iiInstanceId  ∷ !Word64
+                                -- ^ Process-unique identity for THIS physical
+                                --   item, stamped from a monotonic counter at
+                                --   genuine creation (rolls, spawns) and
+                                --   PRESERVED verbatim through every move
+                                --   (equip / store / withdraw / transfer /
+                                --   drop). Lets the UI target the exact
+                                --   instance the player clicked instead of the
+                                --   first inventory entry matching a defName,
+                                --   so same-def items with different fill /
+                                --   sharpness never act on the wrong one
+                                --   (#67). 0 = unassigned (never minted; only a
+                                --   legacy/default sentinel). The counter is
+                                --   persisted as sdNextItemInstanceId so ids
+                                --   stay unique across save/load. Field order
+                                --   is load-bearing (positional Generic
+                                --   Serialize) — appended for save v56.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | A stable, order-independent signature of an item's nested contents
+--   (#67A). Two ITEM-containers (a first-aid kit, a toolbox) are
+--   interchangeable only if they hold the same things in the same state,
+--   so the inventory / cargo UIs fold this into the row key: kits whose
+--   contents have diverged (one drew a bandage) stop merging and become
+--   individually inspectable / withdrawable rather than collapsing onto a
+--   single representative instance. Empty for ordinary items (no nested
+--   contents), so non-containers and fluid containers stack exactly as
+--   before. Recurses so a kit-in-a-kit is captured too.
+itemContentsSig ∷ ItemInstance → Text
+itemContentsSig inst
+    | null (iiContents inst) = T.empty
+    | otherwise = T.intercalate ";" $ sort
+        [ T.intercalate ":"
+            [ iiDefName c
+            , T.pack (show (iiCurrentFill c))
+            , T.pack (show (iiCondition c))
+            , T.pack (show (iiSharpness c))
+            , itemContentsSig c ]
+        | c ← iiContents inst ]
+
+-- | Target predicate for an inventory action (#67). When the caller
+--   supplies a unique instance id (>0) it wins — the action hits exactly
+--   that physical item, so two same-def instances with different fill /
+--   sharpness never get confused. Id 0 means "no id given" (legacy / AI
+--   callers) and falls back to the historical first-match-by-defName.
+itemMatches ∷ Word64 → Text → ItemInstance → Bool
+itemMatches iid name it
+    | iid > 0   = iiInstanceId it ≡ iid
+    | otherwise = iiDefName it ≡ name
 
 -- | Total carried mass of an item (kg), INCLUDING its container
 --   contents, computed recursively. Empty weight (iiWeight) + the mass

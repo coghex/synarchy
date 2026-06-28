@@ -2191,11 +2191,16 @@ local function computeEquipKey(uid, clsName, loadout, accessories)
     if loadout then
         local pairsT = {}
         for slotId, item in pairs(loadout) do
-            -- Include instance sharpness so an equipped weapon dulled by
-            -- combat wear rebuilds (and its tooltip refreshes) without
-            -- needing an unrelated equipment change.
+            -- Include instance condition AND sharpness so an equipped item
+            -- degraded by wear rebuilds (and its tooltip + broken overlay
+            -- refresh) without needing an unrelated equipment change: a
+            -- weapon dulled in combat changes sharpness, but armor
+            -- (gambeson / gloves / boots) loses condition with no sharpness
+            -- change, and the slot UI shows condition and a condition<=0
+            -- broken overlay. Mirrors the accessory key below.
             pairsT[#pairsT + 1] = slotId .. "=" .. (item.defName or "?")
-                                  .. "@" .. tostring(item.sharpness or 0)
+                                  .. "@" .. tostring(item.condition or 0)
+                                  .. "/" .. tostring(item.sharpness or 0)
         end
         table.sort(pairsT)
         parts[#parts + 1] = table.concat(pairsT, ";")
@@ -2226,8 +2231,9 @@ local function rebuildEquipmentSection()
     local accessories = uid and equipment.getAccessories(uid) or nil
 
     -- Skip if nothing relevant changed since the last build. The hash
-    -- folds in uid + class + every (slot, equipped-item) pair + each
-    -- accessory's def/condition, so any equip/unequip — slot or
+    -- folds in uid + class + every (slot, equipped-item def/condition/
+    -- sharpness) pair + each accessory's def/condition/sharpness, so any
+    -- equip/unequip OR a wear-driven condition/sharpness change — slot or
     -- accessory — invalidates it on the next tick.
     local key = computeEquipKey(uid, clsName, loadout, accessories)
     if key == unitInfoV2.lastEquipKey then return end
@@ -2447,6 +2453,8 @@ local function collectInventoryAndEquipment(uid)
     for _, it in ipairs(inv) do
         out[#out + 1] = {
             defName      = it.defName,
+            instanceId   = it.instanceId,
+            contentsKey  = it.contentsKey,
             displayName  = it.displayName or it.defName,
             weight       = it.weight or 0,
             category     = it.category or "Misc",
@@ -2481,6 +2489,8 @@ local function collectInventoryAndEquipment(uid)
         if it then
             out[#out + 1] = {
                 defName       = it.defName,
+                instanceId    = it.instanceId,
+                contentsKey   = it.contentsKey,
                 displayName   = it.displayName or it.defName,
                 weight        = it.weight or 0,
                 category      = it.category or "Misc",
@@ -2505,6 +2515,8 @@ local function collectInventoryAndEquipment(uid)
     for i, it in ipairs(accs) do
         out[#out + 1] = {
             defName        = it.defName,
+            instanceId     = it.instanceId,
+            contentsKey    = it.contentsKey,
             displayName    = it.displayName or it.defName,
             weight         = it.weight or 0,
             category       = it.category or "Misc",
@@ -2532,18 +2544,32 @@ end
 -- they never collapse into a stack (each occupies a distinct slot).
 -- Non-equipped items only merge when their defName + quality +
 -- condition match exactly — a 100% motor and a 99% motor stay on two
--- rows so the player sees the real spread of conditions. Sharpness is
--- added ONLY for weapons (the only items whose tooltip shows it) so two
--- weapons with differing edge wear likewise split; armor and other gear
--- also carry a combat-mutated iiSharpness but never display it, so
--- splitting their rows on it would be an invisible, confusing reason.
+-- rows so the player sees the real spread of conditions. currentFill is
+-- in the key so two canteens with different fill split into separate
+-- rows (the fill is shown per row, and each row targets its own
+-- instance — #67). weight is in the key too: raw gems roll a
+-- per-instance weight, the row shows weight×stackCount, and the "Store"
+-- action targets a representative — so a 0.05 kg and a 0.09 kg garnet
+-- must stay on separate rows rather than merge and mis-report their
+-- weight. Sharpness is added ONLY for weapons (the only items whose
+-- tooltip shows it) so two weapons with differing edge wear likewise
+-- split; armor and other gear also carry a combat-mutated iiSharpness
+-- but never display it, so splitting their rows on it would be an
+-- invisible, confusing reason. Items that DO merge are interchangeable,
+-- so acting on the stack's representative instanceId is always correct.
 local function stackKey(it)
     if it.equipped then return nil end
     return table.concat({
         it.defName,
-        tostring(it.quality   or "_"),
-        tostring(it.condition or "_"),
+        tostring(it.quality     or "_"),
+        tostring(it.condition   or "_"),
+        tostring(it.currentFill or "_"),
+        tostring(it.weight      or "_"),
         it.weapon and tostring(it.sharpness or "_") or "_",
+        -- Nested-contents signature: two first-aid kits whose internal
+        -- supplies have diverged must NOT merge, so "Contents" / "Store"
+        -- act on the kit the player sees (#67A). Empty for non-containers.
+        tostring(it.contentsKey or ""),
     }, "|")
 end
 
@@ -2612,7 +2638,12 @@ end
 -- depleting canteen redraws when its label needs to change, and
 -- stackCount so consuming one item from a stack of identical rows
 -- (grouped list keeps the same single entry) updates the "×N" label,
--- tab counts, and total-weight footer.
+-- tab counts, and total-weight footer. condition is included so a
+-- wear-degraded item refreshes its "condition: N%" tooltip and its
+-- condition<=0 broken overlay: equipped items merged into the "All" view
+-- are each their own row (stackKey returns nil for them), so a
+-- condition-only drop on equipped armor (gambeson / gloves / boots)
+-- wouldn't otherwise change any other field in this hash.
 local function computeInvKey(uid, activeTab, items)
     local parts = { tostring(uid or ""), activeTab or "" }
     for _, it in ipairs(items) do
@@ -2620,6 +2651,9 @@ local function computeInvKey(uid, activeTab, items)
             .. "/" .. (it.equipped and "e" or "i")
             .. "/" .. tostring(it.stackCount or 1)
             .. "/" .. tostring(it.sharpness or 0)
+            .. "/" .. tostring(it.weight or 0)
+            .. "/" .. tostring(it.condition or 0)
+            .. "/" .. tostring(it.contentsKey or "")
     end
     return table.concat(parts, "|")
 end
@@ -3044,7 +3078,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
         items[1] = {
             label    = "Equip",
             callback = function()
-                equipment.equipAccessory(uid, item.defName)
+                equipment.equipAccessory(uid, item.defName, item.instanceId)
                 unitInfoV2.lastInvKey   = nil
                 unitInfoV2.lastEquipKey = nil
             end,
@@ -3061,7 +3095,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
             items[1] = {
                 label    = "Equip",
                 callback = function()
-                    equipment.equip(uid, slotId, item.defName)
+                    equipment.equip(uid, slotId, item.defName, item.instanceId)
                     unitInfoV2.lastInvKey   = nil
                     unitInfoV2.lastEquipKey = nil
                 end,
@@ -3075,7 +3109,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 sub[#sub + 1] = {
                     label    = s.name,
                     callback = function()
-                        equipment.equip(uid, s.id, item.defName)
+                        equipment.equip(uid, s.id, item.defName, item.instanceId)
                         unitInfoV2.lastInvKey   = nil
                         unitInfoV2.lastEquipKey = nil
                     end,
@@ -3100,7 +3134,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                     mx = mx * (fbW / ww)
                     my = my * (fbH / wh)
                 end
-                icp.openFor(uid, item.defName, mx, my)
+                icp.openFor(uid, item.defName, mx, my, item.instanceId)
             end,
         }
     end
@@ -3115,7 +3149,8 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
             items[#items + 1] = {
                 label    = "Store in " .. c.displayName,
                 callback = function()
-                    unit.depositToCargo(uid, c.bid, item.defName)
+                    unit.depositToCargo(uid, c.bid, item.defName,
+                                        item.instanceId)
                     unitInfoV2.lastInvKey = nil
                 end,
             }
@@ -3163,12 +3198,13 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
     for _, it in ipairs(inv) do
         if it.kind == rec.slot.kind then
             local defName    = it.defName
+            local instId     = it.instanceId
             local displayNm  = it.displayName or it.defName
             equipSubmenu[#equipSubmenu + 1] = {
                 label    = displayNm,
                 icon     = it.iconTex,
                 callback = function()
-                    equipment.equip(uid, rec.slotId, defName)
+                    equipment.equip(uid, rec.slotId, defName, instId)
                     unitInfoV2.lastInvKey   = nil
                     unitInfoV2.lastEquipKey = nil
                 end,

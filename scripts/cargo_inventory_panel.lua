@@ -96,14 +96,26 @@ end
 -- Helpers
 -----------------------------------------------------------
 
--- Stack identical entries by exact (defName, quality, condition).
--- Same rule as the unit-info inventory so a 100% motor and a 99%
--- motor remain visually distinct rows.
+-- Stack identical entries only when they are truly interchangeable.
+-- Same rule as the unit-info inventory: defName + quality + condition +
+-- fill, PLUS weight (raw gems roll a per-instance weight, and the row
+-- shows weight×count) and — for weapons only — sharpness (two daggers
+-- with different edge wear must stay distinct so withdraw can target the
+-- exact one). Non-weapon gear also carries a mutated iiSharpness it never
+-- shows, so it is NOT split on sharpness (an invisible, confusing split).
+-- Anything that still merges is interchangeable, so withdrawing the
+-- representative instanceId is always correct (#67).
 local function stackKey(it)
     return table.concat({
         it.defName,
-        tostring(it.quality   or "_"),
-        tostring(it.condition or "_"),
+        tostring(it.quality     or "_"),
+        tostring(it.condition   or "_"),
+        tostring(it.currentFill or "_"),
+        tostring(it.weight      or "_"),
+        it.weapon and tostring(it.sharpness or "_") or "_",
+        -- Nested-contents signature so two stored kits with diverged
+        -- supplies stay distinct and withdraw targets the right one (#67A).
+        tostring(it.contentsKey or ""),
     }, "|")
 end
 
@@ -133,8 +145,18 @@ local function contentHash(bid)
     local parts = { tostring(#stored) }
     for i, it in ipairs(stored) do
         parts[#parts + 1] = it.defName or "?"
-        parts[#parts + 1] = tostring(it.quality   or "_")
-        parts[#parts + 1] = tostring(it.condition or "_")
+        parts[#parts + 1] = tostring(it.quality     or "_")
+        parts[#parts + 1] = tostring(it.condition   or "_")
+        -- Fill + weight + (weapon) sharpness mirror stackKey so a change
+        -- that splits/merges rows — a deposited canteen at a new level, a
+        -- swapped-in gem of a different weight, a re-edged dagger — forces
+        -- a panel rebuild (#67).
+        parts[#parts + 1] = tostring(it.currentFill or "_")
+        parts[#parts + 1] = tostring(it.weight      or "_")
+        parts[#parts + 1] = it.weapon and tostring(it.sharpness or "_") or "_"
+        -- Contents signature so a kit whose internal supplies changed
+        -- (a bandage drawn) re-splits/rebuilds the panel (#67A).
+        parts[#parts + 1] = tostring(it.contentsKey or "")
         if i > 200 then break end
     end
     return table.concat(parts, ",")
@@ -622,6 +644,7 @@ function cargoInventoryPanel.handleItemRightClick(elemHandle)
 
     local bid     = s.bid
     local defName = row.item.defName
+    local instId  = row.item.instanceId
     local target  = adjacentSelectedUnit(bid)
 
     local items = {}
@@ -631,7 +654,7 @@ function cargoInventoryPanel.handleItemRightClick(elemHandle)
         items[1] = {
             label    = "Withdraw with " .. who,
             callback = function()
-                unit.withdrawFromCargo(target, bid, defName)
+                unit.withdrawFromCargo(target, bid, defName, instId)
                 cargoInventoryPanel.state.lastHash = ""
             end,
         }

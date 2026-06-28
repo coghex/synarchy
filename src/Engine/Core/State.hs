@@ -5,7 +5,7 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (IORef, readIORef)
+import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
 import Control.Concurrent.STM.TVar (TVar)
@@ -84,6 +84,12 @@ data EngineEnv = EngineEnv
   , assetPoolRef        ∷ IORef AssetPool
   , textureNameRegistryRef ∷ IORef TextureNameRegistry
   , nextObjectIdRef     ∷ IORef Word32
+  , nextItemInstanceIdRef ∷ IORef Word64
+    -- ^ Monotonic allocator for 'iiInstanceId'. Bumped once per genuine
+    --   item creation (rolls / spawns) via 'freshItemInstanceId'; moves
+    --   preserve the existing id. Seeded to 1 at startup and restored
+    --   from 'sdNextItemInstanceId' on load (max'd, never lowered) so
+    --   post-load items can't collide with loaded ones (#67).
   , fontCacheRef        ∷ IORef FontCache
   , inputStateRef       ∷ IORef InputState
   , keyBindingsRef      ∷ IORef KeyBindings
@@ -363,3 +369,12 @@ activeWorldPage env = resolveActiveWorld <$> readIORef (worldManagerRef env)
 --   case for current-world reads that don't need the page id.
 activeWorldState ∷ EngineEnv → IO (Maybe WorldState)
 activeWorldState env = fmap snd <$> activeWorldPage env
+
+-- | Allocate the next process-unique 'iiInstanceId'. Call ONCE per
+--   genuine item creation (a roll / spawn); never when merely moving or
+--   copying an existing instance — moves preserve the id. Thread-safe
+--   (atomic bump), so it is correct to call from any thread sharing this
+--   'EngineEnv'. See 'nextItemInstanceIdRef'.
+freshItemInstanceId ∷ EngineEnv → IO Word64
+freshItemInstanceId env =
+    atomicModifyIORef' (nextItemInstanceIdRef env) (\n → (n + 1, n))

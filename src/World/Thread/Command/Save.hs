@@ -91,6 +91,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             spoilPiles ← readIORef (wsSpoilRef worldState)
             -- v54 (structure persistence) additions
             texPalette ← readIORef (texPaletteRef env)
+            -- v56 (item-instance identity, #67): persist the allocator so
+            -- new items created after a reload keep unique ids.
+            nextItemId ← readIORef (nextItemInstanceIdRef env)
             -- v4 (Phase 3) additions
             bm        ← readIORef (buildingManagerRef env)
             -- Snapshot only THIS world's buildings/units — the managers are
@@ -152,6 +155,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdGroundItems  = groundItems
                             , sdSpoilPiles   = spoilPiles
                             , sdTexPalette   = texPalette
+                            , sdNextItemInstanceId = nextItemId
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -253,6 +257,11 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- per run). Clear it so the Lua resolve tick re-loads every palette
     -- texture for THIS session and the renderer can resolve loaded pieces.
     writeIORef (texPaletteHandlesRef env) HM.empty
+    -- v56 (item-instance identity, #67): advance the allocator past every
+    -- saved iiInstanceId. max (never lower) so a within-session load over a
+    -- session that already minted higher ids can't recycle a live id.
+    atomicModifyIORef' (nextItemInstanceIdRef env) $ \cur →
+        (max cur (sdNextItemInstanceId saveData), ())
 
     -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
