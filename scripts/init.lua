@@ -163,9 +163,24 @@ function game.onMouseDown(button, x, y)
     -- the input thread; if a UI element ate the click, this never fires.
     local debugOverlay = require("scripts.debug")
 
+    -- #154: this is a focus-less broadcast handler, so a blank click that
+    -- misses every UI element still reaches us even when no gameplay world
+    -- is interactable — in a menu (resolveActiveWorld then falls back to a
+    -- HIDDEN world), or under a non-gameplay overlay that bypasses
+    -- hud.hide() (pause menu / keep-world Settings). isGameplayInputActive()
+    -- is the canonical "the player is driving a visible world" predicate
+    -- (same one the box-select arm #146 and the gameplay key handlers #182
+    -- use). When it's false we must not select, mutate, or move-order the
+    -- world — but a stray RIGHT click is still allowed to *cancel* a leaked
+    -- build / mine / armed-debug mode (their state teardown is #138/#140/
+    -- #148; this gate just keeps blank clicks from ACTING on a hidden world).
+    local gameplayActive = require("scripts.ui_manager").isGameplayInputActive()
+
     -- Debug overlay's parallel hit-test gets first crack. If a debug
     -- rect (spawn button / list entry) eats the click, we stop here
     -- so the click can't fall through into selection / tile-cursor.
+    -- (UI hit-test on a self-hiding overlay — safe to run ungated; it
+    -- returns false whenever the overlay isn't shown.)
     if debugOverlay.tryClaimClick(button, x, y) then
         return
     end
@@ -181,21 +196,38 @@ function game.onMouseDown(button, x, y)
 
     -- Build tool gets first crack at mouse clicks when in placement
     -- mode, so the placement click doesn't fall through into unit
-    -- selection / tile-cursor.
-    local buildTool = require("scripts.build_tool")
-    if buildTool.handleMouseDown(button, x, y) then
-        return
-    end
+    -- selection / tile-cursor. Left-click places (world mutation),
+    -- right-click cancels. #154: when gameplay input is inactive only
+    -- let the right-click cancel through, so a blank left-click can't
+    -- commit a placement onto a hidden/paused world behind an overlay.
+    if gameplayActive or button == MOUSE_RIGHT then
+        local buildTool = require("scripts.build_tool")
+        if buildTool.handleMouseDown(button, x, y) then
+            return
+        end
 
-    -- Mine tool claims clicks while the mine tool mode is active
-    -- (anchor / commit / cancel), so they don't fall through into
-    -- unit selection.
-    local mineTool = require("scripts.mine_tool")
-    if mineTool.handleMouseDown(button, x, y) then
-        return
+        -- Mine tool claims clicks while the mine tool mode is active
+        -- (anchor / commit / cancel), so they don't fall through into
+        -- unit selection. Same left=mutate / right=cancel split, same
+        -- #154 gate as the build tool above.
+        local mineTool = require("scripts.mine_tool")
+        if mineTool.handleMouseDown(button, x, y) then
+            return
+        end
     end
 
     if button == MOUSE_LEFT then
+        -- #154: every left-click branch below either MUTATES the world
+        -- (armed debug spawn / item / fluid / terrain / location /
+        -- structure placement) or SELECTS in it (units / buildings /
+        -- items / tile cursor). None of them is a cancel. So a single
+        -- gate covers them all: a blank left-click on a hidden/paused
+        -- world must do nothing. (Right-click cancels live in the
+        -- MOUSE_RIGHT branch and stay reachable below.)
+        if not gameplayActive then
+            return
+        end
+
         -- Debug spawn mode: if armed, this click is a spawn, not a
         -- selection. Spawn at the hovered tile and stay armed.
         --
@@ -306,18 +338,10 @@ function game.onMouseDown(button, x, y)
         -- shielded for free. It doesn't consume the click — the
         -- single-unit selection / tile-cursor logic below still runs;
         -- the drag only takes over on mouse-up if it passes threshold.
-        --
-        -- Gate on isGameplayInputActive(): game.onMouseDown is a broadcast
-        -- handler with no focus gate, so a blank click on a non-gameplay
-        -- overlay that doesn't take UI focus — pause menu / keep-world
-        -- Settings, both of which bypass hud.hide() — would otherwise arm
-        -- a fresh box-select behind the overlay, defeating the
-        -- cancel()-on-entry teardown (#146). Same predicate the gameplay
-        -- key handlers use (#182). (The single-unit/tile-cursor logic
-        -- below reaching those overlays is the broader #154 concern.)
-        if require("scripts.ui_manager").isGameplayInputActive() then
-            require("scripts.unit_drag_select").handleMouseDown(button, x, y)
-        end
+        -- The gameplay-active gate (#154/#146 — a box-select must never
+        -- arm behind a menu / pause overlay) is the early return at the
+        -- top of this MOUSE_LEFT branch, so no per-call check is needed.
+        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
 
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
@@ -401,6 +425,19 @@ function game.onMouseDown(button, x, y)
         end
         if debugOverlay.armedStructure then
             debugOverlay.clearArmedStructure()
+            return
+        end
+        -- #154: every right-click branch below hit-tests buildings / units
+        -- / ground items or issues move orders against the active world. A
+        -- blank right-click on a non-gameplay overlay or in a menu resolves
+        -- to a HIDDEN world (resolveActiveWorld's empty-wmVisible fallback),
+        -- so without this gate a stray right-click could open a context menu
+        -- on a hidden-world entity or move-order a unit the player can't see.
+        -- The armed-mode cancels above (plus the build/mine right-click
+        -- cancels near the top) run while inactive so a stray click still
+        -- dismisses a leaked mode (#138/#140/#148); past here we need an
+        -- active, visible world. Same gate as the MOUSE_LEFT branch / #182.
+        if not gameplayActive then
             return
         end
         -- Storage building right-click → "Contents" menu, regardless
