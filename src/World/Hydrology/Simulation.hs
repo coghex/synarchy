@@ -820,6 +820,29 @@ simulateHydrology seed worldSize ageIdx grid climate =
                        then idx
                        else go up (steps + 1)
 
+        -- A headwater (first threshold-crossing cell) can itself fall
+        -- INSIDE a filled lake basin — lake flats are land, so they pass
+        -- the headwater test. Sourcing a river there (or, after
+        -- `walkToDivide`, just above it) would carve the basin out and
+        -- drain the lake. So if the chosen source is a lake cell, descend
+        -- the flow chain to the basin's OUTFLOW (the first non-lake cell)
+        -- and source there, so the river starts at the lake's edge and
+        -- flows AWAY from it — the lake is preserved (issue #221). Bounded
+        -- by maxWalk; falls back to the last cell if the chain hits the
+        -- ocean while still flooded (degenerate lake-to-sea case).
+        dropToOutflow ∷ Int → Int
+        dropToOutflow start = go start (0 ∷ Int)
+          where
+            maxWalk = 4 * gridW
+            go idx steps
+                | steps ≥ maxWalk      = idx
+                | not (isLakeCell idx) = idx
+                | otherwise =
+                    let d = flowDirVec VU.! idx
+                    in if d ≥ 0 ∧ d < totalSamples
+                       then go d (steps + 1)
+                       else idx
+
         -- Inland-origin source extension is applied only on real-scale
         -- worlds (issue #221). On tiny worlds (size 32/64 — the
         -- regression-gate sizes) it is both pointless (a 512–1024-tile
@@ -837,7 +860,10 @@ simulateHydrology seed worldSize ageIdx grid climate =
 
         riverSources ∷ [(Int, Int, Int, Float)]
         riverSources = map (\idx →
-            let srcIdx = if extendSources then walkToDivide idx else idx
+            let srcIdx
+                    | not extendSources = idx              -- small worlds: unchanged
+                    | isLakeCell idx    = dropToOutflow idx -- headwater in a lake
+                    | otherwise         = walkToDivide idx  -- extend up to divide
                 gx = gxVec VU.! srcIdx
                 gy = gyVec VU.! srcIdx
                 elev = origElev VU.! srcIdx
