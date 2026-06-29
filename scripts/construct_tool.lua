@@ -73,6 +73,11 @@ local function setStructure(piece, edge)
 end
 
 local function setBuilding(def)
+    -- A building has no rectangle, so clear any armed structure anchor the
+    -- moment the player picks one — otherwise the stale anchor->hover
+    -- preview lingers until the next world click, and the picker is
+    -- reopenable mid-rectangle (re-clicking the construct toolbar slot).
+    if constructTool.anchor then constructTool.cancel() end
     constructTool.target = { kind = "building", def = def }
     engine.logDebug("construct: target = " .. constructTool.targetLabel())
 end
