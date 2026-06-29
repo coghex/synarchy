@@ -1043,6 +1043,23 @@ function uiManager.onContextMenuBackdrop(elemHandle)
     end
     return false
 end
+
+-- Keybind editor modal backdrop: clicking outside the capture/conflict
+-- popup cancels the in-progress capture.
+function uiManager.onKeybindPopupBackdrop(elemHandle)
+    if currentMenu == "settings" and settingsMenu
+       and settingsMenu.cancelKeyCapture then
+        settingsMenu.cancelKeyCapture()
+        return true
+    end
+    return false
+end
+
+-- Clicks on the popup body itself are swallowed (modal no-op) so they
+-- don't fall through to the backdrop and cancel.
+function uiManager.onKeybindPopupSwallow(elemHandle)
+    return true
+end
 -- Note: "onEventLogRightClick" is broadcast to every loaded script —
 -- hud.onEventLogRightClick handles it directly. No uiManager delegate
 -- needed (and adding one would cause the menu to open twice).

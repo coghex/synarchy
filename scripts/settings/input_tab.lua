@@ -61,6 +61,14 @@ local BTN_FONT   = 20
 -- (Z_BUTTONS = 10) and scrollbars on the settings page.
 local POPUP_Z = 30
 
+-- Click-callback names for the modal layer. The backdrop sits just under
+-- the popup (POPUP_Z - 1): clicking outside the dialog hits it and
+-- cancels; clicking the dialog body hits the panel (swallow) so it does
+-- nothing. Both block the tab bar / buttons beneath from being clicked
+-- while a capture is in progress. Handled in ui_manager.
+local BACKDROP_CALLBACK = "onKeybindPopupBackdrop"
+local SWALLOW_CALLBACK  = "onKeybindPopupSwallow"
+
 -----------------------------------------------------------
 -- Module state (singleton via package.loaded)
 -----------------------------------------------------------
@@ -102,6 +110,8 @@ local function dismissPopups()
     for _, id in ipairs(p.buttonIds or {}) do button.destroy(id) end
     for _, id in ipairs(p.labelIds  or {}) do label.destroy(id)  end
     for _, id in ipairs(p.panelIds  or {}) do panel.destroy(id)  end
+    -- Raw UI.newElement handles (the modal backdrop) — no widget wrapper.
+    for _, h  in ipairs(p.rawIds    or {}) do UI.deleteElement(h)  end
     inputTab.popup = nil
 end
 
@@ -143,6 +153,16 @@ local function centeredPanel(name, w, h)
     local ph  = math.floor(h * us)
     local px  = math.floor((ctx.fbW - pw) / 2)
     local py  = math.floor((ctx.fbH - ph) / 2)
+
+    -- Full-screen invisible click blocker just under the popup, so the
+    -- background controls can't be clicked while the dialog is up
+    -- (UI.newElement has geometry but no texture → modal yet invisible).
+    local backdrop = UI.newElement(name .. "_backdrop", ctx.fbW, ctx.fbH, ctx.page)
+    UI.addToPage(ctx.page, backdrop, 0, 0)
+    UI.setZIndex(backdrop, POPUP_Z - 1)
+    UI.setClickable(backdrop, true)
+    UI.setOnClick(backdrop, BACKDROP_CALLBACK)
+
     local pid = panel.new({
         name       = name,
         page       = ctx.page,
@@ -154,7 +174,15 @@ local function centeredPanel(name, w, h)
         padding    = { top = 20, bottom = 20, left = 20, right = 20 },
         uiscale    = us,
     })
-    return pid, px, py, pw, ph
+    -- Swallow clicks on the dialog body so they don't fall through to the
+    -- backdrop (which would cancel).
+    local box = panel.getBoxHandle(pid)
+    if box then
+        UI.setClickable(box, true)
+        UI.setOnClick(box, SWALLOW_CALLBACK)
+    end
+
+    return pid, backdrop, px, py, pw, ph
 end
 
 local function popupLabel(text, cx, cy, color)
@@ -179,14 +207,16 @@ end
 local function showPressPopup(action)
     dismissPopups()
     local ctx = inputTab.ctx
-    local pid, px, py, pw, ph = centeredPanel("keybind_press_popup", 380, 130)
+    local pid, backdrop, px, py, pw, ph =
+        centeredPanel("keybind_press_popup", 380, 130)
     local cx = px + pw / 2
     local l1 = popupLabel("Press a key for", cx, py + math.floor(40 * ctx.uiscale))
     local l2 = popupLabel(actionLabel(action), cx,
         py + math.floor(40 * ctx.uiscale) + ctx.baseSizes.fontSize
             + math.floor(8 * ctx.uiscale),
         {0.85, 0.85, 0.85, 1.0})
-    inputTab.popup = { panelIds = { pid }, labelIds = { l1, l2 }, buttonIds = {} }
+    inputTab.popup = { panelIds = { pid }, labelIds = { l1, l2 },
+                       buttonIds = {}, rawIds = { backdrop } }
 end
 
 -- Conflict modal: key is already bound to another action.
@@ -194,7 +224,8 @@ local function showConflictPopup(action, key, oldAction)
     dismissPopups()
     local ctx = inputTab.ctx
     local us  = ctx.uiscale
-    local pid, px, py, pw, ph = centeredPanel("keybind_conflict_popup", 460, 200)
+    local pid, backdrop, px, py, pw, ph =
+        centeredPanel("keybind_conflict_popup", 460, 200)
     local cx = px + pw / 2
 
     local l1 = popupLabel("Key \"" .. key .. "\" is already", cx,
@@ -236,7 +267,7 @@ local function showConflictPopup(action, key, oldAction)
 
     inputTab.popup = {
         panelIds = { pid }, labelIds = { l1, l2 },
-        buttonIds = { cancelId, remapId },
+        buttonIds = { cancelId, remapId }, rawIds = { backdrop },
     }
 end
 
