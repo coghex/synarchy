@@ -109,7 +109,8 @@ instance FromJSON UnitYamlBody where
 --
 --   drop_priority feeds the spawn-time capacity check: a unit whose
 --   full loadout (inventory + equipment + accessories, fill counted
---   at 1 L = 1 kg) exceeds its rolled carrying_capacity sheds
+--   at each container's per-unit fill weight) exceeds its rolled
+--   carrying_capacity sheds
 --   droppable entries in DESCENDING priority until it fits. 0 (the
 --   default) = never shed — armor, weapons, and survival kit always
 --   arrive. Acolytes mark the pick (2) and shovel (1).

@@ -135,7 +135,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId) =
             -- priority shed (highest first — pick before shovel)
             -- until the loadout fits the rolled carrying_capacity.
             -- Weights mirror getCarryingWeight: instance weight + fill
-            -- (1 L = 1 kg) + container contents, worn gear at full mass.
+            -- (at the container's per-unit fill weight) + container
+            -- contents, worn gear at full mass.
             let itemW = itemTotalWeight itemMgr
                 fixedW = sum (map itemW (HM.elems initialEquipment))
                        + sum (map itemW initialAccessories)
