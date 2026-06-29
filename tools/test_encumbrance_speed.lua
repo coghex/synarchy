@@ -32,7 +32,7 @@ unit = {
     getMaxSpeed = function() return 10.0 end,
     getCarryingWeight = function(uid) return U[uid].carried end,
     getStat = function(uid, name)
-        if name == "agility" then return 1.0 end
+        if name == "agility" then return U[uid].agi or 1.0 end
         if name == "endurance" then return U[uid].endur end
         if name == "carrying_capacity" then return U[uid].cap end
         return nil
@@ -59,8 +59,8 @@ local function approx(a, b, eps)
 end
 
 -- Configure a uid and return its encumbrance multiplier + sprint speed.
-local function setUnit(uid, cap, carried, endur)
-    U[uid] = { cap = cap, carried = carried, endur = endur }
+local function setUnit(uid, cap, carried, endur, agi)
+    U[uid] = { cap = cap, carried = carried, endur = endur, agi = agi }
     return ms.encumbranceMultiplier(uid), ms.sprint(uid)
 end
 
@@ -103,6 +103,23 @@ check(mNorm < mStrong, string.format("at-cap: nominal(1.0) %.3f < strong(2.0) %.
 local oWeak,   _ = setUnit(1, 100, 150, 0.5)
 local oStrong, _ = setUnit(1, 100, 150, 2.0)
 check(oWeak < oStrong, string.format("over-cap: weak %.3f < strong %.3f", oWeak, oStrong))
+
+-----------------------------------------------------------
+-- 2b. Ambient wander (meander) must respond to load too — including the
+--     case the review caught: an AGILE unit whose meander is pinned by the
+--     fixed max_speed cap, not by comfort. Agility 1.2 makes the raw cap
+--     bind when empty, so without the encumbrance term on that cap a 40%
+--     load would amble at exactly the same speed as empty.
+-----------------------------------------------------------
+print("[2b] meander (ambient wander) slows with load, even when the max_speed cap binds")
+setUnit(1, 100, 0,  1.0, 1.2)   -- agile, empty
+local wEmpty = ms.meander(1)
+setUnit(1, 100, 40, 1.0, 1.2)   -- agile, 40% load (within capacity)
+local wMid = ms.meander(1)
+setUnit(1, 100, 100, 1.0, 1.2)  -- agile, at capacity
+local wFull = ms.meander(1)
+check(wMid < wEmpty,  string.format("meander: 40%% load %.4f < empty %.4f", wMid, wEmpty))
+check(wFull < wMid,   string.format("meander: at-cap %.4f < 40%% load %.4f", wFull, wMid))
 
 -----------------------------------------------------------
 -- 3. Unloaded / missing-data safety.

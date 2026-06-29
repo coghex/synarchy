@@ -98,10 +98,17 @@ end
 -- regardless of how fast the unit *could* run — and capped under half
 -- comfort so even a low-comfort unit still meanders slower than it cruises.
 -- This is what keeps animals from sprinting around with no purpose.
+--
+-- Encumbrance DOES slow the amble (a loaded unit physically plods), so it
+-- multiplies the raw max_speed cap too. The comfort term already carries
+-- encumbrance via sprint, but on an agile unit the max_speed cap binds and
+-- would otherwise hide load from wander until it grew heavy — so apply the
+-- multiplier to both terms and the amble always responds to load.
 local MEANDER_FRAC = 0.25
 function M.meander(uid)
     local maxsp = unit.getMaxSpeed(uid) or 0
-    return math.min(maxsp * MEANDER_FRAC, M.comfort(uid) * 0.5)
+    return math.min(maxsp * MEANDER_FRAC * M.encumbranceMultiplier(uid),
+                    M.comfort(uid) * 0.5)
 end
 
 return M
