@@ -75,6 +75,11 @@ local config = {
 buildingSpawn.state = buildingSpawn.state or {}
 local state = buildingSpawn.state
 
+-- How many consecutive spawn failures to log per building before
+-- suppressing further warnings (we keep retrying quietly so the spawn
+-- self-heals once the tile clears, but we don't flood the log).
+local SPAWN_FAIL_LOG_LIMIT = 5
+
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
@@ -181,8 +186,30 @@ local function tickOne(bid, info)
     local newUid = unit.spawn(unitType, spawnX, spawnY,
                               nil, "player", info.page)
     if not newUid then
-        engine.logWarn("BuildingSpawn: unit.spawn failed at "
-            .. spawnX .. "," .. spawnY)
+        -- Throttle retries: stamp lastSpawnedAt so the spawn_interval
+        -- cooldown gate at the top of tickOne rate-limits the next
+        -- attempt to ~spawn_interval (~2s) instead of every unpaused
+        -- frame (~60/s). The original failure path left lastSpawnedAt
+        -- untouched, so buildingSpawn.update re-entered every frame —
+        -- flooding the log and gridlocking the roster. We deliberately
+        -- do NOT consumeSpawn here: the spawn didn't happen, so the
+        -- countdown must not advance.
+        s.lastSpawnedAt = engine.gameTime()
+        s.spawnFailures = (s.spawnFailures or 0) + 1
+        -- Escalate-then-suppress so a persistently un-spawnable
+        -- building (blocked tile, unloaded chunk, bad unitType) stays
+        -- actionable without becoming a log flood. We keep retrying
+        -- quietly past the limit so it self-heals once the tile clears.
+        if s.spawnFailures <= SPAWN_FAIL_LOG_LIMIT then
+            engine.logWarn(string.format(
+                "BuildingSpawn: portal=%d unit.spawn(%s) failed at (%.2f, %.2f) (attempt %d)",
+                bid, tostring(unitType), spawnX, spawnY, s.spawnFailures))
+            if s.spawnFailures == SPAWN_FAIL_LOG_LIMIT then
+                engine.logWarn(string.format(
+                    "BuildingSpawn: portal=%d still failing to spawn; suppressing further warnings (will keep retrying every %.1fs)",
+                    bid, params.spawn_interval or 0))
+            end
+        end
         return
     end
 
@@ -208,6 +235,7 @@ local function tickOne(bid, info)
     s.lastSpawnX    = spawnX
     s.lastSpawnY    = spawnY
     s.lastSpawnedAt = engine.gameTime()
+    s.spawnFailures = 0
 
     engine.logInfo(string.format(
         "BuildingSpawn: portal=%d spawned %s id=%d at (%.2f, %.2f) -> walk to (%.2f, %.2f), remaining=%d",
