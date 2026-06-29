@@ -304,6 +304,12 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
             -- seam would otherwise survive in rawSlope and ramp into water.
             -- (15 `xor` wetMask) is the 4-bit complement of the wet mask.
             dryFlank = rawSlope .&. (15 `xor` wetMask)
+            -- The non-jagged result: the clean terrace flank, or flat (0)
+            -- when it is empty or the degenerate all-four (15 renders as a
+            -- flat top, never a slope). This is also the floor the jagged
+            -- branch falls back to, so the result is NEVER a subset of the
+            -- walkable flank.
+            cleanFlank = if dryFlank ≢ 0 ∧ dryFlank ≢ 15 then dryFlank else 0
         in if roll < jaggedChance ∧ not (null cand)
            -- Jaggedness is ADDED to the clean flank, never substituted for
            -- it. Slope bits are not purely visual: 'Unit.Pathing.Cost'
@@ -325,10 +331,19 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
            then let lean = cand !! fromIntegral ((h `shiftR` 8) `mod`
                                                   fromIntegral (length cand))
                     combined = dryFlank .|. lean
-                in if combined ≡ 15 then lean else combined  -- 15 ≡ flat-top
-           else if dryFlank ≢ 0 ∧ dryFlank ≢ 15
-                then dryFlank   -- clean terrace flank (wet dirs masked out)
-                else 0
+                -- If OR-ing the lean would complete the degenerate all-four
+                -- (15 renders as a flat top, never a slope) we must NOT
+                -- return 'lean' alone: it can be a subset of dryFlank and so
+                -- strand genuine ramps as cliffs (e.g. dryFlank = E|S|W = 14,
+                -- lean = N → combined 15, but N alone drops E/S/W). In that
+                -- case dryFlank is either a real 3-sided flank — keep all
+                -- three ramps — or already all-four itself, in which case we
+                -- fall back to the single 'lean' bit (what the pre-#337 code
+                -- rendered for such a tile; cand is the 4 downhill dirs).
+                in if combined ≢ 15      then combined
+                   else if dryFlank ≢ 15 then dryFlank
+                   else                       lean
+           else cleanFlank
 
 slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → V.Vector (Maybe FluidCell)
