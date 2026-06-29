@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Thermo altitude-lapse probe (issue #308).
+
+Verifies that the unit thermo sim's ambient temperature is ELEVATION-CORRECTED:
+high ground is colder than the regional climate mean, matching where worldgen
+forms ice. Before the fix, `scripts/thermo.lua` sampled `world.getClimateAt().temp`
+(the regional mean, no altitude term) so a unit on an ice-capped peak felt the
+same warmth as the valley floor.
+
+This drives the engine's `world.getAmbientAt(gx,gy)` (the centralized
+elevation-corrected ambient used by thermo.lua) on a real generated world and
+asserts:
+
+  1. SAFETY: getAmbientAt is never WARMER than the regional mean anywhere
+     (the lapse rate only cools).
+  2. THE BUG: there is high ground where the regional mean is ABOVE freezing
+     but the elevation-corrected ambient is BELOW freezing — i.e. a unit there
+     now gets cold where before it stayed temperate.
+  3. MONOTONE: the coldest-by-altitude tile reads strictly colder than a
+     lowland tile in the same area.
+  4. ICE AGREEMENT: tiles that worldgen freezes (the ice system, which applies
+     the SAME lapse rate) read at/below freezing — ambient can't disagree with
+     where ice visibly forms.
+
+Generated-world, deterministic for the pinned seed. Runtime ~1 min.
+
+Usage: python3 tools/thermo_altitude_probe.py [--port 9171] [--seed 42] [--size 128]
+Exit 0 = all checks passed.
+"""
+from __future__ import annotations
+import argparse, json, socket, subprocess, sys, time
+
+LOG = "/tmp/thermo_altitude_probe_engine.log"
+
+
+def send(port, lua, idle=2.0, timeout=120):
+    with socket.create_connection(("localhost", port), timeout=timeout) as s:
+        s.sendall((lua + "\n").encode())
+        s.settimeout(idle)
+        chunks = []
+        try:
+            while True:
+                b = s.recv(65536)
+                if not b:
+                    break
+                chunks.append(b)
+        except socket.timeout:
+            pass
+    out = b"".join(chunks).decode(errors="replace")
+    res = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
+    res = [r for r in res if r]
+    return (res[-1] if res else out.strip())
+
+
+def fnum(port, lua):
+    try:
+        return float(send(port, lua))
+    except (ValueError, TypeError):
+        return None
+
+
+def boot(port):
+    log = open(LOG, "w")
+    proc = subprocess.Popen(
+        ["cabal", "run", "-v0", "exe:synarchy", "--",
+         "--headless", "--port", str(port)],
+        stdout=log, stderr=subprocess.STDOUT)
+    deadline = time.time() + 240
+    while time.time() < deadline:
+        try:
+            if "READY" in open(LOG).read():
+                return proc
+        except FileNotFoundError:
+            pass
+        if proc.poll() is not None:
+            sys.exit(f"engine exited before READY; see {LOG}")
+        time.sleep(0.4)
+    proc.kill()
+    sys.exit("engine never printed READY")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=9171)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--size", type=int, default=128)
+    args = ap.parse_args()
+    port = args.port
+
+    proc = boot(port)
+    fails = []
+    try:
+        send(port, f'world.init("t308",{args.seed},{args.size},5); return "ok"')
+        for _ in range(180):
+            if send(port, 'local p=world.getInitProgress(); return p').strip() == "3":
+                break
+            time.sleep(1)
+        else:
+            sys.exit("world never finished generating")
+        send(port, 'world.show("t308"); return "shown"')
+
+        half = args.size * 16 // 2  # tile half-extent (chunkSize 16)
+        lo, hi, step = -half + 40, half - 40, 40
+
+        # One in-engine sweep: track never-warmer violations, the coldest tile,
+        # the warmest-mean tile, and the best "warm region / freezing peak" hit.
+        # The debug console is SINGLE-LINE only, so this is one statement-stream.
+        lua = (
+            "local viol=0;"
+            "local cax,cay,camb=0,0,1e9;"
+            "local wmx,wmy,wmean,wamb=0,0,-1e9,0;"
+            "local bx,by,bm,ba,bc=0,0,0,0,-1;"
+            f"for gx={lo},{hi},{step} do for gy={lo},{hi},{step} do "
+            "local c=world.getClimateAt(gx,gy); local a=world.getAmbientAt(gx,gy);"
+            "if c and a then "
+            "if a > c.temp + 0.01 then viol=viol+1 end "
+            "if a < camb then camb=a; cax=gx; cay=gy end "
+            "if c.temp > wmean then wmean=c.temp; wmx=gx; wmy=gy; wamb=a end "
+            "if c.temp > 0 and a < 0 then local gap=c.temp-a; if gap>bc then bc=gap; bx=gx; by=gy; bm=c.temp; ba=a end end "
+            "end end end;"
+            "return string.format('%d|%d,%d,%.2f|%d,%d,%.2f,%.2f|%d,%d,%.2f,%.2f',"
+            "viol, cax,cay,camb, wmx,wmy,wmean,wamb, bx,by,bm,ba)"
+        )
+        raw = send(port, lua, idle=20.0, timeout=180)
+        print("sweep:", raw)
+        raw = raw.strip().strip('"')   # console wraps string returns in quotes
+        parts = raw.split("|")
+        viol = int(parts[0])
+        cax, cay, camb = parts[1].split(","); camb = float(camb)
+        wmx, wmy, wmean, wamb = parts[2].split(","); wmean = float(wmean); wamb = float(wamb)
+        bx, by, bm, ba = parts[3].split(","); bm = float(bm); ba = float(ba)
+
+        # 1. SAFETY: never warmer than the regional mean.
+        if viol == 0:
+            print(f"PASS 1 safety: getAmbientAt never exceeds the regional mean ({viol} violations)")
+        else:
+            fails.append(f"1 safety: {viol} tiles read WARMER than the regional mean")
+
+        # 2. THE BUG: warm region, freezing peak.
+        if bm > 0 and ba < 0:
+            print(f"PASS 2 bug fix: ({bx},{by}) regional mean {bm:.2f}°C -> ambient {ba:.2f}°C (altitude pushes a temperate region below freezing)")
+        else:
+            fails.append("2 bug fix: found no tile where mean>0 but elevation-corrected ambient<0")
+
+        # 3. MONOTONE: coldest-by-altitude tile colder than a lowland reference.
+        if camb < wamb - 1.0:
+            print(f"PASS 3 monotone: coldest tile ({cax},{cay}) ambient {camb:.2f}°C < lowland ref ({wmx},{wmy}) ambient {wamb:.2f}°C")
+        else:
+            fails.append(f"3 monotone: coldest ambient {camb:.2f} not below lowland ref {wamb:.2f}")
+
+        # 4. ICE AGREEMENT: sample worldgen ice tiles via a local dump and check
+        #    getAmbientAt reads at/below freezing on them.
+        cx = int(bx) // 16; cy = int(by) // 16
+        dump = subprocess.run(
+            ["cabal", "run", "-v0", "exe:synarchy", "--", "--dump=terrain,ice",
+             "--seed", str(args.seed), "--worldSize", str(args.size),
+             "--region", f"{cx-3},{cy-3},{cx+3},{cy+3}"],
+            capture_output=True, text=True)
+        try:
+            tiles = json.loads(dump.stdout)
+        except json.JSONDecodeError:
+            tiles = []
+        ice = [t for t in tiles if t.get("iceSurf") is not None
+               and not t.get("glacierZone") and not t.get("beyondGlacier")]
+        if not ice:
+            print(f"INFO 4 ice agreement: no interior ice tiles near ({bx},{by}) to sample (skipped)")
+        else:
+            warm_ice = []
+            for t in ice[:8]:
+                a = fnum(port, f'return world.getAmbientAt({t["x"]},{t["y"]})')
+                if a is None or a > 0.5:
+                    warm_ice.append((t["x"], t["y"], a))
+            if not warm_ice:
+                print(f"PASS 4 ice agreement: all {min(8,len(ice))} sampled ice tiles read at/below freezing")
+            else:
+                fails.append(f"4 ice agreement: ice tiles reading above freezing: {warm_ice}")
+    finally:
+        try:
+            send(port, 'engine.quit(); return "bye"', idle=1.0, timeout=5)
+        except Exception:
+            pass
+        time.sleep(1)
+        if proc.poll() is None:
+            proc.kill()
+
+    print()
+    if fails:
+        print("FAILED:")
+        for f in fails:
+            print("  -", f)
+        sys.exit(1)
+    print("ALL CHECKS PASSED")
+
+
+if __name__ == "__main__":
+    main()

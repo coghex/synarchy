@@ -607,6 +607,7 @@ library
                      World.Weather.Log
                      World.Weather.Generate
                      World.Weather.Lookup
+                     World.Weather.Ambient
                      World.Material
                      World.Material.Id
                      World.Preview

@@ -112,7 +112,12 @@ function thermo.tick(uid, info, dt)
     local circ = circulation.compute(uid, core)
     unit.setStat(uid, "circulation", circ)
 
-    local ambient  = clim.temp or 20.0
+    -- Ambient is ELEVATION-CORRECTED: world.getAmbientAt applies the worldgen
+    -- altitude lapse rate (the same one the ice system uses), so a unit on an
+    -- ice-capped peak actually feels the cold instead of the valley mean (#308).
+    -- Falls back to the raw regional mean if the helper is unavailable.
+    local ambient  = world.getAmbientAt and world.getAmbientAt(gx, gy)
+    if not ambient then ambient = clim.temp or 20.0 end
     local humidity = clamp(clim.humidity or 0.5, 0, 1)
     -- Debug/test override: set thermo.debugAmbient (°C) / debugHumidity to
     -- simulate an arctic / desert environment in the flat arena (whose climate

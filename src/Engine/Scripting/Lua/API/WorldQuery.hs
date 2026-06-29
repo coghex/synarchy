@@ -13,6 +13,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldPickTileFn
     , worldPickPosFn
     , worldGetClimateAtFn
+    , worldGetAmbientAtFn
     ) where
 
 import UPrelude
@@ -30,6 +31,7 @@ import World.Hydrology.Types
 import World.Cursor.Types (CursorState(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import World.Weather.Ambient (ambientTempAt)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Render.HitTest (pickWorldTile)
 import World.Render.ViewBounds (computeViewBounds)
@@ -309,6 +311,29 @@ worldGetClimateAtFn env = do
                     putN "precip"     (lcPrecip c)
                     putN "humidity"   (lcHumidity c)
                     putN "snow"       (lcSnow c)
+                    return 1
+        _ → Lua.pushnil >> return 1
+
+-- | world.getAmbientAt(gx, gy) → ambient air temperature (°C) | nil. The
+--   elevation-corrected temperature a unit actually feels at the tile: the
+--   regional climate mean minus the altitude lapse rate — the SAME correction
+--   worldgen's ice system applies (see World.Weather.Ambient / issue #308), so
+--   a unit on an ice-capped peak reads below freezing instead of the valley's
+--   temperate mean. nil if no world is active. Used by scripts/thermo.lua.
+worldGetAmbientAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetAmbientAtFn env = do
+    gxArg ← Lua.tointeger 1
+    gyArg ← Lua.tointeger 2
+    case (gxArg, gyArg) of
+        (Just gx, Just gy) → do
+            mParams ← Lua.liftIO (getWorldGenParams env)
+            case mParams of
+                Nothing → Lua.pushnil >> return 1
+                Just p → do
+                    let t = ambientTempAt (wgpSeed p) (wgpPlates p)
+                                (wgpClimateState p) (wgpWorldSize p)
+                                (fromIntegral gx) (fromIntegral gy)
+                    Lua.pushnumber (Lua.Number (realToFrac t))
                     return 1
         _ → Lua.pushnil >> return 1
 
