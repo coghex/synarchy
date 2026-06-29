@@ -182,13 +182,15 @@ removeActionKeyFn env = do
     return 1
 
 -- | engine.removeActionKeysMatching(action, key) → bool
---   Remove every key from an action's list whose GLFW key set overlaps the
---   given key's. This is the *semantic* sibling of 'removeActionKeyFn':
---   removing @LeftShift@ also clears a stored merged @Shift@ (which covers
---   both sides), so the keybind editor's "Remap" can actually free a key
---   that the source action holds under an alias-equivalent name. Returns
---   true if anything changed. Reserved actions are left untouched, and an
---   unparseable key (empty key set) removes nothing.
+--   Subtract the given key's GLFW key set from each of the action's stored
+--   keys. A stored key fully covered by the removal is dropped; a merged
+--   key only partially covered is replaced by the name(s) for the side(s)
+--   that remain; a non-overlapping key is kept verbatim. So removing
+--   @RightShift@ from an action bound to the merged @Shift@ leaves
+--   @LeftShift@ — the user reassigned one physical key, not both. This is
+--   the *semantic* sibling of 'removeActionKeyFn' (which removes one exact
+--   name), used by the editor's "Remap". Returns true if anything changed;
+--   reserved actions and an unparseable key (empty removal set) are no-ops.
 removeActionKeysMatchingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 removeActionKeysMatchingFn env = do
     actionArg ← Lua.tostring 1
@@ -197,15 +199,23 @@ removeActionKeysMatchingFn env = do
         (Just actionBS, Just keyBS)
           | isEditableAction (TE.decodeUtf8 actionBS) → do
             let action = TE.decodeUtf8 actionBS
-                target = parseKeyName (TE.decodeUtf8 keyBS)
-                matches sk = any (`elem` target) (parseKeyName sk)
+                remove = parseKeyName (TE.decodeUtf8 keyBS)
+                -- Rewrite one stored key into the name(s) that survive the
+                -- subtraction (empty = dropped; unchanged length = kept as
+                -- its original name; otherwise re-named from the remainder).
+                rewrite sk =
+                  let cur       = parseKeyName sk
+                      remaining = filter (`notElem` remove) cur
+                  in if null remaining                 then []
+                     else if length remaining ≡ length cur then [sk]
+                     else map glfwKeyName remaining
             changed ← Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
                 case Map.lookup action b of
-                    Just cur →
-                        let keep = filter (not . matches) cur
-                        in if length keep ≡ length cur
+                    Just curList →
+                        let newList = concatMap rewrite curList
+                        in if newList ≡ curList
                            then (b, False)
-                           else (Map.insert action keep b, True)
+                           else (Map.insert action newList b, True)
                     Nothing → (b, False)
             Lua.pushboolean changed
         _ → Lua.pushboolean False
