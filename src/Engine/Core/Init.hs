@@ -110,6 +110,7 @@ initializeEngineWith logBackend = do
   uiManagerRef ← newIORef emptyUIPageManager
   worldManagerRef ← newIORef emptyWorldManager
   hudActivePageRef ← newIORef Nothing
+  loadProvenanceRef ← newIORef HM.empty
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
@@ -194,6 +195,7 @@ initializeEngineWith logBackend = do
         , uiManagerRef       = uiManagerRef
         , worldManagerRef    = worldManagerRef
         , hudActivePageRef   = hudActivePageRef
+        , loadProvenanceRef  = loadProvenanceRef
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef

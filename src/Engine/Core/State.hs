@@ -5,6 +5,7 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
@@ -113,6 +114,13 @@ data EngineEnv = EngineEnv
   --   touching any cursor field, so the per-world snapshot alone can't
   --   detect the switch — issue #129).
   , hudActivePageRef    ∷ IORef (Maybe WorldPageId)
+  -- | Per-save provenance: save name → the restore ids that save's last load
+  --   registered. Re-loading the SAME save consults its own entry to reuse (and
+  --   thus replace) its collision-renamed synthetic pages instead of
+  --   accumulating new ones; loading a DIFFERENT save never owns another save's
+  --   synthetic pages, so they stay preserved as unrelated live pages (#214,
+  --   #191). Keyed by save name (SaveMetadata.smName).
+  , loadProvenanceRef   ∷ IORef (HM.HashMap Text (HS.HashSet WorldPageId))
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))

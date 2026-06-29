@@ -68,6 +68,14 @@ handleWorldDestroyCommand env logger pageId = do
              , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr)
              }, ())
 
+    -- Forget this page in the save-load provenance (every save's set): once
+    -- destroyed, a page later RECREATED under the same id (Lua can recycle any
+    -- id) is a NEW, unrelated world, not any prior load's page — so a later
+    -- load must not treat it as load-owned (which would let it clobber/drop
+    -- it, #214).
+    atomicModifyIORef' (loadProvenanceRef env) $ \m →
+        (HM.map (HS.delete pageId) m, ())
+
     -- Clear world quads so renderer stops drawing the old world
     writeIORef (worldQuadsRef env) V.empty
 
@@ -90,6 +98,10 @@ handleWorldDestroyAllCommand env logger = do
         Q.writeQueue (simQueue env) (SimDropWorld pid)
     atomicModifyIORef' (worldManagerRef env) $ \m →
         (m { wmWorlds = [], wmVisible = [] }, ())
+    -- Forget all save-load provenance: the next game's first load must not
+    -- treat a stale synthetic id from this game as reusable, which could
+    -- otherwise let it clobber an unrelated page (#214).
+    writeIORef (loadProvenanceRef env) HM.empty
     writeIORef (worldQuadsRef env) V.empty
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so
