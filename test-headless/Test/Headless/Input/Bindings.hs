@@ -71,6 +71,14 @@ spec = do
             Map.lookup "moveLeft" defaultKeyBindings  `shouldBe` Just ["Left", "A"]
             Map.lookup "moveRight" defaultKeyBindings `shouldBe` Just ["Right", "D"]
 
+        -- world_view.onKeyDown resolves these action names against the live
+        -- bindings (issue #275); a rename or default-key change here would
+        -- silently break Q/E rotate + Home z-reset.
+        it "binds camera rotate + z-reset to Q/E/Home" $ do
+            Map.lookup "rotateCCW" defaultKeyBindings      `shouldBe` Just ["Q"]
+            Map.lookup "rotateCW" defaultKeyBindings       `shouldBe` Just ["E"]
+            Map.lookup "resetZTracking" defaultKeyBindings `shouldBe` Just ["Home"]
+
     describe "isActionDown (any bound key)" $ do
         let bindings = Map.fromList [("moveUp", ["Up", "W"])]
         it "fires when the first bound key is held" $
@@ -84,6 +92,47 @@ spec = do
 
         it "is false for an unbound action" $
             isActionDown "noSuchAction" bindings (heldState [GLFW.Key'W]) `shouldBe` False
+
+    describe "reserved keys (#275)" $ do
+        it "strips Escape/Grave when a hand-edited file binds them to actions" $ do
+            let b = parseConfig "keybinds:\n  rotateCW: [Escape]\n  moveUp: [Grave, W]\n"
+            -- Reserved keys removed; surviving real keys kept.
+            Map.lookup "rotateCW" b `shouldBe` Just []
+            Map.lookup "moveUp" b   `shouldBe` Just ["W"]
+
+        it "keeps the reserved-action reference entries intact" $ do
+            let b = parseConfig "keybinds:\n  moveUp: [W]\n"
+            Map.lookup "escape" b    `shouldBe` Just ["Escape"]
+            Map.lookup "openShell" b `shouldBe` Just ["Grave"]
+
+        it "a reserved key bound to an action never drives it" $ do
+            let b = parseConfig "keybinds:\n  rotateCW: [Escape]\n"
+            isActionDown "rotateCW" b (heldState [GLFW.Key'Escape]) `shouldBe` False
+
+    -- keyMatchesAction takes the *exact* GLFW key the engine recorded for
+    -- the press (carried with the key-down event), so it is side-exact and
+    -- needs no input-state lookup — a fast tap can't be dropped or
+    -- mis-attributed by a race (#275).
+    describe "keyMatchesAction (exact-key edge dispatch)" $ do
+        let b = Map.fromList [ ("rotateCCW", ["Q"])
+                             , ("sideAction", ["LeftShift"])
+                             , ("modAction",  ["Shift"]) ]
+        it "matches the bound key" $
+            keyMatchesAction GLFW.Key'Q "rotateCCW" b `shouldBe` True
+
+        it "does not match a different key" $
+            keyMatchesAction GLFW.Key'E "rotateCCW" b `shouldBe` False
+
+        it "is false for an unbound action" $
+            keyMatchesAction GLFW.Key'Q "noSuchAction" b `shouldBe` False
+
+        it "side-specific binding matches only that side" $ do
+            keyMatchesAction GLFW.Key'LeftShift  "sideAction" b `shouldBe` True
+            keyMatchesAction GLFW.Key'RightShift "sideAction" b `shouldBe` False
+
+        it "merged binding matches either side" $ do
+            keyMatchesAction GLFW.Key'LeftShift  "modAction" b `shouldBe` True
+            keyMatchesAction GLFW.Key'RightShift "modAction" b `shouldBe` True
 
     describe "save round-trip" $
         it "encodes then decodes back to the same bindings" $ do

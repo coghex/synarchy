@@ -46,7 +46,7 @@ import Engine.Graphics.Vulkan.Sampler.Cache ( acquireSampler, releaseSampler
                                             , SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (setTextureFilter, registerPinnedTexture
                                               , registerTexture
-                                               , unregisterTexture)
+                                               , unregisterTexture, writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
@@ -410,12 +410,16 @@ duplicateCachedTextureHandle env handle assetId atlas = do
     case mBindless of
         Just bindless →
             case Map.lookup (taTextureHandle atlas) (btsHandleMap bindless) of
-                Just existingBindlessHandle →
+                Just existingBindlessHandle → do
                     liftIO $ writeIORef (textureSystemRef env) (Just bindless
                         { btsHandleMap =
                             Map.insert handle existingBindlessHandle
                                 (btsHandleMap bindless)
                         })
+                    -- Atlas-share path: sync the shader handle→slot table
+                    -- too (the ptr is shared across the immutable copy) (#286).
+                    liftIO $ writeHandleSlotEntry bindless (toInt handle)
+                        (tsIndex (bthSlot existingBindlessHandle))
                 Nothing → logWarnM CatAsset $
                     "Cached texture missing bindless slot for "
                         <> taPath atlas

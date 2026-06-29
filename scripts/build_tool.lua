@@ -148,6 +148,12 @@ local function visibleDefs()
     return visible
 end
 
+-- Exposed so the construction designation tool (scripts/construct_tool.lua)
+-- shows the SAME building set as the build tool — fresh worlds must not be
+-- able to queue non-starting buildings (e.g. cargo before a portal exists)
+-- through the designation picker (#95).
+buildTool.visibleDefs = visibleDefs
+
 -- "All" + every distinct category present in visible defs, in the
 -- order they first appear.
 local function visibleCategories(visible)

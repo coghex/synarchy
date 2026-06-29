@@ -139,6 +139,12 @@ local config = {
             -- same for any body size. Calibrated to the old absolute
             -- 0.01 L/s at the human max_hydration of ~42 L (0.01/42).
             drain_constant_frac = 0.01 / 42,
+            -- Scale the baseline drain by the unit's exertion (the same
+            -- activity multiplier the hunger burn uses) — a unit fighting
+            -- or mining dries out faster than one standing idle. The sweat
+            -- drain in thermo.lua is a SEPARATE, climate-driven loss; this
+            -- is the metabolic baseline reacting to activity.
+            drain_activity_scaled = true,
             -- No regen: hydration only restored by drinking events
             -- (separate API, not yet wired).
             collapse_threshold = 0.2,
@@ -568,6 +574,13 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
     -- run dry over the same game-time instead of small ones dying instantly.
     local drainConstant = (params.drain_constant or 0)
                         + (params.drain_constant_frac or 0) * maxVal
+    -- Exertion scaling: a working/fighting unit burns its baseline pool
+    -- faster than an idle one. Opt-in (hydration) so hunger — which
+    -- already folds the activity multiplier into metabolism_rate — isn't
+    -- double-scaled.
+    if params.drain_activity_scaled then
+        drainConstant = drainConstant * stats.activityMultiplier(uid)
+    end
     local drainMetabolic = 0
     if params.drain_metabolic then
         drainMetabolic = stats.get(uid, "metabolism_rate") or 0

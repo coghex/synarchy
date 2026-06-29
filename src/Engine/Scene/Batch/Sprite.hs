@@ -16,10 +16,8 @@ import Engine.Scene.Types.Graph (SceneGraph(..))
 import Engine.Scene.Types.Batch (DrawableObject(..))
 import Engine.Scene.Batch.Visibility (isNodeVisible, isUILayer)
 import Engine.Scene.Batch.Vertex (generateQuadVertices)
-import Engine.Asset.Handle (TextureHandle)
+import Engine.Asset.Handle (TextureHandle, toInt)
 import Engine.Graphics.Camera (Camera2D)
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Log (LogCategory(..))
@@ -27,14 +25,10 @@ import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do
-    env ← ask
-    texSystem ← liftIO $ readIORef (textureSystemRef env)
-    fmSlotW   ← liftIO $ readIORef (defaultFaceMapSlotRef env)
-    let fmSlot = fromIntegral fmSlotW ∷ Float
-        allNodes = Map.elems (sgNodes graph)
+    let allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleNodes = filter (\n → isUILayer (nodeLayer n) ∨ isNodeVisible camera viewWidth viewHeight n) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable texSystem fmSlot) visibleNodes
+        drawableObjs = mapMaybe nodeToDrawable visibleNodes
 
     logDebugSM CatScene "Visible object culling"
         [("totalObjects", T.pack $ show $ length spriteNodes)
@@ -42,14 +36,16 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
 
     pure $ V.fromList drawableObjs
 
-nodeToDrawable ∷ Maybe BindlessTextureSystem → Float → SceneNode → Maybe DrawableObject
-nodeToDrawable bts fmSlot node = do
+nodeToDrawable ∷ SceneNode → Maybe DrawableObject
+nodeToDrawable node = do
     guard (nodeType node ≡ SpriteObject)
     textureHandle ← nodeTexture node
 
-    let atlasId = case bts of
-                    Just bts' → fromIntegral $ getTextureSlotIndex textureHandle bts'
-                    Nothing   → 0
+    -- Bake the STABLE texture-handle id; the bindless shader resolves it
+    -- to a live slot at draw time (#286). -1 = default face map (generic
+    -- scene sprites have no directional face map).
+    let atlasId = fromIntegral (toInt textureHandle) ∷ Float
+        fmSlot  = -1 ∷ Float
 
     let (v0,v1,v2,v3) = generateQuadVertices node atlasId fmSlot
 

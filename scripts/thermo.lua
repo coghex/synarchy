@@ -27,6 +27,13 @@ thermo.BASELINE = 37.0   -- homeostatic core temperature (°C)
 -- 200°F desert over ~10-20 min"; all freely tweakable) ----
 local BASAL_HEAT    = 0.9    -- metabolic heat flux at rest (× metabolism stat)
 local ACTIVITY_HEAT = 0.6    -- extra heat while moving
+-- Starvation cuts heat generation: a body running on empty can't sustain
+-- full metabolic output, so it cools faster (low calories accelerate
+-- hypothermia). Below HUNGER_HEAT_FLOOR_FRAC of the hunger pool the
+-- metabolic heat output ramps down linearly toward HUNGER_HEAT_MIN at an
+-- empty stomach. Units with no hunger pool (wildlife) are unaffected.
+local HUNGER_HEAT_FLOOR_FRAC = 0.5
+local HUNGER_HEAT_MIN        = 0.6
 local LOSS_COEFF    = 0.10   -- heat lost per °C of body↔air gradient, / insulation
 local INSUL_BASE    = 1.0    -- baseline insulation (naked; thermoneutral ≈28°C)
 local FAT_INSUL_K   = 2.0    -- + body-fat fraction × this (blubber insulates)
@@ -123,10 +130,27 @@ function thermo.tick(uid, info, dt)
     local clothing = (unit.getInsulation and unit.getInsulation(uid)) or 0
     local insul = INSUL_BASE + fatFrac * FAT_INSUL_K + clothing * CLOTHING_INSUL_K
 
-    -- Metabolic heat production (basal + activity + shivering).
+    -- Starvation factor: low calories throttle metabolic heat output.
+    local calFactor = 1.0
+    local maxHun = unit.getStat(uid, "max_hunger")
+    local curHun = unit.getStat(uid, "hunger")
+    if maxHun and maxHun > 0 and curHun then
+        local frac = curHun / maxHun
+        if frac < HUNGER_HEAT_FLOOR_FRAC then
+            calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
+                                          * (frac / HUNGER_HEAT_FLOOR_FRAC)
+        end
+    end
+
+    -- Metabolic heat production (basal + activity + shivering). All three
+    -- scale with the starvation factor: basal/activity burn is throttled
+    -- when calories run low, and shivering — sustained muscle work that
+    -- needs metabolic fuel — likewise fails on an empty stomach (a real
+    -- sign of severe hypoglycemia), so a starving body in the cold can't
+    -- defend its temperature and chills far faster.
     local activity = unit.getActivity(uid) or "idle"
-    local production = BASAL_HEAT * metab
-    if MOVING[activity] then production = production + ACTIVITY_HEAT end
+    local production = BASAL_HEAT * metab * calFactor
+    if MOVING[activity] then production = production + ACTIVITY_HEAT * calFactor end
 
     -- Fever raises the setpoint: the body shivers up to (and won't sweat below)
     -- SHIVER_START/SWEAT_START + this offset.
@@ -137,7 +161,7 @@ function thermo.tick(uid, info, dt)
 
     local shiver = 0
     if core < shiverStart then
-        shiver = math.min(SHIVER_MAX, SHIVER_K * (shiverStart - core))
+        shiver = math.min(SHIVER_MAX, SHIVER_K * (shiverStart - core)) * calFactor
         production = production + shiver
     end
 

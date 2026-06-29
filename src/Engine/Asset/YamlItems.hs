@@ -49,14 +49,18 @@ instance FromJSON ItemYamlContent where
         ⊛ v .:? "count" .!= 1
         ⊛ v .:? "fill"
 
--- | Optional food block. Items without this can't be eaten.
+-- | Optional food block. Items without this can't be eaten. The
+--   calories live under a `nutrition:` sub-object so future diet work
+--   (protein / fat / carbohydrate / micronutrients) can add sibling
+--   keys without restructuring the schema or bumping the save version.
 data ItemYamlFood = ItemYamlFood
-    { iyfNutrition ∷ !Float    -- ^ kcal restored per item
+    { iyfCalories ∷ !Float    -- ^ kcal restored per item (food.nutrition.calories)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlFood where
-    parseJSON = withObject "ItemYamlFood" $ \v → ItemYamlFood
-        ⊚ v .: "nutrition"
+    parseJSON = withObject "ItemYamlFood" $ \v → do
+        nut ← v .: "nutrition"
+        ItemYamlFood ⊚ nut .: "calories"
 
 -- | (min, max) range for a rolled spec — used by both quality and
 --   condition. Interpreted as a normal distribution clamped to the

@@ -281,12 +281,14 @@ end
 
 function testArena.onKeyDown(key)
     if not testArena.visible then return end
-    -- Camera rotation (same as world_view)
-    if key == "Q" then
+    -- Camera rotation / z-reset, routed through the binding table (same as
+    -- world_view) so rebinding rotateCCW/rotateCW/resetZTracking applies in
+    -- the arena too.
+    if engine.keyMatchesAction(key, "rotateCCW") then
         camera.rotateCCW()
-    elseif key == "E" then
+    elseif engine.keyMatchesAction(key, "rotateCW") then
         camera.rotateCW()
-    elseif key == "Home" then
+    elseif engine.keyMatchesAction(key, "resetZTracking") then
         -- Parity with world_view: re-enable z-slice auto tracking
         -- after manual slice scrolling. Without this, anything
         -- placed ABOVE a pinned slice (debug terrain placement!)

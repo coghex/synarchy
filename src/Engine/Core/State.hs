@@ -37,6 +37,7 @@ import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
 import Engine.Input.Types
 import Engine.Input.Bindings
+import qualified Graphics.UI.GLFW as GLFW
 import Engine.Scene.Base
 import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
@@ -53,6 +54,7 @@ import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
 import Infection.Types (InfectionManager)
+import Location.Types (LocationRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible)
 import World.Material (MaterialRegistry)
@@ -94,6 +96,12 @@ data EngineEnv = EngineEnv
   , fontCacheRef        ∷ IORef FontCache
   , inputStateRef       ∷ IORef InputState
   , keyBindingsRef      ∷ IORef KeyBindings
+  -- | The exact GLFW key currently being dispatched to Lua @onKeyDown@,
+  --   set by the Lua thread for the duration of that broadcast and cleared
+  --   after. Lets @engine.keyMatchesAction@ resolve a press to the precise
+  --   physical key (which side of a merged modifier) without racing the
+  --   input thread's shared state. 'Nothing' outside a key-down dispatch.
+  , currentKeyDownRef   ∷ IORef (Maybe GLFW.Key)
   , textBuffersRef      ∷ IORef (Map.Map ObjectId Text)
   , cameraRef           ∷ IORef Camera2D
   , uiCameraRef         ∷ IORef UICamera
@@ -221,6 +229,12 @@ data EngineEnv = EngineEnv
     --   data/infections/*.yaml. The wound tick selects one (climate +
     --   site weighted) when a wound first festers; its aggressiveness /
     --   curable_by drive growth + cure.
+  , locationDefsRef    ∷ IORef LocationRegistry
+    -- ^ Registry of location defs (premade structures stamped into the
+    --   world) loaded from data/locations/*.yaml at boot, after items /
+    --   units / buildings. Read back by the `locations` Lua module
+    --   (locations.listDefs / getDef / build). Pure data — content ids
+    --   are resolved at spawn time by the world-gen overlay (#89/#90).
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

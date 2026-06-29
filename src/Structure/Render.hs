@@ -19,12 +19,11 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, GridConfig(..), defaultGridConfig
@@ -63,12 +62,13 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
             if null pieces then return V.empty else do
                 texSizes ← readIORef (textureSizeRef env)
                 mBts ← readIORef (textureSystemRef env)
-                defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
                 case mBts of
                     Nothing → return V.empty
-                    Just bts → do
-                        let lookupSlot h = getTextureSlotIndex h bts
-                            defFmSlot = fromIntegral defFmSlotWord ∷ Float
+                    Just _bts → do
+                        -- Bake stable handle ids (tile + its own face map);
+                        -- resolved to live slots in the shader (#286).
+                        let lookupSlot h = fromIntegral (toInt h) ∷ Word32
+                            defFmSlot = -1 ∷ Float  -- posts ignore this
                             -- Corner posts anchor at a tile VERTEX (small sprite,
                             -- inset toward the centre); the rest at the tile face.
                             isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW

@@ -229,7 +229,8 @@ updateUniformBufferForFrame win frameIdx camera = do
             brightness ← liftIO $ readIORef (brightnessRef env)
             pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
             sunAngle ← liftIO $ readIORef (sunAngleRef env)
-            
+            defFmSlot ← liftIO $ readIORef (defaultFaceMapSlotRef env)
+
             let ambientLight = computeAmbientLight sunAngle
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
             let facingFloat = case camFacing camera of
@@ -253,7 +254,8 @@ updateUniformBufferForFrame win frameIdx camera = do
                               sunAngle
                               ambientLight
                               facingFloat
-            
+                              (fromIntegral defFmSlot)
+
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)
             

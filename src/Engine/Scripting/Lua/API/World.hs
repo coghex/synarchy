@@ -1171,10 +1171,11 @@ worldGetToolModeFn env = do
         Just ws → do
             tm ← Lua.liftIO $ readIORef (wsToolModeRef ws)
             let s = case tm of
-                    InfoTool    → "info"
-                    DefaultTool → "default"
-                    MineTool    → "mine"
-                    BuildTool   → "build"
+                    InfoTool      → "info"
+                    DefaultTool   → "default"
+                    MineTool      → "mine"
+                    BuildTool     → "build"
+                    ConstructTool → "construct"
             Lua.pushstring s
             return 1
         Nothing → do

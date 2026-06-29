@@ -35,7 +35,9 @@ import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
                                        getFramebufferSizeFn, getWorldCoordFn)
 import Engine.Scripting.Lua.API.Keybinds (getKeybindsFn, setActionKeysFn,
                                           addActionKeyFn, removeActionKeyFn,
-                                          saveKeybindsFn, loadDefaultKeybindsFn)
+                                          removeActionKeysMatchingFn,
+                                          saveKeybindsFn, loadDefaultKeybindsFn,
+                                          keyMatchesActionFn, getCurrentKeyNameFn)
 import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
                                        getTextFn, getTextWidthFn)
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
@@ -52,12 +54,14 @@ import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
+import Engine.Scripting.Lua.API.Construct
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
+import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -168,6 +172,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
   registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
   registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
+  registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env)
+  registerLuaFunction "listLocationDefs" (locationListDefsFn env)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -181,8 +187,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setActionKeys"      (setActionKeysFn env)
   registerLuaFunction "addActionKey"       (addActionKeyFn env)
   registerLuaFunction "removeActionKey"    (removeActionKeyFn env)
+  registerLuaFunction "removeActionKeysMatching" (removeActionKeysMatchingFn env)
   registerLuaFunction "saveKeybinds"       (saveKeybindsFn env)
   registerLuaFunction "loadDefaultKeybinds" (loadDefaultKeybindsFn env)
+  registerLuaFunction "keyMatchesAction"   (keyMatchesActionFn env)
+  registerLuaFunction "getCurrentKeyName"  (getCurrentKeyNameFn env)
 
   registerLuaFunction "loadFont"     (loadFontFn env backendState)
   registerLuaFunction "spawnText"    (spawnTextFn env backendState)
@@ -317,6 +326,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "injure"       (unitInjureFn env)
   registerLuaFunction "drink"        (unitDrinkFn env)
   registerLuaFunction "eat"          (unitEatFn env)
+  registerLuaFunction "feed"         (unitFeedFn env)
+  registerLuaFunction "getCalories"  (unitGetCaloriesFn env)
   registerLuaFunction "pickup"       (unitPickupFn env)
   registerLuaFunction "removeItem"   (unitRemoveItemFn env)
   registerLuaFunction "transferItemToBuilding" (unitTransferItemToBuildingFn env)
@@ -358,6 +369,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "clearModifiers" (unitClearModifiersFn env)
   registerLuaFunction "getAllIds"   (unitGetAllIdsFn env)
   registerLuaFunction "getActivity" (unitGetActivityFn env)
+  registerLuaFunction "getCurrentAnim" (unitGetCurrentAnimFn env)
   registerLuaFunction "getJumpReach" (unitGetJumpReachFn env)
   registerLuaFunction "lungeImpactSpeed" (unitLungeImpactSpeedFn env)
   registerLuaFunction "getSkill"     (unitGetSkillFn env)
@@ -417,6 +429,22 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "floorZAt" (structureFloorZAtFn env)
   registerLuaFunction "hasAt"    (structureHasAtFn env)
   Lua.setglobal (Lua.Name "structure")
+
+  -- Construction designation tool (#95). Mirrors the mine-designation
+  -- API: the tool drives setAnchor/clearAnchor/designate, the build AI
+  -- (#96) drives getPendingJobs/nearestDesignation/setJobStatus.
+  Lua.newtable
+  registerLuaFunction "setAnchor"          (constructSetAnchorFn env)
+  registerLuaFunction "clearAnchor"        (constructClearAnchorFn env)
+  registerLuaFunction "designate"          (constructDesignateFn env)
+  registerLuaFunction "cancelDesignation"  (constructCancelDesignationFn env)
+  registerLuaFunction "getPendingJobs"     (constructGetPendingJobsFn env)
+  registerLuaFunction "getDesignationAt"   (constructGetDesignationAtFn env)
+  registerLuaFunction "getDesignationCount" (constructGetDesignationCountFn env)
+  registerLuaFunction "nearestDesignation" (constructNearestDesignationFn env)
+  registerLuaFunction "setJobStatus"       (constructSetJobStatusFn env)
+  registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
+  Lua.setglobal (Lua.Name "construction")
 
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.

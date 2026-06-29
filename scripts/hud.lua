@@ -70,6 +70,8 @@ hud.texToolInfo            = nil
 hud.texToolInfoSelected    = nil
 hud.texToolMine            = nil
 hud.texToolMineSelected    = nil
+hud.texToolConstruct       = nil
+hud.texToolConstructSelected = nil
 
 hud.texZoomSelect    = nil
 hud.texZoomHover     = nil
@@ -121,6 +123,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
     hud.texToolBuild           = engine.loadTexture("assets/textures/hud/tool_build.png")
     hud.texToolBuildSelected   = engine.loadTexture("assets/textures/hud/tool_build_selected.png")
+    hud.texToolConstruct       = engine.loadTexture("assets/textures/hud/tool_construct.png")
+    hud.texToolConstructSelected = engine.loadTexture("assets/textures/hud/tool_construct_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/hud/utility/zoom_hover.png")
     hud.texWorldSelect         = engine.loadTexture("assets/textures/hud/utility/world_select.png")
@@ -130,6 +134,10 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- Mine-designation marker: dedicated art so standing designations
     -- read differently from the cursor/selection at a glance.
     hud.texMineDesignate       = engine.loadTexture("assets/textures/hud/utility/mine_designate.png")
+    -- Construction-designation ghosts (#95): one per target category so a
+    -- planned structure reads differently from a planned building.
+    hud.texConstructStructure  = engine.loadTexture("assets/textures/hud/utility/construct_designate_structure.png")
+    hud.texConstructBuilding   = engine.loadTexture("assets/textures/hud/utility/construct_designate_building.png")
 
     -- Event-log toggle (top-left). Two states: default and selected
     -- (drawn while the event log panel is open). The combat-log
@@ -265,6 +273,14 @@ function hud.createUI()
     if hud.texMineDesignate then
         world.setMineDesignateTexture(hud.worldId, hud.texMineDesignate)
     end
+    if hud.texConstructStructure then
+        construction.setDesignateTexture(hud.worldId, "structure",
+            hud.texConstructStructure)
+    end
+    if hud.texConstructBuilding then
+        construction.setDesignateTexture(hud.worldId, "building",
+            hud.texConstructBuilding)
+    end
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -351,6 +367,12 @@ function hud.createUI()
                 tooltip     = "Build tool",
             },
             {
+                name        = "tool_construct",
+                texDefault  = hud.texToolConstruct,
+                texSelected = hud.texToolConstructSelected,
+                tooltip     = "Construction designation tool",
+            },
+            {
                 name        = "tool_default",
                 texDefault  = hud.texToolDefault,
                 texSelected = hud.texToolDefaultSelected,
@@ -363,7 +385,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 3,
+        selectedIndex = 4,
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -381,6 +403,10 @@ function hud.createUI()
             -- Route to the mine tool so a pending anchor cancels.
             local mineTool = require("scripts.mine_tool")
             mineTool.onToolMode(itemName)
+            -- Route to the construction tool so it pops its picker on
+            -- entry and cancels a pending anchor on exit.
+            local constructTool = require("scripts.construct_tool")
+            constructTool.onToolMode(itemName)
             -- Route to the tile editor so its popup can hide on
             -- non-info tools.
             local tileEditor = require("scripts.tile_editor")
@@ -404,6 +430,10 @@ function hud.createUI()
     -- Mine tool: needs the hud reference for worldId / current view.
     local mineToolMod = require("scripts.mine_tool")
     mineToolMod.setup({ hud = hud })
+
+    -- Construction designation tool (#95): same hud reference.
+    local constructToolMod = require("scripts.construct_tool")
+    constructToolMod.setup({ hud = hud })
 
     -- Tile editor lives on the same world_page as the build tool.
     -- It uses the same box texture set + menu font; worldId is used
@@ -556,6 +586,14 @@ function hud.show()
     end
     if hud.texMineDesignate then
         world.setMineDesignateTexture(hud.worldId, hud.texMineDesignate)
+    end
+    if hud.texConstructStructure then
+        construction.setDesignateTexture(hud.worldId, "structure",
+            hud.texConstructStructure)
+    end
+    if hud.texConstructBuilding then
+        construction.setDesignateTexture(hud.worldId, "building",
+            hud.texConstructBuilding)
     end
 
     hud.visible = true
@@ -851,6 +889,9 @@ function hud.reconcileView()
     -- cancel() is idempotent (clears Lua state + WorldClearMineAnchor is a
     -- no-op when nothing is pending), so tear it down on every transition.
     require("scripts.mine_tool").cancel()
+    -- Construction designation anchor (#95): same idempotent teardown as
+    -- the mine anchor above, so a pending rectangle can't survive off-view.
+    require("scripts.construct_tool").cancel()
     -- Build picker (#143): the picker panel lives on hud.world_page and
     -- its "picker" mode persists across band changes. The world/zoom page
     -- swap above only takes it off-view, so a picker opened in zoomed_in

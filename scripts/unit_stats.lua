@@ -36,6 +36,42 @@ local stats = {}
 -- unit_resources expects.
 local DAY_SECONDS = 1440
 
+-- Activity-based metabolic multipliers (rough real-world physical-
+-- activity-level ratios for unloaded effort). Mining and combat are NOT
+-- first-class UnitActivity states — the sim only tracks idle / walking /
+-- collapsed — so they're detected from the resolved animation name (the
+-- pickaxe/shovel work anims, the attack_/combat_ overrides). The
+-- anim-derived states win over the locomotion activity: a unit standing
+-- still swinging a pick reads activity "idle" but is working hard. This
+-- one multiplier is shared by the hunger metabolic burn (metabolism_rate)
+-- AND the activity-scaled hydration drain, so both react to exertion the
+-- same way. All tunable.
+local ACT_MULT_MINING  = 2.0
+local ACT_MULT_COMBAT  = 2.5
+local ACT_MULT_RUNNING = 1.7
+local ACT_MULT_WALKING = 1.5
+local ACT_MULT_IDLE    = 1.0
+
+local function activityMultiplier(uid)
+    local anim = unit.getCurrentAnim and unit.getCurrentAnim(uid)
+    if anim and anim ~= "" then
+        if anim:find("pickaxe", 1, true) or anim:find("shovel", 1, true) then
+            return ACT_MULT_MINING
+        end
+        if anim:sub(1, 7) == "attack_" or anim:sub(1, 7) == "combat_" then
+            return ACT_MULT_COMBAT
+        end
+    end
+    local activity = unit.getActivity(uid) or "idle"
+    if activity == "running" then return ACT_MULT_RUNNING end
+    if activity == "walking" then return ACT_MULT_WALKING end
+    return ACT_MULT_IDLE
+end
+
+-- Exposed so unit_resources (hydration drain) shares the same exertion
+-- model the hunger burn uses.
+stats.activityMultiplier = activityMultiplier
+
 local derived = {
     -- Stamina pool size = endurance * 10. Larger endurance means
     -- the unit can exert itself longer before stamina runs out.
@@ -56,11 +92,11 @@ local derived = {
     -- active tissue — lean alone is skeletal muscle, which is only
     -- half of non-fat tissue and would give the wrong BMR.
     --
-    -- Activity multipliers (rough real-world physical-activity-level
-    -- ratios for unloaded effort):
-    --   walking = 1.5
-    --   everything else (idle/drinking/picking/transitioning/
-    --                    collapsed) = 1.0
+    -- Activity multipliers are shared with the hydration drain via
+    -- activityMultiplier() above (mining 2.0×, combat 2.5×, running
+    -- 1.7×, walking 1.5×, everything else 1.0×). Mining/combat are
+    -- detected from the unit's resolved animation since they aren't
+    -- distinct UnitActivity states.
     --
     -- A default acolyte (body=71.3 kg, fat=14.3 kg, metabolism=1.0)
     -- at idle burns ≈ 1318 kcal/day = 0.92 kcal/real-sec — emptying
@@ -70,8 +106,7 @@ local derived = {
         local fat  = unit.getStat(uid, "fat_mass")
         local m    = unit.getStat(uid, "metabolism")
         if not (body and fat and m) then return nil end
-        local activity = unit.getActivity(uid) or "idle"
-        local actMult  = (activity == "walking") and 1.5 or 1.0
+        local actMult = activityMultiplier(uid)
         return (22 * (body - fat) + 4.5 * fat) * m * actMult / DAY_SECONDS
     end,
 }

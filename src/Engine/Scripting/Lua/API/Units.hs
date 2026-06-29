@@ -40,6 +40,7 @@ module Engine.Scripting.Lua.API.Units
     , unitClearModifiersFn
     , unitGetAllIdsFn
     , unitGetActivityFn
+    , unitGetCurrentAnimFn
     , unitGetJumpReachFn
     , unitLungeImpactSpeedFn
     , unitGetSkillFn
@@ -57,6 +58,8 @@ module Engine.Scripting.Lua.API.Units
     , unitInjureFn
     , unitDrinkFn
     , unitEatFn
+    , unitFeedFn
+    , unitGetCaloriesFn
     , unitPickupFn
     , unitRemoveItemFn
     , unitTransferItemToBuildingFn
@@ -761,6 +764,81 @@ unitEatFn env = do
             let uid = UnitId (fromIntegral n)
             Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid
             Lua.pushboolean True
+            return 1
+
+-- | unit.feed(uid, itemId) — consume one food item from the unit's
+--   inventory and credit its calories to the hunger pool (clamped to
+--   max_hunger; the overflow is wasted, the item still consumed). Plays
+--   the eat animation. Returns the kcal actually credited on success, or
+--   nil if the unit doesn't carry the item or the item has no food data
+--   (the codebase signals failure with nil rather than raising). The
+--   authoritative consume-and-credit primitive; the auto-eat AI routes
+--   through it.
+unitFeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitFeedFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid     = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8 nameBS
+            mCredited ← Lua.liftIO $ do
+                itemMgr ← readIORef (itemManagerRef env)
+                case lookupItemDef defName itemMgr >>= idFood of
+                    Nothing   → pure Nothing   -- no food data → can't feed
+                    Just food → atomicModifyIORef' (unitManagerRef env) $ \um →
+                        case HM.lookup uid (umInstances um) of
+                            Nothing → (um, Nothing)
+                            -- Require a LIVE hunger pool: max_hunger is seeded
+                            -- for any body unit (incl. wildlife), but only a
+                            -- present "hunger" stat means the unit actually
+                            -- runs the calorie system. Feeding one that
+                            -- doesn't would conjure a permanent, never-
+                            -- draining pool. Reject without consuming the item.
+                            Just u  → case HM.lookup "hunger" (uiStats u) of
+                                Nothing  → (um, Nothing)  -- no hunger system
+                                Just cur → case removeFirstByName defName (uiInventory u) of
+                                    Nothing     → (um, Nothing)  -- not carried
+                                    Just newInv →
+                                        let stats0 = uiStats u
+                                            maxH   = HM.lookupDefault (cur + ifCalories food)
+                                                         "max_hunger" stats0
+                                            newH   = min maxH (cur + ifCalories food)
+                                            u'     = u { uiInventory = newInv
+                                                       , uiStats = HM.insert "hunger" newH stats0 }
+                                        in ( um { umInstances = HM.insert uid u' (umInstances um) }
+                                           , Just (newH - cur) )
+            case mCredited of
+                Just credited → do
+                    Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid
+                    Lua.pushnumber (Lua.Number (realToFrac credited))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | unit.getCalories(uid) — the unit's current calorie pool (the
+--   "hunger" stat, kcal in the stomach). nil if the unit / stat is
+--   absent. Pairs with max_hunger for the fraction.
+unitGetCaloriesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetCaloriesFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mVal ← Lua.liftIO $ getEffectiveStat env uid "hunger"
+            case mVal of
+                Just v  → do
+                    Lua.pushnumber (Lua.Number (realToFrac v))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        Nothing → do
+            Lua.pushnil
             return 1
 
 -- | unit.pickup(uid) — start the "picking up" animation on an Idle
@@ -2437,6 +2515,31 @@ unitGetActivityFn env = do
                     Lua.pushnil
                     return 1
 
+-- | unit.getCurrentAnim(uid) — the unit's resolved animation name
+--   (uiCurrentAnim) as a string, "" for a T-pose. nil if the unit
+--   doesn't exist. Lets scripts classify exertion that isn't a distinct
+--   UnitActivity — mining (pickaxe/shovel work anims) and combat
+--   (attack_/combat_ overrides) — for the metabolic burn / hydration drain.
+unitGetCurrentAnimFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetCurrentAnimFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mAnim ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (uiCurrentAnim <$> HM.lookup uid (umInstances um))
+            case mAnim of
+                Just anim → do
+                    Lua.pushstring (TE.encodeUtf8 anim)
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
 -- | unit.getAllIds() — return a Lua array of every live unit's
 --   integer id. Useful for per-tick iteration in scripts that don't
 --   want to parse the human-readable string from unit.list.
@@ -4084,8 +4187,10 @@ unitGetInventoryFn env = do
                             Nothing → pure ()
                         case mDef >>= idFood of
                             Just f → do
-                                Lua.newtable
-                                Lua.pushnumber (Lua.Number (realToFrac (ifNutrition f)))
+                                Lua.newtable                -- food
+                                Lua.newtable                -- food.nutrition
+                                Lua.pushnumber (Lua.Number (realToFrac (ifCalories f)))
+                                Lua.setfield (-2) "calories"
                                 Lua.setfield (-2) "nutrition"
                                 Lua.setfield (-2) "food"
                             Nothing → pure ()

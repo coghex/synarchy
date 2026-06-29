@@ -11,11 +11,9 @@ import qualified Data.Vector as V
 import Data.Maybe (isJust)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..))
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Constants (seaLevel)
 import World.Fluids (FluidCell(..), FluidType(..))
@@ -24,6 +22,7 @@ import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileSideHeight, tileWidth)
 import World.Mine.Types (MineDesignation(..))
+import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
@@ -116,15 +115,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
         calendar = maybe defaultCalendarConfig wgpCalender paramsM
         dayOfYear = worldDateToDayOfYear calendar worldDate
 
-    mBindless ← readIORef (textureSystemRef env)
-    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
-    let lookupSlot texHandle = fromIntegral $ case mBindless of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral defFmSlotWord
-        lookupFmSlot texHandle =
-            let s = lookupSlot texHandle
-            in if s ≡ 0 then defFmSlot else fromIntegral s
+    -- Vertices carry a STABLE texture-handle id (#286); the bindless
+    -- fragment shader resolves it to a live slot at draw time, so the
+    -- cache never encodes a recyclable/stale slot. The default-face-map
+    -- fallback (handle → slot 0 → default) now lives in the shader too.
+    let lookupSlot texHandle = fromIntegral (toInt texHandle)
+        lookupFmSlot texHandle = fromIntegral (toInt texHandle)
         worldSize = case paramsM of
                       Nothing → 128
                       Just params → wgpWorldSize params
@@ -364,16 +360,9 @@ renderWorldCursorQuads env worldState tileAlpha = do
     (winW, winH) ← readIORef (windowSizeRef env)
     (fbW, fbH)   ← readIORef (framebufferSizeRef env)
 
-    mBindless    ← readIORef (textureSystemRef env)
-    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
-
-    let lookupSlot texHandle = fromIntegral $ case mBindless of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral defFmSlotWord
-        lookupFmSlot texHandle =
-            let s = lookupSlot texHandle
-            in if s ≡ 0 then defFmSlot else fromIntegral s
+    -- Stable handle ids; resolved to live slots in the shader (#286).
+    let lookupSlot texHandle = fromIntegral (toInt texHandle)
+        lookupFmSlot texHandle = fromIntegral (toInt texHandle)
         facing    = camFacing camera
         zoom      = camZoom camera
         zSlice    = camZSlice camera
@@ -462,6 +451,26 @@ renderWorldCursorQuads env worldState tileAlpha = do
                                        vb camX chunkCoord]
                     ]
 
+    -- Construction-designation ghosts (#95): world annotations like the
+    -- mine markers, visible in every tool mode. Each renders with the
+    -- ghost texture for its target category (structure vs building).
+    constructDesigns ← readIORef (wsConstructDesignationsRef worldState)
+    let constructTexFor cd = case cdTarget cd of
+            CtStructure _ → constructStructTexture cs'
+            CtBuilding  _ → constructBuildingTexture cs'
+        constructDesignQuads
+            | HM.null constructDesigns = V.empty
+            | otherwise = V.fromList
+                [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                      facing dgx dgy (cdZ cd) zSlice effectiveDepth
+                      tileAlpha xOff tex
+                | ((dgx, dgy), cd) ← HM.toList constructDesigns
+                , Just tex ← [constructTexFor cd]
+                , let (chunkCoord, _) = globalToChunk dgx dgy
+                , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                   vb camX chunkCoord]
+                ]
+
     -- Hover quads (bg + fg) — used by both info and mine tools.
     let hoverQuads = case hoverResult of
             Just (gx, gy, hz, xOff, _) →
@@ -538,10 +547,40 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     ]
             _ → V.empty
 
+    -- Construction tool: anchor→hover rectangle preview, mirroring the
+    -- mine preview (per-z-level, unloaded chunks skipped). Drawn with the
+    -- select-cursor texture so it reads as "about to be designated".
+    let constructPreviewQuads = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
+            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
+                | Just anchorZ ← surfaceZAt ax ay →
+                let hx' = clampSide ax hx
+                    hy' = clampSide ay hy
+                    xLo = min ax hx'
+                    xHi = max ax hx'
+                    yLo = min ay hy'
+                    yHi = max ay hy'
+                in V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing gx gy z zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
+                    , z ≡ anchorZ
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+            _ → V.empty
+
+    -- Mine + construction markers are world annotations: shown in every
+    -- tool mode. The mode only adds its own hover/preview on top.
+    let markerQuads = designQuads <> constructDesignQuads
     return $ case toolMode of
-        InfoTool → designQuads <> hoverQuads <> selectQuads
-        MineTool → designQuads <> hoverQuads <> minePreviewQuads
-        _        → designQuads
+        InfoTool      → markerQuads <> hoverQuads <> selectQuads
+        MineTool      → markerQuads <> hoverQuads <> minePreviewQuads
+        ConstructTool → markerQuads <> hoverQuads <> constructPreviewQuads
+        _             → markerQuads
 
 -- | Find the topmost Z that has a non-zero material in a column.
 --   This is the actual rendered surface — no trusting surface maps.

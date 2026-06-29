@@ -5,8 +5,12 @@ items:
     weight: 0.1        # kg per ration
     category: Supplies
     food:
-      # kcal restored per ration. 250 ≈ a small meal — about 19 % of a
-      # default acolyte's daily metabolism (~1318 kcal/day) and a hair
-      # below 18 % of max_hunger (~1426 kcal). Five rations roughly
-      # cover a day of idle metabolism.
-      nutrition: 250
+      # Nutrition is a sub-object so future diet work (protein / fat /
+      # carbohydrate / micronutrients) can add sibling keys beside
+      # calories without restructuring the schema.
+      nutrition:
+        # kcal restored per ration. 250 ≈ a small meal — about 19 % of a
+        # default acolyte's daily metabolism (~1318 kcal/day) and a hair
+        # below 18 % of max_hunger (~1426 kcal). Five rations roughly
+        # cover a day of idle metabolism.
+        calories: 250

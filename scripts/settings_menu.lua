@@ -15,7 +15,7 @@ local slider         = require("scripts.ui.slider")
 local data           = require("scripts.settings.data")
 local graphicsTab      = require("scripts.settings.graphics_tab")
 local notificationsTab = require("scripts.settings.notifications_tab")
-local placeholderTab   = require("scripts.settings.placeholder_tab")
+local inputTab         = require("scripts.settings.input_tab")
 
 local settingsMenu = {}
 
@@ -106,28 +106,11 @@ settingsMenu.ownedSliders    = {}
 -- Each entry: { key, name, createFn(params) → rowHandles[] }
 -----------------------------------------------------------
 local tabDefs = {
-    { key = "system",   name = "System",   create = function(p)
-        return placeholderTab.create({
-            name = "system_placeholder",
-            text = "System settings coming soon...",
-            page = p.page, font = p.font, baseSizes = p.baseSizes,
-            uiscale = p.uiscale, s = p.s,
-            contentX = p.contentX, contentY = p.contentY,
-            zContent = Z_CONTENT,
-        })
-    end },
     { key = "graphics", name = "Graphics", create = function(p)
         return graphicsTab.create(p)
     end },
     { key = "input",    name = "Input",    create = function(p)
-        return placeholderTab.create({
-            name = "input_placeholder",
-            text = "Input settings coming soon...",
-            page = p.page, font = p.font, baseSizes = p.baseSizes,
-            uiscale = p.uiscale, s = p.s,
-            contentX = p.contentX, contentY = p.contentY,
-            zContent = Z_CONTENT,
-        })
+        return inputTab.create(p)
     end },
     { key = "notifications", name = "Notifications", create = function(p)
         return notificationsTab.create(p)
@@ -163,8 +146,68 @@ end
 function settingsMenu.onDefaults()
     engine.logInfo("Loading defaults...")
     data.loadDefaults()
+    -- Keybinds are write-through (no pending state), so the global
+    -- Defaults reset restores factory bindings immediately and persists
+    -- them — giving the Input tab its path back to defaults. The createUI
+    -- rebuild below repopulates the Input rows from the reset bindings.
+    if engine.loadDefaultKeybinds then
+        engine.loadDefaultKeybinds()
+        engine.saveKeybinds()
+    end
     settingsMenu.createUI()
     if settingsMenu.page then UI.showPage(settingsMenu.page) end
+end
+
+-----------------------------------------------------------
+-- Keybind editor (Input tab) glue
+-----------------------------------------------------------
+
+-- Refresh ONLY the Input tab after a keybind add/remove. A full
+-- createUI() would also recreate the Graphics widgets from data.current
+-- and reset pending state, silently discarding any un-applied Graphics
+-- edits — so keybind changes must not touch the rest of the page.
+function settingsMenu.refreshInputTab()
+    local ts = settingsMenu.tabScroll["input"]
+    if not ts or not settingsMenu.page then return end
+
+    inputTab.destroyWidgets()
+    if ts.scrollbarId then
+        scrollbar.destroy(ts.scrollbarId)
+        ts.scrollbarId = nil
+    end
+
+    local uiscale = data.current.uiScale
+    local s = scale.applyAllWith(settingsMenu.baseSizes, uiscale)
+
+    ts.scrollOffset = 0
+    ts.rowHandles = inputTab.create(settingsMenu.tabCreateParams(uiscale, s, ts))
+
+    local frameX, frameY, frameW, frameH =
+        tabbar.getFrameBounds(settingsMenu.tabBarId)
+    settingsMenu.createTabScrollbar("input", frameX, frameY, frameW, frameH,
+        #ts.rowHandles, ts.maxVisibleRows, uiscale, s)
+    settingsMenu.refreshTabScroll("input")
+    if ts.scrollbarId then
+        scrollbar.setVisible(ts.scrollbarId, settingsMenu.activeTab == "input")
+    end
+end
+
+-- True while the Input tab is capturing a key (waiting for a press or
+-- showing the conflict modal). ui_manager gates key routing + escape on
+-- this.
+function settingsMenu.isCapturingKey()
+    return inputTab.captureActive and inputTab.captureActive()
+end
+
+-- The next key press while "+" capture is waiting (routed from
+-- ui_manager.onKeyDown).
+function settingsMenu.onKeyCapture(key)
+    if inputTab.onKeyCapture then inputTab.onKeyCapture(key) end
+end
+
+-- Escape during capture (routed from ui_manager.onUIEscape).
+function settingsMenu.cancelKeyCapture()
+    if inputTab.cancelCapture then inputTab.cancelCapture() end
 end
 
 -----------------------------------------------------------
@@ -180,6 +223,10 @@ function settingsMenu.destroyOwned()
     for _, id in ipairs(settingsMenu.ownedPanels)      do panel.destroy(id) end
     for _, id in ipairs(settingsMenu.ownedTabbars)     do tabbar.destroy(id) end
     for _, id in ipairs(settingsMenu.ownedSliders)     do slider.destroy(id) end
+
+    -- The Input tab tracks its own key/plus buttons (so it can refresh
+    -- in place without a full page rebuild); tear them down here too.
+    inputTab.destroyWidgets()
 
     settingsMenu.ownedLabels     = {}
     settingsMenu.ownedTextboxes  = {}
@@ -398,6 +445,40 @@ end
 -- Create all tab contents
 -----------------------------------------------------------
 
+-- Build the param table a tab's create() receives. Shared by the full
+-- build (createAllTabs) and the Input-tab-only refresh so both stay in
+-- sync. `ts` must already have contentX/contentY/contentW set.
+function settingsMenu.tabCreateParams(uiscale, s, ts)
+    return {
+        page            = settingsMenu.page,
+        font            = settingsMenu.menuFont,
+        baseSizes       = settingsMenu.baseSizes,
+        uiscale         = uiscale,
+        s               = s,
+        contentX        = ts.contentX,
+        contentY        = ts.contentY,
+        contentW        = ts.contentW,
+        zContent        = Z_CONTENT,
+        zWidgets        = Z_WIDGETS,
+        currentSettings = data.current,
+        pendingSettings = data.pending,
+        -- Tracking functions so tabs can register their widgets for the
+        -- scoped cleanup (destroyOwned).
+        trackLabel      = settingsMenu.trackLabel,
+        trackTextbox    = settingsMenu.trackTextbox,
+        trackCheckbox   = settingsMenu.trackCheckbox,
+        trackDropdown   = settingsMenu.trackDropdown,
+        trackButton     = settingsMenu.trackButton,
+        -- Extras the input (keybind) tab needs for its key buttons and
+        -- capture/conflict popups.
+        panelTexSet     = settingsMenu.panelTexSet,
+        buttonTexSet    = settingsMenu.buttonTexSet,
+        fbW             = settingsMenu.fbW,
+        fbH             = settingsMenu.fbH,
+        rebuild         = settingsMenu.refreshInputTab,
+    }
+end
+
 function settingsMenu.createAllTabs(s, uiscale)
     local frameX, frameY, frameW, frameH =
         tabbar.getFrameBounds(settingsMenu.tabBarId)
@@ -418,25 +499,7 @@ function settingsMenu.createAllTabs(s, uiscale)
         ts.scrollOffset = 0
 
         -- Call the tab's create function
-        ts.rowHandles = def.create({
-            page            = settingsMenu.page,
-            font            = settingsMenu.menuFont,
-            baseSizes       = settingsMenu.baseSizes,
-            uiscale         = uiscale,
-            s               = s,
-            contentX        = contentX,
-            contentY        = contentY,
-            contentW        = contentW,
-            zContent        = Z_CONTENT,
-            zWidgets        = Z_WIDGETS,
-            currentSettings = data.current,
-            pendingSettings = data.pending,
-            -- Pass tracking functions so tabs can register their widgets
-            trackLabel      = settingsMenu.trackLabel,
-            trackTextbox    = settingsMenu.trackTextbox,
-            trackCheckbox   = settingsMenu.trackCheckbox,
-            trackDropdown   = settingsMenu.trackDropdown,
-        })
+        ts.rowHandles = def.create(settingsMenu.tabCreateParams(uiscale, s, ts))
 
         -- Scrollbar if needed
         local totalRows = #ts.rowHandles

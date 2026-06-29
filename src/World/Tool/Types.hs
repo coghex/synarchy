@@ -6,14 +6,15 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 
 -- NB: 'Generic Serialize' is positional by constructor tag, so this enum
--- is APPEND-ONLY — new tools go at the END (BuildTool = tag 3) to keep
+-- is APPEND-ONLY — new tools go at the END (ConstructTool = tag 4) to keep
 -- existing 'sdToolMode' saves decoding correctly. See the enum schema
 -- policy in CLAUDE.md.
-data ToolMode = DefaultTool | InfoTool | MineTool | BuildTool
+data ToolMode = DefaultTool | InfoTool | MineTool | BuildTool | ConstructTool
                 deriving (Eq, Show, Generic, Serialize)
 
 textToToolMode ∷ Text → ToolMode
-textToToolMode "tool_info"  = InfoTool
-textToToolMode "tool_mine"  = MineTool
-textToToolMode "tool_build" = BuildTool
+textToToolMode "tool_info"      = InfoTool
+textToToolMode "tool_mine"      = MineTool
+textToToolMode "tool_build"     = BuildTool
+textToToolMode "tool_construct" = ConstructTool
 textToToolMode _      = DefaultTool

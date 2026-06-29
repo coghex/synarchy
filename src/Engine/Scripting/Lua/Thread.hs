@@ -487,8 +487,13 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onUIEnd" []
   LuaUIFocusLost → 
     broadcastToModules ls "onUIFocusLost" []
-  LuaKeyDownEvent key → 
+  LuaKeyDownEvent key glfwKey → do
+    -- Expose the exact key for the duration of the (synchronous) onKeyDown
+    -- broadcast so engine.keyMatchesAction can resolve the precise side of
+    -- a merged modifier; clear it afterwards.
+    writeIORef (currentKeyDownRef env) (Just glfwKey)
     broadcastToModules ls "onKeyDown" [ScriptString (keyToText key)]
+    writeIORef (currentKeyDownRef env) Nothing
   LuaKeyUpEvent key → 
     broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
   LuaShellToggle → 

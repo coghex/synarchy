@@ -207,6 +207,155 @@ def small_creature_section(port, seconds):
     return passed
 
 
+def _hunger(port, uid):
+    r = send(port, f"return unit.getCalories({uid}) or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def hunger_section(port, seconds):
+    """Calorie / hunger system (#92) regression coverage:
+      * Activity-scaled drain — a unit in combat burns calories AND water
+        faster than an idle one (mining/combat detected from currentAnim).
+      * unit.feed restores calories from a carried ration and refuses an
+        item the unit doesn't carry.
+      * Starvation trend — a unit with no food in a temperate climate loses
+        calories steadily (the no-food-starves timeline; full catabolism
+        death is the slow tail, guarded by the organ-failure machinery).
+      * Calorie→thermoregulation coupling — a starving unit in the cold
+        generates less metabolic heat and ends colder than a fed one.
+    All on the flat temperate arena, AI wander already neutralised."""
+    passed = True
+    win = min(seconds, 20.0)
+
+    # --- 1. Activity-scaled drain: idle vs forced-combat ---
+    # Cool (not warm) climate so clothed acolytes don't sweat — that keeps
+    # hydration drain to the activity-scaled metabolic baseline we're
+    # measuring, instead of being swamped by per-unit sweat noise.
+    set_climate(port, 14, 0.4)
+    idle = spawn_batch(port, 2, "acolyte", x0=1)
+    actv = spawn_batch(port, 2, "acolyte", x0=8)
+    if not idle or not actv:
+        print("  [FAIL] hunger: could not spawn acolytes")
+        return False
+    # Drop both below the 75%-surplus-regrowth band so we measure the bare
+    # metabolic burn, and strip rations so nothing tops them back up.
+    for u in idle + actv:
+        send(port, f"local u={u}; local mh=unit.getStat(u,'max_hunger'); "
+                   f"unit.setStat(u,'hunger',mh*0.5); "
+                   f"unit.removeItem(u,'rations'); unit.removeItem(u,'rations'); "
+                   f"return 'ok'")
+    # Keep the active group in a combat anim: attack_quick is a ~0.4s
+    # one-shot, so re-assert it continuously (each batched send takes ~the
+    # console read-timeout, so the loop naturally re-fires at roughly the
+    # anim cadence → currentAnim stays a combat anim → 2.5× metabolic +
+    # hydration drain). The idle group keeps its default idle anim (1.0×).
+    actv_lua = "{" + ",".join(str(u) for u in actv) + "}"
+    def force_combat():
+        send(port, f"for _,u in ipairs({actv_lua}) do "
+                   f"unit.setAnimOverride(u,'attack_quick') end; return 'ok'")
+    force_combat()
+    time.sleep(0.5)
+    def avg_hyd(group):
+        return sum(float(send(port, f"return unit.getStat({u},'hydration') or 0"))
+                   for u in group) / len(group)
+    h_idle0 = sum(_hunger(port, u) for u in idle) / len(idle)
+    h_actv0 = sum(_hunger(port, u) for u in actv) / len(actv)
+    w_idle0 = avg_hyd(idle)
+    w_actv0 = avg_hyd(actv)
+    t_end = time.time() + win
+    while time.time() < t_end:
+        force_combat()
+        time.sleep(0.2)   # leave the Lua thread room to run its resource tick
+    h_idleD = h_idle0 - sum(_hunger(port, u) for u in idle) / len(idle)
+    h_actvD = h_actv0 - sum(_hunger(port, u) for u in actv) / len(actv)
+    w_idleD = w_idle0 - avg_hyd(idle)
+    w_actvD = w_actv0 - avg_hyd(actv)
+    ok1 = h_idleD > 0 and h_actvD > h_idleD * 1.3
+    passed &= ok1
+    print(f"  [{'PASS' if ok1 else 'FAIL'}] hunger drains faster in combat: "
+          f"idle −{h_idleD:.1f} kcal vs combat −{h_actvD:.1f} kcal")
+    ok1b = w_actvD > w_idleD       # hydration also activity-scaled
+    passed &= ok1b
+    print(f"  [{'PASS' if ok1b else 'FAIL'}] hydration drains faster in combat: "
+          f"idle −{w_idleD:.4f} L vs combat −{w_actvD:.4f} L")
+
+    # --- 2. unit.feed restores calories; refuses what isn't carried ---
+    fed = spawn_batch(port, 1, "acolyte", x0=14)[0]
+    send(port, f"local u={fed}; unit.setStat(u,'hunger',unit.getStat(u,'max_hunger')*0.4); return 'ok'")
+    before = _hunger(port, fed)
+    credited = send(port, f"return unit.feed({fed},'rations') or -1")
+    after = _hunger(port, fed)
+    try:
+        cred = float(credited)
+    except ValueError:
+        cred = -1
+    ok2 = cred > 0 and after > before
+    passed &= ok2
+    print(f"  [{'PASS' if ok2 else 'FAIL'}] unit.feed credits calories: "
+          f"+{cred:.0f} kcal ({before:.0f}→{after:.0f})")
+    # Feeding an item the unit doesn't carry returns nil.
+    no_carry = send(port, f"return unit.feed({fed},'nonexistent_food') and 'num' or 'nil'")
+    ok2b = no_carry.strip().strip('"') == "nil"
+    passed &= ok2b
+    print(f"  [{'PASS' if ok2b else 'FAIL'}] unit.feed refuses non-carried item: {no_carry.strip()}")
+
+    # --- 3. Calorie→heat coupling: a starving body can't fuel shivering
+    #        (or full basal burn), so cold-stressed it defends its
+    #        temperature worse and chills faster. Both groups start ALREADY
+    #        cold (core pre-set into the shivering zone) so the calorie-gated
+    #        shivering — the dominant heat term down here — actually drives
+    #        the divergence within the window. Same start core for both, so
+    #        compare final cores directly.
+    set_climate(port, -30, 0.5)
+    starv = spawn_batch(port, 4, "acolyte", x0=1)
+    feda  = spawn_batch(port, 4, "acolyte", x0=8)
+    for u in starv:
+        send(port, f"local u={u}; unit.setStat(u,'hunger',1); "
+                   f"unit.setStat(u,'core_temp',34.0); return 'ok'")
+    for u in feda:
+        send(port, f"local u={u}; unit.setStat(u,'hunger',unit.getStat(u,'max_hunger')); "
+                   f"unit.setStat(u,'core_temp',34.0); return 'ok'")
+    time.sleep(max(seconds, 45.0))
+    core_starv = avg_core(port, starv)
+    core_fed   = avg_core(port, feda)
+    ok3 = core_fed - core_starv > 0.1
+    passed &= ok3
+    print(f"  [{'PASS' if ok3 else 'FAIL'}] starving unit makes less heat (colder when cold-stressed): "
+          f"starving {core_starv:.2f}°C vs fed {core_fed:.2f}°C")
+
+    # --- 4. Wildlife guard: a unit with no hunger system (bear — its body
+    #        block seeds max_hunger, but it has no hunger RESOURCE) must not
+    #        be feedable (that would conjure a permanent, never-draining
+    #        calorie pool) and reports no calorie reading. Regression guard
+    #        for the heal/thermo gating keying off a live "hunger" stat, not
+    #        the always-seeded max_hunger.
+    bear = spawn_batch(port, 1, "bear_brown", x0=14)
+    if bear:
+        b = bear[0]
+        send(port, f"unit.addItem({b},'rations',0); return 'ok'")
+        fed_wild = send(port, f"return unit.feed({b},'rations') and 'num' or 'nil'").strip().strip('"')
+        cal_wild = send(port, f"return unit.getCalories({b}) and 'num' or 'nil'").strip().strip('"')
+        retained = send(port, f"local inv=unit.getInventory({b}) or {{}}; local n=0; "
+                              f"for _,it in ipairs(inv) do if it.defName=='rations' then n=n+1 end end; "
+                              f"return n").strip().strip('"')
+        ok4 = fed_wild == "nil" and cal_wild == "nil" and retained == "1"
+        passed &= ok4
+        print(f"  [{'PASS' if ok4 else 'FAIL'}] wildlife has no calorie pool / isn't feedable: "
+              f"feed={fed_wild} getCalories={cal_wild} ration_retained={retained}")
+    else:
+        print("  [WARN] wildlife guard: could not spawn bear_brown")
+        bear = []
+
+    # Clean up this section's units so they don't add tick load to the
+    # climate scenarios that follow.
+    for u in idle + actv + [fed] + starv + feda + bear:
+        send(port, f"unit.destroy({u}); return 'ok'")
+    return passed
+
+
 # ---- Scenario definitions ----
 # Each: name, ambient °C, humidity 0..1, and an assert(m)->(ok, detail) on the
 # measured aggregate.
@@ -281,6 +430,11 @@ def main():
     passed = True
     try:
         bootstrap(port)
+        # Run the hunger section FIRST, on a fresh engine with the fewest
+        # accumulated units — the per-unit resource tick that drives calorie
+        # / hydration drain gets starved if it runs after dozens of units
+        # have piled up across the climate scenarios.
+        passed &= hunger_section(port, args.seconds)
         for name, ambient, humidity, check in SCENARIOS:
             set_climate(port, ambient, humidity)
             spawn_batch(port, args.count)

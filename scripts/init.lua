@@ -214,6 +214,14 @@ function game.onMouseDown(button, x, y)
         if mineTool.handleMouseDown(button, x, y) then
             return
         end
+
+        -- Construction designation tool claims clicks while active
+        -- (anchor / commit / cancel / single-tile erase), same
+        -- left=designate / right=cancel split and #154 gate.
+        local constructTool = require("scripts.construct_tool")
+        if constructTool.handleMouseDown(button, x, y) then
+            return
+        end
     end
 
     if button == MOUSE_LEFT then
@@ -958,6 +966,11 @@ function game.onKeyDown(key)
     -- Mine tool's Esc cancels a pending designation anchor.
     local mineTool = require("scripts.mine_tool")
     if mineTool.handleKeyDown(key) then
+        return
+    end
+    -- Construction tool's Esc cancels a pending designation anchor.
+    local constructTool = require("scripts.construct_tool")
+    if constructTool.handleKeyDown(key) then
         return
     end
     -- ESC clears any active gameplay selection / cursor.

@@ -145,7 +145,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             bm         ← readIORef (buildingManagerRef env)
             um         ← readIORef (unitManagerRef env)
             uts        ← readIORef (utsRef env)
-            -- The primary (visible) page's gen params drive the listing metadata.
+            -- The primary page's gen params drive the listing metadata.
             mActiveParams ← readIORef (wsGenParamsRef primaryWs)
             case mActiveParams of
                 Nothing →
@@ -182,6 +182,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 toolMode  ← readIORef (wsToolModeRef ws)
                                 edits     ← readIORef (wsEditsRef ws)
                                 mineDesigs ← readIORef (wsMineDesignationsRef ws)
+                                constructDesigs ← readIORef
+                                    (wsConstructDesignationsRef ws)
                                 groundItems ← readIORef (wsGroundItemsRef ws)
                                 spoilPiles ← readIORef (wsSpoilRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
@@ -221,6 +223,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsToolMode   = toolMode
                                     , wpsEdits      = edits
                                     , wpsMineDesignations = mineDesigs
+                                    , wpsConstructDesignations = constructDesigs
                                     , wpsGroundItems = groundItems
                                     , wpsSpoilPiles  = spoilPiles
                                     , wpsBuildings   = buildings
@@ -428,10 +431,12 @@ handleWorldLoadSaveCommand env logger pageId saveData
         writeIORef (wsToolModeRef worldState) DefaultTool
         -- Restore edit log BEFORE chunk generation so the synchronous center
         -- chunk + every chunk pulled off the init queue replay the player's
-        -- edits. Mine designations / ground items / spoil piles render from
-        -- stored data and need no chunk loading first.
+        -- edits. Mine / construct designations, ground items, and spoil piles
+        -- render from stored data and need no chunk loading first.
         writeIORef (wsEditsRef worldState) (wpsEdits wps)
         writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
+        writeIORef (wsConstructDesignationsRef worldState)
+            (wpsConstructDesignations wps)
         writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
         writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
 
