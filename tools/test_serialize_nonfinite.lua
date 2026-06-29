@@ -55,6 +55,24 @@ check("sentinel table: nested",    dec.nested.t == math.huge)
 local keyed = roundtrip({ [math.huge] = "topcap" })
 check("inf numeric key", keyed[math.huge] == "topcap")
 
+-- Backward compatibility: LEGACY blobs written before the fix carry bare
+-- inf/-inf/nan tokens (what %.17g emitted). Existing v60 saves stay at
+-- v60, so deserialize must still decode them rather than dropping the
+-- field (inf/nan → nil) or losing the whole module (-inf threw).
+check("legacy inf decodes",  s.deserialize("inf") == math.huge)
+check("legacy -inf decodes", s.deserialize("-inf") == -math.huge)
+local lnan = s.deserialize("nan")
+check("legacy nan decodes",  lnan ~= lnan)
+local legacyBlob = s.deserialize('{["cooldown"]=inf,["floor"]=-inf,["name"]="acolyte"}')
+check("legacy table: cooldown", legacyBlob.cooldown == math.huge)
+check("legacy table: floor",    legacyBlob.floor == -math.huge)
+check("legacy table: name kept", legacyBlob.name == "acolyte")
+
+-- The restricted env must still block runtime/global access.
+check("env blocks globals", s.deserialize("type") == nil)
+check("env has no os", pcall(function() return s.deserialize("os") end) and
+                       s.deserialize("os") == nil)
+
 if failures == 0 then
     print("ALL PASS")
     os.exit(0)
