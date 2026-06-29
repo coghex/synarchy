@@ -28,6 +28,7 @@ import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)
+import World.Construct.Types (ConstructDesignations)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import Item.Ground (GroundItems, emptyGroundItems)
 
@@ -98,6 +99,13 @@ data WorldState = WorldState
       --   read-your-writes without a second authority. Per-world so it can't
       --   leak across worlds (it dies with the WorldState, and a reloaded
       --   world gets a fresh empty one); never saved.
+    , wsConstructDesignationsRef ∷ IORef ConstructDesignations
+      -- ^ Construction-designation set: tile (gx, gy) → designation
+      --   (surface z, build target, status, progress; see
+      --   World.Construct.Types). Written by the world thread
+      --   (WorldDesignateConstruct / cancel / set-status commands), read
+      --   by the render pass (blueprint ghost) and the build AI (#96).
+      --   Persisted in saves (wpsConstructDesignations).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -129,6 +137,7 @@ emptyWorldState = do
     wsGroundItemsRef ← newIORef emptyGroundItems
     wsSpoilRef ← newIORef emptySpoilPiles
     wsStructureStageRef ← newIORef emptyChunkStructures
+    wsConstructDesignationsRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -138,6 +147,7 @@ emptyWorldState = do
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
+                        wsConstructDesignationsRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

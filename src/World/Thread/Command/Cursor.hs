@@ -16,6 +16,12 @@ module World.Thread.Command.Cursor
     , handleWorldClearMineAnchorCommand
     , handleWorldDesignateMineCommand
     , handleWorldSetMineDesignateTextureCommand
+    , handleWorldSetConstructAnchorCommand
+    , handleWorldClearConstructAnchorCommand
+    , handleWorldDesignateConstructCommand
+    , handleWorldCancelConstructCommand
+    , handleWorldSetConstructStatusCommand
+    , handleWorldSetConstructDesignateTextureCommand
     ) where
 
 import UPrelude
@@ -38,6 +44,10 @@ import World.Tile.Types (lookupChunk)
 import World.Constants (seaLevel)
 import World.Generate (generateChunk, globalToChunk)
 import World.Mine.Types (designationFromSlope)
+import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
+                             , ConstructDesignation(..)
+                             , newConstructDesignation
+                             , constructTargetCategory )
 import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
@@ -279,6 +289,112 @@ handleWorldSetMineDesignateTextureCommand env _logger pageId tid = do
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { mineDesignTexture = Just tid }, ())
+        Nothing → pure ()
+
+-- * Construction designation tool (#95)
+--
+--   Mirrors the mine designation tool: an anchor→rectangle commit that
+--   stores per-tile designations (build target + status + progress) in
+--   wsConstructDesignationsRef. The build AI (#96) is the consumer.
+
+handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → IO ()
+handleWorldSetConstructAnchorCommand env _logger pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { constructAnchor = Just (gx, gy) }, ())
+        Nothing → pure ()
+
+handleWorldClearConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → IO ()
+handleWorldClearConstructAnchorCommand env _logger pageId = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { constructAnchor = Nothing }, ())
+        Nothing → pure ()
+
+-- | Commit a construction designation. Per-z-level like mining: only
+--   tiles at the anchor's surface z are taken. STRUCTURE targets fill the
+--   whole rectangle (paint a floor / wall run); BUILDING targets mark
+--   only the anchor tile (one footprint, not a grid of buildings).
+--   Unloaded-chunk tiles are skipped. Clears the anchor afterwards.
+handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Int → Int → ConstructTarget → IO ()
+handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing → pure ()
+        Just worldState → do
+            tileData ← readIORef (wsTilesRef worldState)
+            let surfaceZAt gx gy = do
+                    let (coord, (lx, ly)) = globalToChunk gx gy
+                    lc ← lookupChunk coord tileData
+                    pure (lcSurfaceMap lc VU.! columnIndex lx ly)
+                xLo = min gx1 gx2
+                yLo = min gy1 gy2
+                xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
+                yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+                entries = case surfaceZAt gx1 gy1 of
+                    Nothing → []   -- anchor chunk unloaded: nothing
+                    Just anchorZ → case tgt of
+                        -- A building is a single footprint: only the
+                        -- anchor tile, at its own surface z.
+                        CtBuilding _ →
+                            [ ((gx1, gy1), newConstructDesignation anchorZ tgt) ]
+                        -- Structure pieces tile the rectangle, per-z-level.
+                        CtStructure _ →
+                            [ ((gx, gy), newConstructDesignation z tgt)
+                            | gx ← [xLo .. xHi]
+                            , gy ← [yLo .. yHi]
+                            , Just z ← [surfaceZAt gx gy]
+                            , z ≡ anchorZ
+                            ]
+            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+                (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { constructAnchor = Nothing }, ())
+            logDebug logger CatWorld $
+                "Construct designation: +" <> T.pack (show (length entries))
+                <> " tiles (" <> constructTargetCategory tgt <> ")"
+
+handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → IO ()
+handleWorldCancelConstructCommand env _logger pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+                (HM.delete (gx, gy) m, ())
+        Nothing → pure ()
+
+-- | Build AI hook (#96): set a designation's status. Complete removes it.
+handleWorldSetConstructStatusCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → ConstructStatus → IO ()
+handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+                case st of
+                    CsComplete → (HM.delete (gx, gy) m, ())
+                    _          → (HM.adjust (\cd → cd { cdStatus = st })
+                                           (gx, gy) m, ())
+        Nothing → pure ()
+
+handleWorldSetConstructDesignateTextureCommand ∷ EngineEnv → LoggerState
+    → WorldPageId → Text → TextureHandle → IO ()
+handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                case cat of
+                    "building" → (cs { constructBuildingTexture = Just tid }, ())
+                    _          → (cs { constructStructTexture = Just tid }, ())
         Nothing → pure ()
 
 -- | Directly select the column at (gx, gy) on the given world, using

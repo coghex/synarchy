@@ -86,6 +86,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             edits     ← readIORef (wsEditsRef worldState)
             -- v31 (mining) additions
             mineDesigs ← readIORef (wsMineDesignationsRef worldState)
+            -- v60 (construction designations, #95)
+            constructDesigs ← readIORef (wsConstructDesignationsRef worldState)
             -- v32 (ground items) additions
             groundItems ← readIORef (wsGroundItemsRef worldState)
             spoilPiles ← readIORef (wsSpoilRef worldState)
@@ -149,6 +151,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , wpsToolMode   = toolMode
                             , wpsEdits      = edits
                             , wpsMineDesignations = mineDesigs
+                            , wpsConstructDesignations = constructDesigs
                             , wpsGroundItems = groundItems
                             , wpsSpoilPiles  = spoilPiles
                             , wpsBuildings   = buildings
@@ -261,6 +264,10 @@ handleWorldLoadSaveCommand env logger pageId saveData
     -- progress). Markers render from the stored z, so this needs no
     -- chunk loading to be visible.
     writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
+    -- v60 (construction designations, #95): restore straight in; ghosts
+    -- re-render from the stored z, so no chunk loading is required first.
+    writeIORef (wsConstructDesignationsRef worldState)
+        (wpsConstructDesignations wps)
     -- v32 (ground items): heights derive from terrain at render, so
     -- restoration is position-only and needs no chunk loading.
     writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
