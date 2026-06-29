@@ -247,15 +247,19 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
 --        ('rawSlope'), so rock mountainsides taper instead of stepping.
 --     2. JAGGEDNESS: with a probability that RISES with hardness and local
 --        relief (the inverse of 'applyRoughness'), override with a
---        semi-random slope toward ONE strictly-lower neighbour. This
---        breaks the regular terrace into irregular angular rock, and fires
---        even where no neighbour is exactly one lower (steep multi-level
---        faces) — the case the strict terrace rule leaves flat.
+--        semi-random slope toward one non-HIGHER dry neighbour (lower =
+--        downhill ramp, equal-height = a visual lean). This breaks the
+--        regular terrace into irregular angular rock, and fires even where
+--        no neighbour is exactly one lower (steep multi-level faces) — the
+--        case the strict terrace rule leaves flat.
 --
---   The ramp only ever points at a strictly-lower DRY neighbour, so it
---   stays a geometrically valid (and pathing-walkable) ramp — never a
---   notch into a higher wall, and never a dry tile dipping into water
---   (the dry-land bank rule, honoured here via the @wet*@ flags).
+--   The lean points at a non-higher DRY neighbour: a strictly-lower one is
+--   a geometrically valid (pathing-walkable) downhill ramp, an equal-height
+--   one is a flat lean toward an already-walkable peer. Including equal
+--   neighbours (#337) gives coherent rock faces directional variety they
+--   otherwise lack — without ever leaning uphill (a notch into a higher
+--   wall) or into water (the dry-land bank rule, honoured via the @wet*@
+--   flags).
 rockJaggedSlope ∷ Word64 → ChunkCoord → Int → Int → Float → Int → Int → Word8
                 → Int → Int → Int → Int
                 → Bool → Bool → Bool → Bool → Word8
@@ -272,15 +276,24 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
             -- Wet-direction bitmask (seam-aware via the wet* flags).
             wetMask = (if wetN then 1 else 0) .|. (if wetE then 2 else 0)
                   .|. (if wetS then 4 else 0) .|. (if wetW then 8 else 0) ∷ Word8
-            -- Candidate ramp directions: strictly-lower cardinal
-            -- neighbours that are NOT wet (bank rule). May be empty if the
-            -- only downhill neighbour is water — then we fall through to
-            -- the dry clean-flank below.
+            -- Candidate jagged-lean directions: cardinal neighbours that
+            -- are present, NOT wet (bank rule), and NOT strictly HIGHER
+            -- (@nz ≤ z@). Strictly-lower neighbours are downhill ramps;
+            -- EQUAL-height neighbours are visual leans, not invalid notches
+            -- into a higher wall. Including the equal-height directions
+            -- (#337) is what gives a COHERENT rock face — a uniform
+            -- mountainside or simple outcrop whose only strictly-lower
+            -- neighbour is a single downhill direction — genuine directional
+            -- variety, instead of a deterministic one-element pick that
+            -- slopes every such tile the same downhill way. Never points
+            -- uphill (a notch into a higher wall) or into water. May be
+            -- empty only if every non-higher neighbour is wet — then we
+            -- fall through to the dry clean-flank below.
             cand = [ b | (b, nz, wet) ← [ (1 ∷ Word8, neighN, wetN)
                                         , (2, neighE, wetE)
                                         , (4, neighS, wetS)
                                         , (8, neighW, wetW) ]
-                       , nz ≠ minBound, nz < z, not wet ]
+                       , nz ≠ minBound, nz ≤ z, not wet ]
             -- Clean-flank fallback: rawSlope with any wet directions
             -- cleared. rawSlope is built by 'slopeBit', whose bank check is
             -- IN-CHUNK only, so a 1-z lower wet neighbour across a chunk
