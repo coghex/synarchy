@@ -1424,8 +1424,8 @@ local function shouldLunge(uid, s)
     -- Stamina gate — a leap is a big spend.
     local stam = unit.getStat(uid, "stamina")
     if stam then
-        local maxStam = (unit.getStat(uid, "endurance") or 1.0) * 10.0
-        if maxStam > 0 and stam / maxStam < LUNGE_MIN_STAMINA_FRAC then
+        local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
+        if maxStam and maxStam > 0 and stam / maxStam < LUNGE_MIN_STAMINA_FRAC then
             return false
         end
     end
