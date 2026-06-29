@@ -203,29 +203,36 @@ cameraGotoTileFn env = do
                                 zoomSafe = gotoTileZoomSafe worldSize
                                 newZoom = if zoomSafe then 0.5 else zoomFadeEnd + 0.5
                             atomicModifyIORef' (cameraRef env) $ \cam →
-                                (cam { camPosition  = (wx, wy)
-                                     , camZoom      = newZoom
-                                     , camVelocity  = (0, 0)
-                                     , camDragging  = False
-                                     , camZSlice    = targetZ
-                                     , camZTracking = zoomSafe
+                                (cam { camPosition     = (wx, wy)
+                                     , camZoom         = newZoom
+                                     , camVelocity     = (0, 0)
+                                     -- Clear leftover scroll inertia, or the next
+                                     -- updateCameraZoom would integrate it and pull
+                                     -- a gated-off zoom back under the loader gate,
+                                     -- reopening the tiny-world crash path.
+                                     , camZoomVelocity = 0
+                                     , camDragging     = False
+                                     , camZSlice       = targetZ
+                                     , camZTracking    = zoomSafe
                                      }, ())
                         -- No gen params (world size unknown): can't clamp, so
                         -- set the unclamped position as before. Without an
                         -- active world there are no chunks to overflow anyway.
                         Nothing →
                             atomicModifyIORef' (cameraRef env) $ \cam →
-                                (cam { camPosition = (wx0, wy0)
-                                     , camZoom     = 0.5
-                                     , camVelocity = (0, 0)
-                                     , camDragging = False
+                                (cam { camPosition     = (wx0, wy0)
+                                     , camZoom         = 0.5
+                                     , camVelocity     = (0, 0)
+                                     , camZoomVelocity = 0
+                                     , camDragging     = False
                                      }, ())
                 Nothing →
                     atomicModifyIORef' (cameraRef env) $ \cam →
-                        (cam { camPosition = (wx0, wy0)
-                             , camZoom     = 0.5
-                             , camVelocity = (0, 0)
-                             , camDragging = False
+                        (cam { camPosition     = (wx0, wy0)
+                             , camZoom         = 0.5
+                             , camVelocity     = (0, 0)
+                             , camZoomVelocity = 0
+                             , camDragging     = False
                              }, ())
 
         _ → pure ()
