@@ -146,6 +146,14 @@ end
 function settingsMenu.onDefaults()
     engine.logInfo("Loading defaults...")
     data.loadDefaults()
+    -- Keybinds are write-through (no pending state), so the global
+    -- Defaults reset restores factory bindings immediately and persists
+    -- them — giving the Input tab its path back to defaults. The createUI
+    -- rebuild below repopulates the Input rows from the reset bindings.
+    if engine.loadDefaultKeybinds then
+        engine.loadDefaultKeybinds()
+        engine.saveKeybinds()
+    end
     settingsMenu.createUI()
     if settingsMenu.page then UI.showPage(settingsMenu.page) end
 end

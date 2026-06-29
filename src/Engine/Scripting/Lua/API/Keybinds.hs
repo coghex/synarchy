@@ -13,6 +13,7 @@ module Engine.Scripting.Lua.API.Keybinds
   , setActionKeysFn
   , addActionKeyFn
   , removeActionKeyFn
+  , removeActionKeysMatchingFn
   , saveKeybindsFn
   , loadDefaultKeybindsFn
   , keyMatchesActionFn
@@ -176,6 +177,36 @@ removeActionKeyFn env = do
                     Just cur | key `elem` cur →
                         (Map.insert action (filter (/= key) cur) b, True)
                     _ → (b, False)
+            Lua.pushboolean changed
+        _ → Lua.pushboolean False
+    return 1
+
+-- | engine.removeActionKeysMatching(action, key) → bool
+--   Remove every key from an action's list whose GLFW key set overlaps the
+--   given key's. This is the *semantic* sibling of 'removeActionKeyFn':
+--   removing @LeftShift@ also clears a stored merged @Shift@ (which covers
+--   both sides), so the keybind editor's "Remap" can actually free a key
+--   that the source action holds under an alias-equivalent name. Returns
+--   true if anything changed. Reserved actions are left untouched, and an
+--   unparseable key (empty key set) removes nothing.
+removeActionKeysMatchingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+removeActionKeysMatchingFn env = do
+    actionArg ← Lua.tostring 1
+    keyArg ← Lua.tostring 2
+    case (actionArg, keyArg) of
+        (Just actionBS, Just keyBS)
+          | isEditableAction (TE.decodeUtf8 actionBS) → do
+            let action = TE.decodeUtf8 actionBS
+                target = parseKeyName (TE.decodeUtf8 keyBS)
+                matches sk = any (`elem` target) (parseKeyName sk)
+            changed ← Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
+                case Map.lookup action b of
+                    Just cur →
+                        let keep = filter (not . matches) cur
+                        in if length keep ≡ length cur
+                           then (b, False)
+                           else (Map.insert action keep b, True)
+                    Nothing → (b, False)
             Lua.pushboolean changed
         _ → Lua.pushboolean False
     return 1

@@ -256,7 +256,11 @@ local function showConflictPopup(action, key, oldAction)
         bgColor = {1.0, 1.0, 1.0, 1.0}, textColor = {0.0, 0.0, 0.0, 1.0},
         zIndex = POPUP_Z + 1,
         onClick = function()
-            engine.removeActionKey(oldAction, key)
+            -- Semantic removal: the source action may hold this key under
+            -- an alias-equivalent name (e.g. a merged "Shift" when the
+            -- captured key is "LeftShift"), which an exact-string remove
+            -- would miss — leaving both actions bound.
+            engine.removeActionKeysMatching(oldAction, key)
             engine.addActionKey(action, key)
             engine.saveKeybinds()
             finishAndRebuild()
