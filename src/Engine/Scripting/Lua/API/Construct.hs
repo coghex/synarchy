@@ -131,7 +131,13 @@ constructGetPendingJobsFn env = do
                     let (ChunkCoord cx cy, _) = globalToChunk gx gy
                     in cx ≥ round cx1 ∧ cx ≤ round cx2
                      ∧ cy ≥ round cy1 ∧ cy ≤ round cy2
-                jobs = [ kv | kv@(k, _) ← HM.toList m, inRegion k ]
+                -- Only UNCLAIMED jobs: a job a worker has claimed
+                -- (setJobStatus "claimed") must drop out of the pending
+                -- list so a second worker scanning for work can't
+                -- re-claim the same tile. The owner re-finds its job by
+                -- tile via getDesignationAt.
+                jobs = [ kv | kv@(k, cd) ← HM.toList m
+                            , inRegion k, cdStatus cd == CsPending ]
             Lua.newtable
             forM_ (zip [1 ∷ Int ..] jobs) $ \(i, ((gx, gy), cd)) → do
                 pushJobTable gx gy cd

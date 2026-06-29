@@ -90,7 +90,14 @@ local function pickerItems()
         { label = "Ceiling", callback = function() setStructure("ceiling") end },
         { label = "Post",    callback = function() setStructure("post") end },
     }
-    local defs = building.listDefs() or {}
+    -- Use the build tool's visibility filter so the designation picker
+    -- offers exactly the buildings the player could place right now
+    -- (starting buildings until placed; the rest only once a starting
+    -- building exists). Otherwise fresh worlds could queue invalid jobs
+    -- (e.g. cargo before a portal) that would persist in saves (#95).
+    local bt = package.loaded["scripts.build_tool"]
+    local defs = (bt and bt.visibleDefs and bt.visibleDefs())
+        or building.listDefs() or {}
     if #defs > 0 then
         local sub = {}
         for _, d in ipairs(defs) do
@@ -150,7 +157,16 @@ function constructTool.handleMouseDown(button, x, y)
             return true
         end
         gx, gy = math.floor(gx), math.floor(gy)
-        if not constructTool.anchor then
+        local t = constructTool.target
+        if t and t.kind == "building" then
+            -- A building is one footprint, not a rectangle of buildings,
+            -- so it designates on a single click. No anchor is set, so no
+            -- (misleading) anchor->hover rectangle preview appears, and
+            -- the single committed tile matches what the player saw. Drop
+            -- any structure anchor left pending from a target switch.
+            if constructTool.anchor then constructTool.cancel() end
+            construction.designate(worldId(), gx, gy, gx, gy, "building", t.def)
+        elseif not constructTool.anchor then
             constructTool.anchor = { gx, gy }
             construction.setAnchor(worldId(), gx, gy)
         else
