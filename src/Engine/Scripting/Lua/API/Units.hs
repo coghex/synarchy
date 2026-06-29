@@ -2113,12 +2113,12 @@ unitWithdrawFromCargoFn env = do
             return 1
 
 -- | unit.getCarryingWeight(uid) → Float kg. Sum of full item weight
---   via 'itemTotalWeight' (instance weight + container fill, 1 L = 1 kg
---   water density, + nested container contents) across loose inventory
---   + equipped slot items + accessories. Worn gear counts the same as
---   carried gear by design: it's the same mass. Used by the auto-store
---   AI utility (fill_fraction = this / cap) and the pickup/fetch
---   capacity gates.
+--   via 'itemTotalWeight' (instance weight + container fill at the
+--   container's per-unit fill weight + nested container contents)
+--   across loose inventory + equipped slot items + accessories. Worn
+--   gear counts the same as carried gear by design: it's the same mass.
+--   Used by the auto-store AI utility (fill_fraction = this / cap) and
+--   the pickup/fetch capacity gates.
 unitGetCarryingWeightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetCarryingWeightFn env = do
     uidArg ← Lua.tointeger 1
