@@ -679,10 +679,12 @@ buildingGetStorageCapacityFn env = do
                     return 1
 
 -- | building.getStorageWeight(bid) → Float kg currently stored. Sums
---   the def-declared weight of each ItemInstance in biStorage.
---   Doesn't account for container fills inside the storage (a stored
---   canteen counts as the empty canteen weight, not full weight) —
---   keep it simple for v1. nil if the bid is gone.
+--   the full weight of each ItemInstance in biStorage via
+--   'itemTotalWeight' (instance weight + container fill + nested
+--   contents) — so a stored canteen counts at its filled weight and a
+--   first-aid kit counts its contents, matching the unit-side
+--   'unit.getCarryingWeight' convention and the depositToCargo capacity
+--   gate. nil if the bid is gone.
 buildingGetStorageWeightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetStorageWeightFn env = do
     idArg ← Lua.tointeger 1
