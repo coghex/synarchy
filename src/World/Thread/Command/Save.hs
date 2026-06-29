@@ -13,7 +13,9 @@ import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import qualified Engine.Core.Queue as Q
+import Sim.Command.Types (SimCommand(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -106,6 +108,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             -- Globals: read once, shared across every page (we're on the
             -- world thread, so no races with worldLoop writes).
             cam        ← readIORef (cameraRef env)
+            -- The page whose live camera IS the global Camera2D, and whose
+            -- clock scripts/pause.lua retimes on resume, is the VISIBLE world
+            -- — NOT necessarily the requested save 'pageId' (saveWorld accepts
+            -- any existing page). Key the camera snapshot + clock freeze on the
+            -- actually-visible world so saving a non-active page records its
+            -- OWN camera and never strands the visible world's wsTimeScaleRef.
+            let visibleId = fst <$> resolveActiveWorld mgr
             gameTime   ← readIORef (gameTimeRef env)
             paused     ← readIORef (enginePausedRef env)
             -- v54 (structure persistence): the texture palette is global.
@@ -137,10 +146,10 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 WorldTime h m    ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
                                 tScale    ← readIORef (wsTimeScaleRef ws)
-                                -- Freeze ONLY the active page's clock here, to
+                                -- Freeze ONLY the VISIBLE page's clock here, to
                                 -- match scripts/pause.lua: its prevTimeScale /
-                                -- resume dance retimes just the active world,
-                                -- so zeroing a background page's wsTimeScaleRef
+                                -- resume dance retimes just world.getActiveWorldId(),
+                                -- so zeroing any other page's wsTimeScaleRef
                                 -- would leave it stuck at 0 once shown (nothing
                                 -- restores it). Drift while paused is already
                                 -- prevented for every page by tickWorldTime,
@@ -149,7 +158,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- hidden page can't advance regardless. 'tScale'
                                 -- (the player's chosen speed) is captured for
                                 -- wpsTimeScale first, so this loses nothing.
-                                when (pid ≡ pageId) $
+                                when (Just pid ≡ visibleId) $
                                     writeIORef (wsTimeScaleRef ws) 0
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 toolMode  ← readIORef (wsToolModeRef ws)
@@ -158,15 +167,15 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 groundItems ← readIORef (wsGroundItemsRef ws)
                                 spoilPiles ← readIORef (wsSpoilRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
-                                -- Camera: the active page uses the live global
+                                -- Camera: the VISIBLE page uses the live global
                                 -- Camera2D (authoritative position/zoom/facing
                                 -- the player sees). Other pages carry only a
                                 -- WorldCamera (x, y) in their own state — no
                                 -- per-page zoom/facing exists — so they save
                                 -- their stored position with the global
                                 -- zoom/facing as the best available value.
-                                let isActive = pid ≡ pageId
-                                    (cx, cy) = if isActive
+                                let isVisible = Just pid ≡ visibleId
+                                    (cx, cy) = if isVisible
                                                then camPosition cam
                                                else (wcx, wcy)
                                     buildings = toBuildingSnapshot pid bm
@@ -340,6 +349,16 @@ handleWorldLoadSaveCommand env logger pageId saveData
             (mgr { wmWorlds = (rid, worldState)
                             : filter ((/= rid) . fst) (wmWorlds mgr) }, ())
 
+        -- Discard any sim (fluid) state still held under this restore id. A
+        -- within-session load over an existing page (e.g. main_world) replaces
+        -- its WorldState, but the sim thread keeps a page's chunks across
+        -- deactivate/activate and reuses them on the next show — so without
+        -- this drop the restored world would inherit STALE pre-load fluid
+        -- chunks. The fresh chunks re-populate sim below (center chunk) and via
+        -- drainInitQueues (the queued remainder). A no-op for a fresh-session
+        -- load (no state under that id).
+        Q.writeQueue (simQueue env) (SimDropWorld rid)
+
         -- 1a. Restore gen params (plates, timeline, ocean map, climate are
         --     all baked inside) + the per-page mutable game state.
         when isActive $ writeIORef phaseRef (LoadPhase1 1 totalSteps)
@@ -441,6 +460,14 @@ handleWorldLoadSaveCommand env logger pageId saveData
         atomicModifyIORef' (wsTilesRef worldState) $ \_ →
             (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                            , wtdMaxChunks = 200 }, ())
+        -- Seed sim with the synchronously-loaded center chunk. drainInitQueues
+        -- emits SimChunkLoaded only for the QUEUED remainder (below), so the
+        -- center — written straight to wsTilesRef, not queued — would otherwise
+        -- never reach the sim thread (after the SimDropWorld above cleared any
+        -- stale copy). Matches the per-chunk message the queue loader sends.
+        Q.writeQueue (simQueue env) $
+            SimChunkLoaded rid centerCoord
+                (lcFluidMap centerChunk) (lcTerrainSurfaceMap centerChunk)
 
         -- 1d. Queue the remaining initial chunks for progressive loading.
         when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
