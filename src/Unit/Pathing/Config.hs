@@ -40,6 +40,15 @@ data PathingConfig = PathingConfig
     , pcLakePenalty         ∷ !Float -- ^ Cost added for wading a lake tile.
     , pcReplanCostThreshold ∷ !Float -- ^ Greedy-step cost above which the
                                       --   mover triggers a local A* detour.
+    , pcMaterialReplanMargin ∷ !Float
+      -- ^ Surface-material detour trigger (#312). The greedy mover runs a
+      --   local A* detour-check when it steps onto ground whose @move_cost@
+      --   exceeds the current tile's by at least this much — so units skirt
+      --   soft ground (sand/mud) when a firmer route is cheaper. Material
+      --   costs are mild (far below `pcReplanCostThreshold`), so without
+      --   this a greedy mover would only ever slow down, never reroute.
+      --   A* still decides whether to actually detour; this only gates when
+      --   we ask. Set very high to disable material-triggered detours.
     } deriving (Show, Eq)
 
 -- | The historical hard-coded values. Used as the fallback when no
@@ -55,6 +64,7 @@ defaultPathingConfig = PathingConfig
     , pcRiverPenalty        = 8.0
     , pcLakePenalty         = 12.0
     , pcReplanCostThreshold = 5.0
+    , pcMaterialReplanMargin = 0.25
     }
 
 -- | Clamp a parsed config to runtime-safe ranges. Two invariants the
@@ -80,6 +90,7 @@ normalizePathingConfig pc = pc
     , pcRiverPenalty        = max 0 (pcRiverPenalty pc)
     , pcLakePenalty         = max 0 (pcLakePenalty pc)
     , pcReplanCostThreshold = max 0 (pcReplanCostThreshold pc)
+    , pcMaterialReplanMargin = max 0 (pcMaterialReplanMargin pc)
     }
 
 -- | Per-key optional parse: any omitted key keeps its default. (Using
@@ -94,6 +105,7 @@ instance FromJSON PathingConfig where
         <*> o .:? "river_penalty"         .!= pcRiverPenalty        defaultPathingConfig
         <*> o .:? "lake_penalty"          .!= pcLakePenalty         defaultPathingConfig
         <*> o .:? "replan_cost_threshold" .!= pcReplanCostThreshold defaultPathingConfig
+        <*> o .:? "material_replan_margin" .!= pcMaterialReplanMargin defaultPathingConfig
 
 -- | Load pathing tunables from a YAML file. A missing file is normal
 --   (defaults). A malformed file warns and falls back to defaults

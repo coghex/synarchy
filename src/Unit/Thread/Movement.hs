@@ -41,7 +41,7 @@ import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep
-                         , materialFactor, PathingConfig(..))
+                         , materialFactor, materialDetour, PathingConfig(..))
 import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
 import World.Material (MaterialRegistry)
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor, gravity, metresPerZ)
@@ -965,6 +965,17 @@ moveToward pc reg now stats us mt mWtd dx dy dist step =
                 Just wtd → stepCost pc reg wtd srcTile dstTile
                 Nothing  → Just 0  -- no world snapshot: don't block
         followingPath = not (null (usLocalPath us))
+        -- Soft-ground detour trigger (#312). Material step costs are mild
+        -- (sand 1.5, mud 1.8) — far below pcReplanCostThreshold — so the
+        -- cost-based replan above never fires for them. This fires a local
+        -- A* check when the unit steps onto notably softer ground than it
+        -- stands on; A* skirts the soft patch only if a firmer route is
+        -- cheaper. Greedy-mode only (a unit already on a path follows it),
+        -- and a rising edge only, so a unit already on soft ground doesn't
+        -- re-run A* every step.
+        matEdge = srcTile ≢ dstTile ∧ case mWtd of
+            Just wtd → materialDetour pc reg wtd srcTile dstTile
+            Nothing  → False
         -- Cliff and fall detection: only meaningful when actually
         -- crossing a tile boundary. The pathfinder already rejects
         -- most cliffs via replanCostThreshold, but when the unit
@@ -994,7 +1005,7 @@ moveToward pc reg now stats us mt mWtd dx dy dist step =
     in case mCost of
         Nothing →
             replan pc reg us mt mWtd srcTile
-        Just c | not followingPath ∧ c > pcReplanCostThreshold pc →
+        Just c | not followingPath ∧ (c > pcReplanCostThreshold pc ∨ matEdge) →
             replan pc reg us mt mWtd srcTile
         Just _ → case (mCliff, mFall) of
             (Just (srcZ, dstZ), _) →

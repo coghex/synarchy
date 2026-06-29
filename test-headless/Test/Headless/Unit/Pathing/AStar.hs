@@ -18,8 +18,8 @@ import Structure.Types (emptyChunkStructures)
 import World.Material ( MaterialRegistry, MaterialProps(..), emptyMaterialRegistry
                       , defaultMaterialProps, registerMaterial )
 import Unit.Pathing.AStar
-import Unit.Pathing.Cost ( PathingConfig, defaultPathingConfig, stepCost
-                         , materialFactor, lookupSurfaceMaterial )
+import Unit.Pathing.Cost ( PathingConfig(..), defaultPathingConfig, stepCost
+                         , materialFactor, lookupSurfaceMaterial, materialDetour )
 
 -- A* cost comes from the pathing config; the tests use the default
 -- profile (the historical hard-coded weights).
@@ -226,3 +226,20 @@ spec = do
                 let path = localAStar pc (softReg 1.05) wtd (5, 5) (12, 5) 32
                 any onSoft path `shouldBe` True
                 last path `shouldBe` (12, 5)
+
+            -- The greedy mover never crosses pcReplanCostThreshold for mild
+            -- material, so it needs `materialDetour` to even ASK A* to look
+            -- for a firmer route when stepping onto soft ground (#312).
+            it "materialDetour fires stepping firm -> soft (rising edge)" $
+                -- firm (7,5) -> soft band (8,5): factor 1.0 -> 1.5, Δ0.5 ≥ 0.25.
+                materialDetour pc (softReg 1.5) wtd (7, 5) (8, 5) `shouldBe` True
+
+            it "materialDetour stays quiet within uniform soft ground" $
+                -- soft (8,5) -> soft (8,6): no rising edge, so no re-ask
+                -- (this is what keeps A* off the hot path in soft terrain).
+                materialDetour pc (softReg 1.5) wtd (8, 5) (8, 6) `shouldBe` False
+
+            it "materialDetour ignores a sub-margin softness bump" $
+                -- firm 1.0 -> mild 1.2 is below the 0.25 margin: speed-only,
+                -- no detour-check (units don't reroute around mild ground).
+                materialDetour pc (softReg 1.2) wtd (7, 5) (8, 5) `shouldBe` False
