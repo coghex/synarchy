@@ -9,6 +9,7 @@ module Engine.Loop.Camera
     , cameraYLimit
     , cameraYLimitChunks
     , cameraGotoBufferChunks
+    , gotoTileZoomSafe
     ) where
 
 import UPrelude
@@ -134,6 +135,24 @@ cameraGotoBufferChunks = chunkLoadRadius + rimUnsafeChunks
 -- | Clamp a teleport target to the gotoTile glacier fence ('cameraGotoBufferChunks').
 applyGotoLimits ∷ Int → CameraFacing → Float → Float → (Float, Float)
 applyGotoLimits = applyLimitsChunks cameraGotoBufferChunks
+
+-- | Is it safe for a gotoTile teleport to drop to tile-level zoom on a world
+--   of this size? Tile zoom enables the per-chunk loader
+--   ('World.Thread.ChunkLoading.updateChunkLoading'), which pulls a
+--   (2·chunkLoadRadius+1)² Chebyshev square around the camera chunk — its
+--   v-corner reaches the clamped camera's v-chunk + 2·chunkLoadRadius. On
+--   worlds too small for the goto fence (the 8-chunk minimum, half-size 4)
+--   that corner lands on the rim band no matter where the camera is fenced
+--   (even centred), so the loader would overflow the world thread (#298).
+--   There is no safe zoomed-in region on such a world, so the teleport must
+--   stay zoomed out (where the loader is gated off). The 2-chunk margin
+--   matches the empirically-safe band (verified on 16- and 128-chunk worlds).
+gotoTileZoomSafe ∷ Int → Bool
+gotoTileZoomSafe worldSizeChunks =
+    let halfSize  = worldSizeChunks `div` 2
+        effBuffer = min cameraGotoBufferChunks halfSize
+        cornerV   = (halfSize - effBuffer) + 2 * chunkLoadRadius
+    in cornerV ≤ halfSize - 2
 
 updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do

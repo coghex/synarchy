@@ -26,7 +26,7 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
-import Engine.Loop.Camera (applyGotoLimits)
+import Engine.Loop.Camera (applyGotoLimits, gotoTileZoomSafe)
 import World.Grid
 import World.Types
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -193,13 +193,22 @@ cameraGotoTileFn env = do
                                 (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gxC gyC
                                 (finalElev, _) = applyTimelineFast timeline plates worldSize gxC gyC registry (baseElev, baseMat)
                                 targetZ = finalElev + surfaceHeadroom
+                                -- Only drop to tile-level zoom when the world is
+                                -- large enough that the zoomed-in chunk loader can
+                                -- keep clear of the v-edge rim. On the 8-chunk
+                                -- minimum no camera position is safe — even a
+                                -- centred load pulls in a rim corner chunk and
+                                -- overflows the world thread (#298) — so stay
+                                -- zoomed out, where the loader is gated off.
+                                zoomSafe = gotoTileZoomSafe worldSize
+                                newZoom = if zoomSafe then 0.5 else zoomFadeEnd + 0.5
                             atomicModifyIORef' (cameraRef env) $ \cam →
                                 (cam { camPosition  = (wx, wy)
-                                     , camZoom      = 0.5
+                                     , camZoom      = newZoom
                                      , camVelocity  = (0, 0)
                                      , camDragging  = False
                                      , camZSlice    = targetZ
-                                     , camZTracking = True
+                                     , camZTracking = zoomSafe
                                      }, ())
                         -- No gen params (world size unknown): can't clamp, so
                         -- set the unclamped position as before. Without an

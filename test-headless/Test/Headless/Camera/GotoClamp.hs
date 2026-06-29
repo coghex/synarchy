@@ -20,7 +20,7 @@ import UPrelude
 import Test.Hspec
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Loop.Camera (applyGotoLimits, cameraYLimitChunks
-                          , cameraGotoBufferChunks)
+                          , cameraGotoBufferChunks, gotoTileZoomSafe)
 import World.Chunk.Types (chunkSize)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Grid (tileHalfDiamondHeight)
@@ -91,6 +91,14 @@ spec = do
             -- nothing but the origin is interior there).
             forM_ (filter (\ws → ws ≥ 16) worldSizes) $ \ws → forM_ facings $ \f →
                 applyGotoLimits ws f 0.3 0.3 `shouldBe` (0.3, 0.3)
+
+        it "only allows tile-level zoom where the loader stays clear of the rim" $ do
+            -- The 8-chunk minimum has no safe zoomed-in region (a centred load
+            -- still pulls a rim corner chunk), so gotoTile must stay zoomed out
+            -- there; every larger supported world is safe.
+            gotoTileZoomSafe 8  `shouldBe` False
+            forM_ [16, 64, 128, 256] $ \ws →
+                gotoTileZoomSafe ws `shouldBe` True
 
         it "the fence sits inside the true rim" $
             forM_ worldSizes $ \ws → do
