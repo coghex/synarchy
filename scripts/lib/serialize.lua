@@ -14,11 +14,23 @@
 
 local serializeLib = {}
 
+-- Format a number as a round-trippable Lua literal. %.17g does not
+-- emit a token that reloads in the empty deserialize env for the
+-- non-finite values (inf/-inf/nan → undefined globals → nil, or a
+-- "1.#INF"-style syntax error on some libc), so map those to bare
+-- arithmetic literals that need no globals. See issue #321.
+local function serNum(v)
+    if v ~= v then return "0/0"             -- nan (v ~= v only for nan)
+    elseif v == math.huge then return "1/0"
+    elseif v == -math.huge then return "-1/0"
+    else return string.format("%.17g", v) end
+end
+
 local function ser(v)
     local t = type(v)
     if t == "nil"     then return "nil"
     elseif t == "boolean" then return tostring(v)
-    elseif t == "number"  then return string.format("%.17g", v)
+    elseif t == "number"  then return serNum(v)
     elseif t == "string"  then return string.format("%q", v)
     elseif t == "table"   then
         local parts = {}
@@ -28,7 +40,7 @@ local function ser(v)
             if kt == "string" then
                 ks = string.format("[%q]", k)
             elseif kt == "number" then
-                ks = "[" .. string.format("%.17g", k) .. "]"
+                ks = "[" .. serNum(k) .. "]"
             else
                 error("serialize: unsupported key type " .. kt)
             end
