@@ -463,11 +463,44 @@ function M.speedMultiplier(uid)
     return math.max(0.25, 1.0 - s)
 end
 
+-- Concussion locomotor band — hysteresis so a unit hovering at the
+-- knockout severity doesn't flap collapsed↔crawling tick-to-tick. Collapse
+-- the instant the concussion reaches CONCUSSION_OUT; once down, stay down
+-- until it heals back below the lower CONCUSSION_RISE (mirrors the
+-- consciousness UNCONSCIOUS_BELOW / RISE_AT band in brain.lua).
+local CONCUSSION_OUT  = 0.35   -- knockout (collapse) trigger
+local CONCUSSION_RISE = 0.25   -- must drop below this before rising
+
 -- Unconscious: a real concussion knocks the unit out cold (Collapsed —
 -- it can't even crawl). Kept separate from cannotWalk so a lucid unit
 -- with shattered legs crawls instead of lying collapsed.
 function M.isUnconscious(uid)
-    return M.concussionSeverity(uid) >= 0.35
+    return M.concussionSeverity(uid) >= CONCUSSION_OUT
+end
+
+-- Rise gate for the concussion path: an already-collapsed unit may only
+-- leave collapse once its concussion has healed below the rise band. The
+-- gap between CONCUSSION_OUT and CONCUSSION_RISE is the hysteresis that
+-- stops a wound-tick wobble around 0.35 from re-posing the unit.
+function M.concussionCanRise(uid)
+    return M.concussionSeverity(uid) < CONCUSSION_RISE
+end
+
+-- Pure locomotor collapse decision WITH hysteresis on the collapse↔crawl
+-- boundary (#304). Inputs are pre-evaluated booleans so this stays
+-- engine-free and unit-testable:
+--   knockedOut — bare knockout trigger (concussion ≥ OUT, or consciousness
+--                < UNCONSCIOUS_BELOW): enough to drop a unit ON ITS FEET.
+--   canRise    — BOTH boundary inputs have cleared their rise band
+--                (consciousness ≥ RISE_AT AND concussion < CONCUSSION_RISE):
+--                enough for an ALREADY-collapsed unit to come back up.
+-- A unit that is not yet collapsed collapses on the bare trigger; once
+-- collapsed it stays down until canRise. Without this asymmetry both
+-- directions pivot on the same threshold and a unit jittering across it
+-- flaps collapsed↔crawling every tick.
+function M.collapseWithHysteresis(pose, knockedOut, canRise)
+    if pose == "collapsed" then return not canRise end
+    return knockedOut
 end
 
 -- Can't walk: the legs/feet are too broken to stand on (two badly-broken

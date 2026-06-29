@@ -698,10 +698,17 @@ local function checkRevive(uid, defConfig)
     local info = unit.getInfo(uid)
     if info and info.knockedDown then return end
 
-    -- Injury gate. A unit incapacitated by injury (concussion / a
-    -- disabling leg break) stays down until the wound heals below the
-    -- threshold — same hysteresis idea as the blood gate below.
-    if injuries.isIncapacitated(uid) then return end
+    -- Injury gate. A unit incapacitated by injury stays down until it
+    -- clears the SAME rise band the collapse↔crawl machine uses (#304),
+    -- not the lower threshold it collapsed at — otherwise a concussion
+    -- healing through 0.25..0.35 (or legs that mend before the concussion)
+    -- would stand the unit up while tickInjuries still wants it down,
+    -- flapping the pose. Concussion must drop below CONCUSSION_RISE
+    -- (injuries.concussionCanRise); a unit that still can't walk stays down
+    -- (it crawls via tickInjuries, it doesn't stand).
+    if not injuries.concussionCanRise(uid) or injuries.cannotWalk(uid) then
+        return
+    end
 
     -- Consciousness gate. A unit knocked out by heat stroke / hypoxia / salt
     -- imbalance stays down until consciousness recovers (hysteresis: collapse
@@ -845,7 +852,17 @@ local function tickInjuries(uid, info, pose)
     --   * conscious but legs gone         → Crawling (drags itself along)
     --   * recovered enough to walk        → stand back up
     if not (info and info.knockedDown) then
-        if injuries.isUnconscious(uid) or brain.isUnconscious(uid) then
+        -- Collapse decision with hysteresis on the collapse↔crawl boundary.
+        -- ENTERING collapse uses the bare knockout triggers; STAYING collapsed
+        -- holds the unit down until BOTH inputs clear their rise band
+        -- (consciousness ≥ RISE_AT via brain.canRise, concussion below
+        -- CONCUSSION_RISE via injuries.concussionCanRise). Without this both
+        -- directions pivot on the same threshold (0.15 / 0.35), so a unit
+        -- jittering across it flaps collapsed↔crawling every tick (#304).
+        local knockedOut = injuries.isUnconscious(uid) or brain.isUnconscious(uid)
+        local canRise    = brain.canRise(uid) and injuries.concussionCanRise(uid)
+        local collapsed  = injuries.collapseWithHysteresis(pose, knockedOut, canRise)
+        if collapsed then
             -- Out cold: from a concussion OR from physiological derangement
             -- (heat stroke / hypoxia / salt imbalance dropping consciousness).
             if pose ~= "collapsed" then unit.collapse(uid) end
