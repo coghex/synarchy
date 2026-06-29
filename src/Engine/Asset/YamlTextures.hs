@@ -62,6 +62,9 @@ data MaterialDef = MaterialDef
     , mdDigGems ∷ Bool
       -- ^ Gem region field applies while digging this material
       --   (default False).
+    , mdMoveCost ∷ Float
+      -- ^ Surface-traversal cost multiplier for unit pathing (default
+      --   1.0). See @World.Material.MaterialProps@ (mpMoveCost) / #312.
     , mdTile     ∷ Text
     , mdZoom     ∷ Text
     , mdBg       ∷ Text
@@ -81,6 +84,7 @@ instance FromJSON MaterialDef where
         ⊛ v .:? "dig_bulking"  .!= 1.0
         ⊛ v .:? "dig_chunk"
         ⊛ v .:? "dig_gems"     .!= False
+        ⊛ v .:? "move_cost"    .!= 1.0
         ⊛ v .: "tile"
         ⊛ v .: "zoom"
         ⊛ v .: "bg"

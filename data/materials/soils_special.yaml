@@ -1,6 +1,7 @@
 materials:
   - id: 60
     name: silt_loam
+    move_cost: 1.25
     hardness: 0.2
     density: 1.4
     albedo: 0.28
@@ -12,6 +13,7 @@ materials:
     bg:   "assets/textures/world/zoommap/silt_loam_chunk_background.png"
   - id: 61
     name: silt
+    move_cost: 1.4
     hardness: 0.15
     density: 1.35
     albedo: 0.30
@@ -23,6 +25,7 @@ materials:
     bg:   "assets/textures/world/zoommap/silt_chunk_background.png"
   - id: 62
     name: peat
+    move_cost: 1.6   # boggy, spongy ground
     hardness: 0.1
     density: 0.9
     albedo: 0.08
@@ -34,6 +37,7 @@ materials:
     bg:   "assets/textures/world/zoommap/peat_chunk_background.png"
   - id: 63
     name: mucky_peat
+    move_cost: 1.7
     hardness: 0.1
     density: 1.0
     albedo: 0.06
@@ -45,6 +49,7 @@ materials:
     bg:   "assets/textures/world/zoommap/mucky_peat_chunk_background.png"
   - id: 64
     name: muck
+    move_cost: 1.8   # deep mud — slowest ground (#312)
     hardness: 0.1
     density: 1.1
     albedo: 0.05
@@ -56,6 +61,7 @@ materials:
     bg:   "assets/textures/world/zoommap/muck_chunk_background.png"
   - id: 65
     name: heavy_gravel
+    move_cost: 1.15   # loose underfoot but firm-bedded
     hardness: 0.5
     density: 2.0
     albedo: 0.30
@@ -67,6 +73,7 @@ materials:
     bg:   "assets/textures/world/zoommap/heavy_gravel_chunk_background.png"
   - id: 66
     name: light_gravel
+    move_cost: 1.15
     hardness: 0.4
     density: 1.8
     albedo: 0.32
@@ -78,6 +85,7 @@ materials:
     bg:   "assets/textures/world/zoommap/light_gravel_chunk_background.png"
   - id: 67
     name: salt_flat
+    move_cost: 1.2   # crusty, uneven salt crust
     hardness: 0.15
     density: 1.5
     albedo: 0.65

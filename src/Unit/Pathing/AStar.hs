@@ -22,6 +22,7 @@ import Data.List (foldl')
 import Data.Maybe (fromMaybe)
 import Unit.Pathing.Cost (stepCost, PathingConfig)
 import World.Tile.Types (WorldTileData)
+import World.Material (MaterialRegistry)
 
 -- | Default search radius. Roughly the size of a chunk (16×16 tiles).
 defaultMaxRadius ∷ Int
@@ -36,8 +37,8 @@ defaultMaxRadius = 16
 --     tile by Euclidean distance to dst.
 --   * Returns `[]` if `src == dst` or if no neighbor of src is
 --     passable.
-localAStar ∷ PathingConfig → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
-localAStar pc wtd src dst maxRadius
+localAStar ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
+localAStar pc reg wtd src dst maxRadius
     | src ≡ dst = []
     | otherwise =
         let h0 = euclid src dst
@@ -50,7 +51,7 @@ localAStar pc wtd src dst maxRadius
                 , asBestH  = h0
                 }
             budget = max 64 (maxRadius * maxRadius * 4)
-            final  = run pc wtd src dst maxRadius budget initial
+            final  = run pc reg wtd src dst maxRadius budget initial
             endTile
                 | HS.member dst (asClosed final) = dst
                 | otherwise                      = asBest final
@@ -70,8 +71,8 @@ data AS = AS
 
 -- | Drive the A* loop. Recurses until dst is closed, the open set
 --   empties, or the node budget runs out.
-run ∷ PathingConfig → WorldTileData → (Int, Int) → (Int, Int) → Int → Int → AS → AS
-run pc wtd src dst maxR budget st
+run ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → Int → AS → AS
+run pc reg wtd src dst maxR budget st
     | HS.size (asClosed st) ≥ budget = st
     | otherwise = case Set.minView (asOpen st) of
         Nothing -> st
@@ -79,18 +80,18 @@ run pc wtd src dst maxR budget st
             | cur ≡ dst ->
                 st { asOpen = open', asClosed = HS.insert cur (asClosed st) }
             | HS.member cur (asClosed st) ->
-                run pc wtd src dst maxR budget (st { asOpen = open' })
+                run pc reg wtd src dst maxR budget (st { asOpen = open' })
             | otherwise ->
                 let st1 = st { asOpen   = open'
                              , asClosed = HS.insert cur (asClosed st)
                              }
-                    st2 = expand pc wtd src dst maxR cur st1
-                in  run pc wtd src dst maxR budget st2
+                    st2 = expand pc reg wtd src dst maxR cur st1
+                in  run pc reg wtd src dst maxR budget st2
 
 -- | Relax all 8 neighbors of `cur`.
-expand ∷ PathingConfig → WorldTileData → (Int, Int) → (Int, Int) → Int → (Int, Int) → AS → AS
-expand pc wtd src dst maxR cur st0 =
-    foldl' (relax pc wtd src dst maxR cur) st0 (neighbors cur)
+expand ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → (Int, Int) → AS → AS
+expand pc reg wtd src dst maxR cur st0 =
+    foldl' (relax pc reg wtd src dst maxR cur) st0 (neighbors cur)
 
 -- | Standard A* relaxation with two extra guards:
 --   * Skip neighbors farther than `maxR` (Chebyshev) from src.
@@ -98,6 +99,7 @@ expand pc wtd src dst maxR cur st0 =
 --     failure to reach dst.
 relax
     ∷ PathingConfig
+    → MaterialRegistry
     → WorldTileData
     → (Int, Int)  -- ^ src
     → (Int, Int)  -- ^ dst
@@ -106,10 +108,10 @@ relax
     → AS
     → (Int, Int)  -- ^ nbr
     → AS
-relax pc wtd src dst maxR cur st nbr
+relax pc reg wtd src dst maxR cur st nbr
     | HS.member nbr (asClosed st)    = st
     | chebyshev src nbr > maxR       = st
-    | otherwise = case stepCost pc wtd cur nbr of
+    | otherwise = case stepCost pc reg wtd cur nbr of
         Nothing → st
         Just c  →
             let curG  = fromMaybe 0 (HM.lookup cur (asGScore st))

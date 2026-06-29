@@ -20,8 +20,14 @@
 --                exists. This is what makes units skirt cliffs instead
 --                of climbing them when going around is cheaper.
 --
+-- Material modifier (issue #312): the destination tile's surface
+-- material scales the horizontal step cost via `materialFactor` —
+-- loose/soft ground (sand, silt, mud) costs more than firm rock, so A*
+-- prefers firmer routes. The same factor drives the actual move SPEED
+-- at the call site (`Unit.Thread.Movement`), since the greedy stepper
+-- reads `stepCost` only for its replan trigger, not for step length.
+--
 -- Future extension points (left as TODOs in the code, NOT plumbed yet):
---   * Material modifier (sand slower than rock, etc.)
 --   * Weather modifier (snow/rain slowing units)
 --   * Per-unit modifier (heavy armor slower, light units faster)
 --
@@ -32,6 +38,8 @@ module Unit.Pathing.Cost
     , lookupTerrainZ
     , lookupFluidType
     , lookupSlopeAt
+    , lookupSurfaceMaterial
+    , materialFactor
     , isCliffStep
     -- * Tunables (loaded from config/pathing.yaml; see "Unit.Pathing.Config")
     , PathingConfig(..)
@@ -47,6 +55,7 @@ import Data.Word (Word8)
 import World.Types (WorldTileData(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Chunk.Types (ColumnTiles(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Material (MaterialRegistry, MaterialId(..), getMaterialProps, mpMoveCost)
 import World.Generate (globalToChunk)
 import Unit.Pathing.Config (PathingConfig(..), defaultPathingConfig)
 
@@ -65,8 +74,8 @@ import Unit.Pathing.Config (PathingConfig(..), defaultPathingConfig)
 --   `Nothing` — units can't path into unloaded territory. This
 --   enforces the "movement clamped to loaded chunks" rule
 --   bottom-up.
-stepCost ∷ PathingConfig → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
-stepCost pc wtd (sgx, sgy) (dgx, dgy) = do
+stepCost ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
+stepCost pc reg wtd (sgx, sgy) (dgx, dgy) = do
     srcZ <- lookupTerrainZ wtd sgx sgy
     dstZ <- lookupTerrainZ wtd dgx dgy
     let fluidAtDst = lookupFluidType wtd dgx dgy
@@ -88,7 +97,12 @@ stepCost pc wtd (sgx, sgy) (dgx, dgy) = do
       else
         let dx     = fromIntegral (dgx - sgx) ∷ Float
             dy     = fromIntegral (dgy - sgy) ∷ Float
-            horizD = sqrt (dx * dx + dy * dy)
+            -- Horizontal distance scaled by the destination tile's
+            -- surface material: loose/soft ground (sand, mud) costs more
+            -- per tile than firm rock, so A* routes prefer firmer ground
+            -- (#312). Climb/fall/fluid terms are unaffected — they're
+            -- vertical/hydraulic, not a function of the ground's looseness.
+            horizD = sqrt (dx * dx + dy * dy) * materialFactor reg wtd dgx dgy
             dz     = dstZ - srcZ
             -- Upward: a walkable ramp (isCliffStep False) costs only the
             -- gentle rampFactor; a true cliff costs the steep climbFactor.
@@ -160,6 +174,34 @@ lookupSlopeAt wtd gx gy z =
                 in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
                    then Just (ctSlopes col VU.! i)
                    else Nothing
+
+-- | Read the surface (top-of-column) material id at a global tile coord.
+--   This is the material a unit walks ON — the same top-of-column entry
+--   the dump reports as @matId@. Returns Nothing if the chunk is
+--   unloaded or the column is empty.
+lookupSurfaceMaterial ∷ WorldTileData → Int → Int → Maybe Word8
+lookupSurfaceMaterial wtd gx gy =
+    let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+    in case lookupChunk chunkCoord wtd of
+        Nothing → Nothing
+        Just lc → case lcTiles lc V.!? columnIndex lx ly of
+            Nothing  → Nothing
+            Just col → let mats = ctMats col
+                       in if VU.null mats
+                          then Nothing
+                          else Just (VU.last mats)
+
+-- | Movement-cost multiplier of a tile's surface material (#312).
+--   1.0 for firm ground, an unknown material, or an unloaded/empty
+--   column (so missing data is a no-op); >1.0 for loose, soft terrain
+--   authored via @move_cost@ in @data/materials/*.yaml@. Clamped to a
+--   positive minimum so a stray @move_cost: 0@ can't zero out the
+--   horizontal cost or divide-by-zero the speed scaling at the call site.
+materialFactor ∷ MaterialRegistry → WorldTileData → Int → Int → Float
+materialFactor reg wtd gx gy =
+    case lookupSurfaceMaterial wtd gx gy of
+        Nothing  → 1.0
+        Just mid → max 0.1 (mpMoveCost (getMaterialProps reg (MaterialId mid)))
 
 -- | Is the step from src to dst a cliff that needs climbing (vs a
 --   walkable slope)?

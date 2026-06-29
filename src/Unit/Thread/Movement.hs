@@ -41,8 +41,9 @@ import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep
-                         , PathingConfig(..))
+                         , materialFactor, PathingConfig(..))
 import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
+import World.Material (MaterialRegistry)
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor, gravity, metresPerZ)
 
 -- | Per-unit movement stats relevant to climb/fall mechanics.
@@ -111,6 +112,10 @@ tickAllMovement dt env utsRef = do
     -- tick so a future settings UI that mutates the ref takes effect
     -- live; the read is a single IORef deref.
     pc ← readIORef (pathingConfigRef env)
+    -- Surface-material registry for the per-tile movement factor (#312):
+    -- soft/loose ground slows the unit and biases A* toward firm routes.
+    -- Read once per tick (single IORef deref), like the pathing config.
+    reg ← readIORef (materialRegistryRef env)
     let statsFor uid = case HM.lookup uid (umInstances um) of
             Just inst →
                 -- Gait threshold (absolute tiles/s) from the unit's def:
@@ -132,7 +137,7 @@ tickAllMovement dt env utsRef = do
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
         simStates' = HM.mapWithKey
-                        (\uid ss → tickUnit pc now dt mWtd (statsFor uid) ss)
+                        (\uid ss → tickUnit pc reg now dt mWtd (statsFor uid) ss)
                         simStates
 
     -- Climb slip rolls + climb→fall conversions. Two passes that
@@ -371,10 +376,10 @@ snapshotVisibleWorldTiles env = do
             Nothing → pure Nothing
             Just ws → Just <$> readIORef (wsTilesRef ws)
 
-tickUnit ∷ PathingConfig → Double → Double → Maybe WorldTileData
+tickUnit ∷ PathingConfig → MaterialRegistry → Double → Double → Maybe WorldTileData
          → UnitMoveStats
          → UnitSimState → UnitSimState
-tickUnit pc now dt mWtd stats us =
+tickUnit pc reg now dt mWtd stats us =
     let us1 = handleGetUp now
             $ handleTransitionExpiry now
             $ handlePickupExpiry now
@@ -399,7 +404,7 @@ tickUnit pc now dt mWtd stats us =
                 let subGoal = case usLocalPath us2 of
                         (p : _) → p
                         []      → (mtTargetX mt, mtTargetY mt)
-                in stepTowardSubGoal pc now dt mWtd stats us2 mt subGoal
+                in stepTowardSubGoal pc reg now dt mWtd stats us2 mt subGoal
 
 -- | While the unit is in TransitioningTo Climbing, lerp usRealZ up the
 --   WALL portion of the cliff only — from the base z to the climb-top
@@ -855,6 +860,7 @@ chainStepDuration = 0.8
 --   (or clear the final target). Otherwise, take one step.
 stepTowardSubGoal
     ∷ PathingConfig
+    → MaterialRegistry
     → Double
     → Double
     → Maybe WorldTileData
@@ -863,7 +869,7 @@ stepTowardSubGoal
     → MoveTarget
     → (Float, Float)
     → UnitSimState
-stepTowardSubGoal pc now dt mWtd stats us mt (gx, gy) =
+stepTowardSubGoal pc reg now dt mWtd stats us mt (gx, gy) =
     let dx   = gx - usRealX us
         dy   = gy - usRealY us
         dist = sqrt (dx * dx + dy * dy)
@@ -872,10 +878,19 @@ stepTowardSubGoal pc now dt mWtd stats us mt (gx, gy) =
         effSpeed = if usPose us ≡ Crawling
                    then min (mtSpeed mt) crawlSpeed
                    else mtSpeed mt
-        step = effSpeed * realToFrac dt
+        -- Surface-material slowdown (#312): the ground under the unit's
+        -- feet divides its speed — loose/soft terrain (sand, silt, mud)
+        -- has move_cost > 1.0 and so is crossed slower than firm rock.
+        -- The greedy stepper reads stepCost only for its replan trigger,
+        -- so the speed effect must be applied to the step length HERE
+        -- (the same factor stepCost folds into the planned route cost).
+        matSlow = case mWtd of
+            Just wtd → materialFactor reg wtd (floor (usRealX us)) (floor (usRealY us))
+            Nothing  → 1.0
+        step = (effSpeed / matSlow) * realToFrac dt
     in if dist ≤ max step arrivalEpsilon
        then arriveAtSubGoal stats us mt (gx, gy) mWtd
-       else moveToward pc now stats us mt mWtd dx dy dist step
+       else moveToward pc reg now stats us mt mWtd dx dy dist step
 
 -- | Top speed (tiles/sec) of a unit dragging itself along on a maimed
 --   body. Slow enough to read as a crawl; the injury speed-multiplier
@@ -923,6 +938,7 @@ arriveAtSubGoal stats us mt (gx, gy) mWtd =
 --   climb transition instead of taking the step.
 moveToward
     ∷ PathingConfig
+    → MaterialRegistry
     → Double             -- now (game time, for transition expiry)
     → UnitMoveStats
     → UnitSimState
@@ -933,7 +949,7 @@ moveToward
     → Float    -- distance to sub-goal
     → Float    -- step length this tick
     → UnitSimState
-moveToward pc now stats us mt mWtd dx dy dist step =
+moveToward pc reg now stats us mt mWtd dx dy dist step =
     let nx   = dx / dist
         ny   = dy / dist
         newX = usRealX us + nx * step
@@ -946,7 +962,7 @@ moveToward pc now stats us mt mWtd dx dy dist step =
         mCost
             | srcTile ≡ dstTile = Just 0  -- sub-tile motion, no boundary cross
             | otherwise = case mWtd of
-                Just wtd → stepCost pc wtd srcTile dstTile
+                Just wtd → stepCost pc reg wtd srcTile dstTile
                 Nothing  → Just 0  -- no world snapshot: don't block
         followingPath = not (null (usLocalPath us))
         -- Cliff and fall detection: only meaningful when actually
@@ -977,9 +993,9 @@ moveToward pc now stats us mt mWtd dx dy dist step =
             _ → Nothing
     in case mCost of
         Nothing →
-            replan pc us mt mWtd srcTile
+            replan pc reg us mt mWtd srcTile
         Just c | not followingPath ∧ c > pcReplanCostThreshold pc →
-            replan pc us mt mWtd srcTile
+            replan pc reg us mt mWtd srcTile
         Just _ → case (mCliff, mFall) of
             (Just (srcZ, dstZ), _) →
                 -- Face the CLIFF, not the unit's walking sub-step.
@@ -1140,15 +1156,16 @@ startFall now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
 --   try again ("never gives up").
 replan
     ∷ PathingConfig
+    → MaterialRegistry
     → UnitSimState
     → MoveTarget
     → Maybe WorldTileData
     → (Int, Int)
     → UnitSimState
-replan pc us mt mWtd srcTile =
+replan pc reg us mt mWtd srcTile =
     let finalTile = (floor (mtTargetX mt), floor (mtTargetY mt))
         tilePath = case mWtd of
-            Just wtd → localAStar pc wtd srcTile finalTile defaultMaxRadius
+            Just wtd → localAStar pc reg wtd srcTile finalTile defaultMaxRadius
             Nothing  → []
         wps = map tileCenter tilePath
     in if null wps

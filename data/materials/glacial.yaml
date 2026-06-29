@@ -1,6 +1,7 @@
 materials:
   - id: 110
     name: till
+    move_cost: 1.1
     hardness: 0.45
     density: 2.0
     albedo: 0.25
@@ -12,6 +13,7 @@ materials:
     bg:   "assets/textures/world/zoommap/till_chunk_background.png"
   - id: 111
     name: moraine
+    move_cost: 1.15   # bouldery, uneven moraine debris
     hardness: 0.5
     density: 2.2
     albedo: 0.28
@@ -23,6 +25,7 @@ materials:
     bg:   "assets/textures/world/zoommap/moraine_chunk_background.png"
   - id: 112
     name: glacial_clay
+    move_cost: 1.35
     hardness: 0.3
     density: 1.8
     albedo: 0.30
@@ -34,6 +37,7 @@ materials:
     bg:   "assets/textures/world/zoommap/glacial_clay_chunk_background.png"
   - id: 113
     name: outwash_gravel
+    move_cost: 1.15
     hardness: 0.45
     density: 2.1
     albedo: 0.32
