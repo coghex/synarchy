@@ -54,9 +54,13 @@ end
 --                         - time_penalty * (now - actionStartedAt)
 -- Clamped to -inf if stamina < min_wander_stamina_fraction * max.
 --
--- follow_command utility is constant 1.0 when a task is pending;
--- placed deliberately above wander's ~0.8 fresh utility so player
--- commands win in the absence of dire needs.
+-- follow_command utility is constant 7.0 when a task is pending
+-- (FOLLOW_COMMAND_UTILITY) — above wander, routine work, and combat
+-- (engage/retreat ~6.0) so a right-click reliably moves the unit, but
+-- below the actions explicitly calibrated to outrank a player order:
+-- explicit pickups, assigned goals, an in-progress notify, a dry-canteen
+-- refill, and dire survival (drink/eat). See the per-action notes below
+-- and the FOLLOW_COMMAND_UTILITY block for the full ladder (#306).
 local config = {
     acolyte = {
         thought_interval = 1.0,    -- seconds between decisions
@@ -75,7 +79,13 @@ local config = {
         -- Drinking
         drink_sip_litres        = 0.5,    -- canteen water consumed per sip
         drink_min_thirst        = 0.2,    -- 1 - hydration/max; below this, no drink
-        drink_weight            = 10.0,   -- scales utility above wander/command
+        -- Drinking utility = thirst · drink_weight (thirst = 1 - hyd/max).
+        -- At weight 15 it crosses follow_command (7.0) at thirst ≈ 0.47,
+        -- so a unit whose hydration drops below ~half diverts to drink
+        -- even under a move order (moderate thirst interrupts commands,
+        -- #306), and a near-empty unit (thirst→1) tops out at ~15, well
+        -- above every order/goal. Shared with drink_from_source.
+        drink_weight            = 15.0,
         drink_canteen_def       = "canteen_steel_2l",
         -- One litre of canteen water restores N L of hydration. A 2 L
         -- canteen at K=11 gives 22 L of hydration ≈ 50% of the
@@ -83,27 +93,35 @@ local config = {
         -- "a full canteen should refill an average acolyte by ~50%".
         drink_hydration_per_litre = 11.0,
         -- Eating. Mirror of drink_from_canteen: only fires when hunger
-        -- drops below eat_max_fraction of max_hunger; utility scales
-        -- linearly with how empty the meter is, weighted to beat
-        -- wander/command. Currently inventory-only — search_for_food
-        -- (foraging from flora) is Phase 6.
+        -- drops below eat_max_fraction (0.25) of max_hunger; utility =
+        -- (1 - hungerFrac) · eat_weight. Because it only fires past the
+        -- 0.25 threshold, the term is always ≥ 0.75·10 = 7.5 > command
+        -- (7.0) — a hungry unit interrupts orders to eat (#306).
+        -- Currently inventory-only — search_for_food (foraging from
+        -- flora) is Phase 6.
         eat_max_fraction        = 0.25,
         eat_weight              = 10.0,
         -- Refilling. Utility ramps quadratically above the threshold:
-        --   25% empty (threshold): ~0.85 — beats wander, stays below
-        --                          follow_command (1.0). Tops off when
-        --                          nothing important is going on.
-        --   50% empty:             ~0.91 — still below command, so a
+        -- util = base + scale·x², x = (emptiness-0.25)/0.75 ∈ [0,1].
+        --   25% empty (threshold): ~0.85 — beats wander, stays well
+        --                          below follow_command (7.0). Tops off
+        --                          only when nothing important is going on.
+        --   50% empty:             ~1.6 — still far below command, so a
         --                          half-empty canteen won't interrupt
         --                          player orders.
-        --   75% empty:             ~1.07 — slightly above command;
-        --                          will pause an order to top up.
-        --   100% empty:            ~1.35 — well above command. Urgent
-        --                          — the canteen has run dry.
+        --   75% empty:             ~3.8 — climbing, but a busy/ordered
+        --                          unit still finishes its task first.
+        --   ~97% empty:            ~7.0 — crosses command. A near-dry
+        --                          canteen now interrupts a move order.
+        --   100% empty:            ~7.5 — above command. The canteen has
+        --                          run dry; refilling pre-empts orders (#306).
         canteen_def              = "canteen_steel_2l",
         refill_min_emptiness     = 0.25,
         refill_base_weight       = 0.85,
-        refill_urgency_scale     = 0.5,   -- added on top, scaled by (x²)
+        -- Peak (x=1, dry) = base + scale = 0.85 + 6.65 = 7.5, just above
+        -- FOLLOW_COMMAND_UTILITY (7.0); the x² shape keeps partial
+        -- canteens well under command (only a near-dry one interrupts).
+        refill_urgency_scale     = 6.65,
         refill_arrival_tiles     = 1.5,
         -- Searching. Fires when canteen has headroom but no water is
         -- known. Walks a rosette: 8 compass waypoints per ring,
@@ -117,12 +135,17 @@ local config = {
         search_spacing           = 6,
         search_arrival_tiles     = 1.5,
         search_max_step          = 32,     -- ~4 rings; then re-anchor origin
-        -- Goal-driven utility floor for "find_water". Beats wander
-        -- (0.5 + ~0.3) and follow_command (1.0) so a goal-bound
-        -- acolyte searches even on a full canteen. Stays well under
-        -- a high-thirst drink (~10*thirst), so they still pause to
-        -- drink before resuming the spiral.
-        goal_search_weight       = 5.0,
+        -- Goal-driven utility floor for "find_water". Above wander
+        -- (0.5 + ~0.3) and follow_command (7.0) so an assigned search
+        -- goal outranks a one-off move order — a goal-bound acolyte
+        -- keeps searching even on a full canteen, and even if the player
+        -- right-clicks it elsewhere (#306). Stays under a high-thirst
+        -- drink (thirst·15, ≥7.5 once thirst≥0.5), so a thirsty searcher
+        -- still pauses to drink (drink_from_canteen wins ties by list
+        -- order) before resuming the spiral. NB: 7.5 > combat (~6.0), so
+        -- an assigned goal also outranks routine engage/retreat — a
+        -- desperate (futile) retreat still escalates past it.
+        goal_search_weight       = 7.5,
         -- Notify-allies (second goal). Radio branch: stand still N
         -- seconds, then push known sources to every other radio-
         -- bearing acolyte. Walk branch: pick an uninformed acolyte
@@ -130,7 +153,11 @@ local config = {
         notify_broadcast_seconds = 1.0,
         notify_transfer_seconds  = 1.0,
         notify_arrival_tiles     = 1.5,
-        goal_notify_weight       = 5.0,
+        -- Same ladder as goal_search_weight: an assigned notify_allies
+        -- goal (and the in-progress phase lock, see notifyAlliesUtility)
+        -- outranks follow_command (7.0) so the deliberate goal isn't
+        -- pre-empted by a stray move order (#306).
+        goal_notify_weight       = 7.5,
         -- Construction (build_nearby). Utility shape:
         --   util = base · (1 − workers_present/saturation) · dist_factor
         -- workers_present EXCLUDES the unit asking, so the curve is
@@ -194,9 +221,14 @@ local config = {
                        work_anim  = "using_pickaxe" },
         },
         -- Ground-item pickup (player order via right-click → Pick up).
-        -- Above follow_command (1.0) so the explicit order wins, below
-        -- dire needs. Capacity is checked at the moment of pickup.
-        pickup_utility       = 1.5,
+        -- An explicit pickup is a player order peer to a move order, so
+        -- it sits just ABOVE follow_command (7.0): commandMove and
+        -- commandPickup set independent fields without clearing each
+        -- other, so when both are pending the more-specific pickup must
+        -- win the arbitration rather than time out behind the move (#306).
+        -- 8.0 also edges out assigned goals (7.5). Below dire survival
+        -- (drink/eat). Capacity is checked at the moment of pickup.
+        pickup_utility       = 8.0,
         pickup_arrival_tiles = 1.2,
         pickup_timeout       = 30.0,
         -- Medic auto-treat (treat_ally, Phase D). A unit that KNOWS
@@ -599,11 +631,12 @@ end
 -----------------------------------------------------------
 -- Action: refill_canteen
 --
--- Proactive maintenance: when the canteen is at least half-empty and
--- the unit has a remembered water location, walk to it and top up.
--- Utility sits between wander and follow_command per the design spec
--- (more important than idling/wandering, less important than a player
--- command). FOV memory is updated separately at the top of tickOne.
+-- Proactive maintenance: when the canteen is past the emptiness
+-- threshold and the unit has a remembered water location, walk to it
+-- and top up. The quadratic urgency ramp keeps a partly-empty canteen
+-- BELOW follow_command (so a topping-off doesn't interrupt orders), but
+-- a near-dry one crosses above it (a dry canteen interrupts orders,
+-- #306). FOV memory is updated separately at the top of tickOne.
 -----------------------------------------------------------
 local function findCanteenWithHeadroom(uid, defName)
     local inv = unit.getInventory(uid)
@@ -625,8 +658,8 @@ local function refillUtility(uid, s, params)
     if emptiness < params.refill_min_emptiness then return -math.huge end
     -- Quadratic ramp: x = normalised position in [threshold, 1.0],
     -- squared so urgency stays low while the canteen is mostly full
-    -- and shoots up as it runs dry. At empty (x=1), exceeds the
-    -- command priority (1.0) — a dry canteen interrupts orders.
+    -- and shoots up as it runs dry. At empty (x=1) → base+scale = 7.5,
+    -- above the command priority (7.0) — a dry canteen interrupts orders.
     local x = (emptiness - params.refill_min_emptiness)
             / (1.0 - params.refill_min_emptiness)
     return params.refill_base_weight
@@ -939,13 +972,23 @@ end
 -----------------------------------------------------------
 -- Action: follow_command
 -----------------------------------------------------------
--- An explicit player move order outranks the unit's autonomous
--- behaviour: above goal-pursuit/search (5.0), combat (retreat/engage
--- 6.0), and ambient wander, so a right-click reliably moves the unit.
--- It stays BELOW dire survival needs — drink/eat scale to ~10 only when
--- the unit is genuinely critical (thirst·drink_weight), so a unit dying
--- of thirst still tends to that first, then resumes the order
--- (commandedTask persists until maintainTask clears it on arrival/timeout).
+-- An explicit player move order outranks routine autonomous behaviour:
+-- above ambient wander, work (build/deliver/store/dig ≤6.0), and combat
+-- (engage/retreat ~6.0), so a right-click reliably moves the unit even
+-- mid-task or mid-fight.
+--
+-- It stays BELOW the actions explicitly calibrated to outrank a player
+-- order (the #306 ladder — all re-derived against this 7.0 baseline, NOT
+-- the historical 1.0):
+--   * dire survival — drink (thirst·15, crosses 7.0 at thirst≈0.47) and
+--     eat (≥7.5 whenever it fires), so a hungry/thirsty unit tends to
+--     that first, then resumes the order;
+--   * a dry-canteen refill (peaks 7.5 near-empty);
+--   * explicit ground-item pickups (8.0) — a peer player order;
+--   * assigned goals — find_water / notify_allies (7.5);
+--   * a desperate, futile retreat (escalates past 7.5 with threat ratio).
+-- commandedTask persists until maintainTask clears it on arrival/timeout,
+-- so the unit resumes the move once the higher-priority action finishes.
 local FOLLOW_COMMAND_UTILITY = 7.0
 
 local function followCommandUtility(uid, s, params)
@@ -1784,14 +1827,19 @@ end
 local function notifyAlliesUtility(uid, s, params)
     if not isGoalActive(s, "notify_allies") then return -math.huge end
     -- Lock in once a phase is active: a half-done broadcast or walk
-    -- shouldn't be pre-empted by ambient utility or player commands.
-    -- The lock is FINITE (not math.huge) so dire needs still win:
-    -- drink/eat scale to ~10 as the meter empties, crossing 6.0 at
-    -- ~60% deficit — a genuinely thirsty notifier pauses to drink
-    -- and the phase state resumes afterwards. 6.0 also ties engage,
-    -- and combat candidates are earlier in the action list, so an
-    -- attacked notifier defends itself (ties go to list order).
-    if s.notifyPhase then return 6.0 end
+    -- shouldn't be pre-empted by ambient utility or player commands. The
+    -- lock matches goal_notify_weight (7.5, above follow_command's 7.0,
+    -- #306) — raising it with the goal floor avoids a flip-flop where the
+    -- unit elects to notify (7.5) but then abandons the phase the moment a
+    -- move order (7.0) is pending. The lock is FINITE (not math.huge) so
+    -- dire needs still win: drink (thirst·15) crosses 7.5 at thirst≈0.5
+    -- and eat is ≥7.5 whenever it fires; both sort before notify_allies
+    -- in the action list, so a genuinely thirsty/hungry notifier pauses to
+    -- drink/eat (ties go to list order) and the phase state resumes after.
+    -- 7.5 now sits above routine combat (engage/retreat ~6.0): an attacked
+    -- notifier finishes the broadcast unless a futile retreat escalates
+    -- past 7.5, which still breaks it off to flee.
+    if s.notifyPhase then return params.goal_notify_weight end
     return params.goal_notify_weight
 end
 
