@@ -1111,11 +1111,27 @@ generateChunk registry catalog params coord =
                     -- pre-smoothing bordered terrain, because
                     -- 'smoothIslandColumns' may lower a lake-adjacent tile
                     -- after 'finalElevVec' is computed.
-                    finalSelf = terrainSurfaceMap VU.! idx
+                    --
+                    -- A beyond-glacier neighbour reads back as the
+                    -- 'minBound' sentinel (its column is empty / unrendered);
+                    -- it must NOT pull 'exposeFrom' down toward minBound, or
+                    -- 'buildColumnStrata' below would size a ~2^63-tall column
+                    -- (depth = rawSurfZ - exposeFrom) and overflow the heap.
+                    -- Treat it like an absent neighbour (fall back to this
+                    -- column's own surface — no downward exposure), the same
+                    -- way the slope / edge-strata passes special-case the
+                    -- sentinel. This is the world-edge case behind the
+                    -- glacier-rim chunk-load crash (#298): a chunk straddling
+                    -- the glacier diagonal has real columns bordering empty
+                    -- ones in-chunk.
+                    finalSelf0 = terrainSurfaceMap VU.! idx
+                    finalSelf = if finalSelf0 ≡ minBound then rawSurfZ
+                                else finalSelf0
                     visibleTerrainOr olx oly fallback =
                         if olx ≥ 0 ∧ olx < chunkSize
                            ∧ oly ≥ 0 ∧ oly < chunkSize
-                        then terrainSurfaceMap VU.! columnIndex olx oly
+                        then let z = terrainSurfaceMap VU.! columnIndex olx oly
+                             in if z ≡ minBound then fallback else z
                         else lookupElevOr olx oly fallback
                     exposeN = visibleTerrainOr lx (ly - 1) rawSurfZ
                     exposeS = visibleTerrainOr lx (ly + 1) rawSurfZ

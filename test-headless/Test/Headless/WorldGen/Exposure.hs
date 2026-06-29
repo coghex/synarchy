@@ -28,6 +28,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv)
 import System.Environment (lookupEnv)
+import qualified Data.Text as T
 import Test.Headless.Harness
 import World.Types
 
@@ -116,6 +117,37 @@ spec = do
 
         it "holds across a w64 world (seed 42)" $ \env → do
             ws ← sharedWorld env 42 64 3
+            tiles ← getWorldTileData ws
+            reportViolations (worldViolations (wtdChunks tiles))
+
+        -- Regression for #298 (glacier-rim chunk-load heap overflow).
+        -- A chunk straddling the glacier diagonal has REAL columns
+        -- bordering BEYOND-GLACIER (empty) columns in-chunk. Reading
+        -- such an empty in-chunk neighbour's terrain surface returns the
+        -- minBound sentinel, which used to drag the column build's
+        -- 'exposeFrom' down to minBound — sizing a ~2^63-tall strata
+        -- column ('buildColumnStrata' depth = surfZ − exposeFrom) and
+        -- heap-overflowing (killing) the world thread the instant such a
+        -- chunk loaded. A private w8 world (half-size 4 chunks) puts the
+        -- v-edge rim two chunks from centre, so it reproduces fast and
+        -- in isolation without perturbing the shared worlds.
+        it "loads glacier-rim chunks straddling the v-edge without\
+           \ heap-overflowing the world thread (#298)" $ \env → do
+            let pid = WorldPageId (T.pack "rim_298_w8")
+            sendWorldCommand env (WorldInit pid 7 8 3)
+            ws ← waitForWorldInit env pid 120
+            -- Queue the whole (-4..0)² corner at once: interior, mixed
+            -- (glacier-diagonal) and fully-beyond chunks together — the
+            -- exact load shape that crashed.
+            queueChunks ws [ ChunkCoord cx cy
+                           | cx ← [-4 .. 0], cy ← [-4 .. 0] ]
+            -- (-4,-1) is a MIXED rim chunk (some real, some beyond). If
+            -- the world thread heap-overflowed mid-batch it never lands,
+            -- so this load IS the regression assertion.
+            loaded ← waitForChunksAt ws (ChunkCoord (-4) (-1)) 60
+            loaded `shouldBe` True
+            -- The rim chunks must also store sane, bounded strata
+            -- (exposure invariant) rather than voids.
             tiles ← getWorldTileData ws
             reportViolations (worldViolations (wtdChunks tiles))
 
