@@ -560,8 +560,9 @@ local function findFoodInInventory(uid)
     if not inv then return nil end
     local best, bestN = nil, -math.huge
     for _, it in ipairs(inv) do
-        if it.food and it.food.nutrition and it.food.nutrition > bestN then
-            best, bestN = it, it.food.nutrition
+        local cal = it.food and it.food.nutrition and it.food.nutrition.calories
+        if cal and cal > bestN then
+            best, bestN = it, cal
         end
     end
     return best
@@ -584,17 +585,15 @@ local function eatExecute(uid, s, params)
     local food = findFoodInInventory(uid)
     if not food then return end
 
-    local hun    = unit.getStat(uid, "hunger")    or 0
-    local maxHun = unit.getStat(uid, "max_hunger") or 0
-    -- Stomach overflow is wasted (clamp to max_hunger). Item is
-    -- consumed regardless — over-feeding loses calories, by design.
-    local newHun = math.min(maxHun, hun + food.food.nutrition)
-    unit.setStat(uid, "hunger", newHun)
-    -- Food carries salt — the only way to recover from sweat-driven
-    -- hyponatremia (the kidneys can't make sodium). See scripts/salts.lua.
-    require("scripts.salts").mealSalt(uid)
-    unit.removeItem(uid, food.defName)
-    unit.eat(uid)
+    -- unit.feed is the authoritative consume-and-credit primitive: it
+    -- removes the item, clamps the credited calories to max_hunger
+    -- (overflow wasted, by design), and plays the eat anim. Returns the
+    -- kcal credited, or nil if the item couldn't be consumed.
+    if unit.feed(uid, food.defName) then
+        -- Food carries salt — the only way to recover from sweat-driven
+        -- hyponatremia (the kidneys can't make sodium). See scripts/salts.lua.
+        require("scripts.salts").mealSalt(uid)
+    end
 end
 
 -----------------------------------------------------------
