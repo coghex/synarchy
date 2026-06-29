@@ -141,11 +141,18 @@ spec = do
             -- exact load shape that crashed.
             queueChunks ws [ ChunkCoord cx cy
                            | cx ← [-4 .. 0], cy ← [-4 .. 0] ]
-            -- (-4,-1) is a MIXED rim chunk (some real, some beyond). If
-            -- the world thread heap-overflowed mid-batch it never lands,
-            -- so this load IS the regression assertion.
-            loaded ← waitForChunksAt ws (ChunkCoord (-4) (-1)) 60
-            loaded `shouldBe` True
+            -- The MIXED rim chunks (real columns bordering beyond-glacier
+            -- columns in-chunk) are the crashers — the full glacier
+            -- anti-diagonal across this corner. They span more than one
+            -- load batch (drainInitQueues does maxChunksPerTick = 8), and
+            -- a heap overflow on any batch kills the world thread so that
+            -- batch's chunks AND every later one never land. Wait for
+            -- EVERY mixed chunk, not just the first, or a later-batch
+            -- crash would slip through.
+            let mixedRim = [ ChunkCoord (-4) (-1), ChunkCoord (-3) (-2)
+                           , ChunkCoord (-2) (-3), ChunkCoord (-1) (-4) ]
+            loaded ← mapM (\c → waitForChunksAt ws c 60) mixedRim
+            loaded `shouldBe` map (const True) mixedRim
             -- The rim chunks must also store sane, bounded strata
             -- (exposure invariant) rather than voids.
             tiles ← getWorldTileData ws
