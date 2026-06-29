@@ -11,11 +11,15 @@ Unlike movement_probe.py this keeps the unit_ai tick LIVE (the arbitration
 IS the thing under test) and reads the chosen action straight off the AI
 state via unitAi.getState(uid).currentAction.
 
+The target ladder (#306): dire-survival > combat/treatment > player orders
+(move/pickup/dry-refill) > situational goals (find_water/notify) > work/wander.
+
 Checks (each on a fresh acolyte on a flat arena):
-  A. pickup_ground beats a pending move: issue commandMove to a far tile,
-     then commandPickup a nearby item -> currentAction == "pickup_ground".
-  B. refill_canteen (dry) beats a pending move: empty the canteen, inject a
-     known water source, issue commandMove -> currentAction == "refill_canteen".
+  A. pickup_ground (a peer player order) beats a pending move.
+  B. refill_canteen (dry) beats a pending move.
+  C. a move order beats a ROUTINE goal (a fresh acolyte's find_water search).
+  D. combat beats a goal: a struck goal-bound acolyte reacts with a combat
+     action instead of continuing to search.
 
 Run from the repo/worktree root (scripts/ resolve relative to CWD):
   python3 tools/follow_command_priority_probe.py [--port N] [--unit acolyte]
@@ -127,18 +131,23 @@ def current_action(port: int, uid: int) -> str:
         return raw
 
 
-def poll_for_action(port: int, uid: int, want: str, seconds: float = 8.0):
-    """Poll currentAction; return (seen_set, hit_bool). Stops early on hit."""
+def poll_for_action(port: int, uid: int, want, seconds: float = 8.0):
+    """Poll currentAction; return (timeline, hit_bool). `want` is a single
+    action name or a set/collection of acceptable names. Stops early on hit."""
+    wants = {want} if isinstance(want, str) else set(want)
     seen: list[str] = []
     steps = int(seconds / 0.4)
     for _ in range(steps):
         a = current_action(port, uid)
         if not seen or seen[-1] != a:
             seen.append(a)
-        if a == want:
+        if a in wants:
             return seen, True
         time.sleep(0.4)
     return seen, False
+
+
+COMBAT_ACTIONS = {"engage", "attack_target", "retreat"}
 
 
 def spawn_acolyte(port: int, unit: str, x: float, y: float) -> int:
@@ -217,21 +226,33 @@ def main() -> int:
         print(f"\n[B refill-beats-move] action timeline: {' -> '.join(seenb)}")
         checks.append(("refill_canteen (dry) wins over a pending move order", hitb))
 
-        # --- Check C: a plain move order still wins when nothing legitimately
-        # outranks it (guards against over-correcting the ladder). Inject a
-        # known water source so the find_water search goal stands down, leave
-        # the canteen full, then issue a move -> follow_command.
+        # --- Check C: a move order beats a ROUTINE goal. A fresh acolyte
+        # spawns with an active find_water goal and no known water, so absent
+        # other input it searches (search_for_water). Issuing a move must pull
+        # it onto follow_command -> a routine goal yields to a player order
+        # (command > goals; the inversion this fix corrects).
         uc = spawn_acolyte(args.port, args.unit, sx + 2, sy + 2)
-        send(args.port,
-             f"local s=require('scripts.unit_ai').getState({uc}); "
-             f"s.knownWaterSources = {{{{x={int(sx)+3},y={int(sy)+3}}}}}; return 'water'")
+        # Confirm it is searching first (goal is live, no water known).
+        pre = current_action(args.port, uc)
         send(args.port,
              f"require('scripts.unit_ai').commandMove({uc},{far_x},{far_y}); "
              f"return 'moved'")
         seenc, hitc = poll_for_action(args.port, uc, "follow_command", args.seconds)
-        print(f"\n[C move-still-works] action timeline: {' -> '.join(seenc)}")
-        checks.append(("follow_command wins a plain move (ladder not inverted)",
-                       hitc))
+        print(f"\n[C move-beats-goal] pre={pre}  timeline: {' -> '.join(seenc)}")
+        checks.append(("follow_command beats a routine find_water goal", hitc))
+
+        # --- Check D: combat beats a goal. Stage an attacker next to a
+        # goal-bound acolyte (searching for water). When struck it must react
+        # with a combat action (engage/attack_target/retreat), NOT keep
+        # searching -- self-defense outranks a routine goal.
+        ud = spawn_acolyte(args.port, args.unit, sx + 4, sy)
+        atk = spawn_acolyte(args.port, args.unit, sx + 5, sy)  # adjacent
+        send(args.port,
+             f"require('scripts.unit_ai').commandAttack({atk},{ud}); return 'fight'")
+        seend, hitd = poll_for_action(args.port, ud, COMBAT_ACTIONS, args.seconds + 6)
+        print(f"\n[D combat-beats-goal] victim timeline: {' -> '.join(seend)}")
+        checks.append(("a struck goal-bound unit reacts with combat, not search",
+                       hitd))
 
         print("\n--- checks ---")
         all_ok = True

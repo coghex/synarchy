@@ -55,12 +55,20 @@ end
 -- Clamped to -inf if stamina < min_wander_stamina_fraction * max.
 --
 -- follow_command utility is constant 7.0 when a task is pending
--- (FOLLOW_COMMAND_UTILITY) — above wander, routine work, and combat
--- (engage/retreat ~6.0) so a right-click reliably moves the unit, but
--- below the actions explicitly calibrated to outrank a player order:
--- explicit pickups, assigned goals, an in-progress notify, a dry-canteen
--- refill, and dire survival (drink/eat). See the per-action notes below
--- and the FOLLOW_COMMAND_UTILITY block for the full ladder (#306).
+-- (FOLLOW_COMMAND_UTILITY). The ladder (highest first, #306):
+--   dire SELF survival (drink/eat ~10–15, derived from need)
+--   combat / treatment        (engage·retreat 8.0+, treat_ally 8.0)
+--   ───── player orders ─────  (follow_command 7.0, pickup 7.5,
+--                               dry-canteen refill peak 7.5)
+--   situational goals          (find_water 3.0–6.0 derived from thirst,
+--                               notify_allies 4.0) — a routine goal
+--                               yields to a command; it only wins on
+--                               its own when need (not the goal) makes it
+--   routine work / wander      (dig·deliver locks ≤6.0, wander ~0.8)
+-- So: a fight or a wound supersedes a move order; a move order supersedes
+-- a routine goal; and a goal only climbs above a command when the
+-- underlying NEED (thirst→drink/refill) does, which is derived. See the
+-- FOLLOW_COMMAND_UTILITY block and the per-action notes for the values.
 local config = {
     acolyte = {
         thought_interval = 1.0,    -- seconds between decisions
@@ -135,17 +143,24 @@ local config = {
         search_spacing           = 6,
         search_arrival_tiles     = 1.5,
         search_max_step          = 32,     -- ~4 rings; then re-anchor origin
-        -- Goal-driven utility floor for "find_water". Above wander
-        -- (0.5 + ~0.3) and follow_command (7.0) so an assigned search
-        -- goal outranks a one-off move order — a goal-bound acolyte
-        -- keeps searching even on a full canteen, and even if the player
-        -- right-clicks it elsewhere (#306). Stays under a high-thirst
-        -- drink (thirst·15, ≥7.5 once thirst≥0.5), so a thirsty searcher
-        -- still pauses to drink (drink_from_canteen wins ties by list
-        -- order) before resuming the spiral. NB: 7.5 > combat (~6.0), so
-        -- an assigned goal also outranks routine engage/retreat — a
-        -- desperate (futile) retreat still escalates past it.
-        goal_search_weight       = 7.5,
+        -- "find_water" goal urgency — DERIVED, not a flat weight (#306).
+        -- A standing goal is not automatically more important than what
+        -- the player just ordered; its priority should track how badly
+        -- water is actually needed. So searchUtility returns
+        --   goal_search_floor + goal_search_urgency · thirst
+        -- where thirst = 1 - hydration/max ∈ [0,1]:
+        --   * well-hydrated scout → ~3.0: above wander (so it searches
+        --     when idle) but BELOW follow_command (7.0), combat, and
+        --     treatment — a player move order, a fight, or a medic's
+        --     patient all supersede a routine search;
+        --   * as the searcher runs dry it climbs toward ~6.0, and its
+        --     own thirst (drink/refill, thirst·15 / dry-canteen 7.5)
+        --     takes over above command before the goal alone ever would.
+        -- This is the "some goals are critical, some are not" rule: the
+        -- criticality is derived from need rather than asserted by a
+        -- constant. Capped below command by construction (floor+urgency<7).
+        goal_search_floor        = 3.0,
+        goal_search_urgency      = 3.0,
         -- Notify-allies (second goal). Radio branch: stand still N
         -- seconds, then push known sources to every other radio-
         -- bearing acolyte. Walk branch: pick an uninformed acolyte
@@ -153,11 +168,13 @@ local config = {
         notify_broadcast_seconds = 1.0,
         notify_transfer_seconds  = 1.0,
         notify_arrival_tiles     = 1.5,
-        -- Same ladder as goal_search_weight: an assigned notify_allies
-        -- goal (and the in-progress phase lock, see notifyAlliesUtility)
-        -- outranks follow_command (7.0) so the deliberate goal isn't
-        -- pre-empted by a stray move order (#306).
-        goal_notify_weight       = 7.5,
+        -- notify_allies is a routine, non-critical goal (sharing where
+        -- water is) — it sits ABOVE wander but BELOW follow_command (7.0)
+        -- so a player order supersedes it, and below combat/treatment so
+        -- an attacked or injured notifier breaks off (#306). The phase
+        -- lock (notifyAlliesUtility) only needs to out-rank ambient
+        -- wander so a half-done broadcast isn't yanked by idle drift.
+        goal_notify_weight       = 4.0,
         -- Construction (build_nearby). Utility shape:
         --   util = base · (1 − workers_present/saturation) · dist_factor
         -- workers_present EXCLUDES the unit asking, so the curve is
@@ -226,25 +243,33 @@ local config = {
         -- commandPickup set independent fields without clearing each
         -- other, so when both are pending the more-specific pickup must
         -- win the arbitration rather than time out behind the move (#306).
-        -- 8.0 also edges out assigned goals (7.5). Below dire survival
-        -- (drink/eat). Capacity is checked at the moment of pickup.
-        pickup_utility       = 8.0,
+        -- 7.5 is just above follow_command (7.0) — a peer player order
+        -- that wins the move-vs-pickup tie — but BELOW combat/treatment
+        -- (≥8.0) and dire survival, so a fight or a fresh wound still
+        -- interrupts it. Capacity is checked at the moment of pickup.
+        pickup_utility       = 7.5,
         pickup_arrival_tiles = 1.2,
         pickup_timeout       = 30.0,
         -- Medic auto-treat (treat_ally, Phase D). A unit that KNOWS
         -- bleed-control (knowledge × intelligence = its capability)
         -- rushes to bandage a bleeding ally, fetching the first-aid
-        -- kit from the technomule first. Base/lock utility sit ABOVE
-        -- the menial-work locks (dig/deliver = 6.0) so a medic drops
-        -- routine labour to save a life, but BELOW dire survival
-        -- (~10) and combat (forceExecute) — you can't dress a wound
-        -- while fighting or bleeding out yourself. Squad rule: the
-        -- best available medic takes a patient; a lesser one only
-        -- steps in when the best is tied up in combat and nobody else
-        -- has claimed that patient.
+        -- kit from the technomule first. Base/lock utility sit ABOVE a
+        -- player move order (follow_command 7.0) and the menial-work
+        -- locks (dig/deliver = 6.0) so treating a bleeding ally is not
+        -- cancelled by a stray move command or routine labour (#306) —
+        -- but BELOW dire SELF survival (drink/eat ~10) and combat
+        -- (engage/retreat 8.0, ties broken to combat by list order), so
+        -- a medic still drinks when dying of thirst and defends itself
+        -- when attacked (medicBusyInCombat then frees a lesser medic).
+        -- Treating ANOTHER unit is high but, per design, below a unit's
+        -- own survival/getting-treated. (A future refinement could scale
+        -- this with the patient's bleed severity for a fully situational
+        -- value; today it is a fixed above-command band.) Squad rule: the
+        -- best available medic takes a patient; a lesser one only steps
+        -- in when the best is tied up in combat and nobody else claimed it.
         treat_scan_range     = 60.0,
-        treat_base_utility   = 7.0,
-        treat_lock_utility   = 7.0,
+        treat_base_utility   = 8.0,
+        treat_lock_utility   = 8.0,
         treat_arrival        = 1.5,   -- tiles to the patient to treat
         treat_min_seep       = 0.6,   -- a wound dressed below this seep
                                       -- is "good enough" — not re-treated
@@ -909,9 +934,19 @@ local function searchUtility(uid, s, params)
     -- is to locate water — search regardless of personal canteen
     -- state. Falls through to the personal-need branch below once the
     -- goal is accomplished (knownWaterSources still empty, but goal
-    -- no longer pushes).
+    -- no longer pushes). DERIVED urgency (#306): floor + urgency·thirst
+    -- (see goal_search_floor/_urgency). A hydrated scout searches at a
+    -- low, below-command floor (a player order / fight / treatment all
+    -- win); the value climbs as it runs dry, but never reaches command
+    -- on its own — genuine thirst is carried by drink/refill, which
+    -- scale past command themselves.
     if isGoalActive(s, "find_water") then
-        return params.goal_search_weight
+        local hyd    = unit.getStat(uid, "hydration")
+        local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
+        local thirst = (hyd and maxHyd and maxHyd > 0)
+                       and math.max(0, math.min(1, 1 - hyd / maxHyd)) or 0
+        return params.goal_search_floor
+             + params.goal_search_urgency * thirst
     end
     local canteen = findCanteenWithHeadroom(uid, params.canteen_def)
     if not canteen then return -math.huge end
@@ -973,20 +1008,20 @@ end
 -- Action: follow_command
 -----------------------------------------------------------
 -- An explicit player move order outranks routine autonomous behaviour:
--- above ambient wander, work (build/deliver/store/dig ≤6.0), and combat
--- (engage/retreat ~6.0), so a right-click reliably moves the unit even
--- mid-task or mid-fight.
+-- above ambient wander, routine work (build/deliver/store/dig ≤6.0), and
+-- the situational goals (find_water/notify) — so a right-click reliably
+-- redirects a unit that is merely wandering, working, or scouting.
 --
--- It stays BELOW the actions explicitly calibrated to outrank a player
--- order (the #306 ladder — all re-derived against this 7.0 baseline, NOT
--- the historical 1.0):
---   * dire survival — drink (thirst·15, crosses 7.0 at thirst≈0.47) and
---     eat (≥7.5 whenever it fires), so a hungry/thirsty unit tends to
---     that first, then resumes the order;
---   * a dry-canteen refill (peaks 7.5 near-empty);
---   * explicit ground-item pickups (8.0) — a peer player order;
---   * assigned goals — find_water / notify_allies (7.5);
---   * a desperate, futile retreat (escalates past 7.5 with threat ratio).
+-- It is OUTRANKED by (the #306 ladder, re-derived against this 7.0
+-- baseline — NOT the historical 1.0):
+--   * dire SELF survival — drink (thirst·15, crosses 7.0 at thirst≈0.47)
+--     and eat (≥7.5 whenever it fires), and a dry-canteen refill (peaks
+--     7.5 near-empty): a unit tends to its own body first, then resumes;
+--   * combat — engage/retreat (8.0+): a unit defends itself or flees a
+--     hopeless fight rather than walking to a commanded tile;
+--   * treatment — treat_ally (8.0): a medic finishes saving a life.
+-- Peer to it: an explicit ground-item pickup (7.5) — also a player order,
+-- nudged just above so it wins the move-vs-pickup tie.
 -- commandedTask persists until maintainTask clears it on arrival/timeout,
 -- so the unit resumes the move once the higher-priority action finishes.
 local FOLLOW_COMMAND_UTILITY = 7.0
@@ -1129,14 +1164,18 @@ end
 
 local function retreatUtility(uid, s, params)
     -- Carry-through: as long as the unit is in retreat goal, keep
-    -- the candidate dominant.
-    if isGoalActive(s, "retreat") then return 6.0 end
+    -- the candidate dominant — 8.0 matches the engage floor, above a
+    -- player move order (7.0) so fleeing for your life isn't cancelled
+    -- by a stale move command (#306).
+    if isGoalActive(s, "retreat") then return 8.0 end
     if not isGoalActive(s, "attack") then return -math.huge end
     if not selfWoundedByTarget(uid, s) then return -math.huge end
     local futile, ratio = futilityCheck(uid, s)
     if not futile then return -math.huge end
-    -- Urgency grows with ratio. ratio=1.5 → 5.0; ratio=3.0 → 8.0.
-    return 5.0 + (ratio - RETREAT_FUTILITY_RATIO) * 2.0
+    -- Urgency grows with ratio from the combat floor (8.0). ratio=1.5
+    -- → 8.0; ratio=3.0 → 11.0 — a hopeless fight outranks even dire
+    -- needs so the unit commits to escaping.
+    return 8.0 + (ratio - RETREAT_FUTILITY_RATIO) * 2.0
 end
 
 local function retreatExecute(uid, s, params)
@@ -1219,10 +1258,10 @@ end
 --   * defend_ally — friendly being attacked nearby.
 -- Each new source is a table entry; the picker stays the same.
 --
--- Score is the natural utility-comparison number: 1.5 for fresh
--- incoming-hit retaliation, above commanded-move (1.0) but below
--- dire-need candidates (thirst / hunger ~10) so a starving bear
--- still drinks before fighting.
+-- Score is the natural utility-comparison number: 8.0 for fresh
+-- incoming-hit retaliation, above a commanded move (follow_command
+-- 7.0) but below dire-need candidates (thirst / hunger scale past it)
+-- so a starving bear still drinks before fighting (#306).
 -----------------------------------------------------------
 local ENGAGE_WINDOW_SEC = 10.0
 -- How recently a melee hit must have landed for the in-combat target swap
@@ -1244,12 +1283,15 @@ local THREAT_SOURCES = {
                > ENGAGE_WINDOW_SEC then return nil end
             if not unit.exists(att.uid) then return nil end
             if unit.getPose(att.uid) == "dead" then return nil end
-            -- 6.0 preempts non-emergency goal candidates like
-            -- search_for_water (5.0). Dire needs (drinking when
-            -- empty ~10, eating when starving ~10) still beat us,
-            -- which is the intended scale: literally-dying > combat
-            -- > general goals > player-issued moves > ambient.
-            return { uid = att.uid, score = 6.0 }
+            -- 8.0 sits above a player move order (follow_command 7.0)
+            -- and well above the goal candidates (find_water/notify,
+            -- ≤6): a unit defends itself when struck rather than
+            -- walking off to a commanded tile or resuming a routine
+            -- search. Dire SELF needs still beat us (drinking when
+            -- near-empty / eating when starving scale past 8.0), the
+            -- intended scale being: literally-dying > combat/treatment
+            -- > player-issued moves > general goals > ambient (#306).
+            return { uid = att.uid, score = 8.0 }
         end,
     },
     -- Future sources go here, e.g.:
@@ -1827,18 +1869,12 @@ end
 local function notifyAlliesUtility(uid, s, params)
     if not isGoalActive(s, "notify_allies") then return -math.huge end
     -- Lock in once a phase is active: a half-done broadcast or walk
-    -- shouldn't be pre-empted by ambient utility or player commands. The
-    -- lock matches goal_notify_weight (7.5, above follow_command's 7.0,
-    -- #306) — raising it with the goal floor avoids a flip-flop where the
-    -- unit elects to notify (7.5) but then abandons the phase the moment a
-    -- move order (7.0) is pending. The lock is FINITE (not math.huge) so
-    -- dire needs still win: drink (thirst·15) crosses 7.5 at thirst≈0.5
-    -- and eat is ≥7.5 whenever it fires; both sort before notify_allies
-    -- in the action list, so a genuinely thirsty/hungry notifier pauses to
-    -- drink/eat (ties go to list order) and the phase state resumes after.
-    -- 7.5 now sits above routine combat (engage/retreat ~6.0): an attacked
-    -- notifier finishes the broadcast unless a futile retreat escalates
-    -- past 7.5, which still breaks it off to flee.
+    -- shouldn't be yanked by ambient WANDER drift. The lock equals the
+    -- goal floor (goal_notify_weight = 4.0): above wander (~0.8) so idle
+    -- drift can't interrupt it, but below follow_command (7.0) and
+    -- combat/treatment (≥8.0) — notify is a routine, non-critical goal,
+    -- so a player order, a fight, or a medic's patient all supersede it
+    -- (#306). It resumes once the higher-priority action finishes.
     if s.notifyPhase then return params.goal_notify_weight end
     return params.goal_notify_weight
 end
