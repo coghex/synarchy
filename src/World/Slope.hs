@@ -551,26 +551,6 @@ generateSideFaceMapRight = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ 
 
 -- * Recompute Neighbor Slopes
 
--- | Chunk-level u-axis seam wrap: fold a chunk coord that has crossed the
---   world's u-seam back into the canonical range chunks are stored under.
---   Mirrors the wrap applied at chunk insertion (the @wrapChunkU@ in
---   'World.Thread.ChunkLoading'), so a cross-seam neighbour lookup
---   resolves the chunk actually stored on the far side instead of missing
---   it and treating a real adjacency as empty air. Identity for interior
---   coords and for non-wrapping (arena / zero-size) worlds.
-wrapChunkCoordU ∷ Int → ChunkCoord → ChunkCoord
-wrapChunkCoordU worldSize cc@(ChunkCoord cx cy)
-    | w ≤ 0     = cc
-    | otherwise =
-        let u        = cx - cy
-            v        = cx + cy
-            halfW    = w `div` 2
-            wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-            cx'      = (wrappedU + v) `div` 2
-            cy'      = (v - wrappedU) `div` 2
-        in ChunkCoord cx' cy'
-  where w = (worldSize `div` 2) * 2
-
 -- | The loaded chunks whose border slopes 'recomputeNeighborSlopes' will
 --   rewrite for the given changed coords — the changed chunks themselves
 --   plus their loaded (seam-wrapped) neighbours. Exposed so a caller can

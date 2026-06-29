@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Chunk.Types
     ( ChunkCoord(..)
+    , wrapChunkCoordU
     , Chunk
     , ColumnIndex
     , columnIndex
@@ -31,6 +32,27 @@ instance NFData ChunkCoord where
 
 instance Hashable ChunkCoord where
     hashWithSalt s (ChunkCoord x y) = s `hashWithSalt` x `hashWithSalt` y
+
+-- | Wrap a chunk coord's u-axis component back into the canonical range
+--   chunks are stored under, for cylindrical (u-seam) worlds. This is the
+--   single source of truth for seam wrapping: the slope / chunk-loading
+--   insert+lookup path (re-exported via "World.Slope") and the fluid /
+--   ocean / seabed / lake / magma / zoommap lookup paths (re-exported via
+--   "World.Fluid.Internal") all share THIS definition, so insert-time and
+--   lookup-time wrapping can't diverge. Identity for interior coords and
+--   for non-wrapping (arena / zero-size) worlds.
+wrapChunkCoordU ∷ Int → ChunkCoord → ChunkCoord
+wrapChunkCoordU worldSize cc@(ChunkCoord cx cy)
+    | w ≤ 0     = cc
+    | otherwise =
+        let u        = cx - cy
+            v        = cx + cy
+            halfW    = w `div` 2
+            wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+            cx'      = (wrappedU + v) `div` 2
+            cy'      = (v - wrappedU) `div` 2
+        in ChunkCoord cx' cy'
+  where w = (worldSize `div` 2) * 2
 
 -- | A single column's tile data: contiguous z-range of non-air tiles.
 --   Tiles from csStartZ to csStartZ + VU.length csMats - 1.

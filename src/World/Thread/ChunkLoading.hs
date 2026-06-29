@@ -68,9 +68,11 @@ updateChunkLoading env logger = do
                             tileData ← readIORef (wsTilesRef worldState)
                             let halfSize = wgpWorldSize params `div` 2
                                 -- Shared with the slope recompute's seam
-                                -- handling (World.Slope.wrapChunkCoordU) so
-                                -- insert-time and lookup-time wrapping can't
-                                -- diverge.
+                                -- handling (World.Slope re-exports the
+                                -- canonical World.Chunk.Types.wrapChunkCoordU,
+                                -- also re-exported via World.Fluid.Internal for
+                                -- the fluid/magma/zoom paths) so insert-time
+                                -- and lookup-time wrapping can't diverge.
                                 wrapChunkU = wrapChunkCoordU (wgpWorldSize params)
                                 inBoundsV (ChunkCoord cx cy) =
                                     let v = cx + cy

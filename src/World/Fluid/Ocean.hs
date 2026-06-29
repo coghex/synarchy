@@ -89,18 +89,18 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                            (c:_) → [c]
                            []    → candidates (r + 1)
             in candidates 0
-        -- Canonicalize seeds via wrapChunkU. Seeds come from plate
-        -- centers whose chunk coords can have u (= cx-cy) outside
+        -- Canonicalize seeds via the shared seam wrap. Seeds come from
+        -- plate centers whose chunk coords can have u (= cx-cy) outside
         -- the canonical [-halfSize, halfSize) range — they're in the
         -- playable square but not on the canonical side of the wrap.
         -- Post-wrap entries from `neighbors` are always canonical, so
         -- without this step the visited set would mix canonical and
         -- non-canonical keys for the same physical chunk and
         -- canonical lookups (after #10) would miss seam-adjacent
-        -- ocean (audit #11).
-        canonChunk (ChunkCoord ccx ccy) =
-            let (cx', cy') = wrapChunkU (ccx, ccy)
-            in ChunkCoord cx' cy'
+        -- ocean (audit #11). Uses the same wrapChunkCoordU as the
+        -- lookup side (hasAnyOceanFluid) so insert and lookup can't
+        -- drift (issue #316).
+        canonChunk = wrapChunkCoordU worldSize
         oceanSeeds = concatMap (\plate →
             if plateIsLand plate
             then []
@@ -109,21 +109,13 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                  in map canonChunk (findOceanSeed cx cy)
             ) plates
 
-        -- Wrap chunk coords in u-space (consistent with the isometric world)
-        wrapChunkU (ccx, ccy) =
-            let w = halfSize * 2
-                u = ccx - ccy
-                v = ccx + ccy
-                halfW = w `div` 2
-                wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-                cx' = (wrappedU + v) `div` 2
-                cy' = (v - wrappedU) `div` 2
-            in (cx', cy')
-
+        -- Wrap chunk coords in u-space (consistent with the isometric
+        -- world) via the shared canonical wrap (issue #316).
         neighbors (ChunkCoord cx cy) =
-            [ ChunkCoord cx' cy'
+            [ nb
             | (dx, dy) ← [(-1,0), (1,0), (0,-1), (0,1)]
-            , let (cx', cy') = wrapChunkU (cx + dx, cy + dy)
+            , let nb@(ChunkCoord _ cy') =
+                    wrapChunkCoordU worldSize (ChunkCoord (cx + dx) (cy + dy))
             , cy' ≥ -halfSize ∧ cy' < halfSize
             ]
 
