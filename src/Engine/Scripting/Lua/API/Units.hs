@@ -88,6 +88,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetLastAttackerFn
     , unitGetWeaponClassFn
     , unitModifyItemFillFn
+    , unitRepairItemFn
     , unitAddItemFn
     , unitGetVisibleTilesFn
     , unitGetFrameTextureFn
@@ -1605,6 +1606,123 @@ unitModifyItemFillFn env = do
         _ → do
             Lua.pushnumber 0
             return 1
+
+-- | unit.repairItem(uid, instanceId, conditionDelta[, sharpnessDelta])
+--   → table | nil. The low-level repair primitive (#300): the single
+--   verb that ADJUSTS an item instance's two wear axes —
+--   `iiCondition` (structural wear, gates breakage) and `iiSharpness`
+--   (edge keenness, gates penetration) — in place, PRESERVING the
+--   exact `iiInstanceId` (#67) so the physical item keeps its identity.
+--
+--   The item is found by `instanceId` across the unit's inventory and
+--   equipment (so a degraded weapon can be restored whether it's stowed
+--   or wielded). Both deltas are applied additively and the RESULT is
+--   clamped to 0..100. Positive restores (repair); negative wears (the
+--   inverse — used by hazards / tests). `sharpnessDelta` defaults to 0,
+--   so a furnace can pass condition-only and a whetstone sharpness-only.
+--
+--   This is deliberately policy-free: restore *rates*, station↔axis
+--   mapping, broken-item rules, and resource cost all live above it
+--   (#301). It just moves the numbers and reports what actually changed.
+--
+--   Returns a table { defName, condition, sharpness, conditionApplied,
+--   sharpnessApplied } with the post-clamp axis values and the actual
+--   applied deltas (0 when an axis is already at a bound), or nil if the
+--   unit doesn't exist or holds no instance with that id.
+unitRepairItemFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitRepairItemFn env = do
+    idArg    ← Lua.tointeger 1
+    instArg  ← Lua.tointeger 2
+    condArg  ← Lua.tonumber 3
+    sharpArg ← Lua.tonumber 4
+    case (idArg, instArg) of
+        (Just n, Just iidI) → do
+            let uid    = UnitId (fromIntegral n)
+                iid    = fromIntegral iidI ∷ Word64
+                condD  = case condArg of
+                    Just (Lua.Number d) → realToFrac d ∷ Float
+                    _                   → 0
+                sharpD = case sharpArg of
+                    Just (Lua.Number d) → realToFrac d ∷ Float
+                    _                   → 0
+            mRes ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing   → (um, Nothing)
+                    Just inst →
+                        -- Inventory first, then equipment; an instance id
+                        -- is unique to one physical item so at most one
+                        -- branch fires.
+                        case repairInList iid condD sharpD (uiInventory inst) of
+                            Just (inv', r) →
+                                let inst' = inst { uiInventory = inv' }
+                                in ( um { umInstances =
+                                            HM.insert uid inst' (umInstances um) }
+                                   , Just r )
+                            Nothing →
+                                case repairInEquip iid condD sharpD
+                                                   (uiEquipment inst) of
+                                    Just (eq', r) →
+                                        let inst' = inst { uiEquipment = eq' }
+                                        in ( um { umInstances =
+                                                    HM.insert uid inst'
+                                                      (umInstances um) }
+                                           , Just r )
+                                    Nothing → (um, Nothing)
+            case mRes of
+                Nothing → Lua.pushnil >> return 1
+                Just (defName, cond1, sharp1, cApp, sApp) → do
+                    Lua.newtable
+                    Lua.pushstring (TE.encodeUtf8 defName)
+                    Lua.setfield (-2) "defName"
+                    Lua.pushnumber (Lua.Number (realToFrac cond1))
+                    Lua.setfield (-2) "condition"
+                    Lua.pushnumber (Lua.Number (realToFrac sharp1))
+                    Lua.setfield (-2) "sharpness"
+                    Lua.pushnumber (Lua.Number (realToFrac cApp))
+                    Lua.setfield (-2) "conditionApplied"
+                    Lua.pushnumber (Lua.Number (realToFrac sApp))
+                    Lua.setfield (-2) "sharpnessApplied"
+                    return 1
+        _ → Lua.pushnil >> return 1
+
+-- | Apply repair deltas to one instance, clamping each axis to 0..100.
+--   Returns the new instance plus a report tuple (defName, newCondition,
+--   newSharpness, conditionApplied, sharpnessApplied) where the *applied*
+--   figures are the post-clamp differences — so a caller/test sees that
+--   topping up an already-full axis applied 0.
+applyRepair ∷ Float → Float → ItemInstance
+            → (ItemInstance, (Text, Float, Float, Float, Float))
+applyRepair condD sharpD it =
+    let cond0  = iiCondition it
+        sharp0 = iiSharpness it
+        cond1  = clampWear (cond0 + condD)
+        sharp1 = clampWear (sharp0 + sharpD)
+    in ( it { iiCondition = cond1, iiSharpness = sharp1 }
+       , (iiDefName it, cond1, sharp1, cond1 - cond0, sharp1 - sharp0) )
+  where clampWear x = max 0 (min 100 x)
+
+-- | Repair the first instance in a list whose id matches; Nothing if
+--   none does. Preserves list order (the slot is rewritten in place).
+repairInList ∷ Word64 → Float → Float → [ItemInstance]
+             → Maybe ([ItemInstance], (Text, Float, Float, Float, Float))
+repairInList _   _     _      []     = Nothing
+repairInList iid condD sharpD (x:xs)
+    | iiInstanceId x ≡ iid =
+        let (x', r) = applyRepair condD sharpD x in Just (x' : xs, r)
+    | otherwise =
+        (\(rest, r) → (x : rest, r)) <$> repairInList iid condD sharpD xs
+
+-- | Repair the equipped instance whose id matches; Nothing if no slot
+--   holds it.
+repairInEquip ∷ Word64 → Float → Float → HM.HashMap Text ItemInstance
+              → Maybe ( HM.HashMap Text ItemInstance
+                      , (Text, Float, Float, Float, Float) )
+repairInEquip iid condD sharpD eq =
+    case [ (slot, it) | (slot, it) ← HM.toList eq, iiInstanceId it ≡ iid ] of
+        ((slot, it) : _) →
+            let (it', r) = applyRepair condD sharpD it
+            in Just (HM.insert slot it' eq, r)
+        [] → Nothing
 
 -- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
 --   to the unit's inventory. Fill is clamped to the def's container
