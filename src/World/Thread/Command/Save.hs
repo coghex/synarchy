@@ -96,11 +96,22 @@ handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → Text → HM.HashMap Text Text → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
     mgr ← readIORef (worldManagerRef env)
-    case lookup pageId (wmWorlds mgr) of
+    -- The save's PRIMARY page — the one that restores as main_world and whose
+    -- camera/clock are captured from the live globals — is the actually-VISIBLE
+    -- world, NOT necessarily the requested 'pageId'. engine.saveWorld accepts
+    -- any existing page, but the global Camera2D and scripts/pause.lua's single
+    -- prevTimeScale (reapplied to world.getActiveWorldId() on resume) both
+    -- describe the visible world; making it the primary keeps the saved camera
+    -- AND the resume speed self-consistent (otherwise loading a save whose
+    -- primary wasn't the visible world resumes main_world at the wrong page's
+    -- speed). In normal use pageId already IS the visible world; fall back to
+    -- it only when nothing is visible.
+    let primaryId = maybe pageId fst (resolveActiveWorld mgr)
+    case lookup primaryId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
-                "World not found for save: " <> unWorldPageId pageId
-        Just activeWs → do
+                "World not found for save: " <> unWorldPageId primaryId
+        Just primaryWs → do
             -- Auto-pause BEFORE reading state so the snapshot
             -- captures pause = True (DF convention — saved worlds
             -- load paused so the player can plan the next move).
@@ -108,13 +119,6 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             -- Globals: read once, shared across every page (we're on the
             -- world thread, so no races with worldLoop writes).
             cam        ← readIORef (cameraRef env)
-            -- The page whose live camera IS the global Camera2D, and whose
-            -- clock scripts/pause.lua retimes on resume, is the VISIBLE world
-            -- — NOT necessarily the requested save 'pageId' (saveWorld accepts
-            -- any existing page). Key the camera snapshot + clock freeze on the
-            -- actually-visible world so saving a non-active page records its
-            -- OWN camera and never strands the visible world's wsTimeScaleRef.
-            let visibleId = fst <$> resolveActiveWorld mgr
             gameTime   ← readIORef (gameTimeRef env)
             paused     ← readIORef (enginePausedRef env)
             -- v54 (structure persistence): the texture palette is global.
@@ -127,12 +131,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             bm         ← readIORef (buildingManagerRef env)
             um         ← readIORef (unitManagerRef env)
             uts        ← readIORef (utsRef env)
-            -- The active page's gen params drive the save-listing metadata.
-            mActiveParams ← readIORef (wsGenParamsRef activeWs)
+            -- The primary (visible) page's gen params drive the listing metadata.
+            mActiveParams ← readIORef (wsGenParamsRef primaryWs)
             case mActiveParams of
                 Nothing →
                     logWarn logger CatWorld
-                        "Cannot save: active world has no gen params"
+                        "Cannot save: visible world has no gen params"
                 Just activeParams → do
                     -- #216: snapshot EVERY live page in wmWorlds, not just
                     -- the active one. A page with no gen params (e.g. an
@@ -158,7 +162,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- hidden page can't advance regardless. 'tScale'
                                 -- (the player's chosen speed) is captured for
                                 -- wpsTimeScale first, so this loses nothing.
-                                when (Just pid ≡ visibleId) $
+                                when (pid ≡ primaryId) $
                                     writeIORef (wsTimeScaleRef ws) 0
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 toolMode  ← readIORef (wsToolModeRef ws)
@@ -174,7 +178,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- per-page zoom/facing exists — so they save
                                 -- their stored position with the global
                                 -- zoom/facing as the best available value.
-                                let isVisible = Just pid ≡ visibleId
+                                let isVisible = pid ≡ primaryId
                                     (cx, cy) = if isVisible
                                                then camPosition cam
                                                else (wcx, wcy)
@@ -232,7 +236,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdLuaModules   = luaBlobs
                             , sdTexPalette   = texPalette
                             , sdNextItemInstanceId = nextItemId
-                            , sdActivePage   = pageId
+                            , sdActivePage   = primaryId
                             -- Record visibility so the loaded game comes up
                             -- showing what the player last saw (#216).
                             , sdVisiblePages = wmVisible mgr
@@ -275,6 +279,12 @@ handleWorldLoadSaveCommand env logger pageId saveData
         -- "main_world"), then a "#N" suffix. See 'assignRestoreIds'.
         restoreIds  = assignRestoreIds pageId activeWpsId (sdWorlds saveData)
         restoreId w = HM.lookupDefault (wpsPageId w) (wpsPageId w) restoreIds
+        -- The page ids the SAVE owns. A saved page that gets remapped (the
+        -- active page → main_world, or a collision rename) leaves its ORIGINAL
+        -- id behind: a live pre-load page under that id is now stale and must
+        -- be torn down, and its entities must not survive as "off-page". Track
+        -- both the saved originals and their restore targets.
+        savedOriginalIds = HS.fromList (map wpsPageId (sdWorlds saveData))
         -- Process non-active pages first and the active page LAST so it ends
         -- up at the head of wmWorlds — that keeps 'resolveActiveWorld' (and
         -- hence world.getInitProgress / waitForInit, which poll the active
@@ -544,10 +554,15 @@ handleWorldLoadSaveCommand env logger pageId saveData
                                   : [ bmNextId b | (_,b,_,_,_,_) ← perPage ])
         uMaxNextId   = maximum (umNextId currentUm
                                   : [ umNextId u | (_,_,_,u,_,_) ← perPage ])
-        -- Off-page = entities whose page is NOT among the restored pages.
-        offPageB     = HM.filter (\bi → not (HS.member (biPage bi) restoredPageIds))
+        -- The id-space the load OWNS: the restored pages plus the saved
+        -- originals (so a pre-load page under a remapped-away id, e.g. the
+        -- saved active "other" now living as main_world, is not preserved).
+        consumedIds  = restoredPageIds `HS.union` savedOriginalIds
+        -- Off-page = entities whose page is NOT owned by the load — genuinely
+        -- unrelated live pages, which we keep (#191).
+        offPageB     = HM.filter (\bi → not (HS.member (biPage bi) consumedIds))
                                  (bmInstances currentBm)
-        offPageU     = HM.filter (\ui → not (HS.member (uiPage ui) restoredPageIds))
+        offPageU     = HM.filter (\ui → not (HS.member (uiPage ui) consumedIds))
                                  (umInstances currentUm)
         offPageUids  = HM.keysSet offPageU
         -- An off-page id that collides with a restored id can't share the
@@ -623,6 +638,23 @@ handleWorldLoadSaveCommand env logger pageId saveData
                 "Save load: dropped " <> T.pack (show n)
                 <> " unit" <> (if n == 1 then "" else "s")
                 <> " (def no longer registered)"
+
+    -- 2b. Tear down GHOST pages: a saved page that was remapped (active →
+    --     main_world, or a collision rename) frees its original id, and any
+    --     pre-load live page still sitting under that id is now stale. Drop it
+    --     from wmWorlds/wmVisible and discard its sim, so a within-session load
+    --     of a save whose active page wasn't already main_world doesn't leave a
+    --     ghost world behind. (Its entities were already excluded from the
+    --     off-page set above via 'consumedIds'.) Done before visibility restore
+    --     so the hide/show below never touches a ghost.
+    let ghostIds = savedOriginalIds `HS.difference` restoredPageIds
+    forM_ (HS.toList ghostIds) $ \gid →
+        Q.writeQueue (simQueue env) (SimDropWorld gid)
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        ( mgr { wmWorlds  = filter (\(p,_) → not (HS.member p ghostIds))
+                                   (wmWorlds mgr)
+              , wmVisible = filter (\p → not (HS.member p ghostIds))
+                                   (wmVisible mgr) }, () )
 
     -- 3. Restore visibility (#217) through the proper show/hide handlers so
     --    their side effects fire — SimActivateWorld for shown pages,
