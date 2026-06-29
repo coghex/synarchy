@@ -14,11 +14,23 @@
 
 local serializeLib = {}
 
+-- Format a number as a round-trippable Lua literal. %.17g does not
+-- emit a token that reloads in the empty deserialize env for the
+-- non-finite values (inf/-inf/nan → undefined globals → nil, or a
+-- "1.#INF"-style syntax error on some libc), so map those to bare
+-- arithmetic literals that need no globals. See issue #321.
+local function serNum(v)
+    if v ~= v then return "0/0"             -- nan (v ~= v only for nan)
+    elseif v == math.huge then return "1/0"
+    elseif v == -math.huge then return "-1/0"
+    else return string.format("%.17g", v) end
+end
+
 local function ser(v)
     local t = type(v)
     if t == "nil"     then return "nil"
     elseif t == "boolean" then return tostring(v)
-    elseif t == "number"  then return string.format("%.17g", v)
+    elseif t == "number"  then return serNum(v)
     elseif t == "string"  then return string.format("%q", v)
     elseif t == "table"   then
         local parts = {}
@@ -28,7 +40,7 @@ local function ser(v)
             if kt == "string" then
                 ks = string.format("[%q]", k)
             elseif kt == "number" then
-                ks = "[" .. string.format("%.17g", k) .. "]"
+                ks = "[" .. serNum(k) .. "]"
             else
                 error("serialize: unsupported key type " .. kt)
             end
@@ -44,11 +56,20 @@ function serializeLib.serialize(value)
     return ser(value)
 end
 
+-- Deserialize env. Kept minimal so the loaded chunk can't reach _G,
+-- io, os, etc. The two number constants exist only to decode LEGACY
+-- blobs: saves written before issue #321 emitted bare inf/-inf/nan
+-- tokens (from %.17g). Binding inf/nan here lets those resolve as
+-- numbers instead of nil-globals (inf/nan dropped to nil, -inf threw
+-- and lost the whole module), so existing v60 saves restore correctly.
+-- The current encoder writes 1/0 / -1/0 / 0/0, which need no globals.
+local deserializeEnv = { inf = math.huge, nan = 0/0 }
+
 function serializeLib.deserialize(str)
     if str == nil or str == "" then return nil end
-    -- "t" mode = text-only chunk (no bytecode). Empty env table
+    -- "t" mode = text-only chunk (no bytecode); the restricted env above
     -- prevents the chunk from reaching _G, io, os, etc.
-    local fn, err = load("return " .. str, "savedata", "t", {})
+    local fn, err = load("return " .. str, "savedata", "t", deserializeEnv)
     if not fn then
         error("deserialize: " .. tostring(err))
     end
