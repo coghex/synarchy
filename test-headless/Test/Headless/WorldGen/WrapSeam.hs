@@ -54,6 +54,11 @@ import World.Scale (computeWorldScale)
 import World.Plate (generatePlates)
 import World.Hydrology.Simulation (buildInitialElevGrid, ElevGrid(..))
 import World.Fluid.River.Identify (labelRiverComponents)
+-- Issue #316: the seam wrap must be one shared definition. We reach it
+-- through BOTH re-export paths and require them to agree, so a future
+-- divergent copy (the bug this guards) fails here.
+import qualified World.Slope as Slope
+import qualified World.Fluid.Internal as Fluid
 
 -- * Shared geometry
 --
@@ -168,6 +173,40 @@ spec = do
                 -- the grid's x-torus wrap aligns with the world's
                 -- u-period (the wrap is only valid when these divide).
                 egGridW grid * egSpacing grid `shouldBe` ws * chunkSize
+
+    describe "wrapChunkCoordU single source of truth (issue #316)" $ do
+        -- A grid of coords spanning interior, the ±u seam, and well past
+        -- it (multi-period wrap), in (cx, cy) space.
+        let coords = [ ChunkCoord cx cy
+                     | cx ← [-20 .. 20], cy ← [-20 .. 20] ]
+            uOf (ChunkCoord cx cy) = cx - cy
+
+        it "slope and fluid re-exports are the same function" $
+            -- Both modules re-export World.Chunk.Types.wrapChunkCoordU; if
+            -- anyone re-introduces a divergent local copy this breaks.
+            forM_ [0, 1, 2, 8, 32, 64, 128, 256] $ \ws →
+                forM_ coords $ \cc →
+                    Slope.wrapChunkCoordU ws cc
+                        `shouldBe` Fluid.wrapChunkCoordU ws cc
+
+        it "is identity for non-wrapping (arena / zero-size) worlds" $
+            -- worldSize ≤ 1 ⇒ w = (ws `div` 2) * 2 = 0; the old un-guarded
+            -- fluid copy did `mod 0` here and crashed.
+            forM_ [-3, 0, 1] $ \ws →
+                forM_ coords $ \cc →
+                    Fluid.wrapChunkCoordU ws cc `shouldBe` cc
+
+        it "folds u into the canonical [-halfW, halfW) range and is idempotent" $
+            forM_ [2, 8, 32, 64, 128, 256] $ \ws → do
+                let w     = (ws `div` 2) * 2
+                    halfW = w `div` 2
+                forM_ coords $ \cc → do
+                    let wrapped = Slope.wrapChunkCoordU ws cc
+                        u       = uOf wrapped
+                    -- canonical range
+                    (u ≥ -halfW ∧ u < halfW) `shouldBe` True
+                    -- already-canonical ⇒ unchanged (idempotent)
+                    Slope.wrapChunkCoordU ws wrapped `shouldBe` wrapped
 
     describe "river component connectivity" $ do
         let wt = 16

@@ -21,7 +21,7 @@ import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import World.Base
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Chunk.Types (chunkSize, wrapChunkCoordU)
 
 type FluidMap = V.Vector (Maybe FluidCell)
 
@@ -61,16 +61,11 @@ wrappedDeltaUVFluid worldSize gx1 gy1 gx2 gy2 =
     in (dx, dy)
 
 -- * Chunk coord wrapping
-
-wrapChunkCoordU ∷ Int → ChunkCoord → ChunkCoord
-wrapChunkCoordU worldSize (ChunkCoord cx cy) =
-    let halfSize = worldSize `div` 2
-        w = halfSize * 2
-        u = cx - cy
-        v = cx + cy
-        halfW = w `div` 2
-        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-    in ChunkCoord ((wrappedU + v) `div` 2) ((v - wrappedU) `div` 2)
+--
+-- 'wrapChunkCoordU' is the canonical seam wrap, defined in
+-- "World.Chunk.Types" and re-exported here so the fluid / ocean / seabed /
+-- lake / magma / zoommap paths share one source of truth with the slope /
+-- chunk-loading path (see "World.Slope"). See issue #316.
 
 -- * Misc helpers
 
