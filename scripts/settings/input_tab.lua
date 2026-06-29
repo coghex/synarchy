@@ -50,6 +50,17 @@ inputTab.actions = {
 -- conflict source.
 local RESERVED_ACTIONS = { escape = true, openShell = true }
 
+-- Left/Right modifier keys and their merged name. A single key press only
+-- ever yields one physical side, so a user builds a merged binding (which
+-- the engine matches on either side) by binding both sides — the editor
+-- then coalesces the pair into the merged name. See coalesceModifierSides.
+local MODIFIER_PAIRS = {
+    { merged = "Shift", left = "LeftShift", right = "RightShift" },
+    { merged = "Ctrl",  left = "LeftCtrl",  right = "RightCtrl"  },
+    { merged = "Alt",   left = "LeftAlt",   right = "RightAlt"   },
+    { merged = "Super", left = "LeftSuper", right = "RightSuper" },
+}
+
 -- Unscaled key/plus button geometry. Kept short so a row of a few keys
 -- plus the "+" fits beside the action label.
 local KEY_BTN_W  = 96
@@ -102,6 +113,40 @@ end
 -- the row buttons behave modally.
 function inputTab.captureActive()
     return inputTab.capture ~= nil or inputTab.conflict ~= nil
+end
+
+-- After a key is added, if the action now holds BOTH sides of a modifier
+-- pair, replace them with the single merged name (which the engine matches
+-- on either side). This is how a merged "Shift" binding is built from the
+-- UI: press one side then the other. Persists via setActionKeys; the
+-- caller still saves + rebuilds.
+local function coalesceModifierSides(action)
+    local keys = engine.getKeybinds()[action]
+    if not keys then return end
+    local changed = false
+    for _, pair in ipairs(MODIFIER_PAIRS) do
+        local hasL, hasR = false, false
+        for _, k in ipairs(keys) do
+            if k == pair.left  then hasL = true end
+            if k == pair.right then hasR = true end
+        end
+        if hasL and hasR then
+            local merged, inserted = {}, false
+            for _, k in ipairs(keys) do
+                if k == pair.left or k == pair.right then
+                    if not inserted then
+                        merged[#merged + 1] = pair.merged
+                        inserted = true
+                    end
+                else
+                    merged[#merged + 1] = k
+                end
+            end
+            keys = merged
+            changed = true
+        end
+    end
+    if changed then engine.setActionKeys(action, keys) end
 end
 
 local function dismissPopups()
@@ -262,6 +307,7 @@ local function showConflictPopup(action, key, oldAction)
             -- would miss — leaving both actions bound.
             engine.removeActionKeysMatching(oldAction, key)
             engine.addActionKey(action, key)
+            coalesceModifierSides(action)
             engine.saveKeybinds()
             finishAndRebuild()
         end,
@@ -338,6 +384,7 @@ function inputTab.onKeyCapture(key)
 
     -- Free key → bind and persist (the exact key pressed).
     engine.addActionKey(action, bindKey)
+    coalesceModifierSides(action)
     engine.saveKeybinds()
     finishAndRebuild()
 end
