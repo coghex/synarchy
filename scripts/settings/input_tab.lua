@@ -461,7 +461,11 @@ function inputTab.create(params)
             table.insert(widgetHandles, button.getElementHandle(btnId))
         end
 
-        local plusId = trackButton(button.new({
+        -- Forward-declared so the onClick closure captures the local (the
+        -- value is only read when the button is later clicked); writing
+        -- `local plusId = …` would make the closure see a nil global.
+        local plusId
+        plusId = trackButton(button.new({
             name       = "keybind_" .. action .. "_add",
             text       = "+",
             width      = PLUS_BTN_W, height = BTN_H, fontSize = BTN_FONT,
