@@ -26,6 +26,7 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
+import Engine.Loop.Camera (applyGotoLimits, gotoTileZoomSafe)
 import World.Grid
 import World.Types
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -156,15 +157,7 @@ cameraGotoTileFn env = do
                 gy = fromIntegral gyRaw ∷ Int
             cam ← readIORef (cameraRef env)
             let facing = camFacing cam
-                (wx, wy) = gridToWorld facing gx gy
-
-            -- Set position and zoom
-            atomicModifyIORef' (cameraRef env) $ \cam →
-                (cam { camPosition = (wx, wy)
-                     , camZoom     = 0.5
-                     , camVelocity = (0, 0)
-                     , camDragging = False
-                     }, ())
+                (wx0, wy0) = gridToWorld facing gx gy
 
             -- Compute surface elevation from world gen params.
             -- This is a pure computation — no loaded chunks needed.
@@ -182,13 +175,65 @@ cameraGotoTileFn env = do
                                 worldSize = wgpWorldSize params
                                 timeline  = wgpGeoTimeline params
                                 plates    = generatePlates seed worldSize (wgpPlateCount params)
-                                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                                (finalElev, _) = applyTimelineFast timeline plates worldSize gx gy registry (baseElev, baseMat)
+                                -- Clamp the teleport target to keep the camera —
+                                -- and the region the chunk loader pulls in around
+                                -- it — clear of the glacier rim, where loading a
+                                -- v-edge chunk heap-overflows the world thread
+                                -- (#297; root cause in #298). See applyGotoLimits
+                                -- for why this fence is larger than the pan path's.
+                                -- Identity for interior targets.
+                                (wx, wy) = applyGotoLimits worldSize facing wx0 wy0
+                                -- Derive the z-slice from the CLAMPED tile, where
+                                -- the camera actually lands, not the raw request:
+                                -- a clamped teleport that ends up far from the
+                                -- requested corner should track its real surface,
+                                -- and this keeps elevation sampling off wildly
+                                -- out-of-bounds coordinates.
+                                (gxC, gyC) = worldToGrid facing wx wy
+                                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gxC gyC
+                                (finalElev, _) = applyTimelineFast timeline plates worldSize gxC gyC registry (baseElev, baseMat)
                                 targetZ = finalElev + surfaceHeadroom
+                                -- Only drop to tile-level zoom when the world is
+                                -- large enough that the zoomed-in chunk loader can
+                                -- keep clear of the v-edge rim. On the 8-chunk
+                                -- minimum no camera position is safe — even a
+                                -- centred load pulls in a rim corner chunk and
+                                -- overflows the world thread (#298) — so stay
+                                -- zoomed out, where the loader is gated off.
+                                zoomSafe = gotoTileZoomSafe worldSize
+                                newZoom = if zoomSafe then 0.5 else zoomFadeEnd + 0.5
                             atomicModifyIORef' (cameraRef env) $ \cam →
-                                (cam { camZSlice = targetZ, camZTracking = True }, ())
-                        Nothing → return ()
-                Nothing → return ()
+                                (cam { camPosition     = (wx, wy)
+                                     , camZoom         = newZoom
+                                     , camVelocity     = (0, 0)
+                                     -- Clear leftover scroll inertia, or the next
+                                     -- updateCameraZoom would integrate it and pull
+                                     -- a gated-off zoom back under the loader gate,
+                                     -- reopening the tiny-world crash path.
+                                     , camZoomVelocity = 0
+                                     , camDragging     = False
+                                     , camZSlice       = targetZ
+                                     , camZTracking    = zoomSafe
+                                     }, ())
+                        -- No gen params (world size unknown): can't clamp, so
+                        -- set the unclamped position as before. Without an
+                        -- active world there are no chunks to overflow anyway.
+                        Nothing →
+                            atomicModifyIORef' (cameraRef env) $ \cam →
+                                (cam { camPosition     = (wx0, wy0)
+                                     , camZoom         = 0.5
+                                     , camVelocity     = (0, 0)
+                                     , camZoomVelocity = 0
+                                     , camDragging     = False
+                                     }, ())
+                Nothing →
+                    atomicModifyIORef' (cameraRef env) $ \cam →
+                        (cam { camPosition     = (wx0, wy0)
+                             , camZoom         = 0.5
+                             , camVelocity     = (0, 0)
+                             , camZoomVelocity = 0
+                             , camDragging     = False
+                             }, ())
 
         _ → pure ()
     return 0

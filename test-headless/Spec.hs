@@ -37,6 +37,7 @@ import qualified Test.Headless.River.Graph as RiverGraph
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
+import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 
 main ∷ IO ()
 main = hspec $ do
@@ -80,3 +81,4 @@ main = hspec $ do
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
     describe "Render.ViewportGuard" ViewportGuard.spec
+    describe "Camera.GotoClamp" GotoClamp.spec
