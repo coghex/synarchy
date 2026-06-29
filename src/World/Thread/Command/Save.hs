@@ -277,9 +277,15 @@ handleWorldLoadSaveCommand env logger pageId saveData
         <> unWorldPageId pageId
 
     -- Live page ids in the CURRENT session, snapshotted before any registration
-    -- below — fed to 'assignRestoreIds' so a synthetic collision-rename id never
-    -- lands on an unrelated live page (which the load would then clobber, #191).
-    liveIds ← HS.fromList . map fst . wmWorlds <$> readIORef (worldManagerRef env)
+    -- below. 'priorLoad' is the set of pages the LAST save-load registered.
+    -- A synthetic collision-rename id must avoid UNRELATED live pages (so the
+    -- load doesn't clobber them, #191) — but NOT the prior load's own pages: a
+    -- re-load of the same save reuses (and thus replaces) its previous synthetic
+    -- ids instead of accumulating new ones. So synthetics avoid liveIds minus
+    -- priorLoad.
+    liveIds   ← HS.fromList . map fst . wmWorlds <$> readIORef (worldManagerRef env)
+    priorLoad ← readIORef (lastLoadPagesRef env)
+    let effectiveLiveIds = liveIds `HS.difference` priorLoad
 
     -- #217/#218: restore EVERY saved page in sdWorlds, not just the active
     -- one. The active page (the one whose id matches 'sdActivePage') restores
@@ -293,7 +299,8 @@ handleWorldLoadSaveCommand env logger pageId saveData
         -- the active page → 'pageId' (main_world); every other page keeps its
         -- own id unless it would collide (a non-active page also named
         -- "main_world"), then a "#N" suffix. See 'assignRestoreIds'.
-        restoreIds  = assignRestoreIds pageId activeWpsId liveIds (sdWorlds saveData)
+        restoreIds  = assignRestoreIds pageId activeWpsId effectiveLiveIds
+                                       (sdWorlds saveData)
         restoreId w = HM.lookupDefault (wpsPageId w) (wpsPageId w) restoreIds
         -- The page ids the SAVE owns. A saved page that gets remapped (the
         -- active page → main_world, or a collision rename) leaves its ORIGINAL
@@ -396,16 +403,16 @@ handleWorldLoadSaveCommand env logger pageId saveData
             (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
         writeIORef (wsDateRef worldState)
             (WorldDate (wpsDateYear wps) (wpsDateMonth wps) (wpsDateDay wps))
-        -- Restore the clock speed. The ACTIVE page mirrors the restored pause
-        -- flag (a paused save — the normal auto-pause-on-save case — loads with
-        -- its clock frozen, not running at the saved speed; scripts/pause.lua
-        -- reapplies prevTimeScale on resume) (#42). BACKGROUND pages keep their
-        -- real saved speed: pause.lua only retimes the active world, so a
-        -- background page forced to 0 would stay frozen once shown. They can't
-        -- drift meanwhile — tickWorldTime only ticks wmVisible worlds and gates
-        -- on enginePausedRef.
-        writeIORef (wsTimeScaleRef worldState)
-            (if isActive ∧ sdEnginePaused saveData then 0 else wpsTimeScale wps)
+        -- Restore each page's real saved clock speed (the player's chosen
+        -- scale). The world is still frozen while paused — tickWorldTime gates
+        -- advancement on enginePausedRef and only ticks wmVisible worlds — so
+        -- holding the live speed here (rather than zeroing) costs no drift but
+        -- lets scripts/pause.lua's onSaveLoaded read the ACTIVE world's real
+        -- speed into prevTimeScale, so a resume restores THAT page's speed (not
+        -- a stale global value) regardless of which page became main_world (#42,
+        -- #214). pause.onSaveLoaded then zeros the active clock to mirror a
+        -- normal pause; background pages keep their speed for when shown.
+        writeIORef (wsTimeScaleRef worldState) (wpsTimeScale wps)
         writeIORef (wsMapModeRef worldState) (wpsMapMode wps)
         -- A loaded world starts on the default tool, NOT the tool that was
         -- active at save time. The HUD toolbar always comes up on the default
@@ -570,10 +577,14 @@ handleWorldLoadSaveCommand env logger pageId saveData
                                   : [ bmNextId b | (_,b,_,_,_,_) ← perPage ])
         uMaxNextId   = maximum (umNextId currentUm
                                   : [ umNextId u | (_,_,_,u,_,_) ← perPage ])
-        -- The id-space the load OWNS: the restored pages plus the saved
-        -- originals (so a pre-load page under a remapped-away id, e.g. the
-        -- saved active "other" now living as main_world, is not preserved).
+        -- The id-space the load OWNS: the restored pages, the saved originals
+        -- (so a pre-load page under a remapped-away id — e.g. the saved active
+        -- "other" now living as main_world — is not preserved), and the PRIOR
+        -- load's pages (so re-loading replaces them instead of stranding their
+        -- entities as off-page survivors). Genuinely-unrelated live pages are
+        -- in none of these and are kept (#191).
         consumedIds  = restoredPageIds `HS.union` savedOriginalIds
+                                       `HS.union` priorLoad
         -- Off-page = entities whose page is NOT owned by the load — genuinely
         -- unrelated live pages, which we keep (#191).
         offPageB     = HM.filter (\bi → not (HS.member (biPage bi) consumedIds))
@@ -655,21 +666,22 @@ handleWorldLoadSaveCommand env logger pageId saveData
                 <> " unit" <> (if n == 1 then "" else "s")
                 <> " (def no longer registered)"
 
-    -- 2b. Tear down GHOST pages: a saved page that was remapped (active →
-    --     main_world, or a collision rename) frees its original id, and any
-    --     pre-load live page still sitting under that id is now stale. Drop it
-    --     from wmWorlds/wmVisible and discard its sim, so a within-session load
-    --     of a save whose active page wasn't already main_world doesn't leave a
-    --     ghost world behind. (Its entities were already excluded from the
-    --     off-page set above via 'consumedIds'.) Done before visibility restore
-    --     so the hide/show below never touches a ghost.
-    let ghostIds = savedOriginalIds `HS.difference` restoredPageIds
-    forM_ (HS.toList ghostIds) $ \gid →
+    -- 2b. Tear down STALE pages the load supersedes but didn't re-register:
+    --     a saved page remapped away (active → main_world, or a collision
+    --     rename) frees its original id, and any prior-load page this re-load
+    --     didn't reuse (e.g. an old synthetic main_world#2 superseded by a
+    --     freshly-reused id). Drop each from wmWorlds/wmVisible and discard its
+    --     sim, so a within-session load leaves no ghost world behind. (Their
+    --     entities were already excluded via 'consumedIds'.) Done before
+    --     visibility restore so the hide/show below never touches a stale page.
+    let staleIds = (savedOriginalIds `HS.union` priorLoad)
+                       `HS.difference` restoredPageIds
+    forM_ (HS.toList staleIds) $ \gid →
         Q.writeQueue (simQueue env) (SimDropWorld gid)
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        ( mgr { wmWorlds  = filter (\(p,_) → not (HS.member p ghostIds))
+        ( mgr { wmWorlds  = filter (\(p,_) → not (HS.member p staleIds))
                                    (wmWorlds mgr)
-              , wmVisible = filter (\p → not (HS.member p ghostIds))
+              , wmVisible = filter (\p → not (HS.member p staleIds))
                                    (wmVisible mgr) }, () )
 
     -- 3. Restore visibility (#217) through the proper show/hide handlers so
@@ -702,6 +714,10 @@ handleWorldLoadSaveCommand env logger pageId saveData
         uSurvivingIds = map (fromIntegral . unUnitId)
                             (HM.keys allRestoredU) ∷ [Int]
     sendSaveLoaded env uSurvivingIds bSurvivingIds
+
+    -- Record the pages THIS load registered, so the next within-session load
+    -- reuses (replaces) them rather than accumulating fresh synthetic ids (#214).
+    writeIORef (lastLoadPagesRef env) restoredPageIds
 
   | otherwise =
       -- Defense-in-depth: loadWorld already rejects an empty sdWorlds at

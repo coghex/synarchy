@@ -5,6 +5,7 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
@@ -105,6 +106,11 @@ data EngineEnv = EngineEnv
   --   touching any cursor field, so the per-world snapshot alone can't
   --   detect the switch — issue #129).
   , hudActivePageRef    ∷ IORef (Maybe WorldPageId)
+  -- | Restore ids the most recent save-load registered. A within-session
+  --   re-load consults this so it reuses (and thus replaces) the prior load's
+  --   collision-renamed synthetic pages instead of accumulating new ones, while
+  --   still treating genuinely-unrelated live pages as off-limits (#214).
+  , lastLoadPagesRef    ∷ IORef (HS.HashSet WorldPageId)
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))

@@ -93,6 +93,28 @@ function pause.toggle()
     pause.set(not engine.isPaused())
 end
 
+-- Broadcast after the engine finishes a save-load. The blob-restored
+-- prevTimeScale describes whatever world was active at SAVE time, which need
+-- not be the page that became main_world (e.g. a save whose primary wasn't the
+-- visible world, or a multi-world save). The engine restores each page's real
+-- saved clock into wsTimeScaleRef and lands on the active world, so read the
+-- ACTIVE world's speed here and use it as prevTimeScale — that way a resume
+-- restores the loaded page's OWN speed, not a stale global value. Then zero the
+-- active clock to mirror a normal pause (the world loads paused). A zero live
+-- speed means the world was saved already paused; keep the blob prevTimeScale
+-- (the player's chosen pre-pause speed) in that case.
+function pause.onSaveLoaded(survUnitIds, survBuildingIds)
+    local wid = world.getActiveWorldId()
+    if not wid then return end
+    local ts = world.getTimeScale(wid)
+    if ts and ts > 0 then
+        pause.prevTimeScale = ts
+    end
+    if engine.isPaused() then
+        world.setTimeScale(wid, 0)
+    end
+end
+
 -- Engine script hooks
 function pause.init(scriptId)
     engine.logInfo("Pause module initializing...")

@@ -90,6 +90,10 @@ handleWorldDestroyAllCommand env logger = do
         Q.writeQueue (simQueue env) (SimDropWorld pid)
     atomicModifyIORef' (worldManagerRef env) $ \m →
         (m { wmWorlds = [], wmVisible = [] }, ())
+    -- Forget the previous game's save-load page set: the next game's first
+    -- load must not treat a stale synthetic id from this game as reusable,
+    -- which could otherwise let it clobber an unrelated page (#214).
+    writeIORef (lastLoadPagesRef env) HS.empty
     writeIORef (worldQuadsRef env) V.empty
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so
