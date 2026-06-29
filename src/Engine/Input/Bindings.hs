@@ -162,6 +162,22 @@ parseKeyName "LeftSuper"  = [GLFW.Key'LeftSuper]
 parseKeyName "RightSuper" = [GLFW.Key'RightSuper]
 parseKeyName name         = maybe [] keyToGLFW (textToKey name)
 
+-- | Canonical name for an *exact* GLFW key — the inverse of 'parseKeyName'
+--   for the side-specific modifier keys, so a key captured by the keybind
+--   editor round-trips to the same config name. Everything else collapses
+--   to the merged vocabulary ('keyToText' . 'fromGLFWKey'), which is what
+--   onKeyDown reports anyway.
+glfwKeyName ∷ GLFW.Key → Text
+glfwKeyName GLFW.Key'LeftShift    = "LeftShift"
+glfwKeyName GLFW.Key'RightShift   = "RightShift"
+glfwKeyName GLFW.Key'LeftControl  = "LeftCtrl"
+glfwKeyName GLFW.Key'RightControl = "RightCtrl"
+glfwKeyName GLFW.Key'LeftAlt      = "LeftAlt"
+glfwKeyName GLFW.Key'RightAlt     = "RightAlt"
+glfwKeyName GLFW.Key'LeftSuper    = "LeftSuper"
+glfwKeyName GLFW.Key'RightSuper   = "RightSuper"
+glfwKeyName k                     = keyToText (fromGLFWKey k)
+
 checkKeyDown ∷ Text → InputState → Bool
 checkKeyDown keyName state = any down (parseKeyName keyName)
   where down k = maybe False keyPressed (Map.lookup k (inpKeyStates state))

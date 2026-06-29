@@ -36,7 +36,7 @@ import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
 import Engine.Scripting.Lua.API.Keybinds (getKeybindsFn, setActionKeysFn,
                                           addActionKeyFn, removeActionKeyFn,
                                           saveKeybindsFn, loadDefaultKeybindsFn,
-                                          keyMatchesActionFn)
+                                          keyMatchesActionFn, getCurrentKeyNameFn)
 import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
                                        getTextFn, getTextWidthFn)
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
@@ -188,6 +188,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "saveKeybinds"       (saveKeybindsFn env)
   registerLuaFunction "loadDefaultKeybinds" (loadDefaultKeybindsFn env)
   registerLuaFunction "keyMatchesAction"   (keyMatchesActionFn env)
+  registerLuaFunction "getCurrentKeyName"  (getCurrentKeyNameFn env)
 
   registerLuaFunction "loadFont"     (loadFontFn env backendState)
   registerLuaFunction "spawnText"    (spawnTextFn env backendState)

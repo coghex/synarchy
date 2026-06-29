@@ -295,6 +295,14 @@ function inputTab.onKeyCapture(key)
         button.setState(inputTab.capture.plusId, "normal")
     end
 
+    -- The onKeyDown string collapses left/right modifiers to a merged
+    -- name ("Shift"); engine.getCurrentKeyName resolves the exact physical
+    -- key (e.g. "LeftShift") so a captured key binds — and round-trips —
+    -- to the precise key pressed. Falls back to the merged name outside a
+    -- key-down dispatch.
+    local bindKey = engine.getCurrentKeyName()
+    if not bindKey or bindKey == "" then bindKey = key end
+
     -- Match against the engine's alias-aware resolver rather than raw
     -- string equality: this runs inside the onKeyDown dispatch, so
     -- engine.keyMatchesAction compares the exact physical key that was
@@ -319,13 +327,13 @@ function inputTab.onKeyCapture(key)
     end
     if owner then
         inputTab.capture  = nil
-        inputTab.conflict = { action = action, key = key, oldAction = owner }
-        showConflictPopup(action, key, owner)
+        inputTab.conflict = { action = action, key = bindKey, oldAction = owner }
+        showConflictPopup(action, bindKey, owner)
         return
     end
 
-    -- Free key → bind and persist.
-    engine.addActionKey(action, key)
+    -- Free key → bind and persist (the exact key pressed).
+    engine.addActionKey(action, bindKey)
     engine.saveKeybinds()
     finishAndRebuild()
 end

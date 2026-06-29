@@ -4,7 +4,8 @@
 --
 --   The action → @[key]@ model lives in "Engine.Input.Bindings"; this
 --   module is a thin Lua façade over it. Key names are validated through
---   'textToKey' (the canonical vocabulary), and @Escape@ / @Grave@ are
+--   'parseKeyName' (so side-specific modifier names like @LeftShift@ are
+--   accepted, not just the merged @Shift@), and @Escape@ / @Grave@ are
 --   refused — they are engine-hardcoded (escape cascade, shell toggle)
 --   and must never be reassigned.
 module Engine.Scripting.Lua.API.Keybinds
@@ -15,6 +16,7 @@ module Engine.Scripting.Lua.API.Keybinds
   , saveKeybindsFn
   , loadDefaultKeybindsFn
   , keyMatchesActionFn
+  , getCurrentKeyNameFn
   ) where
 
 import UPrelude
@@ -26,14 +28,16 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Input.Bindings
   ( KeyBindings, loadKeyBindings, saveKeyBindings, keyMatchesAction
-  , reservedActions, parseKeyName )
-import Engine.Input.Types (textToKey)
+  , reservedActions, parseKeyName, glfwKeyName, isReservedKeyName )
 
--- | A key name is bindable when it parses to a real key AND is not one of
---   the two engine-reserved names. Rejecting them here means no action can
---   ever capture Escape or Grave, regardless of which action is edited.
+-- | A key name is bindable when it resolves to at least one real GLFW key
+--   AND does not resolve to a reserved one (Escape / Grave) under any
+--   spelling. Validating through 'parseKeyName' (not the merged
+--   'keyToText' vocabulary) means the side-specific modifier names the
+--   editor now captures — "LeftShift", "RightCtrl", … — are accepted, not
+--   just the merged "Shift"/"Ctrl".
 isBindableKey ∷ Text → Bool
-isBindableKey k = k /= "Escape" ∧ k /= "Grave" ∧ isJust (textToKey k)
+isBindableKey k = not (isReservedKeyName k) ∧ not (null (parseKeyName k))
 
 -- 'reservedActions' (the actions the engine handles outside the binding
 -- table) is defined in "Engine.Input.Bindings" so the loader and the edit
@@ -209,6 +213,21 @@ loadDefaultKeybindsFn env = do
 --   as a fallback if the function is somehow called outside a key-down
 --   dispatch (no recorded key), where each GLFW key the name covers is
 --   tested.
+-- | engine.getCurrentKeyName() → string | nil
+--   The canonical name of the exact physical key currently being
+--   dispatched to @onKeyDown@ (read from 'currentKeyDownRef'), preserving
+--   the side of a merged modifier — i.e. @LeftShift@ rather than the
+--   merged @Shift@ that the @onKeyDown@ string collapses to. Returns nil
+--   outside a key-down dispatch. The keybind editor calls this during
+--   capture so the key it binds round-trips to the exact key pressed.
+getCurrentKeyNameFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getCurrentKeyNameFn env = do
+    mKey ← Lua.liftIO $ readIORef (currentKeyDownRef env)
+    case mKey of
+        Just g  → Lua.pushstring (TE.encodeUtf8 (glfwKeyName g))
+        Nothing → Lua.pushnil
+    return 1
+
 keyMatchesActionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 keyMatchesActionFn env = do
     keyArg ← Lua.tostring 1
