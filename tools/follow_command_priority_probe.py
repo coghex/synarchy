@@ -20,6 +20,9 @@ Checks (each on a fresh acolyte on a flat arena):
   C. a move order beats a ROUTINE goal (a fresh acolyte's find_water search).
   D. combat beats a goal: a struck goal-bound acolyte reacts with a combat
      action instead of continuing to search.
+  E. combat COMMITS over a pending move: a unit under a move order that is
+     attacked enters combat and stays there (attack_target out-ranks the
+     pending follow_command, so engage's hand-off isn't yanked back).
 
 Run from the repo/worktree root (scripts/ resolve relative to CWD):
   python3 tools/follow_command_priority_probe.py [--port N] [--unit acolyte]
@@ -253,6 +256,29 @@ def main() -> int:
         print(f"\n[D combat-beats-goal] victim timeline: {' -> '.join(seend)}")
         checks.append(("a struck goal-bound unit reacts with combat, not search",
                        hitd))
+
+        # --- Check E: combat COMMITS over a pending move (issue: engage hands
+        # off to attack_target, which must stay above follow_command or the
+        # stale move yanks the unit off the fight). Give the victim a move
+        # order FIRST, then attack it; it must reach a combat action AND not
+        # fall back to follow_command while the fight is on.
+        ue = spawn_acolyte(args.port, args.unit, sx + 7, sy)
+        send(args.port,
+             f"require('scripts.unit_ai').commandMove({ue},{far_x},{far_y}); return 'moved'")
+        atk2 = spawn_acolyte(args.port, args.unit, sx + 8, sy)  # adjacent
+        send(args.port,
+             f"require('scripts.unit_ai').commandAttack({atk2},{ue}); return 'fight'")
+        seene, hite = poll_for_action(args.port, ue, COMBAT_ACTIONS, args.seconds + 6)
+        # Once fighting, sample a few more times: it must NOT revert to the move.
+        tail = []
+        for _ in range(8):
+            time.sleep(0.4)
+            tail.append(current_action(args.port, ue))
+        reverted = "follow_command" in tail
+        print(f"\n[E combat-commits-over-move] timeline: {' -> '.join(seene)}"
+              f"  | tail: {' '.join(tail)}")
+        checks.append(("combat reached over a pending move", hite))
+        checks.append(("combat does NOT hand back to the stale move", not reverted))
 
         print("\n--- checks ---")
         all_ok = True

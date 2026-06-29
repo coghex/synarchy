@@ -1466,7 +1466,14 @@ end
 local function attackTargetUtility(uid, s, params)
     if not isGoalActive(s, "attack") then return -math.huge end
     if not s.attackTargetUid then return -math.huge end
-    return 1.0
+    -- In the combat band (8.0), same as engage/retreat. commandAttack
+    -- sets the attack goal but leaves any pending commandedTask intact,
+    -- so the pursuit MUST out-rank follow_command (7.0) — otherwise a
+    -- stale move order would yank the unit straight back off the fight
+    -- the tick after engage hands over (#306). Dire SELF survival
+    -- (drink/eat scaling past 8) still pre-empts and resumes, and the
+    -- move resumes once the attack goal ends (target dead/gone/fled).
+    return 8.0
 end
 
 -- Helper: pop the attack-target's anim override safely. Used when
@@ -3128,12 +3135,23 @@ local function bestMedicFor(patientUid, params)
     return bestUid
 end
 
--- Any LIVE unit (≠ excludeUid) already claiming this patient?
+-- Any LIVE, AVAILABLE unit (≠ excludeUid) already claiming this patient?
+-- A claimer that's been pulled into combat can't honor its claim while
+-- fighting, so it does NOT hold the slot — a free medic must be able to
+-- step in (this mirrors medicAvailable/bestMedicFor, which already skip
+-- combat-busy medics; without the same skip here the patient would be
+-- pinned to the interrupted medic and ignored by everyone else, #306).
+-- The claim itself persists (treat_ally is not cleared on preempt, like
+-- every other action's locked state) so the fighter resumes this patient
+-- once combat ends; if a lesser medic finished it first, treatExecute
+-- sees no remaining need and drops the redundant claim.
 local function patientClaimed(patientUid, excludeUid)
     for otherUid, st in pairs(aiState) do
         if otherUid ~= excludeUid and st.treatClaim
            and st.treatClaim.patient == patientUid then
-            if unit.getInfo(otherUid) then return true end
+            if unit.getInfo(otherUid) and not medicBusyInCombat(otherUid) then
+                return true
+            end
         end
     end
     return false
@@ -3634,11 +3652,12 @@ function unitAi.commandMove(uid, tx, ty, speed)
 end
 
 -- | Player-issued attack. Sets the unit's active goal to "attack"
---   targeting `targetUid`. The attack_target candidate (score 1.0)
---   pathfinds toward the target each tick; when chebyshev distance
+--   targeting `targetUid`. The attack_target candidate (combat band,
+--   8.0) pathfinds toward the target each tick; when chebyshev distance
 --   ≤ unit.getAttackRange, it fires `combat.attack` once and marks
---   the goal accomplished. Dire-need candidates (thirst, hunger,
---   etc.) outscore 1.0 and preempt — they resume once satisfied.
+--   the goal accomplished. It out-ranks a pending move order (7.0) so
+--   the unit commits to the fight; only dire SELF needs (thirst, hunger
+--   scaling past 8) preempt — and they resume once satisfied (#306).
 -- | Scalar combat-strength heuristic. Higher number = stronger in a
 --   fight. Folds together physical stats, weapon-class skill, blood %,
 --   pain, and a weapon-damage proxy (attack range — longer/sharper
