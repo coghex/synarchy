@@ -142,24 +142,30 @@ scarSeverityThreshold = 0.3   -- wounds milder than this heal scar-free
 -- "starving units heal significantly slower"). The unit's hunger/
 -- max_hunger fraction drives a heal-rate multiplier — full above
 -- calorieHealFloorFrac of the pool, ramping down to calorieHealMin at an
--- empty stomach. A unit with no hunger pool (wildlife, pre-gen tests)
--- heals ungated.
+-- empty stomach.
 calorieHealFloorFrac ∷ Float
 calorieHealFloorFrac = 0.5
 
 calorieHealMin ∷ Float
 calorieHealMin = 0.25
 
--- | Heal-rate multiplier from the unit's calorie (hunger) state.
+-- | Heal-rate multiplier from the unit's calorie (hunger) state. Gated on
+--   the PRESENCE of a live "hunger" stat — that's the real "this unit runs
+--   on calories" signal. max_hunger alone isn't: it's a body-derived stat
+--   seeded for any unit with a body block (wildlife included), but only
+--   hunger-system units (acolytes) ever get a draining "hunger" pool. A
+--   unit without it — wildlife, or an acolyte before its first resource
+--   tick — heals ungated rather than being mistaken for starving.
 calorieHealMultiplier ∷ HM.HashMap Text Float → Float
 calorieHealMultiplier stats =
-    let maxH = HM.lookupDefault 0 "max_hunger" stats
-        cur  = HM.lookupDefault 0 "hunger" stats
-    in if maxH ≤ 0 then 1.0
-       else let frac = cur / maxH
-            in if frac ≥ calorieHealFloorFrac then 1.0
-               else calorieHealMin
-                  + (1 - calorieHealMin) * (frac / calorieHealFloorFrac)
+    case (HM.lookup "hunger" stats, HM.lookup "max_hunger" stats) of
+        (Just cur, Just maxH)
+            | maxH > 0 →
+                let frac = cur / maxH
+                in if frac ≥ calorieHealFloorFrac then 1.0
+                   else calorieHealMin
+                      + (1 - calorieHealMin) * (frac / calorieHealFloorFrac)
+        _ → 1.0
 
 -- ----- Infection -----
 -- A per-wound `woundInfection` (0..1) bar that grows on an OPEN, undressed

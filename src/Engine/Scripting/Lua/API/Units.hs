@@ -789,18 +789,25 @@ unitFeedFn env = do
                     Just food → atomicModifyIORef' (unitManagerRef env) $ \um →
                         case HM.lookup uid (umInstances um) of
                             Nothing → (um, Nothing)
-                            Just u  → case removeFirstByName defName (uiInventory u) of
-                                Nothing     → (um, Nothing)  -- not carried
-                                Just newInv →
-                                    let stats0 = uiStats u
-                                        cur    = HM.lookupDefault 0 "hunger" stats0
-                                        maxH   = HM.lookupDefault (cur + ifCalories food)
-                                                     "max_hunger" stats0
-                                        newH   = min maxH (cur + ifCalories food)
-                                        u'     = u { uiInventory = newInv
-                                                   , uiStats = HM.insert "hunger" newH stats0 }
-                                    in ( um { umInstances = HM.insert uid u' (umInstances um) }
-                                       , Just (newH - cur) )
+                            -- Require a LIVE hunger pool: max_hunger is seeded
+                            -- for any body unit (incl. wildlife), but only a
+                            -- present "hunger" stat means the unit actually
+                            -- runs the calorie system. Feeding one that
+                            -- doesn't would conjure a permanent, never-
+                            -- draining pool. Reject without consuming the item.
+                            Just u  → case HM.lookup "hunger" (uiStats u) of
+                                Nothing  → (um, Nothing)  -- no hunger system
+                                Just cur → case removeFirstByName defName (uiInventory u) of
+                                    Nothing     → (um, Nothing)  -- not carried
+                                    Just newInv →
+                                        let stats0 = uiStats u
+                                            maxH   = HM.lookupDefault (cur + ifCalories food)
+                                                         "max_hunger" stats0
+                                            newH   = min maxH (cur + ifCalories food)
+                                            u'     = u { uiInventory = newInv
+                                                       , uiStats = HM.insert "hunger" newH stats0 }
+                                        in ( um { umInstances = HM.insert uid u' (umInstances um) }
+                                           , Just (newH - cur) )
             case mCredited of
                 Just credited → do
                     Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid

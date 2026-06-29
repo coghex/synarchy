@@ -326,9 +326,32 @@ def hunger_section(port, seconds):
     print(f"  [{'PASS' if ok3 else 'FAIL'}] starving unit makes less heat (colder when cold-stressed): "
           f"starving {core_starv:.2f}°C vs fed {core_fed:.2f}°C")
 
+    # --- 4. Wildlife guard: a unit with no hunger system (bear — its body
+    #        block seeds max_hunger, but it has no hunger RESOURCE) must not
+    #        be feedable (that would conjure a permanent, never-draining
+    #        calorie pool) and reports no calorie reading. Regression guard
+    #        for the heal/thermo gating keying off a live "hunger" stat, not
+    #        the always-seeded max_hunger.
+    bear = spawn_batch(port, 1, "bear_brown", x0=14)
+    if bear:
+        b = bear[0]
+        send(port, f"unit.addItem({b},'rations',0); return 'ok'")
+        fed_wild = send(port, f"return unit.feed({b},'rations') and 'num' or 'nil'").strip().strip('"')
+        cal_wild = send(port, f"return unit.getCalories({b}) and 'num' or 'nil'").strip().strip('"')
+        retained = send(port, f"local inv=unit.getInventory({b}) or {{}}; local n=0; "
+                              f"for _,it in ipairs(inv) do if it.defName=='rations' then n=n+1 end end; "
+                              f"return n").strip().strip('"')
+        ok4 = fed_wild == "nil" and cal_wild == "nil" and retained == "1"
+        passed &= ok4
+        print(f"  [{'PASS' if ok4 else 'FAIL'}] wildlife has no calorie pool / isn't feedable: "
+              f"feed={fed_wild} getCalories={cal_wild} ration_retained={retained}")
+    else:
+        print("  [WARN] wildlife guard: could not spawn bear_brown")
+        bear = []
+
     # Clean up this section's units so they don't add tick load to the
     # climate scenarios that follow.
-    for u in idle + actv + [fed] + starv + feda:
+    for u in idle + actv + [fed] + starv + feda + bear:
         send(port, f"unit.destroy({u}); return 'ok'")
     return passed
 
