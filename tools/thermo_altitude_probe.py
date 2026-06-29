@@ -174,6 +174,21 @@ def main():
                 print(f"PASS 4 ice agreement: all {min(8,len(ice))} sampled ice tiles read at/below freezing")
             else:
                 fails.append(f"4 ice agreement: ice tiles reading above freezing: {warm_ice}")
+
+        # 5. ARENA SAFETY: the flat no-geology arena has empty plates; getAmbientAt
+        #    must NOT crash (elevationAtGlobal would error "no plates") — it falls
+        #    back to the regional mean. thermo.tick calls this every tick, so a
+        #    throw here would kill the whole unit resource update (regression #308).
+        #    Runs last because it switches the active world to the arena.
+        send(port, 'world.initArena("arena"); return "ok"')
+        time.sleep(2)
+        send(port, 'world.show("arena"); return "shown"')
+        a_arena = fnum(port, 'return world.getAmbientAt(0,0)')
+        c_arena = fnum(port, 'local c=world.getClimateAt(0,0); return c and c.temp')
+        if a_arena is not None and c_arena is not None and abs(a_arena - c_arena) < 0.001:
+            print(f"PASS 5 arena safety: getAmbientAt returns the regional mean ({a_arena:.2f}°C), no crash on empty plates")
+        else:
+            fails.append(f"5 arena safety: getAmbientAt={a_arena} (expected regional mean {c_arena}, non-nil, no crash)")
     finally:
         try:
             send(port, 'engine.quit(); return "bye"', idle=1.0, timeout=5)

@@ -42,9 +42,16 @@ altitudeCooling globalElev =
 --   the regional climate mean minus the altitude lapse. This is what a unit
 --   standing on the tile actually feels — a valley floor is warm, the peak
 --   directly above it is colder, matching where the world forms ice.
+--
+--   With no geology (empty plate list — the flat 'World.initArena' test world)
+--   there is no elevation to sample, so the lapse term is skipped and the
+--   regional mean is returned unchanged. Calling 'elevationAtGlobal' there
+--   would error (@twoNearestPlates@: "no plates"); the arena is flat anyway,
+--   so the mean IS the correct ambient.
 ambientTempAt ∷ Word64 → [TectonicPlate] → ClimateState → Int → Int → Int → Float
 ambientTempAt seed plates climate worldSize gx gy =
     let (gx', gy')  = wrapGlobalU worldSize gx gy
         meanT       = lcTemp (lookupLocalClimate climate worldSize gx' gy')
-        (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
-    in meanT - altitudeCooling globalElev
+    in if null plates then meanT
+       else let (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
+            in meanT - altitudeCooling globalElev
