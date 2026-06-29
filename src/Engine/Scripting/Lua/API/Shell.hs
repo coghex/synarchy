@@ -11,6 +11,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as T
 import qualified Data.ByteString.Char8 as BS
 import Data.List (sortBy, sort)
+import Numeric (showHex)
 
 shellExecuteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 shellExecuteFn = do
@@ -178,10 +179,21 @@ luaValueToText depth idx
                 b ← Lua.toboolean idx
                 return $ if b then "true" else "false"
             Lua.TypeNumber  → do
-                Lua.pushvalue idx
-                mStr ← Lua.tostring (-1)
-                Lua.pop 1
-                return $ maybe "0" TE.decodeUtf8 mStr
+                -- Non-finite numbers (inf/-inf/nan) are not valid JSON, and
+                -- math.huge is a live sentinel in game code. Emit a quoted
+                -- stand-in so the headless → JSON → python pipeline still parses.
+                -- NB: unwrap the constructor rather than realToFrac — the
+                -- latter routes through toRational, which mangles inf/nan.
+                mNum ← Lua.tonumber idx
+                case mNum of
+                    Just (Lua.Number d)
+                        | isInfinite d → return $ if d > 0 then "\"inf\"" else "\"-inf\""
+                        | isNaN d      → return "\"nan\""
+                    _ → do
+                        Lua.pushvalue idx
+                        mStr ← Lua.tostring (-1)
+                        Lua.pop 1
+                        return $ maybe "0" TE.decodeUtf8 mStr
             Lua.TypeString  → do
                 mStr ← Lua.tostring idx
                 return $ case mStr of
@@ -254,6 +266,8 @@ collectTablePairs depth tableIdx acc = do
             collectTablePairs depth tableIdx ((keyText, valText) : acc)
 
 -- | Escape special characters for JSON string values.
+--   All C0 control chars (U+0000–U+001F) must be escaped per the JSON spec;
+--   the common ones get named escapes, the rest a \\u00XX form.
 escapeJsonText ∷ Text → Text
 escapeJsonText = T.concatMap $ \c → case c of
     '"'  → "\\\""
@@ -261,4 +275,8 @@ escapeJsonText = T.concatMap $ \c → case c of
     '\n' → "\\n"
     '\r' → "\\r"
     '\t' → "\\t"
-    _    → T.singleton c
+    '\b' → "\\b"
+    '\f' → "\\f"
+    _ | c < '\x20' → "\\u" <> T.pack (let h = showHex (fromEnum c) ""
+                                      in replicate (4 - length h) '0' <> h)
+      | otherwise  → T.singleton c
