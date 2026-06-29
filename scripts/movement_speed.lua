@@ -19,6 +19,45 @@ local function clamp(x, lo, hi)
     return math.max(lo, math.min(hi, x))
 end
 
+-- Encumbrance speed band, keyed on the carried-weight / capacity ratio.
+--   FREE_FRAC  — load up to this fraction of capacity is "free" (a unit
+--                carrying a tool and a canteen isn't visibly slowed).
+--   IN_CAP_K   — gentle penalty slope from FREE_FRAC up to full capacity.
+--   OVER_K     — a much steeper slope once OVER capacity, so an overloaded
+--                unit slows hard. The hard pickup gate still holds (a unit
+--                only ends up over capacity from worn gear / a forced load),
+--                so this just makes that state visibly costly to move in.
+--   FLOOR      — never slower than this fraction of the base band, so a
+--                pinned-down unit still inches along rather than freezing.
+local ENC_FREE_FRAC = 0.25
+local ENC_IN_CAP_K  = 0.40
+local ENC_OVER_K    = 1.20
+local ENC_FLOOR     = 0.20
+
+-- Encumbrance multiplier on the whole speed band (mirrors
+-- injuries.speedMultiplier / salts.speedMultiplier). A light load is ~1.0;
+-- the penalty grows with the carried/capacity ratio and is EASED by the
+-- endurance stat — a fit unit (or a pack animal like the technomule, with
+-- both huge capacity and high endurance) shrugs off load that would crawl
+-- a weak one. Returns 1.0 when capacity data is missing so callers stay
+-- safe for defs without a carry stat.
+function M.encumbranceMultiplier(uid)
+    local cap = unit.getStat(uid, "carrying_capacity")
+    if not cap or cap <= 0 then return 1.0 end
+    local carried = unit.getCarryingWeight(uid) or 0
+    local r = carried / cap
+    -- Endurance 1.0 is nominal (acolyte); clamp so absurd stat data can't
+    -- zero the penalty or blow it up. Higher endurance divides the penalty.
+    local endur = clamp(unit.getStat(uid, "endurance") or 1.0, 0.3, 3.0)
+    -- Penalty accrues only above the free allowance: a gentle term within
+    -- capacity, plus a steep extra term once over it.
+    local penalty = 0.0
+    local inCap = math.min(r, 1.0) - ENC_FREE_FRAC
+    if inCap > 0 then penalty = penalty + ENC_IN_CAP_K * inCap end
+    if r > 1.0  then penalty = penalty + ENC_OVER_K * (r - 1.0) end
+    return clamp(1.0 - penalty / endur, ENC_FLOOR, 1.0)
+end
+
 -- Top (sprint) speed: max_speed × agility. Agility 1.0 → max_speed,
 -- 2.0 → double (a 20 km/h human, an exceptional 40 km/h one). Agility is
 -- clamped defensively so absurd stat data can't produce absurd speeds.
@@ -26,13 +65,15 @@ end
 -- injuries.speedMultiplier, so comfort/ordered/meander — all derived
 -- from sprint — slow together. A fully disabling break keeps the unit
 -- collapsed entirely (unit_resources), so this only ever limps a unit
--- that's still on its feet.
+-- that's still on its feet. Carried load slows the band the same way via
+-- encumbranceMultiplier — heavier = slower, eased by endurance.
 function M.sprint(uid)
     local maxsp = unit.getMaxSpeed(uid) or 0
     local agi   = unit.getStat(uid, "agility") or 1.0
     -- Salt cramps (hyponatremia) slow the whole speed band too, like a limp.
     return maxsp * clamp(agi, 0.3, 3.0)
          * injuries.speedMultiplier(uid) * salts.speedMultiplier(uid)
+         * M.encumbranceMultiplier(uid)
 end
 
 -- Comfort (stamina-neutral cruise): a fraction of sprint set by endurance,
