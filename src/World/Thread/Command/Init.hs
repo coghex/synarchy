@@ -83,10 +83,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
         -- not stack a second one in wmWorlds (#58).
         (mgr { wmWorlds = (pageId, worldState)
                         : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
-    -- A freshly-generated page under this id is NOT the prior load's page, so
-    -- drop it from the save-load provenance set — otherwise the next load could
+    -- A freshly-generated page under this id is NOT any prior load's page, so
+    -- drop it from the save-load provenance — otherwise a later load could
     -- treat this new world as load-owned and clobber it (#214).
-    atomicModifyIORef' (lastLoadPagesRef env) $ \s → (HS.delete pageId s, ())
+    atomicModifyIORef' (loadProvenanceRef env) $ \m →
+        (HM.map (HS.delete pageId) m, ())
 
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -298,8 +299,9 @@ handleWorldInitArenaCommand env logger pageId = do
         -- not stack a second one in wmWorlds (#58).
         (mgr { wmWorlds = (pageId, worldState)
                         : filter ((/= pageId) . fst) (wmWorlds mgr) }, ())
-    -- Fresh arena under this id is not the prior load's page (see #214).
-    atomicModifyIORef' (lastLoadPagesRef env) $ \s → (HS.delete pageId s, ())
+    -- Fresh arena under this id is not any prior load's page (see #214).
+    atomicModifyIORef' (loadProvenanceRef env) $ \m →
+        (HM.map (HS.delete pageId) m, ())
 
     -- Arena parameters
     let arenaRadius = 2           -- 5×5 chunks

@@ -15,7 +15,6 @@ import Data.Time.Calendar (fromGregorian)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import Control.Concurrent.STM (newTVarIO)
 import qualified System.Random as Random
@@ -109,7 +108,7 @@ initializeEngineWith logBackend = do
   uiManagerRef ← newIORef emptyUIPageManager
   worldManagerRef ← newIORef emptyWorldManager
   hudActivePageRef ← newIORef Nothing
-  lastLoadPagesRef ← newIORef HS.empty
+  loadProvenanceRef ← newIORef HM.empty
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
@@ -192,7 +191,7 @@ initializeEngineWith logBackend = do
         , uiManagerRef       = uiManagerRef
         , worldManagerRef    = worldManagerRef
         , hudActivePageRef   = hudActivePageRef
-        , lastLoadPagesRef   = lastLoadPagesRef
+        , loadProvenanceRef  = loadProvenanceRef
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef

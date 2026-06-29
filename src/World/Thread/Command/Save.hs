@@ -280,14 +280,17 @@ handleWorldLoadSaveCommand env logger pageId saveData
         <> unWorldPageId pageId
 
     -- Live page ids in the CURRENT session, snapshotted before any registration
-    -- below. 'priorLoad' is the set of pages the LAST save-load registered.
-    -- A synthetic collision-rename id must avoid UNRELATED live pages (so the
-    -- load doesn't clobber them, #191) — but NOT the prior load's own pages: a
-    -- re-load of the same save reuses (and thus replaces) its previous synthetic
-    -- ids instead of accumulating new ones. So synthetics avoid liveIds minus
-    -- priorLoad.
+    -- below. 'priorLoad' is the set of pages a prior load of THIS SAME save
+    -- (keyed by save name) registered. A synthetic collision-rename id must
+    -- avoid UNRELATED live pages (so the load doesn't clobber them, #191) — but
+    -- NOT this save's own prior pages: re-loading the same save reuses (and thus
+    -- replaces) its previous synthetic ids instead of accumulating new ones. So
+    -- synthetics avoid liveIds minus priorLoad. Scoping by save name keeps a
+    -- DIFFERENT save's synthetic pages unrelated (preserved), not load-owned.
+    let saveName = smName (sdMetadata saveData)
     liveIds   ← HS.fromList . map fst . wmWorlds <$> readIORef (worldManagerRef env)
-    priorLoad ← readIORef (lastLoadPagesRef env)
+    priorLoad ← HM.lookupDefault HS.empty saveName
+                    <$> readIORef (loadProvenanceRef env)
     let effectiveLiveIds = liveIds `HS.difference` priorLoad
 
     -- #217/#218: restore EVERY saved page in sdWorlds, not just the active
@@ -718,9 +721,12 @@ handleWorldLoadSaveCommand env logger pageId saveData
                             (HM.keys allRestoredU) ∷ [Int]
     sendSaveLoaded env uSurvivingIds bSurvivingIds
 
-    -- Record the pages THIS load registered, so the next within-session load
-    -- reuses (replaces) them rather than accumulating fresh synthetic ids (#214).
-    writeIORef (lastLoadPagesRef env) restoredPageIds
+    -- Record the pages THIS load registered under this save's name, so the next
+    -- within-session load of the SAME save reuses (replaces) them rather than
+    -- accumulating fresh synthetic ids — while a different save's pages stay
+    -- preserved as unrelated (#214, #191).
+    atomicModifyIORef' (loadProvenanceRef env) $ \m →
+        (HM.insert saveName restoredPageIds m, ())
 
   | otherwise =
       -- Defense-in-depth: loadWorld already rejects an empty sdWorlds at

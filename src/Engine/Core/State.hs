@@ -106,11 +106,13 @@ data EngineEnv = EngineEnv
   --   touching any cursor field, so the per-world snapshot alone can't
   --   detect the switch — issue #129).
   , hudActivePageRef    ∷ IORef (Maybe WorldPageId)
-  -- | Restore ids the most recent save-load registered. A within-session
-  --   re-load consults this so it reuses (and thus replaces) the prior load's
-  --   collision-renamed synthetic pages instead of accumulating new ones, while
-  --   still treating genuinely-unrelated live pages as off-limits (#214).
-  , lastLoadPagesRef    ∷ IORef (HS.HashSet WorldPageId)
+  -- | Per-save provenance: save name → the restore ids that save's last load
+  --   registered. Re-loading the SAME save consults its own entry to reuse (and
+  --   thus replace) its collision-renamed synthetic pages instead of
+  --   accumulating new ones; loading a DIFFERENT save never owns another save's
+  --   synthetic pages, so they stay preserved as unrelated live pages (#214,
+  --   #191). Keyed by save name (SaveMetadata.smName).
+  , loadProvenanceRef   ∷ IORef (HM.HashMap Text (HS.HashSet WorldPageId))
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
