@@ -114,10 +114,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             (vid:_) | isJust (lookup vid (wmWorlds mgr)) → Just vid
             _                                            → Nothing
         -- The save's PRIMARY page (restores as main_world, drives the listing
-        -- metadata) is the visible world so its captured camera + resume speed
-        -- stay self-consistent. With NOTHING visible, honor the requested
-        -- 'pageId' rather than persisting some arbitrary head page.
-        primaryId = fromMaybe pageId visibleId
+        -- metadata) is the REQUESTED 'pageId' — engine.saveWorld is explicitly
+        -- page-targeted and a debug/headless caller may save a non-visible page.
+        -- This is independent of 'visibleId', which only governs camera/clock
+        -- attribution below (those belong to whatever is actually on screen).
+        -- Resume speed is no longer a reason to override the request: a load's
+        -- resume restores the active page's OWN speed via pause.onSaveLoaded.
+        primaryId = pageId
     case lookup primaryId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
