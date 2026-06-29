@@ -25,9 +25,11 @@ import World.Chunk.Types (chunkSize)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Grid (tileHalfDiamondHeight)
 
--- World sizes (in chunks) to exercise.
+-- World sizes (in chunks) to exercise. 8 is the smallest supported world
+-- (World.Generate.Config.minimumWorldSize) — the case where an unbounded goto
+-- buffer would drive the limit negative and invert the clamp.
 worldSizes ∷ [Int]
-worldSizes = [64, 128, 256]
+worldSizes = [8, 16, 64, 128, 256]
 
 facings ∷ [CameraFacing]
 facings = [FaceSouth, FaceNorth, FaceWest, FaceEast]
@@ -39,37 +41,56 @@ clampedV FaceNorth (_, y) = y
 clampedV FaceWest  (x, _) = x
 clampedV FaceEast  (x, _) = x
 
+-- The camera v-chunk a rim-ward teleport actually lands on for a given world
+-- size, derived from the clamp output (so it reflects the effective, possibly
+-- small-world-capped, buffer rather than the raw constant).
+clampedCamVChunk ∷ Int → Int
+clampedCamVChunk ws =
+    let (_, y) = applyGotoLimits ws FaceSouth 1.0e6 1.0e6
+    in round (y / tileHalfDiamondHeight / fromIntegral chunkSize)
+
 spec ∷ Spec
 spec = do
     describe "camera.gotoTile glacier clamp (#297)" $ do
 
-        it "fences teleports harder than the pan/drag path" $
-            -- The pan path uses a 2-chunk buffer; gotoTile must use more,
-            -- because it forces a zoomed-in level that actually loads chunks.
-            (cameraGotoBufferChunks > 2) `shouldBe` True
+        it "fences teleports at least as hard as the pan/drag path" $
+            -- The pan path uses a 2-chunk buffer; gotoTile uses more (it forces
+            -- a zoomed-in level that actually loads chunks), so its limit is
+            -- never looser than the pan limit on any supported world size.
+            forM_ worldSizes $ \ws →
+                cameraYLimitChunks cameraGotoBufferChunks ws
+                    `shouldSatisfy` (≤ cameraYLimitChunks 2 ws)
+
+        it "never inverts the clamp — limit stays non-negative on every world" $
+            -- On the 8-chunk minimum the raw buffer would push the limit
+            -- negative (maxRow < 0), inverting the clampF range. The half-size
+            -- cap keeps it ≥ 0 (and exactly 0 there — a centre pin).
+            forM_ worldSizes $ \ws →
+                cameraYLimitChunks cameraGotoBufferChunks ws
+                    `shouldSatisfy` (≥ 0)
 
         it "keeps the outermost loaded chunk strictly inside the v-edge rim" $
-            -- The camera is fenced to (halfSize - buffer) v-chunks; the loader
-            -- pulls chunkLoadRadius past that. That outermost loaded chunk must
-            -- stay strictly interior, or generating it heap-overflows the world
-            -- thread (the #297 crash).
+            -- The loader pulls chunkLoadRadius past the (clamped) camera; that
+            -- outermost loaded chunk must stay strictly interior. Holds even on
+            -- the 8-chunk world, where the camera pins to centre and only loads
+            -- the same set the initial (centre) view already loaded safely.
             forM_ worldSizes $ \ws → do
-                let halfSize        = ws `div` 2
-                    loadedMaxVChunk = (halfSize - cameraGotoBufferChunks)
-                                        + chunkLoadRadius
-                (loadedMaxVChunk < halfSize) `shouldBe` True
+                let halfSize = ws `div` 2
+                (clampedCamVChunk ws + chunkLoadRadius) `shouldSatisfy` (< halfSize)
 
         it "clamps an out-of-bounds rim target onto the fence" $
             forM_ worldSizes $ \ws → forM_ facings $ \f → do
                 let lim = cameraYLimitChunks cameraGotoBufferChunks ws
-                    far = 1.0e6
-                    out = applyGotoLimits ws f far far
+                    out = applyGotoLimits ws f 1.0e6 1.0e6
                 abs (clampedV f out) `shouldSatisfy`
-                    (\v → v <= lim + 1.0e-3 ∧ v >= lim - 1.0e-3)
+                    (\v → v ≤ lim + 1.0e-3 ∧ v ≥ lim - 1.0e-3)
 
         it "leaves a deep-interior target unchanged (identity)" $
-            forM_ worldSizes $ \ws → forM_ facings $ \f →
-                applyGotoLimits ws f 3.0 5.0 `shouldBe` (3.0, 5.0)
+            -- 0.3 screen units sits inside the fence for every world big enough
+            -- to have a non-zero fence (the 8-chunk world pins to centre, so
+            -- nothing but the origin is interior there).
+            forM_ (filter (\ws → ws ≥ 16) worldSizes) $ \ws → forM_ facings $ \f →
+                applyGotoLimits ws f 0.3 0.3 `shouldBe` (0.3, 0.3)
 
         it "the fence sits inside the true rim" $
             forM_ worldSizes $ \ws → do

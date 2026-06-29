@@ -30,10 +30,21 @@ import Control.Monad.State.Class (gets)
 
 -- | Compute the camera Y limit from the actual world size, fencing the
 --   camera @bufferChunks@ chunks inside the glacier rim.
+--
+--   The effective buffer is bounded by the world's half-size, so the limit
+--   can't go negative (which would invert the clampF range). On the smallest
+--   supported worlds (8 chunks → half-size 4) the goto buffer (6) exceeds the
+--   half-size and the camera pins to centre (limit 0): there the loader can't
+--   reach the rim band the camera-centred initial view already loaded safely.
+--   (Loading further toward the rim of such a tiny world heap-overflows
+--   regardless of the camera — that is the pre-existing root cause, #298 — so
+--   there is nothing closer to the rim a clamp could safely admit.)
 cameraYLimitChunks ∷ Int → Int → Float
 cameraYLimitChunks bufferChunks worldSizeChunks =
-    let halfTiles = (worldSizeChunks * chunkSize) `div` 2
-        glacierBuffer = chunkSize * bufferChunks
+    let halfSizeChunks = worldSizeChunks `div` 2
+        halfTiles = halfSizeChunks * chunkSize
+        effBuffer = min bufferChunks halfSizeChunks
+        glacierBuffer = chunkSize * effBuffer
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
 
@@ -112,6 +123,10 @@ applyLimitsChunks bufferChunks worldSize facing cx cy =
 --   'rimUnsafeChunks' inside the rim. The pan path can use a smaller buffer
 --   because panning over the rim happens at world-map zoom, where the
 --   per-chunk loader is gated off entirely.
+--
+--   On worlds too small to hold this buffer (the 8-chunk minimum),
+--   'cameraYLimitChunks' caps the effective buffer at the world's half-size,
+--   pinning the teleport to centre rather than inverting the clamp.
 cameraGotoBufferChunks ∷ Int
 cameraGotoBufferChunks = chunkLoadRadius + rimUnsafeChunks
   where rimUnsafeChunks = 4

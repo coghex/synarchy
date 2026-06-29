@@ -183,8 +183,15 @@ cameraGotoTileFn env = do
                                 -- for why this fence is larger than the pan path's.
                                 -- Identity for interior targets.
                                 (wx, wy) = applyGotoLimits worldSize facing wx0 wy0
-                                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                                (finalElev, _) = applyTimelineFast timeline plates worldSize gx gy registry (baseElev, baseMat)
+                                -- Derive the z-slice from the CLAMPED tile, where
+                                -- the camera actually lands, not the raw request:
+                                -- a clamped teleport that ends up far from the
+                                -- requested corner should track its real surface,
+                                -- and this keeps elevation sampling off wildly
+                                -- out-of-bounds coordinates.
+                                (gxC, gyC) = worldToGrid facing wx wy
+                                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gxC gyC
+                                (finalElev, _) = applyTimelineFast timeline plates worldSize gxC gyC registry (baseElev, baseMat)
                                 targetZ = finalElev + surfaceHeadroom
                             atomicModifyIORef' (cameraRef env) $ \cam →
                                 (cam { camPosition  = (wx, wy)
