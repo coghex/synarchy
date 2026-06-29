@@ -236,6 +236,59 @@ function button.onMouseUp()
 end
 
 -----------------------------------------------------------
+-- In-place mutation (used by the keybind editor for live key
+-- updates and the settings scroll/tab-hide model)
+-----------------------------------------------------------
+
+-- Replace the button's label text and re-center it. Creates the label
+-- lazily if the button was made with empty text.
+function button.setText(id, text)
+    local btn = buttons[id]
+    if not btn then return end
+    btn.text = text or ""
+
+    local labelWidth = 0
+    if btn.font and btn.text ~= "" then
+        labelWidth = engine.getTextWidth(btn.font, btn.text, btn.fontSize)
+    end
+    local labelX = (btn.width - labelWidth) / 2
+    local labelY = (btn.height / 2) + (btn.fontSize / 2)
+
+    if btn.labelId then
+        UI.setText(btn.labelId, btn.text)
+        UI.setPosition(btn.labelId, labelX, labelY)
+    elseif btn.font and btn.text ~= "" then
+        btn.labelId = UI.newText(
+            btn.name .. "_label",
+            btn.text,
+            btn.font,
+            btn.fontSize,
+            btn.textColor[1], btn.textColor[2], btn.textColor[3], btn.textColor[4],
+            btn.page
+        )
+        UI.addChild(btn.boxId, btn.labelId, labelX, labelY)
+        UI.setZIndex(btn.labelId, 1)
+    end
+end
+
+-- Toggle the whole button (box + child label). An invisible box prunes
+-- its children in the render walk, so toggling the box suffices.
+function button.setVisible(id, visible)
+    local btn = buttons[id]
+    if not btn then return end
+    if btn.boxId then UI.setVisible(btn.boxId, visible) end
+end
+
+-- Move the button. The label is a child of the box, so it follows.
+function button.setPosition(id, x, y)
+    local btn = buttons[id]
+    if not btn then return end
+    btn.x = x
+    btn.y = y
+    if btn.boxId then UI.setPosition(btn.boxId, x, y) end
+end
+
+-----------------------------------------------------------
 -- Queries
 -----------------------------------------------------------
 
