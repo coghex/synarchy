@@ -13,7 +13,7 @@ import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
-import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
@@ -69,14 +69,23 @@ dedupPages = go HS.empty
 --   remap and silently overwrite it — in which case it gets a "<id>#N" suffix
 --   so no page is dropped. The active page is reserved first so it owns
 --   @target@.
-assignRestoreIds ∷ WorldPageId → WorldPageId → [WorldPageSave]
-                 → HM.HashMap WorldPageId WorldPageId
-assignRestoreIds target activeId pages =
+--
+--   A page that keeps its OWN id may legitimately shadow a live page of the
+--   same id (a reload of that page). But a SYNTHETIC "<id>#N" must avoid the
+--   current session's live page ids (@liveIds@) too — otherwise a collision
+--   rename could land on an unrelated live page, whose WorldState the load then
+--   replaces and whose entities it drops, violating the preserve-unrelated-
+--   pages guarantee (#191).
+assignRestoreIds ∷ WorldPageId → WorldPageId → HS.HashSet WorldPageId
+                 → [WorldPageSave] → HM.HashMap WorldPageId WorldPageId
+assignRestoreIds target activeId liveIds pages =
     let others = filter ((≢ activeId) . wpsPageId) pages
         go _    []       = []
         go used (w : ws) =
-            let rid = uniquePageId used (wpsPageId w)
-            in (wpsPageId w, rid) : go (HS.insert rid used) ws
+            let base = wpsPageId w
+                rid | not (base `HS.member` used) = base   -- keep own id (reload)
+                    | otherwise = uniquePageId (used `HS.union` liveIds) base
+            in (base, rid) : go (HS.insert rid used) ws
     in HM.fromList ((activeId, target) : go (HS.singleton target) others)
 
 -- | First id in the @base, base#2, base#3, …@ sequence not already in @used@.
@@ -96,17 +105,19 @@ handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
                        → Text → HM.HashMap Text Text → IO ()
 handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
     mgr ← readIORef (worldManagerRef env)
-    -- The save's PRIMARY page — the one that restores as main_world and whose
-    -- camera/clock are captured from the live globals — is the actually-VISIBLE
-    -- world, NOT necessarily the requested 'pageId'. engine.saveWorld accepts
-    -- any existing page, but the global Camera2D and scripts/pause.lua's single
-    -- prevTimeScale (reapplied to world.getActiveWorldId() on resume) both
-    -- describe the visible world; making it the primary keeps the saved camera
-    -- AND the resume speed self-consistent (otherwise loading a save whose
-    -- primary wasn't the visible world resumes main_world at the wrong page's
-    -- speed). In normal use pageId already IS the visible world; fall back to
-    -- it only when nothing is visible.
-    let primaryId = maybe pageId fst (resolveActiveWorld mgr)
+    -- The page whose live camera IS the global Camera2D, and whose clock
+    -- scripts/pause.lua retimes via its single prevTimeScale on resume, is the
+    -- actually-VISIBLE world (head of wmVisible, if registered). NOT the raw
+    -- wmWorlds head (resolveActiveWorld's fallback) — a hidden page can sit
+    -- there. 'Nothing' when nothing is visible.
+    let visibleId = case wmVisible mgr of
+            (vid:_) | isJust (lookup vid (wmWorlds mgr)) → Just vid
+            _                                            → Nothing
+        -- The save's PRIMARY page (restores as main_world, drives the listing
+        -- metadata) is the visible world so its captured camera + resume speed
+        -- stay self-consistent. With NOTHING visible, honor the requested
+        -- 'pageId' rather than persisting some arbitrary head page.
+        primaryId = fromMaybe pageId visibleId
     case lookup primaryId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
@@ -162,7 +173,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- hidden page can't advance regardless. 'tScale'
                                 -- (the player's chosen speed) is captured for
                                 -- wpsTimeScale first, so this loses nothing.
-                                when (pid ≡ primaryId) $
+                                when (Just pid ≡ visibleId) $
                                     writeIORef (wsTimeScaleRef ws) 0
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 toolMode  ← readIORef (wsToolModeRef ws)
@@ -178,7 +189,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- per-page zoom/facing exists — so they save
                                 -- their stored position with the global
                                 -- zoom/facing as the best available value.
-                                let isVisible = pid ≡ primaryId
+                                let isVisible = Just pid ≡ visibleId
                                     (cx, cy) = if isVisible
                                                then camPosition cam
                                                else (wcx, wcy)
@@ -265,6 +276,11 @@ handleWorldLoadSaveCommand env logger pageId saveData
     logInfo logger CatWorld $ "Loading save into world: "
         <> unWorldPageId pageId
 
+    -- Live page ids in the CURRENT session, snapshotted before any registration
+    -- below — fed to 'assignRestoreIds' so a synthetic collision-rename id never
+    -- lands on an unrelated live page (which the load would then clobber, #191).
+    liveIds ← HS.fromList . map fst . wmWorlds <$> readIORef (worldManagerRef env)
+
     -- #217/#218: restore EVERY saved page in sdWorlds, not just the active
     -- one. The active page (the one whose id matches 'sdActivePage') restores
     -- under the load-target id 'pageId' (always "main_world" — the documented
@@ -277,7 +293,7 @@ handleWorldLoadSaveCommand env logger pageId saveData
         -- the active page → 'pageId' (main_world); every other page keeps its
         -- own id unless it would collide (a non-active page also named
         -- "main_world"), then a "#N" suffix. See 'assignRestoreIds'.
-        restoreIds  = assignRestoreIds pageId activeWpsId (sdWorlds saveData)
+        restoreIds  = assignRestoreIds pageId activeWpsId liveIds (sdWorlds saveData)
         restoreId w = HM.lookupDefault (wpsPageId w) (wpsPageId w) restoreIds
         -- The page ids the SAVE owns. A saved page that gets remapped (the
         -- active page → main_world, or a collision rename) leaves its ORIGINAL
