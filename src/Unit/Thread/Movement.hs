@@ -968,13 +968,15 @@ moveToward pc reg now stats us mt mWtd dx dy dist step =
         -- Soft-ground detour trigger (#312). Material step costs are mild
         -- (sand 1.5, mud 1.8) — far below pcReplanCostThreshold — so the
         -- cost-based replan above never fires for them. This fires a local
-        -- A* check when the unit steps onto notably softer ground than it
-        -- stands on; A* skirts the soft patch only if a firmer route is
-        -- cheaper. Greedy-mode only (a unit already on a path follows it),
-        -- and a rising edge only, so a unit already on soft ground doesn't
-        -- re-run A* every step.
+        -- A* check when the unit steps onto soft ground; A* skirts the
+        -- patch only if a firmer route is cheaper. It re-fires as the unit
+        -- crosses a wide soft field (so a firmer route beyond the first
+        -- bounded-A* horizon is eventually found), but stays cheap because
+        -- it's consulted only in greedy mode — once a local path is set
+        -- the unit follows it (no replan) until it ends, so this costs
+        -- ~one A* per path-length of soft travel, not one per step.
         matEdge = srcTile ≢ dstTile ∧ case mWtd of
-            Just wtd → materialDetour pc reg wtd srcTile dstTile
+            Just wtd → materialDetour pc reg wtd dstTile
             Nothing  → False
         -- Cliff and fall detection: only meaningful when actually
         -- crossing a tile boundary. The pathfinder already rejects

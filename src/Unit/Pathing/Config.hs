@@ -43,12 +43,13 @@ data PathingConfig = PathingConfig
     , pcMaterialReplanMargin ∷ !Float
       -- ^ Surface-material detour trigger (#312). The greedy mover runs a
       --   local A* detour-check when it steps onto ground whose @move_cost@
-      --   exceeds the current tile's by at least this much — so units skirt
-      --   soft ground (sand/mud) when a firmer route is cheaper. Material
-      --   costs are mild (far below `pcReplanCostThreshold`), so without
-      --   this a greedy mover would only ever slow down, never reroute.
-      --   A* still decides whether to actually detour; this only gates when
-      --   we ask. Set very high to disable material-triggered detours.
+      --   exceeds firm ground (1.0) by at least this much (default 0.25 →
+      --   move_cost ≥ 1.25) — so units skirt soft ground (sand/mud) when a
+      --   firmer route is cheaper. Material costs are mild (far below
+      --   `pcReplanCostThreshold`), so without this a greedy mover would
+      --   only ever slow down, never reroute. A* still decides whether to
+      --   actually detour; this only gates when we ask. Set very high to
+      --   disable material-triggered detours.
     } deriving (Show, Eq)
 
 -- | The historical hard-coded values. Used as the fallback when no

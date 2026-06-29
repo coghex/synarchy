@@ -205,29 +205,33 @@ materialFactor reg wtd gx gy =
         Just mid → max 0.1 (mpMoveCost (getMaterialProps reg (MaterialId mid)))
 
 -- | Should the greedy mover run a local A* detour-check when stepping
---   from @src@ onto @dst@? True when the destination ground is enough
---   softer than the current ground — its `materialFactor` exceeds the
---   source's by at least `pcMaterialReplanMargin` — that a firmer route
---   might be worth finding.
+--   onto @dst@? True when the destination ground is soft enough to be
+--   worth checking — its `materialFactor` exceeds firm ground (1.0) by at
+--   least `pcMaterialReplanMargin` (default 0.25 → move_cost ≥ 1.25).
 --
 --   This exists because material costs are deliberately MILD (sand 1.5,
 --   mud 1.8), far below `pcReplanCostThreshold` (5.0). Without it a
 --   greedy mover — which only replans when a single step exceeds that
 --   threshold — would walk straight through soft ground every time,
---   slowing but never skirting it (#312). The trigger fires only on a
---   firm→soft *rising edge*, so a unit already on soft ground (the
---   common case — most of the world is soft soil) doesn't re-run A*
---   every step. A* itself still decides whether to actually detour: it
---   skirts the soft patch only when a firmer route is genuinely cheaper,
---   otherwise it returns the straight line.
+--   slowing but never skirting it (#312). A* itself still decides whether
+--   to actually detour: it skirts the soft patch only when a firmer route
+--   is genuinely cheaper, otherwise it returns the straight line.
+--
+--   It fires on ANY soft destination (not just a firm→soft edge) so that
+--   wide soft fields keep being re-evaluated as the unit advances — a
+--   firmer route beyond the first bounded-A* horizon is found once the
+--   unit walks close enough to see it. The re-runs are bounded NOT here
+--   but by the caller: the mover only consults this in greedy mode, and a
+--   unit on a freshly-planned local path follows it (no replan) until it
+--   ends — so the cost is ~one A* per local-path length of soft travel,
+--   not one per step (the "walk that far, then replan" philosophy in
+--   "Unit.Pathing.AStar").
 materialDetour
     ∷ PathingConfig → MaterialRegistry → WorldTileData
-    → (Int, Int)    -- src (gx, gy)
     → (Int, Int)    -- dst (gx, gy)
     → Bool
-materialDetour pc reg wtd (sgx, sgy) (dgx, dgy) =
-    materialFactor reg wtd dgx dgy - materialFactor reg wtd sgx sgy
-        ≥ pcMaterialReplanMargin pc
+materialDetour pc reg wtd (dgx, dgy) =
+    materialFactor reg wtd dgx dgy ≥ 1 + pcMaterialReplanMargin pc
 
 -- | Is the step from src to dst a cliff that needs climbing (vs a
 --   walkable slope)?

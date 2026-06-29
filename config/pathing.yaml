@@ -47,9 +47,11 @@ replan_cost_threshold: 5.0
 # (data/materials/*.yaml) is mild — sand 1.5, mud 1.8 — far below the
 # replan threshold above, so a greedy mover would only ever slow down on
 # soft ground, never route around it. This is the EXTRA trigger: when a
-# step crosses onto ground whose move_cost exceeds the current tile's by
-# at least this margin (e.g. firm rock 1.0 -> sand 1.5), the mover runs a
-# local A* check; A* skirts the soft patch only if a firmer route is
-# actually cheaper, otherwise it walks straight through. Lower = units
-# detour around milder soft ground; set very high to disable.
+# step crosses onto ground whose move_cost exceeds firm ground (1.0) by
+# at least this margin (default 0.25 -> move_cost >= 1.25, i.e. sand,
+# silt, clay, mud), the mover runs a local A* check; A* skirts the soft
+# patch only if a firmer route is actually cheaper, otherwise it walks
+# straight through (re-checked as it advances, so a firmer route beyond
+# the first A* horizon is found once it walks close enough). Lower =
+# units detour around milder soft ground; set very high to disable.
 material_replan_margin: 0.25

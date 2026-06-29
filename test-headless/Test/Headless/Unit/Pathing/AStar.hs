@@ -230,16 +230,22 @@ spec = do
             -- The greedy mover never crosses pcReplanCostThreshold for mild
             -- material, so it needs `materialDetour` to even ASK A* to look
             -- for a firmer route when stepping onto soft ground (#312).
-            it "materialDetour fires stepping firm -> soft (rising edge)" $
-                -- firm (7,5) -> soft band (8,5): factor 1.0 -> 1.5, Δ0.5 ≥ 0.25.
-                materialDetour pc (softReg 1.5) wtd (7, 5) (8, 5) `shouldBe` True
+            it "materialDetour fires stepping onto soft ground" $
+                -- step onto the soft band (8,5): move_cost 1.5 ≥ 1.0+0.25.
+                materialDetour pc (softReg 1.5) wtd (8, 5) `shouldBe` True
 
-            it "materialDetour stays quiet within uniform soft ground" $
-                -- soft (8,5) -> soft (8,6): no rising edge, so no re-ask
-                -- (this is what keeps A* off the hot path in soft terrain).
-                materialDetour pc (softReg 1.5) wtd (8, 5) (8, 6) `shouldBe` False
+            it "materialDetour also fires WITHIN soft ground (deep-field re-eval)" $
+                -- A tile deep in the soft band still triggers, so a wide
+                -- field keeps being re-evaluated as the unit advances and a
+                -- firmer route beyond the first A* horizon is eventually
+                -- found. (The mover bounds this to ~one A* per local-path
+                -- length via its follow-the-path suppression, not here.)
+                materialDetour pc (softReg 1.5) wtd (8, 7) `shouldBe` True
 
-            it "materialDetour ignores a sub-margin softness bump" $
-                -- firm 1.0 -> mild 1.2 is below the 0.25 margin: speed-only,
-                -- no detour-check (units don't reroute around mild ground).
-                materialDetour pc (softReg 1.2) wtd (7, 5) (8, 5) `shouldBe` False
+            it "materialDetour ignores mild (sub-margin) ground" $
+                -- move_cost 1.2 < 1.0+0.25: speed-only, no detour-check
+                -- (units don't reroute around mild ground like loam/gravel).
+                materialDetour pc (softReg 1.2) wtd (8, 5) `shouldBe` False
+
+            it "materialDetour is quiet on firm ground" $
+                materialDetour pc (softReg 1.5) wtd (2, 5) `shouldBe` False
