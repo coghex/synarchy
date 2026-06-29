@@ -20,6 +20,7 @@ import World.Plate (TectonicPlate, isBeyondGlacier, isGlacierZone
                    , wrapGlobalU, elevationAtGlobal)
 import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import World.Weather.Ambient (altitudeCooling)
 
 -- * Chunk-Level Ice Computation
 
@@ -57,9 +58,7 @@ computeChunkIce seed plates climate worldSize coord ilGrid terrainSurfMap fluidM
                     terrainZ = terrainSurfMap VU.! idx
 
                     (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
-                    altAboveSeaLevel = max 0 (globalElev - seaLevel)
-                    lapseRate = 0.065 ∷ Float
-                    altCooling = fromIntegral altAboveSeaLevel * lapseRate
+                    altCooling = altitudeCooling globalElev
 
                     oceanPenalty = if globalElev < seaLevel
                                    then 5.0 else 0.0 ∷ Float

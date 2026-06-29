@@ -569,6 +569,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "pickTile"     (worldPickTileFn env)
   registerLuaFunction "pickPos"      (worldPickPosFn env)
   registerLuaFunction "getClimateAt" (worldGetClimateAtFn env)
+  registerLuaFunction "getAmbientAt" (worldGetAmbientAtFn env)
 
   Lua.setglobal (Lua.Name "world")
 

@@ -14,6 +14,7 @@ import World.Hydrology.Simulation (ElevGrid(..), fillDepressions)
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, isGlacierZone, wrapGlobalU)
 import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import World.Weather.Ambient (altitudeCooling)
 
 -- | Compute the global ice surface level grid.
 --   Classifies frozen cells on the ElevGrid, builds a masked grid
@@ -43,9 +44,7 @@ computeIceLevelGrid seed worldSize plates climate grid =
                                     , lcWinterTemp = winterT } =
                             lookupLocalClimate climate worldSize gx' gy'
                         (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
-                        altAboveSea = max 0 (globalElev - seaLevel)
-                        lapseRate = 0.065 ∷ Float
-                        altCooling = fromIntegral altAboveSea * lapseRate
+                        altCooling = altitudeCooling globalElev
                         oceanPenalty = if globalElev < seaLevel
                                         then 5.0 else 0.0 ∷ Float
                         noise = iceLevelNoise seed gx' gy'
