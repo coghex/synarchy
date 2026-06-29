@@ -144,10 +144,19 @@ isSourceNew worldSize existingRivers (sx, sy, _, _) =
 
 -- * Erosion
 
+-- | Chemical-weathering intensity from atmospheric CO2, clamped to [0, 1].
+--   The lower clamp is defensive: the raw formula goes negative for
+--   @co2 < 0.333@, which today the CO2 floor (max 0.4 in Timeline.hs)
+--   keeps out of reach — but that is an implicit cross-module coupling, so
+--   we guard locally rather than rely on it (see #317). Shared by
+--   'erosionFromGeoState' and 'regionalErosionMap' to keep them from drifting.
+chemicalErosion ∷ Float → Float
+chemicalErosion co2 = max 0.0 (min 1.0 (0.2 + (co2 - 1.0) * 0.3))
+
 erosionFromGeoState ∷ Float → GeoState → ClimateState → Word64 → Int → Bool → ErosionParams
 erosionFromGeoState intensity gs climate seed ageIdx isLastAge =
     let co2 = gsCO2 gs
-        chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
+        chemical = chemicalErosion co2
 
         globalTemp = csGlobalTemp climate
         regions = cgRegions (csClimate climate)
@@ -201,7 +210,7 @@ regionalErosionMap ∷ Float → GeoState → ClimateState → Word64 → Int �
                    → HM.HashMap ClimateCoord ErosionParams
 regionalErosionMap intensity gs climate seed ageIdx isLastAge =
     let co2 = gsCO2 gs
-        chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
+        chemical = chemicalErosion co2
         regions = cgRegions (csClimate climate)
     in HM.map (buildRegionErosion co2 chemical) regions
   where
