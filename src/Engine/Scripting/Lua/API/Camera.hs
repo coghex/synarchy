@@ -26,6 +26,7 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
+import Engine.Loop.Camera (applyGotoLimits)
 import World.Grid
 import World.Types
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -156,15 +157,7 @@ cameraGotoTileFn env = do
                 gy = fromIntegral gyRaw ∷ Int
             cam ← readIORef (cameraRef env)
             let facing = camFacing cam
-                (wx, wy) = gridToWorld facing gx gy
-
-            -- Set position and zoom
-            atomicModifyIORef' (cameraRef env) $ \cam →
-                (cam { camPosition = (wx, wy)
-                     , camZoom     = 0.5
-                     , camVelocity = (0, 0)
-                     , camDragging = False
-                     }, ())
+                (wx0, wy0) = gridToWorld facing gx gy
 
             -- Compute surface elevation from world gen params.
             -- This is a pure computation — no loaded chunks needed.
@@ -182,13 +175,42 @@ cameraGotoTileFn env = do
                                 worldSize = wgpWorldSize params
                                 timeline  = wgpGeoTimeline params
                                 plates    = generatePlates seed worldSize (wgpPlateCount params)
+                                -- Clamp the teleport target to keep the camera —
+                                -- and the region the chunk loader pulls in around
+                                -- it — clear of the glacier rim, where loading a
+                                -- v-edge chunk heap-overflows the world thread
+                                -- (#297; root cause in #298). See applyGotoLimits
+                                -- for why this fence is larger than the pan path's.
+                                -- Identity for interior targets.
+                                (wx, wy) = applyGotoLimits worldSize facing wx0 wy0
                                 (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
                                 (finalElev, _) = applyTimelineFast timeline plates worldSize gx gy registry (baseElev, baseMat)
                                 targetZ = finalElev + surfaceHeadroom
                             atomicModifyIORef' (cameraRef env) $ \cam →
-                                (cam { camZSlice = targetZ, camZTracking = True }, ())
-                        Nothing → return ()
-                Nothing → return ()
+                                (cam { camPosition  = (wx, wy)
+                                     , camZoom      = 0.5
+                                     , camVelocity  = (0, 0)
+                                     , camDragging  = False
+                                     , camZSlice    = targetZ
+                                     , camZTracking = True
+                                     }, ())
+                        -- No gen params (world size unknown): can't clamp, so
+                        -- set the unclamped position as before. Without an
+                        -- active world there are no chunks to overflow anyway.
+                        Nothing →
+                            atomicModifyIORef' (cameraRef env) $ \cam →
+                                (cam { camPosition = (wx0, wy0)
+                                     , camZoom     = 0.5
+                                     , camVelocity = (0, 0)
+                                     , camDragging = False
+                                     }, ())
+                Nothing →
+                    atomicModifyIORef' (cameraRef env) $ \cam →
+                        (cam { camPosition = (wx0, wy0)
+                             , camZoom     = 0.5
+                             , camVelocity = (0, 0)
+                             , camDragging = False
+                             }, ())
 
         _ → pure ()
     return 0

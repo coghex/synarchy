@@ -3,6 +3,12 @@ module Engine.Loop.Camera
     ( updateCameraPanning
     , updateCameraMouseDrag
     , updateCameraZoom
+    , applyLimits
+    , applyLimitsChunks
+    , applyGotoLimits
+    , cameraYLimit
+    , cameraYLimitChunks
+    , cameraGotoBufferChunks
     ) where
 
 import UPrelude
@@ -19,17 +25,23 @@ import Engine.Input.Bindings (isActionDown)
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
 import World.Types (chunkSize, WorldState(..), WorldManager(..), WorldGenParams(..))
+import World.Generate.Constants (chunkLoadRadius)
 import Control.Monad.State.Class (gets)
 
--- | Compute the camera Y limit from the actual world size.
---   Glaciers sit at the top/bottom edges; we stop the camera
---   two chunks inward so you can't pan past the ice.
-cameraYLimit ∷ Int → Float
-cameraYLimit worldSizeChunks =
+-- | Compute the camera Y limit from the actual world size, fencing the
+--   camera @bufferChunks@ chunks inside the glacier rim.
+cameraYLimitChunks ∷ Int → Int → Float
+cameraYLimitChunks bufferChunks worldSizeChunks =
     let halfTiles = (worldSizeChunks * chunkSize) `div` 2
-        glacierBuffer = chunkSize * 2
+        glacierBuffer = chunkSize * bufferChunks
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
+
+-- | The camera Y limit used by the pan/drag paths: glaciers sit at the
+--   top/bottom edges, so we stop the camera two chunks inward so you can't
+--   pan past the ice.
+cameraYLimit ∷ Int → Float
+cameraYLimit = cameraYLimitChunks 2
 
 -- | The full world width in screen-space X.
 --   Wrapping grid-X by worldSize chunks (= worldSize * chunkSize tiles)
@@ -73,13 +85,40 @@ wrapCoord w x =
 -- | When facing South/North: X wraps, Y is clamped (glaciers at top/bottom)
 --   When facing West/East:   Y wraps, X is clamped (glaciers at left/right)
 applyLimits ∷ Int → CameraFacing → Float → Float → (Float, Float)
-applyLimits worldSize facing cx cy =
-    let yLim = cameraYLimit worldSize
+applyLimits = applyLimitsChunks 2
+
+-- | As 'applyLimits', but with a caller-chosen glacier buffer (in chunks).
+--   Teleports (camera.gotoTile) use a larger buffer than the pan path —
+--   see Engine.Scripting.Lua.API.Camera (#297).
+applyLimitsChunks ∷ Int → Int → CameraFacing → Float → Float → (Float, Float)
+applyLimitsChunks bufferChunks worldSize facing cx cy =
+    let yLim = cameraYLimitChunks bufferChunks worldSize
     in case facing of
         FaceSouth → (cx, clampF (-yLim) yLim cy)
         FaceNorth → (cx, clampF (-yLim) yLim cy)
         FaceWest  → (clampF (-yLim) yLim cx, cy)
         FaceEast  → (clampF (-yLim) yLim cx, cy)
+
+-- | Glacier buffer (in chunks) for teleports (camera.gotoTile), as opposed
+--   to the 2-chunk buffer the pan/drag paths use.
+--
+--   gotoTile must fence the camera far enough in that the chunk loader's
+--   pull radius around it stops short of the world's v-edge, where
+--   generating a rim chunk heap-overflows the world thread (#297; root cause
+--   in #298). The loader reaches 'chunkLoadRadius' chunks past the camera,
+--   and the outermost rim band overflows on generation — empirically, loading
+--   up to halfSize-4 chunks is safe while halfSize-2 overflows on a 128-world.
+--   So we keep the loaded region (camera ± chunkLoadRadius) at least
+--   'rimUnsafeChunks' inside the rim. The pan path can use a smaller buffer
+--   because panning over the rim happens at world-map zoom, where the
+--   per-chunk loader is gated off entirely.
+cameraGotoBufferChunks ∷ Int
+cameraGotoBufferChunks = chunkLoadRadius + rimUnsafeChunks
+  where rimUnsafeChunks = 4
+
+-- | Clamp a teleport target to the gotoTile glacier fence ('cameraGotoBufferChunks').
+applyGotoLimits ∷ Int → CameraFacing → Float → Float → (Float, Float)
+applyGotoLimits = applyLimitsChunks cameraGotoBufferChunks
 
 updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do

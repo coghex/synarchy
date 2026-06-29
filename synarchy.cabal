@@ -172,6 +172,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.Render.ViewportGuard
+                   Test.Headless.Camera.GotoClamp
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
