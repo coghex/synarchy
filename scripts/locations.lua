@@ -122,6 +122,39 @@ function locations.wallRing(worldId, x0, y0, x1, y1, z0, z1, mat)
     end
 end
 
+-- Level the terrain across the box [x0..x1]×[y0..y1] to the LOWEST base
+-- elevation in it, so a stamped room sits flat instead of following the bumps
+-- under it. The base elevation is the terrain-only surface (getTerrainAt's 2nd
+-- value), so sub-tile slopes ON TOP are excluded from the min; every cell
+-- above the target level is carved to air and any surface slope is dropped.
+-- Returns the level it flattened to — the structure floor then sits one above.
+--
+-- NB the tile edits are async (queued to the world thread), so getTerrainAt
+-- still reads the OLD heights for the rest of THIS call. Builders must place
+-- their pieces at the returned level explicitly rather than re-reading terrain.
+function locations.flattenFootprint(worldId, x0, y0, x1, y1)
+    local lo, hi
+    for gx = x0, x1 do
+        for gy = y0, y1 do
+            local _, tz = world.getTerrainAt(gx, gy, worldId)
+            tz = tz or 0
+            if lo == nil or tz < lo then lo = tz end
+            if hi == nil or tz > hi then hi = tz end
+        end
+    end
+    lo = lo or 0
+    hi = hi or lo
+    for gx = x0, x1 do
+        for gy = y0, y1 do
+            for z = lo + 1, hi do
+                world.setCell(worldId, gx, gy, z, "air")
+            end
+            world.setSlope(worldId, gx, gy, lo, 0)   -- 0 bits = flat
+        end
+    end
+    return lo
+end
+
 -----------------------------------------------------------
 -- Builders
 -----------------------------------------------------------
@@ -139,8 +172,9 @@ local builders = {}
 -- then the inward-facing perimeter walls (which cap to those posts).
 --
 -- Perimeter edge per side: −gx = nw, +gx = se, −gy = ne, +gy = sw.
--- worldId is unused for now — the structure store is global (Stage-1 limit).
--- Ceiling is OFF by default so the interior stays visible while iterating.
+-- worldId selects the page; baseZ (from flattenFootprint) is the levelled
+-- ground the pieces sit on. Ceiling is OFF by default so the interior stays
+-- visible while iterating.
 local ROOM_SMALL_RADIUS = 2   -- → 5×5 footprint
 
 function builders.room_small(worldId, gx, gy, withCeiling)
@@ -149,33 +183,37 @@ function builders.room_small(worldId, gx, gy, withCeiling)
     local x0, x1 = gx - r, gx + r
     local y0, y1 = gy - r, gy + r
 
-    -- 1. floor across the whole footprint. worldId threads through so a
-    --    location stamped on a hidden/non-active page reads THAT page's
-    --    terrain height, not the active world's (#89 multiworld).
+    -- 0. level the ground so the room is flat: flatten the footprint to its
+    --    lowest base elevation and build every piece at that explicit z. (The
+    --    flatten edits are async, so re-reading terrain this call would still
+    --    see the old bumps — hence baseZ is threaded through, not re-read.)
+    local baseZ = locations.flattenFootprint(worldId, x0, y0, x1, y1)
+
+    -- 1. floor across the whole footprint at the levelled height
     for x = x0, x1 do
-        for y = y0, y1 do S.floor(x, y, worldId) end
+        for y = y0, y1 do S.floor(x, y, worldId, baseZ) end
     end
 
     -- 2. corner posts (cap the two perimeter walls that meet at each)
-    S.post(x0, y0, "n", worldId)   -- nw + ne meet
-    S.post(x1, y0, "e", worldId)   -- ne + se meet
-    S.post(x1, y1, "s", worldId)   -- se + sw meet
-    S.post(x0, y1, "w", worldId)   -- sw + nw meet
+    S.post(x0, y0, "n", worldId, baseZ)   -- nw + ne meet
+    S.post(x1, y0, "e", worldId, baseZ)   -- ne + se meet
+    S.post(x1, y1, "s", worldId, baseZ)   -- se + sw meet
+    S.post(x0, y1, "w", worldId, baseZ)   -- sw + nw meet
 
     -- 3. perimeter walls (after posts so they cap to them)
     for y = y0, y1 do
-        S.wall(x0, y, "nw", worldId)   -- −gx side
-        S.wall(x1, y, "se", worldId)   -- +gx side
+        S.wall(x0, y, "nw", worldId, baseZ)   -- −gx side
+        S.wall(x1, y, "se", worldId, baseZ)   -- +gx side
     end
     for x = x0, x1 do
-        S.wall(x, y0, "ne", worldId)   -- −gy side
-        S.wall(x, y1, "sw", worldId)   -- +gy side
+        S.wall(x, y0, "ne", worldId, baseZ)   -- −gy side
+        S.wall(x, y1, "sw", worldId, baseZ)   -- +gy side
     end
 
     -- 4. ceiling (optional)
     if withCeiling then
         for x = x0, x1 do
-            for y = y0, y1 do S.ceiling(x, y, worldId) end
+            for y = y0, y1 do S.ceiling(x, y, worldId, baseZ) end
         end
     end
 
