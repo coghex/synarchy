@@ -35,12 +35,15 @@ import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word64)
 import Data.List (sort, sortOn, foldl')
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier)
 import World.Material (MaterialId, matGlacier)
 import World.Ocean.Types (OceanMap, OceanDistMap, oceanDistAt)
+import World.Fluid.Lake.Types (WorldLakes, lakesInChunk)
+import World.Fluid.River.Types (WorldRivers, riversInChunk)
 import World.Constants (seaLevel)
 import Location.Types (LocationDef(..))
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
@@ -95,9 +98,11 @@ computeLocationOverlay
     → [TectonicPlate] -- ^ pre-generated plates
     → OceanMap        -- ^ submerged-chunk set
     → OceanDistMap    -- ^ distance-from-ocean per chunk
+    → WorldLakes      -- ^ per-chunk lakes
+    → WorldRivers     -- ^ per-chunk rivers
     → [LocationDef]   -- ^ registered location defs
     → LocationOverlay
-computeLocationOverlay seed worldSize plates oceanMap oceanDist defs
+computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers defs
     | null defs = emptyLocationOverlay
     | otherwise = fst (foldl' placeDef (emptyLocationOverlay, HS.empty) defsSorted)
   where
@@ -132,6 +137,21 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist defs
       where elevList  = sort (map (cmMedianElev . snd) landMetrics)
             rangeList = sort (map (cmElevRange  . snd) landMetrics)
 
+    -- A chunk is too close to water if it (or any of its 8 neighbours)
+    -- holds a lake or river, or it sits within one chunk of the ocean.
+    -- Locations avoid those: flattening a footprint next to water leaves
+    -- the water overhanging the carved rim (#414). A def opts back IN via
+    -- a coast anchor.
+    dryEnough ∷ ChunkCoord → Bool
+    dryEnough coord@(ChunkCoord cx cy) =
+        oceanDistAt oceanDist coord ≥ 2
+        ∧ all noStandingWater
+            [ ChunkCoord (cx + dx) (cy + dy)
+            | dx ← [-1, 0, 1], dy ← [-1, 0, 1] ]
+      where
+        noStandingWater c =
+            V.null (lakesInChunk lakes c) ∧ V.null (riversInChunk rivers c)
+
     defsSorted = sortOn ldId defs
 
     -- Place one def, threading the accumulating overlay + the set of
@@ -148,10 +168,12 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist defs
         -- Suitable land chunks, ordered by a deterministic per-chunk
         -- hash so the distribution is semi-random (not a grid) yet
         -- stable for a given seed.
+        wantWater = wantsWater (ldAnchor def)
         scored = sortOn snd
             [ (coord, scoreFor lid coord)
             | (coord, cm) ← landMetrics
-            , anchorOk cuts (ldAnchor def) cm ]
+            , anchorOk cuts (ldAnchor def) cm
+            , wantWater ∨ dryEnough coord ]
 
         greedy _      ov' occ [] = (ov', occ)
         greedy placed ov' occ ((coord, _) : rest)
@@ -180,6 +202,14 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist defs
 idSalt ∷ Text → Word64
 idSalt = T.foldl' (\acc c → (acc `xor` fromIntegral (fromEnum c)) * 0x100000001b3)
                   0xcbf29ce484222325
+
+-- | True if a def's anchors opt it INTO water proximity (a coast / shore /
+--   waterside location), so the dry-ground filter (#414) is skipped for it.
+--   @coast@/@coastal@ also constrain to the ocean shore; @waterside@ just
+--   tolerates nearby water without any other terrain requirement. Every
+--   other location keeps clear of lakes / rivers / the ocean shore.
+wantsWater ∷ [Text] → Bool
+wantsWater = any (`elem` (["coast", "coastal", "waterside"] ∷ [Text]))
 
 -- | Does a chunk satisfy ALL of a def's anchor tags? Unknown tags
 --   impose no constraint (a soft no-op; #88 only ships the "flat" tag,

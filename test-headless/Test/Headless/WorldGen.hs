@@ -24,6 +24,10 @@ import World.Generate.Config
     )
 import World.Plate (generatePlates)
 import World.Types
+import qualified Data.Vector as V
+import World.Ocean.Types (oceanDistAt)
+import World.Fluid.Lake.Types (lakesInChunk)
+import World.Fluid.River.Types (riversInChunk)
 import Location.Types (LocationDef(..))
 import Location.Overlay (computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..))
 
@@ -135,7 +139,9 @@ spec = do
             mtnDef  = mkDef "mountain_test" ["mountain"]
             overlayFor p defs = computeLocationOverlay
                 (wgpSeed p) (wgpWorldSize p) (wgpPlates p)
-                (wgpOceanMap p) (wgpOceanDist p) defs
+                (wgpOceanMap p) (wgpOceanDist p)
+                (gtWorldLakes (wgpGeoTimeline p)) (gtWorldRivers (wgpGeoTimeline p))
+                defs
 
         it "world init wires a serializable overlay field" $ \env → do
             ws ← sharedWorld env 42 64 3
@@ -157,6 +163,8 @@ spec = do
             let plates2 = generatePlates (wgpSeed p) (wgpWorldSize p) (wgpPlateCount p)
                 ov2 = computeLocationOverlay (wgpSeed p) (wgpWorldSize p) plates2
                                              (wgpOceanMap p) (wgpOceanDist p)
+                                             (gtWorldLakes (wgpGeoTimeline p))
+                                             (gtWorldRivers (wgpGeoTimeline p))
                                              [flatDef, mtnDef]
             ov2 `shouldBe` overlayFor p [flatDef, mtnDef]
 
@@ -165,6 +173,19 @@ spec = do
             Just p ← getWorldGenParams ws
             HM.keys (overlayFor p [flatDef, mtnDef])
                 `shouldSatisfy` all (\c → not (HS.member c (wgpOceanMap p)))
+
+        it "keeps locations clear of lakes, rivers, and the ocean shore (#414)" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            let lakes  = gtWorldLakes  (wgpGeoTimeline p)
+                rivers = gtWorldRivers (wgpGeoTimeline p)
+                dry coord@(ChunkCoord cx cy) =
+                    oceanDistAt (wgpOceanDist p) coord ≥ 2
+                    ∧ all (\c → V.null (lakesInChunk lakes c)
+                              ∧ V.null (riversInChunk rivers c))
+                          [ ChunkCoord (cx + dx) (cy + dy)
+                          | dx ← [-1, 0, 1], dy ← [-1, 0, 1] ]
+            HM.keys (overlayFor p [flatDef, mtnDef]) `shouldSatisfy` all dry
 
         it "respects anchor tags — mountain picks higher ground than flat" $ \env → do
             ws ← sharedWorld env 42 64 3
