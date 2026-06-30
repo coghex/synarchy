@@ -110,7 +110,10 @@ saveMagic = 0x53595241
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 60  -- v60: WorldPageSave gains wpsConstructDesignations
+currentSaveVersion = 61  -- v61: UnitSimState drops vestigial usFallImpact
+                         --      (write-only scalar, never read; #386). Falls
+                         --      route through usPendingFallDrop + Unit.Fall.
+                         -- v60: WorldPageSave gains wpsConstructDesignations
                          --      (construction designation layer, #95).
                          -- v59: SaveData restructured — per-world state moved off
                          --      SaveData into a new WorldPageSave record;
