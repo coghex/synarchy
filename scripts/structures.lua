@@ -101,9 +101,9 @@ local CORNER_WALLS = { n = {"ne","nw"}, e = {"ne","se"},
 -- worldId (optional) targets a specific world page's terrain — locations
 -- stamped on a hidden/non-active page must read THAT page's height, not the
 -- active world's (#89). nil → the active world (the click-placement path).
-local function placeWall(gx, gy, e, worldId)
+local function placeWall(gx, gy, e, worldId, baseZ)
     local h = handles()
-    local z = (world.getTerrainAt(gx, gy, worldId) or 0) + 1
+    local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 1
     local ends = WALL_ENDS[e]   -- {leftCorner, rightCorner}
     local capL = structure.hasAt(gx, gy, "post_" .. ends[1], worldId)
     local capR = structure.hasAt(gx, gy, "post_" .. ends[2], worldId)
@@ -117,12 +117,15 @@ local function placeWall(gx, gy, e, worldId)
                     w.texPath, w.facePath[suffix], worldId)
 end
 
+-- (M.wall / recapTileCorner pass the levelled baseZ through; the
+-- click-placement path omits it and reads the active world's terrain.)
+
 -- A post just changed at tile (gx,gy)'s `corner`: re-cap that tile's own two
 -- walls touching the corner, so wall-then-post and post-then-wall converge.
-local function recapTileCorner(gx, gy, corner, worldId)
+local function recapTileCorner(gx, gy, corner, worldId, baseZ)
     for _, e in ipairs(CORNER_WALLS[corner]) do
         if structure.hasAt(gx, gy, "wall_" .. e, worldId) then
-            placeWall(gx, gy, e, worldId)
+            placeWall(gx, gy, e, worldId, baseZ)
         end
     end
 end
@@ -174,16 +177,20 @@ end
 -- The programmatic builders take an optional trailing `worldId` (the page
 -- to author on / read terrain from); nil → the active world. Location
 -- stamping passes it so a hidden page's room reads that page's terrain.
-function M.floor(gx, gy, worldId)
+-- The programmatic builders take an optional trailing baseZ — the levelled
+-- ground a stamped room sits on (locations.flattenFootprint). When given, the
+-- piece is placed at that explicit z instead of re-reading terrain (which,
+-- right after the async flatten edits, would still report the old bumps).
+function M.floor(gx, gy, worldId, baseZ)
     local h = handles()
-    local z = (world.getTerrainAt(gx, gy, worldId) or 0) + 1
+    local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 1
     structure.place(gx, gy, "floor", h.floor.tex, h.floor.face, z,
                     h.floor.texPath, h.floor.facePath, worldId)
 end
 
-function M.ceiling(gx, gy, worldId)
+function M.ceiling(gx, gy, worldId, baseZ)
     local h = handles()
-    local z = (world.getTerrainAt(gx, gy, worldId) or 0) + 2   -- one level above the floor
+    local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 2   -- one level above the floor
     structure.place(gx, gy, "ceiling", h.ceiling.tex, h.ceiling.face, z,
                     h.ceiling.texPath, h.ceiling.facePath, worldId)
 end
@@ -192,19 +199,19 @@ end
 -- this tile's walls touching the corner. Returns true if placed. The post z
 -- comes from the existing floor (read from the same page), so it needs no
 -- terrain read.
-function M.post(gx, gy, corner, worldId)
+function M.post(gx, gy, corner, worldId, baseZ)
     local fz = structure.floorZAt(gx, gy, worldId)
     if not fz then return false end
     local h = handles()
     structure.place(gx, gy, "post_" .. corner, h.post.tex, h.post.face, fz,
                     h.post.texPath, h.post.facePath, worldId)
-    recapTileCorner(gx, gy, corner, worldId)
+    recapTileCorner(gx, gy, corner, worldId, baseZ)
     return true
 end
 
 -- edge ∈ "ne"/"nw"/"se"/"sw". Caps to existing posts on this tile.
-function M.wall(gx, gy, edge, worldId)
-    placeWall(gx, gy, edge, worldId)
+function M.wall(gx, gy, edge, worldId, baseZ)
+    placeWall(gx, gy, edge, worldId, baseZ)
 end
 
 function M.clear() structure.clearAll() end
