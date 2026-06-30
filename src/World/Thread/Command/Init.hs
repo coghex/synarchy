@@ -33,6 +33,8 @@ import World.Geology (buildTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
+import Location.Types (allLocations)
+import Location.Overlay (computeLocationOverlay)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap (buildZoomCacheWithPixels)
@@ -47,7 +49,7 @@ import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
                              , minimumWorldSize, normalizeWorldGenInputs)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
-import World.Thread.ChunkLoading (maxChunksPerTick)
+import World.Thread.ChunkLoading (maxChunksPerTick, dispatchLocationStamps)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → IO ()
@@ -177,7 +179,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
     -- 'withVolcanoCtx' populates the Magma context now that
     -- gtFeatures is final, so chunk-gen sees a built spatial index.
     let baseParams = applyConfigToParams worldGenCfg0
-        params = withVolcanoCtx $ baseParams
+        params0 = withVolcanoCtx $ baseParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize
             , wgpPlateCount  = placeCount
@@ -187,6 +189,17 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
             , wgpOceanDist   = oceanDist
             , wgpClimateState = climateState'
             }
+
+    -- Location overlay (#89): deterministically choose which chunks
+    -- host the registered locations, from the just-finalised plates +
+    -- ocean data. Empty (and skipped) when no defs are loaded — the
+    -- common headless-dump path stays byte-identical and zero-cost.
+    locDefs ← allLocations <$> readIORef (locationDefsRef env)
+    let params = params0
+            { wgpLocationOverlay =
+                computeLocationOverlay seed worldSize plates oceanMap oceanDist locDefs
+            }
+    _ ← evaluate (force (wgpLocationOverlay params))
 
     writeIORef (wsGenParamsRef worldState) (Just params)
     
@@ -259,6 +272,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
         (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                        , wtdMaxChunks = 200 }, ())
 
+    -- Stamp any placed location on the synchronously-generated centre
+    -- chunk (#89). It is written straight to wsTilesRef and excluded from
+    -- the init queue, so the chunk-loading dispatch never sees it.
+    dispatchLocationStamps env params pageId [centerChunk]
+
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
     let remainingCoords = [ ChunkCoord cx cy
@@ -281,7 +299,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
     sendGenLog env $ "World initialized: "
         <> T.pack (show totalInitialChunks) <> " chunks queued"
     
-    logInfo logger CatWorld $ "World initialized: " 
+    logInfo logger CatWorld $ "World initialized: "
         <> T.pack (show totalInitialChunks) <> " chunks, "
         <> "surface at z=" <> T.pack (show surfaceElev)
         <> ": " <> unWorldPageId pageId

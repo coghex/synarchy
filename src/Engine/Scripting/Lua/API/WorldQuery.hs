@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldPickPosFn
     , worldGetClimateAtFn
     , worldGetAmbientAtFn
+    , worldListPlacedLocationsFn
     ) where
 
 import UPrelude
@@ -22,6 +23,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Text.Encoding as TE
+import Control.Monad (forM_)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv(..), activeWorldState)
@@ -30,6 +33,7 @@ import World.Geology.Timeline.Types
 import World.Hydrology.Types
 import World.Cursor.Types (CursorState(..))
 import World.Generate.Types (WorldGenParams(..))
+import Location.Overlay.Types (overlayToList)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Weather.Ambient (ambientTempAt)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -55,19 +59,36 @@ mVisibleWorldState manager = case wmVisible manager of
     (pageId:_) → lookup pageId (wmWorlds manager)
     []         → Nothing
 
--- | world.getTerrainAt(gx, gy) → surfaceZ, terrainSurfaceZ or nil
---   Returns the surface elevation and terrain-only surface elevation.
+-- | The 'WorldState' of a named page (any page in wmWorlds), or Nothing.
+worldStateByPage ∷ EngineEnv → Text → IO (Maybe WorldState)
+worldStateByPage env pidText = do
+    mgr ← readIORef (worldManagerRef env)
+    pure (lookup (WorldPageId pidText) (wmWorlds mgr))
+
+-- | world.getTerrainAt(gx, gy [, pageId]) → surfaceZ, terrainSurfaceZ or nil
+--   Returns the surface elevation and terrain-only surface elevation. With
+--   a page-id string argument it reads that page's tiles instead of the
+--   active world's — so the location stamper can author geometry against a
+--   specific (possibly hidden, non-active) page and still read its real
+--   terrain height (#89 multiworld).
 worldGetTerrainAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetTerrainAtFn env = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
+    mPage ← Lua.tostring 3
     case (mGx, mGy) of
         (Just gx', Just gy') → do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ case mPage of
+                Just pidBS → do
+                    mWs ← worldStateByPage env (TE.decodeUtf8 pidBS)
+                    case mWs of
+                        Just ws → Just <$> readIORef (wsTilesRef ws)
+                        Nothing → pure Nothing
+                Nothing → getWorldTileData env
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
@@ -678,4 +699,48 @@ worldPickPosFn env = do
                     return 1
         _ → do
             Lua.pushnil
+            return 1
+
+-- | world.listPlacedLocations([pageId]) → array of placed-location
+--   tables, each:
+--     { cx, cy,    -- chunk coordinate hosting the location
+--       gx, gy,    -- the chunk's centre tile (anchor for stamping)
+--       id }       -- the LocationDef id (#88) placed there
+--   With a page-id string argument the named page's overlay is read
+--   (the location stamper needs a specific world's placements even
+--   before it becomes the active page); with no argument the active
+--   world is used. Reads the deterministic overlay computed at world
+--   init and carried in the world's gen params (#89). The Lua
+--   `locations` module wraps this as locations.listPlaced(); join `id`
+--   against locations.getDef for label/type/builder. Returns an empty
+--   table when no such world exists or none were placed.
+worldListPlacedLocationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldListPlacedLocationsFn env = do
+    mPage ← Lua.tostring 1
+    mParams ← Lua.liftIO $ do
+        mWs ← case mPage of
+            Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+            Nothing    → activeWorldState env
+        case mWs of
+            Just ws → readIORef (wsGenParamsRef ws)
+            Nothing → pure Nothing
+    Lua.newtable
+    case mParams of
+        Nothing → return 1
+        Just params → do
+            let placed = overlayToList (wgpLocationOverlay params)
+                half   = chunkSize `div` 2
+            forM_ (zip [1 ..] placed) $ \(i, (ChunkCoord cx cy, lid)) → do
+                Lua.newtable
+                Lua.pushinteger (fromIntegral cx)
+                Lua.setfield (-2) "cx"
+                Lua.pushinteger (fromIntegral cy)
+                Lua.setfield (-2) "cy"
+                Lua.pushinteger (fromIntegral (cx * chunkSize + half))
+                Lua.setfield (-2) "gx"
+                Lua.pushinteger (fromIntegral (cy * chunkSize + half))
+                Lua.setfield (-2) "gy"
+                Lua.pushstring (TE.encodeUtf8 lid)
+                Lua.setfield (-2) "id"
+                Lua.rawseti (-2) i
             return 1

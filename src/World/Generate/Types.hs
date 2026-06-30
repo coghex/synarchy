@@ -31,6 +31,7 @@ import World.Weather.Types (ClimateParams, ClimateState
                            , defaultClimateParams, initClimateState)
 import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)
 import World.Magma.Init (buildVolcanoCtx)
+import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 
 -- | Pure, serializable world generation parameters.
 --   Same params + same ChunkCoord = same Chunk, always.
@@ -60,6 +61,11 @@ data WorldGenParams = WorldGenParams
     , wgpWaterfallQuantum ∷ !Int          -- ^ Max water-surface drop between adjacent river tiles before a stepped gorge is carved
     , wgpOreLevers ∷ !OreLevers           -- ^ Resource-abundance levers for the ore deposition pass
     , wgpTimelineParams ∷ !TimelineParams -- ^ Player-configured timeline depth (eon/era/period/epoch/age counts)
+    , wgpLocationOverlay ∷ !LocationOverlay
+      -- ^ Sparse chunk→location-id map placed at world init by the
+      --   deterministic overlay pass (#89). Serialized (appended to the
+      --   manual instance below) so a loaded world keeps its layout
+      --   without recomputation.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -90,6 +96,7 @@ instance Serialize WorldGenParams where
         put (wgpWaterfallQuantum p)
         put (wgpOreLevers p)
         put (wgpTimelineParams p)
+        put (wgpLocationOverlay p)
     get = do
         seed       ← get
         ws         ← get
@@ -110,6 +117,7 @@ instance Serialize WorldGenParams where
         waterfallQ ← get
         oreLevers  ← get
         timelineP  ← get
+        locOverlay ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -131,6 +139,7 @@ instance Serialize WorldGenParams where
             , wgpWaterfallQuantum = waterfallQ
             , wgpOreLevers        = oreLevers
             , wgpTimelineParams   = timelineP
+            , wgpLocationOverlay  = locOverlay
             , wgpVolcanoCtx       = vc
             }
 
@@ -160,6 +169,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpWaterfallQuantum = 12
     , wgpOreLevers = defaultOreLevers
     , wgpTimelineParams = defaultTimelineParams
+    , wgpLocationOverlay = emptyLocationOverlay
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

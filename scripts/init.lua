@@ -80,6 +80,12 @@ function game.init(scriptId)
     -- broadcasts (onSetInfoText) reach the module.
     tileEditorScriptId = engine.loadScript("scripts/tile_editor.lua", 0.1)
 
+    -- Location stamper (#89): on the engine's onWorldReady broadcast it
+    -- materializes the placed-location overlay into geometry via the #88
+    -- builders, stamping each as its chunk loads. Loaded so onWorldReady +
+    -- update() reach it.
+    locationStamperScriptId = engine.loadScript("scripts/location_stamper.lua", 0.1)
+
     -- Pause: owns the engine.setPaused flag + world.setTimeScale
     -- snapshot. No per-tick work; loaded so engine broadcasts (none
     -- needed today) and require()s from game scripts share state.

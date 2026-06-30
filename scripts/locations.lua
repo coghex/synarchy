@@ -40,6 +40,23 @@ function locations.getDef(id)
     return nil
 end
 
+-----------------------------------------------------------
+-- World-gen placement overlay (#89)
+-----------------------------------------------------------
+-- The engine places locations into chunks during world generation
+-- (deterministic from the seed) and carries the result in the world's
+-- gen params, so it survives save/load. listPlaced() reads back that
+-- overlay for the ACTIVE world. Each entry:
+--   { cx, cy,    -- chunk coordinate
+--     gx, gy,    -- chunk-centre tile (anchor for stamping)
+--     id }       -- LocationDef id (join with locations.getDef for
+--                --   label/type/builder)
+-- With no argument the active world is read; pass a page id to read a
+-- specific world's overlay. Returns {} when no such world or nothing placed.
+function locations.listPlaced(worldId)
+    return world.listPlacedLocations(worldId) or {}
+end
+
 -- Debug-overlay list shape: { name=id, label, note }. The overlay keys
 -- armed locations + stamp() on `name`, so name carries the def id.
 function locations.list()
@@ -132,31 +149,33 @@ function builders.room_small(worldId, gx, gy, withCeiling)
     local x0, x1 = gx - r, gx + r
     local y0, y1 = gy - r, gy + r
 
-    -- 1. floor across the whole footprint
+    -- 1. floor across the whole footprint. worldId threads through so a
+    --    location stamped on a hidden/non-active page reads THAT page's
+    --    terrain height, not the active world's (#89 multiworld).
     for x = x0, x1 do
-        for y = y0, y1 do S.floor(x, y) end
+        for y = y0, y1 do S.floor(x, y, worldId) end
     end
 
     -- 2. corner posts (cap the two perimeter walls that meet at each)
-    S.post(x0, y0, "n")   -- nw + ne meet
-    S.post(x1, y0, "e")   -- ne + se meet
-    S.post(x1, y1, "s")   -- se + sw meet
-    S.post(x0, y1, "w")   -- sw + nw meet
+    S.post(x0, y0, "n", worldId)   -- nw + ne meet
+    S.post(x1, y0, "e", worldId)   -- ne + se meet
+    S.post(x1, y1, "s", worldId)   -- se + sw meet
+    S.post(x0, y1, "w", worldId)   -- sw + nw meet
 
     -- 3. perimeter walls (after posts so they cap to them)
     for y = y0, y1 do
-        S.wall(x0, y, "nw")   -- −gx side
-        S.wall(x1, y, "se")   -- +gx side
+        S.wall(x0, y, "nw", worldId)   -- −gx side
+        S.wall(x1, y, "se", worldId)   -- +gx side
     end
     for x = x0, x1 do
-        S.wall(x, y0, "ne")   -- −gy side
-        S.wall(x, y1, "sw")   -- +gy side
+        S.wall(x, y0, "ne", worldId)   -- −gy side
+        S.wall(x, y1, "sw", worldId)   -- +gy side
     end
 
     -- 4. ceiling (optional)
     if withCeiling then
         for x = x0, x1 do
-            for y = y0, y1 do S.ceiling(x, y) end
+            for y = y0, y1 do S.ceiling(x, y, worldId) end
         end
     end
 

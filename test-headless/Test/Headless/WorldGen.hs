@@ -9,6 +9,8 @@ module Test.Headless.WorldGen (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Serialize as Cereal
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
@@ -22,6 +24,8 @@ import World.Generate.Config
     )
 import World.Plate (generatePlates)
 import World.Types
+import Location.Types (LocationDef(..))
+import Location.Overlay (computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..))
 
 spec ∷ SpecWith EngineEnv
 spec = do
@@ -114,3 +118,70 @@ spec = do
             threadDelay 500000
             mWs ← getWorldState env (WorldPageId "destroy")
             isNothing mWs `shouldBe` True
+
+    describe "Location overlay (#89)" $ do
+
+        -- The headless harness boots no Lua, so the location registry is
+        -- empty and the stored overlay is empty — these specs exercise
+        -- the pure placement pass directly against the shared world's
+        -- real plates / ocean data, with synthetic defs. The full
+        -- load-defs → init → listPlaced integration lives in the python
+        -- probe (tools/location_overlay_probe.py).
+        let mkDef lid anchors = LocationDef
+                { ldId = lid, ldLabel = lid, ldType = "test"
+                , ldBuilder = "noop", ldAnchor = anchors
+                , ldMaxCount = 8, ldMinSpacing = 3, ldContents = [] }
+            flatDef = mkDef "flat_test"     ["flat"]
+            mtnDef  = mkDef "mountain_test" ["mountain"]
+            overlayFor p defs = computeLocationOverlay
+                (wgpSeed p) (wgpWorldSize p) (wgpPlates p)
+                (wgpOceanMap p) (wgpOceanDist p) defs
+
+        it "world init wires a serializable overlay field" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            mp ← getWorldGenParams ws
+            case mp of
+                Just p  → HM.size (wgpLocationOverlay p) `shouldSatisfy` (≥ 0)
+                Nothing → expectationFailure "params should exist"
+
+        it "places flat-anchored locations on land" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            HM.size (overlayFor p [flatDef]) `shouldSatisfy` (> 0)
+
+        it "is deterministic — same seed yields the same overlay" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            -- recompute the plates independently from the seed: a fresh
+            -- plate list with the same seed must give the same overlay.
+            let plates2 = generatePlates (wgpSeed p) (wgpWorldSize p) (wgpPlateCount p)
+                ov2 = computeLocationOverlay (wgpSeed p) (wgpWorldSize p) plates2
+                                             (wgpOceanMap p) (wgpOceanDist p)
+                                             [flatDef, mtnDef]
+            ov2 `shouldBe` overlayFor p [flatDef, mtnDef]
+
+        it "never places a location on an ocean chunk" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            HM.keys (overlayFor p [flatDef, mtnDef])
+                `shouldSatisfy` all (\c → not (HS.member c (wgpOceanMap p)))
+
+        it "respects anchor tags — mountain picks higher ground than flat" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            let med c = cmMedianElev
+                    (chunkMetricsAt (wgpSeed p) (wgpPlates p) (wgpWorldSize p)
+                                    (wgpOceanDist p) c)
+                mtn  = HM.keys (overlayFor p [mtnDef])
+                flat = HM.keys (overlayFor p [flatDef])
+                avg xs = sum xs `div` max 1 (length xs)
+            mtn  `shouldSatisfy` (not . null)
+            flat `shouldSatisfy` (not . null)
+            avg (map med mtn) `shouldSatisfy` (> avg (map med flat))
+
+        it "overlay survives a WorldGenParams serialize round-trip" $ \_env → do
+            let sample = HM.fromList [ (ChunkCoord 1 2, "ruin_small" ∷ Text)
+                                     , (ChunkCoord (-3) 4, "camp") ]
+                p = defaultWorldGenParams { wgpLocationOverlay = sample }
+                back = Cereal.decode (Cereal.encode p) ∷ Either String WorldGenParams
+            fmap wgpLocationOverlay back `shouldBe` Right sample

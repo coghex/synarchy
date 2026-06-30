@@ -38,6 +38,11 @@ data LocationDef = LocationDef
     , ldAnchor   ∷ ![Text]            -- ^ terrain placement constraint tags
                                       --   (e.g. ["mountain","flat"]); the
                                       --   generator (#89) filters on these.
+    , ldMaxCount ∷ !Int               -- ^ max instances the world-gen
+                                      --   overlay (#89) places (per type).
+    , ldMinSpacing ∷ !Int             -- ^ min chunk separation between two
+                                      --   instances of this type (jittered
+                                      --   distribution; #89).
     , ldContents ∷ ![LocationContent] -- ^ content to spawn (raw ids; #90)
     } deriving (Show, Eq, Generic)
 

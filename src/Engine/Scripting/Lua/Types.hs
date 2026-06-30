@@ -107,6 +107,14 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaFramebufferResize Int Int
             | LuaAssetLoaded Text Int Text
             | LuaArenaReady Text
+            | LuaStampLocation Text Text Int Int
+              -- ^ A just-loaded chunk hosts a placed location (#89):
+              --   (pageId, locationId, anchorGx, anchorGy). Broadcast to
+              --   Lua as onStampLocation so the stamper materializes the
+              --   geometry via the #88 builder — issued on every load of
+              --   the chunk (the stamper skips it if already stamped), so
+              --   a location always materializes from the persisted
+              --   overlay, even after a save/load that preceded stamping.
             | LuaOpenArena
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char

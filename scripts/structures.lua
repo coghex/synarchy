@@ -98,12 +98,15 @@ local CORNER_WALLS = { n = {"ne","nw"}, e = {"ne","se"},
 -- from THIS tile's own corner post — a post on a neighbouring tile (which
 -- shares the end node) must NOT cap this wall, else a post placed for the next
 -- segment bleeds across a gap onto this wall's clean end.
-local function placeWall(gx, gy, e)
+-- worldId (optional) targets a specific world page's terrain — locations
+-- stamped on a hidden/non-active page must read THAT page's height, not the
+-- active world's (#89). nil → the active world (the click-placement path).
+local function placeWall(gx, gy, e, worldId)
     local h = handles()
-    local z = (world.getTerrainAt(gx, gy) or 0) + 1
+    local z = (world.getTerrainAt(gx, gy, worldId) or 0) + 1
     local ends = WALL_ENDS[e]   -- {leftCorner, rightCorner}
-    local capL = structure.hasAt(gx, gy, "post_" .. ends[1])
-    local capR = structure.hasAt(gx, gy, "post_" .. ends[2])
+    local capL = structure.hasAt(gx, gy, "post_" .. ends[1], worldId)
+    local capR = structure.hasAt(gx, gy, "post_" .. ends[2], worldId)
     local suffix = (capL and "1" or "0") .. (capR and "1" or "0")
     if M.debug then
         engine.logInfo(string.format("[wall] tile %d,%d %s -> _%s  (L=%s post_%s  R=%s post_%s)",
@@ -111,15 +114,15 @@ local function placeWall(gx, gy, e)
     end
     local w = h.walls[e]
     structure.place(gx, gy, "wall_" .. e, w.tex, w.face[suffix], z,
-                    w.texPath, w.facePath[suffix])
+                    w.texPath, w.facePath[suffix], worldId)
 end
 
 -- A post just changed at tile (gx,gy)'s `corner`: re-cap that tile's own two
 -- walls touching the corner, so wall-then-post and post-then-wall converge.
-local function recapTileCorner(gx, gy, corner)
+local function recapTileCorner(gx, gy, corner, worldId)
     for _, e in ipairs(CORNER_WALLS[corner]) do
-        if structure.hasAt(gx, gy, "wall_" .. e) then
-            placeWall(gx, gy, e)
+        if structure.hasAt(gx, gy, "wall_" .. e, worldId) then
+            placeWall(gx, gy, e, worldId)
         end
     end
 end
@@ -168,35 +171,40 @@ end
 -- These name the exact slot/edge/corner instead of deriving it from a click.
 -----------------------------------------------------------
 
-function M.floor(gx, gy)
+-- The programmatic builders take an optional trailing `worldId` (the page
+-- to author on / read terrain from); nil → the active world. Location
+-- stamping passes it so a hidden page's room reads that page's terrain.
+function M.floor(gx, gy, worldId)
     local h = handles()
-    local z = (world.getTerrainAt(gx, gy) or 0) + 1
+    local z = (world.getTerrainAt(gx, gy, worldId) or 0) + 1
     structure.place(gx, gy, "floor", h.floor.tex, h.floor.face, z,
-                    h.floor.texPath, h.floor.facePath)
+                    h.floor.texPath, h.floor.facePath, worldId)
 end
 
-function M.ceiling(gx, gy)
+function M.ceiling(gx, gy, worldId)
     local h = handles()
-    local z = (world.getTerrainAt(gx, gy) or 0) + 2   -- one level above the floor
+    local z = (world.getTerrainAt(gx, gy, worldId) or 0) + 2   -- one level above the floor
     structure.place(gx, gy, "ceiling", h.ceiling.tex, h.ceiling.face, z,
-                    h.ceiling.texPath, h.ceiling.facePath)
+                    h.ceiling.texPath, h.ceiling.facePath, worldId)
 end
 
 -- corner ∈ "n"/"e"/"s"/"w". Gated to a floor (like click placement); re-caps
--- this tile's walls touching the corner. Returns true if placed.
-function M.post(gx, gy, corner)
-    local fz = structure.floorZAt(gx, gy)
+-- this tile's walls touching the corner. Returns true if placed. The post z
+-- comes from the existing floor (read from the same page), so it needs no
+-- terrain read.
+function M.post(gx, gy, corner, worldId)
+    local fz = structure.floorZAt(gx, gy, worldId)
     if not fz then return false end
     local h = handles()
     structure.place(gx, gy, "post_" .. corner, h.post.tex, h.post.face, fz,
-                    h.post.texPath, h.post.facePath)
-    recapTileCorner(gx, gy, corner)
+                    h.post.texPath, h.post.facePath, worldId)
+    recapTileCorner(gx, gy, corner, worldId)
     return true
 end
 
 -- edge ∈ "ne"/"nw"/"se"/"sw". Caps to existing posts on this tile.
-function M.wall(gx, gy, edge)
-    placeWall(gx, gy, edge)
+function M.wall(gx, gy, edge, worldId)
+    placeWall(gx, gy, edge, worldId)
 end
 
 function M.clear() structure.clearAll() end

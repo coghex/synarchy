@@ -498,6 +498,10 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onShellToggle" []
   LuaArenaReady pageId →
     broadcastToModules ls "onArenaReady" [ScriptString pageId]
+  LuaStampLocation pageId locId gx gy →
+    broadcastToModules ls "onStampLocation"
+        [ ScriptString pageId, ScriptString locId
+        , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy) ]
   LuaOpenArena →
     broadcastToModules ls "onOpenArena" []
   LuaDebugToggle → do

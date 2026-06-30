@@ -3,6 +3,7 @@
 module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
+    , dispatchLocationStamps
     , maxChunksPerTick
     ) where
 
@@ -31,6 +32,7 @@ import World.Slope (recomputeNeighborSlopes, slopeRecomputeAffected, wrapChunkCo
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
 import World.Generate.Types (WorldGenParams(..), isArenaParams)
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopesTd)
 import Sim.Command.Types (SimCommand(..))
@@ -140,6 +142,9 @@ updateChunkLoading env logger = do
                                         SimChunkLoaded pageId (lcCoord lc)
                                             (lcFluidMap lc)
                                             (lcTerrainSurfaceMap lc)
+                                -- Stamp any placed locations on the loaded
+                                -- chunks (#89).
+                                dispatchLocationStamps env params pageId newChunks'
                                 -- Notify sim thread of evicted chunks
                                 forM_ evicted $ \cc →
                                     Q.writeQueue (simQueue env)
@@ -147,6 +152,28 @@ updateChunkLoading env logger = do
                                 bumpQuadCacheGen worldState
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing
+
+-- | Dispatch a location-stamp request to the Lua thread for any
+--   just-loaded chunk the overlay (#89) places a location on. Issued on
+--   EVERY load of the chunk (fresh gen, eviction reload, or after a
+--   save/load) — the Lua stamper skips it when the geometry is already
+--   present (structure.hasAt), so repeats are cheap no-ops. Consulting
+--   the persisted overlay on every chunk load is what makes a location
+--   materialize even if the world was saved before it was first stamped:
+--   there is no async queue to drain, only the overlay (which always
+--   rides the save) and the chunk-load trigger.
+dispatchLocationStamps ∷ EngineEnv → WorldGenParams → WorldPageId
+                       → [LoadedChunk] → IO ()
+dispatchLocationStamps env params pageId chunks =
+    forM_ chunks $ \lc →
+        case HM.lookup (lcCoord lc) (wgpLocationOverlay params) of
+            Nothing  → return ()
+            Just lid →
+                let ChunkCoord cx cy = lcCoord lc
+                    gx = cx * chunkSize + chunkSize `div` 2
+                    gy = cy * chunkSize + chunkSize `div` 2
+                in Q.writeQueue (luaQueue env)
+                       (LuaStampLocation (unWorldPageId pageId) lid gx gy)
 
 partitionChunks ∷ [ChunkCoord] → WorldTileData → ([ChunkCoord], [ChunkCoord])
 partitionChunks coords tileData =
@@ -244,6 +271,8 @@ drainInitQueues env logger = do
                                 SimChunkLoaded pageId (lcCoord lc)
                                     (lcFluidMap lc)
                                     (lcTerrainSurfaceMap lc)
+                        -- Stamp any placed locations on the loaded chunks (#89).
+                        dispatchLocationStamps env params pageId newChunks'
 
                         -- The batch is now in wsTilesRef AND the sim has been
                         -- notified, so drop it from the init queue — by coord,
