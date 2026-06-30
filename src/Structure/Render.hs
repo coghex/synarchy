@@ -302,17 +302,22 @@ postBias s = case s of
     _      → 0.00025
 
 -- | Post sort anchor, z-aware for the FRONT (S) post (#415), mirroring the
---   front walls it caps: if either side rim it stands against is higher than
---   the post, drop from the front corner back to the tile centre so the rim
---   occludes it too — otherwise a dug room's corner post floats over the rim
---   while its walls correctly recede behind it. 'postSortAnchor' otherwise.
+--   front walls it caps: when a side rim it stands against is higher than the
+--   post, recede from the front corner to the tile centre so the rim occludes
+--   it too — otherwise a dug room's corner post floats over the rim while its
+--   walls correctly recede behind it. Receding is gated on the same safety
+--   condition as the walls ('sortAnchorZ'): the diagonal-south tile (gx+1,
+--   gy+1) must be at/above the post, so its overdraw is genuine occlusion and
+--   not a low-tile notch on asymmetric terrain. 'postSortAnchor' otherwise.
 postSortAnchorZ ∷ WorldTileData → StructureSlot → Int → Int → Int → (Float, Float)
 postSortAnchorZ td slot gx gy postZ =
     let gxf = fromIntegral gx
         gyf = fromIntegral gy
-        higher ax ay = maybe False (> postZ) (terrainSurfaceZAt td ax ay)
+        higher  ax ay = maybe False (> postZ) (terrainSurfaceZAt td ax ay)
+        atLeast ax ay = maybe False (≥ postZ) (terrainSurfaceZAt td ax ay)
     in case slot of
-        SPostS | higher (gx + 1) gy ∨ higher gx (gy + 1)
+        SPostS | atLeast (gx + 1) (gy + 1)
+               , higher (gx + 1) gy ∨ higher gx (gy + 1)
                  → (gxf + 0.5, gyf + 0.5)
         _        → postSortAnchor slot gx gy
 
@@ -348,22 +353,38 @@ terrainSurfaceZAt td gx gy =
 --   integer of iso-depth, so it ALSO beats the tile directly across the
 --   wall's edge (one depth-rank behind), which is correct on flat ground.
 --
---   But a sunken room (dug DOWN for an underground dungeon) makes that
+--   A sunken room (dug DOWN for an underground dungeon) makes that
 --   across-edge tile a HIGHER rim that should OCCLUDE the wall. Because the
 --   forward anchor is an integer ahead of the rim, the z-tiebreak (sub-1.0)
---   can never let the rim win. So: when the across-edge terrain surface is
---   above the wall top, drop the anchor back to the tile centre — the same
---   integer depth as the rim tile — and let the z-term hand the rim the
---   overlap. Flat/lower ground (and unloaded neighbours) keep the forward
---   anchor, so nothing regresses. 'sortAnchor' handles every other slot.
+--   can never let the rim win — so we recede the anchor to the tile centre
+--   (same integer depth as the rim tile) and let the z-term hand the rim the
+--   overlap.
+--
+--   But receding to centre also surrenders the south-vertex protection
+--   against the DIAGONAL-SOUTH tile (gx+1,gy+1), which then sits a full
+--   integer AHEAD of the wall and always overdraws it. That is only correct
+--   when that south tile is itself a rim — if it is low (e.g. asymmetric
+--   terrain: high across-edge rim, open low ground to the south) its diamond
+--   would punch back through the wall footing (the green notch again). So we
+--   recede ONLY when the across-edge rim is higher than the wall top AND the
+--   diagonal-south tile is at/above the wall top (its overdraw is genuine
+--   occlusion, not a notch). Otherwise — flat ground, asymmetric low-south,
+--   or unloaded neighbours — keep the forward anchor, so nothing regresses.
+--   (One scalar sort key cannot order a wall against two terrain tiles at
+--   different depths at once; in the asymmetric case the side rim simply
+--   keeps the pre-#415 over-draw rather than trading it for a notch.)
+--   'sortAnchor' handles every other slot.
 sortAnchorZ ∷ WorldTileData → StructureSlot → Int → Int → Int → (Float, Float)
 sortAnchorZ td slot gx gy wallZ =
     let gxf = fromIntegral gx
         gyf = fromIntegral gy
+        higher  ax ay = maybe False (> wallZ) (terrainSurfaceZAt td ax ay)
+        atLeast ax ay = maybe False (≥ wallZ) (terrainSurfaceZAt td ax ay)
+        -- diagonal-south tile is (gx+1,gy+1) for BOTH front walls
         frontAnchor ax ay
-            | maybe False (> wallZ) (terrainSurfaceZAt td ax ay)
-                        = (gxf + 0.5, gyf + 0.5)   -- sunken: rim occludes wall
-            | otherwise = (gxf + 1.0, gyf + 1.0)   -- flat: wall covers footing
+            | higher ax ay ∧ atLeast (gx + 1) (gy + 1)
+                        = (gxf + 0.5, gyf + 0.5)   -- sunken rim, safe to recede
+            | otherwise = (gxf + 1.0, gyf + 1.0)   -- forward: cover footing
     in case slot of
         SWallSE → frontAnchor (gx + 1) gy      -- edge shared with (gx+1, gy)
         SWallSW → frontAnchor gx (gy + 1)      -- edge shared with (gx, gy+1)
