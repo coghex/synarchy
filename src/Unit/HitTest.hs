@@ -26,19 +26,14 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , applyFacingF, GridConfig(..), defaultGridConfig)
 import World.Generate (viewDepth)
 import Unit.Types
-import Unit.Direction (Direction(..), dirIndex, indexToDir)
+import Unit.Direction (Direction)
+import Unit.Sprite (resolveTexture)
 
 baseTileW ∷ Float
 baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
 
 baseTileH ∷ Float
 baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
-
-cameraRotSteps ∷ CameraFacing → Int
-cameraRotSteps FaceSouth = 0
-cameraRotSteps FaceWest  = 2
-cameraRotSteps FaceNorth = 4
-cameraRotSteps FaceEast  = 6
 
 -- | Hit test at framebuffer-pixel coordinates. Returns the topmost
 --   (highest-Z) unit whose sprite quad contains the click, or Nothing.
@@ -215,19 +210,18 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
                 else [uid | (uid, inst) ← HM.toList instances, inRect inst]
 
 -- | Resolve which texture handle the unit displays for a given camera
---   facing. Duplicated from Unit.Render so HitTest doesn't import the
---   whole renderer.
+--   facing, for hit-box SIZING. Delegates to the shared
+--   'Unit.Sprite.resolveTexture' so the hit-box is sized from the same
+--   sprite the renderer draws — including the 'mirrorDir' fallback that
+--   produces W/SW/NW from their eastern counterparts. (A previous copy
+--   here omitted that fallback, so those units' hit-boxes were sized
+--   from the default texture instead — #389.) The flip flag doesn't
+--   affect sprite dimensions, so we drop it.
 resolveTextureH
     ∷ CameraFacing
     → Direction
     → Map.Map Direction TextureHandle
     → TextureHandle
     → TextureHandle
-resolveTextureH camFacing unitFacing dirSprites fallback
-    | Map.null dirSprites = fallback
-    | otherwise =
-        let screenIdx = (dirIndex unitFacing - cameraRotSteps camFacing) `mod` 8
-            screenDir = indexToDir screenIdx
-        in case Map.lookup screenDir dirSprites of
-            Just h  → h
-            Nothing → fallback
+resolveTextureH camFacing unitFacing dirSprites fallback =
+    fst (resolveTexture camFacing unitFacing dirSprites fallback)

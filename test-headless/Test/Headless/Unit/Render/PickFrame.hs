@@ -12,7 +12,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Unit.Direction (Direction(..))
-import Unit.Render (pickFrame, screenDirOf)
+import Unit.Render (pickFrame, screenDirOf, resolveTexture)
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
 
@@ -120,6 +120,33 @@ spec = do
             screenDirOf FaceWest DirS `shouldBe` DirE
         it "is its own inverse for full rotation" $
             screenDirOf FaceSouth (screenDirOf FaceSouth DirNE) `shouldBe` DirNE
+
+    -- resolveTexture is the single direction→sprite path shared by the
+    -- renderer (Unit.Render) and the hit-tester (Unit.HitTest). The
+    -- mirror fallback below is the #389 regression: a unit facing
+    -- W/SW/NW is DRAWN as the mirrored eastern sprite, so its hit-box
+    -- must be SIZED from that same sprite (not the default texture).
+    describe "resolveTexture — mirror fallback (#389)" $ do
+        -- The 5-sprite convention: only S/SE/E/NE/N authored; the
+        -- western half is produced by horizontal mirror of the east.
+        let east = Map.fromList
+                [ (DirS, h 1), (DirSE, h 2), (DirE, h 3)
+                , (DirNE, h 4), (DirN, h 5) ]
+            fb   = h 0
+        it "returns the directional sprite (no flip) when present" $
+            resolveTexture FaceSouth DirE east fb `shouldBe` (h 3, False)
+        it "W falls back to the mirrored E sprite with flipX" $
+            resolveTexture FaceSouth DirW east fb `shouldBe` (h 3, True)
+        it "SW falls back to the mirrored SE sprite with flipX" $
+            resolveTexture FaceSouth DirSW east fb `shouldBe` (h 2, True)
+        it "NW falls back to the mirrored NE sprite with flipX" $
+            resolveTexture FaceSouth DirNW east fb `shouldBe` (h 4, True)
+        it "uses the fallback only when neither dir nor its mirror exist" $
+            -- N is its own canonical (no mirror); drop it → fallback.
+            let noN = Map.delete DirN east
+            in resolveTexture FaceSouth DirN noN fb `shouldBe` (h 0, False)
+        it "uses the fallback when there are no directional sprites" $
+            resolveTexture FaceSouth DirW Map.empty fb `shouldBe` (h 0, False)
 
     describe "pickFrame — T-pose fallbacks" $ do
         it "returns directional T-pose when uiCurrentAnim is empty" $

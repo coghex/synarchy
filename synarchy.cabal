@@ -407,6 +407,7 @@ library
                      Unit.Anim
                      Unit.Stats
                      Unit.Render
+                     Unit.Sprite
                      Unit.Selection
                      Unit.HitTest
                      Unit.LineOfSight
