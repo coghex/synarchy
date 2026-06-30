@@ -1490,16 +1490,16 @@ local function unitConditions(uid)
 
     -- Bleeding: an open (cutting) wound that is actually seeping. Two
     -- gates, matching what bleedRateFor actually squares for live blood
-    -- loss: (1) EFFECTIVE severity — max(acute trauma, necrosis floor) —
-    -- so an open necrotic wound with little acute trauma left still
-    -- counts; (2) the live seep fraction (1 − clot) × bandage, so a
-    -- clotted or dressed-shut wound doesn't, however severe. Together
-    -- they avoid both the closed-wound false positive and the necrotic-
-    -- wound false negative.
+    -- loss: (1) EFFECTIVE severity (severityEffective = max of acute trauma
+    -- and the necrosis floor) so an open necrotic wound with little acute
+    -- trauma left still counts; (2) the live seep fraction (1 − clot) ×
+    -- bandage, so a clotted or dressed-shut wound doesn't, however severe.
+    -- Together they avoid both the closed-wound false positive and the
+    -- necrotic-wound false negative.
     local ws = unit.getWounds(uid)
     if type(ws) == "table" then
         for _, w in ipairs(ws) do
-            local effSev = math.max(w.severity or 0, w.necrosis or 0)
+            local effSev = w.severityEffective or w.severity or 0
             local seep = (1 - (w.clot or 0)) * (w.bandage or 1)
             if (w.kind == "slash" or w.kind == "stab")
                and effSev >= 0.2 and seep > 0.02 then

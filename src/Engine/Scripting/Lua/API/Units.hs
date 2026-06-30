@@ -1292,15 +1292,25 @@ unitGetWoundsFn env = do
                         -- own death path) reported separately as `necrosis`,
                         -- so the acute organ-failure meters (suffocation,
                         -- neuro, shock, visceral) read this without a rotting
-                        -- wound spuriously driving an acute-trauma meter. A
-                        -- Lua consumer that wants the engine's full effective
-                        -- severity reconstructs it as max(severity, necrosis)
-                        -- (e.g. the injured-anim threshold in unit_ai.lua).
-                        -- `severityInflicted` is the original, `heal` the
-                        -- 0..1 healing progress.
+                        -- wound spuriously driving an acute-trauma meter.
+                        -- Consumers that drive IMPAIRMENT/bleed (limp/crawl,
+                        -- injured-anim, bleeding) read `severityEffective`
+                        -- below instead. `severityInflicted` is the original,
+                        -- `heal` the 0..1 healing progress.
                         Lua.pushnumber (Lua.Number (realToFrac
                             (woundSeverity w * (1 - woundHeal w))))
                         Lua.setfield (-2) "severity"
+                        -- `severityEffective` is the engine's full effective
+                        -- severity — max(acute, necrosis) via woundEffSeverity,
+                        -- the SAME value the Haskell bleed/pain/impairment
+                        -- paths (bleedRateFor, painFor, injurySpeedMult, …)
+                        -- use. Lua consumers that must stay in lockstep with
+                        -- those (locomotion limp/crawl, injured-anim, bleeding
+                        -- badge) read this so a healed-but-necrotic wound still
+                        -- impairs, matching the engine.
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundEffSeverity w)))
+                        Lua.setfield (-2) "severityEffective"
                         Lua.pushnumber (Lua.Number
                             (realToFrac (woundSeverity w)))
                         Lua.setfield (-2) "severityInflicted"
