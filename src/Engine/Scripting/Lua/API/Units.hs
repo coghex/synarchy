@@ -891,10 +891,11 @@ parsePose "climbing"  = Just Climbing
 parsePose "falling"   = Just Falling
 parsePose _           = Nothing
 
--- | unit.getPose(uid) — returns the unit's current pose as a string:
---   "standing" / "crouching" / "crawling" / "collapsed". nil if the
---   unit doesn't exist. Reads `uiPose`, mirrored from `usPose` by
---   Unit.Thread.publishToRender every tick.
+-- | unit.getPose(uid) — returns the unit's current pose as a string,
+--   one of: "standing" / "crouching" / "crawling" / "collapsed" /
+--   "dead" / "climbing" / "falling" (the full `Unit.Anim.poseTag`
+--   set). nil if the unit doesn't exist. Reads `uiPose`, mirrored from
+--   `usPose` by Unit.Thread.publishToRender every tick.
 unitGetPoseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPoseFn env = do
     idArg ← Lua.tointeger 1
@@ -2700,9 +2701,12 @@ unitLungeImpactSpeedFn env = do
                 Nothing → Lua.pushnumber (Lua.Number 0) >> return 1
 
 -- | unit.getActivity(uid) — returns the unit's current sim-thread
---   activity as a string: "idle", "walking", or "collapsed". nil if
---   the unit doesn't exist. Reads `uiActivity`, which is mirrored
---   from `usState` by Unit.Thread.publishToRender every tick.
+--   activity as a string, one of: "idle", "walking", "running",
+--   "drinking", "eating", "pickup", "transitioning" (see
+--   `Unit.Thread.activityLabel`). nil if the unit doesn't exist. This
+--   is the activity, NOT the pose — collapse/death are poses, read via
+--   `unit.getPose`, and never appear here. Reads `uiActivity`, which is
+--   mirrored from `usState` by Unit.Thread.publishToRender every tick.
 unitGetActivityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetActivityFn env = do
     idArg ← Lua.tointeger 1
@@ -3449,7 +3453,11 @@ unitRemoveModifierFn env = do
 
 -- | unit.getModifiers(id, name) — list every modifier on the named
 --   stat as a Lua array of @{delta, percent, source, expiry}@ tables. Expired
---   entries are NOT filtered — caller can compare expiry to os.time().
+--   entries are NOT filtered — caller can compare expiry to the game
+--   clock (e.g. `engine.gameTime()`). NB: @expiry@ is in game-clock
+--   seconds (stamped from `gameTimeRef` by `unit.addModifier`), NOT
+--   POSIX epoch, so comparing it to `os.time()` is wrong. @expiry@ is
+--   absent on permanent modifiers.
 --   nil if the unit doesn't exist; empty array if no modifiers.
 unitGetModifiersFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetModifiersFn env = do
