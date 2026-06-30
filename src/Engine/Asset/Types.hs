@@ -86,7 +86,6 @@ data TextureAtlas = TextureAtlas
   , taName         ∷ Text
   , taPath         ∷ Text
   , taMetadata     ∷ AtlasMetadata
-  , taStatus       ∷ AssetStatus
   , taInfo         ∷ Maybe TextureInfo   -- ^ Vulkan image\/view\/sampler; 'Nothing' until loaded
   , taRefCount     ∷ Word32
   , taCleanup      ∷ Maybe (IO ())       -- ^ Destroy Vulkan resources on unload

@@ -16,7 +16,7 @@ import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
 import qualified Codec.Picture as JP
-import Engine.Asset.Base (AssetId, AssetStatus(AssetLoaded))
+import Engine.Asset.Base (AssetId)
 import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Types
@@ -562,7 +562,6 @@ handleLoadTextureBatch requests = do
                                     (tupWidth prep, tupHeight prep)
                                     FORMAT_R8G8B8A8_UNORM
                                     Map.empty
-                                , taStatus = AssetLoaded
                                 , taInfo = Just TextureInfo
                                     { tiImage = image
                                     , tiView = imageView

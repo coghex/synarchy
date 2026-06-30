@@ -66,7 +66,6 @@ updateSceneForRender = do
                     [("textBatches", T.pack $ show $ V.length textRenderBatches)]
 
                 let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
-                    finalBatchMgr = buildLayeredBatches updatedBatchMgr
                     spriteBatches = getCurrentBatches updatedSceneMgr
                     spriteCount = V.sum $ V.map (V.length . rbVertices) spriteBatches
                     drawCallCount = V.length spriteBatches + V.length textRenderBatches
@@ -78,7 +77,7 @@ updateSceneForRender = do
                     ,("totalDrawCalls", T.pack $ show drawCallCount)]
 
                 let finalSceneMgr = updatedSceneMgr
-                                        { smBatchManager = finalBatchMgr }
+                                        { smBatchManager = updatedBatchMgr }
                 modify $ \s → s { sceneManager = finalSceneMgr }
             Nothing → do
                 logDebugM CatScene "No scene graph found for active scene"

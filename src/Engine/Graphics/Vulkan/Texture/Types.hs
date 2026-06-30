@@ -71,6 +71,5 @@ data BindlessTextureSystem = BindlessTextureSystem
 data TextureSystemConfig = TextureSystemConfig
   { tscMaxTextures    ∷ Word32   -- ^ Max textures (for bindless)
   , tscReservedSlots  ∷ Word32   -- ^ Reserved slots (slot 0 = undefined)
-  , tscForceBindless  ∷ Bool     -- ^ Force bindless even if limits are low
   , tscForceLegacy    ∷ Bool     -- ^ Force legacy path (for testing)
   } deriving (Show, Eq)

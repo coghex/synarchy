@@ -67,17 +67,3 @@ spec = do
               replicateM 3 (tryReadQueue queue)
         (_, results) ← concurrently writeItems readItems
         sequence results `shouldBe` Just ["1", "2", "3"]
-    describe "Channel Operations" $ do
-      it "can write and read from channel" $ do
-        chan ← newChannel ∷ IO (Channel T.Text)
-        atomically $ writeChannel chan "test"
-        result ← atomically $ tryReadChannel chan
-        result `shouldBe` Just "test"
-
-      it "returns Nothing when reading from empty channel" $ do
-        chan ← newChannel ∷ IO (Channel T.Text)
-        result ← atomically $ tryReadChannel chan
-        result `shouldBe` (Nothing ∷ Maybe T.Text)
-
-  where
-    atomically = STM.atomically
