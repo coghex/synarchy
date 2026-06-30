@@ -21,7 +21,7 @@ colorToVec4 ('#':r1:r2:g1:g2:b1:b2:a1:a2:[]) =
       a = fromIntegral (readHex' ([a1, a2]) ∷ Int) / 255.0
   in Vec4 r g b a
 colorToVec4 ("red") = Vec4 1.0 0 0 1.0
-colorToVec4 ("green") = Vec4 0 1.0 0 1.0
+colorToVec4 ("green") = Vec4 0 0.5 0 1.0
 colorToVec4 ("blue") = Vec4 0 0 1.0 1.0
 colorToVec4 ("white") = Vec4 1.0 1.0 1.0 1.0
 colorToVec4 ("black") = Vec4 0 0 0 1.0
@@ -29,7 +29,10 @@ colorToVec4 ("yellow") = Vec4 1.0 1.0 0 1.0
 colorToVec4 ("cyan") = Vec4 0 1.0 1.0 1.0
 colorToVec4 ("magenta") = Vec4 1.0 0 1.0 1.0
 colorToVec4 ("transparent") = Vec4 0 0 0 0.0
-colorToVec4 ("opaque") = Vec4 0 0 0 0.5
+-- A dark translucent overlay (NOT alpha=1 — "opaque" was a misnomer for
+-- this 50%-alpha black; renamed per #378). Kept under an honest name so
+-- the dark-overlay value stays reachable; no caller used "opaque".
+colorToVec4 ("overlay") = Vec4 0 0 0 0.5
 colorToVec4 ("ghost") = Vec4 1.0 1.0 1.0 0.5
 colorToVec4 ("gray") = Vec4 0.5 0.5 0.5 1.0
 colorToVec4 ("orange") = Vec4 1.0 0.65 0 1.0
