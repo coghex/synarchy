@@ -14,4 +14,4 @@ getGlacierParams pf = case pfFeature pf of
     (HydroShape (GlacierFeature g)) → g
     other → error $ "getGlacierParams: not a glacier (featureId=" ⧺ show (pfId pf)
                   ⧺ " formationPeriod=" ⧺ show (pfFormationPeriod pf)
-                  ⧺ " actualShape=" ⧺ show other ⧺ ")"
+                  ⧺ " actualShape=" ⧺ featureShapeTag other ⧺ ")"

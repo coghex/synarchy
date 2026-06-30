@@ -22,6 +22,7 @@ module World.Geology.Timeline.Types
     , RiverSegmentCarve(..)
     , RiverDeltaParams(..)
     , FeatureShape(..)
+    , featureShapeTag
     , FeatureActivity(..)
     , FeatureEvolution(..)
     , CraterParams(..)
@@ -577,6 +578,25 @@ data FeatureShape
     = VolcanicShape !VolcanicFeature
     | HydroShape   !HydroFeature
     deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
+
+-- | Compact constructor tag for a FeatureShape — the constructor name
+--   only, without the payload. Use this for diagnostics/abort messages:
+--   the derived Show of a RiverFeature drags in the full rpSegments
+--   geometry, which would dump an entire river into a crash log.
+featureShapeTag ∷ FeatureShape → String
+featureShapeTag (VolcanicShape v) = case v of
+    ShieldVolcano{}    → "VolcanicShape ShieldVolcano"
+    CinderCone{}       → "VolcanicShape CinderCone"
+    LavaDome{}         → "VolcanicShape LavaDome"
+    Caldera{}          → "VolcanicShape Caldera"
+    FissureVolcano{}   → "VolcanicShape FissureVolcano"
+    LavaTube{}         → "VolcanicShape LavaTube"
+    SuperVolcano{}     → "VolcanicShape SuperVolcano"
+    HydrothermalVent{} → "VolcanicShape HydrothermalVent"
+featureShapeTag (HydroShape h) = case h of
+    RiverFeature{}   → "HydroShape RiverFeature"
+    GlacierFeature{} → "HydroShape GlacierFeature"
+    LakeFeature{}    → "HydroShape LakeFeature"
 
 data FeatureActivity
     = FActive

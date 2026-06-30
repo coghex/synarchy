@@ -14,4 +14,4 @@ getRiverParams pf = case pfFeature pf of
     (HydroShape (RiverFeature r)) → r
     other → error $ "getRiverParams: not a river (featureId=" ⧺ show (pfId pf)
                   ⧺ " formationPeriod=" ⧺ show (pfFormationPeriod pf)
-                  ⧺ " actualShape=" ⧺ show other ⧺ ")"
+                  ⧺ " actualShape=" ⧺ featureShapeTag other ⧺ ")"

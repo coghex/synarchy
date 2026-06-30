@@ -121,7 +121,7 @@ getRiverParamsFromPf pf = case pfFeature pf of
     HydroShape (RiverFeature r) → r
     other → error $ "getRiverParamsFromPf: not a river (featureId=" ⧺ show (pfId pf)
                   ⧺ " formationPeriod=" ⧺ show (pfFormationPeriod pf)
-                  ⧺ " actualShape=" ⧺ show other ⧺ ")"
+                  ⧺ " actualShape=" ⧺ featureShapeTag other ⧺ ")"
 
 isSourceNew ∷ Int → [PersistentFeature] → (Int, Int, Int, Float) → Bool
 isSourceNew worldSize existingRivers (sx, sy, _, _) =

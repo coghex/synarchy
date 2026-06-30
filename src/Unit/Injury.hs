@@ -302,28 +302,37 @@ allocateSubparts kind reach roll subs =
         deepSoft   p = any (\(_, m, _) → m ≡ "nerve" ∨ m ≡ "organ")     (bpLayers p)
         rollFor i = let x = roll * fromIntegral (i + 3) * 1.61803
                     in x - fromIntegral (floor x ∷ Int)
+        -- Context label threaded into weightedPick so a (caller-guarded,
+        -- so unreachable) empty-pool abort names the allocation path that
+        -- violated the invariant — kind, reach, and which sub-pool.
+        pick lbl = weightedPick (T.unpack kind ⧺ "/" ⧺ lbl
+                                 ⧺ " reach=" ⧺ show reach)
     in case kind of
-        "slash" → [ weightedPick (rollFor i) band | (i, band) ← zip [0 ..] bands ]
+        "slash" → [ pick ("slash-band" ⧺ show i) (rollFor i) band
+                  | (i, band) ← zip [0 ..] bands ]
         "stab"  → case reverse bands of
-            (deepest : _) → [ weightedPick roll deepest ]
+            (deepest : _) → [ pick "stab-deepest" roll deepest ]
             []            → []
         _       → let struct = filter structural pool
                       soft   = filter deepSoft pool
-                      sPick  = case struct of [] → []; _ → [weightedPick roll struct]
-                      tPick  = case soft   of [] → []; _ → [weightedPick (rollFor 1) soft]
+                      sPick  = case struct of [] → []; _ → [pick "blunt-struct" roll struct]
+                      tPick  = case soft   of [] → []; _ → [pick "blunt-soft" (rollFor 1) soft]
                       picks  = sPick ++ tPick
                   -- An all-soft part (no bone/cartilage, no nerve/organ —
                   -- e.g. a hand of skin+fat+muscle subparts) has neither a
                   -- structural nor a deep target; honour the "always ≥1"
                   -- contract by bruising one subpart from the pool.
-                  in if null picks then [ weightedPick roll pool ] else picks
+                  in if null picks then [ pick "blunt-allsoft" roll pool ] else picks
 
 -- | Pick one part weighted by area weight, from a roll in [0,1). Total.
-weightedPick ∷ Float → [BodyPart] → BodyPart
--- Guarded by callers: bands from groupBy are non-empty, and the stab /
--- structural / soft paths case-match [] before calling.
-weightedPick roll [] = error $ "weightedPick: empty list (roll=" ⧺ show roll ⧺ ")"
-weightedPick roll ps@(p0 : _) =
+--   The @ctx@ label identifies the allocation path for the abort message
+--   (the empty-list case is caller-guarded — bands from groupBy are
+--   non-empty, and the stab / structural / soft paths case-match []
+--   before calling — so it should never fire).
+weightedPick ∷ String → Float → [BodyPart] → BodyPart
+weightedPick ctx roll [] = error $ "weightedPick: empty list (ctx=" ⧺ ctx
+                                 ⧺ " roll=" ⧺ show roll ⧺ ")"
+weightedPick _ roll ps@(p0 : _) =
     let total  = sum (map bpAreaWeight ps)
         target = roll * total
         go _   []          = p0
