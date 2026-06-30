@@ -359,6 +359,8 @@ Enum schema policy: `Direction`, `Pose`, and `UnitActivity` derive `Generic Seri
 
 Wait ~15 seconds after `loadSave` for a 128-world before querying — the center chunk gens synchronously but the rest queue progressively. Headless tests need to budget the wait.
 
+Multi-world save regression: **`python3 tools/multiworld_save_probe.py`** — the #214/#219 gate. Generates two real world pages (active→`main_world` + a `second_world`), spawns a unit + building on each, saves, then does the gold-standard **save → quit → fresh restart → load** and asserts both pages' entities survive on the right page (cross-page negative checks included). `--port`/`--seed`/`--seed2`/`--size`. NB: it uses two `world.init` pages, not `world.initArena` — loading a save that contains an arena page currently hangs the world thread (#365), so arenas can't be a save-test secondary page.
+
 ## AI Asset Generation
 
 Textures (flora, units, buildings, tiles) can be generated via the PixelLab MCP server.
