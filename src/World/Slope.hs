@@ -246,16 +246,24 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
 --     1. Clean single-step flanks slope toward their lower neighbours
 --        ('rawSlope'), so rock mountainsides taper instead of stepping.
 --     2. JAGGEDNESS: with a probability that RISES with hardness and local
---        relief (the inverse of 'applyRoughness'), override with a
---        semi-random slope toward ONE strictly-lower neighbour. This
---        breaks the regular terrace into irregular angular rock, and fires
---        even where no neighbour is exactly one lower (steep multi-level
---        faces) — the case the strict terrace rule leaves flat.
+--        relief (the inverse of 'applyRoughness'), ADD a semi-random lean
+--        toward one non-HIGHER dry neighbour (lower or equal-height) ON TOP
+--        of the clean downhill flank. This breaks the regular terrace into
+--        irregular angular rock, and fires even where no neighbour is
+--        exactly one lower (steep multi-level faces) — the case the strict
+--        terrace rule leaves flat.
 --
---   The ramp only ever points at a strictly-lower DRY neighbour, so it
---   stays a geometrically valid (and pathing-walkable) ramp — never a
---   notch into a higher wall, and never a dry tile dipping into water
---   (the dry-land bank rule, honoured here via the @wet*@ flags).
+--   Jaggedness is ADDITIVE, not a substitution: the lean is OR-ed onto the
+--   genuine downhill flank rather than replacing it. Slope bits drive
+--   pathing ('Unit.Pathing.Cost' reads a bit as a walkable 1-z ramp toward
+--   that neighbour), so dropping the real downhill flank for a decorative
+--   lean would turn a walkable rock ramp into a cliff (#337). The added
+--   lean points only at a non-higher DRY neighbour — a strictly-lower one
+--   (a valid descent, or a ≥2 drop that is a cliff regardless) or an
+--   equal-height one (a 0-z step, always walkable regardless of the bit) —
+--   so it is pathing-neutral while supplying the directional variety a
+--   coherent face otherwise lacks. Never leans uphill (a notch into a
+--   higher wall) or into water (the bank rule, via the @wet*@ flags).
 rockJaggedSlope ∷ Word64 → ChunkCoord → Int → Int → Float → Int → Int → Word8
                 → Int → Int → Int → Int
                 → Bool → Bool → Bool → Bool → Word8
@@ -272,27 +280,70 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
             -- Wet-direction bitmask (seam-aware via the wet* flags).
             wetMask = (if wetN then 1 else 0) .|. (if wetE then 2 else 0)
                   .|. (if wetS then 4 else 0) .|. (if wetW then 8 else 0) ∷ Word8
-            -- Candidate ramp directions: strictly-lower cardinal
-            -- neighbours that are NOT wet (bank rule). May be empty if the
-            -- only downhill neighbour is water — then we fall through to
-            -- the dry clean-flank below.
+            -- Candidate jagged-lean directions: cardinal neighbours that
+            -- are present, NOT wet (bank rule), and NOT strictly HIGHER
+            -- (@nz ≤ z@). Strictly-lower neighbours are downhill ramps;
+            -- EQUAL-height neighbours are visual leans, not invalid notches
+            -- into a higher wall. Including the equal-height directions
+            -- (#337) is what gives a COHERENT rock face — a uniform
+            -- mountainside or simple outcrop whose only strictly-lower
+            -- neighbour is a single downhill direction — genuine directional
+            -- variety, instead of a deterministic one-element pick that
+            -- slopes every such tile the same downhill way. Never points
+            -- uphill (a notch into a higher wall) or into water. May be
+            -- empty only if every non-higher neighbour is wet — then we
+            -- fall through to the dry clean-flank below.
             cand = [ b | (b, nz, wet) ← [ (1 ∷ Word8, neighN, wetN)
                                         , (2, neighE, wetE)
                                         , (4, neighS, wetS)
                                         , (8, neighW, wetW) ]
-                       , nz ≠ minBound, nz < z, not wet ]
+                       , nz ≠ minBound, nz ≤ z, not wet ]
             -- Clean-flank fallback: rawSlope with any wet directions
             -- cleared. rawSlope is built by 'slopeBit', whose bank check is
             -- IN-CHUNK only, so a 1-z lower wet neighbour across a chunk
             -- seam would otherwise survive in rawSlope and ramp into water.
             -- (15 `xor` wetMask) is the 4-bit complement of the wet mask.
             dryFlank = rawSlope .&. (15 `xor` wetMask)
+            -- The non-jagged result: the clean terrace flank, or flat (0)
+            -- when it is empty or the degenerate all-four (15 renders as a
+            -- flat top, never a slope). This is also the floor the jagged
+            -- branch falls back to, so the result is NEVER a subset of the
+            -- walkable flank.
+            cleanFlank = if dryFlank ≢ 0 ∧ dryFlank ≢ 15 then dryFlank else 0
         in if roll < jaggedChance ∧ not (null cand)
-           then cand !! fromIntegral ((h `shiftR` 8) `mod`
-                                      fromIntegral (length cand))
-           else if dryFlank ≢ 0 ∧ dryFlank ≢ 15
-                then dryFlank   -- clean terrace flank (wet dirs masked out)
-                else 0
+           -- Jaggedness is ADDED to the clean flank, never substituted for
+           -- it. Slope bits are not purely visual: 'Unit.Pathing.Cost'
+           -- reads a bit as "this tile has a walkable 1-z ramp down toward
+           -- that neighbour", so replacing the genuine downhill flank
+           -- ('dryFlank') with an equal-height lean would turn a walkable
+           -- rock ramp into a cliff (#337 review). OR-ing instead keeps
+           -- every real ramp: the extra lean is pathing-neutral — it points
+           -- only at a lower neighbour (already a valid descent / ≥2-drop
+           -- cliff regardless) or an equal-height one (a 0-z step, always
+           -- walkable regardless of the bit). The lean is what supplies the
+           -- directional variety on a coherent face whose dryFlank is a
+           -- single downhill bit (or 0 on a steep multi-level face).
+           --
+           -- 'lean' MUST stay inside this @not (null cand)@ branch: this
+           -- module is compiled @{-# LANGUAGE Strict #-}@, so a top-level
+           -- let would be forced eagerly and @`mod` (length cand)@ would
+           -- divide by zero on the empty-cand fall-through case.
+           then let lean = cand !! fromIntegral ((h `shiftR` 8) `mod`
+                                                  fromIntegral (length cand))
+                    combined = dryFlank .|. lean
+                -- If OR-ing the lean would complete the degenerate all-four
+                -- (15 renders as a flat top, never a slope) we must NOT
+                -- return 'lean' alone: it can be a subset of dryFlank and so
+                -- strand genuine ramps as cliffs (e.g. dryFlank = E|S|W = 14,
+                -- lean = N → combined 15, but N alone drops E/S/W). In that
+                -- case dryFlank is either a real 3-sided flank — keep all
+                -- three ramps — or already all-four itself, in which case we
+                -- fall back to the single 'lean' bit (what the pre-#337 code
+                -- rendered for such a tile; cand is the 4 downhill dirs).
+                in if combined ≢ 15      then combined
+                   else if dryFlank ≢ 15 then dryFlank
+                   else                       lean
+           else cleanFlank
 
 slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → V.Vector (Maybe FluidCell)
