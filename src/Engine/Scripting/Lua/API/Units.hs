@@ -1678,9 +1678,15 @@ unitRepairItemFn env = do
                                 Nothing →
                                   case repairInList iid condD sharpD
                                                     (uiAccessories inst) of
-                                    Just (accs', repInst, r) →
-                                        let mods' = refreshItemBuffs itemMgr
-                                                      repInst (uiModifiers inst)
+                                    Just (accs', _, r) →
+                                        -- Re-derive buffs from the WHOLE worn
+                                        -- list (with the repaired instance in
+                                        -- it), in equip order, so a same-source
+                                        -- duplicate's last-equipped copy stays
+                                        -- the live one — repairing an older
+                                        -- duplicate must not hijack the buff.
+                                        let mods' = refreshAccessoryBuffs itemMgr
+                                                      accs' (uiModifiers inst)
                                         in ( commit inst { uiAccessories = accs'
                                                          , uiModifiers   = mods' }
                                            , Just r )
@@ -1745,17 +1751,30 @@ repairInEquip iid condD sharpD eq =
             in Just (HM.insert slot it' eq, it', r)
         [] → Nothing
 
--- | Re-apply a worn accessory's buffs to the unit's `uiModifiers` after
---   its condition changed, so a condition-scaled buff (e.g.
---   technogoggles' perception) tracks the repair. Mirrors
+-- | Re-derive worn-accessory buffs into the unit's `uiModifiers` after a
+--   repair changed one accessory's condition, so a condition-scaled buff
+--   (e.g. technogoggles' perception) tracks the repair. Folds the buffs
+--   of EVERY worn accessory over the modifier map IN LIST ORDER, exactly
+--   as a fresh sequence of `equipAccessory` calls would: same-source
+--   modifiers collapse (dedup by display_name) so the LAST-equipped copy
+--   of a duplicated accessory wins. Re-deriving from the whole list — not
+--   just the repaired instance — is what keeps repairing an *older*
+--   duplicate from silently switching the live buff to its condition.
+refreshAccessoryBuffs ∷ ItemManager → [ItemInstance]
+                      → HM.HashMap Text [StatModifier]
+                      → HM.HashMap Text [StatModifier]
+refreshAccessoryBuffs itemMgr accs mods0 =
+    foldl' (\mods inst → applyAccessoryBuffs itemMgr inst mods) mods0 accs
+
+-- | Apply one accessory's buffs to a modifier map. Mirrors
 --   `Equipment.applyItemBuffs`: the modifier source is the item's
---   display_name and same-source modifiers on a stat collapse, so
---   re-applying REPLACES the stale modifier rather than stacking. A
---   no-op for items with no buffs (or no def in scope).
-refreshItemBuffs ∷ ItemManager → ItemInstance
-                 → HM.HashMap Text [StatModifier]
-                 → HM.HashMap Text [StatModifier]
-refreshItemBuffs itemMgr inst mods =
+--   display_name and same-source modifiers on a stat collapse, so this
+--   REPLACES that source's stale modifier rather than stacking. A no-op
+--   for items with no buffs (or no def in scope).
+applyAccessoryBuffs ∷ ItemManager → ItemInstance
+                    → HM.HashMap Text [StatModifier]
+                    → HM.HashMap Text [StatModifier]
+applyAccessoryBuffs itemMgr inst mods =
     case lookupItemDef (iiDefName inst) itemMgr of
         Nothing   → mods
         Just iDef →

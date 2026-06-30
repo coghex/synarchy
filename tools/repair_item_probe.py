@@ -344,6 +344,38 @@ def main() -> int:
                   perc_full > perc_half + 0.01,
                   f"perc@100={perc_full} perc@50={perc_half}")
 
+            # DUPLICATE source: wear a SECOND technogoggles (now the live one,
+            # since equip order = last wins). Repairing the OLDER pair must NOT
+            # hijack the active buff — the refresh re-derives from the whole
+            # worn list in order, so the newer pair stays live.
+            send(args.port, f"return unit.addItem({uid}, 'technogoggles', 0)")
+            inv_g = [it for it in inventory(args.port, uid)
+                     if it.get("defName") == "technogoggles"]
+            acc_id2 = inv_g[0]["instanceId"] if inv_g else None
+            if acc_id2 is None:
+                check("second technogoggles in inventory", False, "missing")
+            else:
+                send(args.port,
+                     f"return equipment.equipAccessory({uid}, 'technogoggles', {acc_id2})")
+                # Both pairs to 100 → known baseline (live = the newer acc_id2).
+                repair(args.port, uid, acc_id, 1000, 0)
+                repair(args.port, uid, acc_id2, 1000, 0)
+                perc_base = perception()
+                # Wreck the OLDER pair (acc_id) to 0; the live newer pair is
+                # still 100, so perception must be UNCHANGED.
+                repair(args.port, uid, acc_id, -1000, 0)
+                perc_after_old = perception()
+                check("repairing an OLDER duplicate does NOT hijack the live buff",
+                      approx(perc_after_old, perc_base, 0.05),
+                      f"base={perc_base} after_older_repair={perc_after_old}")
+                # Sanity: the LIVE pair still drives the buff (drop it to 50).
+                repair(args.port, uid, acc_id2, -1000, 0)
+                repair(args.port, uid, acc_id2, 50, 0)
+                perc_live50 = perception()
+                check("the live (last-equipped) duplicate still controls the buff",
+                      approx(perc_base - perc_live50, 0.5, 0.05),
+                      f"base={perc_base} live@50={perc_live50}")
+
         print("\n== MISS: bad id / bad uid → nil ==")
         miss = repair(args.port, uid, 999999999, 50, 50)
         check("unknown instanceId returns nil", miss is None, f"{miss}")
