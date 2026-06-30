@@ -17,6 +17,7 @@ module Structure.Render
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -28,9 +29,10 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, GridConfig(..), defaultGridConfig
                   , applyFacingF, gridToScreen)
+import World.Generate.Coordinates (globalToChunk)
 import World.Types (WorldState, wsTilesRef)
 import World.Tile.Types (WorldTileData(..))
-import World.Chunk.Types (LoadedChunk(..))
+import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import Structure.Types
 
 baseTileW ∷ Float
@@ -73,9 +75,9 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
                             -- inset toward the centre); the rest at the tile face.
                             isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
                             mkQuad gx gy slot piece
-                                | isPost slot = postToQuad lookupSlot defFmSlot facing zSlice
+                                | isPost slot = postToQuad td lookupSlot defFmSlot facing zSlice
                                                     effDepth tileAlpha gx gy slot piece texSizes
-                                | otherwise   = structureToQuad lookupSlot facing zSlice effDepth
+                                | otherwise   = structureToQuad td lookupSlot facing zSlice effDepth
                                                     tileAlpha gx gy slot piece texSizes
                             quads = V.fromList
                                 [ sq
@@ -84,12 +86,13 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
                         return quads
 
 structureToQuad
-    ∷ (TextureHandle → Word32)
+    ∷ WorldTileData
+    → (TextureHandle → Word32)
     → CameraFacing → Int → Int → Float
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
+structureToQuad td lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
@@ -137,7 +140,7 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             -- a wall anchors at ITS edge midpoint, so a south (SE/SW) wall
             -- sits in front of the terrain tile ahead of it and a north
             -- (NE/NW) wall behind it. applyFacingF keeps it rotation-aware.
-            (saX, saY) = sortAnchor slot gx gy
+            (saX, saY) = sortAnchorZ td slot gx gy gridZ
             (faS, fbS) = applyFacingF facing saX saY
             sortKey = (faS + fbS)
                     + fromIntegral relativeZ * 0.001
@@ -177,13 +180,14 @@ postInset = 0.0
 --   tile centre while front walls sort at the front corner). No bespoke
 --   facemap → its own facemap slot.
 postToQuad
-    ∷ (TextureHandle → Word32)
+    ∷ WorldTileData
+    → (TextureHandle → Word32)
     → Float
     → CameraFacing → Int → Int → Float
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
+postToQuad td lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
@@ -230,7 +234,7 @@ postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot pie
             -- front (S) post stands IN FRONT of its SE/SW walls. All biases
             -- stay above the floor (0.0002) so the post sits on the floor, and
             -- below the z-step (0.001) so they never cross a level.
-            (psX, psY) = postSortAnchor slot gx gy
+            (psX, psY) = postSortAnchorZ td slot gx gy gridZ
             (faS, fbS) = applyFacingF facing psX psY
             sortKey = (faS + fbS) + fromIntegral relativeZ * 0.001 + postBias slot
 
@@ -297,6 +301,21 @@ postBias s = case s of
     SPostW → 0.00045
     _      → 0.00025
 
+-- | Post sort anchor, z-aware for the FRONT (S) post (#415), mirroring the
+--   front walls it caps: if either side rim it stands against is higher than
+--   the post, drop from the front corner back to the tile centre so the rim
+--   occludes it too — otherwise a dug room's corner post floats over the rim
+--   while its walls correctly recede behind it. 'postSortAnchor' otherwise.
+postSortAnchorZ ∷ WorldTileData → StructureSlot → Int → Int → Int → (Float, Float)
+postSortAnchorZ td slot gx gy postZ =
+    let gxf = fromIntegral gx
+        gyf = fromIntegral gy
+        higher ax ay = maybe False (> postZ) (terrainSurfaceZAt td ax ay)
+    in case slot of
+        SPostS | higher (gx + 1) gy ∨ higher gx (gy + 1)
+                 → (gxf + 0.5, gyf + 0.5)
+        _        → postSortAnchor slot gx gy
+
 -- | Depth-sort anchor for a post — matches the walls it caps (back walls
 --   sort at the tile centre, front walls at the front corner).
 postSortAnchor ∷ StructureSlot → Int → Int → (Float, Float)
@@ -308,6 +327,47 @@ postSortAnchor slot gx gy =
         SPostE → (gxf + 1.0, gyf + 0.5)
         SPostW → (gxf + 0.5, gyf + 1.0)
         _      → (gxf + 0.5, gyf + 0.5)
+
+-- | Top terrain surface z at a global tile (terrain only, excludes fluid),
+--   read from the same per-column map the terrain pass sorts its surface
+--   quad by (@lcTerrainSurfaceMap@). Nothing if the chunk isn't loaded.
+--   Drives the z-aware front-wall sort below (#415).
+terrainSurfaceZAt ∷ WorldTileData → Int → Int → Maybe Int
+terrainSurfaceZAt td gx gy =
+    let (cc, (lx, ly)) = globalToChunk gx gy
+    in case HM.lookup cc (wtdChunks td) of
+        Just lc → Just (lcTerrainSurfaceMap lc VU.! columnIndex lx ly)
+        Nothing → Nothing
+
+-- | Depth-sort anchor, made z-aware for the FRONT walls (#415).
+--
+--   A front wall normally anchors a full tile forward (the south vertex,
+--   grid (gx+1,gy+1)) so it covers its own footing against the terrain in
+--   front — without that push the tile directly south pokes its diamond
+--   over the wall base (the "green notch"). That forward push is a full
+--   integer of iso-depth, so it ALSO beats the tile directly across the
+--   wall's edge (one depth-rank behind), which is correct on flat ground.
+--
+--   But a sunken room (dug DOWN for an underground dungeon) makes that
+--   across-edge tile a HIGHER rim that should OCCLUDE the wall. Because the
+--   forward anchor is an integer ahead of the rim, the z-tiebreak (sub-1.0)
+--   can never let the rim win. So: when the across-edge terrain surface is
+--   above the wall top, drop the anchor back to the tile centre — the same
+--   integer depth as the rim tile — and let the z-term hand the rim the
+--   overlap. Flat/lower ground (and unloaded neighbours) keep the forward
+--   anchor, so nothing regresses. 'sortAnchor' handles every other slot.
+sortAnchorZ ∷ WorldTileData → StructureSlot → Int → Int → Int → (Float, Float)
+sortAnchorZ td slot gx gy wallZ =
+    let gxf = fromIntegral gx
+        gyf = fromIntegral gy
+        frontAnchor ax ay
+            | maybe False (> wallZ) (terrainSurfaceZAt td ax ay)
+                        = (gxf + 0.5, gyf + 0.5)   -- sunken: rim occludes wall
+            | otherwise = (gxf + 1.0, gyf + 1.0)   -- flat: wall covers footing
+    in case slot of
+        SWallSE → frontAnchor (gx + 1) gy      -- edge shared with (gx+1, gy)
+        SWallSW → frontAnchor gx (gy + 1)      -- edge shared with (gx, gy+1)
+        _       → sortAnchor slot gx gy
 
 -- | Grid-space anchor used for DEPTH SORTING (not rendering).
 --   The FRONT walls (SE/SW) anchor at the tile's FRONT CORNER (the south
