@@ -130,6 +130,33 @@ def is_ocean(port: int, gx: int, gy: int) -> bool:
     return r.strip('"') == "ocean"
 
 
+def has_floor(port: int, gx: int, gy: int) -> bool:
+    """True if a 'floor' structure piece exists at (gx,gy) — i.e. the
+    ruin_small builder (room_small) has stamped its room there."""
+    r = send(port, f"return structure.hasAt({gx},{gy},'floor') and 'yes' or 'no'")
+    return r.strip('"') == "yes"
+
+
+def load_chunk(port: int, cx: int, cy: int) -> None:
+    send(port, f"return world.loadChunksInRegion({cx},{cy},{cx},{cy})")
+    send(port, "return world.waitForChunks(30)", timeout=35)
+
+
+def count_stamped(port: int, ruins: list[dict]) -> int:
+    return sum(1 for e in ruins if has_floor(port, e["gx"], e["gy"]))
+
+
+def wait_stamped(port: int, ruins: list[dict], tries: int = 80) -> int:
+    """Poll until every ruin has been stamped (or the cap)."""
+    want, n = len(ruins), 0
+    for _ in range(tries):
+        n = count_stamped(port, ruins)
+        if n >= want:
+            return n
+        time.sleep(0.5)
+    return n
+
+
 def gen_world(port: int, page: str, seed: int, size: int) -> None:
     send(port, f"world.init('{page}', {seed}, {size}, 3); return 'ok'")
     send(port, "return world.waitForInit(240)", timeout=250)
@@ -151,10 +178,13 @@ def main() -> int:
 
     failures: list[str] = []
 
-    # ---- Phase 1: placement + determinism + anchor (one engine) ----
+    # ---- Phase 1: placement + determinism + anchor + stamping ----
     proc = boot(args.port)
     try:
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
+        # Load the stamper so the engine's onWorldReady broadcast drives it
+        # (the loading screen that normally loads it is GUI-only).
+        send(args.port, "engine.loadScript('scripts/location_stamper.lua', 0.1); return 'ok'")
 
         gen_world(args.port, "wa", args.seed, args.size)
         la = placed_ready(args.port)
@@ -192,6 +222,14 @@ def main() -> int:
         elif ocean_hits:
             failures.append(f"{len(ocean_hits)} ruin(s) placed on ocean tiles")
 
+        # Stamping: the location_stamper materializes each ruin's geometry
+        # (the #88 room_small builder) into the world as its chunk loads.
+        n = wait_stamped(args.port, ruins)
+        if ruins and n == len(ruins):
+            print(f"PASS: all {n} ruin(s) stamped into the world (geometry present)")
+        else:
+            failures.append(f"only {n}/{len(ruins)} ruin(s) stamped into the world")
+
         # Save world A for the reload phase.
         send(args.port, "engine.saveWorld('wa', 'loc_overlay_probe'); return 'saved'")
         time.sleep(1.0)
@@ -199,8 +237,10 @@ def main() -> int:
         shutdown(args.port, proc)
 
     # ---- Phase 2: save survives a fresh restart + load ----
-    # Deliberately do NOT load the location YAML on this engine: if the
-    # placements still appear, they came from the save, not a recompute.
+    # Deliberately load NEITHER the location YAML NOR the stamper on this
+    # engine: if the placements AND their geometry still appear, they came
+    # from the save (overlay in gen params + stamped edits), not a recompute
+    # or a re-stamp.
     proc = boot(args.port)
     try:
         send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
@@ -214,6 +254,18 @@ def main() -> int:
             print(f"PASS: overlay survived save/load ({len(lc)} placements, no YAML reload)")
         else:
             failures.append(f"overlay lost/changed across save-load: before={key(la)} after={key(lc)}")
+
+        # Stamped geometry must replay from the saved per-chunk edits (with
+        # no stamper loaded). Load each ruin's chunk so its edits replay,
+        # then confirm the floor is back.
+        ruins_after = [e for e in lc if e["id"] == "ruin_small"]
+        for e in ruins_after:
+            load_chunk(args.port, e["cx"], e["cy"])
+        m = count_stamped(args.port, ruins_after)
+        if ruins_after and m == len(ruins_after):
+            print(f"PASS: stamped geometry replayed after load ({m} ruin(s), no re-stamp)")
+        else:
+            failures.append(f"geometry lost across save/load: {m}/{len(ruins_after)} ruins have floors")
     finally:
         shutdown(args.port, proc)
 

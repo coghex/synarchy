@@ -107,6 +107,11 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaFramebufferResize Int Int
             | LuaAssetLoaded Text Int Text
             | LuaArenaReady Text
+            | LuaWorldReady Text
+              -- ^ A full world page finished FRESH generation (not a
+              --   save-load). Carries the page id; broadcast to Lua as
+              --   onWorldReady so the location stamper (#89) materializes
+              --   the placed-location geometry once each chunk loads.
             | LuaOpenArena
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char

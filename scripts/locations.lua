@@ -51,9 +51,10 @@ end
 --     gx, gy,    -- chunk-centre tile (anchor for stamping)
 --     id }       -- LocationDef id (join with locations.getDef for
 --                --   label/type/builder)
--- Returns {} when no world is active or nothing was placed.
-function locations.listPlaced()
-    return world.listPlacedLocations() or {}
+-- With no argument the active world is read; pass a page id to read a
+-- specific world's overlay. Returns {} when no such world or nothing placed.
+function locations.listPlaced(worldId)
+    return world.listPlacedLocations(worldId) or {}
 end
 
 -- Debug-overlay list shape: { name=id, label, note }. The overlay keys

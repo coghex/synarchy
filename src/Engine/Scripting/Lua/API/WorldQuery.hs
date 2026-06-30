@@ -59,6 +59,12 @@ mVisibleWorldState manager = case wmVisible manager of
     (pageId:_) → lookup pageId (wmWorlds manager)
     []         → Nothing
 
+-- | The 'WorldState' of a named page (any page in wmWorlds), or Nothing.
+worldStateByPage ∷ EngineEnv → Text → IO (Maybe WorldState)
+worldStateByPage env pidText = do
+    mgr ← readIORef (worldManagerRef env)
+    pure (lookup (WorldPageId pidText) (wmWorlds mgr))
+
 -- | world.getTerrainAt(gx, gy) → surfaceZ, terrainSurfaceZ or nil
 --   Returns the surface elevation and terrain-only surface elevation.
 worldGetTerrainAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -684,20 +690,26 @@ worldPickPosFn env = do
             Lua.pushnil
             return 1
 
--- | world.listPlacedLocations() → array of placed-location tables for
---   the active world, each:
+-- | world.listPlacedLocations([pageId]) → array of placed-location
+--   tables, each:
 --     { cx, cy,    -- chunk coordinate hosting the location
 --       gx, gy,    -- the chunk's centre tile (anchor for stamping)
 --       id }       -- the LocationDef id (#88) placed there
---   Reads the deterministic overlay computed at world init and carried
---   in the world's gen params (#89). The Lua `locations` module wraps
---   this as locations.listPlaced(); join `id` against locations.getDef
---   for label/type/builder. Returns an empty table when no world is
---   active or none were placed.
+--   With a page-id string argument the named page's overlay is read
+--   (the location stamper needs a specific world's placements even
+--   before it becomes the active page); with no argument the active
+--   world is used. Reads the deterministic overlay computed at world
+--   init and carried in the world's gen params (#89). The Lua
+--   `locations` module wraps this as locations.listPlaced(); join `id`
+--   against locations.getDef for label/type/builder. Returns an empty
+--   table when no such world exists or none were placed.
 worldListPlacedLocationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldListPlacedLocationsFn env = do
+    mPage ← Lua.tostring 1
     mParams ← Lua.liftIO $ do
-        mWs ← activeWorldState env
+        mWs ← case mPage of
+            Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+            Nothing    → activeWorldState env
         case mWs of
             Just ws → readIORef (wsGenParamsRef ws)
             Nothing → pure Nothing

@@ -294,10 +294,17 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
     sendGenLog env $ "World initialized: "
         <> T.pack (show totalInitialChunks) <> " chunks queued"
     
-    logInfo logger CatWorld $ "World initialized: " 
+    logInfo logger CatWorld $ "World initialized: "
         <> T.pack (show totalInitialChunks) <> " chunks, "
         <> "surface at z=" <> T.pack (show surfaceElev)
         <> ": " <> unWorldPageId pageId
+
+    -- Notify Lua that a fresh world is ready, so the location stamper
+    -- (#89) materializes the placed-location geometry as their chunks
+    -- load. Fired only on FRESH gen — the save-load path
+    -- (handleWorldLoadSaveCommand) replays the location edits instead, so
+    -- loaded worlds are never re-stamped.
+    Q.writeQueue (luaQueue env) (LuaWorldReady (unWorldPageId pageId))
 
 handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldInitArenaCommand env logger pageId = do
