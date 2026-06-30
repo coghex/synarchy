@@ -143,13 +143,11 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
            slopeRate = 0.5 ∷ Float
 
            -- Coastal segments (ending near or below sea level) carry
-           -- the carve past the segment endpoint to match the channel
-           -- mask's extended reach. Without this, mask claims tiles
-           -- past the endpoint as river but their terrain is not
-           -- lowered — the wt pin (= channelFloor ≈ seaLevel-1) sits
-           -- below the un-carved sandbar terrain, and no fluid is
-           -- placed. Visible symptom: rivers "stop short" of the ocean.
-           -- Formula matches `tileInChannelMask`'s downstreamOver.
+           -- the carve past the segment endpoint so the channel reaches
+           -- the ocean. Without this overshoot the un-carved sandbar
+           -- terrain sits above the channel floor (≈ seaLevel-1) and no
+           -- fluid is placed. Visible symptom: rivers "stop short" of
+           -- the ocean.
            isCoastalSeg = rsEndElev seg ≤ seaLevel + 5
            downstreamOver = if isCoastalSeg
                             then min 2.0 (12.0 / segLen)
