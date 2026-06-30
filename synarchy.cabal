@@ -202,6 +202,7 @@ test-suite synarchy-test-headless
                 , random
                 , linear
                 , bytestring
+                , cereal
                 , yaml
     default-language: GHC2024
     if flag(dev)
@@ -448,6 +449,8 @@ library
                      Engine.Asset.YamlInfection
                      Engine.Scripting.Lua.API.Infection
                      Location.Types
+                     Location.Overlay.Types
+                     Location.Overlay
                      Engine.Asset.YamlLocations
                      Engine.Scripting.Lua.API.Locations
                      Sim.Thread

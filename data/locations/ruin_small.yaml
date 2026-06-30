@@ -18,6 +18,12 @@ locations:
     # Terrain placement constraint tags read by the world-gen overlay
     # (#89) to filter candidate chunks. The room wants flat ground.
     anchor: [flat]
+    # World-gen overlay (#89) placement controls. Per-type, not global:
+    # at most `max_count` instances, each at least `min_spacing` chunks
+    # from another ruin (jittered, deterministic from the seed). Both are
+    # optional (defaults: max_count 4, min_spacing 4).
+    max_count: 6
+    min_spacing: 5
     # Reference content entry (raw ids, resolved later in #90).
     contents:
       - { kind: building, id: cargo_hold_S, count: 1 }

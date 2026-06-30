@@ -34,13 +34,15 @@ loadLocationYamlFn env = do
                 defs ← loadLocationYaml logger filePath
                 total ← foldM (\acc d → do
                     let def = LocationDef
-                            { ldId       = lydId d
-                            , ldLabel    = if T.null (lydLabel d)
-                                           then lydId d else lydLabel d
-                            , ldType     = lydType d
-                            , ldBuilder  = lydBuilder d
-                            , ldAnchor   = lydAnchor d
-                            , ldContents = map toContent (lydContents d)
+                            { ldId         = lydId d
+                            , ldLabel      = if T.null (lydLabel d)
+                                             then lydId d else lydLabel d
+                            , ldType       = lydType d
+                            , ldBuilder    = lydBuilder d
+                            , ldAnchor     = lydAnchor d
+                            , ldMaxCount   = lydMaxCount d
+                            , ldMinSpacing = lydMinSpacing d
+                            , ldContents   = map toContent (lydContents d)
                             }
                     atomicModifyIORef' (locationDefsRef env) $ \reg →
                         (registerLocation def reg, ())

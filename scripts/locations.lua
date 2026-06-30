@@ -40,6 +40,22 @@ function locations.getDef(id)
     return nil
 end
 
+-----------------------------------------------------------
+-- World-gen placement overlay (#89)
+-----------------------------------------------------------
+-- The engine places locations into chunks during world generation
+-- (deterministic from the seed) and carries the result in the world's
+-- gen params, so it survives save/load. listPlaced() reads back that
+-- overlay for the ACTIVE world. Each entry:
+--   { cx, cy,    -- chunk coordinate
+--     gx, gy,    -- chunk-centre tile (anchor for stamping)
+--     id }       -- LocationDef id (join with locations.getDef for
+--                --   label/type/builder)
+-- Returns {} when no world is active or nothing was placed.
+function locations.listPlaced()
+    return world.listPlacedLocations() or {}
+end
+
 -- Debug-overlay list shape: { name=id, label, note }. The overlay keys
 -- armed locations + stamp() on `name`, so name carries the def id.
 function locations.list()

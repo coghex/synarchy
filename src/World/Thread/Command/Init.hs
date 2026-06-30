@@ -33,6 +33,8 @@ import World.Geology (buildTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
+import Location.Types (allLocations)
+import Location.Overlay (computeLocationOverlay)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap (buildZoomCacheWithPixels)
@@ -177,7 +179,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
     -- 'withVolcanoCtx' populates the Magma context now that
     -- gtFeatures is final, so chunk-gen sees a built spatial index.
     let baseParams = applyConfigToParams worldGenCfg0
-        params = withVolcanoCtx $ baseParams
+        params0 = withVolcanoCtx $ baseParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize
             , wgpPlateCount  = placeCount
@@ -187,6 +189,17 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
             , wgpOceanDist   = oceanDist
             , wgpClimateState = climateState'
             }
+
+    -- Location overlay (#89): deterministically choose which chunks
+    -- host the registered locations, from the just-finalised plates +
+    -- ocean data. Empty (and skipped) when no defs are loaded — the
+    -- common headless-dump path stays byte-identical and zero-cost.
+    locDefs ← allLocations <$> readIORef (locationDefsRef env)
+    let params = params0
+            { wgpLocationOverlay =
+                computeLocationOverlay seed worldSize plates oceanMap oceanDist locDefs
+            }
+    _ ← evaluate (force (wgpLocationOverlay params))
 
     writeIORef (wsGenParamsRef worldState) (Just params)
     

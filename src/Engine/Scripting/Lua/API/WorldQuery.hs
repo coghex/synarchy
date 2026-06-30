@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldPickPosFn
     , worldGetClimateAtFn
     , worldGetAmbientAtFn
+    , worldListPlacedLocationsFn
     ) where
 
 import UPrelude
@@ -22,6 +23,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Text.Encoding as TE
+import Control.Monad (forM_)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv(..), activeWorldState)
@@ -30,6 +33,7 @@ import World.Geology.Timeline.Types
 import World.Hydrology.Types
 import World.Cursor.Types (CursorState(..))
 import World.Generate.Types (WorldGenParams(..))
+import Location.Overlay.Types (overlayToList)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Weather.Ambient (ambientTempAt)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -678,4 +682,42 @@ worldPickPosFn env = do
                     return 1
         _ → do
             Lua.pushnil
+            return 1
+
+-- | world.listPlacedLocations() → array of placed-location tables for
+--   the active world, each:
+--     { cx, cy,    -- chunk coordinate hosting the location
+--       gx, gy,    -- the chunk's centre tile (anchor for stamping)
+--       id }       -- the LocationDef id (#88) placed there
+--   Reads the deterministic overlay computed at world init and carried
+--   in the world's gen params (#89). The Lua `locations` module wraps
+--   this as locations.listPlaced(); join `id` against locations.getDef
+--   for label/type/builder. Returns an empty table when no world is
+--   active or none were placed.
+worldListPlacedLocationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldListPlacedLocationsFn env = do
+    mParams ← Lua.liftIO $ do
+        mWs ← activeWorldState env
+        case mWs of
+            Just ws → readIORef (wsGenParamsRef ws)
+            Nothing → pure Nothing
+    Lua.newtable
+    case mParams of
+        Nothing → return 1
+        Just params → do
+            let placed = overlayToList (wgpLocationOverlay params)
+                half   = chunkSize `div` 2
+            forM_ (zip [1 ..] placed) $ \(i, (ChunkCoord cx cy, lid)) → do
+                Lua.newtable
+                Lua.pushinteger (fromIntegral cx)
+                Lua.setfield (-2) "cx"
+                Lua.pushinteger (fromIntegral cy)
+                Lua.setfield (-2) "cy"
+                Lua.pushinteger (fromIntegral (cx * chunkSize + half))
+                Lua.setfield (-2) "gx"
+                Lua.pushinteger (fromIntegral (cy * chunkSize + half))
+                Lua.setfield (-2) "gy"
+                Lua.pushstring (TE.encodeUtf8 lid)
+                Lua.setfield (-2) "id"
+                Lua.rawseti (-2) i
             return 1

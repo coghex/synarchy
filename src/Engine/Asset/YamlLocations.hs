@@ -29,22 +29,26 @@ instance FromJSON LocationYamlContent where
 -- | The YAML shape of a location definition. Converted to
 --   'Location.Types.LocationDef' by the API loader.
 data LocationYamlDef = LocationYamlDef
-    { lydId       ∷ !Text
-    , lydLabel    ∷ !Text
-    , lydType     ∷ !Text
-    , lydBuilder  ∷ !Text
-    , lydAnchor   ∷ ![Text]
-    , lydContents ∷ ![LocationYamlContent]
+    { lydId         ∷ !Text
+    , lydLabel      ∷ !Text
+    , lydType       ∷ !Text
+    , lydBuilder    ∷ !Text
+    , lydAnchor     ∷ ![Text]
+    , lydMaxCount   ∷ !Int   -- ^ max placements (#89); default 4
+    , lydMinSpacing ∷ !Int   -- ^ min chunk separation (#89); default 4
+    , lydContents   ∷ ![LocationYamlContent]
     } deriving (Show, Eq, Generic)
 
 instance FromJSON LocationYamlDef where
     parseJSON = withObject "LocationYamlDef" $ \v → LocationYamlDef
         ⊚ v .:  "id"
-        ⊛ v .:? "label"    .!= ""
-        ⊛ v .:? "type"     .!= "natural"
+        ⊛ v .:? "label"       .!= ""
+        ⊛ v .:? "type"        .!= "natural"
         ⊛ v .:  "builder"
-        ⊛ v .:? "anchor"   .!= []
-        ⊛ v .:? "contents" .!= []
+        ⊛ v .:? "anchor"      .!= []
+        ⊛ v .:? "max_count"   .!= 4
+        ⊛ v .:? "min_spacing" .!= 4
+        ⊛ v .:? "contents"    .!= []
 
 newtype LocationYamlFile = LocationYamlFile
     { lyfLocations ∷ [LocationYamlDef]

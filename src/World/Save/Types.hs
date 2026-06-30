@@ -117,7 +117,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 62  -- v62: drop dead rpMeanderSeed/rscMeanderSeed from the serialized GeoTimeline
+currentSaveVersion = 63  -- v63: WorldGenParams gains trailing 'wgpLocationOverlay'
+                         --      (sparse chunk→location-id map placed at world
+                         --      init; serialized so a loaded world keeps its
+                         --      layout without recomputation; #89).
+                         -- v62: drop dead rpMeanderSeed/rscMeanderSeed from the serialized GeoTimeline
                          --      (write-only scalar, never read; #386). Falls
                          --      route through usPendingFallDrop + Unit.Fall.
                          -- v60: WorldPageSave gains wpsConstructDesignations
