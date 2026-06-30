@@ -11,18 +11,12 @@ module UI.Focus
   -- * focus operation
   , getInputMode
   , registerFocusTarget
-  , unregisterFocusTarget
   , setFocus
   , clearFocus
-  , focusNext
-  , getFocusTarget
-  , modifyFocusTargetBuffer
   ) where
 
 import UPrelude
-import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import UI.Types (TextBuffer(..), emptyBuffer)
 
 -- | Unique identifier for focusable elements
@@ -32,7 +26,6 @@ newtype FocusId = FocusId { unFocusId ∷ Word32 }
 -- | A focusable UI element
 data FocusTarget = FocusTarget
   { ftId          ∷ FocusId   -- ^ Unique identifier
-  , ftBuffer      ∷ TextBuffer -- ^ Text buffer for this element
   , ftAcceptsText ∷ Bool       -- ^ Does this target accept text input?
   , ftTabIndex    ∷ Int        -- ^ Order for Tab navigation
   } deriving (Show)
@@ -72,7 +65,6 @@ registerFocusTarget acceptsText tabIndex fm =
   let fid = FocusId (fmNextId fm)
       target = FocusTarget
         { ftId          = fid
-        , ftBuffer      = emptyBuffer
         , ftAcceptsText = acceptsText
         , ftTabIndex    = tabIndex
         }
@@ -81,15 +73,6 @@ registerFocusTarget acceptsText tabIndex fm =
           , fmNextId  = fmNextId fm + 1 }
      )
 
--- | Remove a focusable element
-unregisterFocusTarget ∷ FocusId → FocusManager → FocusManager
-unregisterFocusTarget fid fm = fm
-  { fmTargets      = Map.delete fid (fmTargets fm)
-  , fmCurrentFocus = if fmCurrentFocus fm ≡ Just fid
-                     then Nothing
-                     else fmCurrentFocus fm
-  }
-
 -- | Set focus to a target
 setFocus ∷ FocusId → FocusManager → FocusManager
 setFocus fid fm = fm { fmCurrentFocus = Just fid }
@@ -97,27 +80,3 @@ setFocus fid fm = fm { fmCurrentFocus = Just fid }
 -- | Clear focus (return to game input mode)
 clearFocus ∷ FocusManager → FocusManager
 clearFocus fm = fm { fmCurrentFocus = Nothing }
-
--- | Navigate to next focusable element (Tab)
-focusNext ∷ FocusManager → FocusManager
-focusNext fm =
-  let textTargets = sortOn ftTabIndex
-                  $ filter ftAcceptsText
-                  $ Map.elems (fmTargets fm)
-      nextFocus = case fmCurrentFocus fm of
-        Nothing → ftId ⊚ listToMaybe textTargets
-        Just current →
-          let after = dropWhile (\t → ftId t ≢ current) textTargets
-          in case drop 1 after of
-               (next:_) → Just (ftId next)
-               []       → ftId ⊚ listToMaybe textTargets  -- wrap around
-  in fm { fmCurrentFocus = nextFocus }
-
--- | Get a focus target by ID
-getFocusTarget ∷ FocusId → FocusManager → Maybe FocusTarget
-getFocusTarget fid fm = Map.lookup fid (fmTargets fm)
-
--- | Modify the buffer of a focus target
-modifyFocusTargetBuffer ∷ FocusId → (TextBuffer → TextBuffer) → FocusManager → FocusManager
-modifyFocusTargetBuffer fid f fm = fm
-  { fmTargets = Map.adjust (\t → t { ftBuffer = f (ftBuffer t) }) fid (fmTargets fm) }

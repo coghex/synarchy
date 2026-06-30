@@ -231,7 +231,10 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             -- which the row term already handles.
             normalSort = (faF + fbF)
                        + relativeZf * 0.001
-                       + 0.0006
+                       -- 2× the base nudge so the unit sorts just above
+                       -- the terrain/fluid at its own tile (one nudge for
+                       -- the surface, one to clear it).
+                       + 2 * unitSortNudge
             -- Far-side climb occlusion: while climbing onto a cliff
             -- column whose face is between the unit and the camera (its
             -- screen-row is in FRONT of the unit's frozen base), sort the

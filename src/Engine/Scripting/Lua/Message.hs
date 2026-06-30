@@ -388,19 +388,6 @@ handleSetPixelSnap enabled = do
     liftIO $ writeIORef (pixelSnapRef env) enabled
     logDebugM CatGraphics $ "Pixel snap " <> if enabled then "enabled" else "disabled"
 
-handleSetTextureFilter ∷ TextureFilter → EngineM ε σ ()
-handleSetTextureFilter tf = do
-    env ← ask
-    liftIO $ writeIORef (textureFilterRef env) tf
-    state ← gets graphicsState
-    mBindless ← liftIO $ readIORef (textureSystemRef env)
-    case (vulkanDevice state, vulkanPDevice state, mBindless) of
-        (Just dev, Just pdev, Just bindless) → do
-            logInfoM CatTexture $ "Texture filter set to: " 
-                <> textureFilterToText tf
-                <> " (takes effect on next texture load or restart)"
-        _ → pure ()
-
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM ε σ ()
 duplicateCachedTextureHandle env handle assetId atlas = do
