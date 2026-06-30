@@ -37,14 +37,11 @@ import Structure.Types (emptyChunkStructures)
 import World.Fluids (hasAnyOceanFluid)
 import World.Ocean.Types (oceanDistAt)
 import World.Fluid.Internal (emptyFluidMap, lavaOverrides
-                            , wrapChunkCoordU, wrappedDeltaUVFluid)
+                            , wrapChunkCoordU)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
-import World.Fluid.River (riverNearChunk)
 import World.Fluid.Ice (computeChunkIce)
 import World.Magma.Types (MagmaOverlay(..))
 import World.Magma.Init (discoverChunkLava)
-import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
-                             , RiverSegment(..))
 import World.Geology.Timeline.Types (GeoEvent(..), GeoPeriod(..))
 import World.Hydrology.WaterTable (computeWaterTable)
 import World.Fluid.Lake.Types
@@ -88,13 +85,9 @@ import World.Generate.Strata
 -- it stays computed and stored on 'LoadedChunk' so that the
 -- subsurface dig path can still ask "is this buried tile saturated?"
 composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
-                → VU.Vector Int
-                → Maybe MagmaOverlay
                 → V.Vector (Maybe FluidCell)
-composeFluidMap params coord terrainMap _channelMask _mMagma =
-    let worldSize   = wgpWorldSize params
-        timeline    = wgpGeoTimeline params
-        oceanDist   = wgpOceanDist params
+composeFluidMap params coord terrainMap =
+    let timeline    = wgpGeoTimeline params
         chunkArea   = chunkSize * chunkSize
         worldLakes  = gtWorldLakes timeline
         worldRivers = gtWorldRivers timeline
@@ -599,130 +592,6 @@ smoothIslandColumns terr fluid = runST $ do
     finalFluid ← V.unsafeFreeze mFluid
     pure (finalTerr, finalFluid)
 
--- | Sentinel for "this tile is not in any channel" in the channel-floor
---   map. Picked so it's an obviously-impossible elevation and easy to
---   detect with @≡ noChannel@.
-noChannel ∷ Int
-noChannel = maxBound
-
--- | Slice the chunk interior out of a bordered-region channel-floor map.
-sliceInteriorMask ∷ VU.Vector Int → VU.Vector Int
-sliceInteriorMask bordered =
-    let bSize = chunkSize + 2 * chunkBorder
-    in VU.generate (chunkSize * chunkSize) $ \i →
-        let lx = i `mod` chunkSize
-            ly = i `div` chunkSize
-            bidx = (ly + chunkBorder) * bSize + (lx + chunkBorder)
-        in bordered VU.! bidx
-
--- | Bordered channel-floor map: for each tile in the bordered region,
---   the segment-interpolated channel-floor elevation (= the elevation
---   the water surface should sit at), or @noChannel@ if no segment
---   covers this tile.
---
---   This is what gets pinned in the water-table compute and what
---   classifies tiles as river in the fluid composer. By storing the
---   channel-floor (not just a bool), the water table at every tile in
---   a channel cross-section is the SAME value — the river surface is
---   flat across its width even though terrain slopes up the banks.
---
---   Terrain-aware: only includes tiles whose actual terrain is at or
---   below the segment's reference elevation (with rsDepth+4 lower
---   tolerance, more for coastal segments). This excludes valley walls
---   and ridges that sit perpendicularly close to a segment centerline.
---
---   When multiple segments overlap a tile (confluence / braided rivers),
---   the LOWEST channel-floor wins — that's the deeper water, and
---   propagating that downstream produces continuous surfaces at junctions.
-computeBorderedChannelMask ∷ Int → ChunkCoord → [RiverParams]
-                           → VU.Vector Int → VU.Vector Int
-computeBorderedChannelMask worldSize coord rivers borderedTerrain =
-    let ChunkCoord cx cy = coord
-        bSize = chunkSize + 2 * chunkBorder
-        bArea = bSize * bSize
-        chunkMinGX = cx * chunkSize
-        chunkMinGY = cy * chunkSize
-        nearby = filter (riverNearChunk worldSize chunkMinGX chunkMinGY) rivers
-        nearbySegs = concatMap (V.toList . rpSegments) nearby
-
-        floorFromSeg gx gy terrainHere seg =
-            case tileInChannelMask worldSize gx gy terrainHere seg of
-                Nothing → noChannel
-                Just f  → f
-
-        minFloor a b = if b < a then b else a
-
-    in VU.generate bArea $ \idx →
-        let bx = idx `mod` bSize
-            by = idx `div` bSize
-            gx = chunkMinGX + bx - chunkBorder
-            gy = chunkMinGY + by - chunkBorder
-            terrainHere = borderedTerrain VU.! idx
-        in foldl' (\acc seg → minFloor acc
-                              (floorFromSeg gx gy terrainHere seg))
-                  noChannel nearbySegs
-
--- | Membership test for a tile against one river segment. Returns the
---   interpolated channel-floor elevation if the tile is in the mask,
---   or @Nothing@ otherwise.
---
---   Cuts:
---     1. Longitudinal: tile must project within the segment, with a
---        small overshoot at endpoints to prevent gaps. Coastal segments
---        (ending near sea level) get a larger downstream overshoot to
---        reach into ocean across coastal-erosion-lowered tiles.
---     2. Horizontal: perpendicular distance ≤ rsWidth (or 2× for coastal).
---     3. Vertical: tile terrain ≤ refElev and ≥ refElev − maxFillDepth.
-tileInChannelMask ∷ Int → Int → Int → Int → RiverSegment → Maybe Int
-tileInChannelMask worldSize gx gy terrainHere seg =
-    let GeoCoord sx sy = rsStart seg
-        GeoCoord ex ey = rsEnd seg
-        (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy ex ey
-        dx' = fromIntegral dxi ∷ Float
-        dy' = fromIntegral dyi ∷ Float
-        segLen2 = dx' * dx' + dy' * dy'
-    in if segLen2 < 1.0
-       then Nothing
-       else
-         let segLen = sqrt segLen2
-             isCoastalSeg = rsEndElev seg ≤ seaLevel + 5
-             upstreamOver   = 0.05
-             downstreamOver = if isCoastalSeg
-                              then min 2.0 (12.0 / segLen)
-                              else 0.05
-             (pxi, pyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
-             px = fromIntegral pxi ∷ Float
-             py = fromIntegral pyi ∷ Float
-             tRaw = (px * dx' + py * dy') / segLen2
-         in if tRaw < negate upstreamOver ∨ tRaw > 1.0 + downstreamOver
-            then Nothing
-            else
-              let perpDist = abs ((px * dy' - py * dx') / segLen)
-                  baseHalf = fromIntegral (rsWidth seg) ∷ Float
-                  -- Clamp mask reach to the carved valley extent. If
-                  -- the mask reaches further than carving (rsValleyWidth/2),
-                  -- tiles get classified as river but their terrain
-                  -- wasn't lowered — producing dry "columns" sticking
-                  -- up through the river surface. Coastal segments get
-                  -- 2× width but still capped by the carved valley.
-                  carveHalf = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
-                  rawMaskHalf = if isCoastalSeg then baseHalf * 2.0 else baseHalf
-                  maskHalf = min rawMaskHalf carveHalf
-                  tClamped = max 0.0 (min 1.0 tRaw)
-                  startE = fromIntegral (rsStartElev seg) ∷ Float
-                  endE   = fromIntegral (rsEndElev seg)   ∷ Float
-                  refElev = floor (startE + tClamped * (endE - startE)) ∷ Int
-                  maxFillDepth = rsDepth seg + (if isCoastalSeg then 12 else 4)
-                  -- Channel-floor at this point along the segment. This
-                  -- is the value water sits at, regardless of how far
-                  -- across the cross-section this particular tile is.
-                  channelFloor = max (seaLevel - 1) (refElev - rsDepth seg)
-              in if perpDist ≤ maskHalf
-                  ∧ terrainHere ≤ refElev
-                  ∧ terrainHere ≥ refElev - maxFillDepth
-                 then Just channelFloor
-                 else Nothing
-
 -- | Merge a river-flat surface rule into surface-map computation.
 -- For River fluid, surface = fluid surface (hides terrain protrusions).
 -- For other fluid types, surface = max(terrain, fluid).
@@ -989,18 +858,6 @@ generateChunk registry catalog params coord =
             then minBound
             else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
-        -- Channel mask: river pinning is intentionally disabled. We're
-        -- focusing on basin-fill from climate + sink-pin; rivers are
-        -- deferred. Pass an empty rivers list so the bordered mask is
-        -- 'noChannel' everywhere, which leaves the water-table compute
-        -- and the fluid composer's River branch as no-ops. Terrain
-        -- carving from river events still happens earlier in the
-        -- timeline; we just don't render river surface fluid here.
-        borderedChannelMask = computeBorderedChannelMask worldSize coord
-                                                         []
-                                                         finalElevVec
-        interiorChannelMask = sliceInteriorMask borderedChannelMask
-
         -- Same per-chunk ocean test that 'composeFluidMap' uses
         -- internally — lifted here so we know whether the ocean
         -- column will sit above any cap the magma overlay leaves
@@ -1036,7 +893,6 @@ generateChunk registry catalog params coord =
         -- Shared with generateZoomTerrain so the two views agree about
         -- which tiles are water (and lava).
         rawFluidMap = composeFluidMap params coord cappedTerrainMap
-                                      interiorChannelMask magmaOverlay
 
         -- Lava-water boundary shell: any lava tile 8-adjacent to a
         -- non-lava tile (water OR dry land — see 'lavaShellMask')
@@ -1663,17 +1519,6 @@ generateZoomTerrain registry params mBorderedCache coord =
                then unMaterialId (finalMatVec VU.! toIndex lx ly)
                else 1
 
-        -- All fluid placement — same composeFluidMap as the detail
-        -- world, so the zoom map shows rivers, lakes, and lava in the
-        -- same tiles where the world view shows them. Water table and
-        -- channel mask are recomputed from the zoom path's bordered
-        -- terrain so the two views see identical wt (deterministic).
-        -- Same river-skipping rationale as the detail path above.
-        zoomBorderedMask = computeBorderedChannelMask worldSize coord
-                                                      []
-                                                      finalElevVec
-        zoomInteriorMask = sliceInteriorMask zoomBorderedMask
-
         -- Mirror the detail path's ocean test + cap pipeline so the
         -- zoom map agrees with the world view on which sub-ocean
         -- chambers become basalt seamounts (no lava) vs. above-water
@@ -1690,7 +1535,6 @@ generateZoomTerrain registry params mBorderedCache coord =
         zoomMagma = mergeRimCaps zoomMagmaBase zoomRimCaps
         cappedZoomElev = applyBasaltCaps coord zoomMagma interiorElev
         rawZoomFluid = composeFluidMap params coord cappedZoomElev
-                                       zoomInteriorMask zoomMagma
 
         -- Mirror the detail path's lava-water boundary shell so the
         -- zoom map agrees: any lava tile adjacent to water becomes
