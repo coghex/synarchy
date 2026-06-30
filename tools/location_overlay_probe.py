@@ -146,10 +146,11 @@ def is_ocean(port: int, gx: int, gy: int) -> bool:
     return r.strip('"') == "ocean"
 
 
-def has_floor(port: int, gx: int, gy: int) -> bool:
-    """True if a 'floor' structure piece exists at (gx,gy) — i.e. the
-    ruin_small builder (room_small) has stamped its room there."""
-    r = send(port, f"return structure.hasAt({gx},{gy},'floor') and 'yes' or 'no'")
+def has_floor(port: int, gx: int, gy: int, page: str | None = None) -> bool:
+    """True if a 'floor' structure piece exists at (gx,gy) on the given page
+    (or the active world) — i.e. room_small has stamped its room there."""
+    arg = f",'{page}'" if page else ""
+    r = send(port, f"return structure.hasAt({gx},{gy},'floor'{arg}) and 'yes' or 'no'")
     return r.strip('"') == "yes"
 
 
@@ -173,9 +174,9 @@ def wait_stamped(port: int, ruins: list[dict], tries: int = 80) -> int:
     return n
 
 
-def wait_floor(port: int, gx: int, gy: int, tries: int = 40) -> bool:
+def wait_floor(port: int, gx: int, gy: int, page: str | None = None, tries: int = 40) -> bool:
     for _ in range(tries):
-        if has_floor(port, gx, gy):
+        if has_floor(port, gx, gy, page):
             return True
         time.sleep(0.5)
     return False
@@ -433,11 +434,16 @@ def main() -> int:
                 failures.append(f"phase 5: expected 'arena' active, got '{active}'")
             elif not has_loc_on(args.port, 0, 0, page="sw"):
                 failures.append("phase 5: hidden world 'sw' has no location on (0,0)")
-            elif wait_floor(args.port, 8, 8):
+            elif wait_floor(args.port, 8, 8, page="sw"):
+                # The structure must be on 'sw', NOT the active arena.
+                on_arena = has_floor(args.port, 8, 8, page="arena")
                 swz = send(args.port, "return world.getTerrainAt(8,8,'sw')").split("\t")[0].strip()
-                fz = send(args.port, "return structure.floorZAt(8,8)").strip()
-                print(f"PASS: hidden non-active page stamped its centre while '{active}' active "
-                      f"(floor z={fz} matches sw terrain {swz}, not the arena's 0)")
+                fz = send(args.port, "return structure.floorZAt(8,8,'sw')").strip()
+                if on_arena:
+                    failures.append("phase 5: structure leaked onto the active arena page")
+                else:
+                    print(f"PASS: hidden non-active page 'sw' stamped its OWN centre while "
+                          f"'{active}' active (floor z={fz}=sw terrain {swz}+1; nothing on arena)")
             else:
                 failures.append("hidden non-active page did NOT stamp its centre (multiworld)")
     finally:

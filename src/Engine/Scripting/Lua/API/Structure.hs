@@ -39,11 +39,22 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, TexPalette(..))
 import Control.Monad (forM_)
-import World.Types (wsTilesRef, wsStructureStageRef)
+import World.Types (wsTilesRef, wsStructureStageRef, wmWorlds, WorldPageId(..), WorldState)
 import World.Chunk.Types (LoadedChunk(..))
 import World.Tile.Types (WorldTileData(..), lookupChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Command.Types (WorldCommand(..))
+
+-- | Resolve which world page a structure op targets: a named page (any in
+--   wmWorlds, even hidden / non-active) when a page-id string is given,
+--   else the active world. Location stamping (#89) passes the page id so a
+--   room authored on a hidden secondary page writes onto THAT page — not
+--   whichever page happens to be active when its chunk loaded.
+resolveStructurePage ∷ EngineEnv → Maybe Text → IO (Maybe (WorldPageId, WorldState))
+resolveStructurePage env (Just pid) = do
+    mgr ← readIORef (worldManagerRef env)
+    pure $ (\ws → (WorldPageId pid, ws)) <$> lookup (WorldPageId pid) (wmWorlds mgr)
+resolveStructurePage env Nothing = activeWorldPage env
 
 -- | structure.place(gx, gy, slot, texHandle, faceHandle, z, texPath, facePath)
 --   → bool. slot ∈ "floor"/"ceiling"/"post_n…w"/"wall_ne…sw".
@@ -66,6 +77,7 @@ structurePlaceFn env = do
     zA    ← Lua.tointeger 6
     texPathA  ← Lua.tostring 7
     facePathA ← Lua.tostring 8
+    pageA     ← Lua.tostring 9
     case (gxA, gyA, slotA, texA, faceA) of
         (Just gx, Just gy, Just slotBS, Just tex, Just face) →
             case slotFromText (TE.decodeUtf8 slotBS) of
@@ -96,7 +108,7 @@ structurePlaceFn env = do
                                     ( HM.insert texId  (TextureHandle (fromIntegral tex))
                                     $ HM.insert faceId (TextureHandle (fromIntegral face)) m
                                     , () )
-                                mActive ← activeWorldPage env
+                                mActive ← resolveStructurePage env (TE.decodeUtf8 <$> pageA)
                                 case mActive of
                                     Just (pageId, ws) → do
                                         -- Only stage + queue when the target chunk
@@ -262,10 +274,12 @@ structureFloorZAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureFloorZAtFn env = do
     gxA ← Lua.tointeger 1
     gyA ← Lua.tointeger 2
+    pageA ← Lua.tostring 3
     case (gxA, gyA) of
         (Just gx, Just gy) → do
             mSpd ← Lua.liftIO $
-                lookupStructure env (fromIntegral gx) (fromIntegral gy) SFloor
+                lookupStructure env (TE.decodeUtf8 <$> pageA)
+                                (fromIntegral gx) (fromIntegral gy) SFloor
             case mSpd of
                 Just spd → Lua.pushinteger (fromIntegral (spdGridZ spd)) >> return 1
                 Nothing  → Lua.pushnil >> return 1
@@ -279,13 +293,15 @@ structureHasAtFn env = do
     gxA   ← Lua.tointeger 1
     gyA   ← Lua.tointeger 2
     slotA ← Lua.tostring 3
+    pageA ← Lua.tostring 4
     case (gxA, gyA, slotA) of
         (Just gx, Just gy, Just slotBS) →
             case slotFromText (TE.decodeUtf8 slotBS) of
                 Nothing → Lua.pushboolean False >> return 1
                 Just slot → do
                     mSpd ← Lua.liftIO $
-                        lookupStructure env (fromIntegral gx) (fromIntegral gy) slot
+                        lookupStructure env (TE.decodeUtf8 <$> pageA)
+                                        (fromIntegral gx) (fromIntegral gy) slot
                     Lua.pushboolean (maybe False (const True) mSpd)
                     return 1
         _ → Lua.pushboolean False >> return 1
@@ -297,10 +313,10 @@ structureHasAtFn env = do
 --   persistence read, and what's left after a save/load replay (when the cache
 --   is empty). Nothing if it's in neither: no staged add, and either no active
 --   world, the chunk holding (gx,gy) isn't loaded, or no piece there.
-lookupStructure ∷ EngineEnv → Int → Int → StructureSlot
+lookupStructure ∷ EngineEnv → Maybe Text → Int → Int → StructureSlot
                 → IO (Maybe StructurePieceData)
-lookupStructure env gx gy slot = do
-    mWs ← activeWorldState env
+lookupStructure env mPage gx gy slot = do
+    mWs ← fmap snd <$> resolveStructurePage env mPage
     case mWs of
         Nothing → pure Nothing
         Just ws → do
