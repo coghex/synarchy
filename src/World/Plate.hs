@@ -6,7 +6,6 @@ module World.Plate
     , generatePlates
     , defaultPlatesFor
       -- * Queries
-    , plateAt
     , twoNearestPlates
     , elevationAtGlobal
       -- * Boundary classification
@@ -25,8 +24,6 @@ module World.Plate
 import UPrelude
 import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
-import Data.List (sortBy)
-import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
 import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist, scaleElevI)
 import World.Constants (seaLevel)
@@ -40,9 +37,6 @@ data BoundaryType
     | Divergent  !Float
     | Transform  !Float
     deriving (Show)
-
-data BoundarySide = SidePlateA | SidePlateB
-    deriving (Show, Eq)
 
 -- * Plate Generation
 
@@ -127,12 +121,6 @@ generateOnePlate seed worldSize plateIndex =
 
 -- * Plate Queries
 
-plateAt ∷ Word64 → Int → [TectonicPlate] → Int → Int → (TectonicPlate, Float)
-plateAt seed worldSize plates gx gy =
-    case rankPlates seed worldSize plates gx gy of
-      (x:_) → x
-      []    → error "plateAt: no plates"
-
 twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
                  → ((TectonicPlate, Float), (TectonicPlate, Float))
 twoNearestPlates seed worldSize plates gx gy =
@@ -185,16 +173,6 @@ twoNearestPlates seed worldSize plates gx gy =
                 second = (p, maxDist)
             in go first second False ps
         _ → error "no plates"
-
-rankPlates seed worldSize plates gx gy =
-    let withDist plate =
-            let du = fromIntegral (wrappedDeltaU worldSize gx gy
-                        (plateCenterX plate) (plateCenterY plate)) ∷ Float
-                dv = fromIntegral ((gx + gy) - (plateCenterX plate + plateCenterY plate)) ∷ Float
-                jitter = plateJitter seed worldSize gx gy
-                             (plateCenterX plate) (plateCenterY plate)
-            in (plate, sqrt (du * du + dv * dv) + jitter)
-    in sortBy (comparing snd) (map withDist plates)
 
 -- * Boundary Classification
 
@@ -453,8 +431,7 @@ elevationAtGlobal seed plates worldSize gx gy =
             baseElev = plateBaseElev myPlate
             boundaryDist = (distB - distA) / 2.0
             boundary = classifyBoundary worldSize plateA plateB
-            side = SidePlateA
-            boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
+            boundaryEffect = boundaryElevation wsc boundary plateA plateB boundaryDist
             shelfEffect = continentalShelf wsc plateA plateB boundaryDist
             mness = mountainness wsc boundaryDist
             ridge = ridgeContribution seed worldSize gx' gy' wsc mness
@@ -476,8 +453,7 @@ elevationAtGlobal seed plates worldSize gx gy =
 
         boundaryDist = (distB - distA) / 2.0
         boundary = classifyBoundary worldSize plateA plateB
-        side = SidePlateA
-        boundaryEffect = boundaryElevation wsc boundary side
+        boundaryEffect = boundaryElevation wsc boundary
                            plateA plateB boundaryDist
         shelfEffect = continentalShelf wsc plateA plateB boundaryDist
 
@@ -499,10 +475,10 @@ elevationAtGlobal seed plates worldSize gx gy =
 
 -- * Boundary Elevation Profiles
 
-boundaryElevation ∷ WorldScale → BoundaryType → BoundarySide
+boundaryElevation ∷ WorldScale → BoundaryType
                   → TectonicPlate → TectonicPlate
                   → Float → Int
-boundaryElevation wsc boundary _side plateA plateB boundaryDist =
+boundaryElevation wsc boundary plateA plateB boundaryDist =
     let bothLand  = plateIsLand plateA ∧ plateIsLand plateB
         bothOcean = not (plateIsLand plateA) ∧ not (plateIsLand plateB)
         aIsLand   = plateIsLand plateA

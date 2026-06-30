@@ -109,8 +109,15 @@ saveMagic = 0x53595241
 --       bitmask) to GeoTimeline — composeFluidMap ORs it into the
 --       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
 --       missed render ocean (sea-stops-at-chunk-boundary fix).
+--   v62 removes the dead 'rpMeanderSeed' (RiverParams) and
+--       'rscMeanderSeed' (RiverSegmentCarve) fields. Both rode along in
+--       the serialized 'wgpGeoTimeline' (GeoTimeline → gtPeriods →
+--       gpEvents → GeoEvent, e.g. HydroEvent (RiverFeature _)) but were
+--       never read — the meander noise they seeded was discarded by the
+--       river carve. Positional Generic Serialize drops the trailing
+--       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 61  -- v61: UnitSimState drops vestigial usFallImpact
+currentSaveVersion = 62  -- v62: drop dead rpMeanderSeed/rscMeanderSeed from the serialized GeoTimeline
                          --      (write-only scalar, never read; #386). Falls
                          --      route through usPendingFallDrop + Unit.Fall.
                          -- v60: WorldPageSave gains wpsConstructDesignations

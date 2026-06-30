@@ -18,6 +18,7 @@ module World.Geology.Timeline.Types
     , bboxOverlapsChunk
     , tagEventsWithBBox
     , GeoEvent(..)
+    , isRiverCarveEvent
     , OreSheetParams(..)
     , RiverSegmentCarve(..)
     , RiverDeltaParams(..)
@@ -212,7 +213,6 @@ noBBox = EventBBox minBound minBound maxBound maxBound
 --   at the event level. Each segment gets its own tight bbox.
 data RiverSegmentCarve = RiverSegmentCarve
     { rscSegment     ∷ !RiverSegment
-    , rscMeanderSeed ∷ !Word64
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 -- | Delta deposit at the river mouth. Extracted from the last
@@ -253,6 +253,20 @@ data GeoEvent
 --   simultaneously, producing gap-free valleys.
 explodeRiverEvent ∷ GeoEvent → [GeoEvent]
 explodeRiverEvent evt = [evt]
+
+-- * River-carve event predicate
+
+-- | True for events that carve river/glacier valleys into terrain.
+--   Single source shared by the timeline build (cache pre-filter,
+--   "World.Geology.Timeline") and the chunk apply pass (final river
+--   re-carve, "World.Generate.Timeline") so the two consumers can't
+--   diverge as 'GeoEvent' grows.
+isRiverCarveEvent ∷ GeoEvent → Bool
+isRiverCarveEvent (HydroEvent (RiverFeature _))   = True
+isRiverCarveEvent (HydroEvent (GlacierFeature _)) = True
+isRiverCarveEvent (RiverSegmentEvent _)           = True
+isRiverCarveEvent (RiverDeltaEvent _)             = True
+isRiverCarveEvent _                               = False
 
 -- * Bounding boxes
 

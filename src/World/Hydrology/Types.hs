@@ -38,7 +38,6 @@ data RiverParams = RiverParams
     , rpMouthRegion   ∷ !GeoCoord       -- ^ Where it reaches ocean/lake/basin
     , rpSegments      ∷ !(V.Vector RiverSegment) -- ^ Ordered list of path segments
     , rpFlowRate      ∷ !Float          -- ^ Accumulated precipitation along path
-    , rpMeanderSeed   ∷ !Word64         -- ^ Sub-seed for meander noise
     } deriving (Show, Eq, Generic, Serialize, Hashable)
 instance (Serialize a, Eq a, Hashable a)
     ⇒ Serialize (V.Vector a) where
@@ -49,8 +48,8 @@ instance (Serialize a, Eq a, Hashable a)
     hashWithSalt s v = hashWithSalt s (V.toList v)
 
 instance NFData RiverParams where
-    rnf (RiverParams s m segs f ms) =
-        rnf s `seq` rnf m `seq` rnf segs `seq` rnf f `seq` rnf ms `seq` ()
+    rnf (RiverParams s m segs f) =
+        rnf s `seq` rnf m `seq` rnf segs `seq` rnf f `seq` ()
 
 -- | A single segment of a river between two waypoints.
 --

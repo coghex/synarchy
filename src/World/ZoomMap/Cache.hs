@@ -6,8 +6,6 @@ module World.ZoomMap.Cache
     ( buildZoomCache
     , buildZoomCacheWithPixels
     , majorityMaterial
-    , wrapChunkX
-    , wrapChunkY
     ) where
 
 import UPrelude
@@ -682,14 +680,6 @@ smoothZoomContour iters cs elev =
     in smoothZoomContour (iters - 1) cs smoothed
 
 -- * Helpers
-
-wrapChunkX ∷ Int → Int → Int
-wrapChunkX halfSize cx =
-    let w = halfSize * 2
-    in ((cx + halfSize) `mod` w + w) `mod` w - halfSize
-
-wrapChunkY ∷ Int → Int → Int
-wrapChunkY halfSize cy = max (-halfSize) (min (halfSize - 1) cy)
 
 majorityMaterial ∷ [(Int, Word8)] → Word8
 majorityMaterial samples =
