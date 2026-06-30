@@ -20,6 +20,15 @@ import Data.IORef (IORef, readIORef, atomicModifyIORef')
 
 import Engine.Scripting.Lua.Debug (getSourceInfo, SourceInfo(..))
 
+-- | Strip the leading directory (and any "./" prefix) from a Lua chunk
+--   source path so the log prefix shows just the script segment, not the
+--   full on-disk path. Shared by all four log fns (info/warn/error/debug).
+dropDir ∷ String → String
+dropDir ('.':'/':ss) = dropDir ss
+dropDir ('/':ss)     = ss
+dropDir (_:ss)       = dropDir ss
+dropDir _            = ""
+
 logInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 logInfoFn env = do
     msg ← Lua.tostring 1
@@ -29,10 +38,6 @@ logInfoFn env = do
             Just info → (siSource info, siCurrentLine info)
             Nothing   → ("<unknown>", 0)
         srcFileStripped = dropDir srcFile
-        dropDir ('.':'/':ss) = dropDir ss
-        dropDir ('/':ss)     = ss
-        dropDir (_:ss)       = dropDir ss
-        dropDir _            = ""
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
@@ -52,10 +57,6 @@ logWarnFn env = do
             Just info → (siSource info, siCurrentLine info)
             Nothing   → ("<unknown>", 0)
         srcFileStripped = dropDir srcFile
-        dropDir ('.':'/':ss) = dropDir ss
-        dropDir ('/':ss)     = ss
-        dropDir (_:ss)       = dropDir ss
-        dropDir _            = ""
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
@@ -75,10 +76,6 @@ logErrorFn env = do
             Just info → (siSource info, siCurrentLine info)
             Nothing   → ("<unknown>", 0)
         srcFileStripped = dropDir srcFile
-        dropDir ('.':'/':ss) = dropDir ss
-        dropDir ('/':ss)     = ss
-        dropDir (_:ss)       = dropDir ss
-        dropDir _            = ""
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
@@ -99,12 +96,13 @@ logDebugFn env = do
     let (srcFile, srcLine) = case mInfo of
             Just info → (siSource info, siCurrentLine info)
             Nothing   → ("<unknown>", 0)
-    
+        srcFileStripped = dropDir srcFile
+
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
             let msgText = TE.decodeUtf8 msgBS
-                fullMsg = "[" <> T.pack srcFile <> ":" <> T.pack (show srcLine) <> "] " <> msgText
+                fullMsg = "[" <> T.pack srcFileStripped <> ":" <> T.pack (show srcLine) <> "] " <> msgText
             logThreadDebug logger CatLua fullMsg
         Nothing → pure ()
     

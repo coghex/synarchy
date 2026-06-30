@@ -512,7 +512,7 @@ computeFlowAccumulation worldTiles terrain lakeIdAt dir spillwayOf
                         , let s = spillwayOf VU.! lid
                         , s ≥ 0
                         ]
-            spillDesc = sortDescByFst spillways
+            spillDesc = sortDescOn (\(z,_,_) → z) spillways
         forM_ spillDesc $ \(_, sw, lid) → do
             inject ← VUM.read lakeFlow lid
             when (inject > 0) $ do
@@ -550,14 +550,18 @@ walkInject worldTiles terrain lakeIdAt dir lakeFlow flow start inject =
                            when (terrain VU.! dn ≠ minBound) (go dn)
     in go start
 
--- | Sort a list of @(z, idx, lid)@ tuples by z descending.
-sortDescByFst ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
-sortDescByFst xs = foldr insertDesc [] xs
+-- | Insertion sort, descending by a projected key. Insertion sort is
+--   fine for these — n is bounded by world area (spillway count /
+--   raw river count). Shared by the spillway-injection order
+--   (key = @(z,_,_)@) and the river-component keep order
+--   (key = @counts VU.! i@).
+sortDescOn ∷ Ord b ⇒ (a → b) → [a] → [a]
+sortDescOn key = foldr insertDesc []
   where
     insertDesc x [] = [x]
-    insertDesc x@(zx,_,_) (y@(zy,_,_):rest)
-        | zx ≥ zy   = x : y : rest
-        | otherwise = y : insertDesc x rest
+    insertDesc x (y:rest)
+        | key x ≥ key y = x : y : rest
+        | otherwise     = y : insertDesc x rest
 
 -- * River trace
 
@@ -926,7 +930,7 @@ cullByLength worldSize rawCompId rawNComps rawIsRiverTile =
                 when (cid ≥ 0) (VUM.modify v (+ 1) cid)
             pure v
         keepN      = min rawNComps (targetRiverCount worldSize)
-        ordered    = sortDescByKey rawNComps counts
+        ordered    = sortDescOn (counts VU.!) [0 .. rawNComps - 1]
         keptSet    = VU.create $ do
             v ← VUM.replicate rawNComps False
             forM_ (take keepN ordered) (\cid → VUM.write v cid True)
@@ -947,17 +951,6 @@ cullByLength worldSize rawCompId rawNComps rawIsRiverTile =
         newIsRiver  = VU.zipWith (\rt cid → rt ∧ cid ≥ 0)
                                  rawIsRiverTile newCompId
     in (newIsRiver, newCompId, newNComps)
-
--- | Sort component ids @[0 .. n - 1]@ by their per-id key value
---   (descending). Insertion sort is fine — n is the raw river count,
---   bounded by world area.
-sortDescByKey ∷ Int → VU.Vector Int → [Int]
-sortDescByKey n key = foldr insertDesc [] [0 .. n - 1]
-  where
-    insertDesc x [] = [x]
-    insertDesc x (y:rest)
-        | key VU.! x ≥ key VU.! y = x : y : rest
-        | otherwise               = y : insertDesc x rest
 
 -- | BFS label connected components of the river-tile mask. Edges are
 --   plain 4-adjacency over river tiles (E/W wrapped to mirror

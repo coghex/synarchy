@@ -26,7 +26,8 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
 import World.State.Types (wmVisible)
 import Unit.Types
-import Unit.Direction (Direction(..), dirIndex, indexToDir, mirrorDir)
+import Unit.Direction (mirrorDir)
+import Unit.Sprite (screenDirOf, resolveTexture)
 
 baseTileW ∷ Float
 baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
@@ -37,44 +38,8 @@ baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 unitSortNudge ∷ Float
 unitSortNudge = 0.0003
 
--- | How many direction steps (in our 8-dir clockwise ring) the
---   camera rotation shifts.  Each 90 deg CW rotation = 2 steps.
-cameraRotSteps ∷ CameraFacing → Int
-cameraRotSteps FaceSouth = 0
-cameraRotSteps FaceWest  = 2
-cameraRotSteps FaceNorth = 4
-cameraRotSteps FaceEast  = 6
-
--- | Apply camera rotation to a world-space facing to get the screen-space
---   direction we should render. Used by both the T-pose picker and the
---   animation frame picker.
-screenDirOf ∷ CameraFacing → Direction → Direction
-screenDirOf camFacing unitFacing =
-    indexToDir ((dirIndex unitFacing - cameraRotSteps camFacing) `mod` 8)
-
--- | Pick the correct directional sprite for a unit given its world-space
---   facing and the current camera rotation.
---
---   Lookup order: requested screen direction → its `mirrorDir` (returned
---   with `flipX = True` so the renderer flips UVs) → fallback default
---   (no flip). The mirror step lets animations ship 5 directional
---   sprites (S/SE/E/NE/N) instead of 8 — SW/W/NW are produced by
---   horizontal mirror at draw time.
-resolveTexture
-    ∷ CameraFacing
-    → Direction                          -- ^ unit world facing
-    → Map.Map Direction TextureHandle    -- ^ directional sprites
-    → TextureHandle                      -- ^ fallback default
-    → (TextureHandle, Bool)              -- ^ (handle, flipX)
-resolveTexture camFacing unitFacing dirSprites fallback
-    | Map.null dirSprites = (fallback, False)
-    | otherwise =
-        let dir = screenDirOf camFacing unitFacing
-        in case Map.lookup dir dirSprites of
-            Just h  → (h, False)
-            Nothing → case mirrorDir dir >>= (`Map.lookup` dirSprites) of
-                Just h  → (h, True)
-                Nothing → (fallback, False)
+-- `cameraRotSteps`, `screenDirOf`, and `resolveTexture` now live in
+-- `Unit.Sprite` (shared with `Unit.HitTest`); re-exported above.
 
 -- | Choose a texture for a unit. If the unit has an active animation and
 --   the requested frames exist, pick by elapsed time; otherwise fall back

@@ -1123,7 +1123,7 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
         -- skin/fat/muscle it crossed, the fracture over the bone, etc. (Not
         -- per-individual-layer — that double-counts a thin layer's tiny
         -- capacity and would let a graze "destroy" the skin.)
-        distOf layerSet _pmh =
+        distOf layerSet =
             let deps = penetrateDeposits layerSet budget wp kind
                 perKind = HM.fromListWith
                     (\(c1, h1) (c2, h2) → (c1 + c2, h1 + h2))
@@ -1144,7 +1144,6 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
                           | (msub, th) ← scaledLayers pid ]
                 cap' = if cap ≤ 0 then defaultPartCapacity * sizeF else cap
             in max 0.5 (cap' * capacityHpScale)
-        hpOf pid = partHpId pid
 
         -- MACRO-part severity (the strike's reach + the death/wear scalar),
         -- on the macro-part's representative tissue stack.
@@ -1159,7 +1158,7 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
                                         | (msub, _) ← macroLayers ])
         load = driver * clamp 0.0 2.0 (targetHardness / max 1.0 weaponHardness)
 
-        sev = sevDriver * kindSeverityFactor kind / (hpOf partId * perHp)
+        sev = sevDriver * kindSeverityFactor kind / (partHpId partId * perHp)
         -- Reach: how deep the strike penetrates (0 = surface, 1 = deepest
         -- subpart), from the macro severity. A solid hit reaches the deep
         -- structures; a glance only the shallow ones.
@@ -1177,12 +1176,12 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
         selected = allocateSubparts kind reach allocRoll subparts
         subInjuries p =
             let sl = armorLayers ++ scaledLayers (bpId p)
-            in [ (bpId p, k, s) | (k, s) ← distOf sl (hpOf (bpId p)) ]
+            in [ (bpId p, k, s) | (k, s) ← distOf sl ]
         -- Scale a named layer's thickness the same way scalePair does.
         scaleNamed (nm, msub, th) =
             (nm, msub, th * layerThickScale (maybe "" sbsName msub))
         injuries = if null subparts
-                   then [ (partId, k, s) | (k, s) ← distOf macroLayers (hpOf partId) ]
+                   then [ (partId, k, s) | (k, s) ← distOf macroLayers ]
                    else concatMap subInjuries selected
 
         -- PER-LAYER log detail (for the combat-log narration): every named
@@ -1193,12 +1192,16 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
         -- "lacerating the forearm's skin, fat, and muscle and breaking the
         -- radius".) Returns (subpartDisplayName, layerName, material, sev).
         bpNameOf pid = maybe pid bpName (HM.lookup pid (bodyPartIndex tdef))
-        layerDetailOf p =
-            let named = map scaleNamed (resolvePartLayersNamed sm tdef (bpId p))
+        -- One layer-detail path for both the per-subpart case (called with
+        -- each selected subpart's id) and the no-subpart macro fallback
+        -- (called with the macro part id). The two used to be structural
+        -- clones differing only in which part id they resolved.
+        layerDetailOfPart pid =
+            let named = map scaleNamed (resolvePartLayersNamed sm tdef pid)
                 armorNamed = [ ("armor", msub, th) | (msub, th) ← armorLayers ]
                 full  = armorNamed ++ named
                 deps  = penetrateDeposits [ (s, t) | (_, s, t) ← full ] budget wp kind
-                sub   = bpNameOf (bpId p)
+                sub   = bpNameOf pid
             in [ (sub, lname, lmat, capInjurySeverity k sv)
                | ((lname, _, th), (lmat, contrib)) ← zip full deps
                , Just k ← [tissueInjuryKind lmat kind]
@@ -1207,21 +1210,8 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
                                / (layerHpMat lmat th * perHp))
                , sv ≥ injuryFloor ]
         logDetail = if null subparts
-                    then layerDetailOfMacro
-                    else concatMap layerDetailOf selected
-        layerDetailOfMacro =
-            let named = map scaleNamed (resolvePartLayersNamed sm tdef partId)
-                armorNamed = [ ("armor", msub, th) | (msub, th) ← armorLayers ]
-                full  = armorNamed ++ named
-                deps  = penetrateDeposits [ (s, t) | (_, s, t) ← full ] budget wp kind
-                sub   = bpNameOf partId
-            in [ (sub, lname, lmat, capInjurySeverity k sv)
-               | ((lname, _, th), (lmat, contrib)) ← zip full deps
-               , Just k ← [tissueInjuryKind lmat kind]
-               , let sv = capInjurySeverity k
-                            (contrib * kindSeverityFactor kind
-                               / (layerHpMat lmat th * perHp))
-               , sv ≥ injuryFloor ]
+                    then layerDetailOfPart partId
+                    else concatMap (layerDetailOfPart . bpId) selected
     in (clamp 0.0 1.0 sev, driver, sevDriver, load, weaponHardness, injuries, logDetail)
 
 -- ----- Event constructors -----
