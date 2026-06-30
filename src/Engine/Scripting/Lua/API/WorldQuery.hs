@@ -82,8 +82,13 @@ worldGetTerrainAtFn env = do
             Lua.pushnil
             return 1
 
--- | world.getFluidAt(gx, gy) → type, surface or nil
---   Returns fluid type string ("ocean","lake","river","lava") and surface Z.
+-- | world.getFluidAt(gx, gy) → type, surface | nil
+--   Arity is the contract: on dry tiles (and unloaded/out-of-range
+--   chunks) it pushes a single nil; on a fluid tile it pushes TWO
+--   values — the fluid type string ("ocean","lake","river","lava") and
+--   the fluid surface Z. So test `getFluidAt(x,y) ~= nil` (or capture
+--   the first return) to distinguish "no fluid" from a fluid sitting at
+--   surface 0 — never rely on the surface alone.
 worldGetFluidAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetFluidAtFn env = do
     mGx ← Lua.tointeger 1
