@@ -26,7 +26,6 @@ import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
 import World.State.Types (wmWorlds, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import Engine.Core.Types (EngineConfig(..))
-import Engine.Event.Types (Event(..))
 import Engine.Input.Types (InputState, keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
@@ -126,7 +125,6 @@ startLuaThread env = do
         (\(e ∷ SomeException) → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatLua $ "Lua thread failed to start: " <> T.pack (show e)
-            Q.writeQueue (eventQueue env) (EventError "LuaThread" (T.pack (show e)))
             error "Lua thread failed to start."
         )
     return $ ThreadState stateRef threadId doneVar

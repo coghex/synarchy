@@ -15,7 +15,6 @@ import Engine.Core.Log.Monad (logAndThrowM, logInfoM, logWarnM, logDebugM)
 import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..))
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
-import Engine.Input.Event (handleInputEvents)
 import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
@@ -60,7 +59,6 @@ handleEngineRunning = do
     let Window glfwWin = window
     
     GLFW.pollEvents
-    handleInputEvents
     updateCameraPanning
     updateCameraZoom
     updateCameraMouseDrag

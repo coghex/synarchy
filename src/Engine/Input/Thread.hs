@@ -13,7 +13,6 @@ import Engine.Core.Log (logDebug, logError, logWarn, logInfo, LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Thread
 import Engine.Core.Error.Exception (SystemError(..), ExceptionType(..))
-import Engine.Event.Types
 import Engine.Input.Types
 import Engine.Input.Callback
 import Engine.Scripting.Lua.Types
@@ -42,8 +41,6 @@ startInputThread env = do
         ) 
         (\(e ∷ SomeException) → do
             logError logger CatInput $ "Failed starting input thread: " <> T.pack (show e)
-            Q.writeQueue (eventQueue env) $ EventError
-              "startInputThread:" $ T.pack (show e)
             error "Input thread start failure."
         )
     return $ ThreadState stateRef threadId doneVar

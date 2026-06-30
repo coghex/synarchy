@@ -21,7 +21,6 @@ import Engine.Core.Queue as Q
 import Engine.PlayerEvent (PlayerEvent, NotificationCfg)
 import qualified Combat.Types
 import Engine.Scripting.Lua.Types
-import Engine.Event.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Config
 import Engine.Graphics.Vulkan.Base
@@ -78,7 +77,6 @@ data EngineEnv = EngineEnv
   , brightnessRef       ∷ IORef Int
   , pixelSnapRef        ∷ IORef Bool
   , textureFilterRef    ∷ IORef TextureFilter
-  , eventQueue          ∷ Q.Queue Event
   , inputQueue          ∷ Q.Queue InputEvent
   , loggerRef           ∷ IORef LoggerState
   , luaToEngineQueue    ∷ Q.Queue LuaToEngineMsg
