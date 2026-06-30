@@ -20,6 +20,7 @@ local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
+local brokenOverlay = require("scripts.ui.broken_overlay")
 local stats       = require("scripts.unit_stats")
 local injuries    = require("scripts.injuries")
 local knowledge   = require("scripts.knowledge")
@@ -735,28 +736,15 @@ local function loadIconFor(iconKey)
     return tex
 end
 
--- Broken-equipment overlay texture (registered by name during item
--- load; see Lua/API/Items). Cached once resolved.
-local _brokenTex = nil
-local function brokenOverlayTex()
-    if _brokenTex then return _brokenTex end
-    local h = engine.getTextureHandle("broken_equipment")
-    if h and h >= 0 then _brokenTex = h end
-    return _brokenTex
-end
-
 -- Overlay broken_equipment.png over an item icon at (x,y,w,h) when the
 -- item is broken (condition 0). z should sit just above the icon. The
 -- overlay sprite is tracked in `track` so it tears down with the panel.
+-- Cache + draw live in scripts.ui.broken_overlay (shared with the cargo
+-- and item-container contents panels).
 local function addBrokenOverlay(it, name, x, y, w, h, z, track)
-    if not (it and it.condition and it.condition <= 0) then return end
-    local bt = brokenOverlayTex()
-    if not bt then return end
-    local oid = UI.newSprite(name, w, h, bt, 1.0, 1.0, 1.0, 1.0,
-                             unitInfoV2.page)
-    UI.addToPage(unitInfoV2.page, oid, x, y)
-    UI.setZIndex(oid, z)
-    table.insert(track, { kind = "sprite", id = oid })
+    local oid = brokenOverlay.add(unitInfoV2.page, name,
+                                  it and it.condition, x, y, w, h, z)
+    if oid then table.insert(track, { kind = "sprite", id = oid }) end
 end
 
 -- Place a single content row: stat icon on the left, bright value on
