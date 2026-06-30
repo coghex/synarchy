@@ -192,12 +192,14 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
 
     -- Location overlay (#89): deterministically choose which chunks
     -- host the registered locations, from the just-finalised plates +
-    -- ocean data. Empty (and skipped) when no defs are loaded — the
-    -- common headless-dump path stays byte-identical and zero-cost.
+    -- ocean + lake/river data (locations keep clear of water, #414).
+    -- Empty (and skipped) when no defs are loaded — the common
+    -- headless-dump path stays byte-identical and zero-cost.
     locDefs ← allLocations <$> readIORef (locationDefsRef env)
     let params = params0
             { wgpLocationOverlay =
-                computeLocationOverlay seed worldSize plates oceanMap oceanDist locDefs
+                computeLocationOverlay seed worldSize plates oceanMap oceanDist
+                    (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
             }
     _ ← evaluate (force (wgpLocationOverlay params))
 

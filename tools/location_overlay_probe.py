@@ -13,7 +13,8 @@ This drives the full integration headless and checks #89 end to end:
      somewhere (via listPlacedLocations).
   2. Same seed -> same overlay (two independent generations match).
   3. Suitability respects anchor tags: every ruin_small (anchor [flat])
-     sits on a land chunk, never an ocean one.
+     sits on a land chunk, never an ocean one, and its footprint is clear
+     of lakes / rivers / ocean (#414 — no carving a room next to water).
   4. Lazy stamping: loading a ruin's chunk materializes its geometry
      (engine chunk-load dispatch -> stamper -> the #88 builder).
   5. The overlay survives save -> quit -> fresh restart -> load; checked
@@ -147,6 +148,16 @@ def is_ocean(port: int, gx: int, gy: int) -> bool:
     return r.strip('"') == "ocean"
 
 
+def footprint_water(port: int, gx: int, gy: int, r: int = 3) -> str:
+    """Scan the room footprint + margin around (gx,gy) for any fluid tile
+    (lake/river/ocean/lava). Returns 'x,y,type' for the first wet tile, or
+    'dry'. One server-side call; the region stays inside the ruin's chunk."""
+    lua = (f"return (function() for y={gy - r},{gy + r} do for x={gx - r},{gx + r} do "
+           f"local f = world.getFluidAt(x, y); if f then return x..','..y..','..f end "
+           f"end end return 'dry' end)()")
+    return send(port, lua).strip('"')
+
+
 def has_floor(port: int, gx: int, gy: int, page: str | None = None) -> bool:
     """True if a 'floor' structure piece exists at (gx,gy) on the given page
     (or the active world) — i.e. room_small has stamped its room there."""
@@ -183,11 +194,13 @@ def wait_floor(port: int, gx: int, gy: int, page: str | None = None, tries: int 
     return False
 
 
-# A dense location def (no anchor, no spacing, unbounded count) places a
-# location on EVERY land chunk — so the centre chunk (0,0), land for our
-# seed, is guaranteed one. (0,0) is only ever loaded synchronously (Init /
-# Save regenerate it directly and exclude it from the chunk-load queue), so
-# a floor there can only come from the synchronous-centre stamp hooks.
+# A dense location def places a location on EVERY land chunk — so the centre
+# chunk (0,0), land for our seed, is guaranteed one. (0,0) is only ever loaded
+# synchronously (Init / Save regenerate it directly and exclude it from the
+# chunk-load queue), so a floor there can only come from the synchronous-centre
+# stamp hooks. The `waterside` anchor opts out of the #414 dry-ground filter
+# (without any terrain constraint), so (0,0) is covered even when it sits near
+# water — what we need to exercise the centre-chunk hooks regardless of seed.
 DENSE_YAML = "/tmp/loc_overlay_probe_dense.yaml"
 DENSE_BODY = (
     "locations:\n"
@@ -195,7 +208,7 @@ DENSE_BODY = (
     "    label: Small Ruin\n"
     "    type: ruin\n"
     "    builder: room_small\n"
-    "    anchor: []\n"
+    "    anchor: [waterside]\n"
     "    max_count: 100000\n"
     "    min_spacing: 1\n"
     "    contents: []\n"
@@ -280,14 +293,22 @@ def main() -> int:
         # geometry (engine dispatch -> stamper -> #88 builder). Doubles as
         # the on-land / anchor check.
         ocean_hits = []
+        wet = []
         for e in ruins:
             load_chunk(args.port, e["cx"], e["cy"])
             if is_ocean(args.port, e["gx"], e["gy"]):
                 ocean_hits.append(e)
+            w = footprint_water(args.port, e["gx"], e["gy"])
+            if w != "dry":
+                wet.append((e["cx"], e["cy"], w))
         if ruins and not ocean_hits:
             print(f"PASS: all {len(ruins)} ruin(s) on land (anchor [flat] respected)")
         elif ocean_hits:
             failures.append(f"{len(ocean_hits)} ruin(s) placed on ocean tiles")
+        if ruins and not wet:
+            print(f"PASS: all {len(ruins)} ruin footprint(s) clear of water (#414)")
+        elif wet:
+            failures.append(f"water in/near {len(wet)} ruin footprint(s): {wet[:3]}")
         n = wait_stamped(args.port, ruins)
         if ruins and n == len(ruins):
             print(f"PASS: lazy stamping materialized all {n} ruin(s) as their chunks loaded")
