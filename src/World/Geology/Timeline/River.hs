@@ -223,7 +223,6 @@ evolveExistingRiver seed ageIdx periodIdx worldSize pf tbs =
                     , rpMouthRegion  = GeoCoord bx by
                     , rpSegments     = tribSegs
                     , rpFlowRate     = rsFlowRate branchSeg * 0.4
-                    , rpMeanderSeed  = fromIntegral (hashGeo seed fidInt (925 + ageIdx))
                     }
 
                 childPf = PersistentFeature

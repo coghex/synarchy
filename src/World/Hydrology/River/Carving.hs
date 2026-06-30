@@ -8,7 +8,6 @@ module World.Hydrology.River.Carving
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Geology.Hash (wrappedDeltaUV)
@@ -33,10 +32,7 @@ import World.Geology.Hash
 applyRiverCarve ∷ RiverParams → Int → Int → Int → Int → GeoModification
 -- DEBUG STEP 1: carving only, no delta deposit
 applyRiverCarve river worldSize gx gy baseElev =
-    let mSeed = rpMeanderSeed river
-        bestCarve = findDeepestCarve worldSize gx gy mSeed baseElev
-                                     (rpSegments river)
-    in bestCarve
+    findDeepestCarve worldSize gx gy baseElev (rpSegments river)
 
 -- | Walk the segment list with an explicit recursive loop.
 --   This avoids the foldl' closure overhead and lets GHC
@@ -45,9 +41,9 @@ applyRiverCarve river worldSize gx gy baseElev =
 --   Early-out: skip segments whose bounding box (padded by
 --   valley width) doesn't contain the query point.
 {-# INLINE findDeepestCarve #-}
-findDeepestCarve ∷ Int → Int → Int → Word64 → Int
+findDeepestCarve ∷ Int → Int → Int → Int
                  → V.Vector RiverSegment → GeoModification
-findDeepestCarve worldSize gx gy mSeed baseElev segs = go noModification 0
+findDeepestCarve worldSize gx gy baseElev segs = go noModification 0
   where
     !len = V.length segs
     go !acc !i
@@ -65,7 +61,7 @@ findDeepestCarve worldSize gx gy mSeed baseElev segs = go noModification 0
         = go acc (i + 1)
         | otherwise
         = let seg = V.unsafeIndex segs i
-              carve = carveFromSegment worldSize gx gy mSeed seg baseElev
+              carve = carveFromSegment worldSize gx gy seg baseElev
           in go (pickDeepest acc carve) (i + 1)
 
 -- * Target-Based Segment Carving (sloped banks)
@@ -92,8 +88,8 @@ findDeepestCarve worldSize gx gy mSeed baseElev segs = go noModification 0
 --
 --   refSurface = lerp(rsStartElev, rsEndElev, clampedT) and
 --   channelFloor = max(seaLevel − 1, floor(refSurface − rsDepth)).
-carveFromSegment ∷ Int → Int → Int → Word64 → RiverSegment → Int → GeoModification
-carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
+carveFromSegment ∷ Int → Int → Int → RiverSegment → Int → GeoModification
+carveFromSegment worldSize gx gy seg baseElev =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
 

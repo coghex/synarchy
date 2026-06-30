@@ -121,7 +121,6 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
             , rpMouthRegion  = GeoCoord endX endY
             , rpSegments     = segments
             , rpFlowRate     = 0.4
-            , rpMeanderSeed  = fromIntegral (hashGeo seed fidInt 975)
             }
 
         childPf = PersistentFeature

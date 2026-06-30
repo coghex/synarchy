@@ -763,9 +763,12 @@ injurySpeedMult inst =
                    || p == "l_foot" || p == "r_foot"
                    || p == "l_fore_leg" || p == "r_fore_leg"
                    || p == "l_hind_leg" || p == "r_hind_leg"
-        legSev = sum [ woundSeverity w
+        -- EFFECTIVE severity (heal eases it, necrosis floors it) so a
+        -- limping unit regains speed as its leg wound mends, in step
+        -- with the bleed/pain/anim consumers that share the same helper.
+        legSev = sum [ woundEffSeverity w
                      | w ← uiWounds inst, isLegPart (woundPart w) ]
-        torsoSev = sum [ woundSeverity w
+        torsoSev = sum [ woundEffSeverity w
                        | w ← uiWounds inst, woundPart w == "torso" ]
         bodyMass = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
         maxBlood = bodyMass * 0.075

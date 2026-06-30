@@ -45,7 +45,8 @@ import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Engine.Core.Log (logDebug, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
-                  , UnitManager(..), BodyPart(..), Wound(..), Scar(..))
+                  , UnitManager(..), BodyPart(..), Wound(..), woundEffSeverity
+                  , Scar(..))
 import Unit.Command.Types (UnitCommand(..))
 import qualified System.Random as Random
 import World.State.Types (WorldManager(..), WorldState(..))
@@ -382,7 +383,7 @@ bleedRateFor def inst =
     let parts    = HM.fromList [(bpId p, p) | p ← udBodyParts def]
         con      = HM.lookupDefault 1.0 "constitution" (uiStats inst)
         bleedCon = max 0.5 (min 2.0 con)
-    in sum [ let effSev = woundSeverity w * (1 - woundHeal w)
+    in sum [ let effSev = woundEffSeverity w
              in effSev * effSev
                 * kindBleedFactor (woundKind w)
                 * maybe 1.0 bpBleedFactor (HM.lookup (woundPart w) parts)

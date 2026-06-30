@@ -582,12 +582,6 @@ computeOceanDistance totalSamples gridW landVec maxDist = runST $ do
 
     VU.unsafeFreeze distM
 
-foldlM ∷ Monad m ⇒ (a → b → m a) → a → [b] → m a
-foldlM _ acc [] = return acc
-foldlM f acc (x:xs) = do
-    acc' ← f acc x
-    foldlM f acc' xs
-
 -- * Flow Simulation
 
 simulateHydrology ∷ Word64 → Int → Int → ElevGrid → ClimateState → FlowResult

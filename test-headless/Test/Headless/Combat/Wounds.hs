@@ -91,7 +91,9 @@ tick1 gt dt w =
     in head (uiWounds inst')
 
 spec ∷ Spec
-spec = describe "Combat.Wounds infection" $ do
+spec = do
+  effSeveritySpec
+  describe "Combat.Wounds infection" $ do
 
     it "a dirty open wound accrues infection after the grace period" $ do
         -- gt 100 s is past the 60 s grace; a big dt makes the growth clear.
@@ -154,3 +156,25 @@ spec = describe "Combat.Wounds infection" $ do
                                         Nothing (Random.mkStdGen 1) (withCore c)
                      in woundInfection (head (uiWounds i'))
         grow 41.0 `shouldSatisfy` (< grow 37.0)
+
+-- The single source of truth every consumer (bleed display, medic
+-- targeting, injured-anim, pain, movement, attack-gate) routes through.
+-- Mirrors the per-tick `effSev` in tickOneUnit: max (sev×(1−heal)) nec.
+effSeveritySpec ∷ Spec
+effSeveritySpec = describe "Wound.woundEffSeverity" $ do
+
+    it "a fresh wound's effective severity equals its inflicted severity" $
+        woundEffSeverity (mkWound "slash" 0.5 0.0 0.0 False) `shouldBe` 0.5
+
+    it "healing eases effective severity (sev × (1 − heal))" $
+        -- 0.8 inflicted, half-healed → 0.4.
+        woundEffSeverity (mkWound "slash" 0.8 0.5 0.0 False) `shouldBe` 0.4
+
+    it "necrosis is a permanent floor below which healing can't drop it" $
+        -- 0.5 inflicted healed to 0.9 → 0.05 by heal, but 0.3 necrosis floors it.
+        woundEffSeverity ((mkWound "slash" 0.5 0.9 0.0 False)
+                            { woundNecrosis = 0.3 }) `shouldBe` 0.3
+
+    it "a festering wound (heal reversed below 0) climbs above the inflicted value" $
+        -- heal −0.5 → sev × 1.5 = 0.75 > the inflicted 0.5.
+        woundEffSeverity (mkWound "slash" 0.5 (-0.5) 0.0 False) `shouldBe` 0.75

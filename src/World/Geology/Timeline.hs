@@ -21,7 +21,7 @@ import World.Hydrology.Types (RiverSegment(..))
 import World.Fluid.River (fixupSegmentContinuity)
 import World.Generate.Timeline.Fast (applyTimelineFastFrom)
 import World.Geology.Types
-import World.Geology.Timeline.Types (TimelineParams(..))
+import World.Geology.Timeline.Types (TimelineParams(..), isRiverCarveEvent)
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
@@ -154,7 +154,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         -- This is cached on GeoTimeline so applyTimeline/Fast don't
         -- recompute it per-tile (was 35% of CPU in profiling).
         riverExploded = V.concat
-            [ V.filter (\(evt, _) → isRiverCarveEvtCached evt)
+            [ V.filter (\(evt, _) → isRiverCarveEvent evt)
                        (gpExplodedEvents p)
             | p ← periods
             ]
@@ -399,13 +399,6 @@ stitchWorldTerrain worldSize cache =
                     ∧ gyOff ≥ 0 ∧ gyOff < worldTiles) $
                     VUM.write v wIdx (interior VU.! i)
         pure v
-
-isRiverCarveEvtCached ∷ GeoEvent → Bool
-isRiverCarveEvtCached (HydroEvent (RiverFeature _)) = True
-isRiverCarveEvtCached (HydroEvent (GlacierFeature _)) = True
-isRiverCarveEvtCached (RiverSegmentEvent _) = True
-isRiverCarveEvtCached (RiverDeltaEvent _) = True
-isRiverCarveEvtCached _ = False
 
 -- * Primordial Bombardment
 
