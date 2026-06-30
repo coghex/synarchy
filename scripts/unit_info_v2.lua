@@ -1488,16 +1488,21 @@ local function unitConditions(uid)
         end
     end
 
-    -- Bleeding: an open (cutting) wound that is actually seeping — not
-    -- merely severe. A wound that has clotted or been dressed shut isn't
-    -- losing blood even if its severity is still high, so gate on the
-    -- live seep fraction (1 − clot) × bandage, not severity alone.
+    -- Bleeding: an open (cutting) wound that is actually seeping. Two
+    -- gates, matching what bleedRateFor actually squares for live blood
+    -- loss: (1) EFFECTIVE severity — max(acute trauma, necrosis floor) —
+    -- so an open necrotic wound with little acute trauma left still
+    -- counts; (2) the live seep fraction (1 − clot) × bandage, so a
+    -- clotted or dressed-shut wound doesn't, however severe. Together
+    -- they avoid both the closed-wound false positive and the necrotic-
+    -- wound false negative.
     local ws = unit.getWounds(uid)
     if type(ws) == "table" then
         for _, w in ipairs(ws) do
+            local effSev = math.max(w.severity or 0, w.necrosis or 0)
             local seep = (1 - (w.clot or 0)) * (w.bandage or 1)
             if (w.kind == "slash" or w.kind == "stab")
-               and (w.severity or 0) >= 0.2 and seep > 0.02 then
+               and effSev >= 0.2 and seep > 0.02 then
                 out[#out + 1] = { name = "Bleeding", icon = "blood",
                     hint = "Losing blood from open wounds.\n"
                         .. "Bleeds out at 0 blood; revives once it recovers." }
