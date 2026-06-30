@@ -26,6 +26,10 @@ This drives the full integration headless and checks #89 end to end:
   7. The SYNCHRONOUS centre chunk (0,0) — which Init/Save regenerate
      directly and exclude from the chunk-load queue — also stamps, both
      on first generation (Init hook) and on first load (Save hook).
+  8. Multiworld: a location on a HIDDEN, non-active page still stamps
+     (page-targeted terrain reads, no active-page gate) — checked with a
+     locationless arena as the active world so the hidden page's stamp is
+     observable.
 
 The location stamper is auto-loaded at boot by scripts/init.lua, exactly
 as in the real game, so this only registers the location defs by hand
@@ -196,14 +200,17 @@ DENSE_BODY = (
 )
 
 
-def has_loc_on(port: int, cx: int, cy: int, tries: int = 20) -> bool:
-    """Whether the active overlay places a location on chunk (cx,cy).
+def has_loc_on(port: int, cx: int, cy: int, page: str | None = None, tries: int = 20) -> bool:
+    """Whether the overlay places a location on chunk (cx,cy). With `page`
+    it reads that page's overlay (so a hidden, non-active world works);
+    otherwise the active world.
 
-    Polls until the overlay is readable (the world is active), so it does
-    not race world.show. The server-side scan returns just a flag, never
-    the (huge, dense) full list.
+    Polls until the overlay is readable (genParams written / world active),
+    so it does not race init or world.show. The server-side scan returns
+    just a flag, never the (huge, dense) full list.
     """
-    lua = (f"local t = world.listPlacedLocations(); "
+    arg = f"'{page}'" if page else ""
+    lua = (f"local t = world.listPlacedLocations({arg}); "
            f"for _, e in ipairs(t) do if e.cx == {cx} and e.cy == {cy} then return 'yes' end end; "
            f"return (#t > 0) and 'no' or 'empty'")
     for _ in range(tries):
@@ -392,6 +399,49 @@ def main() -> int:
                 failures.append("saved-camera centre chunk (0,0) NOT present on first load (Save hook)")
         finally:
             shutdown(args.port, proc)
+
+    # ---- Phase 5: a location on a HIDDEN, non-active page still stamps
+    #      (multiworld). A flat, locationless ARENA is the active world, so a
+    #      separately generated page's centre chunk loads while hidden — and
+    #      a floor at (8,8) can then only come from that hidden page. With the
+    #      old active-page gate it would be skipped forever; page-targeted
+    #      terrain reads let it stamp against its own page regardless. ----
+    proc = boot(args.port)
+    try:
+        send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+        send(args.port, "world.initArena('arena'); world.initArenaDone('arena'); world.show('arena'); return 'ok'")
+        arena_ok = False
+        for _ in range(40):
+            r = send(args.port, "local i=world.getChunkInfo(0,0); return i and i.loaded and 'y' or 'n'").strip('"')
+            if r == "y":
+                arena_ok = True
+                break
+            time.sleep(0.25)
+        if not arena_ok:
+            failures.append("phase 5: arena never became ready")
+        else:
+            # Generate a second world but DO NOT show it — arena stays active.
+            send(args.port, f"world.init('sw', {args.seed}, {args.size}, 3); return 'ok'")
+            send(args.port, "return world.waitForInit(240)", timeout=250)
+            active = "?"
+            for _ in range(10):
+                active = send(args.port, "return world.getActiveWorldId()").strip('"')
+                if active == "arena":
+                    break
+                time.sleep(0.3)
+            if active != "arena":
+                failures.append(f"phase 5: expected 'arena' active, got '{active}'")
+            elif not has_loc_on(args.port, 0, 0, page="sw"):
+                failures.append("phase 5: hidden world 'sw' has no location on (0,0)")
+            elif wait_floor(args.port, 8, 8):
+                swz = send(args.port, "return world.getTerrainAt(8,8,'sw')").split("\t")[0].strip()
+                fz = send(args.port, "return structure.floorZAt(8,8)").strip()
+                print(f"PASS: hidden non-active page stamped its centre while '{active}' active "
+                      f"(floor z={fz} matches sw terrain {swz}, not the arena's 0)")
+            else:
+                failures.append("hidden non-active page did NOT stamp its centre (multiworld)")
+    finally:
+        shutdown(args.port, proc)
 
     print("-" * 56)
     if failures:

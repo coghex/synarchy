@@ -16,6 +16,11 @@
 -- which replays on chunk reload. So a chunk that loads again already carries
 -- its geometry; we detect that with structure.hasAt and skip — never
 -- stamping twice, and never clobbering a location the player has edited.
+--
+-- Multiworld: the builders read terrain with an explicit page id
+-- (locations.stamp -> the #88 builder -> world.getTerrainAt(gx,gy,pageId)),
+-- so a location materializes on its own page even when that page is hidden /
+-- not the active one — there is no active-page gate here.
 
 local stamper = {}
 
@@ -24,9 +29,6 @@ local locations = require("scripts.locations")
 -- Fired by the engine for a just-loaded chunk that hosts a placed location.
 function stamper.onStampLocation(pageId, locId, gx, gy)
     gx, gy = math.floor(gx), math.floor(gy)
-    -- The #88 builders read the ACTIVE world's terrain for the floor
-    -- height, so only stamp the world that is currently active.
-    if pageId ~= world.getActiveWorldId() then return end
     -- Already materialized (stamped earlier this session, or its edits
     -- replayed on reload)? Then this is a repeat load — nothing to do.
     if structure.hasAt(gx, gy, "floor") then return end

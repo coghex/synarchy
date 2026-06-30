@@ -65,19 +65,30 @@ worldStateByPage env pidText = do
     mgr ← readIORef (worldManagerRef env)
     pure (lookup (WorldPageId pidText) (wmWorlds mgr))
 
--- | world.getTerrainAt(gx, gy) → surfaceZ, terrainSurfaceZ or nil
---   Returns the surface elevation and terrain-only surface elevation.
+-- | world.getTerrainAt(gx, gy [, pageId]) → surfaceZ, terrainSurfaceZ or nil
+--   Returns the surface elevation and terrain-only surface elevation. With
+--   a page-id string argument it reads that page's tiles instead of the
+--   active world's — so the location stamper can author geometry against a
+--   specific (possibly hidden, non-active) page and still read its real
+--   terrain height (#89 multiworld).
 worldGetTerrainAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetTerrainAtFn env = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
+    mPage ← Lua.tostring 3
     case (mGx, mGy) of
         (Just gx', Just gy') → do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ getWorldTileData env
+            mTd ← Lua.liftIO $ case mPage of
+                Just pidBS → do
+                    mWs ← worldStateByPage env (TE.decodeUtf8 pidBS)
+                    case mWs of
+                        Just ws → Just <$> readIORef (wsTilesRef ws)
+                        Nothing → pure Nothing
+                Nothing → getWorldTileData env
             case mTd >>= lookupChunk coord of
                 Nothing → do
                     Lua.pushnil
