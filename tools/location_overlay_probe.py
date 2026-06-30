@@ -7,17 +7,22 @@ produces a sparse chunk -> location-id overlay that is carried in the
 world's gen params and serialized into the save. `world.listPlaced-
 Locations()` (Lua `locations.listPlaced()`) reads that overlay back.
 
-This drives the full integration headless and checks the four
-acceptance criteria of #89:
+This drives the full integration headless and checks #89 end to end:
 
   1. Generating a world with `ruin_small` defined produces >= 1 ruin
      somewhere (via listPlacedLocations).
   2. Same seed -> same overlay (two independent generations match).
-  3. Overlay survives save -> quit -> fresh restart -> load, WITHOUT the
-     reload engine re-loading the location YAML (so the placements can
-     only have come from the save, never a recompute).
-  4. Suitability respects anchor tags: every ruin_small (anchor [flat])
+  3. Suitability respects anchor tags: every ruin_small (anchor [flat])
      sits on a land chunk, never an ocean one.
+  4. Lazy stamping: loading a ruin's chunk materializes its geometry
+     (engine chunk-load dispatch -> stamper -> the #88 builder).
+  5. The overlay survives save -> quit -> fresh restart -> load; checked
+     before any location YAML is reloaded, so it can only have come from
+     the save (a recompute is impossible with no defs registered).
+  6. No location is lost to save timing: the world is saved with its
+     ruins still UN-STAMPED (right after gen, before their far chunks
+     load); after a fresh restart + load, visiting each ruin's chunk
+     materializes it from the persisted overlay anyway.
 
 Usage:
   python3 tools/location_overlay_probe.py
@@ -178,12 +183,13 @@ def main() -> int:
 
     failures: list[str] = []
 
-    # ---- Phase 1: placement + determinism + anchor + stamping ----
+    # ---- Phase 1: placement, determinism, lazy stamping; then save the
+    #      world with its locations still UN-STAMPED (saved right after gen,
+    #      before any far ruin chunk has loaded) so phase 2 can prove they
+    #      are not lost. ----
     proc = boot(args.port)
     try:
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
-        # Load the stamper so the engine's onWorldReady broadcast drives it
-        # (the loading screen that normally loads it is GUI-only).
         send(args.port, "engine.loadScript('scripts/location_stamper.lua', 0.1); return 'ok'")
 
         gen_world(args.port, "wa", args.seed, args.size)
@@ -198,6 +204,32 @@ def main() -> int:
         else:
             failures.append("no ruin_small placed in world A")
 
+        # The ruins sit on far chunks not loaded at gen, so none are stamped
+        # yet. Confirm, then SAVE in that un-stamped state — the race the
+        # reviewer flagged (saved before stamping drains).
+        unstamped = sum(1 for e in ruins if not has_floor(args.port, e["gx"], e["gy"]))
+        print(f"  {unstamped}/{len(ruins)} ruin(s) un-stamped at save time")
+        send(args.port, "engine.saveWorld('wa', 'loc_overlay_probe'); return 'saved'")
+        time.sleep(1.0)
+
+        # In-session lazy stamping: loading a ruin's chunk materializes its
+        # geometry (engine dispatch -> stamper -> #88 builder). Doubles as
+        # the on-land / anchor check.
+        ocean_hits = []
+        for e in ruins:
+            load_chunk(args.port, e["cx"], e["cy"])
+            if is_ocean(args.port, e["gx"], e["gy"]):
+                ocean_hits.append(e)
+        if ruins and not ocean_hits:
+            print(f"PASS: all {len(ruins)} ruin(s) on land (anchor [flat] respected)")
+        elif ocean_hits:
+            failures.append(f"{len(ocean_hits)} ruin(s) placed on ocean tiles")
+        n = wait_stamped(args.port, ruins)
+        if ruins and n == len(ruins):
+            print(f"PASS: lazy stamping materialized all {n} ruin(s) as their chunks loaded")
+        else:
+            failures.append(f"only {n}/{len(ruins)} ruin(s) stamped in-session")
+
         # Determinism: a second independent generation with the same seed.
         gen_world(args.port, "wb", args.seed, args.size)
         lb = placed_ready(args.port)
@@ -205,67 +237,42 @@ def main() -> int:
             print("PASS: same seed -> identical overlay (A == B)")
         else:
             failures.append(f"overlay not deterministic: A={key(la)} B={key(lb)}")
-
-        # Anchor: flat-anchored ruins must never sit on an ocean tile.
-        # Load each ruin's own chunk on demand (cheaper than the whole
-        # world) and read the fluid at its anchor tile.
-        send(args.port, "world.show('wa'); return 'ok'")
-        ocean_hits = []
-        for e in ruins:
-            cx, cy = e["cx"], e["cy"]
-            send(args.port, f"return world.loadChunksInRegion({cx},{cy},{cx},{cy})")
-            send(args.port, "return world.waitForChunks(30)", timeout=35)
-            if is_ocean(args.port, e["gx"], e["gy"]):
-                ocean_hits.append(e)
-        if ruins and not ocean_hits:
-            print(f"PASS: all {len(ruins)} ruin(s) on land (anchor [flat] respected)")
-        elif ocean_hits:
-            failures.append(f"{len(ocean_hits)} ruin(s) placed on ocean tiles")
-
-        # Stamping: the location_stamper materializes each ruin's geometry
-        # (the #88 room_small builder) into the world as its chunk loads.
-        n = wait_stamped(args.port, ruins)
-        if ruins and n == len(ruins):
-            print(f"PASS: all {n} ruin(s) stamped into the world (geometry present)")
-        else:
-            failures.append(f"only {n}/{len(ruins)} ruin(s) stamped into the world")
-
-        # Save world A for the reload phase.
-        send(args.port, "engine.saveWorld('wa', 'loc_overlay_probe'); return 'saved'")
-        time.sleep(1.0)
     finally:
         shutdown(args.port, proc)
 
-    # ---- Phase 2: save survives a fresh restart + load ----
-    # Deliberately load NEITHER the location YAML NOR the stamper on this
-    # engine: if the placements AND their geometry still appear, they came
-    # from the save (overlay in gen params + stamped edits), not a recompute
-    # or a re-stamp.
+    # ---- Phase 2: a world saved with UN-STAMPED locations still
+    #      materializes them after a fresh restart + load (the reviewer's
+    #      option 2: chunk-load after a save consults the persisted overlay
+    #      and stamps any not-yet-materialized entry). ----
     proc = boot(args.port)
     try:
         send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
-        # The overlay rides gen params, restored immediately on load — no
-        # need to wait for chunks. A short settle covers the load queue.
         time.sleep(6.0)
         send(args.port, "world.show('main_world'); return 'ok'")
         time.sleep(1.0)
+
+        # Overlay persisted: no location YAML loaded yet, so this CANNOT be a
+        # recompute (computeLocationOverlay short-circuits with no defs) — it
+        # came from the save.
         lc = placed_ready(args.port)
         if key(lc) == key(la) and lc:
             print(f"PASS: overlay survived save/load ({len(lc)} placements, no YAML reload)")
         else:
             failures.append(f"overlay lost/changed across save-load: before={key(la)} after={key(lc)}")
 
-        # Stamped geometry must replay from the saved per-chunk edits (with
-        # no stamper loaded). Load each ruin's chunk so its edits replay,
-        # then confirm the floor is back.
+        # Load the defs + stamper as the game does at boot, then visit each
+        # ruin's chunk. Each must materialize from the persisted overlay even
+        # though the save contained no stamped geometry for it.
+        send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
+        send(args.port, "engine.loadScript('scripts/location_stamper.lua', 0.1); return 'ok'")
         ruins_after = [e for e in lc if e["id"] == "ruin_small"]
         for e in ruins_after:
             load_chunk(args.port, e["cx"], e["cy"])
-        m = count_stamped(args.port, ruins_after)
+        m = wait_stamped(args.port, ruins_after)
         if ruins_after and m == len(ruins_after):
-            print(f"PASS: stamped geometry replayed after load ({m} ruin(s), no re-stamp)")
+            print(f"PASS: all {m} ruin(s) materialized after load despite being saved un-stamped")
         else:
-            failures.append(f"geometry lost across save/load: {m}/{len(ruins_after)} ruins have floors")
+            failures.append(f"only {m}/{len(ruins_after)} ruin(s) materialized after load")
     finally:
         shutdown(args.port, proc)
 
