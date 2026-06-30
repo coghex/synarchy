@@ -119,7 +119,9 @@ isSuperVolcano pf = case pfFeature pf of
 getRiverParamsFromPf ∷ PersistentFeature → RiverParams
 getRiverParamsFromPf pf = case pfFeature pf of
     HydroShape (RiverFeature r) → r
-    _ → error "getRiverParamsFromPf: not a river"
+    other → error $ "getRiverParamsFromPf: not a river (featureId=" ⧺ show (pfId pf)
+                  ⧺ " formationPeriod=" ⧺ show (pfFormationPeriod pf)
+                  ⧺ " actualShape=" ⧺ featureShapeTag other ⧺ ")"
 
 isSourceNew ∷ Int → [PersistentFeature] → (Int, Int, Int, Float) → Bool
 isSourceNew worldSize existingRivers (sx, sy, _, _) =

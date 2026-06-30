@@ -172,7 +172,9 @@ twoNearestPlates seed worldSize plates gx gy =
                 first  = (p, d0)
                 second = (p, maxDist)
             in go first second False ps
-        _ → error "no plates"
+        _ → error $ "twoNearestPlates: no plates (seed=" ⧺ show seed
+                  ⧺ " worldSize=" ⧺ show worldSize
+                  ⧺ " tile=(" ⧺ show gx ⧺ "," ⧺ show gy ⧺ "))"
 
 -- * Boundary Classification
 
