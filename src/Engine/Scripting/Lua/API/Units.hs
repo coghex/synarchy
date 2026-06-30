@@ -1284,15 +1284,22 @@ unitGetWoundsFn env = do
                         Lua.setfield (-2) "vital"
                         Lua.pushstring (TE.encodeUtf8 (woundKind w))
                         Lua.setfield (-2) "kind"
-                        -- `severity` is the EFFECTIVE severity (inflicted ×
-                        -- (1 − heal), floored by necrosis) — so every
-                        -- consumer (pain, impairment, naming, the injured-
-                        -- anim threshold) automatically eases as the wound
-                        -- heals and stays in lockstep with the engine side.
+                        -- `severity` is the ACUTE/mechanical effective
+                        -- severity (inflicted × (1 − heal)) — the trauma
+                        -- itself, easing as the wound mends. It deliberately
+                        -- does NOT fold in the necrosis floor: rot is a
+                        -- separate failure mode (gangrene/sepsis, with its
+                        -- own death path) reported separately as `necrosis`,
+                        -- so the acute organ-failure meters (suffocation,
+                        -- neuro, shock, visceral) read this without a rotting
+                        -- wound spuriously driving an acute-trauma meter. A
+                        -- Lua consumer that wants the engine's full effective
+                        -- severity reconstructs it as max(severity, necrosis)
+                        -- (e.g. the injured-anim threshold in unit_ai.lua).
                         -- `severityInflicted` is the original, `heal` the
                         -- 0..1 healing progress.
                         Lua.pushnumber (Lua.Number (realToFrac
-                            (woundEffSeverity w)))
+                            (woundSeverity w * (1 - woundHeal w))))
                         Lua.setfield (-2) "severity"
                         Lua.pushnumber (Lua.Number
                             (realToFrac (woundSeverity w)))

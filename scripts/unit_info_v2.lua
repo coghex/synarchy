@@ -1490,9 +1490,8 @@ local function unitConditions(uid)
 
     -- Bleeding: an open (cutting) wound that is actually seeping — not
     -- merely severe. A wound that has clotted or been dressed shut isn't
-    -- losing blood, and a necrotic-but-closed cut (whose effective
-    -- severity stays high via the necrosis floor) isn't either, so gate
-    -- on the live seep fraction (1 − clot) × bandage, not severity alone.
+    -- losing blood even if its severity is still high, so gate on the
+    -- live seep fraction (1 − clot) × bandage, not severity alone.
     local ws = unit.getWounds(uid)
     if type(ws) == "table" then
         for _, w in ipairs(ws) do

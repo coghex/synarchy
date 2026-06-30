@@ -1110,17 +1110,21 @@ local COMBAT_ANIM_SUFFIX = {
     },
 }
 
--- "Injured" for animation purposes = cumulative wound severity > 1.0
--- (sum across all active wounds). A single bad slash or several
+-- "Injured" for animation purposes = cumulative EFFECTIVE wound severity
+-- > 1.0 (sum across all active wounds). A single bad slash or several
 -- moderate ones flip the unit to the limp/struggling combat anim;
 -- a couple of light scratches don't. Tunable via INJURED_THRESHOLD.
+-- Reconstruct the engine's effective severity — max(acute, necrosis) —
+-- from the two reported fields so this stays in lockstep with the
+-- engine-side injured-anim flag (Unit.Thread.publishToRender sums
+-- woundEffSeverity); a rotting wound counts even once the cut has closed.
 local INJURED_THRESHOLD = 1.0
 local function isInjured(uid)
     local wounds = unit.getWounds(uid)
     if not wounds then return false end
     local total = 0
     for _, w in ipairs(wounds) do
-        total = total + (w.severity or 0)
+        total = total + math.max(w.severity or 0, w.necrosis or 0)
         if total > INJURED_THRESHOLD then return true end
     end
     return false
