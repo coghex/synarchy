@@ -29,10 +29,13 @@ colorToVec4 ("yellow") = Vec4 1.0 1.0 0 1.0
 colorToVec4 ("cyan") = Vec4 0 1.0 1.0 1.0
 colorToVec4 ("magenta") = Vec4 1.0 0 1.0 1.0
 colorToVec4 ("transparent") = Vec4 0 0 0 0.0
--- A dark translucent overlay (NOT alpha=1 — "opaque" was a misnomer for
--- this 50%-alpha black; renamed per #378). Kept under an honest name so
--- the dark-overlay value stays reachable; no caller used "opaque".
+-- A dark translucent overlay (50%-alpha black). "overlay" is the honest
+-- name (#378). "opaque" is a deprecated alias for the same value — it
+-- was always a misnomer (alpha != 1), but it's kept so any out-of-tree
+-- script still passing it gets the unchanged behaviour rather than
+-- silently falling through to the opaque-black default below.
 colorToVec4 ("overlay") = Vec4 0 0 0 0.5
+colorToVec4 ("opaque")  = Vec4 0 0 0 0.5
 colorToVec4 ("ghost") = Vec4 1.0 1.0 1.0 0.5
 colorToVec4 ("gray") = Vec4 0.5 0.5 0.5 1.0
 colorToVec4 ("orange") = Vec4 1.0 0.65 0 1.0
