@@ -654,23 +654,26 @@ worldClearWorldCursorSelectFn env = do
         _ → pure ()
     return 0
 
--- | world.selectTile(pageId, gx, gy) — atomically mark the column at
---   (gx, gy) as the world's selected tile, using the chunk's surface
---   z. Unlike setWorldCursorSelect (which races with per-tick mouse
---   hover updates), this is direct: a one-shot selection that doesn't
---   touch the cursor position. Used by the right-click → Info context
---   menu to highlight the right-clicked tile after the mouse has
---   already moved into the menu.
+-- | world.selectTile(pageId, gx, gy[, z]) — atomically mark the column
+--   at (gx, gy) as the world's selected tile. With @z@ (the live-picked
+--   z from @world.pickTile@) the exact clicked tile is selected — below
+--   the surface that is NOT the column top (issue #367). Omit @z@ to use
+--   the chunk's surface z (the right-click → Info context-menu path,
+--   which has no live pick). Unlike setWorldCursorSelect (which races
+--   with per-tick mouse hover updates), this is direct: a one-shot
+--   selection that doesn't touch the cursor position.
 worldSelectTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSelectTileFn env = do
     pageIdArg ← Lua.tostring 1
     gxArg     ← Lua.tonumber 2
     gyArg     ← Lua.tonumber 3
+    zArg      ← Lua.tonumber 4
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                mz     = round ⊚ zArg
             Q.writeQueue (worldQueue env) $
-                WorldSelectTileByCoord pageId (round gx) (round gy)
+                WorldSelectTileByCoord pageId (round gx) (round gy) mz
         _ → pure ()
     return 0
 

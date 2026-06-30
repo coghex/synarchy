@@ -817,8 +817,11 @@ function game.onMouseDown(button, x, y)
             -- this hardcoded list later.
             -- Capture the right-clicked tile with a live pick at the click
             -- coords (the cached hover lags a fast move, and once the menu
-            -- opens the cursor moves off the tile anyway) (#123).
-            local gx, gy = world.pickTile(x, y)
+            -- opens the cursor moves off the tile anyway) (#123). The pick
+            -- resolves the tile at the active z-slice, so stash its z too
+            -- and select that exact tile — a right-click on a cliff face /
+            -- below the surface must not snap to the column top (#367).
+            local gx, gy, gz = world.pickTile(x, y)
             if gx and gy then
                 local hud = require("scripts.hud")
                 local contextMenu = require("scripts.ui.context_menu")
@@ -829,7 +832,7 @@ function game.onMouseDown(button, x, y)
                     mx = x * (fbW / ww)
                     my = y * (fbH / wh)
                 end
-                local tileX, tileY = gx, gy
+                local tileX, tileY, tileZ = gx, gy, gz
                 contextMenu.show({
                     { label = "Info",
                       callback = function()
@@ -845,8 +848,10 @@ function game.onMouseDown(button, x, y)
                           -- select API — the cursor's pixel-hover state
                           -- has already moved to the menu, so the
                           -- usual hover+select would pick the wrong
-                          -- tile.
-                          world.selectTile(hud.worldId, tileX, tileY)
+                          -- tile. tileZ is the z captured at right-click
+                          -- time so the selection lands on the clicked
+                          -- tile, not the column surface (#367).
+                          world.selectTile(hud.worldId, tileX, tileY, tileZ)
                           local tileEditor =
                               require("scripts.tile_editor")
                           tileEditor.onTileSelected(tileX, tileY)

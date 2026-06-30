@@ -772,10 +772,13 @@ function hud.onMouseDown(button_num, mx, my)
             -- so a fast move-then-click selected the previously hovered
             -- tile; pickTile resolves the tile under the click NOW and
             -- world.selectTile sets it in one shot (also dropping any
-            -- chunk selection, #135) (#123).
-            local gx, gy = world.pickTile(cx, cy)
+            -- chunk selection, #135) (#123). Pass the picked z so a click
+            -- below the surface selects the clicked tile, not the column
+            -- top (#367) — pickTile resolves the tile at the active
+            -- z-slice, world.selectTile would otherwise snap to surface z.
+            local gx, gy, gz = world.pickTile(cx, cy)
             if gx and gy then
-                world.selectTile(hud.worldId, gx, gy)
+                world.selectTile(hud.worldId, gx, gy, gz)
                 -- Refresh the tile-editor popup at the just-selected
                 -- tile. Gated internally by arenaMode so non-arena worlds
                 -- silently no-op.

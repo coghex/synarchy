@@ -555,7 +555,7 @@ worldGetHoverPosFn env = do
             Lua.pushnil
             return 1
 
--- | world.pickTile(pixX, pixY) → gx, gy or nil
+-- | world.pickTile(pixX, pixY) → gx, gy, z or nil
 --   Synchronous screen-pixel → tile hit-test from the given click
 --   coordinates. Unlike getHoverTile (which reads the cached
 --   worldHoverTile the render thread resolves from the periodically
@@ -565,6 +565,12 @@ worldGetHoverPosFn env = do
 --   placement) where the async hover cache can lag a fast cursor move
 --   off-world and place on a stale tile. Returns nil when the pixel is
 --   off-world / over no solid tile.
+--
+--   The third result @z@ is the elevation of the resolved tile at the
+--   current z-slice — the actual tile under the cursor, which below the
+--   surface is NOT the column top. Pass it to @world.selectTile@ so a
+--   click selects the clicked tile, not the surface (issue #367).
+--   Existing callers that bind only @gx, gy@ are unaffected.
 worldPickTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldPickTileFn env = do
     -- Click coords arrive as Lua numbers (Doubles from GLFW.getCursorPos),
@@ -601,10 +607,11 @@ worldPickTileFn env = do
                         vb = computeViewBounds camera fbW fbH effectiveDepth
                     case pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
                                        worldSize effectiveDepth vb tileData px py of
-                        Just (gx, gy, _, _, _) → do
+                        Just (gx, gy, z, _, _) → do
                             Lua.pushinteger (fromIntegral gx)
                             Lua.pushinteger (fromIntegral gy)
-                            return 2
+                            Lua.pushinteger (fromIntegral z)
+                            return 3
                         Nothing → do
                             Lua.pushnil
                             return 1
