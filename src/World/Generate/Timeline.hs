@@ -18,8 +18,7 @@ import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
 import World.Plate (wrapGlobalU, TectonicPlate, elevationAtGlobal)
 import World.Geology.Types (GeoModification(..))
 import World.Geology.Event (applyGeoEvent)
-import World.Geology.Timeline.Types (GeoEvent(..))
-import World.Hydrology.Types (HydroFeature(..))
+import World.Geology.Timeline.Types (isRiverCarveEvent)
 import World.Geology.Erosion
     (applyErosion, applyErosionLerp4, lookupRegionalErosion
     , erosionCornerLookup)
@@ -457,13 +456,6 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                 pure (elevF, matF)
 
         in (finalElev, finalMat)
-
-    isRiverCarveEvent ∷ GeoEvent → Bool
-    isRiverCarveEvent (HydroEvent (RiverFeature _)) = True
-    isRiverCarveEvent (HydroEvent (GlacierFeature _)) = True
-    isRiverCarveEvent (RiverSegmentEvent _) = True
-    isRiverCarveEvent (RiverDeltaEvent _) = True
-    isRiverCarveEvent _ = False
 
     applyOneEvent ws gx gy (elev, mat) event =
         let hardness = mpHardness (getMaterialProps registry mat)

@@ -536,7 +536,6 @@ buildRiverFromPath seed worldSize gridSpacing riverIdx baseFlow climate path =
                         , rpMouthRegion  = GeoCoord mouthX mouthY
                         , rpSegments     = segments
                         , rpFlowRate     = totalFlow
-                        , rpMeanderSeed  = fromIntegral (hashGeo seed riverIdx 1150)
                         }
 
 -- | Keep every Nth point from the path, always preserving
