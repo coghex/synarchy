@@ -84,7 +84,8 @@ loadMaterialYamlFn env backendState = do
                                                (mdDigSpoil def)
                                                (mdDigBulking def)
                                                (mdDigChunk def)
-                                               (mdDigGems def))
+                                               (mdDigGems def)
+                                               (mdMoveCost def))
                                 r
                             ) reg defs
                     in (reg', ())

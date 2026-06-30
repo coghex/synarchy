@@ -27,6 +27,7 @@ spec = do
                     , "river_penalty: 5.0"
                     , "lake_penalty: 6.0"
                     , "replan_cost_threshold: 7.0"
+                    , "material_replan_margin: 8.0"
                     ]
             decode yaml `shouldBe` Right PathingConfig
                 { pcClimbFactor         = 1.0
@@ -36,6 +37,7 @@ spec = do
                 , pcRiverPenalty        = 5.0
                 , pcLakePenalty         = 6.0
                 , pcReplanCostThreshold = 7.0
+                , pcMaterialReplanMargin = 8.0
                 }
 
     describe "partial document keeps defaults for omitted keys" $
@@ -63,6 +65,7 @@ spec = do
                 , pcRiverPenalty        = -4.0
                 , pcLakePenalty         = -5.0
                 , pcReplanCostThreshold = -6.0
+                , pcMaterialReplanMargin = -7.0
                 } `shouldBe` PathingConfig
                 { pcClimbFactor         = 0.0
                 , pcRampFactor          = 0.0
@@ -71,6 +74,7 @@ spec = do
                 , pcRiverPenalty        = 0.0
                 , pcLakePenalty         = 0.0
                 , pcReplanCostThreshold = 0.0
+                , pcMaterialReplanMargin = 0.0
                 }
 
         it "leaves a valid config unchanged" $

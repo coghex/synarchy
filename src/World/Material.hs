@@ -211,12 +211,18 @@ data MaterialProps = MaterialProps
       -- ^ Does the seeded gem region field (World.Gem) apply while
       --   digging this material? yaml @dig_gems@, default False.
       --   Granite (pegmatite host) is the pilot.
+    , mpMoveCost ∷ !Float
+      -- ^ Surface-traversal cost multiplier for unit pathing (yaml
+      --   @move_cost@, default 1.0 = firm ground). >1.0 slows a unit
+      --   crossing this material AND makes A* prefer firmer routes
+      --   (loose/soft soils — sand, silt, mud — are >1.0; bare rock
+      --   stays 1.0). Read by @Unit.Pathing.Cost@. See issue #312.
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps
 defaultMaterialProps =
     MaterialProps "unknown" 0.5 2.5 0.5 0.4 0.5 0.5 Nothing 1.0 Nothing
-                  False
+                  False 1.0
 
 -- | Find a material's id by its registered yaml name. Linear scan of
 --   the 256-slot registry — called at dig frequency, not per-frame.
