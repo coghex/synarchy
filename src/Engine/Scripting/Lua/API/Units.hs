@@ -1283,12 +1283,14 @@ unitGetWoundsFn env = do
                         Lua.pushstring (TE.encodeUtf8 (woundKind w))
                         Lua.setfield (-2) "kind"
                         -- `severity` is the EFFECTIVE severity (inflicted ×
-                        -- (1 − heal)) — so every consumer (pain, impairment,
-                        -- naming) automatically eases as the wound heals.
+                        -- (1 − heal), floored by necrosis) — so every
+                        -- consumer (pain, impairment, naming, the injured-
+                        -- anim threshold) automatically eases as the wound
+                        -- heals and stays in lockstep with the engine side.
                         -- `severityInflicted` is the original, `heal` the
                         -- 0..1 healing progress.
                         Lua.pushnumber (Lua.Number (realToFrac
-                            (woundSeverity w * (1 - woundHeal w))))
+                            (woundEffSeverity w)))
                         Lua.setfield (-2) "severity"
                         Lua.pushnumber (Lua.Number
                             (realToFrac (woundSeverity w)))
@@ -3751,8 +3753,12 @@ treatBleedingIO env medic patient mOwner = do
                 -- bleeding, so the (1 − clot) and dressing factors must be
                 -- in here too. Without them the medic could rank a high-
                 -- severity but clotted wound above the one actually seeping
-                -- and waste a bandage on it.
-                scoreOf w = (woundSeverity w * woundSeverity w)
+                -- and waste a bandage on it. Severity is the EFFECTIVE
+                -- severity (healing eases it, necrosis floors it) — the
+                -- same source of truth bleedRateFor squares — so a mostly-
+                -- healed wound no longer outranks a fresh seeping one.
+                scoreOf w = let effSev = woundEffSeverity w
+                            in (effSev * effSev)
                           * kindBleedFactor (woundKind w)
                           * maybe 1.0 bpBleedFactor
                                 (HM.lookup (woundPart w) parts)
