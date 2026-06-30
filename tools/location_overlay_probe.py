@@ -26,10 +26,11 @@ This drives the full integration headless and checks #89 end to end:
   7. The SYNCHRONOUS centre chunk (0,0) — which Init/Save regenerate
      directly and exclude from the chunk-load queue — also stamps, both
      on first generation (Init hook) and on first load (Save hook).
-  8. Multiworld: a location on a HIDDEN, non-active page still stamps
-     (page-targeted terrain reads, no active-page gate) — checked with a
-     locationless arena as the active world so the hidden page's stamp is
-     observable.
+  8. Multiworld: a location on a HIDDEN, non-active page still stamps onto
+     its OWN page, even when the active page already has a floor at the same
+     tile (page-targeted writes + reads + idempotency guard). Checked with
+     an arena as the active world that is given a room at (8,8); the hidden
+     page must still stamp there, at its own terrain z, not the arena's.
 
 The location stamper is auto-loaded at boot by scripts/init.lua, exactly
 as in the real game, so this only registers the location defs by hand
@@ -401,12 +402,14 @@ def main() -> int:
         finally:
             shutdown(args.port, proc)
 
-    # ---- Phase 5: a location on a HIDDEN, non-active page still stamps
-    #      (multiworld). A flat, locationless ARENA is the active world, so a
-    #      separately generated page's centre chunk loads while hidden — and
-    #      a floor at (8,8) can then only come from that hidden page. With the
-    #      old active-page gate it would be skipped forever; page-targeted
-    #      terrain reads let it stamp against its own page regardless. ----
+    # ---- Phase 5: a location on a HIDDEN, non-active page still stamps,
+    #      EVEN when the active page already has a floor at the same tile
+    #      (multiworld). The active world is an arena that we deliberately
+    #      give a room at (8,8); a second page is then generated hidden, also
+    #      with a location at (8,8). The page-targeted hasAt guard must not
+    #      let the arena's floor suppress the hidden page's stamp, and the
+    #      write must land on the hidden page at ITS terrain z, not the
+    #      arena's. ----
     proc = boot(args.port)
     try:
         send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
@@ -421,31 +424,41 @@ def main() -> int:
         if not arena_ok:
             failures.append("phase 5: arena never became ready")
         else:
-            # Generate a second world but DO NOT show it — arena stays active.
-            send(args.port, f"world.init('sw', {args.seed}, {args.size}, 3); return 'ok'")
-            send(args.port, "return world.waitForInit(240)", timeout=250)
-            active = "?"
-            for _ in range(10):
-                active = send(args.port, "return world.getActiveWorldId()").strip('"')
-                if active == "arena":
-                    break
-                time.sleep(0.3)
-            if active != "arena":
-                failures.append(f"phase 5: expected 'arena' active, got '{active}'")
-            elif not has_loc_on(args.port, 0, 0, page="sw"):
-                failures.append("phase 5: hidden world 'sw' has no location on (0,0)")
-            elif wait_floor(args.port, 8, 8, page="sw"):
-                # The structure must be on 'sw', NOT the active arena.
-                on_arena = has_floor(args.port, 8, 8, page="arena")
-                swz = send(args.port, "return world.getTerrainAt(8,8,'sw')").split("\t")[0].strip()
-                fz = send(args.port, "return structure.floorZAt(8,8,'sw')").strip()
-                if on_arena:
-                    failures.append("phase 5: structure leaked onto the active arena page")
-                else:
-                    print(f"PASS: hidden non-active page 'sw' stamped its OWN centre while "
-                          f"'{active}' active (floor z={fz}=sw terrain {swz}+1; nothing on arena)")
+            # Put a room on the ACTIVE arena at (8,8) (arena terrain z=0 ->
+            # floor z=1). This is the unrelated geometry that must NOT
+            # suppress the hidden page's stamp at the same tile.
+            send(args.port, "require('scripts.locations').stamp('ruin_small', 8, 8, 'arena'); return 'ok'")
+            if not wait_floor(args.port, 8, 8, page="arena"):
+                failures.append("phase 5 setup: could not place a floor on the active arena")
             else:
-                failures.append("hidden non-active page did NOT stamp its centre (multiworld)")
+                # Generate a second world but DO NOT show it — arena stays active.
+                send(args.port, f"world.init('sw', {args.seed}, {args.size}, 3); return 'ok'")
+                send(args.port, "return world.waitForInit(240)", timeout=250)
+                active = "?"
+                for _ in range(10):
+                    active = send(args.port, "return world.getActiveWorldId()").strip('"')
+                    if active == "arena":
+                        break
+                    time.sleep(0.3)
+                if active != "arena":
+                    failures.append(f"phase 5: expected 'arena' active, got '{active}'")
+                elif not has_loc_on(args.port, 0, 0, page="sw"):
+                    failures.append("phase 5: hidden world 'sw' has no location on (0,0)")
+                elif wait_floor(args.port, 8, 8, page="sw"):
+                    # sw stamped despite arena already having a floor at (8,8).
+                    # Confirm it's sw's own room at sw's terrain z (29), not
+                    # the arena's (1) — proving page-targeted write + guard.
+                    swz = send(args.port, "return world.getTerrainAt(8,8,'sw')").split("\t")[0].strip()
+                    fz_sw = send(args.port, "return structure.floorZAt(8,8,'sw')").strip()
+                    fz_ar = send(args.port, "return structure.floorZAt(8,8,'arena')").strip()
+                    if fz_sw == fz_ar:
+                        failures.append(f"phase 5: sw floor z ({fz_sw}) == arena floor z ({fz_ar}) — pages not isolated")
+                    else:
+                        print(f"PASS: hidden page 'sw' stamped at (8,8) despite the active "
+                              f"'arena' already having a floor there (sw floor z={fz_sw}=sw "
+                              f"terrain {swz}+1; arena floor z={fz_ar})")
+                else:
+                    failures.append("hidden page suppressed by active-world geometry at same tile (multiworld)")
     finally:
         shutdown(args.port, proc)
 

@@ -29,9 +29,12 @@ local locations = require("scripts.locations")
 -- Fired by the engine for a just-loaded chunk that hosts a placed location.
 function stamper.onStampLocation(pageId, locId, gx, gy)
     gx, gy = math.floor(gx), math.floor(gy)
-    -- Already materialized (stamped earlier this session, or its edits
-    -- replayed on reload)? Then this is a repeat load — nothing to do.
-    if structure.hasAt(gx, gy, "floor") then return end
+    -- Already materialized ON THIS PAGE (stamped earlier this session, or
+    -- its edits replayed on reload)? Then this is a repeat load — skip.
+    -- The pageId is essential: without it the check resolves to the active
+    -- world, so unrelated geometry there could suppress a valid stamp on a
+    -- hidden secondary page.
+    if structure.hasAt(gx, gy, "floor", pageId) then return end
     locations.stamp(locId, gx, gy, pageId)
 end
 
