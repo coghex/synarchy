@@ -125,13 +125,16 @@ publishToRender env utsRef = do
                                     -- wins over the state-driven map.
                                     -- Empty string = no override.
                                     override = uiAnimOverride inst
-                                    -- Cumulative wound severity. The
-                                    -- injured-anim swap fires above the
+                                    -- Cumulative EFFECTIVE wound severity
+                                    -- (heal eases it, necrosis floors it).
+                                    -- The injured-anim swap fires above the
                                     -- same threshold the Lua-side
-                                    -- combatAnimName helper uses (1.0).
-                                    -- Computed here to keep the engine
-                                    -- and Lua sides in lockstep.
-                                    woundSev = sum (map woundSeverity
+                                    -- combatAnimName helper uses (1.0), and
+                                    -- on the same per-wound value the Lua
+                                    -- `unit.getWounds` severity reports, so
+                                    -- the engine and Lua sides stay in
+                                    -- lockstep as a wound heals.
+                                    woundSev = sum (map woundEffSeverity
                                                         (uiWounds inst))
                                     injured = woundSev > 1.0
                                     baseKey = stateKey (usPose ss) (usState ss)

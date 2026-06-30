@@ -1125,9 +1125,11 @@ unitGetWeaponWieldedFromFn env = do
 
 -- | unit.getWoundSeverityOn(uid, partId) → float | nil
 --
---   Sum of severity for all current wounds on the given body part.
---   Used by the AI's attack-mode picker and cooldown formula to gate
---   heavy attacks when the weapon arm is hurt. Returns 0 (not nil) for
+--   Sum of EFFECTIVE severity (heal eases it, necrosis floors it) for
+--   all current wounds on the given body part — so the gate eases as the
+--   wound mends, matching the bleed/pain consumers. Used by the AI's
+--   attack-mode picker and cooldown formula to gate heavy attacks when
+--   the weapon arm is hurt. Returns 0 (not nil) for
 --   a part with no wounds — only returns nil if the unit itself
 --   doesn't exist.
 unitGetWoundSeverityOnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -1143,7 +1145,7 @@ unitGetWoundSeverityOnFn env = do
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
-                        let s = sum [ woundSeverity w
+                        let s = sum [ woundEffSeverity w
                                     | w ← uiWounds inst
                                     , woundPart w ≡ partId ]
                         in return (Just s)
@@ -1282,14 +1284,33 @@ unitGetWoundsFn env = do
                         Lua.setfield (-2) "vital"
                         Lua.pushstring (TE.encodeUtf8 (woundKind w))
                         Lua.setfield (-2) "kind"
-                        -- `severity` is the EFFECTIVE severity (inflicted ×
-                        -- (1 − heal)) — so every consumer (pain, impairment,
-                        -- naming) automatically eases as the wound heals.
-                        -- `severityInflicted` is the original, `heal` the
-                        -- 0..1 healing progress.
+                        -- `severity` is the ACUTE/mechanical effective
+                        -- severity (inflicted × (1 − heal)) — the trauma
+                        -- itself, easing as the wound mends. It deliberately
+                        -- does NOT fold in the necrosis floor: rot is a
+                        -- separate failure mode (gangrene/sepsis, with its
+                        -- own death path) reported separately as `necrosis`,
+                        -- so the acute organ-failure meters (suffocation,
+                        -- neuro, shock, visceral) read this without a rotting
+                        -- wound spuriously driving an acute-trauma meter.
+                        -- Consumers that drive IMPAIRMENT/bleed (limp/crawl,
+                        -- injured-anim, bleeding) read `severityEffective`
+                        -- below instead. `severityInflicted` is the original,
+                        -- `heal` the 0..1 healing progress.
                         Lua.pushnumber (Lua.Number (realToFrac
                             (woundSeverity w * (1 - woundHeal w))))
                         Lua.setfield (-2) "severity"
+                        -- `severityEffective` is the engine's full effective
+                        -- severity — max(acute, necrosis) via woundEffSeverity,
+                        -- the SAME value the Haskell bleed/pain/impairment
+                        -- paths (bleedRateFor, painFor, injurySpeedMult, …)
+                        -- use. Lua consumers that must stay in lockstep with
+                        -- those (locomotion limp/crawl, injured-anim, bleeding
+                        -- badge) read this so a healed-but-necrotic wound still
+                        -- impairs, matching the engine.
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundEffSeverity w)))
+                        Lua.setfield (-2) "severityEffective"
                         Lua.pushnumber (Lua.Number
                             (realToFrac (woundSeverity w)))
                         Lua.setfield (-2) "severityInflicted"
@@ -1540,7 +1561,8 @@ unitGetLastAttackerFn env = do
 -- | unit.getPain(uid) → number | nil
 --
 --   Pain accumulator derived live from the wound list:
---     pain = sum(severity × kind_pain_factor)
+--     pain = sum(effective_severity × kind_pain_factor)
+--   (effective severity eases as the wound heals, floored by necrosis).
 --   Used by the AI (future retreat candidate), the unit-info UI,
 --   and the combat hit-roll's pain penalty (computed Haskell-side
 --   in Combat.Resolution; this getter mirrors the same formula
@@ -1559,8 +1581,8 @@ unitGetPainFn env = do
                     Nothing → return Nothing
                     Just inst →
                         let pain = sum
-                              [ woundSeverity w * kindPainFactor
-                                                   (woundKind w)
+                              [ woundEffSeverity w * kindPainFactor
+                                                      (woundKind w)
                               | w ← uiWounds inst ]
                         in return $ Just pain
             case mPain of
@@ -3752,8 +3774,12 @@ treatBleedingIO env medic patient mOwner = do
                 -- bleeding, so the (1 − clot) and dressing factors must be
                 -- in here too. Without them the medic could rank a high-
                 -- severity but clotted wound above the one actually seeping
-                -- and waste a bandage on it.
-                scoreOf w = (woundSeverity w * woundSeverity w)
+                -- and waste a bandage on it. Severity is the EFFECTIVE
+                -- severity (healing eases it, necrosis floors it) — the
+                -- same source of truth bleedRateFor squares — so a mostly-
+                -- healed wound no longer outranks a fresh seeping one.
+                scoreOf w = let effSev = woundEffSeverity w
+                            in (effSev * effSev)
                           * kindBleedFactor (woundKind w)
                           * maybe 1.0 bpBleedFactor
                                 (HM.lookup (woundPart w) parts)

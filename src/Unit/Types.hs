@@ -3,6 +3,7 @@ module Unit.Types
     ( Animation(..)
     , StatModifier(..)
     , Wound(..)
+    , woundEffSeverity
     , Scar(..)
     , BodyPart(..)
     , NaturalWeapon(..)
@@ -160,6 +161,19 @@ data Wound = Wound
       --   non-vital part rots off (severing cascade), a vital part → death
       --   by gangrene. Future: a debridement action removes it.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | The authoritative EFFECTIVE severity of a wound — what actually
+--   drives bleed magnitude, pain, impairment, medic priority, and the
+--   injured-animation flag. Healing eases it (@sev × (1 − heal)@, which
+--   climbs back above the inflicted value when a festering wound's heal
+--   goes negative), while necrosis (dead tissue) is a PERMANENT floor:
+--   a rotting wound is at least as bad as the fraction of tissue that
+--   has died. Mirrors the per-tick @effSev@ in
+--   'Combat.Wounds.tickOneUnit' (the source of truth) so every
+--   downstream consumer stays in lockstep with it.
+woundEffSeverity ∷ Wound → Float
+woundEffSeverity w =
+    max (woundSeverity w * (1 - woundHeal w)) (woundNecrosis w)
 
 -- | A healed-over wound left as a permanent mark. Descriptive record
 --   for now (shown in the unit's Status tab); the data is here to hang

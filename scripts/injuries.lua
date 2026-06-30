@@ -433,7 +433,10 @@ function M.legFractureSeverity(uid)
     local worst = 0
     for _, w in ipairs(ws) do
         if (w.kind == "fracture" or w.kind == "severed") and isLegWound(w) then
-            worst = math.max(worst, w.severity or 0)
+            -- EFFECTIVE severity (max of acute trauma and necrosis floor),
+            -- matching the engine's injurySpeedMult — a healed-but-necrotic
+            -- leg wound keeps impairing instead of freeing the unit to walk.
+            worst = math.max(worst, w.severityEffective or w.severity or 0)
         end
     end
     return worst
@@ -512,8 +515,12 @@ function M.cannotWalk(uid)
     local badLegs, worstLeg = 0, 0
     for _, w in ipairs(ws) do
         if (w.kind == "fracture" or w.kind == "severed") and isLegWound(w) then
-            worstLeg = math.max(worstLeg, w.severity or 0)
-            if (w.severity or 0) >= 0.5 then badLegs = badLegs + 1 end
+            -- EFFECTIVE severity (acute trauma or necrosis floor) so the
+            -- crawl decision stays in lockstep with the engine's movement
+            -- penalty as a leg wound heals but rots.
+            local sev = w.severityEffective or w.severity or 0
+            worstLeg = math.max(worstLeg, sev)
+            if sev >= 0.5 then badLegs = badLegs + 1 end
         end
     end
     return worstLeg >= 0.85 or badLegs >= 2
