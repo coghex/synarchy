@@ -279,7 +279,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             , taName = name
             , taPath = T.pack path
             , taMetadata = AtlasMetadata (0, 0) Vk.FORMAT_R8G8B8A8_UNORM Map.empty
-            , taStatus = AssetLoaded
             , taInfo = Just $ TextureInfo
                 { tiImage = image
                 , tiView = imageView
@@ -434,9 +433,7 @@ cleanupResources device state = do
           [("name", taName atlas)
           ,("path", taPath atlas)
           ,("asset_id", T.pack $ show $ taId atlas)]
-        case taStatus atlas of
-            AssetLoaded → liftIO $ maybe (pure ()) id (taCleanup atlas)
-            _           → pure ()
+        liftIO $ maybe (pure ()) id (taCleanup atlas)
 
     liftIO $ writeIORef (apNextAssetId pool) 0
     liftIO $ atomicModifyIORef' poolRef $ \poolRef' →

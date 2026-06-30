@@ -57,10 +57,6 @@ computeAmbientLight sunAngle =
        then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
        else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
 
--- | Sun cycle speed: full cycle every 600 seconds
-sunCycleSpeed ∷ Double
-sunCycleSpeed = 1.0 / 600.0
-
 -- | Draw a single frame
 drawFrame ∷ EngineM ε σ ()
 drawFrame = do

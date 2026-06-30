@@ -4,7 +4,6 @@ module Engine.Scene.Batch.Update
   , updateTextBatches
   , createBatch
   , getSortedBatches
-  , buildLayeredBatches
   , groupByTextureAndLayer
   ) where
 
@@ -80,32 +79,3 @@ getSortedBatches manager =
     let batches = Map.elems (bmBatches manager)
         sorted = List.sortOn (\batch → (rbLayer batch, rbAvgZ batch)) batches
     in V.fromList sorted
-
--- | Build layered batches from sprite and text batches.
---   Accumulates into lists (O(1) cons) then converts to vectors once,
---   instead of using V.snoc which is O(n) per append.
-buildLayeredBatches ∷ BatchManager → BatchManager
-buildLayeredBatches manager =
-    let sortedSprites = getSortedBatches manager
-        sortedText = List.sortOn trbLayer $ Map.elems (bmTextBatches manager)
-        
-        -- Accumulate into lists with (:) — O(1) per item
-        spriteLists ∷ Map.Map LayerId [RenderItem]
-        spriteLists = V.foldl' (\acc batch →
-            let layer = rbLayer batch
-            in Map.insertWith (\_ old → SpriteItem batch : old)
-                layer [SpriteItem batch] acc
-          ) Map.empty sortedSprites
-        
-        textLists ∷ Map.Map LayerId [RenderItem]
-        textLists = foldl' (\acc batch →
-            let layer = trbLayer batch
-            in Map.insertWith (\_ old → TextItem batch : old)
-                layer [TextItem batch] acc
-          ) Map.empty sortedText
-        
-        -- Merge lists, then convert to vectors once
-        allLists = Map.unionWith (⧺) spriteLists textLists
-        allLayers = Map.map V.fromList allLists
-        
-    in manager { bmLayeredBatches = allLayers }

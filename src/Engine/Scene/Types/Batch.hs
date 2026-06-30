@@ -135,7 +135,6 @@ data BatchManager = BatchManager
     , bmTextBatches    ∷ Map.Map (FontHandle, LayerId) TextRenderBatch
     , bmVisibleObjs    ∷ V.Vector DrawableObject
     , bmDirtyBatches   ∷ Set.Set (TextureHandle, LayerId)
-    , bmLayeredBatches ∷ Map.Map LayerId (V.Vector RenderItem)
     } deriving (Show)
 
 createBatchManager ∷ BatchManager
@@ -144,7 +143,6 @@ createBatchManager = BatchManager
     , bmTextBatches = Map.empty
     , bmVisibleObjs = V.empty
     , bmDirtyBatches = Set.empty
-    , bmLayeredBatches = Map.empty
     }
 
 data SceneDynamicBuffer = SceneDynamicBuffer

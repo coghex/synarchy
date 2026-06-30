@@ -156,7 +156,6 @@ initializeVulkan window = do
   let texSystemConfig = TextureSystemConfig
         { tscMaxTextures   = 16384
         , tscReservedSlots = 1      -- Slot 0 = undefined texture
-        , tscForceBindless = False
         , tscForceLegacy   = False
         }
   texSystem ← createTextureSystem physicalDevice device cmdPool 
