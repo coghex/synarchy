@@ -61,34 +61,51 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 
 SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
 
 
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one line of Lua in the debug console, return the result text.
+def _results(raw: bytes) -> list[str]:
+    """Non-empty "> value" lines from the console stream. The console emits a
+    "synarchy debug console\\n> " banner on connect and a trailing "> "
+    prompt; both yield EMPTY "> " lines, so filter those out."""
+    out = raw.decode(errors="replace")
+    return [ln[2:].strip() for ln in out.splitlines()
+            if ln.startswith("> ") and ln[2:].strip()]
 
-    The console keeps the connection open after replying, so we read with
-    a short idle timeout and stop on the first quiet gap rather than to
-    EOF — each call costs a fraction of a second. (Copied verbatim from
-    combat_anim_probe.py; see the gotcha note there.)
+
+def send(port: int, lua: str, timeout: float = 10.0,
+         expect_result: bool = True) -> str:
+    """Run one Lua line over the debug console and return its result.
+
+    With expect_result (a `return ...` command) we read until a non-empty
+    "> value" line appears, waiting up to `timeout`. This is what makes the
+    BLOCKING builtins work: world.waitForInit / world.waitForChunks emit
+    nothing until they unblock, so the read must wait the full timeout for
+    the result rather than idling out early (a fixed short idle timeout
+    would return before generation/chunk-loading finished and race partially
+    initialized terrain). Fire-and-forget commands (no return) pass
+    expect_result=False and just drain briefly. (Mirrors save_pause_probe.py.)
     """
     with socket.create_connection(("localhost", port), timeout=timeout) as s:
         s.sendall((lua + "\n").encode())
         chunks: list[bytes] = []
-        s.settimeout(0.3)
+        s.settimeout(timeout)
         try:
             while True:
                 b = s.recv(4096)
                 if not b:
                     break
                 chunks.append(b)
+                if expect_result and _results(b"".join(chunks)):
+                    break               # got the real result past the banner
+                if not expect_result:
+                    s.settimeout(0.3)   # drain remainder then idle out
         except socket.timeout:
             pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
+    vals = _results(b"".join(chunks))
+    return (vals[-1] if vals else "").strip('"')
 
 
 def boot(port: int, logpath: str, tag: str) -> subprocess.Popen:
@@ -262,9 +279,16 @@ def main() -> int:
     ap.add_argument("--plates", type=int, default=3)
     args = ap.parse_args()
 
-    save_name = f"{SAVE_PREFIX}{os.getpid()}"
+    # Unique per run (random, NOT pid-derived): a reused pid could collide
+    # with a stale dir left by an interrupted run, making engine B load OLD
+    # data (false pass) and the cleanup delete a dir this run didn't create.
+    save_name = f"{SAVE_PREFIX}{uuid.uuid4().hex[:12]}"
     save_dir = os.path.join("saves", save_name)
     save_file = os.path.join(save_dir, "world.synworld")
+    # Belt-and-suspenders on top of the random name: never reuse/clobber an
+    # existing directory, so file existence below is proof THIS run wrote it.
+    if os.path.exists(save_dir):
+        sys.exit(f"refusing to run: {save_dir} already exists")
     logA = "/tmp/mw_save_probe_A.log"
     logB = "/tmp/mw_save_probe_B.log"
     procA = procB = None
