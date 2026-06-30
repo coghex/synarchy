@@ -267,8 +267,6 @@ library
                      Engine.Asset.YamlUnits
                      Engine.Asset.YamlNames
                      Engine.Asset.YamlNotifications
-                     Engine.Event.Base
-                     Engine.Event.Types
                      Engine.PlayerEvent
                      Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
@@ -323,7 +321,6 @@ library
                      Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
-                     Engine.Input.Event
                      Engine.Input.Types
                      Engine.Input.Thread
                      Engine.Scripting.Types

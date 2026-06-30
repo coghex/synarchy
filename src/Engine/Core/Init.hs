@@ -69,7 +69,6 @@ initializeEngine = initializeEngineWith (LogToHandle stdout)
 --   emitted).
 initializeEngineWith ∷ LogBackend → IO EngineInitResult
 initializeEngineWith logBackend = do
-  eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   worldQueue ← Q.newQueue
   simQueue ← Q.newQueue
@@ -175,7 +174,6 @@ initializeEngineWith logBackend = do
         , brightnessRef      = brightnessRef
         , pixelSnapRef       = pixelSnapRef
         , textureFilterRef   = textureFilterRef
-        , eventQueue         = eventQueue
         , inputQueue         = inputQueue
         , loggerRef          = loggerRef
         , luaToEngineQueue   = luaToEngineQueue
