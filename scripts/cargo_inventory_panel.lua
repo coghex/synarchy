@@ -29,6 +29,7 @@ local panel       = require("scripts.ui.panel")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
+local brokenOverlay = require("scripts.ui.broken_overlay")
 
 -----------------------------------------------------------
 -- Layout constants. Mirrors unit_info_v2's inventory section so
@@ -412,23 +413,11 @@ local function buildRows(originX, originY, contentW, grouped)
             UI.setZIndex(iconId, 133)
             s.rowElements[#s.rowElements + 1] = { kind = "sprite", id = iconId }
             -- Broken (condition 0): overlay broken_equipment.png.
-            if g.condition and g.condition <= 0 then
-                local bt = cargoInventoryPanel.brokenTex
-                if not bt then
-                    local hh = engine.getTextureHandle("broken_equipment")
-                    if hh and hh >= 0 then
-                        cargoInventoryPanel.brokenTex = hh
-                        bt = hh
-                    end
-                end
-                if bt then
-                    local oid = UI.newSprite("cargo_inv_broken_" .. i,
-                        iconSz, iconSz, bt, 1.0, 1.0, 1.0, 1.0, h.page)
-                    UI.addToPage(h.page, oid, originX + txtPad, iconY)
-                    UI.setZIndex(oid, 134)
-                    s.rowElements[#s.rowElements + 1] =
-                        { kind = "sprite", id = oid }
-                end
+            local oid = brokenOverlay.add(h.page, "cargo_inv_broken_" .. i,
+                g.condition, originX + txtPad, iconY, iconSz, iconSz, 134)
+            if oid then
+                s.rowElements[#s.rowElements + 1] =
+                    { kind = "sprite", id = oid }
             end
         end
 
