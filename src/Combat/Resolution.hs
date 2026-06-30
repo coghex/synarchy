@@ -68,7 +68,7 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , UnitManager(..), BodyPart(..)
                   , NaturalResistance(..), NaturalWeapon(..)
                   , StrikeProfile(..)
-                  , Wound(..))
+                  , Wound(..), woundEffSeverity)
 import Unit.Injury (penetrate, penetrateDeposits, woundFactor, tissueInjuryKind
                    , injuryFloor, capInjurySeverity, allocateSubparts
                    , tissueCapacityWeight, defaultPartCapacity)
@@ -612,10 +612,15 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
 
 -- ----- Helpers -----
 
+-- Pain eases as a wound heals (and floors on necrosis): drive it off
+-- EFFECTIVE severity, the same quantity bleed/impairment use, so a
+-- recovering unit regains composure rather than hurting at the full
+-- inflicted level until the wound vanishes. The Lua `unit.getPain`
+-- getter mirrors this formula and must change in lockstep.
 painFor ∷ UnitInstance → Float
 painFor inst =
     let raw = foldl'
-              (\acc w → acc + woundSeverity w
+              (\acc w → acc + woundEffSeverity w
                               * kindPainFactor (woundKind w))
               0 (uiWounds inst)
     in clamp 0.0 1.0 (raw / painCeiling)

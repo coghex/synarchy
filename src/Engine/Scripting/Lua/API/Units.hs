@@ -1125,9 +1125,11 @@ unitGetWeaponWieldedFromFn env = do
 
 -- | unit.getWoundSeverityOn(uid, partId) → float | nil
 --
---   Sum of severity for all current wounds on the given body part.
---   Used by the AI's attack-mode picker and cooldown formula to gate
---   heavy attacks when the weapon arm is hurt. Returns 0 (not nil) for
+--   Sum of EFFECTIVE severity (heal eases it, necrosis floors it) for
+--   all current wounds on the given body part — so the gate eases as the
+--   wound mends, matching the bleed/pain consumers. Used by the AI's
+--   attack-mode picker and cooldown formula to gate heavy attacks when
+--   the weapon arm is hurt. Returns 0 (not nil) for
 --   a part with no wounds — only returns nil if the unit itself
 --   doesn't exist.
 unitGetWoundSeverityOnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -1143,7 +1145,7 @@ unitGetWoundSeverityOnFn env = do
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst →
-                        let s = sum [ woundSeverity w
+                        let s = sum [ woundEffSeverity w
                                     | w ← uiWounds inst
                                     , woundPart w ≡ partId ]
                         in return (Just s)
@@ -1542,7 +1544,8 @@ unitGetLastAttackerFn env = do
 -- | unit.getPain(uid) → number | nil
 --
 --   Pain accumulator derived live from the wound list:
---     pain = sum(severity × kind_pain_factor)
+--     pain = sum(effective_severity × kind_pain_factor)
+--   (effective severity eases as the wound heals, floored by necrosis).
 --   Used by the AI (future retreat candidate), the unit-info UI,
 --   and the combat hit-roll's pain penalty (computed Haskell-side
 --   in Combat.Resolution; this getter mirrors the same formula
@@ -1561,8 +1564,8 @@ unitGetPainFn env = do
                     Nothing → return Nothing
                     Just inst →
                         let pain = sum
-                              [ woundSeverity w * kindPainFactor
-                                                   (woundKind w)
+                              [ woundEffSeverity w * kindPainFactor
+                                                      (woundKind w)
                               | w ← uiWounds inst ]
                         in return $ Just pain
             case mPain of
