@@ -179,10 +179,12 @@ spec = do
             Just p ← getWorldGenParams ws
             let lakes  = gtWorldLakes  (wgpGeoTimeline p)
                 rivers = gtWorldRivers (wgpGeoTimeline p)
+                wrap   = wrapChunkCoordU (wgpWorldSize p)
                 dry coord@(ChunkCoord cx cy) =
-                    oceanDistAt (wgpOceanDist p) coord ≥ 2
-                    ∧ all (\c → V.null (lakesInChunk lakes c)
-                              ∧ V.null (riversInChunk rivers c))
+                    oceanDistAt (wgpOceanDist p) (wrap coord) ≥ 2
+                    ∧ all (\c → let cc = wrap c
+                                in V.null (lakesInChunk lakes cc)
+                                 ∧ V.null (riversInChunk rivers cc))
                           [ ChunkCoord (cx + dx) (cy + dy)
                           | dx ← [-1, 0, 1], dy ← [-1, 0, 1] ]
             HM.keys (overlayFor p [flatDef, mtnDef]) `shouldSatisfy` all dry

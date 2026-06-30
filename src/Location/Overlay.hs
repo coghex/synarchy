@@ -38,7 +38,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Chunk.Types (ChunkCoord(..), chunkSize, wrapChunkCoordU)
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier)
 import World.Material (MaterialId, matGlacier)
 import World.Ocean.Types (OceanMap, OceanDistMap, oceanDistAt)
@@ -142,15 +142,22 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers def
     -- Locations avoid those: flattening a footprint next to water leaves
     -- the water overhanging the carved rim (#414). A def opts back IN via
     -- a coast anchor.
+    --
+    -- Every coord is canonicalised through 'wrapChunkCoordU' first, because
+    -- the ocean / lake / river tables are keyed by the wrapped coord (see
+    -- 'World.Generate.Chunk') — a seam-crossing neighbour read raw would
+    -- otherwise miss the water on the far side of the wrap.
     dryEnough ∷ ChunkCoord → Bool
     dryEnough coord@(ChunkCoord cx cy) =
-        oceanDistAt oceanDist coord ≥ 2
+        oceanDistAt oceanDist (wrap coord) ≥ 2
         ∧ all noStandingWater
             [ ChunkCoord (cx + dx) (cy + dy)
             | dx ← [-1, 0, 1], dy ← [-1, 0, 1] ]
       where
+        wrap = wrapChunkCoordU worldSize
         noStandingWater c =
-            V.null (lakesInChunk lakes c) ∧ V.null (riversInChunk rivers c)
+            let cc = wrap c
+            in V.null (lakesInChunk lakes cc) ∧ V.null (riversInChunk rivers cc)
 
     defsSorted = sortOn ldId defs
 
