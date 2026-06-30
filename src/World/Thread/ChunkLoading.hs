@@ -3,6 +3,7 @@
 module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
+    , dispatchLocationStamps
     , maxChunksPerTick
     ) where
 

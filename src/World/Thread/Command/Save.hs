@@ -49,7 +49,7 @@ import Unit.Sim.Types (UnitThreadState(..))
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, sendSaveLoaded, unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
-import World.Thread.ChunkLoading (maxChunksPerTick)
+import World.Thread.ChunkLoading (maxChunksPerTick, dispatchLocationStamps)
 
 
 -- | Order-preserving de-duplication of a page-id list (keeps the first
@@ -512,6 +512,13 @@ handleWorldLoadSaveCommand env logger pageId saveData
         Q.writeQueue (simQueue env) $
             SimChunkLoaded rid centerCoord
                 (lcFluidMap centerChunk) (lcTerrainSurfaceMap centerChunk)
+
+        -- Stamp any placed location on the synchronously-regenerated centre
+        -- chunk (#89). Like Init's centre chunk it is written straight to
+        -- wsTilesRef and excluded from the init queue, so the chunk-loading
+        -- dispatch never sees it. A location saved un-stamped on the camera
+        -- chunk thus still materializes on load.
+        dispatchLocationStamps env params rid [centerChunk]
 
         -- 1d. Queue the remaining initial chunks for progressive loading.
         when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)

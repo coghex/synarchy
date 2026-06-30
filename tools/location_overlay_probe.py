@@ -23,6 +23,13 @@ This drives the full integration headless and checks #89 end to end:
      ruins still UN-STAMPED (right after gen, before their far chunks
      load); after a fresh restart + load, visiting each ruin's chunk
      materializes it from the persisted overlay anyway.
+  7. The SYNCHRONOUS centre chunk (0,0) — which Init/Save regenerate
+     directly and exclude from the chunk-load queue — also stamps, both
+     on first generation (Init hook) and on first load (Save hook).
+
+The location stamper is auto-loaded at boot by scripts/init.lua, exactly
+as in the real game, so this only registers the location defs by hand
+(headless skips the GUI data-loading step).
 
 Usage:
   python3 tools/location_overlay_probe.py
@@ -162,6 +169,53 @@ def wait_stamped(port: int, ruins: list[dict], tries: int = 80) -> int:
     return n
 
 
+def wait_floor(port: int, gx: int, gy: int, tries: int = 40) -> bool:
+    for _ in range(tries):
+        if has_floor(port, gx, gy):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+# A dense location def (no anchor, no spacing, unbounded count) places a
+# location on EVERY land chunk — so the centre chunk (0,0), land for our
+# seed, is guaranteed one. (0,0) is only ever loaded synchronously (Init /
+# Save regenerate it directly and exclude it from the chunk-load queue), so
+# a floor there can only come from the synchronous-centre stamp hooks.
+DENSE_YAML = "/tmp/loc_overlay_probe_dense.yaml"
+DENSE_BODY = (
+    "locations:\n"
+    "  - id: ruin_small\n"
+    "    label: Small Ruin\n"
+    "    type: ruin\n"
+    "    builder: room_small\n"
+    "    anchor: []\n"
+    "    max_count: 100000\n"
+    "    min_spacing: 1\n"
+    "    contents: []\n"
+)
+
+
+def has_loc_on(port: int, cx: int, cy: int, tries: int = 20) -> bool:
+    """Whether the active overlay places a location on chunk (cx,cy).
+
+    Polls until the overlay is readable (the world is active), so it does
+    not race world.show. The server-side scan returns just a flag, never
+    the (huge, dense) full list.
+    """
+    lua = (f"local t = world.listPlacedLocations(); "
+           f"for _, e in ipairs(t) do if e.cx == {cx} and e.cy == {cy} then return 'yes' end end; "
+           f"return (#t > 0) and 'no' or 'empty'")
+    for _ in range(tries):
+        r = send(port, lua).strip('"')
+        if r == "yes":
+            return True
+        if r == "no":
+            return False
+        time.sleep(0.5)
+    return False
+
+
 def gen_world(port: int, page: str, seed: int, size: int) -> None:
     send(port, f"world.init('{page}', {seed}, {size}, 3); return 'ok'")
     send(port, "return world.waitForInit(240)", timeout=250)
@@ -190,7 +244,8 @@ def main() -> int:
     proc = boot(args.port)
     try:
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
-        send(args.port, "engine.loadScript('scripts/location_stamper.lua', 0.1); return 'ok'")
+        # The stamper is auto-loaded at boot by scripts/init.lua (as in the
+        # real game), so we only have to register the location defs here.
 
         gen_world(args.port, "wa", args.seed, args.size)
         la = placed_ready(args.port)
@@ -264,7 +319,8 @@ def main() -> int:
         # ruin's chunk. Each must materialize from the persisted overlay even
         # though the save contained no stamped geometry for it.
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
-        send(args.port, "engine.loadScript('scripts/location_stamper.lua', 0.1); return 'ok'")
+        # The stamper is auto-loaded at boot by scripts/init.lua (as in the
+        # real game), so we only have to register the location defs here.
         ruins_after = [e for e in lc if e["id"] == "ruin_small"]
         for e in ruins_after:
             load_chunk(args.port, e["cx"], e["cy"])
@@ -275,6 +331,67 @@ def main() -> int:
             failures.append(f"only {m}/{len(ruins_after)} ruin(s) materialized after load")
     finally:
         shutdown(args.port, proc)
+
+    # A dense def places a location on EVERY land chunk, so the centre
+    # chunk (0,0) — land for our seed, and the only chunk that is ever
+    # loaded SYNCHRONOUSLY (Init and Save regenerate it directly and
+    # exclude it from the chunk-load queue) — is guaranteed one. A floor at
+    # its anchor (8,8) can therefore only come from the synchronous-centre
+    # stamp hooks, not the chunk-load dispatch.
+    with open(DENSE_YAML, "w") as fh:
+        fh.write(DENSE_BODY)
+
+    # ---- Phase 3: the SYNCHRONOUS centre chunk (0,0) stamps on fresh gen
+    #      (Init hook). ----
+    proc = boot(args.port)
+    try:
+        send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+        gen_world(args.port, "wc", args.seed, args.size)
+        if not has_loc_on(args.port, 0, 0):
+            failures.append(f"seed {args.seed}: no location on centre chunk (0,0) — cannot test Init hook")
+        elif wait_floor(args.port, 8, 8):
+            print("PASS: synchronous centre chunk (0,0) stamped on first gen (Init hook)")
+        else:
+            failures.append("centre chunk (0,0) NOT stamped on first gen (Init hook)")
+    finally:
+        shutdown(args.port, proc)
+
+    # ---- Phase 4: a location on the SAVED CAMERA CHUNK is present on the
+    #      FIRST load. The default camera sits on (0,0); save a world whose
+    #      (0,0) hosts a location, then on a fresh restart confirm it is back
+    #      WITHOUT force-loading (0,0) — Save regenerates that chunk
+    #      synchronously and excludes it from the queue, so its presence
+    #      exercises the Save centre hook. ----
+    proc = boot(args.port)
+    saved_centre = False
+    try:
+        send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+        gen_world(args.port, "wd", args.seed, args.size)
+        if not has_loc_on(args.port, 0, 0):
+            failures.append(f"seed {args.seed}: no location on centre chunk (0,0) — cannot test Save hook")
+        elif not wait_floor(args.port, 8, 8):
+            failures.append("phase 4 setup: centre (0,0) did not stamp at gen")
+        else:
+            send(args.port, "engine.saveWorld('wd', 'loc_centre_probe'); return 'saved'")
+            time.sleep(1.0)
+            saved_centre = True
+    finally:
+        shutdown(args.port, proc)
+
+    if saved_centre:
+        proc = boot(args.port)
+        try:
+            send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
+            send(args.port, "engine.loadSave('loc_centre_probe'); return 'queued'")
+            time.sleep(6.0)
+            send(args.port, "world.show('main_world'); return 'ok'")
+            # Do NOT force-load (0,0) — it is the synchronous centre chunk.
+            if wait_floor(args.port, 8, 8):
+                print("PASS: saved-camera centre chunk (0,0) present on first load (Save hook)")
+            else:
+                failures.append("saved-camera centre chunk (0,0) NOT present on first load (Save hook)")
+        finally:
+            shutdown(args.port, proc)
 
     print("-" * 56)
     if failures:

@@ -49,7 +49,7 @@ import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
                              , minimumWorldSize, normalizeWorldGenInputs)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
-import World.Thread.ChunkLoading (maxChunksPerTick)
+import World.Thread.ChunkLoading (maxChunksPerTick, dispatchLocationStamps)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → IO ()
@@ -271,6 +271,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                        , wtdMaxChunks = 200 }, ())
+
+    -- Stamp any placed location on the synchronously-generated centre
+    -- chunk (#89). It is written straight to wsTilesRef and excluded from
+    -- the init queue, so the chunk-loading dispatch never sees it.
+    dispatchLocationStamps env params pageId [centerChunk]
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
