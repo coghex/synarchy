@@ -141,6 +141,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
+import Data.List (foldl')
 import Item.Types (ItemInstance(..), itemMatches, itemContentsSig)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
@@ -1614,12 +1615,21 @@ unitModifyItemFillFn env = do
 --   (edge keenness, gates penetration) — in place, PRESERVING the
 --   exact `iiInstanceId` (#67) so the physical item keeps its identity.
 --
---   The item is found by `instanceId` across the unit's inventory and
---   equipment (so a degraded weapon can be restored whether it's stowed
---   or wielded). Both deltas are applied additively and the RESULT is
---   clamped to 0..100. Positive restores (repair); negative wears (the
---   inverse — used by hazards / tests). `sharpnessDelta` defaults to 0,
---   so a furnace can pass condition-only and a whetstone sharpness-only.
+--   The item is found by `instanceId` across the unit's inventory,
+--   equipment, AND worn accessories (so a degraded weapon can be
+--   restored whether it's stowed or wielded, and a worn item like the
+--   technogoggles is reachable too). Both deltas are applied additively
+--   and the RESULT is clamped to 0..100. Positive restores (repair);
+--   negative wears (the inverse — used by hazards / tests).
+--   `sharpnessDelta` defaults to 0, so a furnace can pass condition-only
+--   and a whetstone sharpness-only.
+--
+--   Repairing a WORN accessory also refreshes the unit's `uiModifiers`,
+--   because accessory buffs can be condition-scaled (technogoggles'
+--   perception buff) and are baked into the modifier map at equip time —
+--   without the refresh a repaired accessory would keep its degraded
+--   buff. (Equipped weapons/armour don't bake buffs into `uiModifiers`,
+--   so the inventory/equipment branches need no such refresh.)
 --
 --   This is deliberately policy-free: restore *rates*, station↔axis
 --   mapping, broken-item rules, and resource cost all live above it
@@ -1645,27 +1655,34 @@ unitRepairItemFn env = do
                 sharpD = case sharpArg of
                     Just (Lua.Number d) → realToFrac d ∷ Float
                     _                   → 0
+            -- For the accessory branch we may need the item def to refresh
+            -- condition-scaled buffs; read the manager once up front.
+            itemMgr ← Lua.liftIO $ readIORef (itemManagerRef env)
             mRes ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, Nothing)
                     Just inst →
-                        -- Inventory first, then equipment; an instance id
-                        -- is unique to one physical item so at most one
-                        -- branch fires.
-                        case repairInList iid condD sharpD (uiInventory inst) of
-                            Just (inv', r) →
-                                let inst' = inst { uiInventory = inv' }
-                                in ( um { umInstances =
-                                            HM.insert uid inst' (umInstances um) }
-                                   , Just r )
+                        -- Inventory, then equipment, then worn accessories;
+                        -- an instance id is unique to one physical item so at
+                        -- most one branch fires.
+                        let commit inst' = um { umInstances =
+                                  HM.insert uid inst' (umInstances um) }
+                        in case repairInList iid condD sharpD (uiInventory inst) of
+                            Just (inv', _, r) →
+                                (commit inst { uiInventory = inv' }, Just r)
                             Nothing →
-                                case repairInEquip iid condD sharpD
-                                                   (uiEquipment inst) of
-                                    Just (eq', r) →
-                                        let inst' = inst { uiEquipment = eq' }
-                                        in ( um { umInstances =
-                                                    HM.insert uid inst'
-                                                      (umInstances um) }
+                              case repairInEquip iid condD sharpD
+                                                 (uiEquipment inst) of
+                                Just (eq', _, r) →
+                                    (commit inst { uiEquipment = eq' }, Just r)
+                                Nothing →
+                                  case repairInList iid condD sharpD
+                                                    (uiAccessories inst) of
+                                    Just (accs', repInst, r) →
+                                        let mods' = refreshItemBuffs itemMgr
+                                                      repInst (uiModifiers inst)
+                                        in ( commit inst { uiAccessories = accs'
+                                                         , uiModifiers   = mods' }
                                            , Just r )
                                     Nothing → (um, Nothing)
             case mRes of
@@ -1703,26 +1720,57 @@ applyRepair condD sharpD it =
 
 -- | Repair the first instance in a list whose id matches; Nothing if
 --   none does. Preserves list order (the slot is rewritten in place).
+--   Also returns the repaired instance so the caller can react to its
+--   new condition (the accessory branch re-derives its buffs).
 repairInList ∷ Word64 → Float → Float → [ItemInstance]
-             → Maybe ([ItemInstance], (Text, Float, Float, Float, Float))
+             → Maybe ([ItemInstance], ItemInstance
+                     , (Text, Float, Float, Float, Float))
 repairInList _   _     _      []     = Nothing
 repairInList iid condD sharpD (x:xs)
     | iiInstanceId x ≡ iid =
-        let (x', r) = applyRepair condD sharpD x in Just (x' : xs, r)
+        let (x', r) = applyRepair condD sharpD x in Just (x' : xs, x', r)
     | otherwise =
-        (\(rest, r) → (x : rest, r)) <$> repairInList iid condD sharpD xs
+        (\(rest, ri, r) → (x : rest, ri, r))
+            <$> repairInList iid condD sharpD xs
 
 -- | Repair the equipped instance whose id matches; Nothing if no slot
 --   holds it.
 repairInEquip ∷ Word64 → Float → Float → HM.HashMap Text ItemInstance
-              → Maybe ( HM.HashMap Text ItemInstance
+              → Maybe ( HM.HashMap Text ItemInstance, ItemInstance
                       , (Text, Float, Float, Float, Float) )
 repairInEquip iid condD sharpD eq =
     case [ (slot, it) | (slot, it) ← HM.toList eq, iiInstanceId it ≡ iid ] of
         ((slot, it) : _) →
             let (it', r) = applyRepair condD sharpD it
-            in Just (HM.insert slot it' eq, r)
+            in Just (HM.insert slot it' eq, it', r)
         [] → Nothing
+
+-- | Re-apply a worn accessory's buffs to the unit's `uiModifiers` after
+--   its condition changed, so a condition-scaled buff (e.g.
+--   technogoggles' perception) tracks the repair. Mirrors
+--   `Equipment.applyItemBuffs`: the modifier source is the item's
+--   display_name and same-source modifiers on a stat collapse, so
+--   re-applying REPLACES the stale modifier rather than stacking. A
+--   no-op for items with no buffs (or no def in scope).
+refreshItemBuffs ∷ ItemManager → ItemInstance
+                 → HM.HashMap Text [StatModifier]
+                 → HM.HashMap Text [StatModifier]
+refreshItemBuffs itemMgr inst mods =
+    case lookupItemDef (iiDefName inst) itemMgr of
+        Nothing   → mods
+        Just iDef →
+            let src  = idDisplayName iDef
+                cond = iiCondition inst
+                applyOne acc b =
+                    let delta = if ibScalesWithCondition b
+                                  then ibAmount b * (cond / 100)
+                                  else ibAmount b
+                        m = StatModifier { smDelta = delta, smSource = src
+                                         , smExpiry = Nothing, smPercent = 0 }
+                        existing = HM.lookupDefault [] (ibStat b) acc
+                        others   = filter (\x → smSource x ≢ src) existing
+                    in HM.insert (ibStat b) (m : others) acc
+            in foldl' applyOne mods (idBuffs iDef)
 
 -- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
 --   to the unit's inventory. Fill is clamped to the def's container

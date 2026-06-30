@@ -295,6 +295,55 @@ def main() -> int:
         check("getLoadout confirms equipped condition (~70)",
               approx(float(lc.strip().strip('"')), 70), f"condition={lc}")
 
+        print("\n== ACCESSORY path (worn, condition-scaled buff) ==")
+        # Worn accessories live in a SEPARATE collection (uiAccessories) and
+        # their buffs are baked into uiModifiers at equip time, scaled by
+        # condition (technogoggles: +1 perception × condition/100). Repair
+        # must reach them AND refresh the modifier, or the buff stays stale.
+        def perception() -> float:
+            return float(send(args.port,
+                f"return unit.getStat({uid}, 'perception')").strip().strip('"'))
+
+        # NB: acolytes already spawn wearing a technogoggles, and the buff
+        # dedups by source name, so an ABSOLUTE perception baseline is
+        # confounded. The robust signal is the DIFFERENCE in perception
+        # across two conditions of the SAME worn target: the +1.0/100-per-
+        # condition buff means cond 100 vs 50 must differ by exactly 0.5. If
+        # repair did NOT refresh uiModifiers, perception would not move at
+        # all when condition changes.
+        send(args.port, f"return unit.addItem({uid}, 'technogoggles', 0)")
+        goggles = next((it for it in inventory(args.port, uid)
+                        if it.get("defName") == "technogoggles"), None)
+        if goggles is None:
+            check("technogoggles in inventory", False, "missing")
+        else:
+            acc_id = goggles["instanceId"]
+            send(args.port,
+                 f"return equipment.equipAccessory({uid}, 'technogoggles', {acc_id})")
+            worn = send(args.port,
+                f"local a=equipment.getAccessories({uid}) or {{}}; "
+                f"for _,it in ipairs(a) do if it.instanceId=={acc_id} then "
+                "return 1 end end; return 0").strip().strip('"')
+            check("technogoggles is now worn (in accessories)", worn == "1", worn)
+
+            full = repair(args.port, uid, acc_id, 1000, 0)  # condition → 100
+            check("repairItem reaches the WORN accessory",
+                  full is not None and approx(full["condition"], 100), f"{full}")
+            perc_full = perception()
+
+            # Drop to 50% and re-read: the buff must re-scale.
+            repair(args.port, uid, acc_id, -1000, 0)  # floor to 0
+            repair(args.port, uid, acc_id, 50, 0)     # → 50
+            perc_half = perception()
+            check("worn-accessory buff RE-SCALES with repaired condition "
+                  "(cond 100→50 drops perception by 0.5)",
+                  approx(perc_full - perc_half, 0.5, 0.05),
+                  f"perc@100={perc_full} perc@50={perc_half} "
+                  f"delta={perc_full - perc_half:.3f}")
+            check("the repaired buff actually moved (refresh fired)",
+                  perc_full > perc_half + 0.01,
+                  f"perc@100={perc_full} perc@50={perc_half}")
+
         print("\n== MISS: bad id / bad uid → nil ==")
         miss = repair(args.port, uid, 999999999, 50, 50)
         check("unknown instanceId returns nil", miss is None, f"{miss}")
