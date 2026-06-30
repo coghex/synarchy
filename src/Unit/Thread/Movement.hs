@@ -144,7 +144,7 @@ tickAllMovement dt env utsRef = do
     -- both need RNG / per-unit stats, so they live up here (tickUnit
     -- is pure and has neither).
     simStates'' ← rollClimbSlips env now statsFor simStates'
-    let simStates''' = HM.mapWithKey (convertSlippedClimb now statsFor)
+    let simStates''' = HM.mapWithKey (convertSlippedClimb now)
                                      simStates''
 
     -- Drain climbing XP from any unit that finished a climb this
@@ -307,26 +307,22 @@ rollClimbSlips env now statsFor sim = do
 --   transform the active Climbing transition into a Falling transition
 --   from its current usRealZ down to the climb's origin tile.
 convertSlippedClimb
-    ∷ Double → (UnitId → UnitMoveStats)
-    → UnitId → UnitSimState → UnitSimState
-convertSlippedClimb now statsFor uid ss =
+    ∷ Double → UnitId → UnitSimState → UnitSimState
+convertSlippedClimb now _uid ss =
     case (usState ss, usClimbSlipAt ss, usClimbFromTile ss) of
         (TransitioningTo Climbing, Just slipAt,
          Just (fromX, fromY, fromZ)) | now ≥ slipAt →
-            let stats     = statsFor uid
-                curRealZ  = usRealZ ss
+            let curRealZ  = usRealZ ss
                 currentZ  = floor curRealZ ∷ Int
                 dropZ     = currentZ - fromZ
                 duration  = fallDuration dropZ
                 dstX      = fromX
                 dstY      = fromY
-                impact    = computeFallImpact dropZ stats
             in ss { usState            = TransitioningTo Falling
                   , usTransitionUntil  = Just (now + duration)
                   , usTransitionStride = 1
                   , usFallFromTile     = Just (fromX, fromY, currentZ)
                   , usFallToTile       = Just (dstX, dstY, fromZ)
-                  , usFallImpact       = Just impact
                   , usJumpApex         = Nothing   -- a fall, not a leap
                   -- Cancel the climb-chain follow-ups; the unit isn't
                   -- going to crawl + stand after a fall.
@@ -620,7 +616,6 @@ startJump now ss tgx tgy =
           , usFacing           = vectorToDirection dx dy
           , usFallFromTile     = Just (fromX, fromY, z)
           , usFallToTile       = Just (dstX, dstY, z)
-          , usFallImpact       = Nothing
           , usJumpApex         = Just apex
           , usPostTransition   = []
           , usTarget           = Nothing
@@ -633,18 +628,6 @@ startJump now ss tgx tgy =
 -- function uses, so the planner and the mover agree on what counts as a
 -- fall. dz of -1 still plays the regular walking animation; dz of
 -- -pcFallTriggerDrop or worse triggers the Standing→Falling transition.
-
--- | Legacy scalar fall impact (dz × mass/50 / toughness). The landing
---   OUTCOME no longer uses this — falls now go through the `Unit.Fall`
---   physics injury model (see tickAllMovement). Retained only because a
---   slip-converted climb still stamps `usFallImpact` for any future
---   consumer; the value is otherwise vestigial.
-computeFallImpact ∷ Int → UnitMoveStats → Float
-computeFallImpact dz stats =
-    let absDz   = abs (fromIntegral dz) ∷ Float
-        massN   = umsBodyMass stats / 50.0
-        toughN  = max 0.1 (umsToughness stats)
-    in absDz * massN / toughN
 
 -- | Per-unit climb speed in z-tiles per second. Replaces the bare
 --   climbSpeedZ constant. Formula:
@@ -822,9 +805,6 @@ handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
                               , usFallToTile      = if clearFall
                                                     then Nothing
                                                     else usFallToTile snapped
-                              , usFallImpact      = if clearFall
-                                                    then Nothing
-                                                    else usFallImpact snapped
                               , usPostTransition  = chainAfter
                               -- Drop magnitude for tickAllMovement's injury
                               -- pass; usGetUpAt is set there once the worst
@@ -1030,7 +1010,7 @@ moveToward pc reg now stats us mt mWtd dx dy dist step =
                     (dgx, dgy) = dstTile
                     fallDx     = fromIntegral (dgx - sx) ∷ Float
                     fallDy     = fromIntegral (dgy - sy) ∷ Float
-                in startFall now stats us (dstTile, dstZ) srcZ
+                in startFall now us (dstTile, dstZ) srcZ
                              (fallDx, fallDy)
             _ →
                 let (dgx, dgy) = dstTile
@@ -1121,17 +1101,17 @@ startClimb now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
 -- | Initiate a fall sequence. Stops xy movement, faces the cliff
 --   the unit's about to drop off, and starts a Standing→Falling
 --   transition whose duration scales with the drop distance.
---   handleTransitionExpiry consumes usFallImpact to pick the
---   landing outcome (walk, collapse, or kill).
+--   handleTransitionExpiry stamps the drop magnitude onto
+--   usPendingFallDrop, which tickAllMovement feeds to the
+--   `Unit.Fall` physics injury model to pick the landing outcome.
 startFall
     ∷ Double              -- now
-    → UnitMoveStats
     → UnitSimState
     → ((Int, Int), Int)   -- dst tile (gx, gy) + dst Z (bottom)
     → Int                 -- src Z (top of the fall)
     → (Float, Float)      -- step direction (for facing)
     → UnitSimState
-startFall now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
+startFall now us ((dgx, dgy), dstZ) srcZ (nx, ny) =
     let dz       = srcZ - dstZ                 -- positive: drop magnitude
         duration = fallDuration dz
         srcX     = usRealX us
@@ -1141,18 +1121,16 @@ startFall now stats us ((dgx, dgy), dstZ) srcZ (nx, ny) =
         -- you've hit the ground, you've cleared the cliff face.
         dstX     = fromIntegral dgx + 0.5
         dstY     = fromIntegral dgy + 0.5
-        impact   = computeFallImpact dz stats
     in us { usState            = TransitioningTo Falling
           , usTransitionUntil  = Just (now + duration)
           , usTransitionStride = 1
           , usFacing           = vectorToDirection nx ny
           , usFallFromTile     = Just (srcX, srcY, srcZ)
           , usFallToTile       = Just (dstX, dstY, dstZ)
-          , usFallImpact       = Just impact
           , usJumpApex         = Nothing   -- a fall, not a leap
           -- usPostTransition stays empty here; the landing outcome
-          -- (set in handleTransitionExpiry based on impact) decides
-          -- whether to chain into Collapsed/Standing/Dead.
+          -- (set in handleTransitionExpiry from the drop magnitude)
+          -- decides whether to chain into Collapsed/Standing/Dead.
           , usPostTransition   = []
           -- Clear any movement target the fall interrupted. The AI
           -- can re-issue after recovery. Without this, a unit that

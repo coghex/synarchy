@@ -89,15 +89,11 @@ data UnitSimState = UnitSimState
     , usFallFromTile ∷ !(Maybe (Float, Float, Int))
     -- | Destination (bottom) tile of a fall. At end of the fall
     --   transition, xy snaps to this position and Z lands at this
-    --   tile's terrain z. handleTransitionExpiry then computes the
-    --   impact from fromZ → toZ and routes the outcome (walk-off,
-    --   collapse, or kill).
+    --   tile's terrain z. handleTransitionExpiry then derives the
+    --   drop magnitude (fromZ → toZ), stamps it onto usPendingFallDrop,
+    --   and tickAllMovement runs the Unit.Fall injury model to route
+    --   the outcome (walk-off, collapse, or kill).
     , usFallToTile ∷ !(Maybe (Float, Float, Int))
-    -- | Fall impact score, computed at fall start from the drop
-    --   distance, body mass, and toughness. handleTransitionExpiry
-    --   reads it at landing to pick the outcome (walk / collapse /
-    --   kill). Cleared after the impact is resolved.
-    , usFallImpact ∷ !(Maybe Float)
     -- | Number of z-levels just climbed, set when a Climbing
     --   transition completes. Drained by tickAllMovement after
     --   the per-unit tick — it converts this into a skill bump on
