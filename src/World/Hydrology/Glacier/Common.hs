@@ -12,4 +12,6 @@ import World.Hydrology.Types
 getGlacierParams ∷ PersistentFeature → GlacierParams
 getGlacierParams pf = case pfFeature pf of
     (HydroShape (GlacierFeature g)) → g
-    _ → error "getGlacierParams: not a glacier"
+    other → error $ "getGlacierParams: not a glacier (featureId=" ⧺ show (pfId pf)
+                  ⧺ " formationPeriod=" ⧺ show (pfFormationPeriod pf)
+                  ⧺ " actualShape=" ⧺ show other ⧺ ")"

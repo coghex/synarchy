@@ -39,7 +39,8 @@ toClimateCoord facing worldSize x y =
   where
     floorDiv a b
       | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
-      | otherwise = error "floorDiv: non-positive divisor"
+      | otherwise = error $ "floorDiv: non-positive divisor (a=" ⧺ show a
+                          ⧺ " b=" ⧺ show b ⧺ ")"
 
 -- * Per-Mode Color Functions
 

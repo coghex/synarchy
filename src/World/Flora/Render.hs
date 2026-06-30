@@ -92,4 +92,6 @@ findActiveCycleStage stages dayOfYear =
 maximumByKey ∷ Ord b ⇒ (a → b) → [a] → a
 maximumByKey _ [x]    = x
 maximumByKey f (x:xs) = foldl' (\best y → if f y > f best then y else best) x xs
-maximumByKey _ []     = error "maximumByKey: empty list"
+-- Unreachable: the only caller (findActivePhase) matches [] → Nothing
+-- before reaching this, so the list is non-empty here by construction.
+maximumByKey _ []     = error "maximumByKey: empty list (caller failed to guard non-empty)"

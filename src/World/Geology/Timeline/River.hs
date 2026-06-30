@@ -423,7 +423,10 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
         cutSeg   = if cutIdx < V.length tribSegs
                    then tribSegs V.! cutIdx
                    else if V.null tribSegs
-                        then error "performMerge: empty tributary"
+                        then error $ "performMerge: empty tributary (tribId="
+                                   ⧺ show tribId ⧺ " mainId=" ⧺ show mainId
+                                   ⧺ " period=" ⧺ show periodIdx
+                                   ⧺ " junction=(" ⧺ show jx ⧺ "," ⧺ show jy ⧺ "))"
                         else V.last tribSegs
 
         -- Junction segment's end elevation must put the tributary's

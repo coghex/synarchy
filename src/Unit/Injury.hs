@@ -320,7 +320,9 @@ allocateSubparts kind reach roll subs =
 
 -- | Pick one part weighted by area weight, from a roll in [0,1). Total.
 weightedPick ∷ Float → [BodyPart] → BodyPart
-weightedPick _ [] = error "weightedPick: empty list"   -- guarded by callers
+-- Guarded by callers: bands from groupBy are non-empty, and the stab /
+-- structural / soft paths case-match [] before calling.
+weightedPick roll [] = error $ "weightedPick: empty list (roll=" ⧺ show roll ⧺ ")"
 weightedPick roll ps@(p0 : _) =
     let total  = sum (map bpAreaWeight ps)
         target = roll * total

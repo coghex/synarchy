@@ -12,4 +12,6 @@ import World.Hydrology.Types
 getRiverParams ∷ PersistentFeature → RiverParams
 getRiverParams pf = case pfFeature pf of
     (HydroShape (RiverFeature r)) → r
-    _ → error "getRiverParams: not a river"
+    other → error $ "getRiverParams: not a river (featureId=" ⧺ show (pfId pf)
+                  ⧺ " formationPeriod=" ⧺ show (pfFormationPeriod pf)
+                  ⧺ " actualShape=" ⧺ show other ⧺ ")"

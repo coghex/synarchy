@@ -131,7 +131,9 @@ plateAt ∷ Word64 → Int → [TectonicPlate] → Int → Int → (TectonicPlat
 plateAt seed worldSize plates gx gy =
     case rankPlates seed worldSize plates gx gy of
       (x:_) → x
-      []    → error "plateAt: no plates"
+      []    → error $ "plateAt: no plates (seed=" ⧺ show seed
+                    ⧺ " worldSize=" ⧺ show worldSize
+                    ⧺ " tile=(" ⧺ show gx ⧺ "," ⧺ show gy ⧺ "))"
 
 twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
                  → ((TectonicPlate, Float), (TectonicPlate, Float))
@@ -184,7 +186,9 @@ twoNearestPlates seed worldSize plates gx gy =
                 first  = (p, d0)
                 second = (p, maxDist)
             in go first second False ps
-        _ → error "no plates"
+        _ → error $ "twoNearestPlates: no plates (seed=" ⧺ show seed
+                  ⧺ " worldSize=" ⧺ show worldSize
+                  ⧺ " tile=(" ⧺ show gx ⧺ "," ⧺ show gy ⧺ "))"
 
 rankPlates seed worldSize plates gx gy =
     let withDist plate =
