@@ -71,12 +71,16 @@ data WorldCommand
     | WorldSetWorldCursorHover WorldPageId Int Int
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId
-    | WorldSelectTileByCoord WorldPageId Int Int
-        -- ^ Atomically set worldSelectedTile to the column at (gx, gy)
-        --   using the loaded chunk's surface z. Bypasses the hover-
-        --   then-select dance so the caller doesn't have to fight the
-        --   continuous mouse-hover overwrites for one-shot selections
-        --   (e.g. context-menu "Info" on a tile).
+    | WorldSelectTileByCoord WorldPageId Int Int (Maybe Int)
+        -- ^ Atomically set worldSelectedTile to the column at (gx, gy).
+        --   The @Maybe Int@ is the z to select: @Just z@ pins the exact
+        --   tile (the live-picked z from a left-click, so a click below
+        --   the surface selects the clicked tile, not the column top —
+        --   issue #367); @Nothing@ falls back to the loaded chunk's
+        --   surface z (the right-click context-menu "Info" path, which
+        --   has no live pick). Bypasses the hover-then-select dance so
+        --   the caller doesn't have to fight the continuous mouse-hover
+        --   overwrites for one-shot selections.
     | WorldSetToolMode WorldPageId ToolMode
     | WorldSetMineAnchor WorldPageId Int Int
         -- ^ Mine tool: first click anchors the designation rectangle

@@ -125,8 +125,8 @@ handleWorldCommand env logger (WorldSetWorldCursorSelect pageId)
   = handleWorldSetWorldCursorSelectCommand env logger pageId
 handleWorldCommand env logger (WorldSetWorldCursorDeselect pageId)
   = handleWorldSetWorldCursorDeselectCommand env logger pageId
-handleWorldCommand env logger (WorldSelectTileByCoord pageId gx gy)
-  = handleWorldSelectTileByCoordCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldSelectTileByCoord pageId gx gy mz)
+  = handleWorldSelectTileByCoordCommand env logger pageId gx gy mz
 handleWorldCommand env logger (WorldSetMineAnchor pageId gx gy)
   = handleWorldSetMineAnchorCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldClearMineAnchor pageId)

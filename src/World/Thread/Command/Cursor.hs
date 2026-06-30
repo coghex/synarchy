@@ -397,14 +397,18 @@ handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
                     _          → (cs { constructStructTexture = Just tid }, ())
         Nothing → pure ()
 
--- | Directly select the column at (gx, gy) on the given world, using
---   the loaded chunk's surface z. Used by the context-menu "Info" path
---   so a tile can be selected without going through the hover-then-
---   select cursor flow (which races with the per-tick mouse-hover
---   updates from hud.update). No-op if the chunk isn't loaded.
+-- | Directly select the column at (gx, gy) on the given world. The
+--   @Maybe Int@ picks the z: @Just z@ selects that exact tile (the
+--   live-picked z from a left-click, so clicking below the surface
+--   selects the clicked tile rather than the column top — issue #367);
+--   @Nothing@ falls back to the loaded chunk's surface z (the
+--   context-menu "Info" path, which has no live pick). Used so a tile
+--   can be selected without going through the hover-then-select cursor
+--   flow (which races with the per-tick mouse-hover updates from
+--   hud.update). No-op if the chunk isn't loaded.
 handleWorldSelectTileByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → IO ()
-handleWorldSelectTileByCoordCommand env _logger pageId gx gy = do
+    → Int → Int → Maybe Int → IO ()
+handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Nothing → pure ()
@@ -414,7 +418,9 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy = do
             case lookupChunk chunkCoord tileData of
                 Nothing → pure ()
                 Just lc → do
-                    let z = lcSurfaceMap lc VU.! columnIndex lx ly
+                    -- Use the live-picked z when supplied; otherwise
+                    -- default to the column surface.
+                    let z = fromMaybe (lcSurfaceMap lc VU.! columnIndex lx ly) mz
                     -- This path resolves the tile immediately (no hover
                     -- round-trip), so the set and the opposing-chunk clear
                     -- happen in the SAME write — no blank window. A new
