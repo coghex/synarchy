@@ -2752,8 +2752,9 @@ unitGetAllIdsFn env = do
 unitListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitListFn env = do
     result ← Lua.liftIO $ do
-        um ← readIORef (unitManagerRef env)
-        let entries = HM.toList (umInstances um)
+        -- Active world page only — consistent with unit.getAllIds, so a
+        -- unit on another world page never leaks into this listing (#377).
+        entries ← HM.toList <$> activeUnits env
         if null entries
         then return "No units spawned"
         else return $ T.unpack $ T.intercalate "\n" $
