@@ -43,7 +43,7 @@ Conventions that keep this fast — don't undo them:
   the suite, and don't grow the baseline seed list without tagging the
   quick tier accordingly.
 
-**Do NOT use `-f dev` for routine work.** The project is ~300 modules; switching between the `dev` and production flag profiles forces a full rebuild that takes about five minutes. The default (prod) profile is what the test suite, dump tool, and binaries are expected to run under, and what every code change should be validated against.
+**Do NOT use `-f dev` for routine work.** The project is 360+ modules; switching between the `dev` and production flag profiles forces a full rebuild that takes about five minutes. The default (prod) profile is what the test suite, dump tool, and binaries are expected to run under, and what every code change should be validated against.
 
 The `dev` flag enables Vulkan validation layers, address sanitizer on macOS, and `ENGINE_DEBUG` plumbing. Reach for it only when actively chasing a graphics or memory bug, and tell the user before switching — they may want to flip back afterward to avoid the rebuild cost on the next change. Production builds use `-O2 -optc-O3`.
 
@@ -108,7 +108,7 @@ Procedural world with geological simulation in `World/`:
 
 ## Project Layout
 
-- `src/` — Library source (260+ modules)
+- `src/` — Library source (360+ modules)
 - `app/Main.hs` — Executable entry point (draw loop)
 - `test/` — hspec unit tests (engine core and Vulkan primitives)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
@@ -187,7 +187,7 @@ echo 'return world.getInitProgress()' | nc -w 2 localhost 9008
 ### World generation workflow
 
 ```bash
-# Create a world (name, seed, worldSize, numAges)
+# Create a world (name, seed, worldSize, plateCount)
 echo 'world.init("test", 42, 256, 5)' | nc -w 2 localhost 8008
 
 # Option A: Block until done (preferred — timeout in seconds)
@@ -252,7 +252,7 @@ headless engine, loads defs + AI scripts (the loading screen doesn't run
 headless), spawns an attacker next to a target on flat ground, issues
 `unitAi.commandAttack`, and prints each unit's `currentAnim` timeline
 plus pass/fail checks (a swing animation appeared; a killed unit settled
-on a death animation). `--attacker`/`--target`/`--seed`/`--port`/`--seconds`.
+on a death animation). `--attacker`/`--target`/`--seed`/`--size`/`--port`/`--seconds`.
 
 To drive it by hand: load the AI stack with
 `engine.loadScript('scripts/unit_stats.lua',0.1)` (+ `unit_resources`,
@@ -277,8 +277,8 @@ the only thing steering — otherwise the AI wanders the unit off-course),
 builds the course, spawns a unit, issues `unit.moveTo`, and prints a
 position / activity / pose / `currentAnim` timeline plus per-course
 pass/fail checks (e.g. `corner_trap`: reaches the goal and does NOT freeze
-in walking — the diagonal-corner-cut stuck-unit bug). `--course`/`--unit`/
-`--speed`/`--seconds`/`--port`; `--list` lists courses.
+in walking — the diagonal-corner-cut stuck-unit bug). `--mode {move,stamina}`/
+`--course`/`--unit`/`--speed`/`--seconds`/`--port`; `--list` lists courses.
 
 Note: `startFall` clears the move target on landing (AI re-issues after
 recovery), so a unit can't reach a goal across a fall in one `moveTo` —
@@ -340,7 +340,7 @@ echo 'engine.quit()' | nc -w 2 localhost 8008
 
 ## Save / Load
 
-Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here; v30 as of the ore-deposit work, 2026-06). Saves live under `saves/<name>/world.synworld` (binary) plus a human-readable `world_gen.yaml` alongside.
+Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) plus a human-readable `world_gen.yaml` alongside.
 
 ```bash
 # From headless / debug console
@@ -359,7 +359,7 @@ Enum schema policy: `Direction`, `Pose`, and `UnitActivity` derive `Generic Seri
 
 Wait ~15 seconds after `loadSave` for a 128-world before querying — the center chunk gens synchronously but the rest queue progressively. Headless tests need to budget the wait.
 
-Multi-world save regression: **`python3 tools/multiworld_save_probe.py`** — the #214/#219 gate. Generates two real world pages (active→`main_world` + a `second_world`), spawns a unit + building on each, saves, then does the gold-standard **save → quit → fresh restart → load** and asserts both pages' entities survive on the right page (cross-page negative checks included). `--port`/`--seed`/`--seed2`/`--size`. NB: it uses two `world.init` pages, not `world.initArena` — loading a save that contains an arena page currently hangs the world thread (#365), so arenas can't be a save-test secondary page.
+Multi-world save regression: **`python3 tools/multiworld_save_probe.py`** — the #214/#219 gate. Generates two real world pages (active→`main_world` + a `second_world`), spawns a unit + building on each, saves, then does the gold-standard **save → quit → fresh restart → load** and asserts both pages' entities survive on the right page (cross-page negative checks included). `--port`/`--seed`/`--seed2`/`--size`/`--plates`. NB: it uses two `world.init` pages, not `world.initArena` — loading a save that contains an arena page currently hangs the world thread (#365), so arenas can't be a save-test secondary page.
 
 ## AI Asset Generation
 
