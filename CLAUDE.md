@@ -43,9 +43,11 @@ Conventions that keep this fast — don't undo them:
   the suite, and don't grow the baseline seed list without tagging the
   quick tier accordingly.
 
-**Do NOT use `-f dev` for routine work.** The project is 360+ modules; switching between the `dev` and production flag profiles forces a full rebuild that takes about five minutes. The default (prod) profile is what the test suite, dump tool, and binaries are expected to run under, and what every code change should be validated against.
+**Do NOT use `-f dev` for routine work.** The project is 360+ modules; a full prod rebuild takes ~1.5 minutes (parallelized via the `semaphore:` setting in `cabal.project`), and flag-profile switches force one. The default (prod) profile is what the test suite, dump tool, and binaries are expected to run under, and what every code change should be validated against.
 
-The `dev` flag enables Vulkan validation layers, address sanitizer on macOS, and `ENGINE_DEBUG` plumbing. Reach for it only when actively chasing a graphics or memory bug, and tell the user before switching — they may want to flip back afterward to avoid the rebuild cost on the next change. Production builds use `-O2 -optc-O3`.
+The `dev` flag enables Vulkan validation layers, address sanitizer on macOS, and `ENGINE_DEBUG` plumbing. Reach for it only when actively chasing a graphics or memory bug. When you do, give it its own build dir so the two profiles' artifacts coexist and flipping back is free: `cabal build -f dev --builddir=dist-dev` (every `cabal run`/`test` in that profile needs the same `-f dev --builddir=dist-dev` pair; plain commands keep using the prod `dist-newstyle`). Production builds use `-O2 -optc-O3`.
+
+The executable is built with `-rtsopts`, so RTS behavior can be inspected and tuned at run time without a rebuild — e.g. append `+RTS -s` to a `--dump` run for a GC/allocation summary on stderr, or experiment with `-N<n>` / `-A<size>`. The baked-in default remains `-N -A128M`.
 
 ## Language & Conventions
 
