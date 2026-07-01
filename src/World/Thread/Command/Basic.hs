@@ -8,7 +8,6 @@ module World.Thread.Command.Basic
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scene.Types (emptyLayeredQuads)
