@@ -3,6 +3,7 @@ module Engine.Scene.Render where
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.IORef
@@ -61,7 +62,7 @@ updateSceneForRender = do
 
                 let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
                     spriteBatches = getCurrentBatches updatedSceneMgr
-                    spriteCount = V.sum $ V.map (V.length . rbVertices) spriteBatches
+                    spriteCount = V.sum $ V.map (VS.length . rbVertices) spriteBatches
                     drawCallCount = V.length spriteBatches + V.length textRenderBatches
 
                 logDebugSM CatScene "Batch generation complete"
@@ -163,7 +164,7 @@ uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
                                            "No device"
         Just d → pure d
 
-    let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
+    let totalVertices = V.sum $ V.map (fromIntegral . VS.length . rbVertices) batches
 
     logDebugSM CatRender "Uploading batches to buffer"
         [("batches", T.pack $ show $ V.length batches)
@@ -187,12 +188,12 @@ uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
     V.forM_ batches $ \batch → do
         offset ← liftIO $ readIORef currentOffset
         let !vertices = rbVertices batch
-            !batchSize = V.length vertices * fromIntegral vertexTotalSize
+            !batchSize = VS.length vertices * fromIntegral vertexTotalSize
 
         liftIO $ do
-            let ptr = castPtr dataPtr `plusPtr` offset
-            V.iforM_ vertices $ \i vertex →
-                pokeByteOff ptr (i * fromIntegral vertexTotalSize) vertex
+            let dst = castPtr dataPtr `plusPtr` offset ∷ Ptr Vertex
+            VS.unsafeWith vertices $ \src →
+                copyArray dst src (VS.length vertices)
             writeIORef currentOffset (offset + batchSize)
 
     unmapMemory device (sdbMemory finalBuffer)

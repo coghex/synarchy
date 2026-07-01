@@ -5,11 +5,12 @@ module World.Render
     ) where
 
 import UPrelude
+import qualified Data.Map as Map
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
-import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Generate (viewDepth, globalToChunk)
@@ -31,7 +32,7 @@ surfaceHeadroom = 25
 
 -- * Top-Level Entry Point
 
-updateWorldTiles ∷ EngineEnv → IO (V.Vector SortableQuad)
+updateWorldTiles ∷ EngineEnv → IO LayeredQuads
 updateWorldTiles env = do
     camera ← readIORef (cameraRef env)
     (fbW, fbH) ← readIORef (framebufferSizeRef env)
@@ -50,7 +51,7 @@ updateWorldTiles env = do
     worldManager ← readIORef (worldManagerRef env)
 
     tileQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
+        then return Map.empty
         else do
             let currentSnap = WorldCameraSnapshot
                     { wcsPosition = camPosition camera
@@ -77,11 +78,16 @@ updateWorldTiles env = do
                                 return (wqcQuads wqc)
                             _ → do
                                 result ← renderWorldQuads env worldState tileAlpha currentSnap
+                                -- Group + depth-sort ONCE per rebuild, here on
+                                -- the world thread — the frame loop then only
+                                -- linear-merges dynamic quads into these runs
+                                -- (#446).
+                                let sorted = sortQuadsByLayer result
                                 writeIORef (wsQuadCacheRef worldState) $
-                                    Just (WorldQuadCache curGen currentSnap result)
-                                return result
-                    Nothing → return V.empty
-            return $ V.concat quads
+                                    Just (WorldQuadCache curGen currentSnap sorted)
+                                return sorted
+                    Nothing → return Map.empty
+            return $ Map.unionsWith mergeSortedQuads quads
 
     -- Cursor quads are generated every frame (cheap: just 1-2 quads)
     -- so they respond instantly to mouse movement
@@ -191,8 +197,10 @@ updateWorldTiles env = do
                     Nothing → return ()
             Nothing → return ()
 
-    let allQuads = tileQuads <> worldCursorQuads <> spoilQuads
+    -- Static terrain rides pre-sorted per layer; everything per-tick
+    -- stays a flat run the frame loop sorts (it's small) and merges in.
+    let dynQuads = worldCursorQuads <> spoilQuads
                 <> groundItemQuads
                 <> buildingQuads <> structureQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
-    return allQuads
+    return (LayeredQuads tileQuads dynQuads)

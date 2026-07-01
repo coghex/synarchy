@@ -108,8 +108,7 @@ function data.loadDefaults()
     local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
           pixelSnap, textureFilter = engine.loadDefaultConfig()
 
-    -- DEBUG: Log what defaults gave us
-    engine.logInfo("loadDefaultConfig() returned: " .. w .. "x" .. h)
+    engine.logDebug("loadDefaultConfig() returned: " .. w .. "x" .. h)
 
     -- Auto-adjust UI scale for large/HiDPI displays
     -- If the resolution is very high, scale up the UI so it's not tiny
@@ -232,8 +231,7 @@ end
 function data.reload()
     local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
           pixelSnap, textureFilter = engine.getVideoConfig()
-    -- DEBUG: Log what we're loading
-    engine.logInfo("reload() got resolution: " .. w .. "x" .. h
+    engine.logDebug("reload() got resolution: " .. w .. "x" .. h
                   .. ", uiScale: " .. tostring(uiScale))
     data.current.width         = w
     data.current.height        = h
@@ -266,7 +264,7 @@ function data.apply(widgetValues)
         data.current.width  = data.pending.width
         data.current.height = data.pending.height
         result.resolutionChanged = true
-        engine.logInfo("Resolution applied: "
+        engine.logDebug("Resolution applied: "
             .. data.current.width .. "x" .. data.current.height)
     end
 
@@ -274,42 +272,42 @@ function data.apply(widgetValues)
     if data.pending.windowMode ~= data.current.windowMode then
         data.current.windowMode = data.pending.windowMode
         engine.setWindowMode(data.current.windowMode)
-        engine.logInfo("Window mode applied: " .. data.current.windowMode)
+        engine.logDebug("Window mode applied: " .. data.current.windowMode)
     end
 
     -- VSync
     if data.pending.vsync ~= data.current.vsync then
         data.current.vsync = data.pending.vsync
         engine.setVSync(data.current.vsync)
-        engine.logInfo("VSync applied: " .. tostring(data.current.vsync))
+        engine.logDebug("VSync applied: " .. tostring(data.current.vsync))
     end
 
     -- MSAA
     if data.pending.msaa ~= data.current.msaa then
         data.current.msaa = data.pending.msaa
         engine.setMSAA(data.current.msaa)
-        engine.logInfo("MSAA applied: " .. tostring(data.current.msaa))
+        engine.logDebug("MSAA applied: " .. tostring(data.current.msaa))
     end
 
     -- Brightness (from pending, set by dropdown onChange callbacks)
     if data.pending.brightness ~= data.current.brightness then
         data.current.brightness = data.pending.brightness
         engine.setBrightness(data.current.brightness)
-        engine.logInfo("Brightness applied: " .. tostring(data.current.brightness))
+        engine.logDebug("Brightness applied: " .. tostring(data.current.brightness))
     end
 
     -- Pixel Snap
     if data.pending.pixelSnap ~= data.current.pixelSnap then
         data.current.pixelSnap = data.pending.pixelSnap
         engine.setPixelSnap(data.current.pixelSnap)
-        engine.logInfo("Pixel Snap applied: " .. tostring(data.current.pixelSnap))
+        engine.logDebug("Pixel Snap applied: " .. tostring(data.current.pixelSnap))
     end
 
     -- Texture Filter
     if data.pending.textureFilter ~= data.current.textureFilter then
         data.current.textureFilter = data.pending.textureFilter
         engine.setTextureFilter(data.current.textureFilter)
-        engine.logInfo("Texture filter applied: " .. data.current.textureFilter)
+        engine.logDebug("Texture filter applied: " .. data.current.textureFilter)
     end
 
     -- UI Scale (read from widget)
@@ -321,7 +319,7 @@ function data.apply(widgetValues)
                 data.current.uiScale  = newScale
                 data.pending.uiScale  = newScale
                 engine.setUIScale(newScale)
-                engine.logInfo("UI scale applied: " .. tostring(newScale))
+                engine.logDebug("UI scale applied: " .. tostring(newScale))
             end
         else
             engine.logWarn("UI scale out of range: " .. tostring(newScale))
@@ -338,7 +336,7 @@ function data.apply(widgetValues)
             -- Engine already has this value from live preview,
             -- but ensure it's set in case apply is called without slider interaction
             engine.setBrightness(br)
-            engine.logInfo("Brightness applied: " .. tostring(br))
+            engine.logDebug("Brightness applied: " .. tostring(br))
         end
     end
 
@@ -349,7 +347,7 @@ function data.apply(widgetValues)
             data.current.frameLimit  = math.floor(fl)
             data.pending.frameLimit  = data.current.frameLimit
             engine.setFrameLimit(data.current.frameLimit)
-            engine.logInfo("Frame limit applied: " .. tostring(data.current.frameLimit))
+            engine.logDebug("Frame limit applied: " .. tostring(data.current.frameLimit))
         else
             engine.logWarn("Frame limit out of range: " .. tostring(fl))
         end
@@ -364,7 +362,7 @@ function data.apply(widgetValues)
             data.current.tooltipDwellMs = dw
             data.pending.tooltipDwellMs = dw
             engine.setTooltipDwellMs(dw)
-            engine.logInfo("Tooltip dwell applied: " .. tostring(dw) .. "ms")
+            engine.logDebug("Tooltip dwell applied: " .. tostring(dw) .. "ms")
         end
     end
 
@@ -377,7 +375,7 @@ function data.apply(widgetValues)
             data.current.tooltipHintDelayMs = hd
             data.pending.tooltipHintDelayMs = hd
             engine.setTooltipHintDelayMs(hd)
-            engine.logInfo("Tooltip hint delay applied: "
+            engine.logDebug("Tooltip hint delay applied: "
                 .. tostring(hd) .. "ms")
         end
     end

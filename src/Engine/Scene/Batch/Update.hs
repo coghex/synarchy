@@ -9,7 +9,8 @@ module Engine.Scene.Batch.Update
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as VM
+import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Storable.Mutable as VSM
 import qualified Data.Map as Map
 import qualified Data.List as List
 import Engine.Asset.Handle (TextureHandle)
@@ -52,16 +53,16 @@ createBatch ((textureId, layerId), objects) =
         objectIds = V.map doId objects
         -- Compute average z-index while we have the objects
         !avgZ = V.sum (V.map doZIndex objects) / fromIntegral numObjs
-        allVertices = V.create $ do
-            mv ← VM.new totalVerts
+        allVertices = VS.create $ do
+            mv ← VSM.new totalVerts
             V.iforM_ objects $ \idx obj → do
                 let !i = idx * 6
-                VM.write mv  i      (doV0 obj)
-                VM.write mv (i+1)   (doV1 obj)
-                VM.write mv (i+2)   (doV2 obj)
-                VM.write mv (i+3)   (doV0 obj)
-                VM.write mv (i+4)   (doV2 obj)
-                VM.write mv (i+5)   (doV3 obj)
+                VSM.write mv  i      (doV0 obj)
+                VSM.write mv (i+1)   (doV1 obj)
+                VSM.write mv (i+2)   (doV2 obj)
+                VSM.write mv (i+3)   (doV0 obj)
+                VSM.write mv (i+4)   (doV2 obj)
+                VSM.write mv (i+5)   (doV3 obj)
             return mv
         batch = RenderBatch
             { rbTexture  = textureId

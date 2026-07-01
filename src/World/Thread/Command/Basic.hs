@@ -11,6 +11,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scene.Types (emptyLayeredQuads)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
@@ -59,7 +60,7 @@ handleWorldDestroyCommand env logger pageId = do
         (HM.map (HS.delete pageId) m, ())
 
     -- Clear world quads so renderer stops drawing the old world
-    writeIORef (worldQuadsRef env) V.empty
+    writeIORef (worldQuadsRef env) emptyLayeredQuads
 
     logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId
 
@@ -84,7 +85,7 @@ handleWorldDestroyAllCommand env logger = do
     -- treat a stale synthetic id from this game as reusable, which could
     -- otherwise let it clobber an unrelated page (#214).
     writeIORef (loadProvenanceRef env) HM.empty
-    writeIORef (worldQuadsRef env) V.empty
+    writeIORef (worldQuadsRef env) emptyLayeredQuads
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so
     -- clearing the managers here would race any in-flight spawns and let
