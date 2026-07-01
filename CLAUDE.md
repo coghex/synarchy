@@ -37,9 +37,11 @@ edit baseline JSON by hand — regenerate with `world_baseline.py`.
 CI (`.github/workflows/ci.yml`, #436) runs on every PR and push to
 master, on Linux: full build with `-Werror` (the #435 warning-clean
 state is enforced, dependency warnings excluded), both test-suite
-builds, the headless suite, and `test_audit.py` — tier 2 minus
-world_check, which runs as a non-blocking probe until cross-arch
-float determinism (macOS/aarch64 baselines vs Linux/x86_64) is proven.
+builds, the headless suite, `test_audit.py`, and `world_check --quick`
+— all blocking. Worldgen output proved bit-identical between
+macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
+tracked baselines are platform-agnostic; a worldgen-output PR that
+skips its tier-3 rebaseline fails CI.
 
 Conventions that keep this fast — don't undo them:
 - hspec worldgen specs **share generated worlds** via

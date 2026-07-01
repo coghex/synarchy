@@ -5,11 +5,12 @@
 # Coverage vs CLAUDE.md testing tiers:
 #   - tier 2 hspec:   cabal test synarchy-test-headless
 #   - tier 2 audit:   python3 tools/test_audit.py
-#   - tier 2 worldgen: tools/world_check.py --quick runs as a
-#     NON-BLOCKING probe (continue-on-error) until we know whether
-#     worldgen float math is bit-stable across macOS/aarch64 (where the
-#     tracked baselines are captured, #421) and Linux/x86_64. If runs
-#     prove it stable, drop the continue-on-error to make it a gate.
+#   - tier 2 worldgen: tools/world_check.py --quick, a BLOCKING gate.
+#     Worldgen float math proved bit-stable across architectures on the
+#     first run (6/6 exact-match against the macOS/aarch64-captured
+#     baselines from #421, PR #449) — if it ever flakes cross-arch,
+#     demote it to continue-on-error and investigate rather than
+#     rebaselining per-platform.
 #
 # -Werror is applied to the synarchy package only (not dependencies),
 # so the warning-clean state from #435 is enforced, not just observed.
@@ -97,10 +98,8 @@ jobs:
       - name: Test audit
         run: python3 tools/test_audit.py
 
-      # Worldgen regression probe — see the header comment. Baselines
+      # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
-      # dev machine (macOS/aarch64). Cross-arch float divergence would
-      # show up here as stat mismatches with zero bug-category failures.
-      - name: world_check --quick (non-blocking cross-arch probe)
-        continue-on-error: true
+      # dev machine (macOS/aarch64); Linux output matches them exactly.
+      - name: world_check --quick
         run: python3 tools/world_check.py --quick
