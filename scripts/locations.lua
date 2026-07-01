@@ -324,30 +324,30 @@ end
 local function spawnLootTableContent(def, entry, gx, gy, worldId)
     for _ = 1, (entry.rolls or 1) do
         local itemId = loot.roll(entry.id)
-        if itemId then
-            local ox, oy = contentOffset(def, entry)
-            item.spawnGround(itemId, gx + ox, gy + oy, nil, worldId)
-        else
+        if not itemId then
             engine.logWarn("locations: unknown loot table '" ..
                 tostring(entry.id) .. "'")
+        else
+            local ox, oy = contentOffset(def, entry)
+            local gid = item.spawnGround(itemId, gx + ox, gy + oy, nil, worldId)
+            if not gid then
+                engine.logWarn("locations: loot table '" .. tostring(entry.id) ..
+                    "' rolled unknown item id '" .. tostring(itemId) .. "'")
+            end
         end
     end
 end
 
--- NB building.spawn does NOT take a pageId (it validates occupancy
--- against the snapshot of the VISIBLE worlds, not a named page) — a
--- building content entry only spawns correctly when its location's
--- page is the active/visible one. Pre-existing engine limitation, not
--- new to #90; a hidden-page location with building content logs the
--- "unknown/unplaceable" warning below instead of spawning.
+-- building.spawn takes an explicit pageId (#90) so this validates
+-- occupancy/terrain-Z against — and spawns onto — the location's own
+-- page, same as unit.spawn / item.spawnGround / structure.place.
 local function spawnBuildingContent(def, entry, gx, gy, worldId)
     for _ = 1, (entry.count or 1) do
         local ox, oy = contentOffset(def, entry)
-        local bid = building.spawn(entry.id, gx + ox, gy + oy)
+        local bid = building.spawn(entry.id, gx + ox, gy + oy, worldId)
         if not bid then
             engine.logWarn("locations: building content '" ..
-                tostring(entry.id) .. "' failed to spawn " ..
-                "(unknown id, unplaceable, or not on the active page)")
+                tostring(entry.id) .. "' failed to spawn (unknown id or unplaceable)")
         end
     end
 end
