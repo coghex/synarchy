@@ -2,6 +2,7 @@
 module World.Render.ViewBounds
     ( ViewBounds(..)
     , computeViewBounds
+    , expandViewBounds
     , isTileVisible
     ) where
 
@@ -38,6 +39,19 @@ computeViewBounds camera fbW fbH effDepth =
         , vbTop    = cy - halfH - padY
         , vbBottom = cy + halfH + padY
         }
+
+-- | Widen bounds by per-axis margins. The cached tile pass uses this
+--   with 'World.Render.Camera.quadCacheMargins' so a pan can travel
+--   the margin before the quad cache must rebuild (#447). Per-frame
+--   (dynamic) passes keep the tight bounds — margin would only make
+--   them build more offscreen quads every tick.
+expandViewBounds ∷ (Float, Float) → ViewBounds → ViewBounds
+expandViewBounds (mX, mY) vb = ViewBounds
+    { vbLeft   = vbLeft vb - mX
+    , vbRight  = vbRight vb + mX
+    , vbTop    = vbTop vb - mY
+    , vbBottom = vbBottom vb + mY
+    }
 
 isTileVisible ∷ ViewBounds → Float → Float → Bool
 isTileVisible vb drawX drawY =

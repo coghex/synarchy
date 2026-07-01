@@ -9,6 +9,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, atomicModifyIORef')
+import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
@@ -21,7 +22,8 @@ import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), spdGridZ)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
-import World.Render.ViewBounds (computeViewBounds, isTileVisible)
+import World.Render.ViewBounds (computeViewBounds, expandViewBounds, isTileVisible)
+import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
 import World.Render.FloraQuads (floraToQuad)
@@ -182,7 +184,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
                  [] → Nothing
                  ks → Just (maximum ks)
 
-        vb = computeViewBounds camera fbW fbH effectiveDepth
+        -- Cached pass: widen the bounds by the pan margin so the camera
+        -- can travel that far before cameraChanged forces a rebuild
+        -- (#447). The margins come from the SAME snapshot the cache is
+        -- stamped with, pairing coverage with invalidation.
+        vb = expandViewBounds (quadCacheMargins snap) $
+                 computeViewBounds camera fbW fbH effectiveDepth
 
         visibleChunksWithOffset =
             [ (lc, offset)
@@ -398,6 +405,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                      <> blankQuads <> iceQuads <> oceanQuads
                                      <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
+            -- Chunks build independently, so rebuilds (already off the
+            -- render thread — this runs on the world thread) spread
+            -- across cores, same pattern as ChunkLoading /
+            -- ZoomMap.Cache (#447). Chunk-of-4 keeps spark overhead
+            -- low at typical visible-chunk counts (~20–100).
+            `using` parListChunk 4 rdeepseq
     return $! V.concat chunkVectors
 
 -- * World Cursor Quads (generated every frame, not cached)

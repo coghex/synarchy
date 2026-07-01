@@ -40,6 +40,7 @@ import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
+import qualified Test.Headless.Render.PanMargin as PanMargin
 
 main ∷ IO ()
 main = hspec $ do
@@ -86,3 +87,4 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Scene.BatchMerge" BatchMerge.spec
+    describe "Render.PanMargin" PanMargin.spec

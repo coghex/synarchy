@@ -20,6 +20,7 @@ module Engine.Scene.Types.Batch
   ) where
 
 import UPrelude
+import Control.DeepSeq (NFData(..), rwhnf)
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Storable as VS
@@ -47,6 +48,11 @@ data SortableQuad = SortableQuad
     , sqTexture  ∷ !TextureHandle  -- ^ Needed for potential future per-texture batching
     , sqLayer    ∷ !LayerId
     } deriving (Show)
+
+-- | Every field is strict (Vertex transitively so), so WHNF = NF —
+--   what the parallel per-chunk quad build's rdeepseq forces (#447).
+instance NFData SortableQuad where
+    rnf = rwhnf
 
 -- | Drawable object ready for rendering
 data DrawableObject = DrawableObject
