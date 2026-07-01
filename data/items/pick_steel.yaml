@@ -1,7 +1,7 @@
 items:
   - name: "pick_steel"
     display_name: "Steel Pick"
-    sprite: "assets/textures/items/pick_steel.png"
+    sprite: "assets/textures/items/tool/pick_steel.png"
     weight: 2.0
     kind: weapon
     category: Tools

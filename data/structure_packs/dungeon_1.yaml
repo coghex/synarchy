@@ -14,40 +14,40 @@ name: dungeon_1
 pieces:
   floor:
     texture: assets/textures/buildings/dungeon_1/floor.png
-    facemap: assets/textures/world/facemap/floorface.png
+    facemap: assets/textures/facemap/floorface.png
   ceiling:
     texture: assets/textures/buildings/dungeon_1/ceiling.png
-    facemap: assets/textures/world/facemap/ceilingface.png
+    facemap: assets/textures/facemap/ceilingface.png
   post:
     texture: assets/textures/buildings/dungeon_1/post.png
-    facemap: assets/textures/world/facemap/postface.png
+    facemap: assets/textures/facemap/postface.png
 
 walls:
   ne:
     texture: assets/textures/buildings/dungeon_1/wall_ne.png
     facemaps:
-      "00": assets/textures/world/facemap/wallface_ne_00.png
-      "10": assets/textures/world/facemap/wallface_ne_10.png
-      "01": assets/textures/world/facemap/wallface_ne_01.png
-      "11": assets/textures/world/facemap/wallface_ne_11.png
+      "00": assets/textures/facemap/wallface_ne_00.png
+      "10": assets/textures/facemap/wallface_ne_10.png
+      "01": assets/textures/facemap/wallface_ne_01.png
+      "11": assets/textures/facemap/wallface_ne_11.png
   nw:
     texture: assets/textures/buildings/dungeon_1/wall_nw.png
     facemaps:
-      "00": assets/textures/world/facemap/wallface_nw_00.png
-      "10": assets/textures/world/facemap/wallface_nw_10.png
-      "01": assets/textures/world/facemap/wallface_nw_01.png
-      "11": assets/textures/world/facemap/wallface_nw_11.png
+      "00": assets/textures/facemap/wallface_nw_00.png
+      "10": assets/textures/facemap/wallface_nw_10.png
+      "01": assets/textures/facemap/wallface_nw_01.png
+      "11": assets/textures/facemap/wallface_nw_11.png
   se:
     texture: assets/textures/buildings/dungeon_1/wall_se.png
     facemaps:
-      "00": assets/textures/world/facemap/wallface_se_00.png
-      "10": assets/textures/world/facemap/wallface_se_10.png
-      "01": assets/textures/world/facemap/wallface_se_01.png
-      "11": assets/textures/world/facemap/wallface_se_11.png
+      "00": assets/textures/facemap/wallface_se_00.png
+      "10": assets/textures/facemap/wallface_se_10.png
+      "01": assets/textures/facemap/wallface_se_01.png
+      "11": assets/textures/facemap/wallface_se_11.png
   sw:
     texture: assets/textures/buildings/dungeon_1/wall_sw.png
     facemaps:
-      "00": assets/textures/world/facemap/wallface_sw_00.png
-      "10": assets/textures/world/facemap/wallface_sw_10.png
-      "01": assets/textures/world/facemap/wallface_sw_01.png
-      "11": assets/textures/world/facemap/wallface_sw_11.png
+      "00": assets/textures/facemap/wallface_sw_00.png
+      "10": assets/textures/facemap/wallface_sw_10.png
+      "01": assets/textures/facemap/wallface_sw_01.png
+      "11": assets/textures/facemap/wallface_sw_11.png

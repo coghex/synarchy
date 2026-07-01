@@ -1,7 +1,7 @@
 items:
   - name: "axe_steel"
     display_name: "Steel Axe"
-    sprite: "assets/textures/items/axe_steel.png"
+    sprite: "assets/textures/items/tool/axe_steel.png"
     weight: 1.0
     kind: weapon
     category: Tools

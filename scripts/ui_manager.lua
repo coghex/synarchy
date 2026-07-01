@@ -135,7 +135,7 @@ function uiManager.init(scriptId)
     menuFont = menuFontHandle
     titleFont = titleFontHandle
     
-    boxTexSet = boxTextures.load("assets/textures/box", "box")
+    boxTexSet = boxTextures.load("assets/textures/ui/box", "box")
     btnTexSet = boxTextures.load("assets/textures/ui/button", "button")
     
     mainMenu = require("scripts.main_menu")
@@ -236,7 +236,7 @@ function uiManager.ensureTooltipStyle()
     local persistedDwell = engine.getTooltipDwellMs()
     local persistedHintDelay = engine.getTooltipHintDelayMs()
     local whitePixelTex = engine.loadTexture(
-        "assets/textures/hud/utility/white.png")
+        "assets/textures/utility/white.png")
     UI.setTooltipStyle({
         font               = menuFont,
         fontSize           = 14,

@@ -8,85 +8,85 @@
 items:
   - name: "raw_garnet"
     display_name: "Raw Garnet"
-    sprite: "assets/textures/items/raw_garnet.png"
+    sprite: "assets/textures/items/gem/raw_garnet.png"
     weight: { mean: 0.06, range: 0.08 }
     category: Gems
     make: world
   - name: "raw_amazonite"
     display_name: "Raw Amazonite"
-    sprite: "assets/textures/items/raw_amazonite.png"
+    sprite: "assets/textures/items/gem/raw_amazonite.png"
     weight: { mean: 0.18, range: 0.24 }
     category: Gems
     make: world
   - name: "raw_smoky_quartz"
     display_name: "Raw Smoky Quartz"
-    sprite: "assets/textures/items/raw_smoky_quartz.png"
+    sprite: "assets/textures/items/gem/raw_smoky_quartz.png"
     weight: { mean: 0.25, range: 0.40 }
     category: Gems
     make: world
   - name: "raw_zircon"
     display_name: "Raw Zircon"
-    sprite: "assets/textures/items/raw_zircon.png"
+    sprite: "assets/textures/items/gem/raw_zircon.png"
     weight: { mean: 0.03, range: 0.04 }
     category: Gems
     make: world
   - name: "raw_moonstone"
     display_name: "Raw Moonstone"
-    sprite: "assets/textures/items/raw_moonstone.png"
+    sprite: "assets/textures/items/gem/raw_moonstone.png"
     weight: { mean: 0.08, range: 0.10 }
     category: Gems
     make: world
   - name: "raw_citrine"
     display_name: "Raw Citrine"
-    sprite: "assets/textures/items/raw_citrine.png"
+    sprite: "assets/textures/items/gem/raw_citrine.png"
     weight: { mean: 0.15, range: 0.20 }
     category: Gems
     make: world
   - name: "raw_fluorite"
     display_name: "Raw Fluorite"
-    sprite: "assets/textures/items/raw_fluorite.png"
+    sprite: "assets/textures/items/gem/raw_fluorite.png"
     weight: { mean: 0.12, range: 0.16 }
     category: Gems
     make: world
   - name: "raw_aquamarine"
     display_name: "Raw Aquamarine"
-    sprite: "assets/textures/items/raw_aquamarine.png"
+    sprite: "assets/textures/items/gem/raw_aquamarine.png"
     weight: { mean: 0.06, range: 0.08 }
     category: Gems
     make: world
   - name: "raw_topaz"
     display_name: "Raw Topaz"
-    sprite: "assets/textures/items/raw_topaz.png"
+    sprite: "assets/textures/items/gem/raw_topaz.png"
     weight: { mean: 0.09, range: 0.12 }
     category: Gems
     make: world
   - name: "raw_golden_beryl"
     display_name: "Raw Golden Beryl"
-    sprite: "assets/textures/items/raw_golden_beryl.png"
+    sprite: "assets/textures/items/gem/raw_golden_beryl.png"
     weight: { mean: 0.06, range: 0.08 }
     category: Gems
     make: world
   - name: "raw_tourmaline"
     display_name: "Raw Tourmaline"
-    sprite: "assets/textures/items/raw_tourmaline.png"
+    sprite: "assets/textures/items/gem/raw_tourmaline.png"
     weight: { mean: 0.07, range: 0.10 }
     category: Gems
     make: world
   - name: "raw_amethyst"
     display_name: "Raw Amethyst"
-    sprite: "assets/textures/items/raw_amethyst.png"
+    sprite: "assets/textures/items/gem/raw_amethyst.png"
     weight: { mean: 0.15, range: 0.20 }
     category: Gems
     make: world
   - name: "raw_emerald"
     display_name: "Raw Emerald"
-    sprite: "assets/textures/items/raw_emerald.png"
+    sprite: "assets/textures/items/gem/raw_emerald.png"
     weight: { mean: 0.04, range: 0.06 }
     category: Gems
     make: world
   - name: "raw_morganite"
     display_name: "Raw Morganite"
-    sprite: "assets/textures/items/raw_morganite.png"
+    sprite: "assets/textures/items/gem/raw_morganite.png"
     weight: { mean: 0.05, range: 0.06 }
     category: Gems
     make: world

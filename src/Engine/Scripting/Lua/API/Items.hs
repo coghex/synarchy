@@ -49,13 +49,13 @@ import World.Types (WorldManager(..), WorldState(..))
 --   The fallback path itself isn't checked — if you delete it too,
 --   you'll get the usual broken-texture behaviour at draw time.
 missingEquipmentTexture ∷ FilePath
-missingEquipmentTexture = "assets/textures/equipment/missing_equipment.png"
+missingEquipmentTexture = "assets/textures/ui/placeholders/missing_equipment.png"
 
 -- | Overlay drawn over a broken item's sprite. Loaded once (lazily,
 --   alongside item sprites) and registered under this name; the ground-
 --   item renderer looks it up by name via the texture-name registry.
 brokenEquipmentTexture ∷ FilePath
-brokenEquipmentTexture = "assets/textures/equipment/broken_equipment.png"
+brokenEquipmentTexture = "assets/textures/ui/placeholders/broken_equipment.png"
 
 brokenEquipmentTexName ∷ Text
 brokenEquipmentTexName = "broken_equipment"

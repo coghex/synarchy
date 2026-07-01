@@ -1,7 +1,7 @@
 items:
   - name: "steel_bar"
     display_name: "Steel Bar"
-    sprite: "assets/textures/items/bar_steel.png"
+    sprite: "assets/textures/items/material/bar_steel.png"
     weight: 0.5
     category: Materials
     make: foundry

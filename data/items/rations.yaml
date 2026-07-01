@@ -1,7 +1,7 @@
 items:
   - name: "rations"
     display_name: "Rations"
-    sprite: "assets/textures/items/rations.png"
+    sprite: "assets/textures/items/supply/rations.png"
     weight: 0.1        # kg per ration
     category: Supplies
     food:

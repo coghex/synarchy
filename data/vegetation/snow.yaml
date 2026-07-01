@@ -3,7 +3,7 @@ vegetation:
   - id_start: 65
     name: snow
     variants:
-      - "assets/textures/vegetation/snow_1.png"
-      - "assets/textures/vegetation/snow_2.png"
-      - "assets/textures/vegetation/snow_3.png"
-      - "assets/textures/vegetation/snow_4.png"
+      - "assets/textures/vegetation/snow/frame_000.png"
+      - "assets/textures/vegetation/snow/frame_001.png"
+      - "assets/textures/vegetation/snow/frame_002.png"
+      - "assets/textures/vegetation/snow/frame_003.png"

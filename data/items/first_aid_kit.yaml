@@ -5,7 +5,7 @@ items:
   # spawns holding. This is the same mechanism a toolbox will use.
   - name: "first_aid_kit"
     display_name: "First Aid Kit"
-    sprite: "assets/textures/items/first_aid_kit.png"
+    sprite: "assets/textures/items/medical/first_aid_kit.png"
     weight: 0.5           # empty case (contents not yet summed into weight)
     kind: container
     category: Medical

@@ -3,17 +3,17 @@ items:
   # acquire more once the kit runs dry.
   - name: "bandage"
     display_name: "Bandage"
-    sprite: "assets/textures/items/bandage.png"
+    sprite: "assets/textures/items/medical/bandage.png"
     weight: 0.02
     category: Medical
   - name: "gauze"
     display_name: "Gauze Pad"
-    sprite: "assets/textures/items/gauze.png"
+    sprite: "assets/textures/items/medical/gauze.png"
     weight: 0.015
     category: Medical
   - name: "elastic_wrap"
     display_name: "Elastic Wrap"
-    sprite: "assets/textures/items/elastic_wrap.png"
+    sprite: "assets/textures/items/medical/elastic_wrap.png"
     weight: 0.06
     category: Medical
 
@@ -24,7 +24,7 @@ items:
   # drawn down, leaving just the empty bottle.
   - name: "antiseptic"
     display_name: "Antiseptic"
-    sprite: "assets/textures/items/antiseptic.png"
+    sprite: "assets/textures/items/medical/antiseptic.png"
     weight: 0.12          # empty bottle (full 1 L ≈ +1 kg of fluid)
     category: Medical
     container:
@@ -33,7 +33,7 @@ items:
       fill_weight: 1.0    # 1 L = 1 kg
   - name: "antibiotics"
     display_name: "Antibiotics"
-    sprite: "assets/textures/items/antibiotics.png"
+    sprite: "assets/textures/items/medical/antibiotics.png"
     weight: 0.022         # empty 22 g plastic bottle
     category: Medical
     container:
@@ -47,14 +47,14 @@ items:
   # later, but the treat fallback improvises it for free.
   - name: "makeshift_tourniquet"
     display_name: "Makeshift Tourniquet"
-    sprite: "assets/textures/items/tourniquet.png"
+    sprite: "assets/textures/items/medical/tourniquet.png"
     weight: 0.05
     category: Medical
 
   # Reusable tools — units draw and RETURN these; they wear (condition).
   - name: "tweezers"
     display_name: "Tweezers"
-    sprite: "assets/textures/items/tweezers.png"
+    sprite: "assets/textures/items/medical/tweezers.png"
     weight: 0.02
     category: Medical
     condition:
@@ -62,7 +62,7 @@ items:
       max: 100
   - name: "scissors"
     display_name: "Scissors"
-    sprite: "assets/textures/items/scissors.png"
+    sprite: "assets/textures/items/medical/scissors.png"
     weight: 0.06
     category: Medical
     condition:

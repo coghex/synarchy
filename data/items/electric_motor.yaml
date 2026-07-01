@@ -1,7 +1,7 @@
 items:
   - name: "electric_motor"
     display_name: "Electric Motor"
-    sprite: "assets/textures/items/electric_motor.png"
+    sprite: "assets/textures/items/material/electric_motor.png"
     weight: 2.5
     category: Materials
     make: factory

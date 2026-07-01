@@ -102,8 +102,8 @@ local MUTE_TOGGLE_CALLBACK = "onPopupMuteToggleClick"
 -- Mute-toggle icon texture paths. The checkbox flips the category's
 -- persistent `popup` notification setting via setNotificationOverrides
 -- (same backend as the settings tab). Loaded in bootstrap; nil-safe.
-local POPUP_TEX_ENABLED  = "assets/textures/hud/popup_enabled.png"
-local POPUP_TEX_DISABLED = "assets/textures/hud/popup_disabled.png"
+local POPUP_TEX_ENABLED  = "assets/textures/ui/hud/popup_enabled.png"
+local POPUP_TEX_DISABLED = "assets/textures/ui/hud/popup_disabled.png"
 
 -----------------------------------------------------------
 -- Forward declarations

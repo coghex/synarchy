@@ -1,7 +1,7 @@
 items:
   - name: "steel_dagger"
     display_name: "Steel Dagger"
-    sprite: "assets/textures/equipment/dagger_steel_acolyte.png"
+    sprite: "assets/textures/items/weapon/dagger_steel_acolyte.png"
     weight: 0.4
     kind: weapon
     category: Weapons
