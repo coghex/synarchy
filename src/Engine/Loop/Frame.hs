@@ -136,7 +136,7 @@ drawFrame = do
             -- 6. Render UI
             (_uiBatches, uiLayeredBatches) ← renderUIPages
             
-            -- 6. Final merge: world + UI
+            -- 7. Final merge: world + UI
             let layeredBatches = Map.unionsWith (<>)
                     [worldLayeredBatches, uiLayeredBatches]
 
