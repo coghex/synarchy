@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "seed": 536686,
+    "worldSize": 64,
+    "region": [
+      -2,
+      -2,
+      2,
+      2
+    ],
+    "captureRuns": 3
+  },
+  "determinism": {
+    "deterministic": true,
+    "distinctHashes": 1,
+    "hashes": [
+      "68761b543638f341a86314e8134203ceb3ff2ec06614769e9e816ccc2c6e05d2",
+      "68761b543638f341a86314e8134203ceb3ff2ec06614769e9e816ccc2c6e05d2",
+      "68761b543638f341a86314e8134203ceb3ff2ec06614769e9e816ccc2c6e05d2"
+    ]
+  },
+  "tileCount": 6400,
+  "elevationStats": {
+    "min": -11,
+    "max": 29,
+    "median": 14,
+    "count": 6400
+  },
+  "fluidStats": {
+    "dry": 6071,
+    "lake": 329
+  },
+  "fluidEnvelope": {
+    "dry": {
+      "min": 6071,
+      "max": 6071,
+      "median": 6071,
+      "all": [
+        6071,
+        6071,
+        6071
+      ]
+    },
+    "lake": {
+      "min": 329,
+      "max": 329,
+      "median": 329,
+      "all": [
+        329,
+        329,
+        329
+      ]
+    }
+  },
+  "auditEnvelope": {
+    "FLAT_ISOLATED_WATER": {
+      "min": 2,
+      "max": 2,
+      "median": 2,
+      "all": [
+        2,
+        2,
+        2
+      ]
+    }
+  },
+  "representativeAudit": {
+    "summary": {
+      "FLAT_ISOLATED_WATER": 2
+    },
+    "issues": {
+      "FLAT_ISOLATED_WATER": [
+        {
+          "x": 35,
+          "y": -12,
+          "details": "lake surf=14 terr=13 water_nbrs=1 terr_range=1"
+        },
+        {
+          "x": 45,
+          "y": -15,
+          "details": "lake surf=14 terr=13 water_nbrs=1 terr_range=1"
+        }
+      ]
+    }
+  }
+}

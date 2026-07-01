@@ -5,6 +5,5 @@ config/shell_history.txt
 saves/
 .claude/
 src/World/Hydrology/DESIGN.md
-tools/baselines/
 soil
 stone

@@ -1,0 +1,104 @@
+# CI gate (#436): build everything warning-free and run the headless
+# test tiers on Linux — the first automated validation of the Linux
+# build (development is on macOS).
+#
+# Coverage vs CLAUDE.md testing tiers:
+#   - tier 2 hspec:   cabal test synarchy-test-headless
+#   - tier 2 audit:   python3 tools/test_audit.py
+#   - tier 2 worldgen: tools/world_check.py --quick runs as a
+#     NON-BLOCKING probe (continue-on-error) until we know whether
+#     worldgen float math is bit-stable across macOS/aarch64 (where the
+#     tracked baselines are captured, #421) and Linux/x86_64. If runs
+#     prove it stable, drop the continue-on-error to make it a gate.
+#
+# -Werror is applied to the synarchy package only (not dependencies),
+# so the warning-clean state from #435 is enforced, not just observed.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # X11/GL headers are needed to compile GLFW-b; libvulkan-dev to
+      # link the vulkan bindings. No GPU or display is needed — the
+      # test suite runs the engine headless.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan-dev xorg-dev libxi-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxxf86vm-dev \
+            libgl1-mesa-dev pkg-config
+
+      - name: Set up GHC
+        id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.12.2'
+          cabal-version: '3.16.1.0'
+
+      - name: Configure (-Werror for the local package only)
+        run: |
+          cabal update
+          # Scoped to `package synarchy` so dependency warnings can't
+          # fail the build — only regressions against #435's clean slate.
+          {
+            echo "package synarchy"
+            echo "  ghc-options: -Werror"
+          } > cabal.project.local
+          cabal build all --dry-run
+
+      # plan.json exists after --dry-run; its hash keys the store cache.
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: deps-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-${{ runner.os }}-ghc9.12.2-
+
+      - name: Build dependencies
+        run: cabal build all --only-dependencies
+
+      # Save the store as soon as deps are built, so a later failure in
+      # the package build doesn't throw away the expensive part.
+      - name: Save dependency cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: deps-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+
+      - name: Build (library + executable)
+        run: cabal build all
+
+      - name: Build test suites
+        run: |
+          cabal build synarchy-test-headless
+          cabal build synarchy-test-graphical
+
+      - name: Headless test suite
+        run: cabal test synarchy-test-headless --test-show-details=direct
+
+      - name: Test audit
+        run: python3 tools/test_audit.py
+
+      # Worldgen regression probe — see the header comment. Baselines
+      # are tracked in tools/baselines/ (#421), captured on the primary
+      # dev machine (macOS/aarch64). Cross-arch float divergence would
+      # show up here as stat mismatches with zero bug-category failures.
+      - name: world_check --quick (non-blocking cross-arch probe)
+        continue-on-error: true
+        run: python3 tools/world_check.py --quick
