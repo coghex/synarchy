@@ -76,15 +76,15 @@ function testArena.sendTextures(worldId)
 
     -- If worldView hasn't loaded textures yet, load the essentials ourselves
     local noTex    = validHandle(st.noTexture) and st.noTexture
-                     or engine.loadTexture("assets/textures/world/notexture.png")
+                     or engine.loadTexture("assets/textures/utility/notexture.png")
     local blankTex = validHandle(st.blankTexture) and st.blankTexture
-                     or engine.loadTexture("assets/textures/world/blanktexture.png")
+                     or engine.loadTexture("assets/textures/utility/blanktexture.png")
     local isoFM    = validHandle(st.isoFaceMap) and st.isoFaceMap
-                     or engine.loadTexture("assets/textures/world/facemap/isoface.png")
+                     or engine.loadTexture("assets/textures/facemap/isoface.png")
     local vegFM    = validHandle(st.vegFaceMap) and st.vegFaceMap
-                     or engine.loadTexture("assets/textures/world/facemap/vegface.png")
+                     or engine.loadTexture("assets/textures/facemap/vegface.png")
     local noFM     = validHandle(st.noFaceMap) and st.noFaceMap
-                     or engine.loadTexture("assets/textures/world/facemap/noface.png")
+                     or engine.loadTexture("assets/textures/facemap/noface.png")
 
     world.setTexture(worldId, "notexture",   noTex)
     world.setTexture(worldId, "blank",       blankTex)

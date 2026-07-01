@@ -236,7 +236,7 @@ function uiManager.ensureTooltipStyle()
     local persistedDwell = engine.getTooltipDwellMs()
     local persistedHintDelay = engine.getTooltipHintDelayMs()
     local whitePixelTex = engine.loadTexture(
-        "assets/textures/ui/hud/utility/white.png")
+        "assets/textures/utility/white.png")
     UI.setTooltipStyle({
         font               = menuFont,
         fontSize           = 14,

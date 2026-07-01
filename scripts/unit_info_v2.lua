@@ -3417,7 +3417,7 @@ local function bootstrap()
     -- engine.loadTexture caches by path so this returns the same
     -- handle that drag_select / tooltip separators already use.
     unitInfoV2.whitePixelTex = engine.loadTexture(
-        "assets/textures/ui/hud/utility/white.png")
+        "assets/textures/utility/white.png")
     unitInfoV2.tabSelectedTex = engine.loadTexture(
         "assets/textures/ui/unittabselected.png")
 
