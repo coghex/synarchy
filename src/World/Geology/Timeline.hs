@@ -4,28 +4,19 @@ module World.Geology.Timeline
     ( buildTimeline
     ) where
 import UPrelude
-import Data.Bits (xor)
-import Data.Word (Word64)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Plate (generatePlates, TectonicPlate, wrapGlobalU
-                   , elevationAtGlobal)
+import World.Plate (generatePlates, wrapGlobalU, elevationAtGlobal)
 import World.Material (MaterialRegistry, MaterialId, matGlacier)
 import World.Generate.Constants (chunkBorder)
-import World.Hydrology.Types (RiverSegment(..))
 import World.Fluid.River (fixupSegmentContinuity)
 import World.Generate.Timeline.Fast (applyTimelineFastFrom)
-import World.Geology.Types
-import World.Geology.Timeline.Types (TimelineParams(..), isRiverCarveEvent)
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
-import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
-                             , LakeParams(..), GlacierParams(..))
 import World.Fluid.IceLevel (computeIceLevelGrid)
 import World.Fluid.Lake.Identify (identifyWorldLakes, computeRenderedOcean)
 import World.Fluid.Seabed (identifySeabed)
@@ -45,13 +36,12 @@ import World.Generate.InitTerrain
 import World.Geology.Coastal (identifyCoastalErosion)
 import World.Geology.Coastal.Types (CoastalTable, emptyCoastalTable)
 import World.Generate.Timeline (applyTimelineFast)
-import World.Ocean.Types (OceanMap, OceanDistMap)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
-import World.Chunk.Types (chunkSize)
-import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
-                                  , ElevGrid(..), buildInitialElevGrid
-                                  , updateElevGrid)
+import World.Hydrology.Simulation (simulateHydrology
+                                   , ElevGrid(..)
+                                   , buildInitialElevGrid
+                                   , updateElevGrid)
 import World.Geology.Timeline.Helpers
     ( mkGeoPeriod, erosionFromGeoState, regionalErosionMap
     , isGlacierFeature, isActiveRiver, getRiverParamsFromPf
@@ -60,8 +50,6 @@ import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution )
 import World.Geology.Timeline.River
     ( reconcileHydrology, mergeConvergingRivers )
-import World.Constants (seaLevel)
-import World.Geology.Hash (hashGeo, hashToFloatGeo, scaleCount)
 import World.Hydrology.Glacier (generateGlaciers)
 import World.Hydrology.Glacier.Common (getGlacierParams)
 import World.Weather.Types
@@ -402,6 +390,9 @@ stitchWorldTerrain worldSize cache =
 
 -- * Primordial Bombardment
 
+buildPrimordialBombardment ∷ Word64 → Int → [TectonicPlate]
+                           → TimelineBuildState → ElevGrid
+                           → (TimelineBuildState, ElevGrid)
 buildPrimordialBombardment seed worldSize plates tbs grid =
     let craterSeed = seed `xor` 0xDEADBEEF
         craters = generateCraters craterSeed worldSize plates CraterEra_Primordial
@@ -626,7 +617,7 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
         flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
                                        (tbsClimateState tbs)
 
-        (hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
+        (_hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
             hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
             elevGrid tbs
 
@@ -720,9 +711,6 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
     in (tbs_final, elevGrid')
 
 -- * River + Glacier helpers
-
-pfToRiverFeature ∷ PersistentFeature → HydroFeature
-pfToRiverFeature pf = RiverFeature (getRiverParamsFromPf pf)
 
 pfToGlacierFeature ∷ PersistentFeature → HydroFeature
 pfToGlacierFeature pf = GlacierFeature (getGlacierParams pf)

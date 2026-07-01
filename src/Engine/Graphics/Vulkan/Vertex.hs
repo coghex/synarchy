@@ -10,10 +10,8 @@ import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.BufferUtils
-import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Types.Vertex
 import Vulkan.Core10
 import Vulkan.Zero

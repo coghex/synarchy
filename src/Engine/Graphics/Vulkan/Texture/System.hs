@@ -12,7 +12,6 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logDebugM, logAndThrowM)
 import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Graphics.Vulkan.Image (VulkanImage)
 import Engine.Graphics.Vulkan.Texture (createTextureImageView)
 import Engine.Graphics.Vulkan.Texture.Bindless
 import Engine.Graphics.Vulkan.Texture.Handle
@@ -53,7 +52,7 @@ loadTexture ∷ Device → PhysicalDevice → CommandPool → Queue
   → TextureHandle → FilePath → Filter → BindlessTextureSystem
   → EngineM ε σ (Word32, BindlessTextureSystem)
 loadTexture dev pdev cmdPool queue texHandle path _filterMode system = do
-    (vulkanImage, imageView) ←
+    (_vulkanImage, imageView) ←
       createTextureImageView pdev dev cmdPool queue path
 
     -- Atlases share the bindless system's single texture sampler — they

@@ -9,7 +9,7 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
@@ -127,7 +127,7 @@ waterSideQuad ∷ (TextureHandle → Int)
               → ViewBounds
               → Maybe SortableQuad
 waterSideQuad lookupSlot lookupFmSlot textures facing ftype gx gy z isLeft
-              zSlice effDepth tileAlpha xOffset vb =
+              zSlice _effDepth tileAlpha xOffset vb =
     let (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
         relativeZ = z - zSlice

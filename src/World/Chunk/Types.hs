@@ -20,8 +20,8 @@ import Data.Hashable (Hashable(..))
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import World.Material (MaterialId(..))
-import World.Fluid.Types (FluidCell(..), IceMap, emptyIceMap)
-import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
+import World.Fluid.Types (FluidCell(..), IceMap)
+import World.Flora.Types (FloraChunkData(..))
 import World.Magma.Overlay (MagmaOverlay)
 import Structure.Types (ChunkStructures)
 

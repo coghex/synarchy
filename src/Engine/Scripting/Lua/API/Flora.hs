@@ -11,9 +11,8 @@ module Engine.Scripting.Lua.API.Flora
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (readIORef, atomicModifyIORef', IORef)
+import Data.IORef (atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)

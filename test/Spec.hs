@@ -16,7 +16,6 @@ import Engine.Graphics.Window.Types (Window(..))
 import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
-import Engine.Core.Var (atomically, readVar)
 import Data.IORef (readIORef)
 import Engine.Graphics.Config (defaultVideoConfig)
 

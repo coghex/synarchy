@@ -11,8 +11,6 @@ import Control.DeepSeq (NFData)
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BSI
-import Foreign.ForeignPtr (withForeignPtr)
-import Foreign.Storable (pokeByteOff)
 import System.IO.Unsafe (unsafePerformIO)
 import World.Types (ZoomChunkEntry(..), WorldGenParams(..))
 import World.Render.Zoom.Types (zoomTileSize)

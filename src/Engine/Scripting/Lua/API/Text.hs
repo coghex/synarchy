@@ -22,7 +22,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
 import Data.IORef (readIORef, atomicModifyIORef')
-import Control.Monad.Logger (LogLevel(..), defaultLoc)
 import Control.Monad.IO.Class (liftIO)
 
 loadFontFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults

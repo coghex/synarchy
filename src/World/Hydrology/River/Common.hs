@@ -5,7 +5,6 @@ module World.Hydrology.River.Common
 
 import UPrelude
 import World.Types
-import World.Hydrology.Types
 
 -- * Extract river params from PersistentFeature
 

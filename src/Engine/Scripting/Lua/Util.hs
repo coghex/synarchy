@@ -8,14 +8,10 @@ import UPrelude
 import Engine.Scripting.Types (ScriptValue)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaScript(..))
 import Engine.Scripting.Lua.Script (callModuleFunction)
-import Engine.Graphics.Font.Data (FontAtlas(..))
-import Engine.Asset.Types (GlyphInfo(..))
-import Engine.Input.Types (Key(..))
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import Control.Concurrent.STM (readTVarIO)
-import Control.Monad (forM_, when)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 

@@ -26,40 +26,21 @@ module World.Thread.Command.Cursor
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Control.DeepSeq (force)
-import Control.Exception (evaluate)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, logDebug, logError, logWarn
-                       , LogCategory(..), LoggerState)
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import qualified Data.Vector.Unboxed as VU
 import World.Types
-import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
-import World.Tile.Types (lookupChunk)
-import World.Constants (seaLevel)
-import World.Generate (generateChunk, globalToChunk)
+import World.Generate (globalToChunk)
 import World.Mine.Types (designationFromSlope)
 import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , ConstructDesignation(..)
                              , newConstructDesignation
                              , constructTargetCategory )
-import World.Generate.Constants (chunkLoadRadius)
-import World.Generate.Timeline (applyTimelineFast)
-import World.Geology (buildTimeline)
-import World.Geology.Log (formatTimeline, formatPlatesSummary)
-import World.Fluids (computeOceanMap, isOceanChunk)
-import World.Plate (generatePlates, elevationAtGlobal)
-import World.Preview (buildPreviewImage, PreviewImage(..))
-import World.Render (surfaceHeadroom)
-import World.ZoomMap (buildZoomCache)
-import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
-import World.Thread.Helpers (sendGenLog, unWorldPageId)
-import World.Thread.ChunkLoading (maxChunksPerTick)
+import World.Thread.Helpers (unWorldPageId)
 
 handleWorldSetZoomCursorHoverCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -73,7 +54,7 @@ handleWorldSetZoomCursorHoverCommand env logger pageId x y = do
             logWarn logger CatWorld $ 
                 "World not found for cursor hover update: " <> unWorldPageId pageId
 handleWorldSetZoomCursorSelectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetZoomCursorSelectCommand env logger pageId = do
+handleWorldSetZoomCursorSelectCommand env _logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
@@ -86,7 +67,7 @@ handleWorldSetZoomCursorSelectCommand env logger pageId = do
                 (cs { zoomSelectNow = True }, ())
         Nothing → pure ()
 handleWorldSetZoomCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetZoomCursorDeselectCommand env logger pageId = do
+handleWorldSetZoomCursorDeselectCommand env _logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
@@ -129,7 +110,7 @@ handleWorldSetWorldCursorHoverCommand env logger pageId x y = do
             logWarn logger CatWorld $ 
                 "World not found for cursor hover update: " <> unWorldPageId pageId
 handleWorldSetWorldCursorSelectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetWorldCursorSelectCommand env logger pageId = do
+handleWorldSetWorldCursorSelectCommand env _logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →
@@ -142,7 +123,7 @@ handleWorldSetWorldCursorSelectCommand env logger pageId = do
                 (cs { worldSelectNow = True }, ())
         Nothing → pure ()
 handleWorldSetWorldCursorDeselectCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldSetWorldCursorDeselectCommand env logger pageId = do
+handleWorldSetWorldCursorDeselectCommand env _logger pageId = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Just worldState →

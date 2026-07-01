@@ -19,8 +19,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Thread (shutdownThread, ThreadState)
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Core.Thread (shutdownThread)
+import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
 import World.Thread (startWorldThread)
 import World.Types

@@ -10,15 +10,12 @@ module Engine.Graphics.Vulkan.Capability
   ) where
 
 import UPrelude
-import Data.Bits (shiftR, (.&.))
 import qualified Data.Text as T
 import Vulkan.Core10
-import Vulkan.Core10.DeviceInitialization (PhysicalDeviceProperties(..))
 import Vulkan.Core11 (getPhysicalDeviceProperties2)
 import Vulkan.Core11.Promoted_From_VK_KHR_get_physical_device_properties2 (PhysicalDeviceProperties2(..))
 import Vulkan.Core12 (PhysicalDeviceVulkan12Properties(..))
 import Vulkan.CStruct.Extends
-import Vulkan.Zero (zero)
 
 -- | Detailed bindless texture support information
 data BindlessSupport = BindlessSupport

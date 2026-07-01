@@ -8,8 +8,6 @@ module Engine.Graphics.Vulkan.Texture.Types
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import Foreign.Ptr (Ptr)
-import Data.Word (Word32)
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlotAllocator)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle)

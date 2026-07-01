@@ -48,11 +48,8 @@ module Unit.Pathing.Cost
     ) where
 
 import UPrelude
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.Bits (testBit)
-import Data.Word (Word8)
 import World.Types (WorldTileData(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Chunk.Types (ColumnTiles(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))

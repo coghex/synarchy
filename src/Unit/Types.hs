@@ -189,7 +189,10 @@ data Scar = Scar
 
 -- | Unique identifier for a spawned unit instance.
 newtype UnitId = UnitId { unUnitId ∷ Word32 }
-    deriving (Show, Eq, Ord, Generic, Hashable, Serialize)
+    deriving stock (Show, Eq, Ord, Generic)
+    -- anyclass (Generic-default) matches what GHC picked implicitly;
+    -- same wire bytes as the raw Word32, so no save bump.
+    deriving anyclass (Hashable, Serialize)
 
 -- | A targetable body part on a creature. Body parts are declared
 --   per-unit-def (humanoid acolytes ship a 12-part layout, quadruped

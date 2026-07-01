@@ -2,10 +2,8 @@
 module Engine.Graphics.Vulkan.Types where
 import UPrelude
 import qualified Data.Vector as V
-import Linear (V4(..), M44, identity)
+import Linear (M44)
 import Vulkan.Core10
-import Vulkan.Extensions.VK_EXT_debug_utils
-import Vulkan.Extensions.VK_EXT_validation_features
 
 data VulkanExtensions = VulkanExtensions
   { veRequired ∷ V.Vector String  -- ^ Required extensions

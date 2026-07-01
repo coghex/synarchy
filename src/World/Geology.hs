@@ -13,6 +13,5 @@ module World.Geology
 
 import World.Geology.Timeline (buildTimeline)
 import World.Geology.Event (applyGeoEvent)
-import World.Geology.Crater (applyCrater, generateCraters)
 import World.Geology.Types (GeoModification(..))
 import World.Geology.Log (logTimeline, logTimelineSummary)

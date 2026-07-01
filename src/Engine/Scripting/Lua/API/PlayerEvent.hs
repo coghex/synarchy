@@ -251,15 +251,14 @@ readOverridesTable = do
                          then Lua.tostring (-2)
                          else return Nothing
                 innerIsTab ← Lua.istable (-1)
-                if innerIsTab && mk /= Nothing
-                    then do
+                case mk of
+                    Just kb | innerIsTab → do
                         l ← readBoolField "log"
                         p ← readBoolField "popup"
                         z ← readBoolField "pause"
                         Lua.pop 1  -- pop inner table (keep key)
-                        let Just kb = mk
                         loop (HM.insert (TE.decodeUtf8 kb) (l, p, z) acc)
-                    else do
+                    _ → do
                         Lua.pop 1
                         loop acc
 

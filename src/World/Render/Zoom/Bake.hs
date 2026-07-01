@@ -13,7 +13,7 @@ import Data.IORef (readIORef, writeIORef, IORef)
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
 import World.Types
 import World.Grid (gridToWorld)
 

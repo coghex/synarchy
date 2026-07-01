@@ -9,24 +9,16 @@ module World.Hydrology.Simulation
     ) where
 
 import UPrelude
-import Data.Bits (xor)
-import Data.Word (Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
-import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector.Algorithms.Intro as VA
-import Control.Monad.ST (runST, ST)
-import Control.Monad (forM_, when)
+import Control.Monad.ST (runST)
 import Data.STRef (newSTRef, readSTRef, modifySTRef')
-import World.Base (GeoCoord(..), GeoFeatureId(..))
-import World.Constants (seaLevel)
 import World.Types
-import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU, worldWidthTiles)
-import World.Geology.Types
+import World.Plate (elevationAtGlobal, isBeyondGlacier, wrapGlobalU, worldWidthTiles)
 import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
-import World.Hydrology.Types
 import qualified Data.HashMap.Strict as HM
 import World.Weather.Types (ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..))
@@ -72,9 +64,6 @@ effRiverThreshold climate =
                          / fromIntegral (HM.size regions)
     in max minRiverDrainageCells
          $ round (fromIntegral minRiverDrainageCells * avgPrecip * 10.0 ∷ Float)
-
-minRiverLength ∷ Int
-minRiverLength = 2
 
 maxGridDim ∷ Int
 maxGridDim = 384
@@ -136,8 +125,9 @@ buildInitialElevGrid seed worldSize plates =
         -- size. Regression test: Test.Headless.WorldGen.WrapSeam.
         minSpacing = max baseSampleSpacing
                          ((totalTiles + maxGridDim - 1) `div` maxGridDim)
-        spacing = head ([ s | s ← [minSpacing .. totalTiles]
-                            , totalTiles `mod` s ≡ 0 ] ⧺ [totalTiles])
+        spacing = fromMaybe totalTiles
+                      (listToMaybe [ s | s ← [minSpacing .. totalTiles]
+                                       , totalTiles `mod` s ≡ 0 ])
         gridW = max 4 (totalTiles `div` spacing)
         halfGrid = gridW `div` 2
         totalSamples = gridW * gridW
@@ -527,12 +517,12 @@ fillDepressions grid =
                                                  ]
                                     in case scored of
                                         [] → natural
-                                        _  →
+                                        s0 : rest →
                                             -- Pick the one with shortest ocean dist
                                             let (bestN, _) = foldl'
                                                     (\(bn, bd) (n, d) →
                                                         if d < bd then (n, d) else (bn, bd))
-                                                    (head scored) (tail scored)
+                                                    s0 rest
                                             in bestN
 
         return (filledV, d8Biased)
@@ -585,31 +575,13 @@ computeOceanDistance totalSamples gridW landVec maxDist = runST $ do
 -- * Flow Simulation
 
 simulateHydrology ∷ Word64 → Int → Int → ElevGrid → ClimateState → FlowResult
-simulateHydrology seed worldSize ageIdx grid climate =
+simulateHydrology _seed worldSize _ageIdx grid climate =
     let gridW   = egGridW grid
-        spacing = egSpacing grid
         totalSamples = gridW * gridW
         origElev = egElev grid
         landVec  = egLand grid
         gxVec    = egGX grid
         gyVec    = egGY grid
-
-        toIdx ix iy = iy * gridW + ix
-        fromIdx idx = (idx `mod` gridW, idx `div` gridW)
-        wrapIX ix = ((ix `mod` gridW) + gridW) `mod` gridW
-
-        neighborOffsets ∷ [(Int, Int)]
-        neighborOffsets = [(-1,0),(1,0),(0,-1),(0,1)
-                          ,(-1,-1),(1,-1),(-1,1),(1,1)]
-
-        neighbors ∷ Int → [Int]
-        neighbors idx =
-            let (ix, iy) = fromIdx idx
-            in [ toIdx (wrapIX (ix + dx)) ny
-               | (dx, dy) ← neighborOffsets
-               , let ny = iy + dy
-               , ny ≥ 0 ∧ ny < gridW
-               ]
 
         ---------------------------------------------------
         -- Step 1: Fill depressions + drainage directions

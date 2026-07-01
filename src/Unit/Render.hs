@@ -13,14 +13,12 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                           , renderFlagSelected)
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)

@@ -11,13 +11,13 @@ import qualified Data.Map as Map
 import qualified Data.List as List
 import qualified Data.Text as T
 import Data.IORef (readIORef)
-import Engine.Scene.Base (ObjectId, NodeType(..), LayerId(..), Transform2D(..))
+import Engine.Scene.Base (NodeType(..), LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
 import Engine.Scene.Types.Batch (TextRenderBatch(..), TextBatch(..))
 import Engine.Scene.Batch.Visibility (isUILayer)
 import Engine.Asset.Handle (FontHandle)
-import Engine.Graphics.Font.Data (FontCache(..), FontAtlas, fcFonts)
+import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutText, layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Core.Monad

@@ -29,7 +29,6 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
 import World.Types
-import World.Constants (seaLevel)
 
 -- | Top surface material of a column (mirrors the --dump extraction:
 --   highest stored tile; fluids live in a separate map so this is the

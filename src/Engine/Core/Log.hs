@@ -49,18 +49,17 @@ import UPrelude
 import Data.Char (toLower, toUpper)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as Map
 import qualified Data.Time.Clock as Clock
 import qualified Data.Time.Format as TimeFormat
 import Data.Maybe (mapMaybe)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Monad (foldM)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
 import GHC.Stack (HasCallStack, CallStack, callStack, getCallStack, SrcLoc(..))
-import System.IO (Handle, stdout, stderr, hPutStrLn, hFlush)
+import System.IO (Handle, stdout, hFlush)
 import System.Environment (lookupEnv)
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType, mkErrorContext)
 

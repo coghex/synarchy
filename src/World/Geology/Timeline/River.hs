@@ -5,22 +5,13 @@ module World.Geology.Timeline.River
     , mergeConvergingRivers
     ) where
 import UPrelude
-import Control.Parallel.Strategies (parMap, rdeepseq)
-import Control.DeepSeq (NFData(..))
-import Data.Bits (xor)
-import Data.List (foldl', minimumBy, sortBy)
-import Data.Ord (comparing, Down(..))
-import Data.Word (Word64)
+import Data.List (minimumBy)
+import Data.Ord (comparing)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Fluid.River (fixupSegmentContinuity)
-import World.Plate (TectonicPlate)
-import World.Geology.Types
 import World.Geology.Hash
-import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
-                             , RiverSegment(..), LakeParams(..))
 import World.Hydrology.Simulation (ElevGrid(..), FlowResult(..))
 import World.Hydrology.River.Meander (meanderSegments)
 import World.Hydrology.River.Tributary (buildTributarySegments)
@@ -28,7 +19,6 @@ import World.Geology.Timeline.Helpers
     ( isActiveRiver, isLakeFeature, isSourceNew, getRiverParamsFromPf
     , reconcileLakes )
 import World.Geology.Timeline.RiverTrace (traceRiverFromSource)
-import World.Chunk.Types (chunkSize)
 
 -- * Hydrology reconciliation
 

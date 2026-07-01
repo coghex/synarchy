@@ -126,7 +126,7 @@ buildMatPalette logger defs = do
 
 buildVegPalette ∷ LoggerState → [VegetationDef]
                → IO (Map.Map Word8 RGBA)
-buildVegPalette logger defs = do
+buildVegPalette _logger defs = do
     allPairs ← forM defs $ \def → do
         let baseId = vdIdStart def
         pairs ← forM (zip [0 ..] (vdVariants def)) $ \(i, path) → do
@@ -158,7 +158,7 @@ lookupMatColor palette matId =
 --   Returns Nothing for category 0 or if no veg textures loaded.
 lookupVegColor ∷ ZoomColorPalette → Word8 → Int → Int → Maybe RGBA
 lookupVegColor _palette 0 _ _ = Nothing
-lookupVegColor palette vegCat gx gy
+lookupVegColor palette _vegCat gx gy
     | Map.null (zcpVegetation palette) = Nothing
     | otherwise =
         let vegMap = zcpVegetation palette

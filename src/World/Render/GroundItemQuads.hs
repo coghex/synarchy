@@ -22,9 +22,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.Bits (testBit)
 import Data.IORef (readIORef)
-import Data.Maybe (mapMaybe)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.YamlTextures (lookupTextureName)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -35,8 +33,6 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
 import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemManager(..), ItemDef(..), ItemInstance(..))
-import World.Cursor.Types (CursorState(..))
-import World.Fluid.Types (FluidCell(..))
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight

@@ -35,7 +35,8 @@ import World.Geology.Hash (wrappedDeltaUV)
 
 -- | Unique identifier for a node in the river graph.
 newtype RiverNodeId = RiverNodeId Int
-    deriving (Show, Eq, Ord, Generic, Serialize, NFData, Hashable)
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass (Serialize, NFData, Hashable)
 
 -- * Node kinds
 
@@ -140,7 +141,7 @@ buildRiverGraph timeline =
         -- Assign node IDs. Each river gets a headwater node
         -- and a mouth node. Confluences are detected when a
         -- tributary's mouth is near the parent river's path.
-        (nodes, routes, nextId) = foldl' addRiver ([], [], 0) rivers
+        (nodes, routes, _nextId) = foldl' addRiver ([], [], 0) rivers
 
         addRiver (ns, rs, nid) (fid, rp) =
             let headNode = RiverNode

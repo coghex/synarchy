@@ -7,25 +7,13 @@ module Test.Engine.Graphics.Vulkan.Surface where
 
 import UPrelude
 import Test.Hspec
-import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Vulkan.Instance
-import Engine.Graphics.Window.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Core.Var
 import Data.IORef (newIORef)
-import Engine.Graphics.Base
-import Control.Concurrent (threadDelay)
-import Control.Monad (when)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Error.Class (catchError)
-import qualified Test.Engine.Graphics.Vulkan.Helpers as VH
-import Foreign.Ptr (nullPtr)
-import Data.Maybe (isJust)
-import Vulkan.Dynamic (InstanceCmds(..))
-import Engine.Core.Error.Exception
 import Vulkan.Core10
 import Vulkan.Zero
 

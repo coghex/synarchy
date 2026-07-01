@@ -151,7 +151,7 @@ buildClimateFromOceanSet ∷ Int                       -- ^ worldSize
                          → ClimateState
 buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTempOffset solarConst =
     let regionsPerSide = climateRegionCount worldSize
-        halfRegions    = regionsPerSide `div` 2
+        _halfRegions    = regionsPerSide `div` 2
 
         allCoords = [ ClimateCoord ru rv
                     | ru ← [0 .. regionsPerSide - 1]
@@ -359,7 +359,7 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
 
         mkRegionClimate ∷ ClimateCoord → Bool → RegionClimate
         mkRegionClimate coord@(ClimateCoord _ru _rv) isOcean =
-            let (latSigned, latRatio, latDeg) = latInfo coord
+            let (_latSigned, latRatio, latDeg) = latInfo coord
                 m = maritimeIndex coord
 
                 tMean = HM.lookupDefault 15.0 coord tempMeanMap

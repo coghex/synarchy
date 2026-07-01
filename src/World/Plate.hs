@@ -22,8 +22,6 @@ module World.Plate
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word32, Word64)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
 import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist, scaleElevI)
 import World.Constants (seaLevel)
@@ -151,7 +149,7 @@ twoNearestPlates seed worldSize plates gx gy =
         -- boundary calculations correctly when the first plate has no
         -- competitor. Preserving that placeholder keeps elevation
         -- bit-identical to the pre-optimization output.
-        go !best1 !best2 !best2Real [] = (best1, best2)
+        go !best1 !best2 !_best2Real [] = (best1, best2)
         go !best1 !best2 !best2Real (p:rest) =
             let !raw = rawDist p
             in if best2Real ∧ raw - jitterMax > snd best2

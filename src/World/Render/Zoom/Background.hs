@@ -14,10 +14,8 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Types
-import World.Constants (seaLevel)
 import World.Grid (backgroundMapLayer)
 
 import World.Render.Zoom.Bake (ensureBaked)
@@ -44,7 +42,7 @@ renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D → Int → Int → 
                   → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
                   → LayerId → Int
                   → IO (V.Vector SortableQuad)
-renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
+renderFromBakedBg _env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
@@ -79,7 +77,7 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
             return visibleQuads
 
 emitQuadBg ∷ BakedZoomEntry → Float → Float → Float → LayerId → Int → SortableQuad
-emitQuadBg entry dx dy alpha layer zSlice =
+emitQuadBg entry dx dy alpha layer _zSlice =
     let !baseX = bzeDrawX entry
         !baseY = bzeDrawY entry
         !xShift = dx - baseX

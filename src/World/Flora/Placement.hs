@@ -5,20 +5,15 @@ module World.Flora.Placement
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word8, Word16, Word64)
-import Data.List (sortOn, foldl')
+import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
-import World.Fluid.Types (FluidCell(..))
 import World.Vegetation (isBarrenMaterial)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
-import World.Flora.Types
 import System.IO.Unsafe (unsafePerformIO)
 
 -- * Chunk Flora Computation
@@ -145,7 +140,7 @@ speciesMaxAge fid catalog =
                               then 0.0
                               else maximum [ lpAge lp | lp ← HM.elems phases ]
             in case lifecycle of
-                Perennial minL maxL _ → maxL
+                Perennial _minL maxL _ → maxL
                 Annual                → 360.0
                 Biennial              → 720.0
                 Evergreen
@@ -197,21 +192,6 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge =
         , fiVariant   = variant
         , fiBaseWidth = baseWidth
         }
-
--- * Biome Matching
-
-matchesBiome ∷ FloraWorldGen → Word8 → Word8 → Float → Float → Bool
-matchesBiome wg matId slopeId temp precip =
-       temp   ≥ fwMinTemp wg
-    ∧ temp   ≤ fwMaxTemp wg
-    ∧ precip ≥ fwMinPrecip wg
-    ∧ precip ≤ fwMaxPrecip wg
-    ∧ slopeId ≤ fwMaxSlope wg
-    ∧ soilOk
-  where
-    soils = fwSoils wg
-    soilOk = null soils ∨ matId `elem` soils
-
 
 -- * Hash
 

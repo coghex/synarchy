@@ -25,7 +25,6 @@ module World.Mine.Types
 import UPrelude hiding (get)
 import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
-import Data.Bits (testBit)
 import Data.List (sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM

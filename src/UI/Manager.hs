@@ -66,7 +66,7 @@ module UI.Manager
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe, isJust, listToMaybe)
+import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))

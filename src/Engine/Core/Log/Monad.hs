@@ -18,7 +18,7 @@ import UPrelude
 import qualified Data.Text as T
 import GHC.Stack (HasCallStack)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
-import Control.Monad.Reader.Class (MonadReader, asks)
+import Control.Monad.Reader.Class (MonadReader)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Error.Class (MonadError)
 import Data.IORef (readIORef)

@@ -15,7 +15,7 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', newIORef, IORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
+import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)

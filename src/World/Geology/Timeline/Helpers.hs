@@ -27,27 +27,20 @@ module World.Geology.Timeline.Helpers
     , updateLakeSpillways
     ) where
 import UPrelude
-import Data.List (foldl')
-import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Plate (wrapGlobalU)
-import World.Geology.Types
 import World.Geology.Hash
 import World.Weather.Types
 import World.Hydrology.Glacier (evolveGlacier)
-import World.Hydrology.Types (HydroFeature(..), GlacierParams(..)
-                             , RiverParams(..), LakeParams(..))
 import World.Hydrology.Simulation (ElevGrid(..))
 
 -- * Elev grid lookup
 
 {-# INLINE elevFromGrid #-}
 elevFromGrid ∷ ElevGrid → Int → Int → Int → Int
-elevFromGrid grid worldSize gx gy =
+elevFromGrid grid _worldSize gx gy =
     let spacing = egSpacing grid
         gridW = egGridW grid
         halfGrid = gridW `div` 2
@@ -70,7 +63,7 @@ elevFromGrid grid worldSize gx gy =
 --   filled vector using the same grid indexing as elevFromGrid.
 {-# INLINE filledElevFromGrid #-}
 filledElevFromGrid ∷ VU.Vector Int → ElevGrid → Int → Int → Int → Int
-filledElevFromGrid filled grid worldSize gx gy =
+filledElevFromGrid filled grid _worldSize gx gy =
     let spacing = egSpacing grid
         gridW = egGridW grid
         halfGrid = gridW `div` 2
@@ -216,7 +209,7 @@ regionalErosionMap intensity gs climate seed ageIdx isLastAge =
         regions = cgRegions (csClimate climate)
     in HM.map (buildRegionErosion co2 chemical) regions
   where
-    buildRegionErosion co2 chemical rc =
+    buildRegionErosion _co2 chemical rc =
         let SeasonalClimate summerT winterT = rcAirTemp rc
             regionTemp = (summerT + winterT) / 2.0
             SeasonalClimate summerP winterP = rcPrecipitation rc

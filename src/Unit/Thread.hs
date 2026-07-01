@@ -15,11 +15,9 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
-import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Anim (stateKey, resolveStateAnim, poseTag, chooseAnim)
-import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
 import Building.Thread.Command (processAllBuildingCommands)

@@ -6,10 +6,7 @@ module Engine.Scripting.Lua.Debug
 
 import UPrelude
 import Foreign.C.Types (CInt(..))
-import Foreign.C.String (CString, peekCString)
-import Foreign.Ptr (Ptr)
-import Foreign.Marshal.Alloc (alloca)
-import Foreign.Storable (peek)
+import Foreign.C.String (CString)
 import qualified HsLua.Core as Lua
 import HsLua.Core.Types (LuaE, State(..))
 

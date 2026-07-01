@@ -104,16 +104,15 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_, unless, when)
+import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 import qualified System.Random as Random
 import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage, freshItemInstanceId)
 import World.Page.Types (WorldPageId(..))
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
-import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStat(..), UnitYamlSkill(..),
@@ -141,12 +140,16 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
-import Data.List (foldl')
 import Item.Types (ItemInstance(..), itemMatches, itemContentsSig)
 import Item.Roll (rollItemSpec, rollItemWeight)
-import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
-                  , ItemFood(..), ItemWeapon(..), ItemBuff(..)
-                  , ItemManager(..), lookupItemDef, itemTotalWeight)
+import Item.Types (ItemDef(..)
+                   , ItemContainer(..)
+                   , ItemFood(..)
+                   , ItemWeapon(..)
+                   , ItemBuff(..)
+                   , ItemManager(..)
+                   , lookupItemDef
+                   , itemTotalWeight)
 import Item.Ground (spawnGroundItem)
 import Combat.Wounds (bleedRateFor, kindBleedFactor)
 import Combat.Types (pushInjuryEvent)
@@ -154,8 +157,7 @@ import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
 import qualified Unit.HitTest as HitTest
-import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
-                    LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
+import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 
 -- * YAML loading

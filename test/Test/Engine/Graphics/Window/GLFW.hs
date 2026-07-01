@@ -8,14 +8,12 @@ import Test.Hspec
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.State
-import Control.Monad (when)
-import Data.Maybe (isJust)
 
 -- | Main test specification for GLFW functionality
 spec ∷ EngineEnv → EngineState → Spec
-spec env state = 
+spec _env state = 
     case glfwWindow (graphicsState state) of
-        Just win@(Window glfwWin) → do
+        Just _win@(Window glfwWin) → do
             describe "GLFW Window" $ do
                 it "has correct dimensions" $ do
                     (width, height) <- GLFW.getWindowSize glfwWin

@@ -27,13 +27,10 @@ module Unit.Thread.Movement
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import Control.Monad (when, forM_)
-import Data.Maybe (isJust)
 import qualified Data.Text as T
 import Combat.Types (pushInjuryEvent)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import qualified System.Random as Random
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Tile.Types (WorldTileData(..))

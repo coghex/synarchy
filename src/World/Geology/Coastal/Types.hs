@@ -18,7 +18,6 @@ module World.Geology.Coastal.Types
 
 import UPrelude hiding (get)
 import Control.DeepSeq (NFData(..))
-import Data.Word (Word8)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as Serialize

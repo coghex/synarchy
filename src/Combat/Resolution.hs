@@ -54,8 +54,7 @@ import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Data.IORef (readIORef, atomicModifyIORef')
-import Data.List (foldl', maximumBy)
-import Data.Word (Word32)
+import Data.List (maximumBy)
 import qualified System.Random as Random
 import Combat.Types (CombatEvent(..), AttackMode(..), attackModeText)
 import Engine.Core.State (EngineEnv(..))

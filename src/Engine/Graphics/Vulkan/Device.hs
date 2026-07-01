@@ -16,11 +16,10 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Engine.Core.Error.Exception (ExceptionType(..), InitError(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM, logInfoSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logInfoSM)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types
-import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
 import Vulkan.Core12 (PhysicalDeviceVulkan12Features(..))
 import Vulkan.Zero
@@ -28,7 +27,6 @@ import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_surface
 import Vulkan.Extensions.VK_KHR_swapchain
 import Vulkan.Extensions.VK_KHR_portability_subset
-import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 
 -- | Indices of queue families we need
 data QueueFamilyIndices = QueueFamilyIndices
@@ -40,7 +38,7 @@ createVulkanDevice ∷ Instance
                    → PhysicalDevice 
                    → SurfaceKHR     
                    → EngineM ε σ (Device, DevQueues)
-createVulkanDevice inst physicalDevice surface = do
+createVulkanDevice _inst physicalDevice surface = do
   logDebugM CatVulkan "Finding queue families"
   -- pickPhysicalDevice only selects devices whose probe succeeded, so
   -- Nothing here is an invariant violation, not a selection failure.

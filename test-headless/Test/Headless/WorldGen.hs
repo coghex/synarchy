@@ -25,7 +25,6 @@ import World.Generate.Config
 import World.Plate (generatePlates)
 import World.Types
 import qualified Data.Vector as V
-import World.Ocean.Types (oceanDistAt)
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
 import Location.Types (LocationDef(..))

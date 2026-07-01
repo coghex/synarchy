@@ -14,9 +14,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
-import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
-import World.Types
 import World.Render (updateWorldTiles)
 import World.Thread.Cursor (pollCursorInfo)
 import World.Thread.Time (tickWorldTime)
@@ -77,7 +75,7 @@ worldLoop env stateRef lastTimeRef = do
                 updateChunkLoading env logger
                 pollCursorInfo env
 
-                camera ← readIORef (cameraRef env)
+                _camera ← readIORef (cameraRef env)
                 allQuads ← updateWorldTiles env
                 -- Plain writeIORef is fine here: the value is an immutable
                 -- Vector built entirely before the write, so the reader

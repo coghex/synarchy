@@ -8,7 +8,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_)
+import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo)

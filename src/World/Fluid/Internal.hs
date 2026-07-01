@@ -15,12 +15,8 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
-import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
-import Data.STRef (newSTRef, readSTRef, writeSTRef)
-import World.Base
-import World.Constants (seaLevel)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..))
 import World.Chunk.Types (chunkSize, wrapChunkCoordU)
 
 type FluidMap = V.Vector (Maybe FluidCell)

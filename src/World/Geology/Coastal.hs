@@ -19,22 +19,16 @@ module World.Geology.Coastal
     ) where
 
 import UPrelude
-import Control.Monad (when, forM_)
 import Control.Monad.ST (runST)
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
-                      , MaterialRegistry(..), matGlacier)
-import World.Plate (TectonicPlate(..), twoNearestPlates
-                   , BoundaryType(..), classifyBoundary, wrapGlobalU)
+                      , MaterialRegistry, matGlacier)
+import World.Plate (twoNearestPlates, BoundaryType(..), classifyBoundary, wrapGlobalU)
 import World.Geology.Coastal.Types (CoastalTable(..))
 import World.Geology.Hash (wrappedDeltaUV)
-import World.Constants (seaLevel)
-import World.Chunk.Types (chunkSize)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 
@@ -110,18 +104,6 @@ isNearRiverMouth worldSize mouths gx gy =
         let (dx, dy) = wrappedDeltaUV worldSize gx gy mx my
             d2 = dx * dx + dy * dy
         in d2 ≤ riverMouthRadius * riverMouthRadius
-        ) mouths
-
--- | Like `isNearRiverMouth` but with an explicit radius. Used for the
---   tighter "channel-carve-through" zone that lowers terrain to sea
---   level at the actual mouth (vs the wider classification zone that
---   uses `riverMouthRadius`).
-isNearRiverMouth' ∷ Int → [(Int, Int)] → Int → Int → Int → Bool
-isNearRiverMouth' worldSize mouths radius gx gy =
-    let r2 = radius * radius
-    in any (\(mx, my) →
-        let (dx, dy) = wrappedDeltaUV worldSize gx gy mx my
-        in dx * dx + dy * dy ≤ r2
         ) mouths
 
 -- * Sand Profile

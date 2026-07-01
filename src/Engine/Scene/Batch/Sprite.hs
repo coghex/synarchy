@@ -9,19 +9,17 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
-import Data.IORef (readIORef)
-import Engine.Scene.Base (ObjectId, NodeType(..), LayerId, Transform2D(..))
+import Engine.Scene.Base (NodeType(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
 import Engine.Scene.Types.Batch (DrawableObject(..))
 import Engine.Scene.Batch.Visibility (isNodeVisible, isUILayer)
 import Engine.Scene.Batch.Vertex (generateQuadVertices)
-import Engine.Asset.Handle (TextureHandle, toInt)
+import Engine.Asset.Handle (toInt)
 import Engine.Graphics.Camera (Camera2D)
 import Engine.Core.Monad
-import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM)
+import Engine.Core.Log.Monad (logDebugSM)
 
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do

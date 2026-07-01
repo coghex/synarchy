@@ -23,7 +23,6 @@ module Structure.Palette
 import UPrelude
 import Data.Serialize (Serialize(..), Get)
 import qualified Data.Serialize as S
-import Data.Text (Text)
 import qualified Data.HashMap.Strict as HM
 
 -- | Bidirectional path↔id map + the next id to hand out. Both maps are kept

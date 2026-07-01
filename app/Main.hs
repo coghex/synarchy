@@ -16,14 +16,12 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Generate.Types (WorldGenParams(..))
 import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
 import World.Geology.Ore (oreMaterialIds)
 import World.Material (getMaterialProps, MaterialProps(..)
                       , MaterialId(..), MaterialRegistry)
 import World.Geology.Ore.Types (wodByChunk)
-import World.Geology.Timeline.Types (GeoTimeline(..))
 import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
 import World.Fluid.River.Types (WorldRivers(..), rivFlowRate)
 import qualified Engine.Core.Queue as Q
@@ -39,8 +37,7 @@ import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
                                    , SystemError(..), mkErrorContext
                                    , throwEngineException)
 import qualified Data.Text as T
-import Engine.Core.Log (LogCategory(..), LoggerState(..), LogBackend(..)
-                       , shutdownLogger)
+import Engine.Core.Log (LogCategory(..), LogBackend(..), shutdownLogger)
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Graphics.Vulkan.Init (initializeVulkan)
 import Engine.Graphics.Window.Types (Window(..))

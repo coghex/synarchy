@@ -11,11 +11,6 @@ module Engine.Graphics.Vulkan.Buffer
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.Resource
-import Engine.Core.Types
-import Engine.Core.State
-import Engine.Core.Error.Exception
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBuffer, findMemoryType)
 import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Vulkan.Core10

@@ -21,10 +21,8 @@ module Engine.Scripting.Lua.API.Camera
 
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
-import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import Engine.Loop.Camera (applyGotoLimits, gotoTileZoomSafe)
 import World.Grid
@@ -32,9 +30,6 @@ import World.Types
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Render (surfaceHeadroom)
 import World.Generate (globalToChunk, applyTimelineFast, viewDepth)
-import World.Generate.Coordinates (globalToChunk)
-import World.ZoomMap (buildZoomCache)
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified HsLua as Lua
 
@@ -335,7 +330,7 @@ cameraGetFacingFn env = do
 
 invalidateWorldCaches ∷ EngineEnv → IO ()
 invalidateWorldCaches env = do
-    camera ← readIORef (cameraRef env)
+    _camera ← readIORef (cameraRef env)
     manager ← readIORef (worldManagerRef env)
     forM_ (wmWorlds manager) $ \(_, ws) → do
         bumpQuadCacheGen ws

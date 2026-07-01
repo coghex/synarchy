@@ -4,17 +4,12 @@ module World.Geology.Timeline.RiverTrace
     ( traceRiverFromSource
     ) where
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Base (GeoCoord(..))
-import World.Constants (seaLevel)
 import World.Types
 import World.Fluid.River (fixupSegmentContinuity)
 import World.Geology.Hash
-import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 import World.Hydrology.Simulation (ElevGrid(..))
-import World.Chunk.Types (chunkSize)
 import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
@@ -484,7 +479,7 @@ coherentNoise seed idx t =
 
 buildRiverFromPath ∷ Word64 → Int → Int → Int → Float → ClimateState
                    → [(Int, Int, Int)] → Maybe RiverParams
-buildRiverFromPath seed worldSize gridSpacing riverIdx baseFlow climate path =
+buildRiverFromPath seed worldSize gridSpacing _riverIdx baseFlow climate path =
     let -- Subdivide any long gaps between consecutive waypoints.
         -- This catches wrap-boundary residuals and anomalous grid-path
         -- jumps that create visible straight-line carved segments.
@@ -537,25 +532,6 @@ buildRiverFromPath seed worldSize gridSpacing riverIdx baseFlow climate path =
                         , rpSegments     = segments
                         , rpFlowRate     = totalFlow
                         }
-
--- | Keep every Nth point from the path, always preserving
---   the first and last points.
-decimatePath ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
-decimatePath _ [] = []
-decimatePath _ [x] = [x]
-decimatePath n xs =
-    let lastPt = last xs
-        picked = go 0 xs
-        -- Ensure the last point is always included
-    in case picked of
-        [] → [lastPt]
-        _  → if last picked ≡ lastPt then picked
-             else picked <> [lastPt]
-  where
-    go _ [] = []
-    go i (x:rest)
-        | i `mod` n ≡ 0 = x : go (i + 1) rest
-        | otherwise       = go (i + 1) rest
 
 -- | Clamp the last above-sea-level point to seaLevel+2 so the river
 --   transitions smoothly at the coast. Below-sea-level points (from

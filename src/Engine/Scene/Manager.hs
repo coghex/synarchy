@@ -5,16 +5,12 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import qualified Data.Text as T
 import Engine.Scene.Base
 import Engine.Scene.Types
 import Engine.Scene.Graph
 import Engine.Scene.Batch
 import Engine.Graphics.Camera
-import Engine.Asset.Base (AssetId)
 import Engine.Core.Monad
-import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logDebugSM, logInfoSM)
 
 createScene ∷ Text → Camera2D → SceneManager → SceneManager
 createScene sceneId camera manager =

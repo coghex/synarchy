@@ -34,20 +34,16 @@ module World.Generate.Timeline.Fast
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Types
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Geology.Coastal.Types (CoastalTable(..))
 import World.Fluid.Seabed.Types (SeabedTable(..))
-import World.Material (MaterialId(..), MaterialRegistry(..)
+import World.Material (MaterialId(..), MaterialRegistry
                       , getMaterialProps, MaterialProps(..), matGlacier)
-import World.Plate (wrapGlobalU, TectonicPlate, elevationAtGlobal)
-import World.Geology.Types (GeoModification(..))
+import World.Plate (wrapGlobalU, elevationAtGlobal)
 import World.Geology.Event (applyGeoEvent)
-import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
 import World.Scale (WorldScale(..), computeWorldScale)
 

@@ -13,43 +13,28 @@ module World.Generate.Chunk
     ) where
 
 import UPrelude
-import Data.Bits (shiftR, (.&.))
-import Control.Monad (when, forM_)
 import Control.Monad.ST (runST)
-import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
+import Data.STRef (newSTRef, readSTRef, modifySTRef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import World.Types
-import World.Material (MaterialId(..), matGlacier, getMaterialProps
-                      , MaterialProps(..), matAir, matBasalt
-                      , MaterialRegistry(..))
-import World.Plate (TectonicPlate(..), generatePlates
-                   , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
-import World.Geology (applyGeoEvent, GeoModification(..))
-import World.Geology.Timeline.Types (GeoEvent(..), GeoTimeline(..))
-import World.Constants (seaLevel)
-import World.Scale (computeWorldScale, WorldScale(..))
+import World.Material (MaterialId(..), matGlacier, matAir, matBasalt, MaterialRegistry)
+import World.Plate (elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
+import World.Scale (computeWorldScale)
 import World.Slope (computeChunkSlopes)
 import Structure.Types (emptyChunkStructures)
-import World.Fluids (hasAnyOceanFluid)
-import World.Ocean.Types (oceanDistAt)
-import World.Fluid.Internal (emptyFluidMap, lavaOverrides
-                            , wrapChunkCoordU)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.Ice (computeChunkIce)
 import World.Magma.Types (MagmaOverlay(..))
 import World.Magma.Init (discoverChunkLava)
-import World.Geology.Timeline.Types (GeoEvent(..), GeoPeriod(..))
 import World.Hydrology.WaterTable (computeWaterTable)
 import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), lakesInChunk )
 import qualified World.Fluid.Lake.Types as WL
 import World.Fluid.River.Types
     ( WorldRivers(..), RiverChunkEntry(..), riversInChunk )
-import World.Fluid.Types (emptyIceMap)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
@@ -419,64 +404,6 @@ chunkOrNeighborOceanic params coord =
        ∨ check (ChunkCoord cx (cy + 1))
        ∨ check (ChunkCoord cx (cy - 1))
 
--- | True iff @(gx, gy)@ is a water tile (Ocean / Lake / River)
---   according to the global fluid tables. Used by 'lavaShellMask'
---   for cross-chunk neighbour queries where we don't have the
---   neighbour chunk's final fluid map.
---
---   The lake/river checks read the per-chunk bitmasks the same way
---   'composeFluidMap' does, comparing each table's surface against
---   the tile's terrain. When the caller supplies @mExactTerr@ (the
---   bordered region's carved terrain — 'lavaShellMask' always can,
---   its queries are 1 tile out) the comparison is exact; otherwise
---   it falls back to 'elevationAtGlobal' (raw plate elevation,
---   pre-erosion), which can disagree with final terrain by a few z
---   at eroded/carved tiles and cause a cosmetic 1-tile shell
---   mismatch.
-isWaterAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int → Bool
-isWaterAtGlobal params gx gy mExactTerr =
-    let worldSize  = wgpWorldSize params
-        timeline   = wgpGeoTimeline params
-        lakes      = gtWorldLakes timeline
-        rivers     = gtWorldRivers timeline
-        seed       = wgpSeed params
-        plates     = wgpPlates params
-        floorDivCS a =
-            let (q, r) = a `divMod` chunkSize
-            in if r < 0 then q - 1 else q
-        cx = floorDivCS gx
-        cy = floorDivCS gy
-        lx = gx - cx * chunkSize  -- always in [0, chunkSize)
-        ly = gy - cy * chunkSize
-        idx = ly * chunkSize + lx
-        cc = wrapChunkCoordU worldSize (ChunkCoord cx cy)
-        -- Exact carved terrain when the caller has it (bordered
-        -- region lookups); raw plate elevation as the fallback —
-        -- the approximation can disagree with final terrain by a
-        -- few z at eroded/carved tiles.
-        baseElev = case mExactTerr of
-            Just tz | tz ≠ minBound → tz
-            _ → fst (elevationAtGlobal seed plates worldSize gx gy)
-        chunkIsOcean = chunkOrNeighborOceanic params (ChunkCoord cx cy)
-        isOcean = chunkIsOcean ∧ baseElev ≤ seaLevel
-        -- Lake hit: any lake's bitmask bit set AND surface ≥ terrain.
-        isLake = V.any
-            (\lce →
-                let bm = WL.lceBitmask lce
-                    s  = WL.lkSurface
-                            (wlLakes lakes V.! WL.lceLakeId lce)
-                in bm VU.! idx ∧ s ≥ baseElev)
-            (lakesInChunk lakes cc)
-        -- River hit: any river's bitmask bit set AND per-tile
-        -- quantised surface ≥ terrain.
-        isRiver = V.any
-            (\rce →
-                let bm = rceBitmask rce
-                    s  = rcePerTileSurfZ rce VU.! idx
-                in bm VU.! idx ∧ s ≥ baseElev)
-            (riversInChunk rivers cc)
-    in isOcean ∨ isLake ∨ isRiver
-
 -- | Apply the shell mask: drop the lava cell at every shell tile so
 --   the renderer paints bare basalt terrain there. Interior lava
 --   stays — the chamber's surface lake is preserved, only the
@@ -653,12 +580,6 @@ generateChunk registry catalog params coord =
         timeline = wgpGeoTimeline params
         plates = wgpPlates params
         wsc = computeWorldScale worldSize
-        oceanMap = wgpOceanMap params
-
-        -- True if this chunk or any of its 8 neighbors is oceanic.
-        -- Used to extend strata to sea level for all coastal columns,
-        -- preventing cliff-face voids at chunk boundaries.
-        isCoastalChunk = hasAnyOceanFluid worldSize oceanMap coord
 
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize
@@ -1393,7 +1314,7 @@ generateZoomTerrain registry params mBorderedCache coord =
         worldSize = wgpWorldSize params
         timeline  = wgpGeoTimeline params
         plates    = wgpPlates params
-        oceanMap  = wgpOceanMap params
+        _oceanMap  = wgpOceanMap params
         wsc       = computeWorldScale worldSize
 
         borderSize = chunkSize + 2 * chunkBorder

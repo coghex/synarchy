@@ -65,7 +65,6 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
-import Control.Monad (when, forM_)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
@@ -74,7 +73,6 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types hiding (activeWorldPage)
-import World.Fluid.Types (FluidType(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
                       , materialIdByName)
@@ -82,10 +80,7 @@ import World.Gem (gemChanceAt)
 import World.Spoil.Logic (spoilBlockedAt)
 import World.Spoil.Types (SpoilPile(..))
 import World.Mine.Types (MineDesignation(..))
-import World.Tool.Types (ToolMode(..), textToToolMode)
-import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
 import World.Render.Quads (renderWorldQuads)
-import World.Render.Camera.Types (WorldCameraSnapshot(..))
 import World.Render.Textures (getTileTexture)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
@@ -202,13 +197,13 @@ worldSetGenConfigFn env = do
     -- Arg 1 is a table on the stack
     let getIntField ∷ Lua.Name → Int → Lua.LuaE Lua.Exception Int
         getIntField name def = do
-            Lua.getfield (Lua.nth 1) name
+            _ ← Lua.getfield (Lua.nth 1) name
             mi ← Lua.tointeger Lua.top
             Lua.pop 1
             pure $ maybe def fromIntegral mi
         getFloatField ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
         getFloatField name def = do
-            Lua.getfield (Lua.nth 1) name
+            _ ← Lua.getfield (Lua.nth 1) name
             mn ← Lua.tonumber Lua.top
             Lua.pop 1
             pure $ case mn of
@@ -216,11 +211,11 @@ worldSetGenConfigFn env = do
                 _                   → def
         getSubInt ∷ Lua.Name → Lua.Name → Int → Lua.LuaE Lua.Exception Int
         getSubInt tbl name def = do
-            Lua.getfield (Lua.nth 1) tbl
+            _ ← Lua.getfield (Lua.nth 1) tbl
             isT ← Lua.istable Lua.top
             if isT
                 then do
-                    Lua.getfield (Lua.nth 1) name
+                    _ ← Lua.getfield (Lua.nth 1) name
                     mi ← Lua.tointeger Lua.top
                     Lua.pop 2
                     pure $ maybe def fromIntegral mi
@@ -229,11 +224,11 @@ worldSetGenConfigFn env = do
                     pure def
         getSubFloat ∷ Lua.Name → Lua.Name → Float → Lua.LuaE Lua.Exception Float
         getSubFloat tbl name def = do
-            Lua.getfield (Lua.nth 1) tbl
+            _ ← Lua.getfield (Lua.nth 1) tbl
             isT ← Lua.istable Lua.top
             if isT
                 then do
-                    Lua.getfield (Lua.nth 1) name
+                    _ ← Lua.getfield (Lua.nth 1) name
                     mn ← Lua.tonumber Lua.top
                     Lua.pop 2
                     pure $ case mn of
@@ -920,6 +915,7 @@ worldGetDigInfoAtFn env = do
                                 (realToFrac (mpShovelSpeed props)))
                             Lua.pushboolean blocked
                             return 4
+        _ → Lua.pushnil >> return 1
 
 -- | world.addTile(pageId, gx, gy, material) → bool
 --   Raise the column at (gx, gy) one z of the named material (string

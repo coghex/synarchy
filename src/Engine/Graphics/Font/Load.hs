@@ -5,21 +5,16 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as VU
-import Data.Word (Word8)
-import Data.Char (ord)
 import Data.Array.IO (IOArray, newArray, writeArray, getElems)
 import Data.IORef (readIORef, atomicModifyIORef', IORef)
-import Foreign.Ptr (castPtr)
-import Foreign.Marshal.Array (pokeArray)
 import Engine.Asset.Types
 import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Asset.Handle
 import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.STB
 import Engine.Graphics.Types
-import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
-import Engine.Graphics.Vulkan.Image (createVulkanImage, VulkanImage(..), createVulkanImageView)
+import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView)
 import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, SamplerKind(..))
 import Engine.Graphics.Vulkan.Types.Texture
@@ -27,12 +22,12 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM, logAndThrowM)
+import Engine.Core.Log.Monad (logDebugM, logWarnM, logDebugSM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
-import Control.Monad (forM_, when, foldM, forM)
+import Control.Monad (foldM)
 
 -- | Create a descriptor pool dedicated to font atlas textures
 -- Each font gets one descriptor set with one combined image sampler
@@ -487,7 +482,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
 
 transitionImageLayout ∷ CommandBuffer → Image → Format 
                       → ImageLayout → ImageLayout → EngineM ε σ ()
-transitionImageLayout cmdBuf image format oldLayout newLayout = do
+transitionImageLayout cmdBuf image _format oldLayout newLayout = do
     let (srcAccess, dstAccess, srcStage, dstStage) = case (oldLayout, newLayout) of
           (IMAGE_LAYOUT_UNDEFINED, IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) →
               ( zero

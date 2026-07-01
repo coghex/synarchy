@@ -5,8 +5,6 @@ module World.Fluid.IceLevel
     ) where
 
 import UPrelude
-import Data.Word (Word64)
-import Data.Bits (xor, shiftR, (.&.))
 import qualified Data.Vector.Unboxed as VU
 import World.Constants (seaLevel)
 import World.Fluid.Types (IceLevelGrid(..))

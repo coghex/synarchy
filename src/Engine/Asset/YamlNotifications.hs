@@ -11,8 +11,6 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), ToJSON(..), (.:), (.:?), (.!=), (.=)
                   , withObject, object)
-import qualified Data.Aeson as Aeson
-import Data.Foldable (toList)
 import System.Directory (doesFileExist, createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))

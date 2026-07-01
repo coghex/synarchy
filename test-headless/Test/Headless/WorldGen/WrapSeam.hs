@@ -34,7 +34,6 @@ module Test.Headless.WorldGen.WrapSeam (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Monad (forM_)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..))

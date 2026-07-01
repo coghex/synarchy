@@ -4,21 +4,15 @@ module Engine.Core.Defaults where
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import qualified Data.Map as Map
 import Engine.Core.Types
 import Engine.Core.State
 import Engine.Asset.Types
-import Engine.Input.Types
 import Engine.Graphics.Base
-import Engine.Graphics.Camera
 import Engine.Graphics.Config
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..), emptyCleanup)
-import Engine.Graphics.Vulkan.Types.Texture
-import Engine.Graphics.Font.Data
+import Engine.Graphics.Vulkan.Types.Cleanup (emptyCleanup)
 import Engine.Scene.Types
-import Vulkan.Zero
 
 defaultEngineConfig ∷ EngineConfig
 defaultEngineConfig = EngineConfig 

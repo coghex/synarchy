@@ -2,12 +2,8 @@ module Engine.Graphics.Font.Data where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
-import Data.Word (Word8, Word32)
 import Engine.Asset.Types (GlyphInfo)
 import Engine.Asset.Handle
-import Engine.Scene.Base (ObjectId, LayerId)
-import Foreign.Storable (peekByteOff, pokeByteOff, Storable(..))
 import Vulkan.Core10
 
 -- | Complete font atlas texture with glyph metadata

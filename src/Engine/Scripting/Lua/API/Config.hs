@@ -23,13 +23,11 @@ module Engine.Scripting.Lua.API.Config
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, logWarn, LogCategory(..))
+import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Config
-import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
 import UI.Types (UIPageManager(..), TooltipState(..), TooltipStyle(..))
 

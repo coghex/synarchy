@@ -11,19 +11,16 @@ import qualified Codec.Picture as JP
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
-import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logInfoM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Error.Exception
-import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
                                     , createVulkanImage'
-                                    , copyBufferToImage, VulkanImage(..))
+                                    , copyBufferToImage)
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
-import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
@@ -127,7 +124,9 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
                           imageDataPtr imageDataLen
     unmapMemory dev stagingMem
 
-    waitForFences dev (V.singleton fence) True maxTimeout
+    -- Result discard is safe: timeout is maxBound, so the only
+    -- non-SUCCESS outcomes throw as VulkanException.
+    _ ← waitForFences dev (V.singleton fence) True maxTimeout
     resetFences dev (V.singleton fence)
     
     logDebugM CatTexture "Copying buffer to image and transitioning layout"
@@ -155,7 +154,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
           { commandBuffers = V.singleton (commandBufferHandle cmdBuf) }
     queueSubmit cmdQueue (V.singleton $ SomeStruct submitInfo) fence
 
-    waitForFences dev (V.singleton fence) True maxBound
+    _ ← waitForFences dev (V.singleton fence) True maxBound
     freeCommandBuffers dev cmdPool (V.singleton cmdBuf)
   destroyFence dev fence Nothing
 
@@ -172,7 +171,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
                      → Word32 → CommandBuffer → EngineM ε σ ()
-transitionImageLayout (VulkanImage image _) format transition
+transitionImageLayout (VulkanImage image _) _format transition
                       mipLevels cmdBuf = do
   let (oldLayout, newLayout, srcAccess, dstAccess, srcStage, dstStage) =
         case transition of

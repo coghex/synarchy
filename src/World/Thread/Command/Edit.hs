@@ -12,7 +12,6 @@ module World.Thread.Command.Edit
     ) where
 
 import UPrelude
-import Data.Word (Word8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -24,9 +23,6 @@ import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
-import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
-import World.Fluid.Types (FluidType(..))
-import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
@@ -594,9 +590,9 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
 --   over the candidate set suffices.
 promoteFullSpoilTiles ∷ EngineEnv → LoggerState → WorldPageId
     → WorldState → (Int, Int) → IO ()
-promoteFullSpoilTiles env logger pageId ws startV = do
+promoteFullSpoilTiles env logger _pageId ws startV = do
     piles ← readIORef (wsSpoilRef ws)
-    registry ← readIORef (materialRegistryRef env)
+    _registry ← readIORef (materialRegistryRef env)
     let ready = promotableTiles piles (candidateVertices startV)
     forM_ ready $ \tile@(tx, ty) → do
         ps ← readIORef (wsSpoilRef ws)

@@ -13,22 +13,18 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
-import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
+import World.Material (MaterialId(..), matGlacier, MaterialRegistry
                       , getMaterialProps, MaterialProps(..))
-import World.Plate (wrapGlobalU, TectonicPlate, elevationAtGlobal)
-import World.Geology.Types (GeoModification(..))
+import World.Plate (wrapGlobalU)
 import World.Geology.Event (applyGeoEvent)
-import World.Geology.Timeline.Types (isRiverCarveEvent)
 import World.Geology.Erosion
     (applyErosion, applyErosionLerp4, lookupRegionalErosion
     , erosionCornerLookup)
 import World.Weather.Lookup (RegionGridCoords(..), regionGridCoords)
-import World.Scale (WorldScale(..), computeWorldScale)
-import World.Constants (seaLevel)
+import World.Scale (WorldScale(..))
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline.Fast (applyTimelineFast)
-import Control.Monad (forM_, when)
 
 -- * Spike Removal
 --
@@ -238,27 +234,10 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
   where
     borderSize = chunkSize + 2 * chunkBorder
 
-    {-# INLINE toIndex #-}
-    toIndex lx ly =
-        let bx = lx + chunkBorder
-            by = ly + chunkBorder
-        in by * borderSize + bx
-
     {-# INLINE fromIndex #-}
     fromIndex idx =
         let (by, bx) = idx `divMod` borderSize
         in (bx - chunkBorder, by - chunkBorder)
-
-    {-# INLINE inBorder #-}
-    inBorder lx ly =
-        lx ≥ negate chunkBorder ∧ lx < chunkSize + chunkBorder ∧
-        ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
-
-    {-# INLINE lookupElev #-}
-    lookupElev vec lx ly fallback =
-        if inBorder lx ly
-        then vec VU.! toIndex lx ly
-        else fallback
 
     -- CHUNK PATH: uses gpExplodedEvents (per-segment bboxes)
     -- Filtered once per chunk, then per-row Y-band sweep + per-tile

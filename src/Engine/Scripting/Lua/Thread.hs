@@ -24,7 +24,7 @@ import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
-import World.State.Types (wmWorlds, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
+import World.State.Types (wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Input.Types (InputState, keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
@@ -34,7 +34,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
-import Data.List (find, sortBy, sort)
+import Data.List (find)
 import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
@@ -43,8 +43,6 @@ import Control.Concurrent.STM.TQueue (TQueue, newTQueue)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch, finally)
-import Control.Monad (forM_, when)
-import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 
 startLuaThread ∷ EngineEnv → IO ThreadState
 startLuaThread env = do

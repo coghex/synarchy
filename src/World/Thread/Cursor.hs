@@ -17,7 +17,6 @@ import World.Fluids (isOceanChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Edit.Apply (replayEdits)
 import World.Generate (generateLoadedChunk)
-import World.Generate.Types (isArenaParams)
 import World.Geology.Ore (chunkOreCounts)
 import World.Slope (patchEdgeStrata)
 import World.Thread.Helpers (sendHudInfo, sendHudChunkInfo, sendHudWeatherInfo

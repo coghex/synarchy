@@ -10,7 +10,6 @@ module World.ZoomMap.Cache
 
 import UPrelude
 import Control.Parallel.Strategies (parListChunk, using, rdeepseq)
-import Control.DeepSeq (NFData)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as BL
@@ -18,26 +17,18 @@ import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import World.Types
-import World.Constants (seaLevel)
-import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..))
-import World.Plate (TectonicPlate(..), elevationAtGlobal
-                   , isBeyondGlacier, isGlacierZone, wrapGlobalU
-                   , twoNearestPlates, BoundaryType(..), classifyBoundary)
+import World.Material (MaterialId(..), matGlacier, MaterialRegistry)
+import World.Plate (elevationAtGlobal, isBeyondGlacier, isGlacierZone, wrapGlobalU)
 import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyOceanFluid)
 import World.Fluid.Lake.Types (wlByChunk)
 import qualified Data.HashMap.Strict as HM
 import World.Fluid.Lava (chunkHasLavaQuick)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..), IceMap)
 import World.Fluid.IceLevel (lookupIceLevel)
-import World.Fluid.Internal (FluidMap, wrapChunkCoordU)
-import World.Geology.Timeline.Types (GeoEvent(..))
-import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
+import World.Fluid.Internal (FluidMap)
 import World.Generate (applyTimelineFast)
 import World.Generate.Chunk (generateZoomTerrain)
 import World.Generate.InitTerrain (BorderedTerrainCache)
-import Data.Bits ((.&.), shiftR, xor)
-import Data.Word (Word64)
 import World.Vegetation (isBarrenMaterial, isWetlandSoil
                         , vegHash, vegSnow, vegVariants)
 import World.Weather.Types (ClimateState(..))
@@ -45,18 +36,8 @@ import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
-import World.Base (GeoCoord(..))
-import World.Geology.Hash (valueNoise2D)
-import World.Geology.Coastal (CoastType(..), classifyCoast, isDepositional
-                             , beachMaterial, wetlandMaterial, deltaMaterial
-                             , coastHash, sandProfile, outcroppHardness
-                             , maxCoastalDist, filterNearbyMouths
-                             , isNearRiverMouth, shorelineOffset)
-import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector.Mutable as MV
 import Control.Monad.ST (runST)
-import Control.Monad (when, forM_)
-import World.Render.Zoom.Types (zoomTileSize)
 
 -- * Sampling Configuration
 
@@ -211,14 +192,14 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                            ∨ hasAnyOceanFluid worldSize oceanMap coord
 
                 -- Neighbor ocean chunks for edge seeding of ocean flood fill
-                wrapC = wrapChunkCoordU worldSize
-                chunkOceanN = isOceanChunk oceanMap (wrapC (ChunkCoord ccx (ccy - 1)))
+                _wrapC = wrapChunkCoordU worldSize
+                _chunkOceanN = isOceanChunk oceanMap (wrapC (ChunkCoord ccx (ccy - 1)))
                             ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord ccx (ccy - 1)))
-                chunkOceanS = isOceanChunk oceanMap (wrapC (ChunkCoord ccx (ccy + 1)))
+                _chunkOceanS = isOceanChunk oceanMap (wrapC (ChunkCoord ccx (ccy + 1)))
                             ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord ccx (ccy + 1)))
-                chunkOceanE = isOceanChunk oceanMap (wrapC (ChunkCoord (ccx + 1) ccy))
+                _chunkOceanE = isOceanChunk oceanMap (wrapC (ChunkCoord (ccx + 1) ccy))
                             ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord (ccx + 1) ccy))
-                chunkOceanW = isOceanChunk oceanMap (wrapC (ChunkCoord (ccx - 1) ccy))
+                _chunkOceanW = isOceanChunk oceanMap (wrapC (ChunkCoord (ccx - 1) ccy))
                             ∨ hasAnyOceanFluid worldSize oceanMap (wrapC (ChunkCoord (ccx - 1) ccy))
 
                 -- Use the full detail-world pipeline (bordered region +
@@ -335,7 +316,7 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                                 Just (IceCell (min iceLevel (e + 20)) BasinIce)
                             _ → Just (IceCell (e + 1) DrapeIce)
                          else Nothing
-                    | (td, idx') ← zip tileData [0 ∷ Int ..]
+                    | (td, _idx') ← zip tileData [0 ∷ Int ..]
                     ]
 
                 -- Inject snow veg on ice-covered tiles
@@ -383,8 +364,8 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
         -- Pass 2: extend ocean at chunk boundaries using neighbor fluid data,
         -- then regenerate pixels.  For each chunk, check if edge tiles should
         -- be ocean by looking at the adjacent chunk's fluid map.
-        extendAndRender ((ccx, ccy), (entry, tileData0, rawFluid, extras)) =
-            let coord = ChunkCoord ccx ccy
+        extendAndRender ((ccx, ccy), (entry, _tileData0, rawFluid, extras)) =
+            let _coord = ChunkCoord ccx ccy
                 -- Check if neighbor chunk has ocean at a specific tile
                 neighborHasOcean nx ny =
                     let ncx = if ny < 0 then ccx else if ny ≥ chunkSize then ccx else ccx + (if nx < 0 then -1 else if nx ≥ chunkSize then 1 else 0)
@@ -442,7 +423,7 @@ generateChunkPixels ∷ ZoomColorPalette → Bool
                     → Int → FluidMap → IceMap
                     → V.Vector (Int, Word8, Word8, Int, Int)
                     → BS.ByteString
-generateChunkPixels palette hasLava worldSize fluidMap iceMap tileVec =
+generateChunkPixels palette hasLava _worldSize fluidMap iceMap tileVec =
     BL.toStrict $ BB.toLazyByteString $ mconcat
         [ pixelAt px py
         | py ← [0 .. zoomTileSize - 1]
@@ -524,7 +505,7 @@ defaultLavaColor3 = let (r, g, b, _) = defaultLavaColor in (r, g, b)
 --   the compose fluid map, not here.
 tileColor ∷ ZoomColorPalette → Bool → Word8 → Word8 → Int → Int → Int
           → (Word8, Word8, Word8, Word8)
-tileColor palette hasLava matId vegId elev _gx _gy
+tileColor palette _hasLava matId vegId _elev _gx _gy
     -- Snow-covered tiles (including frozen ocean) use snow color
     | isSnowVeg vegId =
         case lookupVegColorById palette vegId of
@@ -631,53 +612,6 @@ zoomHashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF �
 
 zoomSmoothstep ∷ Float → Float
 zoomSmoothstep t = t * t * (3.0 - 2.0 * t)
-
--- * Coastal Contour Smoothing (zoom map)
-
--- | Lightweight coastal terrain flattening for the zoom map.
---   Simplified version of smoothCoastalContour (Coastal.hs) without
---   border overlap or hardness awareness. Flattens terrain near
---   seaLevel by pulling toward minimum neighbor, creating gradual
---   coastal slopes for the minimap.
-smoothZoomContour ∷ Int → Int → VU.Vector Int → VU.Vector Int
-smoothZoomContour 0 _ elev = elev
-smoothZoomContour iters cs elev =
-    let csA = cs * cs
-        bandWidth = 60 ∷ Int
-        fadeStart = 45 ∷ Int
-        smoothed = runST $ do
-            em ← VUM.new csA
-            forM_ [0 .. csA - 1] $ \i →
-                VUM.write em i (elev VU.! i)
-            forM_ [0 .. csA - 1] $ \idx → do
-                let e  = elev VU.! idx
-                    bx = idx `mod` cs
-                    by = idx `div` cs
-                    absD = abs (e - seaLevel)
-                when (absD < bandWidth
-                     ∧ bx > 0 ∧ bx < cs - 1
-                     ∧ by > 0 ∧ by < cs - 1) $ do
-                    let elevFade = if absD < fadeStart then 1.0
-                                   else 1.0 - fromIntegral (absD - fadeStart)
-                                            / fromIntegral (bandWidth - fadeStart) ∷ Float
-                        readN nx ny
-                            | nx ≥ 0 ∧ nx < cs ∧ ny ≥ 0 ∧ ny < cs
-                                = elev VU.! (ny * cs + nx)
-                            | otherwise = e
-                        n  = readN bx       (by - 1)
-                        s  = readN bx       (by + 1)
-                        w  = readN (bx - 1) by
-                        eN = readN (bx + 1) by
-                        minN = min n (min s (min w eN))
-                        avg  = (n + s + w + eN + e) `div` 5
-                        target
-                          | e > seaLevel = min avg (minN + 2)
-                          | otherwise    = avg
-                        delta = fromIntegral (target - e) ∷ Float
-                        newE = e + round (elevFade * delta)
-                    VUM.write em idx newE
-            VU.unsafeFreeze em
-    in smoothZoomContour (iters - 1) cs smoothed
 
 -- * Helpers
 

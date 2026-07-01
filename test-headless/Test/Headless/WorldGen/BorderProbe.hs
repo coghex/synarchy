@@ -20,19 +20,16 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef)
-import Control.Monad (forM_)
 import Test.Headless.Harness
 import Engine.Core.State (EngineEnv(..))
 import World.Types
 import World.Material (matGlacier)
 import World.Plate (elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
-import World.Constants (seaLevel)
 import World.Scale (computeWorldScale)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
 import World.Geology.Coastal (applyCoastalTable)
-import World.Geology.Timeline.Types (GeoTimeline(..))
 import World.Fluid.River.Types (wrCarveDelta)
 import World.Fluid.Lake.Types (wlCarveDelta)
 

@@ -22,18 +22,12 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text.Encoding as TE
-import Control.Monad (forM_)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv(..), activeWorldState)
 import World.Types
-import World.Geology.Timeline.Types
-import World.Hydrology.Types
-import World.Cursor.Types (CursorState(..))
-import World.Generate.Types (WorldGenParams(..))
 import Location.Overlay.Types (overlayToList)
 import World.Generate.Coordinates (globalToChunk)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
@@ -42,7 +36,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import World.Render.HitTest (pickWorldTile)
 import World.Render.ViewBounds (computeViewBounds)
 
-import World.Generate (globalToChunk, viewDepth)
+import World.Generate (viewDepth)
 
 -- | Helper: get the first active world's tile data
 getWorldTileData ∷ EngineEnv → IO (Maybe WorldTileData)
@@ -202,7 +196,7 @@ worldGetChunkInfoFn env = do
                     Lua.setfield (Lua.nth 2) "loaded"
                     return 1
                 Just lc → do
-                    let sz = chunkSize * chunkSize
+                    let _sz = chunkSize * chunkSize
                         surfMap = lcSurfaceMap lc
                         terrMap = lcTerrainSurfaceMap lc
                         fluidMap = lcFluidMap lc

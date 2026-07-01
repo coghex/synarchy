@@ -8,9 +8,6 @@ module Engine.Graphics.Vulkan.Texture.Undefined
 
 import UPrelude
 import qualified Data.Vector.Storable as Vec
-import Foreign.Ptr (castPtr)
-import Foreign.ForeignPtr (withForeignPtr)
-import Foreign.Marshal.Array (copyArray)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Image

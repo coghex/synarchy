@@ -40,7 +40,6 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as HM
-import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 
 -- * Climate Region Coordinate
 

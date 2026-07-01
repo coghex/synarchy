@@ -24,7 +24,6 @@ import World.Render.Zoom.Types (ZoomChunkEntry(..), ZoomQuadCache(..), BakedZoom
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
-import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)

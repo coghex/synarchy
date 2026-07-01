@@ -17,7 +17,6 @@ module World.Edit.Types
 
 import UPrelude
 import Data.Serialize (Serialize)
-import Data.Word (Word8)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..))

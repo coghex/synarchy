@@ -13,7 +13,6 @@ module Engine.Graphics.Vulkan.Sampler.Types
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import Data.Word (Word32)
 import Vulkan.Core10
 import Vulkan.Zero
 

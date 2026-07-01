@@ -10,10 +10,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness
-import World.Base (GeoCoord(..))
-import World.Geology.Types (GeoModification(..))
 import World.Hydrology.Glacier.Carving (applyGlacierMoraine)
-import World.Hydrology.Types (GlacierMoraineParams(..))
 import World.Material (matMoraine, unMaterialId)
 import World.Types
 

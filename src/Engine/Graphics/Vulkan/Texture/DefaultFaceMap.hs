@@ -7,9 +7,6 @@ module Engine.Graphics.Vulkan.Texture.DefaultFaceMap
 
 import UPrelude
 import qualified Data.Vector.Storable as Vec
-import Foreign.Ptr (castPtr)
-import Foreign.ForeignPtr (withForeignPtr)
-import Foreign.Marshal.Array (copyArray)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.State (EngineEnv(..))

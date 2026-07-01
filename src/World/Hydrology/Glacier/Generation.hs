@@ -4,13 +4,9 @@ module World.Hydrology.Glacier.Generation
     ) where
 
 import UPrelude
-import Data.Word (Word64)
-import World.Base (GeoCoord(..))
 import World.Types
 import World.Material (MaterialId(..))
-import World.Plate (TectonicPlate(..), elevationAtGlobal, isBeyondGlacier, isGlacierZone)
-import World.Hydrology.Types
-import World.Geology.Types
+import World.Plate (elevationAtGlobal, isBeyondGlacier, isGlacierZone)
 import World.Geology.Hash
 
 -- * Glacier Generation

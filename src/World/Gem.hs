@@ -25,7 +25,6 @@ module World.Gem
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR)
 
 -- | Region side in tiles. A typical mining operation stays inside
 --   one region, so a bearing region produces same-gem streaks.

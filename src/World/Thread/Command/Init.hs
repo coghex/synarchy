@@ -17,21 +17,17 @@ import Control.Exception (evaluate)
 import System.Random
 import Engine.Asset.YamlTextures (MaterialDef(..), loadMaterialDirectory)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, logDebug, logError, logWarn
-                       , LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Material (MaterialProps(..), registerMaterial
                       , emptyMaterialRegistry)
 import World.Types
 import Structure.Types (emptyChunkStructures)
-import World.Constants (seaLevel)
 import World.Generate (generateChunk)
 import World.Generate.Constants (chunkLoadRadius)
-import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
-import World.Geology.Log (formatTimeline, formatPlatesSummary)
-import World.Fluids (computeOceanMap, isOceanChunk)
+import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import Location.Types (allLocations)
 import Location.Overlay (computeLocationOverlay)
@@ -42,14 +38,15 @@ import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Weather (initEarlyClimate, formatWeather)
 import World.Weather.Types (ClimateState(..))
-import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
-                             , CalendarYaml(..), SunYaml(..), MoonYaml(..)
-                             , ResourcesYaml(..)
-                             , applyConfigToParams, timelineParamsOf
-                             , minimumWorldSize, normalizeWorldGenInputs)
+import World.Generate.Config (WorldGenConfig(..)
+                              , ResourcesYaml(..)
+                              , applyConfigToParams
+                              , timelineParamsOf
+                              , minimumWorldSize
+                              , normalizeWorldGenInputs)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
-import World.Thread.ChunkLoading (maxChunksPerTick, dispatchLocationStamps)
+import World.Thread.ChunkLoading (dispatchLocationStamps)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → IO ()
@@ -344,7 +341,7 @@ handleWorldInitArenaCommand env logger pageId = do
         columnSlopes = VU.replicate arenaDepth 0
 
         generateChunk ∷ Int → V.Vector ColumnTiles → StdGen → V.Vector ColumnTiles
-        generateChunk 0    init g = init
+        generateChunk 0    init _g = init
         generateChunk area init g = generateChunk (area - 1)
                                       (V.cons newelem init) newg
             where (rand, newg) = randomR (0, 3) g

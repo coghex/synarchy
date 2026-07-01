@@ -10,9 +10,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Storable as Vec
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import Data.Time.Clock (getCurrentTime)
-import Foreign.ForeignPtr (ForeignPtr, withForeignPtr)
-import Foreign.Ptr (castPtr)
+import Foreign.ForeignPtr (ForeignPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
 import qualified Codec.Picture as JP
@@ -22,15 +20,16 @@ import Engine.Asset.Manager
 import Engine.Asset.Types
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logWarnM
-                             , logDebugSM, logInfoSM, logWarnSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logWarnM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (ecHeadless)
 import Engine.Core.Resource (locally)
 import qualified Engine.Core.Queue as Q
-import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..)
-                              , textureFilterToText, textureFilterToVulkan)
+import Engine.Graphics.Config (WindowMode(..)
+                               , VideoConfig(..)
+                               , textureFilterToText
+                               , textureFilterToVulkan)
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Graphics.Vulkan.Base (TextureInfo(..))
@@ -612,7 +611,7 @@ handleLoadTexture handle path = do
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
 
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
-handleLoadFont handle path size = do
+handleLoadFont handle path _size = do
     logDebugM CatLua $ "Loading font from Lua: " <> T.pack path
     actualHandle ← loadSDFFont handle path
     env ← ask
@@ -639,7 +638,7 @@ handleSpawnText oid x y fontHandle text color layer size = do
               , nodeLayer = layer
               }
         case addObjectToScene sceneId node sceneMgr of
-          Just (addedObjId, newSceneMgr) → do
+          Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
             env ← ask
             liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
@@ -652,7 +651,8 @@ handleSetText objId text = do
     env ← ask
     liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
       (Map.insert objId text m, ())
-    modifySceneNode objId $ \node → node { nodeText = Just text }
+    -- Bool result ignored: setText on a missing node is a no-op by design.
+    _ ← modifySceneNode objId $ \node → node { nodeText = Just text }
     return ()
 
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float
@@ -671,7 +671,7 @@ handleSpawnSprite objId x y width height texHandle layer = do
               , nodeLayer = layer
               }
         case addObjectToScene sceneId node sceneMgr of
-          Just (addedObjId, newSceneMgr) → do
+          Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
           Nothing → logDebugM CatLua $ "Failed to add sprite " <> T.pack (show objId)
       Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"

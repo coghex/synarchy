@@ -10,7 +10,6 @@ module World.Hydrology.River.Carving
 import UPrelude
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
-import World.Geology.Hash (wrappedDeltaUV)
 import World.Material (matSandstone, matShale, unMaterialId)
 import World.Constants (seaLevel)
 import World.Hydrology.Types

@@ -4,11 +4,7 @@ module World.Hydrology.Glacier.Evolution
     ) where
 
 import UPrelude
-import Data.Word (Word64)
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Hydrology.Types
-import World.Geology.Types
 import World.Geology.Hash
 import World.Hydrology.Glacier.Common (getGlacierParams)
 import World.Hydrology.Glacier.Spawn (spawnMeltwaterRiver, spawnMoraineLake)
@@ -114,7 +110,7 @@ evolveFActiveGlacier ∷ Word64 → Int → GeoState → Float → Float
                      → GeoFeatureId → Int → PersistentFeature
                      → ([GeoEvent], TimelineBuildState)
                      → ([GeoEvent], TimelineBuildState)
-evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
+evolveFActiveGlacier seed periodIdx _gs roll temp fid fidInt pf (events, tbs)
     -- ===== COLD WORLD =====
     | temp < 0.8 =
         if roll < 0.50
@@ -378,7 +374,7 @@ evolveFDormantGlacier ∷ Word64 → Int → GeoState → Float → Float
                       → GeoFeatureId → Int → PersistentFeature
                       → ([GeoEvent], TimelineBuildState)
                       → ([GeoEvent], TimelineBuildState)
-evolveFDormantGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
+evolveFDormantGlacier seed periodIdx _gs roll temp fid fidInt pf (events, tbs)
     -- Cold snap: dormant glaciers can reactivate
     | temp < 0.8 =
         if roll < 0.40

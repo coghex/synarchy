@@ -5,13 +5,9 @@ module World.Hydrology.Event
     ) where
 
 import UPrelude
-import Data.Word (Word64)
-import World.Base (GeoCoord(..))
 import World.Types
-import World.Hydrology.Types
 import World.Hydrology.River (applyRiverCarve, applyRiverEvolution)
 import World.Hydrology.Glacier (applyGlacierCarve, applyGlacierEvolution)
-import World.Geology.Types (GeoModification(..), noModification)
 import World.Geology.Hash (wrappedDeltaUV, hashGeo, hashToFloatGeo, smoothstepGeo)
 
 -- * HydroEvent dispatch (for new feature placement)

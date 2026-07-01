@@ -8,19 +8,15 @@ module Engine.Graphics.Vulkan.Image
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Resource
 import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..))
-import Engine.Graphics.Types
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
-import Vulkan.CStruct.Extends
 
 createVulkanImage ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
                   → ImageUsageFlags → MemoryPropertyFlags → EngineM ε σ VulkanImage

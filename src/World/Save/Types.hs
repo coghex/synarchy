@@ -37,7 +37,7 @@ import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
                   , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
-import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
+import Unit.Sim.Types (UnitSimState(..))
 import Item.Types (ItemInstance(..))
 
 -- | 4-byte magic prefix on every save file. Spells "SYRA"

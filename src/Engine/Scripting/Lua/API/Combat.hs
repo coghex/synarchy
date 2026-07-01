@@ -22,7 +22,6 @@ module Engine.Scripting.Lua.API.Combat
     ) where
 
 import UPrelude
-import Control.Monad (forM_, forM)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T

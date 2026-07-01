@@ -5,19 +5,11 @@ module Engine.Graphics.Vulkan.Pipeline
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.ByteString as BS
-import Engine.Core.Types
 import Engine.Core.Monad
-import Engine.Core.Resource
 import Engine.Core.State
-import Engine.Graphics.Types
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup
-import Engine.Graphics.Vulkan.Types.Texture
-import Engine.Graphics.Vulkan.Vertex
 import Vulkan.Core10
 import Vulkan.Zero
-import Vulkan.CStruct.Extends
 
 -- | Creates a render pass for the swapchain.
 -- When sampleCount > 1, uses a multisampled color attachment with resolve.

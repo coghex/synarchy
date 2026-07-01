@@ -20,11 +20,10 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector as V
 import World.Types
-import World.Geology (applyGeoEvent, GeoModification(..))
+import World.Geology (applyGeoEvent)
 import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
-import World.Geology.Timeline.Types (tileInBBoxWrapped)
 import World.Scale (WorldScale(..))
-import World.Material (MaterialId(..), MaterialRegistry(..)
+import World.Material (MaterialId(..), MaterialRegistry
                       , getMaterialProps, MaterialProps(..))
 
 data StrataState = StrataState
@@ -124,7 +123,7 @@ buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
         in (st', cache : acc)
 
     -- Now receives tagged (event, bbox) pairs instead of raw events
-    applyEvent elev surfMat (deltas, e, sm) (event, _bb) =
+    applyEvent _elev _surfMat (deltas, e, sm) (event, _bb) =
         let h = mpHardness (getMaterialProps registry sm)
             mod' = applyGeoEvent event worldSize gx gy e h
             delta = gmElevDelta mod'
@@ -149,7 +148,7 @@ buildColumnStrata caches (baseElev, baseMat) startZ endZ =
             let applyCache (!elev, !surfMat) cache = do
                     -- Apply each event's writes
                     (elev', _surfMat') ← V.foldM'
-                        (\(!e, !sm) ed → do
+                        (\(!e, !_sm) ed → do
                             writeDelta mats startZ depth e
                                        (edDelta ed) (edIntrusion ed)
                                        (edMat ed)
@@ -208,7 +207,7 @@ applyCachedPeriod ∷ Int → StrataZState → PeriodStrataCache → StrataZStat
 applyCachedPeriod queryZ state cache =
     let afterEvents = V.foldl' (applyEventDelta queryZ) state (pscEvents cache)
 
-        (surfMat', uplift', zMat') =
+        (_surfMat', uplift', zMat') =
             applyDelta queryZ
                        (szElev afterEvents)
                        (pscErosionDelta cache)

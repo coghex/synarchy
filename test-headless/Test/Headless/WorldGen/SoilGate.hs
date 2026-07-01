@@ -16,7 +16,7 @@ import Test.Hspec
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (chunkSize)
 import World.Generate.Chunk
-    (surfaceDemotion, demoteWetland, wetlandKeep, saltFlatKeep, nearFlat)
+    (surfaceDemotion, demoteWetland, saltFlatKeep, nearFlat)
 
 saltFlat, lightGravel, muck, clay ∷ Word8
 saltFlat    = 67

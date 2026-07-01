@@ -25,7 +25,6 @@ import UPrelude
 import qualified Data.Sequence as Seq
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, atomicModifyIORef')
-import Data.Word (Word32)
 
 -- | Which swing the attacker is throwing.
 --

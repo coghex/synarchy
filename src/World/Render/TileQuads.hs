@@ -16,10 +16,8 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
-import World.Constants (seaLevel)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
 import World.Material (matOcean, matLava, matIce, unMaterialId)
-import World.Fluids (FluidCell(..), FluidType(..))
 import World.Vegetation (getVegTexture)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
 import World.Types
@@ -28,6 +26,13 @@ import World.Render.Textures (getTileTexture, getTileFaceMapTexture
 
 -- * Convert Tile to Quad
 
+tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+           → WorldTextures → CameraFacing
+           → Int → Int → Int        -- ^ worldX, worldY, worldZ
+           → Tile → Int → Int       -- ^ tile, zSlice, effDepth
+           → Float → Float          -- ^ tileAlpha, xOffset
+           → Maybe FluidCell → Bool -- ^ fluid at tile, chunk has fluid
+           → SortableQuad
 tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid chunkHasFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
@@ -89,6 +94,11 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
 
 -- * Blank Tile Quad
 
+blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                → WorldTextures → CameraFacing
+                → Int → Int → Int → Int -- ^ worldX, worldY, worldZ, zSlice
+                → Float → Float         -- ^ tileAlpha, xOffset
+                → SortableQuad
 blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
@@ -126,7 +136,12 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
 
 -- * Ocean Surface Tile Quad
 
-oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice effDepth tileAlpha xOffset =
+oceanTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                → WorldTextures → CameraFacing
+                → Int → Int → Int → Int → Int -- ^ worldX, worldY, fluidZ, zSlice, effDepth
+                → Float → Float               -- ^ tileAlpha, xOffset
+                → SortableQuad
+oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice _effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = fluidZ - zSlice
@@ -163,7 +178,12 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
 
 -- * Ice Surface Tile Quad
 
-iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice effDepth tileAlpha xOffset =
+iceTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+              → WorldTextures → CameraFacing
+              → Int → Int → Int → Int → Int -- ^ worldX, worldY, iceZ, zSlice, effDepth
+              → Float → Float               -- ^ tileAlpha, xOffset
+              → SortableQuad
+iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice _effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = iceZ - zSlice
@@ -200,7 +220,12 @@ iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice 
         , sqLayer    = worldLayer
         }
 
-lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice effDepth tileAlpha xOffset =
+lavaTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+               → WorldTextures → CameraFacing
+               → Int → Int → Int → Int → Int -- ^ worldX, worldY, fluidZ, zSlice, effDepth
+               → Float → Float               -- ^ tileAlpha, xOffset
+               → SortableQuad
+lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice _effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = fluidZ - zSlice
@@ -234,8 +259,14 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
 
 -- * Freshwater (River/Lake) Surface Tile Quad
 
+freshwaterTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                     → WorldTextures → CameraFacing
+                     → Int → Int → Int → FluidType → Int → Int -- ^ worldX, worldY, fluidZ, fluidType, zSlice, effDepth
+                     → Float → Float                           -- ^ tileAlpha, xOffset
+                     → Word8                                   -- ^ waterSlopeId
+                     → SortableQuad
 freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
-                     fluidZ fluidType zSlice effDepth tileAlpha xOffset waterSlopeId =
+                     fluidZ fluidType zSlice _effDepth tileAlpha xOffset waterSlopeId =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = fluidZ - zSlice
@@ -292,7 +323,7 @@ worldCursorToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                   → TextureHandle      -- ^ cursor texture
                   → SortableQuad
 worldCursorToQuad lookupSlot lookupFmSlot textures facing
-                  gx gy surfZ zSlice effDepth tileAlpha xOffset cursorTex =
+                  gx gy surfZ zSlice _effDepth tileAlpha xOffset cursorTex =
     let (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
         relativeZ = surfZ - zSlice
@@ -340,7 +371,7 @@ worldCursorBgToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                     → TextureHandle
                     → SortableQuad
 worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                    gx gy surfZ zSlice effDepth tileAlpha xOffset cursorBgTex =
+                    gx gy surfZ zSlice _effDepth tileAlpha xOffset cursorBgTex =
     let (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
         relativeZ = surfZ - zSlice

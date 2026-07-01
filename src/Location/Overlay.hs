@@ -31,9 +31,7 @@ module Location.Overlay
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word64)
-import Data.List (sort, sortOn, foldl')
+import Data.List (sort, sortOn)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
@@ -75,9 +73,12 @@ chunkMetricsAt ∷ Word64 → [TectonicPlate] → Int → OceanDistMap → Chunk
 chunkMetricsAt seed plates worldSize oceanDist coord =
     let elevs  = map fst (sampleElevs seed plates worldSize coord)
         sorted = sort elevs
+        elevRange = case sorted of
+            lo : _ → last sorted - lo
+            []     → 0  -- unreachable: sampleElevs always returns 5 points
     in ChunkMetrics
          { cmMedianElev = sorted !! 2
-         , cmElevRange  = last sorted - head sorted
+         , cmElevRange  = elevRange
          , cmOceanDist  = oceanDistAt oceanDist coord
          }
 

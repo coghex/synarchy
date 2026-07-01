@@ -49,7 +49,7 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , Scar(..))
 import Unit.Command.Types (UnitCommand(..))
 import qualified System.Random as Random
-import World.State.Types (WorldManager(..), WorldState(..))
+import World.State.Types (WorldState(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import Infection.Types (InfectionManager, InfectionDef(..)

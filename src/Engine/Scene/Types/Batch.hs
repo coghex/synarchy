@@ -20,9 +20,7 @@ import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import qualified Data.List as List
 import Data.Ord (comparing)
-import Control.Monad.ST (runST)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex)

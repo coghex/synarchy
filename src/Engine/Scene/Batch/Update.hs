@@ -12,9 +12,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Data.Map as Map
 import qualified Data.List as List
-import qualified Data.Set as Set
-import Engine.Asset.Handle (TextureHandle, FontHandle)
-import Engine.Scene.Base (ObjectId, LayerId)
+import Engine.Asset.Handle (TextureHandle)
+import Engine.Scene.Base (LayerId)
 import Engine.Scene.Types.Batch
 
 updateBatches ∷ V.Vector DrawableObject → BatchManager → BatchManager

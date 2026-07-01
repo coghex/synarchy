@@ -17,5 +17,4 @@ module World.Fluids
 
 import World.Fluid.Types (FluidType(..), FluidCell(..))
 import World.Fluid.Ocean (computeOceanMap, isOceanChunk, hasAnyOceanFluid)
-import World.Types (OceanMap, RegionCoord(..), Region(..), ChunkCoord(..)
-                   , chunkToRegion)
+import World.Types (OceanMap, RegionCoord(..), Region(..), chunkToRegion)

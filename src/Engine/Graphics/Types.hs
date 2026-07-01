@@ -2,7 +2,6 @@
 module Engine.Graphics.Types where
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Map as Map
 import Engine.Graphics.Vulkan.Types
 import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface

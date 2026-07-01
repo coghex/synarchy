@@ -7,12 +7,9 @@ module World.Geology.Crater
     ) where
 
 import UPrelude
-import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
-import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate
-                   , wrapGlobalU)
-import World.Geology.Types
+import World.Plate (isBeyondGlacier, elevationAtGlobal, wrapGlobalU)
 import World.Geology.Hash
 import World.Geology.Volcano (perturbDist)
 

@@ -8,24 +8,20 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
-import Data.Maybe (isJust)
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
-import World.Constants (seaLevel)
-import World.Fluids (FluidCell(..), FluidType(..))
 import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
-import World.Chunk.Types (ChunkCoord(..))
-import World.Grid (gridToScreen, tileSideHeight, tileWidth, applyFacing)
+import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), spdGridZ)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
-import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
+import World.Render.ViewBounds (computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
 import World.Render.FloraQuads (floraToQuad)
@@ -35,7 +31,6 @@ import World.Render.TileQuads
     , lavaTileToQuad, freshwaterTileToQuad, worldCursorToQuad
     , worldCursorBgToQuad, vegToQuad
     )
-import World.Fluid.Types (IceCell(..))
 
 -- * Water Slope Helpers
 
@@ -300,7 +295,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let idx = columnIndex lx ly
-                          surfZ = surfMap VU.! idx
+                          _surfZ = surfMap VU.! idx
                           terrainZ = terrainSurfMap VU.! idx
                     , terrainZ > zSlice
                     , let col = tileMap V.! idx
@@ -316,7 +311,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , isTileVisible vb drawX drawY
                     ]
 
-                mkFreshwaterQuad gx gy ft fc slopeId =
+                _mkFreshwaterQuad gx gy ft fc slopeId =
                         freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                             gx gy (fcSurface fc) ft zSlice effectiveDepth
                             zoomAlpha xOffset slopeId
@@ -652,7 +647,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
 findTopSolid ∷ ColumnTiles → Int
 findTopSolid col =
     let mats = ctMats col
-        start = ctStartZ col
+        _start = ctStartZ col
         len = VU.length mats
     in go (len - 1)
   where

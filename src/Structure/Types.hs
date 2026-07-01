@@ -19,7 +19,6 @@ module Structure.Types
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
-import Data.Word (Word8)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle)

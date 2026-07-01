@@ -14,12 +14,11 @@ module Engine.Loop.Camera
 
 import UPrelude
 import qualified Data.Map as Map
-import qualified Data.Vector as V
 import qualified Graphics.UI.GLFW as GLFW
-import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Monad (EngineM, liftIO)
 import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import Engine.Input.Types (InputState(..))
 import Engine.Input.Bindings (isActionDown)
@@ -27,7 +26,6 @@ import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
 import World.Types (chunkSize, WorldState(..), WorldManager(..), WorldGenParams(..))
 import World.Generate.Constants (chunkLoadRadius)
-import Control.Monad.State.Class (gets)
 
 -- | Compute the camera Y limit from the actual world size, fencing the
 --   camera @bufferChunks@ chunks inside the glacier rim.

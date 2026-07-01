@@ -26,8 +26,6 @@ module World.Fluid.River.Types
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
-import Data.Bits (shiftL, shiftR, (.&.), (.|.))
-import Data.Word (Word8)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as Serialize

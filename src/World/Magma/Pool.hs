@@ -222,7 +222,7 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
                 in HS.toList comp : go (HS.difference s comp)
               where
                 grow acc [] = acc
-                grow acc (p@(px, py) : rest) =
+                grow acc (_p@(px, py) : rest) =
                     let nbrs = [ q
                                | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
                                , (dx, dy) ≠ (0, 0)

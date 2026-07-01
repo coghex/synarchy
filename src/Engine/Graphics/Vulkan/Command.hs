@@ -8,7 +8,6 @@ module Engine.Graphics.Vulkan.Command
   ) where
 
 import UPrelude
-import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, locally)
@@ -40,7 +39,7 @@ runCommandsOnce device commandPool cmdQueue action = do
   result ← action buffer
   endCommandBuffer buffer
   
-  locally $ do
+  void $ locally $ do
     fence ← allocResource (\f → destroyFence device f Nothing) $
       createFence device zero Nothing
     

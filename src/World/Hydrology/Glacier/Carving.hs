@@ -6,7 +6,6 @@ module World.Hydrology.Glacier.Carving
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import World.Base (GeoCoord(..))
 import World.Geology.Hash (wrappedDeltaUV, valueNoise2D)
 import World.Material (matMoraine, matSandstone, unMaterialId)

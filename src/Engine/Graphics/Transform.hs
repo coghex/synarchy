@@ -8,7 +8,6 @@ module Engine.Graphics.Transform
 
 import UPrelude
 import Linear
-import qualified Data.Text as T
 import Engine.Scene.Base (Transform2D(..), defaultTransform)
 
 -- | Create model matrix from 2D transform

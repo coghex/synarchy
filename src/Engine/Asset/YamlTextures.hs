@@ -24,12 +24,11 @@ module Engine.Asset.YamlTextures
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
-import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
-import System.Directory (listDirectory, doesFileExist)
+import Data.IORef (IORef, atomicModifyIORef')
+import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Log (LoggerState, logInfo, logWarn, logDebug, LogCategory(..))

@@ -53,7 +53,6 @@ import Data.Hashable (Hashable)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Fluid.Types (IceLevelGrid(..))
 import World.Fluid.Lake.Types (WorldLakes, emptyWorldLakes)

@@ -16,8 +16,7 @@ import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
-import World.Save.Serialize (listSaves, saveWorld, loadWorld
-                            , sanitizeSaveName)
+import World.Save.Serialize (listSaves, loadWorld, sanitizeSaveName)
 import World.Save.Types (SaveMetadata(..), SaveData(..))
 import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
                    , LoadPhase(..))

@@ -15,9 +15,8 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
-import Engine.Graphics.Config (VideoConfig(..), WindowMode(..))
-import Engine.Graphics.Window.Types (Window(..))
-import Engine.Core.State (EngineEnv(..), EngineState(..), glfwWindow)
+import Engine.Graphics.Config (VideoConfig(..))
+import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -25,7 +24,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Logger (LogLevel(..), defaultLoc)
 
 getUIScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getUIScaleFn env = do

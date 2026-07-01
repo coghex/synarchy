@@ -88,7 +88,13 @@ tick1 ∷ Double → Float → Wound → Wound
 tick1 gt dt w =
     let (inst', _, _) = tickOneUnit gt def dt emptyInfectionManager Nothing
                             (Random.mkStdGen 1) (inst [w])
-    in head (uiWounds inst')
+    in firstWound inst'
+
+-- | Total 'head': every unit in this spec is built with exactly one wound.
+firstWound ∷ UnitInstance → Wound
+firstWound i = case uiWounds i of
+    w : _ → w
+    []    → error "Wounds spec: unit has no wounds"
 
 spec ∷ Spec
 spec = do
@@ -130,20 +136,20 @@ spec = do
         let w  = (mkWound "slash" 0.5 0.0 0.8 False) { woundInfectionType = "bug" }
             (i', _, _) = tickOneUnit 100 def 10 (mgrWith ["necrosis"]) Nothing
                             (Random.mkStdGen 1) (inst [w])
-        woundNecrosis (head (uiWounds i')) `shouldSatisfy` (> 0.01)
+        woundNecrosis (firstWound i') `shouldSatisfy` (> 0.01)
 
     it "a NON-necrotic infection does NOT rot tissue" $ do
         let w  = (mkWound "slash" 0.5 0.0 0.8 False) { woundInfectionType = "bug" }
             (i', _, _) = tickOneUnit 100 def 10 (mgrWith []) Nothing
                             (Random.mkStdGen 1) (inst [w])
-        woundNecrosis (head (uiWounds i')) `shouldBe` 0.0
+        woundNecrosis (firstWound i') `shouldBe` 0.0
 
     it "necrosis needs an ESTABLISHED infection (low infection doesn't rot)" $ do
         -- infection 0.1 < necrosisInfThreshold → no rot even for a necrotic bug.
         let w  = (mkWound "slash" 0.5 0.0 0.1 False) { woundInfectionType = "bug" }
             (i', _, _) = tickOneUnit 100 def 10 (mgrWith ["necrosis"]) Nothing
                             (Random.mkStdGen 1) (inst [w])
-        woundNecrosis (head (uiWounds i')) `shouldBe` 0.0
+        woundNecrosis (firstWound i') `shouldBe` 0.0
 
     it "fever (high core temp) slows infection growth" $ do
         -- A dirty, already-infected wound; compare growth at a febrile core
@@ -154,7 +160,7 @@ spec = do
                     [("body_mass", 70), ("constitution", 1.0), ("core_temp", c)] }
             grow c = let (i', _, _) = tickOneUnit 100 def 10 emptyInfectionManager
                                         Nothing (Random.mkStdGen 1) (withCore c)
-                     in woundInfection (head (uiWounds i'))
+                     in woundInfection (firstWound i')
         grow 41.0 `shouldSatisfy` (< grow 37.0)
 
 -- The single source of truth every consumer (bleed display, medic

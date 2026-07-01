@@ -6,8 +6,6 @@ import UPrelude
 import Test.Hspec
 import Engine.Core.Var
 import Control.Concurrent.Async (concurrently)
-import qualified Control.Concurrent.STM as STM
-import qualified Data.Text as T
 
 spec ∷ Spec
 spec = do
