@@ -101,7 +101,7 @@ Procedural world with geological simulation in `World/`:
 - Chunk-based with zoom-level LOD system (`World.Render.Zoom.*`, `World.ZoomMap`)
 
 ### Lua scripting
-`Engine.Scripting.Lua.*` provides a Lua API for game logic. Lua scripts live in `.claude/scripts/` (UI, menus, HUD, world management). The API modules in `Engine.Scripting.Lua.API.*` expose engine functionality to Lua.
+`Engine.Scripting.Lua.*` provides a Lua API for game logic. Lua scripts live in the repo-root `scripts/` directory (UI, menus, HUD, world management); `engine.loadScript` paths are relative to the repo root (e.g. `engine.loadScript("scripts/ui_manager.lua")`). The API modules in `Engine.Scripting.Lua.API.*` expose engine functionality to Lua.
 
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering. UI layout and behavior is driven from Lua scripts.
@@ -115,7 +115,7 @@ Procedural world with geological simulation in `World/`:
 - `config/` — YAML config (keybinds, video settings)
 - `data/` — Game data YAML (materials, vegetation, flora, units)
 - `assets/` — Images and graphical resources
-- `.claude/scripts/` — Lua scripts for game logic
+- `scripts/` — Lua scripts for game logic
 
 ## Headless Mode & Debug Console
 
