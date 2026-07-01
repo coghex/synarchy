@@ -621,7 +621,7 @@ simulateHydrology seed worldSize ageIdx grid climate =
         (filledElev, flowDirVec) = fillDepressions grid
 
         ---------------------------------------------------
-        -- Step 3: Flow accumulation
+        -- Step 2: Flow accumulation
         ---------------------------------------------------
         -- Sort indices by descending filled elevation using in-place
         -- vector sort. Much faster than list sort on 262K elements
@@ -671,7 +671,7 @@ simulateHydrology seed worldSize ageIdx grid climate =
             VU.unsafeFreeze mv
 
         ---------------------------------------------------
-        -- Step 4: Lakes
+        -- Step 3: Lakes
         ---------------------------------------------------
         -- Raw lake candidates — sorted deepest-first so large basins
         -- get priority during dedup (they "claim" more territory).
@@ -702,7 +702,7 @@ simulateHydrology seed worldSize ageIdx grid climate =
         dedupedLakes = dedupLakes worldSize lakes
 
         ---------------------------------------------------
-        -- Step 5: River sources
+        -- Step 4: River sources
         -- A cell is a headwater if:
         --   1. It's land
         --   2. It has accumulation >= riverThreshold
