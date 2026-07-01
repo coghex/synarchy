@@ -725,13 +725,32 @@ local STAT_DEFS = {
 -- engine each rebuild. Missing icons silently fall back to text.
 local iconCache = {}
 
+-- Icons live in kind subfolders (assets/textures/icons/<kind>/<name>.png) but
+-- are referenced by bare name (e.g. "strength"). Build a one-time
+-- basename -> full-path index over the subfolders so callers stay name-only.
+local ICON_SUBDIRS = { "stat", "skill", "status", "injury", "infection", "knowledge" }
+local iconIndex = nil
+local function buildIconIndex()
+    iconIndex = {}
+    for _, sub in ipairs(ICON_SUBDIRS) do
+        local dir   = "assets/textures/icons/" .. sub
+        local files = engine.listFiles(dir, ".png")
+        if files then
+            for _, fn in ipairs(files) do
+                iconIndex[fn:gsub("%.png$", "")] = dir .. "/" .. fn
+            end
+        end
+    end
+end
+
 local function loadIconFor(iconKey)
     if not iconKey then return nil end
     if iconCache[iconKey] ~= nil then
         return iconCache[iconKey] or nil
     end
-    local tex = engine.loadTexture(
-        "assets/textures/icons/" .. iconKey .. ".png")
+    if not iconIndex then buildIconIndex() end
+    local path = iconIndex[iconKey]
+    local tex  = path and engine.loadTexture(path) or nil
     iconCache[iconKey] = tex or false
     return tex
 end

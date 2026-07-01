@@ -153,7 +153,11 @@ local function queueNormalProfile()
     addYamlDir("data/locations",  "Loading locations...",  engine.loadLocationYaml)
 
     -- Texture-only phases.
-    addTextureDir("assets/textures/icons", "Loading icons...")
+    -- Icons are organized into kind subfolders; addTextureDir is not
+    -- recursive, so enqueue each subfolder.
+    for _, sub in ipairs({ "stat", "skill", "status", "injury", "infection", "knowledge" }) do
+        addTextureDir("assets/textures/icons/" .. sub, "Loading icons...")
+    end
     addTextureList("Loading HUD...",   hudPaths)
     addTextureList("Loading world...", worldStructuralPaths)
 end

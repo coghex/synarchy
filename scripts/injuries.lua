@@ -402,7 +402,7 @@ function M.scarList(uid)
     for _, s in ipairs(sc) do
         out[#out + 1] = {
             name     = M.scarName(s.kind),
-            icon     = "scar",   -- dedicated scar icon (assets/textures/icons/scar.png)
+            icon     = "scar",   -- dedicated scar icon (assets/textures/icons/injury/scar.png)
             kind     = s.kind,
             part     = s.part,
             severity = s.severity or 0,
