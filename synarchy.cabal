@@ -822,6 +822,7 @@ executable synarchy
                        -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
+                       -rtsopts
                        "-with-rtsopts=-N -A128M"
                        -haddock
     else
@@ -832,6 +833,7 @@ executable synarchy
                        -optc-O3
                        -fexcess-precision
                        -threaded
+                       -rtsopts
                        "-with-rtsopts=-N -A128M"
                        -feager-blackholing
       else
@@ -839,6 +841,7 @@ executable synarchy
                        -optc-O3
                        -fexcess-precision
                        -threaded
+                       -rtsopts
                        "-with-rtsopts=-N -A128M"
                        -feager-blackholing
 
