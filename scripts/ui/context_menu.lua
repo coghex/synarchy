@@ -98,7 +98,7 @@ function cm.init()
     if cm.assetsLoaded then return end
     cm.boxTexSet     = boxTextures.load("assets/textures/ui/textbox", "textbox")
     cm.highlightTex  = engine.loadTexture("assets/textures/ui/highlight.png")
-    cm.whitePixelTex = engine.loadTexture("assets/textures/hud/utility/white.png")
+    cm.whitePixelTex = engine.loadTexture("assets/textures/ui/hud/utility/white.png")
     local hud = package.loaded["scripts.hud"]
     cm.font = hud and hud.menuFont or nil
     cm.assetsLoaded = true

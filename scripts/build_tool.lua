@@ -340,7 +340,7 @@ function buildTool.showPicker()
     -- cached, but going through it on every rebuild is wasted work.
     if not buildTool.whitePixelTex then
         buildTool.whitePixelTex = engine.loadTexture(
-            "assets/textures/hud/utility/white.png")
+            "assets/textures/ui/hud/utility/white.png")
     end
 
     local visible = visibleDefs()

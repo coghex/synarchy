@@ -350,7 +350,7 @@ local function buildLayout(uid, defName, mx, my, instanceId)
 
     if not itemContentsPanel.whitePixelTex then
         itemContentsPanel.whitePixelTex = engine.loadTexture(
-            "assets/textures/hud/utility/white.png")
+            "assets/textures/ui/hud/utility/white.png")
     end
 
     local rows = unit.getItemContents(uid, defName, instanceId) or {}

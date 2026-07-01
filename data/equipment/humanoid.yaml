@@ -28,7 +28,7 @@
 # y=148 to y=180 to clear the weapons row.
 classes:
   - name: humanoid
-    silhouette:   assets/textures/equipment/humanoid_silhouette.png
+    silhouette:   assets/textures/ui/placeholders/humanoid_silhouette.png
     silhouette_w: 160
     silhouette_h: 256
     slots:

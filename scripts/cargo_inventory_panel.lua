@@ -502,7 +502,7 @@ local function buildLayout(bid, mx, my)
     end
     if not cargoInventoryPanel.whitePixelTex then
         cargoInventoryPanel.whitePixelTex = engine.loadTexture(
-            "assets/textures/hud/utility/white.png")
+            "assets/textures/ui/hud/utility/white.png")
     end
 
     local stored  = building.getStorage(bid) or {}
