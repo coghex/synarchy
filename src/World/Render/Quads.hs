@@ -20,7 +20,8 @@ import World.Fluids (FluidCell(..), FluidType(..))
 import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
-import World.Grid (gridToScreen, tileSideHeight, tileWidth)
+import World.Grid (gridToScreen, tileSideHeight, tileWidth, applyFacing)
+import Structure.Types (StructureSlot(..), spdGridZ)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
@@ -139,6 +140,44 @@ renderWorldQuads env worldState zoomAlpha snap = do
             Just lc' → Just (lcTerrainSurfaceMap lc')
             Nothing  → Nothing
 
+        -- #418: a flora/veg billboard sitting in front of a structure's FRONT
+        -- wall must draw over the WHOLE wall, not slice through the wall's
+        -- depth-sorted strips (#417). A single-depth sprite otherwise beats
+        -- the wall's back strips but loses its clamped south strips → the
+        -- "leaf over the wall / frond cut off" straddle. Here we find the
+        -- highest front-wall strip key the sprite at (gx,gy) is spatially IN
+        -- FRONT of, so the caller lifts the sprite's key just above it and it
+        -- clears the entire strip range as one unit. Returns Nothing when no
+        -- such wall is near (the sprite keeps its normal key).
+        --
+        -- The strip-key formula mirrors 'frontWallStrips'/'tieBreak' in
+        -- Structure.Render (SE 0.0006, SW 0.0005; the clamped south strip
+        -- anchors at the S vertex (wgx+1,wgy+1)) — keep them in sync. The
+        -- applyFacing depth test keeps it rotation-correct. Wall lookups cross
+        -- chunks; the per-chunk gate below keeps it free where there are none.
+        seTag = fromIntegral (fromEnum SWallSE) ∷ Word8
+        swTag = fromIntegral (fromEnum SWallSW) ∷ Word8
+        structureFrontWallClear gx gy =
+            let (fa, fb) = applyFacing facing gx gy
+                spriteDepth = fa + fb
+                wallKeyAt wgx wgy tag tieB = do
+                    let (cc, _) = globalToChunk wgx wgy
+                    lc' ← HM.lookup cc (wtdChunks tileData)
+                    spd ← HM.lookup (wgx, wgy, tag) (lcStructures lc')
+                    let (sa, sb) = applyFacing facing (wgx + 1) (wgy + 1)
+                        scDepth  = sa + sb
+                    if spriteDepth < scDepth   -- sprite is NOT fully in front
+                       then Nothing
+                       else Just (fromIntegral scDepth
+                                  + fromIntegral (spdGridZ spd - zSlice) * 0.001
+                                  + tieB)
+                cands = [ wallKeyAt (gx + dx) (gy + dy) tag tieB
+                        | dx ← [-2 .. 2], dy ← [-2 .. 2], (dx, dy) ≠ (0, 0)
+                        , (tag, tieB) ← [(seTag, 0.0006 ∷ Float), (swTag, 0.0005)] ]
+            in case [ k | Just k ← cands ] of
+                 [] → Nothing
+                 ks → Just (maximum ks)
+
         vb = computeViewBounds camera fbW fbH effectiveDepth
 
         visibleChunksWithOffset =
@@ -156,6 +195,19 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 iceMap   = lcIceMap lc
                 chunkHasFluid = V.any isJust fluidMap
                 terrainSurfMap = lcTerrainSurfaceMap lc
+
+                -- #418: only pay the front-wall clearance lookup in chunks that
+                -- actually carry structures (rooms are localised — most chunks
+                -- have none, so this is a no-op there). A sprite whose own
+                -- chunk has structures gets lifted to sit fully in front of any
+                -- front wall it overlaps (structureFrontWallClear); everything
+                -- else is untouched.
+                chunkHasStructures = not (HM.null (lcStructures lc))
+                bump gx gy q
+                    | not chunkHasStructures = q
+                    | otherwise = case structureFrontWallClear gx gy of
+                        Just c  → q { sqSortKey = max (sqSortKey q) (c + 0.0001) }
+                        Nothing → q
 
                 !realQuads = V.ifoldl' (\acc idx col →
                         let lx = idx `mod` chunkSize
@@ -196,14 +248,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                    else Nothing
 
                                         in case vegQ of
-                                            Just vq → vq : tq : acc2
+                                            Just vq → bump gx gy vq : tq : acc2
                                             Nothing → tq : acc2
                                 ) acc [zLo .. zHi]
                     ) [] tileMap
                 -- Flora sprites
                 floraData = lcFlora lc
                 !floraQuads =
-                    [ fq
+                    [ bump gx gy fq
                     | inst ← fcdInstances floraData
                     , let tileX = fromIntegral (fiTileX inst)
                           tileY = fromIntegral (fiTileY inst)
