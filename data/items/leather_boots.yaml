@@ -1,7 +1,7 @@
 items:
   - name: "leather_boots"
     display_name: "Leather Boots"
-    sprite: "assets/textures/equipment/boots_leather.png"
+    sprite: "assets/textures/items/wearable/boots_leather.png"
     weight: 0.9
     kind: boots
     category: Armor

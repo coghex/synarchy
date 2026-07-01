@@ -1,7 +1,7 @@
 items:
   - name: "processing_unit"
     display_name: "Processing Unit"
-    sprite: "assets/textures/items/processing_unit.png"
+    sprite: "assets/textures/items/material/processing_unit.png"
     weight: 0.4
     category: Materials
     make: factory

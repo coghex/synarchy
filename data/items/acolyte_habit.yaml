@@ -1,7 +1,7 @@
 items:
   - name: "acolyte_habit"
     display_name: "Acolyte's Habit"
-    sprite: "assets/textures/items/acolyte_habit.png"
+    sprite: "assets/textures/items/wearable/acolyte_habit.png"
     weight: 1.2
     kind: accessory     # not slot-equipment; lives on uiAccessories
     category: Armor     # appears under the Armor inventory tab

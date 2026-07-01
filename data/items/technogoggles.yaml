@@ -1,7 +1,7 @@
 items:
   - name: "technogoggles"
     display_name: "Technogoggles"
-    sprite: "assets/textures/items/technogoggles.png"
+    sprite: "assets/textures/items/wearable/technogoggles.png"
     weight: 0.3
     kind: accessory
     category: Armor

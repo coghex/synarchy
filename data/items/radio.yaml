@@ -1,7 +1,7 @@
 items:
   - name: "radio"
     display_name: "Field Radio"
-    sprite: "assets/textures/items/radio.png"
+    sprite: "assets/textures/items/supply/radio.png"
     weight: 0.3
     category: Supplies
     # Lets the AI broadcast water-source locations (and, later, other
