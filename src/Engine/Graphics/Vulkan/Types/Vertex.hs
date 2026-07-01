@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
+import Control.DeepSeq (NFData(..), rwhnf)
 import qualified Foreign.Storable as Storable
 
 -- Constants for vertex layout
@@ -39,10 +40,15 @@ mkVertex ∷ Vec2 → Vec2 → Vec4 → Float → Float → Vertex
 mkVertex p t c a f = Vertex p t c a f 0
 
 -- | 2D vector for positions and texture coordinates
-data Vec2 = Vec2 
+data Vec2 = Vec2
     { x ∷ !Float
-    , y ∷ !Float 
+    , y ∷ !Float
     } deriving (Show, Eq)
+
+-- | All fields strict and primitive, so WHNF = NF for these three
+--   (needed by the parallel quad build's rdeepseq, #447).
+instance NFData Vec2 where
+    rnf = rwhnf
 
 -- NB: sizeOf/alignment take LAZY (~) patterns. This module is compiled
 -- with Strict, and Data.Vector.Storable calls @sizeOf undefined@ — a
@@ -60,12 +66,15 @@ instance Storable Vec2 where
         Storable.pokeElemOff (castPtr ptr ∷ Ptr Float) 1 y'
 
 -- | 4D vector for colors
-data Vec4 = Vec4 
+data Vec4 = Vec4
     { r ∷ !Float
     , g ∷ !Float
     , b ∷ !Float
-    , a ∷ !Float 
+    , a ∷ !Float
     } deriving (Show, Eq)
+
+instance NFData Vec4 where
+    rnf = rwhnf
 
 instance Storable Vec4 where
     sizeOf ~_ = 16
@@ -90,6 +99,9 @@ data Vertex = Vertex
     , faceMapId   ∷ !Float  -- ^ Face map texture slot (layout = 4)
     , renderFlags ∷ !Word32 -- ^ Render-flag bitset, see renderFlag* (layout = 5)
     } deriving (Show, Eq)
+
+instance NFData Vertex where
+    rnf = rwhnf
 
 instance Storable Vertex where
     sizeOf ~_ = vertexTotalSize
