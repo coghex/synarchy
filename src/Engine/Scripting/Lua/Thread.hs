@@ -24,7 +24,7 @@ import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
-import World.State.Types (wmWorlds, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
+import World.State.Types (wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Input.Types (InputState, keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))

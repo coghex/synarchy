@@ -147,7 +147,9 @@ spec = do
             length (T.words nm) `shouldBe` 2
         it "draws given/family from the declared pools" $ do
             let nm = pickOne givenFamily 1
-                [g, f] = T.words nm
+                (g, f) = case T.words nm of
+                    [g', f'] → (g', f')
+                    ws → error ("expected 'given family', got " ⧺ show ws)
             g `shouldSatisfy` (`elem` npGiven givenFamily)
             f `shouldSatisfy` (`elem` npFamily givenFamily)
         it "yields a single token when family list is empty" $

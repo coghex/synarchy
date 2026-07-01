@@ -26,7 +26,6 @@ import World.Plate (elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Scale (computeWorldScale)
 import World.Slope (computeChunkSlopes)
 import Structure.Types (emptyChunkStructures)
-import World.Fluids (hasAnyOceanFluid)
 import World.Fluid.Ice (computeChunkIce)
 import World.Magma.Types (MagmaOverlay(..))
 import World.Magma.Init (discoverChunkLava)
@@ -581,12 +580,6 @@ generateChunk registry catalog params coord =
         timeline = wgpGeoTimeline params
         plates = wgpPlates params
         wsc = computeWorldScale worldSize
-        oceanMap = wgpOceanMap params
-
-        -- True if this chunk or any of its 8 neighbors is oceanic.
-        -- Used to extend strata to sea level for all coastal columns,
-        -- preventing cliff-face voids at chunk boundaries.
-        isCoastalChunk = hasAnyOceanFluid worldSize oceanMap coord
 
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize
@@ -1321,7 +1314,7 @@ generateZoomTerrain registry params mBorderedCache coord =
         worldSize = wgpWorldSize params
         timeline  = wgpGeoTimeline params
         plates    = wgpPlates params
-        oceanMap  = wgpOceanMap params
+        _oceanMap  = wgpOceanMap params
         wsc       = computeWorldScale worldSize
 
         borderSize = chunkSize + 2 * chunkBorder

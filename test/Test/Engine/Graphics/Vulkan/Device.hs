@@ -15,8 +15,6 @@ import Engine.Core.Monad
 import Engine.Core.Var
 import Data.IORef (newIORef)
 import Engine.Graphics.Window.Types
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Error.Class (catchError)
 import Vulkan.Core10
 import Vulkan.Zero
 import qualified Data.Vector as V
@@ -53,7 +51,9 @@ spec env state = do
                 let physDev = V.head physDevs
                 
                 -- Create a surface for device creation
-                let (Just (Window win)) = glfwWindow (graphicsState state)
+                let win = case glfwWindow (graphicsState state) of
+                        Just (Window w) → w
+                        Nothing → error "Device spec: no GLFW window in state"
                 surface ← GLFW.createWindowSurface (Window win) inst
                 
                 (device, _) ← createVulkanDevice inst physDev surface

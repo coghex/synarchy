@@ -26,9 +26,9 @@ import World.Time.Types
     , defaultMoonConfig
     )
 import World.Geology.Ore.Types (OreLevers, defaultOreLevers)
-import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)
+import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline
+                                    , TimelineParams(..), defaultTimelineParams)
 import World.Ocean.Types (OceanMap, OceanDistMap)
-import World.Flora.Types (FloraCatalog, emptyFloraCatalog)
 import World.Weather.Types (ClimateParams, ClimateState
                            , defaultClimateParams, initClimateState)
 import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)

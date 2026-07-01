@@ -123,7 +123,7 @@ buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
         in (st', cache : acc)
 
     -- Now receives tagged (event, bbox) pairs instead of raw events
-    applyEvent _elev surfMat (deltas, e, sm) (event, _bb) =
+    applyEvent _elev _surfMat (deltas, e, sm) (event, _bb) =
         let h = mpHardness (getMaterialProps registry sm)
             mod' = applyGeoEvent event worldSize gx gy e h
             delta = gmElevDelta mod'

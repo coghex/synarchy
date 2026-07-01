@@ -38,7 +38,7 @@ import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , AssetError(..))
 import Engine.Core.Log.Monad (logDebugM, logWarnM, logInfoM, logAndThrowM
-                             , logDebugSM, logInfoSM)
+                             , logDebugSM)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Asset.Base
 import Engine.Asset.Types

@@ -575,31 +575,13 @@ computeOceanDistance totalSamples gridW landVec maxDist = runST $ do
 -- * Flow Simulation
 
 simulateHydrology ∷ Word64 → Int → Int → ElevGrid → ClimateState → FlowResult
-simulateHydrology seed worldSize ageIdx grid climate =
+simulateHydrology _seed worldSize _ageIdx grid climate =
     let gridW   = egGridW grid
-        spacing = egSpacing grid
         totalSamples = gridW * gridW
         origElev = egElev grid
         landVec  = egLand grid
         gxVec    = egGX grid
         gyVec    = egGY grid
-
-        toIdx ix iy = iy * gridW + ix
-        fromIdx idx = (idx `mod` gridW, idx `div` gridW)
-        wrapIX ix = ((ix `mod` gridW) + gridW) `mod` gridW
-
-        neighborOffsets ∷ [(Int, Int)]
-        neighborOffsets = [(-1,0),(1,0),(0,-1),(0,1)
-                          ,(-1,-1),(1,-1),(-1,1),(1,1)]
-
-        neighbors ∷ Int → [Int]
-        neighbors idx =
-            let (ix, iy) = fromIdx idx
-            in [ toIdx (wrapIX (ix + dx)) ny
-               | (dx, dy) ← neighborOffsets
-               , let ny = iy + dy
-               , ny ≥ 0 ∧ ny < gridW
-               ]
 
         ---------------------------------------------------
         -- Step 1: Fill depressions + drainage directions

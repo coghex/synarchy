@@ -10,7 +10,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize, columnIndex)
+import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
 import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)

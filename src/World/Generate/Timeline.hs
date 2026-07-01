@@ -234,27 +234,10 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
   where
     borderSize = chunkSize + 2 * chunkBorder
 
-    {-# INLINE toIndex #-}
-    _toIndex lx ly =
-        let bx = lx + chunkBorder
-            by = ly + chunkBorder
-        in by * borderSize + bx
-
     {-# INLINE fromIndex #-}
     fromIndex idx =
         let (by, bx) = idx `divMod` borderSize
         in (bx - chunkBorder, by - chunkBorder)
-
-    {-# INLINE inBorder #-}
-    _inBorder lx ly =
-        lx ≥ negate chunkBorder ∧ lx < chunkSize + chunkBorder ∧
-        ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
-
-    {-# INLINE lookupElev #-}
-    _lookupElev vec lx ly fallback =
-        if inBorder lx ly
-        then vec VU.! toIndex lx ly
-        else fallback
 
     -- CHUNK PATH: uses gpExplodedEvents (per-segment bboxes)
     -- Filtered once per chunk, then per-row Y-band sweep + per-tile

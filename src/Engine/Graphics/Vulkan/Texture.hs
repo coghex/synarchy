@@ -18,7 +18,7 @@ import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
                                     , createVulkanImage'
-                                    , copyBufferToImage, VulkanImage(..))
+                                    , copyBufferToImage)
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Types.Texture
@@ -171,7 +171,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
                      → Word32 → CommandBuffer → EngineM ε σ ()
-transitionImageLayout (VulkanImage image _) format transition
+transitionImageLayout (VulkanImage image _) _format transition
                       mipLevels cmdBuf = do
   let (oldLayout, newLayout, srcAccess, dstAccess, srcStage, dstStage) =
         case transition of

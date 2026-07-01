@@ -105,7 +105,7 @@ drawFrame = do
             
             -- 2. Update scene (populates BatchManager with DrawableObjects)
             updateSceneForRender
-            sceneMgr ← gets sceneManager
+            _sceneMgr ← gets sceneManager
             
             -- 3. Get scene sprites in world layers as SortableQuads
             sceneQuads ← getWorldSceneQuads

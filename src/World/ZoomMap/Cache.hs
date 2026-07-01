@@ -36,7 +36,6 @@ import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
-import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector.Mutable as MV
 import Control.Monad.ST (runST)
 
@@ -506,7 +505,7 @@ defaultLavaColor3 = let (r, g, b, _) = defaultLavaColor in (r, g, b)
 --   the compose fluid map, not here.
 tileColor ∷ ZoomColorPalette → Bool → Word8 → Word8 → Int → Int → Int
           → (Word8, Word8, Word8, Word8)
-tileColor palette _hasLava matId vegId elev _gx _gy
+tileColor palette _hasLava matId vegId _elev _gx _gy
     -- Snow-covered tiles (including frozen ocean) use snow color
     | isSnowVeg vegId =
         case lookupVegColorById palette vegId of

@@ -22,7 +22,7 @@ import Unit.Stats (rollStat, pickName)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
-                        EquipmentClassManager, lookupEquipmentClass)
+                        lookupEquipmentClass)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
                   , ItemBuff(..), ItemManager(..), lookupItemDef

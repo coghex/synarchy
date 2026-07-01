@@ -222,7 +222,7 @@ formatEventDetailed (CraterEvent cp) =
        <> " depth=" <> T.pack (show (cpDepth cp))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
        <> case cpMeteorite cp of
-            Just mat → " *meteorite*"
+            Just _mat → " *meteorite*"
             Nothing  → ""
 
 formatEventDetailed (VolcanicEvent feature) =

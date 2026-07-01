@@ -16,7 +16,7 @@ import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Config (VideoConfig(..))
-import Engine.Core.State (EngineEnv(..), glfwWindow)
+import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua

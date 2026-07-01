@@ -23,15 +23,14 @@ import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
-                       , LogCategory(..), LogBackend(..))
+                       , LogBackend(..))
 import System.IO (stdout)
 import Engine.Core.State
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (defaultCamera, defaultUICamera)
-import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..)
-                              , WindowMode(..))
+import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..))
 import Engine.Graphics.Font.Data (defaultFontCache)
 import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)

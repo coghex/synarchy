@@ -6,19 +6,13 @@ module Test.Engine.Graphics.Vulkan.Instance (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
-import qualified Data.Vector as V
-import Engine.Core.Error.Exception
 import Engine.Core.State
 import Engine.Core.Monad
 import Engine.Core.Var
 import Data.IORef (newIORef)
 import Engine.Graphics.Base
 import Engine.Graphics.Vulkan.Instance
-import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Types
-import qualified Graphics.UI.GLFW as GLFW
 import Vulkan.Core10
-import Vulkan.Extensions.VK_EXT_debug_utils
 import Vulkan.Extensions.VK_KHR_portability_enumeration
 import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 
@@ -68,10 +62,10 @@ spec env state = do
                         { gcDebugMode = False
                         , gcAppName = "VulkanTest" }
                 -- First creation
-                (inst1, dbg1) <- createVulkanInstance config
+                (inst1, _dbg1) <- createVulkanInstance config
                 liftIO $ instanceHandle inst1 `shouldNotBe` nullPtr
                 -- Second creation
-                (inst2, dbg2) <- createVulkanInstance config
+                (inst2, _dbg2) <- createVulkanInstance config
                 liftIO $ instanceHandle inst2 `shouldNotBe` nullPtr
                 pure ()
 
@@ -108,5 +102,7 @@ defaultGraphicsConfig ∷ GraphicsConfig
 defaultGraphicsConfig = GraphicsConfig
     { gcDebugMode = False
     , gcAppName = "VulkanTest"
-    -- Add other fields as needed
+    , gcWidth = 800
+    , gcHeight = 600
+    , gcMaxFrames = 2
     }

@@ -671,7 +671,7 @@ handleSpawnSprite objId x y width height texHandle layer = do
               , nodeLayer = layer
               }
         case addObjectToScene sceneId node sceneMgr of
-          Just (addedObjId, newSceneMgr) → do
+          Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
           Nothing → logDebugM CatLua $ "Failed to add sprite " <> T.pack (show objId)
       Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"
