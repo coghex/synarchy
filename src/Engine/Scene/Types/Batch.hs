@@ -16,7 +16,8 @@ module Engine.Scene.Types.Batch
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as VM
+import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Storable.Mutable as VSM
 import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -78,16 +79,16 @@ mergeQuadsToBatch layer quads =
                     in if last' == first'
                        then last'
                        else (last' + first') / 2
-        !allVerts = V.create $ do
-            mv ← VM.new totalVerts
+        !allVerts = VS.create $ do
+            mv ← VSM.new totalVerts
             V.iforM_ sorted $ \idx q → do
                 let i = idx * 6
-                VM.write mv  i      (sqV0 q)
-                VM.write mv (i+1)   (sqV1 q)
-                VM.write mv (i+2)   (sqV2 q)
-                VM.write mv (i+3)   (sqV0 q)
-                VM.write mv (i+4)   (sqV2 q)
-                VM.write mv (i+5)   (sqV3 q)
+                VSM.write mv  i      (sqV0 q)
+                VSM.write mv (i+1)   (sqV1 q)
+                VSM.write mv (i+2)   (sqV2 q)
+                VSM.write mv (i+3)   (sqV0 q)
+                VSM.write mv (i+4)   (sqV2 q)
+                VSM.write mv (i+5)   (sqV3 q)
             return mv
         tex = if V.null sorted
               then TextureHandle 0
@@ -104,7 +105,9 @@ mergeQuadsToBatch layer quads =
 data RenderBatch = RenderBatch
     { rbTexture    ∷ TextureHandle
     , rbLayer      ∷ LayerId
-    , rbVertices   ∷ V.Vector Vertex
+      -- | Storable (unboxed, pinned) so upload is a straight memcpy and
+      --   per-frame batch builds allocate no boxed Vertex objects (#445).
+    , rbVertices   ∷ VS.Vector Vertex
     , rbObjects    ∷ V.Vector ObjectId
     , rbDirty      ∷ Bool
     , rbAvgZ       ∷ Float

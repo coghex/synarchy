@@ -44,9 +44,13 @@ data Vec2 = Vec2
     , y ∷ !Float 
     } deriving (Show, Eq)
 
+-- NB: sizeOf/alignment take LAZY (~) patterns. This module is compiled
+-- with Strict, and Data.Vector.Storable calls @sizeOf undefined@ — a
+-- strict wildcard would force it and crash (same trap family as the
+-- Strict+derivingUnbox gotcha).
 instance Storable Vec2 where
-    sizeOf _ = 8
-    alignment _ = 4
+    sizeOf ~_ = 8
+    alignment ~_ = 4
     peek ptr = do
         x' ← Storable.peekElemOff (castPtr ptr ∷ Ptr Float) 0
         y' ← Storable.peekElemOff (castPtr ptr ∷ Ptr Float) 1
@@ -64,8 +68,8 @@ data Vec4 = Vec4
     } deriving (Show, Eq)
 
 instance Storable Vec4 where
-    sizeOf _ = 16
-    alignment _ = 4
+    sizeOf ~_ = 16
+    alignment ~_ = 4
     peek ptr = do
         r' ← Storable.peekElemOff (castPtr ptr ∷ Ptr Float) 0
         g' ← Storable.peekElemOff (castPtr ptr ∷ Ptr Float) 1
@@ -88,8 +92,8 @@ data Vertex = Vertex
     } deriving (Show, Eq)
 
 instance Storable Vertex where
-    sizeOf _ = vertexTotalSize
-    alignment _ = 4
+    sizeOf ~_ = vertexTotalSize
+    alignment ~_ = 4
     peek ptr = do
         p ← peek (ptr `plusPtr` vertexPositionOffset)
         t ← peek (ptr `plusPtr` vertexTexCoordOffset)
