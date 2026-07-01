@@ -62,6 +62,7 @@ import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
 import Engine.Scripting.Lua.API.Locations
+import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -174,6 +175,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
   registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env)
   registerLuaFunction "listLocationDefs" (locationListDefsFn env)
+  registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn env)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -477,6 +479,13 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getNames" (infectionGetNamesFn env)
   Lua.setglobal (Lua.Name "infection")
 
+  -- Loot table global — weighted rolls against data/loot_tables/*.yaml
+  -- (loaded via engine.loadLootTableYaml). Consumed by a `loot_table`
+  -- location content entry (#90).
+  Lua.newtable
+  registerLuaFunction "roll" (lootRollFn env)
+  Lua.setglobal (Lua.Name "loot")
+
   Lua.newtable
   registerLuaFunction "listDefs"     (itemListDefsFn env)
   registerLuaFunction "spawnGround"  (itemSpawnGroundFn env)
@@ -572,6 +581,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getClimateAt" (worldGetClimateAtFn env)
   registerLuaFunction "getAmbientAt" (worldGetAmbientAtFn env)
   registerLuaFunction "listPlacedLocations" (worldListPlacedLocationsFn env)
+  registerLuaFunction "hasSpawnedLocationContents"
+    (worldHasSpawnedLocationContentsFn env)
+  registerLuaFunction "markLocationContentsSpawned"
+    (worldMarkLocationContentsSpawnedFn env)
 
   Lua.setglobal (Lua.Name "world")
 

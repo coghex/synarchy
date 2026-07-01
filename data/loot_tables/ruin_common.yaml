@@ -1,0 +1,14 @@
+# Reference loot table (#90): common scavenge finds in a ruin. One
+# file IS one table — no wrapping list, unlike locations/items/units.
+#
+# `weight` is relative, not a percentage: rations is 3x as likely to
+# roll as steel_dagger. A `loot_table` location content entry rolls
+# this `rolls` times and spawns each result as a ground item.
+id: ruin_common
+entries:
+  - id: rations
+    weight: 3
+  - id: first_aid_kit
+    weight: 2
+  - id: steel_dagger
+    weight: 1

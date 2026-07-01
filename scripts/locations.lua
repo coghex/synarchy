@@ -14,6 +14,14 @@
 -- terrain primitives below. Definitions are now data-driven: they come
 -- from data/locations/*.yaml, loaded at boot via engine.loadLocationYaml
 -- and read back through engine.listLocationDefs (#88).
+--
+-- Content spawning (#90): scripts/location_stamper.lua calls
+-- locations.spawnContents(id, gx, gy, worldId) once per chunk load,
+-- independent of whether the geometry was (re)built this call. It
+-- dispatches each `contents` entry to unit.spawn / item.spawnGround /
+-- building.spawn / loot.roll / a builder (for nested "structure"
+-- content), gated by its own one-time engine flag
+-- (world.hasSpawnedLocationContents) so contents are never re-spawned.
 
 local locations = {}
 
@@ -158,10 +166,10 @@ end
 -----------------------------------------------------------
 -- Builders
 -----------------------------------------------------------
--- One function per location id. Authored on top of the primitives
--- above + content spawns (building.spawn / item.spawnGround /
--- unit.spawn). Anchor is the clicked tile (gx, gy); the builder decides
--- how the structure is laid out relative to it.
+-- One function per location id, authored on top of the primitives
+-- above. Anchor is the clicked tile (gx, gy); the builder decides how
+-- the structure is laid out relative to it. Content spawning (#90) is
+-- a separate concern — see locations.spawnContents below.
 
 local builders = {}
 
@@ -252,6 +260,146 @@ end
 -- `worldId`. The debug-overlay entry point (it knows the page).
 function locations.stamp(id, gx, gy, worldId)
     return buildAt(id, gx, gy, worldId)
+end
+
+-----------------------------------------------------------
+-- Content spawning (#90)
+-----------------------------------------------------------
+-- Each LocationDef.contents entry (see data/locations/*.yaml):
+--   { kind, id, count, rolls, position = {x,y} | nil, faction | nil }
+-- `position` is a fixed offset from the anchor; when absent the entry
+-- scatters randomly within the location's footprint instead (a fresh
+-- roll per instance). `count` is how many to place ("loot_table" uses
+-- `rolls` instead — how many times to roll the table). `faction` is
+-- unit-only and defaults to "hostile".
+--
+-- Called once per chunk load by scripts/location_stamper.lua,
+-- regardless of whether the geometry was (re)built this call — gated
+-- by its OWN one-time engine flag (world.hasSpawnedLocationContents),
+-- independent of the structure.hasAt check that gates re-stamping.
+-- That independence matters: a floor-less location type would
+-- otherwise re-run every load, and a player demolishing the floor
+-- would otherwise re-trigger every content spawn too.
+
+-- Scatter radius (tiles from anchor), keyed by LocationDef.builder,
+-- for content entries that omit `position`. Add an entry here for
+-- each new builder's footprint; unknown builders fall back to the
+-- default.
+local FOOTPRINT_RADIUS = { room_small = ROOM_SMALL_RADIUS }
+local DEFAULT_FOOTPRINT_RADIUS = 2
+
+local function contentOffset(def, entry)
+    if entry.position then
+        return entry.position.x or 0, entry.position.y or 0
+    end
+    local r = FOOTPRINT_RADIUS[def.builder] or DEFAULT_FOOTPRINT_RADIUS
+    return math.random(-r, r), math.random(-r, r)
+end
+
+local function spawnUnitContent(def, entry, gx, gy, worldId)
+    local faction = entry.faction or "hostile"
+    for _ = 1, (entry.count or 1) do
+        local ox, oy = contentOffset(def, entry)
+        local uid = unit.spawn(entry.id, gx + ox, gy + oy, nil, faction, worldId)
+        if uid == -1 then
+            engine.logWarn("locations: unknown unit content '" ..
+                tostring(entry.id) .. "'")
+        end
+    end
+end
+
+-- NB item.spawnGround takes an explicit pageId (#90) so this works on
+-- a hidden secondary page, same as unit.spawn / structure.place.
+local function spawnItemContent(def, entry, gx, gy, worldId)
+    for _ = 1, (entry.count or 1) do
+        local ox, oy = contentOffset(def, entry)
+        local gid = item.spawnGround(entry.id, gx + ox, gy + oy, nil, worldId)
+        if not gid then
+            engine.logWarn("locations: unknown item content '" ..
+                tostring(entry.id) .. "'")
+        end
+    end
+end
+
+local function spawnLootTableContent(def, entry, gx, gy, worldId)
+    for _ = 1, (entry.rolls or 1) do
+        local itemId = loot.roll(entry.id)
+        if itemId then
+            local ox, oy = contentOffset(def, entry)
+            item.spawnGround(itemId, gx + ox, gy + oy, nil, worldId)
+        else
+            engine.logWarn("locations: unknown loot table '" ..
+                tostring(entry.id) .. "'")
+        end
+    end
+end
+
+-- NB building.spawn does NOT take a pageId (it validates occupancy
+-- against the snapshot of the VISIBLE worlds, not a named page) — a
+-- building content entry only spawns correctly when its location's
+-- page is the active/visible one. Pre-existing engine limitation, not
+-- new to #90; a hidden-page location with building content logs the
+-- "unknown/unplaceable" warning below instead of spawning.
+local function spawnBuildingContent(def, entry, gx, gy, worldId)
+    for _ = 1, (entry.count or 1) do
+        local ox, oy = contentOffset(def, entry)
+        local bid = building.spawn(entry.id, gx + ox, gy + oy)
+        if not bid then
+            engine.logWarn("locations: building content '" ..
+                tostring(entry.id) .. "' failed to spawn " ..
+                "(unknown id, unplaceable, or not on the active page)")
+        end
+    end
+end
+
+-- A "structure" content entry nests another builder's geometry at an
+-- offset from the anchor — `id` names a scripts.locations builder
+-- (the same names LocationDef.builder uses), not a location id.
+local function spawnStructureContent(def, entry, gx, gy, worldId)
+    local b = builders[entry.id]
+    if not b then
+        engine.logWarn("locations: content structure names unknown builder '" ..
+            tostring(entry.id) .. "'")
+        return
+    end
+    local ox, oy = contentOffset(def, entry)
+    b(worldId, gx + ox, gy + oy)
+end
+
+local function dispatchContent(def, entry, gx, gy, worldId)
+    local kind = entry.kind
+    if kind == "unit" then
+        spawnUnitContent(def, entry, gx, gy, worldId)
+    elseif kind == "item" then
+        spawnItemContent(def, entry, gx, gy, worldId)
+    elseif kind == "loot_table" then
+        spawnLootTableContent(def, entry, gx, gy, worldId)
+    elseif kind == "building" then
+        spawnBuildingContent(def, entry, gx, gy, worldId)
+    elseif kind == "structure" then
+        spawnStructureContent(def, entry, gx, gy, worldId)
+    else
+        engine.logWarn("locations: unknown content kind '" ..
+            tostring(kind) .. "'")
+    end
+end
+
+-- Spawn location `id`'s contents, anchored at (gx, gy) on page
+-- `worldId` — once, ever, for this chunk. Safe to call on every chunk
+-- load: a no-op once world.hasSpawnedLocationContents is true.
+function locations.spawnContents(id, gx, gy, worldId)
+    gx, gy = math.floor(gx), math.floor(gy)
+    if world.hasSpawnedLocationContents(gx, gy, worldId) then return end
+    local def = locations.getDef(id)
+    if def then
+        for _, entry in ipairs(def.contents or {}) do
+            dispatchContent(def, entry, gx, gy, worldId)
+        end
+    else
+        engine.logWarn("locations: unknown location '" .. tostring(id) ..
+            "' (content spawn)")
+    end
+    world.markLocationContentsSpawned(gx, gy, worldId)
 end
 
 return locations

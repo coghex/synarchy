@@ -54,6 +54,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetFluidTileFn
     , worldSetSlopeFn
     , worldSetCellFn
+    , worldMarkLocationContentsSpawnedFn
     ) where
 
 import UPrelude
@@ -67,12 +68,12 @@ import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Control.Monad (when, forM_)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..), activeWorldState)
+import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import World.Types
+import World.Types hiding (activeWorldPage)
 import World.Fluid.Types (FluidType(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
@@ -730,6 +731,29 @@ worldSetWorldCursorSelectBgTextureFn env = do
     return 0
 
 -- * Mine designation tool
+
+-- | world.markLocationContentsSpawned(gx, gy [, pageId]) — one-time
+--   content-spawn flag (#90). An explicit pageId targets that live
+--   page (even hidden); omitted defaults to the active world. No-op
+--   (queues nothing) when neither resolves to a live page.
+worldMarkLocationContentsSpawnedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldMarkLocationContentsSpawnedFn env = do
+    gxArg   ← Lua.tointeger 1
+    gyArg   ← Lua.tointeger 2
+    pageArg ← Lua.tostring 3
+    case (gxArg, gyArg) of
+        (Just gx, Just gy) → do
+            Lua.liftIO $ do
+                mPid ← case pageArg of
+                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8 pidBS)))
+                    Nothing    → (fmap fst) <$> activeWorldPage env
+                case mPid of
+                    Just pid → Q.writeQueue (worldQueue env) $
+                        WorldMarkLocationContentsSpawned pid
+                            (fromIntegral gx) (fromIntegral gy)
+                    Nothing  → pure ()
+            return 0
+        _ → return 0
 
 -- | world.setMineAnchor(pageId, gx, gy) — anchor the designation
 --   rectangle at the given tile (mine tool first click).

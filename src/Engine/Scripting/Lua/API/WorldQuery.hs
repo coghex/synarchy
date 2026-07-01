@@ -15,6 +15,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetClimateAtFn
     , worldGetAmbientAtFn
     , worldListPlacedLocationsFn
+    , worldHasSpawnedLocationContentsFn
     ) where
 
 import UPrelude
@@ -34,6 +35,7 @@ import World.Hydrology.Types
 import World.Cursor.Types (CursorState(..))
 import World.Generate.Types (WorldGenParams(..))
 import Location.Overlay.Types (overlayToList)
+import World.Generate.Coordinates (globalToChunk)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Weather.Ambient (ambientTempAt)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -744,3 +746,37 @@ worldListPlacedLocationsFn env = do
                 Lua.setfield (-2) "id"
                 Lua.rawseti (-2) i
             return 1
+
+-- | world.hasSpawnedLocationContents(gx, gy [, pageId]) → bool.
+--   One-time content-spawn flag (#90): true once the chunk containing
+--   (gx, gy) has had its placed location's `contents` spawned.
+--   Independent of structure-geometry state (structure.hasAt) — see
+--   'World.Command.Types.WorldMarkLocationContentsSpawned'. With no
+--   page argument the active world is read; false when no such world
+--   or its gen params aren't live.
+worldHasSpawnedLocationContentsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldHasSpawnedLocationContentsFn env = do
+    gxA ← Lua.tointeger 1
+    gyA ← Lua.tointeger 2
+    pageA ← Lua.tostring 3
+    case (gxA, gyA) of
+        (Just gx, Just gy) → do
+            spawned ← Lua.liftIO $ do
+                mWs ← case pageA of
+                    Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+                    Nothing    → activeWorldState env
+                case mWs of
+                    Nothing → pure False
+                    Just ws → do
+                        mParams ← readIORef (wsGenParamsRef ws)
+                        case mParams of
+                            Nothing → pure False
+                            Just params →
+                                let (coord, _) =
+                                        globalToChunk (fromIntegral gx)
+                                                       (fromIntegral gy)
+                                in pure (HS.member coord
+                                    (wgpLocationContentsSpawned params))
+            Lua.pushboolean spawned
+            return 1
+        _ → Lua.pushboolean False >> return 1

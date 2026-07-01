@@ -117,7 +117,12 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 63  -- v63: WorldGenParams gains trailing 'wgpLocationOverlay'
+currentSaveVersion = 64  -- v64: WorldGenParams gains trailing
+                         --      'wgpLocationContentsSpawned' (one-time
+                         --      content-spawn flag per chunk, independent
+                         --      of the structure-geometry idempotency
+                         --      check; #90).
+                         -- v63: WorldGenParams gains trailing 'wgpLocationOverlay'
                          --      (sparse chunk→location-id map placed at world
                          --      init; serialized so a loaded world keeps its
                          --      layout without recomputation; #89).

@@ -32,6 +32,7 @@ import World.Weather.Types (ClimateParams, ClimateState
 import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)
 import World.Magma.Init (buildVolcanoCtx)
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
+import World.Chunk.Types (ChunkCoord)
 
 -- | Pure, serializable world generation parameters.
 --   Same params + same ChunkCoord = same Chunk, always.
@@ -66,6 +67,17 @@ data WorldGenParams = WorldGenParams
       --   deterministic overlay pass (#89). Serialized (appended to the
       --   manual instance below) so a loaded world keeps its layout
       --   without recomputation.
+    , wgpLocationContentsSpawned ∷ !(HS.HashSet ChunkCoord)
+      -- ^ One-time content-spawn flag (#90): chunks whose placed
+      --   location has already had its `contents` spawned (units,
+      --   items, buildings, …). Deliberately INDEPENDENT of the
+      --   structure-geometry idempotency check
+      --   (@structure.hasAt gx gy "floor"@) that gates re-STAMPING —
+      --   that check alone isn't enough for content: a floor-less
+      --   location type would re-run every chunk load, and a player
+      --   demolishing the floor would re-trigger a full re-stamp
+      --   including contents. Persisted alongside 'wgpLocationOverlay'
+      --   so a save never re-spawns contents already spawned.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -97,6 +109,7 @@ instance Serialize WorldGenParams where
         put (wgpOreLevers p)
         put (wgpTimelineParams p)
         put (wgpLocationOverlay p)
+        put (wgpLocationContentsSpawned p)
     get = do
         seed       ← get
         ws         ← get
@@ -118,6 +131,7 @@ instance Serialize WorldGenParams where
         oreLevers  ← get
         timelineP  ← get
         locOverlay ← get
+        locSpawned ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -140,6 +154,7 @@ instance Serialize WorldGenParams where
             , wgpOreLevers        = oreLevers
             , wgpTimelineParams   = timelineP
             , wgpLocationOverlay  = locOverlay
+            , wgpLocationContentsSpawned = locSpawned
             , wgpVolcanoCtx       = vc
             }
 
@@ -170,6 +185,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpOreLevers = defaultOreLevers
     , wgpTimelineParams = defaultTimelineParams
     , wgpLocationOverlay = emptyLocationOverlay
+    , wgpLocationContentsSpawned = HS.empty
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

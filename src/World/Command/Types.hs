@@ -184,4 +184,11 @@ data WorldCommand
         -- ^ Sim → World: apply the sim's settled/active fluid results to
         --   the visible world's 'wsTilesRef'. The world thread is the
         --   SOLE writer of 'wsTilesRef'; the sim never touches it.
+    | WorldMarkLocationContentsSpawned WorldPageId Int Int
+        -- ^ worldId, gx, gy. One-time content-spawn flag (#90): marks the
+        --   chunk containing (gx, gy) as having had its placed location's
+        --   `contents` spawned, in 'WorldGenParams.wgpLocationContentsSpawned'
+        --   — so a later chunk (re)load never respawns them. The world
+        --   thread is the sole owner of WorldGenParams; Lua queues this
+        --   rather than mutating wsGenParamsRef directly.
     deriving (Show)

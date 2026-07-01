@@ -21,6 +21,13 @@
 -- (locations.stamp -> the #88 builder -> world.getTerrainAt(gx,gy,pageId)),
 -- so a location materializes on its own page even when that page is hidden /
 -- not the active one — there is no active-page gate here.
+--
+-- Content spawning (#90): spawnContents is called EVERY time, regardless
+-- of whether stamp() ran this call — it has its own persisted one-time
+-- flag (world.hasSpawnedLocationContents), independent of structure.hasAt.
+-- A geometry-only skip does not imply contents already spawned: a
+-- floor-less location type never satisfies structure.hasAt, and a player
+-- demolishing the floor would otherwise re-trigger a full re-stamp.
 
 local stamper = {}
 
@@ -34,8 +41,10 @@ function stamper.onStampLocation(pageId, locId, gx, gy)
     -- The pageId is essential: without it the check resolves to the active
     -- world, so unrelated geometry there could suppress a valid stamp on a
     -- hidden secondary page.
-    if structure.hasAt(gx, gy, "floor", pageId) then return end
-    locations.stamp(locId, gx, gy, pageId)
+    if not structure.hasAt(gx, gy, "floor", pageId) then
+        locations.stamp(locId, gx, gy, pageId)
+    end
+    locations.spawnContents(locId, gx, gy, pageId)
 end
 
 return stamper
