@@ -199,14 +199,14 @@ wallStripCount = 16
 --   is needed: a low tile in front loses on z (wall covers footing) and a
 --   high rim wins (it occludes that strip), each at its own depth.
 --
---   Edge → depth map (from the wall art, both sprites 96×64):
---     • SE: edge E(gx+1,gy)→S(gx+1,gy+1); art in UV-x 0.43..1.0, screen-x
---       rising left→right runs S→E, so depth = (gx+gy+1) + 2·(1−u).
---     • SW: edge W(gx,gy+1)→S(gx+1,gy+1); art in UV-x 0.0..0.56, screen-x
---       rising left→right runs W→S, so depth = (gx+gy+1) + 2·u.
+--   Edge → depth map (from the wall art, both sprites 96×64). The edge runs
+--   only over the S half of the sprite (S corner at UV-x 0.5), so the param
+--   is clamped to [0,1] = its endpoints; art overhanging the S vertex must
+--   sort AT it (depth gx+gy+2), not past it:
+--     • SE: edge E(gx+1,gy)→S(gx+1,gy+1); depth = (gx+gy+1) + clamp01(2·(1−u)).
+--     • SW: edge W(gx,gy+1)→S(gx+1,gy+1); depth = (gx+gy+1) + clamp01(2·u).
 --   (applyFacingF rotates the grid anchor, so the depth stays correct at any
---   facing.) Strips outside the art's UV range are transparent and sort
---   harmlessly forward.
+--   facing.) Strips outside the art's UV range are transparent.
 frontWallStrips
     ∷ (TextureHandle → Word32)
     → CameraFacing → Int → Int → Float
@@ -242,10 +242,14 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
 
             gxf = fromIntegral gx ∷ Float
             gyf = fromIntegral gy ∷ Float
-            -- grid edge position (→ sort depth) at UV-x u, per direction
+            -- grid edge position (→ sort depth) at UV-x u, per direction. The
+            -- edge param is CLAMPED to [0,1] (edge endpoints E/W .. S): the
+            -- wall art overhangs the S vertex by a few px of wall thickness
+            -- (se bbox x41..95 vs S corner x48), and that sliver must NOT sort
+            -- PAST the S vertex (depth gx+gy+2) or it punches forward again.
             anchorAt u = case slot of
-                SWallSE → (gxf + 1.0,         gyf + 2.0 * (1.0 - u))
-                _       → (gxf + 2.0 * u,     gyf + 1.0)              -- SWallSW
+                SWallSE → (gxf + 1.0,                gyf + clamp01 (2.0 * (1.0 - u)))
+                _       → (gxf + clamp01 (2.0 * u),  gyf + 1.0)        -- SWallSW
 
             k = wallStripCount
             strip i =
