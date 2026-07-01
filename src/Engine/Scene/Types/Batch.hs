@@ -12,10 +12,16 @@ module Engine.Scene.Types.Batch
   , TextInstanceBuffer(..)
   , drawableToQuad
   , mergeQuadsToBatch
+  , batchFromSortedQuads
+  , sortQuadsByLayer
+  , mergeSortedQuads
+  , LayeredQuads(..)
+  , emptyLayeredQuads
   ) where
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as VSM
 import qualified Data.Vector.Algorithms.Intro as VA
@@ -67,11 +73,64 @@ drawableToQuad dobj = SortableQuad
     , sqLayer    = doLayer dobj
     }
 
+-- | World quads split by lifetime (#446). 'lqStatic' is the cached
+--   terrain set, pre-grouped by layer and pre-sorted by 'sqSortKey' —
+--   built on the world thread only when the quad cache rebuilds.
+--   'lqDynamic' is the small per-tick rest (units, cursor, ghost,
+--   spoil, ground items, buildings, structures, zoom map), sorted
+--   fresh each frame and linear-merged into the static runs.
+data LayeredQuads = LayeredQuads
+    { lqStatic  ∷ !(Map.Map LayerId (V.Vector SortableQuad))
+    , lqDynamic ∷ !(V.Vector SortableQuad)
+    } deriving (Show)
+
+emptyLayeredQuads ∷ LayeredQuads
+emptyLayeredQuads = LayeredQuads Map.empty V.empty
+
+-- | Group quads by layer and depth-sort each layer's run.
+sortQuadsByLayer ∷ V.Vector SortableQuad → Map.Map LayerId (V.Vector SortableQuad)
+sortQuadsByLayer quads =
+    Map.map (V.modify (VA.sortBy (comparing sqSortKey)) ∘ V.fromList) $
+        V.foldl' (\acc q → Map.insertWith (⧺) (sqLayer q) [q] acc)
+                 Map.empty quads
+
+-- | Linear merge of two individually depth-sorted runs into one sorted
+--   run, O(n+m). Ties take from the LEFT run first — callers pass the
+--   static (terrain) run on the left, so a dynamic sprite sitting at
+--   exactly a tile's depth deterministically draws after (over) it.
+mergeSortedQuads ∷ V.Vector SortableQuad → V.Vector SortableQuad → V.Vector SortableQuad
+mergeSortedQuads xs ys
+    | V.null xs = ys
+    | V.null ys = xs
+    | otherwise = V.create $ do
+        let nx = V.length xs
+            ny = V.length ys
+        mv ← VM.new (nx + ny)
+        let go i j
+              | i ≥ nx = V.copy (VM.slice (i + j) (ny - j) mv) (V.slice j (ny - j) ys)
+              | j ≥ ny = V.copy (VM.slice (i + j) (nx - i) mv) (V.slice i (nx - i) xs)
+              | otherwise = do
+                  let qx = xs V.! i
+                      qy = ys V.! j
+                  if sqSortKey qx ≤ sqSortKey qy
+                    then do VM.write mv (i + j) qx
+                            go (i + 1) j
+                    else do VM.write mv (i + j) qy
+                            go i (j + 1)
+        go 0 0
+        return mv
+
 -- | Sort quads by painter's algorithm and merge into a single RenderBatch.
 mergeQuadsToBatch ∷ LayerId → V.Vector SortableQuad → RenderBatch
 mergeQuadsToBatch layer quads =
-    let !sorted = V.modify (VA.sortBy (comparing sqSortKey)) quads
-        !totalVerts = V.length sorted * 6
+    batchFromSortedQuads layer (V.modify (VA.sortBy (comparing sqSortKey)) quads)
+
+-- | Expand ALREADY depth-sorted quads into a RenderBatch. The frame
+--   loop calls this with 'mergeSortedQuads' output so the per-frame
+--   cost is the linear merge, not a full re-sort (#446).
+batchFromSortedQuads ∷ LayerId → V.Vector SortableQuad → RenderBatch
+batchFromSortedQuads layer sorted =
+    let !totalVerts = V.length sorted * 6
         !avgZ = if V.null sorted
                then 0
                else let last' = sqSortKey (V.last sorted)

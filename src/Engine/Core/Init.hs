@@ -26,6 +26,7 @@ import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..))
 import System.IO (stdout)
 import Engine.Core.State
+import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
 import qualified Engine.Core.Queue as Q
@@ -114,7 +115,7 @@ initializeEngineWith logBackend = do
   sunAngleRef ← newIORef 0.25       -- start at noon
   worldPreviewRef ← newIORef Nothing
   zoomAtlasDataRef ← newIORef Nothing
-  worldQuadsRef ← newIORef (V.empty)
+  worldQuadsRef ← newIORef emptyLayeredQuads
   textureSystemRef ← newIORef Nothing
   samplerCacheRef ← newIORef emptySamplerCache
   texSizeRef ← newIORef HM.empty

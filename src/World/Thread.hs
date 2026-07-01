@@ -78,10 +78,10 @@ worldLoop env stateRef lastTimeRef = do
                 _camera ← readIORef (cameraRef env)
                 allQuads ← updateWorldTiles env
                 -- Plain writeIORef is fine here: the value is an immutable
-                -- Vector built entirely before the write, so the reader
-                -- (Frame.hs) always sees either the old or the new vector,
-                -- never a torn pointer — at worst it draws one frame
-                -- against the previous vector.
+                -- LayeredQuads built entirely before the write, so the
+                -- reader (Frame.hs) always sees either the old or the new
+                -- value, never a torn pointer — at worst it draws one
+                -- frame against the previous quads.
                 writeIORef (worldQuadsRef env) allQuads
                 threadDelay 16666
                 pure True

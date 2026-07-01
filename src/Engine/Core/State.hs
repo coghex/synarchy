@@ -121,7 +121,10 @@ data EngineEnv = EngineEnv
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
   , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString))  -- ^ Pending zoom atlas pixel data for GPU upload
-  , worldQuadsRef       ∷ IORef (V.Vector SortableQuad)
+  , worldQuadsRef       ∷ IORef LayeredQuads
+    -- ^ World quads split static (pre-sorted per layer at quad-cache
+    --   rebuild) / dynamic (per-tick), written by the world thread,
+    --   merged + drawn by the frame loop (#446).
   , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
   , samplerCacheRef     ∷ IORef SamplerCache
     -- ^ Deduplicated, refcounted Vulkan samplers keyed by 'SamplerKind'.
