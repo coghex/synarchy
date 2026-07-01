@@ -1,0 +1,8 @@
+packages: .
+
+-- Parallel builds (#443). The library is one 360+-module package, so
+-- package-level `jobs` alone can't help; `semaphore: True` makes cabal
+-- create a jobserver semaphore and pass -jsem to GHC (9.8+), letting the
+-- single --make session compile modules in parallel up to $ncpus.
+jobs: $ncpus
+semaphore: True
