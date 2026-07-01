@@ -20,6 +20,7 @@ import World.Fluids (FluidCell(..), FluidType(..))
 import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
+import World.Chunk.Types (ChunkCoord(..))
 import World.Grid (gridToScreen, tileSideHeight, tileWidth, applyFacing)
 import Structure.Types (StructureSlot(..), spdGridZ)
 import World.Mine.Types (MineDesignation(..))
@@ -157,6 +158,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
         -- chunks; the per-chunk gate below keeps it free where there are none.
         seTag = fromIntegral (fromEnum SWallSE) ∷ Word8
         swTag = fromIntegral (fromEnum SWallSW) ∷ Word8
+        -- Chunks that actually carry structures. A sprite is only considered
+        -- for the lift when its chunk is within ONE chunk of one of these, so
+        -- the check stays a no-op in structure-free areas — but, unlike a
+        -- same-chunk-only gate, it still fires for a sprite sitting across a
+        -- chunk seam from a wall on the next chunk (structureFrontWallClear
+        -- already resolves that wall cross-chunk).
+        structureChunkCoords =
+            [ lcCoord lc | lc ← chunks, not (HM.null (lcStructures lc)) ]
         structureFrontWallClear gx gy =
             let (fa, fb) = applyFacing facing gx gy
                 spriteDepth = fa + fb
@@ -196,15 +205,19 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 chunkHasFluid = V.any isJust fluidMap
                 terrainSurfMap = lcTerrainSurfaceMap lc
 
-                -- #418: only pay the front-wall clearance lookup in chunks that
-                -- actually carry structures (rooms are localised — most chunks
-                -- have none, so this is a no-op there). A sprite whose own
-                -- chunk has structures gets lifted to sit fully in front of any
-                -- front wall it overlaps (structureFrontWallClear); everything
-                -- else is untouched.
-                chunkHasStructures = not (HM.null (lcStructures lc))
+                -- #418: only pay the front-wall clearance lookup in chunks at
+                -- or adjacent to one carrying structures (rooms are localised —
+                -- most chunks are nowhere near one, so this is a no-op there).
+                -- Adjacency (not same-chunk-only) is what lets a sprite across
+                -- a chunk seam from a wall still get lifted. A qualifying sprite
+                -- is raised to sit fully in front of any front wall it overlaps;
+                -- everything else is untouched.
+                ChunkCoord ccx ccy = coord
+                chunkNearStructures =
+                    any (\(ChunkCoord sx sy) → abs (sx - ccx) ≤ 1 ∧ abs (sy - ccy) ≤ 1)
+                        structureChunkCoords
                 bump gx gy q
-                    | not chunkHasStructures = q
+                    | not chunkNearStructures = q
                     | otherwise = case structureFrontWallClear gx gy of
                         Just c  → q { sqSortKey = max (sqSortKey q) (c + 0.0001) }
                         Nothing → q
