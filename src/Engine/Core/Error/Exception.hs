@@ -23,7 +23,7 @@ import UPrelude
 import Engine.Asset.Base (AssetId)
 import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError(..), throwError)
-import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack, getCallStack)
+import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack)
 import qualified Data.Text as T
 import Type.Reflection
 import qualified Vulkan.Core10 as Vk

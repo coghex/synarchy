@@ -33,11 +33,14 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import World.Grid (tileWidth, tileHeight, tileSideHeight
-                  , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, GridConfig(..), defaultGridConfig
-                  , applyFacingF, gridToScreen)
+import World.Grid (tileWidth
+                   , tileHeight
+                   , tileSideHeight
+                   , worldLayer
+                   , GridConfig(..)
+                   , defaultGridConfig
+                   , applyFacingF
+                   , gridToScreen)
 import World.Types (WorldState, wsTilesRef)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))

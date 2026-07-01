@@ -9,24 +9,16 @@ module World.Hydrology.Simulation
     ) where
 
 import UPrelude
-import Data.Bits (xor)
-import Data.Word (Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
-import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector.Algorithms.Intro as VA
-import Control.Monad.ST (runST, ST)
-import Control.Monad (forM_, when)
+import Control.Monad.ST (runST)
 import Data.STRef (newSTRef, readSTRef, modifySTRef')
-import World.Base (GeoCoord(..), GeoFeatureId(..))
-import World.Constants (seaLevel)
 import World.Types
-import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU, worldWidthTiles)
-import World.Geology.Types
+import World.Plate (elevationAtGlobal, isBeyondGlacier, wrapGlobalU, worldWidthTiles)
 import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
-import World.Hydrology.Types
 import qualified Data.HashMap.Strict as HM
 import World.Weather.Types (ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..))
@@ -72,9 +64,6 @@ effRiverThreshold climate =
                          / fromIntegral (HM.size regions)
     in max minRiverDrainageCells
          $ round (fromIntegral minRiverDrainageCells * avgPrecip * 10.0 ∷ Float)
-
-minRiverLength ∷ Int
-minRiverLength = 2
 
 maxGridDim ∷ Int
 maxGridDim = 384
@@ -136,8 +125,9 @@ buildInitialElevGrid seed worldSize plates =
         -- size. Regression test: Test.Headless.WorldGen.WrapSeam.
         minSpacing = max baseSampleSpacing
                          ((totalTiles + maxGridDim - 1) `div` maxGridDim)
-        spacing = head ([ s | s ← [minSpacing .. totalTiles]
-                            , totalTiles `mod` s ≡ 0 ] ⧺ [totalTiles])
+        spacing = fromMaybe totalTiles
+                      (listToMaybe [ s | s ← [minSpacing .. totalTiles]
+                                       , totalTiles `mod` s ≡ 0 ])
         gridW = max 4 (totalTiles `div` spacing)
         halfGrid = gridW `div` 2
         totalSamples = gridW * gridW
@@ -527,12 +517,12 @@ fillDepressions grid =
                                                  ]
                                     in case scored of
                                         [] → natural
-                                        _  →
+                                        s0 : rest →
                                             -- Pick the one with shortest ocean dist
                                             let (bestN, _) = foldl'
                                                     (\(bn, bd) (n, d) →
                                                         if d < bd then (n, d) else (bn, bd))
-                                                    (head scored) (tail scored)
+                                                    s0 rest
                                             in bestN
 
         return (filledV, d8Biased)

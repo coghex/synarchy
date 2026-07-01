@@ -9,13 +9,13 @@ module World.Render.Zoom.Cursor
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef', IORef)
+import Data.IORef (readIORef, atomicModifyIORef', IORef)
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
 import World.Types
 import World.Grid (gridToWorld, worldToGrid, zoomMapLayer)
 

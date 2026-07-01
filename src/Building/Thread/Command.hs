@@ -4,10 +4,8 @@ module Building.Thread.Command
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q

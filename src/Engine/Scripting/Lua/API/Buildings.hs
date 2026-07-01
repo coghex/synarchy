@@ -37,13 +37,12 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_)
+import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import World.Page.Types (WorldPageId(..))
-import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
-import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
+import Engine.Core.Log (LogCategory(..), logInfo, logDebug)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
                                    BuildingYamlTileSize(..), loadBuildingYaml)
@@ -51,8 +50,7 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Asset.Handle (TextureHandle(..))
-import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..), lookupItemDef
-                  , itemTotalWeight)
+import Item.Types (itemTotalWeight)
 import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
 import Building.Placement (canPlaceAt, PlacementResult(..))
 import Building.HitTest (hitTestBuildingAt)

@@ -20,7 +20,6 @@ module World.Weather.Ambient
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import World.Constants (seaLevel)
 import World.Plate (TectonicPlate, elevationAtGlobal, wrapGlobalU)
 import World.Weather.Types (ClimateState)

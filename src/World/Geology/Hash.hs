@@ -10,8 +10,6 @@ module World.Geology.Hash
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word32, Word64)
 import World.Chunk.Types (chunkSize)
 
 -- * Hash Utilities

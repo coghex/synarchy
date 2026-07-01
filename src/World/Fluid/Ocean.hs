@@ -7,23 +7,13 @@ module World.Fluid.Ocean
 
 import UPrelude
 import Data.List (sort)
-import Data.Word (Word64)
 import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Vector.Unboxed as VU
-import qualified Data.Vector.Mutable as MV
-import Data.Hashable (Hashable(..))
 import Data.Sequence (Seq(..))
 import qualified Data.Sequence as Seq
-import Control.Monad (when, forM_)
-import Control.Monad.ST (ST)
-import World.Base
 import World.Types
-import World.Ocean.Types (OceanDistMap)
 import World.Material (MaterialId(..), matGlacier)
-import World.Plate (TectonicPlate(..), elevationAtGlobal
-                   , isBeyondGlacier, wrapGlobalU)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Plate (elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Fluid.Internal
 
 -- * Ocean Flood Fill
@@ -31,7 +21,7 @@ import World.Fluid.Internal
 computeOceanMap ∷ Word64 → Int → Int → [TectonicPlate]
                → (Int → Int → (Int, MaterialId) → (Int, MaterialId))
                → (OceanMap, OceanDistMap)
-computeOceanMap seed worldSize plateCount plates applyTL =
+computeOceanMap seed worldSize _plateCount plates applyTL =
     let halfSize = worldSize `div` 2
 
         -- Sample a single tile's post-timeline elevation

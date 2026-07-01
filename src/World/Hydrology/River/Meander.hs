@@ -4,7 +4,6 @@ module World.Hydrology.River.Meander
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Hydrology.Types

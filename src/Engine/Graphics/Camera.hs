@@ -16,11 +16,8 @@ module Engine.Graphics.Camera
 import UPrelude
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
-import Linear (M44, V3(..), V4(..), identity)
-import qualified Data.Text as T
+import Linear (M44, V4(..), identity)
 import Linear.Matrix ((!*!))
-import qualified Graphics.UI.GLFW as GLFW
-import Engine.Input.Types (InputState(..))
 
 -- | Four camera facings, 90° apart.
 -- FaceSouth is the default (current) viewing direction.
@@ -138,7 +135,7 @@ createViewMatrix camera =
     in rotationMat !*! translateMat
 
 createProjectionMatrix ∷ Camera2D → Float → Float → M44 Float
-createProjectionMatrix camera width height
+createProjectionMatrix _camera width height
     -- Zero-size framebuffer (minimized window): aspect = width/height and
     -- the 2/(right-left) scale would feed Infinity/NaN into the per-frame
     -- UBO (height 0 → NaN, width 0 → a degenerate centerline projection).

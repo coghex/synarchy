@@ -14,7 +14,6 @@ import qualified Data.HashMap.Strict as HM
 import Data.Sequence (Seq, (|>))
 import qualified Data.Sequence as Seq
 import Data.Foldable (toList)
-import Data.Word (Word32)
 import Data.IORef (readIORef, writeIORef)
 import Control.Concurrent.STM (STM, atomically, readTVarIO)
 import Control.Concurrent.STM.TVar (TVar, modifyTVar')

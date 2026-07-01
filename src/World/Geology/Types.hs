@@ -32,8 +32,7 @@ import UPrelude
 import Data.List (find)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Data.Hashable (Hashable(..))
-import World.Base (GeoFeatureId(..), GeoCoord(..))
+import World.Base (GeoFeatureId(..))
 import World.Chunk.Types (chunkSize)
 import World.Region.Types (RegionCoord(..), RegionalData(..)
                           , emptyRegionalData, regionSize)
@@ -44,8 +43,7 @@ import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
                                     , LavaDomeParams(..), FissureParams(..)
                                     , ShieldParams(..)
                                     , TimelineParams(..), defaultTimelineParams)
-import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
-import World.Material (matBasalt, matObsidian)
+import World.Plate (TectonicPlate(..))
 import World.Weather.Types (ClimateState, ClimateCoord)
 
 -- * GeoModification
@@ -233,8 +231,8 @@ data GeoState = GeoState
 -- | Initialize GeoState from plate data.
 --   Temperature varies by latitude: hot at equator, cold at poles.
 initGeoState ∷ Word64 → Int → [TectonicPlate] → GeoState
-initGeoState seed worldSize plates =
-    let halfChunks = worldSize `div` 2
+initGeoState _seed worldSize plates =
+    let _halfChunks = worldSize `div` 2
         regionsPerSide = worldSize `div` regionSize
         halfRegions = regionsPerSide `div` 2
 

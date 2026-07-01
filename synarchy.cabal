@@ -81,17 +81,28 @@ test-suite synarchy-test-graphical
                 , vulkan
                 , vulkan-utils
     default-language: GHC2024
+    -- Warnings apply to BOTH profiles (#435): prod is the default for all
+    -- routine work, so it must carry the full warning set. Keep this the
+    -- single source of truth — don't re-add warning flags inside the
+    -- dev/prod conditionals below.
+    ghc-options: -Wall
+                 -Wcompat
+                 -Wincomplete-record-updates
+                 -Wincomplete-uni-patterns
+                 -Wincomplete-patterns
+                 -Wno-ambiguous-fields
+                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
+                 -- risk the wrong-variable bugs the warning guards against.
+                 -- Revisit incrementally, not as a sweep (#435).
+                 -Wno-name-shadowing
+                 -- type-defaults: all literal defaulting in log/format
+                 -- code; annotating adds noise without catching bugs.
+                 -Wno-type-defaults
     if flag(dev)
       if os(darwin)
           cpp-options: -DDARWIN -DDEVELOPMENT
           ghc-options: -optP-Wno-nonportable-include-path
                        -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -haddock
@@ -104,12 +115,6 @@ test-suite synarchy-test-graphical
       else
           cpp-options: -DDEVELOPMENT
           ghc-options: -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -haddock
@@ -205,17 +210,28 @@ test-suite synarchy-test-headless
                 , cereal
                 , yaml
     default-language: GHC2024
+    -- Warnings apply to BOTH profiles (#435): prod is the default for all
+    -- routine work, so it must carry the full warning set. Keep this the
+    -- single source of truth — don't re-add warning flags inside the
+    -- dev/prod conditionals below.
+    ghc-options: -Wall
+                 -Wcompat
+                 -Wincomplete-record-updates
+                 -Wincomplete-uni-patterns
+                 -Wincomplete-patterns
+                 -Wno-ambiguous-fields
+                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
+                 -- risk the wrong-variable bugs the warning guards against.
+                 -- Revisit incrementally, not as a sweep (#435).
+                 -Wno-name-shadowing
+                 -- type-defaults: all literal defaulting in log/format
+                 -- code; annotating adds noise without catching bugs.
+                 -Wno-type-defaults
     if flag(dev)
       if os(darwin)
           cpp-options: -DDARWIN -DDEVELOPMENT
           ghc-options: -optP-Wno-nonportable-include-path
                        -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -fno-full-laziness
@@ -226,12 +242,6 @@ test-suite synarchy-test-headless
       else
           cpp-options: -DDEVELOPMENT
           ghc-options: -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
     else
@@ -688,17 +698,28 @@ library
         cbits
     cc-options: -O2
     default-language: GHC2024
+    -- Warnings apply to BOTH profiles (#435): prod is the default for all
+    -- routine work, so it must carry the full warning set. Keep this the
+    -- single source of truth — don't re-add warning flags inside the
+    -- dev/prod conditionals below.
+    ghc-options: -Wall
+                 -Wcompat
+                 -Wincomplete-record-updates
+                 -Wincomplete-uni-patterns
+                 -Wincomplete-patterns
+                 -Wno-ambiguous-fields
+                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
+                 -- risk the wrong-variable bugs the warning guards against.
+                 -- Revisit incrementally, not as a sweep (#435).
+                 -Wno-name-shadowing
+                 -- type-defaults: all literal defaulting in log/format
+                 -- code; annotating adds noise without catching bugs.
+                 -Wno-type-defaults
     if flag(dev)
       if os(darwin)
           cpp-options: -DDARWIN -DDEVELOPMENT
           ghc-options: -optP-Wno-nonportable-include-path
                        -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        -haddock
                        -fno-full-laziness
@@ -709,12 +730,6 @@ library
       else
           cpp-options: -DDEVELOPMENT
           ghc-options: -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        -haddock
     else
@@ -798,6 +813,23 @@ executable synarchy
     hs-source-dirs: app
     -- Base language which the package is written in.
     default-language: GHC2024
+    -- Warnings apply to BOTH profiles (#435): prod is the default for all
+    -- routine work, so it must carry the full warning set. Keep this the
+    -- single source of truth — don't re-add warning flags inside the
+    -- dev/prod conditionals below.
+    ghc-options: -Wall
+                 -Wcompat
+                 -Wincomplete-record-updates
+                 -Wincomplete-uni-patterns
+                 -Wincomplete-patterns
+                 -Wno-ambiguous-fields
+                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
+                 -- risk the wrong-variable bugs the warning guards against.
+                 -- Revisit incrementally, not as a sweep (#435).
+                 -Wno-name-shadowing
+                 -- type-defaults: all literal defaulting in log/format
+                 -- code; annotating adds noise without catching bugs.
+                 -Wno-type-defaults
     if flag(dev)
       if os(darwin)
           cpp-options: -DDARWIN -DDEVELOPMENT
@@ -815,12 +847,6 @@ executable synarchy
       else
           cpp-options: -DDEVELOPMENT
           ghc-options: -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -haddock

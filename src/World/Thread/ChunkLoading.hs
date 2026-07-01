@@ -12,26 +12,24 @@ import qualified Data.HashMap.Strict as HM
 import Data.List (partition, sortOn)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Parallel.Strategies (parMap, rdeepseq)
-import Control.DeepSeq (NFData, rnf)
+import Control.DeepSeq (rnf)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (Camera2D(..))
-import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashSet as HS
 import World.Types
-import World.Chunk.Types (chunkSize)
-import World.Fluid.Types (FluidCell(..))
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Grid (zoomFadeEnd)
-import World.Slope (recomputeNeighborSlopes, slopeRecomputeAffected, wrapChunkCoordU, patchEdgeStrata, chunkNeighbors)
+import World.Slope (recomputeNeighborSlopes
+                    , slopeRecomputeAffected
+                    , patchEdgeStrata
+                    , chunkNeighbors)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
-import World.Generate.Types (WorldGenParams(..), isArenaParams)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopesTd)
@@ -44,7 +42,7 @@ maxChunksPerTick ∷ Int
 maxChunksPerTick = 8
 
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
-updateChunkLoading env logger = do
+updateChunkLoading env _logger = do
     camera ← readIORef (cameraRef env)
     catalog ← readIORef (floraCatalogRef env)
     registry ← readIORef (materialRegistryRef env)

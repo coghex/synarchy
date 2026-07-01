@@ -8,13 +8,9 @@ module World.Geology.Evolution
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.Vector as V
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Geology.Types
 import World.Geology.Hash
-import World.Hydrology.Types
 
 -- * Volcanic Evolution
 

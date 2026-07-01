@@ -15,7 +15,7 @@ import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, withText)
+import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 import World.Flora.Types (LifePhaseTag(..), AnnualStageTag(..))
 

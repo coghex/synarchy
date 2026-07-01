@@ -12,23 +12,17 @@ import qualified Data.ByteString.UTF8 as BSU
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM, logWarnM)
-import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..)
-                                   , InitError(..), catchEngine)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logWarnM)
+import Engine.Core.Error.Exception (ExceptionType(..), InitError(..), catchEngine)
 import Engine.Core.Monad
-import Engine.Core.Resource
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Base
-import Engine.Graphics.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Foreign.Marshal.Utils (with)
 import Vulkan.Core10
 import Vulkan.Core12
-import Vulkan.Core10.LayerDiscovery (LayerProperties(..))
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_EXT_debug_utils
 import Vulkan.Extensions.VK_EXT_layer_settings
-import Vulkan.Extensions.VK_KHR_portability_subset
 import Vulkan.Extensions.VK_KHR_portability_enumeration
 import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 import Vulkan.Utils.Debug (debugCallbackPtr)

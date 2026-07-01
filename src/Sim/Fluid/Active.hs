@@ -11,12 +11,10 @@ import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as MVU
 import Data.Maybe (mapMaybe)
-import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
-import Data.Bits ((.&.), (.|.), shiftL)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
-import World.Fluid.Types (FluidType(..), FluidCell(..))
+import World.Fluid.Types (FluidCell(..))
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
 
@@ -74,9 +72,9 @@ deactivateInPlace scs =
 -- | Simulate one tick for a single active chunk.
 simulateActiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
                     → ChunkCoord → SimChunkState → (SimChunkState, Bool)
-simulateActiveChunk allChunks coord scs =
+simulateActiveChunk _allChunks coord scs =
     let terrainV = scsTerrain scs
-        sz = chunkSize * chunkSize
+        _sz = chunkSize * chunkSize
         (newActive, newDeco, changed) = runST $ do
             mv ← V.thaw (scsActiveFluid scs)
             decoMv ← VU.thaw (scsSideDeco scs)

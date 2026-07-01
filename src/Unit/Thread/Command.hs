@@ -12,8 +12,6 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
-import Data.List (foldl')
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
 import Unit.Anim (stateKey)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..))
@@ -21,7 +19,6 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Stats (rollStat, pickName)
-import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
@@ -31,8 +28,7 @@ import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
                   , ItemBuff(..), ItemManager(..), lookupItemDef
                   , itemTotalWeight)
 import Engine.Core.Log (LoggerState)
-import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
-                    LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
+import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 
 processAllUnitCommands ∷ EngineEnv → IORef UnitThreadState → IO ()
@@ -406,7 +402,7 @@ handleUnitCommand env utsRef (UnitJump uid tgx tgy) = do
                        else let ss' = startJump now ss tgx tgy
                             in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitCommand env utsRef (UnitStop uid) = do
+handleUnitCommand _env utsRef (UnitStop uid) = do
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
@@ -423,7 +419,7 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitCommand env utsRef (UnitCollapse uid) = do
+handleUnitCommand _env utsRef (UnitCollapse uid) = do
     -- Snap to Collapsed pose. Fall animation is deferred — when the
     -- standing→collapsed composite is authored, this handler will
     -- instead queue a TransitioningTo Collapsed.
@@ -449,7 +445,7 @@ handleUnitCommand env utsRef (UnitCollapse uid) = do
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitCommand env utsRef (UnitCrawl uid) = do
+handleUnitCommand _env utsRef (UnitCrawl uid) = do
     -- Drop to a sustained Crawling pose. Unlike Collapsed this KEEPS the
     -- in-flight move target + walking state, so a unit maimed mid-stride
     -- keeps crawling toward its goal (the mover caps its speed to a
@@ -476,7 +472,7 @@ handleUnitCommand env utsRef (UnitCrawl uid) = do
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitCommand env utsRef (UnitKill uid) = do
+handleUnitCommand _env utsRef (UnitKill uid) = do
     -- Terminal: snap to Dead pose and clear all in-flight state.
     -- No animation chain — just an instant transition. Dead units
     -- are filtered out by AI / movement / drink / pickup via the
@@ -508,7 +504,7 @@ handleUnitCommand env utsRef (UnitKill uid) = do
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitCommand env utsRef (UnitRevive uid) = do
+handleUnitCommand _env utsRef (UnitRevive uid) = do
     -- Snap to Standing pose. Per the orthogonal-pose plan, a real
     -- revive eventually chains Collapsed → Crawling → Crouching →
     -- Standing reverse transitions; for now (no transition assets yet)

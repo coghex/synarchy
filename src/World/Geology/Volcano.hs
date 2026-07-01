@@ -13,11 +13,8 @@ module World.Geology.Volcano
     ) where
 
 import UPrelude
-import Data.Word (Word64)
-import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
-import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, smoothstepGeo, valueNoise2D
                           , wrappedDeltaUV)
 

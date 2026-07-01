@@ -23,8 +23,6 @@ module World.Generate.Config
 import UPrelude
 import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), (.:?), (.=), FromJSON(..), ToJSON(..))
-import qualified Data.Aeson as Yaml (object)
-import qualified Data.Text as T
 import System.Directory (doesFileExist)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)

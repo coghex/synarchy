@@ -39,8 +39,6 @@ module World.Material
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as VU
-import qualified Data.IORef as IORef
 -- MaterialId (+ its Unbox instance) lives in the NON-Strict
 -- World.Material.Id — see the note there for why the derivingUnbox
 -- splice must not be compiled under {-# LANGUAGE Strict #-}.

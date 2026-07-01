@@ -28,7 +28,6 @@ module Engine.Scripting.Lua.API.Structure
     ) where
 
 import UPrelude
-import Data.Word (Word8)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
@@ -38,7 +37,6 @@ import Engine.Core.State (EngineEnv(..), activeWorldPage, activeWorldState)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
 import Structure.Palette (internPath, TexPalette(..))
-import Control.Monad (forM_)
 import World.Types (wsTilesRef, wsStructureStageRef, wmWorlds, WorldPageId(..), WorldState)
 import World.Chunk.Types (LoadedChunk(..))
 import World.Tile.Types (WorldTileData(..), lookupChunk)

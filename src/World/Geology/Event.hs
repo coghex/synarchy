@@ -5,19 +5,15 @@ module World.Geology.Event
     ) where
 
 import UPrelude
-import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
-import World.Geology.Types
-import World.Geology.Ore.Types (OreSheetParams(..), oreSheetThicknessAt)
+import World.Geology.Ore.Types (oreSheetThicknessAt)
 import World.Geology.Crater (applyCrater)
 import World.Geology.Volcano (applyVolcanicFeature, perturbDist)
 import World.Geology.Hash (smoothstepGeo, wrappedDeltaUV)
-import World.Hydrology.Types (HydroFeature(..))
 import World.Hydrology.Event (applyHydroEvolution, applyHydroFeature)
-import World.Hydrology.River (applyRiverCarve)
 import World.Hydrology.River.Carving (carveFromSegment, computeDeltaDeposit')
-import World.Hydrology.Glacier (applyGlacierCarve, applyGlacierMoraine)
+import World.Hydrology.Glacier (applyGlacierMoraine)
 
 -- * Event Application
 

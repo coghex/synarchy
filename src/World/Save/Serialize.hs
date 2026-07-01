@@ -16,7 +16,6 @@ import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (parseTimeM, formatTime, defaultTimeLocale)
-import Control.Monad (when)
 import System.Directory (createDirectoryIfMissing, listDirectory
                         , doesFileExist, doesDirectoryExist)
 import System.FilePath ((</>), takeExtension, dropExtension)

@@ -22,7 +22,6 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), (.=), (.:?), FromJSON(..), ToJSON(..)
                    , Value(..), withText)
-import Data.Bits ((.&.))
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
 import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..), Filter(..))
 
@@ -32,14 +31,6 @@ msaaToSampleCount 2 = SAMPLE_COUNT_2_BIT
 msaaToSampleCount 4 = SAMPLE_COUNT_4_BIT
 msaaToSampleCount 8 = SAMPLE_COUNT_8_BIT
 msaaToSampleCount _ = SAMPLE_COUNT_1_BIT
-
--- | Convert Vulkan sample count back to user-facing int
-sampleCountToMSAA ∷ SampleCountFlagBits → Int
-sampleCountToMSAA s
-  | s ≡ SAMPLE_COUNT_8_BIT = 8
-  | s ≡ SAMPLE_COUNT_4_BIT = 4
-  | s ≡ SAMPLE_COUNT_2_BIT = 2
-  | otherwise               = 1
 
 -- | Clamp a requested sample count to the highest supported by the device.
 -- 'supported' is the framebufferColorSampleCounts bitmask from PhysicalDeviceLimits.

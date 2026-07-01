@@ -14,14 +14,10 @@ module Engine.Graphics.Font.STB
 
 import UPrelude
 import qualified Data.Text as T
-import Foreign.Ptr (Ptr, nullPtr)
 import Foreign.C.Types (CInt(..), CFloat(..))
 import Foreign.C.String (CString, withCString)
-import Foreign.Marshal.Alloc (alloca, free, mallocBytes)
-import Foreign.Marshal.Array (peekArray)
-import Foreign.Storable (Storable(peek, poke))
+import Foreign.Marshal.Alloc (free, mallocBytes)
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(CatFont))
-import Data.Word (Word8)
 import Data.Char (ord)
 
 -- * C FFI Declarations
@@ -32,7 +28,8 @@ data STBFontInfo
 data STBFont = STBFont
     { stbFontData ∷ Ptr Word8      -- Font file data
     , stbFontInfo ∷ Ptr STBFontInfo -- Font info struct
-    , stbFontSize ∷ Int             -- Size of font data
+    , _stbFontSize ∷ Int            -- Size of font data (unread; kept so
+                                    -- the record mirrors what C hands back)
     }
 
 foreign import ccall "stb_load_font"

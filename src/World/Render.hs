@@ -5,39 +5,21 @@ module World.Render
     ) where
 
 import UPrelude
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State.Class (gets)
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
-import Data.Maybe (isJust)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..)
-                         , resolveActiveWorld)
-import Engine.Core.Monad (EngineM)
-import Engine.Scene.Base (LayerId(..), ObjectId(..))
-import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
+import Engine.Scene.Types (SortableQuad(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
-import World.Constants (seaLevel)
-import World.Slope (slopeToFaceMapIndex)
-import World.Fluids (FluidCell(..), FluidType(..))
-import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk)
-import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
-                   tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
-                   , worldToGrid, worldScreenWidth, applyFacing)
-import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
+import World.Generate (viewDepth, globalToChunk)
+import World.Grid (zoomFadeStart, zoomFadeEnd, worldToGrid)
+import World.ZoomMap (generateZoomMapQuads)
 
-import World.Render.Camera (cameraChanged, camEpsilon)
+import World.Render.Camera (cameraChanged)
 import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
 import World.Render.GroundItemQuads (renderGroundItemQuads)
 import World.Render.SpoilQuads (renderSpoilQuads)
-import World.Render.ViewBounds (computeViewBounds)
-import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import Unit.Render (renderUnitQuads)
 import Building.Render (renderBuildingQuads, renderGhostQuad)
 import Structure.Render (renderStructureQuads)
@@ -56,7 +38,7 @@ updateWorldTiles env = do
 
     let zoom = camZoom camera
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
-        zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
+        _zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
         -- Terrain's visible Z-band depth below the slice (same formula as
         -- Quads.hs). Units/buildings cull to this so a sprite is hidden
         -- exactly when its ground tile is — only ABOVE the slice (camera

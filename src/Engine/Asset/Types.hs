@@ -7,12 +7,10 @@ module Engine.Asset.Types where
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import qualified Data.Text as T
 import Data.IORef (IORef, newIORef)
 import Vulkan.Core10
 import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Asset.Handle
-import Engine.Scene.Base (ObjectId)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
 
 -- | Central registry of every loaded texture, font, and shader, plus the

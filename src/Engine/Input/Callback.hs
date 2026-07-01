@@ -3,7 +3,6 @@ module Engine.Input.Callback where
 
 import UPrelude
 import qualified Graphics.UI.GLFW as GLFW
-import Control.Concurrent.STM.TQueue
 import Data.IORef (IORef, readIORef)
 import Engine.Input.Types
 import Engine.Core.State
@@ -62,7 +61,7 @@ charCallback queue el _win char = whenRunning el $
 
 mouseCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
               → GLFW.MouseButton → GLFW.MouseButtonState → GLFW.ModifierKeys → IO ()
-mouseCallback queue el win btn state mods = whenRunning el $ do
+mouseCallback queue el win btn state _mods = whenRunning el $ do
     (x, y) ← GLFW.getCursorPos win
     writeQueue queue $ InputMouseEvent btn (x, y) state
 

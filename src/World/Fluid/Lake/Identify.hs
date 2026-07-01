@@ -53,7 +53,6 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
-import Control.Monad (when, forM_)
 import Control.Monad.ST (runST)
 import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (ChunkCoord(..), chunkSize)

@@ -37,7 +37,8 @@ import World.Fluid.Lake.Types (packBitmask, unpackBitmask)
 --   no ocean tile are absent.
 newtype WorldOceanMask = WorldOceanMask
     { womByChunk ∷ HM.HashMap ChunkCoord (VU.Vector Bool) }
-    deriving (Show, Eq, Generic, NFData)
+    deriving stock (Show, Eq, Generic)
+    deriving anyclass (NFData)
 
 instance Serialize WorldOceanMask where
     put (WorldOceanMask m) =

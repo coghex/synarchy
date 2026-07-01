@@ -24,7 +24,6 @@ import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Core.Error.Exception
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Config (textureFilterToVulkan)

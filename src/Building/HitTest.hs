@@ -16,7 +16,6 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
-import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import World.Grid (tileWidth, tileHeight, tileSideHeight

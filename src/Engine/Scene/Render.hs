@@ -7,24 +7,18 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.IORef
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logInfoM, logInfoSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
-import Engine.Scene.Base
 import Engine.Scene.Types
 import Engine.Scene.Manager
-import Engine.Scene.Graph
 import Engine.Scene.Batch
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Vertex
-import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Window.Types
-import Engine.Graphics.Font.Data
 import qualified Engine.Graphics.Window.GLFW as GLFW
-import Engine.Graphics.Window.Types (Window(..))
 import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
 import Vulkan.Zero

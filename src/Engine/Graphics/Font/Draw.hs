@@ -14,28 +14,18 @@ import Engine.Graphics.Font.Data
 import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Resource
-import Engine.Core.Error.Exception
-import Engine.Scene.Types
-import Engine.Scene.Base
-import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer, copyBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
-import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode
                                          , fontSDFFragmentShaderCode
                                          , fontUIVertexShaderCode)
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
-import Engine.Graphics.Vulkan.Types.Descriptor
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import qualified Data.Text as T
-import Foreign.Storable (Storable(..), pokeElemOff)
-import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import Vulkan.Core10
 import Vulkan.Zero

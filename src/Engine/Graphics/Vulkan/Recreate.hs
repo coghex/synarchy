@@ -21,7 +21,6 @@ import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Framebuffer
 import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Pipeline.Bindless
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))

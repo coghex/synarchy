@@ -115,7 +115,7 @@ renderSpoilQuads env worldState tileAlpha = do
                 cornerOf 2 = (False, True,  False, False)  -- NE
                 cornerOf _ = (True,  False, False, False)  -- NW
 
-            quadFor lvl (tile@(tx, ty), (mat, corners)) = do
+            quadFor lvl (_tile@(tx, ty), (mat, corners)) = do
                 let (chunkCoord, (lx, ly)) = globalToChunk tx ty
                 lc ← HM.lookup chunkCoord (wtdChunks tileData)
                 xOff ← isChunkVisibleWrapped facing worldSize vb camX

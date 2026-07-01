@@ -24,7 +24,7 @@ import Engine.Scripting.Lua.Message (processLuaMessages)
 mainLoop ∷ EngineM ε σ ()
 mainLoop = do
     env ← ask
-    state ← gets graphicsState
+    _state ← gets graphicsState
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
 
     case lifecycle of

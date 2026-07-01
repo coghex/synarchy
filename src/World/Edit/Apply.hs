@@ -17,7 +17,6 @@ module World.Edit.Apply
     ) where
 
 import UPrelude
-import Data.Word (Word8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU

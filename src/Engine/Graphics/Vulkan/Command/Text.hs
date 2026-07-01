@@ -11,16 +11,13 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.IORef (readIORef)
-import Foreign.Storable (sizeOf, pokeElemOff)
-import Foreign.Ptr (castPtr)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM, logWarnM)
+import Engine.Core.Log.Monad (logDebugSM, logWarnM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Font.Data (FontCache(..), FontAtlas(..), GlyphInstance, fcFonts)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
-import Engine.Graphics.Vulkan.Types
-import Engine.Scene.Types (TextBatch(..), TextRenderBatch(..), TextInstanceBuffer(..))
+import Engine.Scene.Types (TextRenderBatch(..), TextInstanceBuffer(..))
 import Vulkan.Core10
 import Vulkan.Zero
 

@@ -10,9 +10,8 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Resource (allocResource)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM)
+import Engine.Core.Log.Monad (logDebugM, logDebugSM, logInfoSM)
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10

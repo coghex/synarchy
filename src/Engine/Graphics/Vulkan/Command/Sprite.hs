@@ -6,14 +6,12 @@ module Engine.Graphics.Vulkan.Command.Sprite
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, modifyIORef')
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Scene.Types (RenderBatch(..), SceneDynamicBuffer(..))
 import Vulkan.Core10

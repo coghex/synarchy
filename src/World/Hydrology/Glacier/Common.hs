@@ -5,7 +5,6 @@ module World.Hydrology.Glacier.Common
 
 import UPrelude
 import World.Types
-import World.Hydrology.Types
 
 -- * Extract glacier params from PersistentFeature
 

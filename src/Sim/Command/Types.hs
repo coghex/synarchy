@@ -5,7 +5,6 @@ module Sim.Command.Types
 
 import UPrelude
 import Control.Concurrent.MVar (MVar)
-import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))

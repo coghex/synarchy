@@ -14,14 +14,9 @@ module World.Geology.Generate
     ) where
 
 import UPrelude
-import Data.Bits (xor)
-import Data.Word (Word64)
-import World.Base (GeoCoord(..))
 import World.Types
-import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
-import World.Geology.Types
+import World.Plate (isBeyondGlacier, elevationAtGlobal)
 import World.Geology.Hash (hashGeo, hashToFloatGeo, hashToRangeGeo, scaleCount)
-import World.Scale (WorldScale(..), computeWorldScale)
 
 -- | World-scale a raw volcanic edifice height so volcanoes scale with the
 --   rest of the elevation system instead of being unscaled outliers. The
@@ -220,7 +215,7 @@ generateCaldera seed worldSize plates gx gy =
 -- | Fissures: shorter.
 generateFissure ∷ Word64 → Int → [TectonicPlate]
                 → Int → Int → Maybe FeatureShape
-generateFissure seed worldSize plates gx gy =
+generateFissure seed worldSize _plates gx gy =
     if isBeyondGlacier worldSize gx gy
     then Nothing
     else let h1 = hashGeo seed gx 120

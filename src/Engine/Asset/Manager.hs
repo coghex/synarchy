@@ -30,38 +30,28 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
-import Control.Concurrent.MVar
-import Control.Exception (finally, catch, SomeException)
 import qualified Data.Map as Map
 import qualified Data.Text as T
-import qualified Data.Vector as V
-import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
-import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , AssetError(..))
 import Engine.Core.Log.Monad (logDebugM, logWarnM, logInfoM, logAndThrowM
                              , logDebugSM, logInfoSM)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Var
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
-import Engine.Graphics.Vulkan.Descriptor
-import Engine.Graphics.Vulkan.Image (VulkanImage(..))
 import Engine.Graphics.Vulkan.Texture
-import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.ShaderCode
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture, unregisterTexture, writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import qualified Vulkan.Core10 as Vk
-import Vulkan.Zero
 
 generateTextureHandle ∷ AssetPool → IO TextureHandle
 generateTextureHandle pool =
@@ -159,7 +149,7 @@ loadTextureAtlasWithHandle ∷ TextureHandle  -- ^ Pre-generated handle
                           → FilePath        -- ^ Path to the atlas file
                           → Text            -- ^ Array name
                           → EngineM ε σ AssetId
-loadTextureAtlasWithHandle texHandle name path arrayName = do
+loadTextureAtlasWithHandle texHandle name path _arrayName = do
   logDebugSM CatAsset "Asset loading started"
     [("path", T.pack path)
     ,("handle", T.pack $ show texHandle)
@@ -243,7 +233,7 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
         Just queues → pure $ graphicsQueue queues
           
       -- Create the texture image, view and sampler
-      ((vulkanImage@(VulkanImage image imageMemory), imageView), imageCleanup) ←
+      ((_vulkanImage@(VulkanImage image imageMemory), imageView), imageCleanup) ←
         createTextureImageView' pDevice device cmdPool cmdQueue path
         
       env ← ask
@@ -395,7 +385,7 @@ cleanupAssetManager = do
     logInfoM CatAsset "Asset cleanup phase started"
     state ← gets graphicsState
     poolRef ← asks assetPoolRef
-    pool ← liftIO $ readIORef poolRef
+    _pool ← liftIO $ readIORef poolRef
 
     when (cleanupStatus state ≡ InProgress) $
       logAndThrowM CatAsset (ExGraphics CleanupError) $ "Cleanup already in progress"
@@ -420,7 +410,7 @@ cleanupAssetManager = do
     logInfoM CatAsset "Asset cleanup completed successfully"
 
 cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ε ()
-cleanupResources device state = do
+cleanupResources device _state = do
     poolRef ← asks assetPoolRef
     pool ← liftIO $ readIORef poolRef
     -- The device is already fully idle here ('cleanupAssetManager' waits

@@ -4,12 +4,9 @@ module World.Fluid.Ice
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
-import Control.Monad (forM_, when)
 import Control.Monad.ST (runST)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)

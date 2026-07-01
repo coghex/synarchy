@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
-import qualified Data.Text as T
 import qualified Foreign.Storable as Storable
 
 -- Constants for vertex layout

@@ -17,8 +17,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_, unless)
-import Data.List (foldl')
+import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
@@ -160,15 +159,7 @@ equipmentGetClassNamesFn env = do
         Lua.rawseti (-2) (fromIntegral i)
     return 1
 
--- | Drop the first inventory entry matching @defName@. Returns
---   @(remainingInventory, Just removedInstance)@ if found, else
---   @(originalInventory, Nothing)@.
-removeFirstFromInventory ∷ Text → [ItemInstance]
-                         → ([ItemInstance], Maybe ItemInstance)
-removeFirstFromInventory defName = removeFirstFromInventoryWhere
-                                       (\x → iiDefName x ≡ defName)
-
--- | 'removeFirstFromInventory' over an arbitrary predicate, so equip can
+-- | Drop the first inventory entry matching a predicate, so equip can
 --   target a specific 'iiInstanceId' (#67) — the clicked dagger, not the
 --   first one matching its defName. Order of the surviving items is
 --   preserved (the equipped slot is the only thing that moves).

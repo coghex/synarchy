@@ -29,7 +29,6 @@ module World.Generate.InitTerrain
     ) where
 
 import UPrelude
-import Control.Monad (forM_)
 import Control.Monad.ST (runST)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU

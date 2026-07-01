@@ -17,7 +17,6 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Types (SwapchainInfo(..))
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Command.Sprite (renderSpritesBindless, renderSpritesBindlessUI)
 import Engine.Graphics.Vulkan.Command.Text (renderTextBatches, ensureTextInstanceBuffer, uploadTextInstances)
@@ -25,7 +24,6 @@ import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types
 import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
-import Vulkan.Core10.CommandBufferBuilding (ClearValue(..), ClearColorValue(..))
 import Vulkan.Zero
 
 -- | Record scene command buffer with sprite and text batches

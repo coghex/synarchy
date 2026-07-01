@@ -16,15 +16,12 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
-import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Types
 import World.Grid (zoomMapLayer, zoomFadeStart, zoomFadeEnd)
-import World.Weather.Types (ClimateCoord(..), ClimateGrid(..), ClimateState(..)
-                           , RegionClimate(..), SeasonalClimate(..)
-                           , OceanCell(..), OceanGrid(..))
+import World.Weather.Types (ClimateGrid(..), ClimateState(..), OceanGrid(..))
 
-import World.Render.Zoom.Bake (ensureBaked, ensureBakedAtlas)
+import World.Render.Zoom.Bake (ensureBakedAtlas)
 import World.Render.Zoom.ViewBounds (ZoomViewBounds(..), computeZoomViewBounds
                                     , isChunkInView, bestZoomWrapOffset)
 import World.Render.Zoom.Climate (tempToColorAt, pressureToColorAt, humidityToColorAt

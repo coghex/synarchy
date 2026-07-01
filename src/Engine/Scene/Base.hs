@@ -2,7 +2,6 @@
 module Engine.Scene.Base where
 
 import UPrelude
-import qualified Data.Text as T
 
 newtype ObjectId = ObjectId Word32
   deriving (Show, Eq, Ord)

@@ -1,9 +1,8 @@
 module Engine.Scripting.Lua.Types where
 
 import UPrelude
-import Data.Time.Clock (UTCTime)
 import Data.IORef (IORef)
-import Control.Concurrent.STM.TVar (TVar, newTVarIO)
+import Control.Concurrent.STM.TVar (TVar)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle

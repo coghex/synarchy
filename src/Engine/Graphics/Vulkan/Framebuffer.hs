@@ -8,7 +8,6 @@ import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Graphics.Types
-import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero

@@ -36,10 +36,8 @@ module World.Fluid.Seabed
     ) where
 
 import UPrelude
-import Control.Monad (when, forM_)
 import Control.Monad.ST (runST)
 import Data.STRef
-import Data.Word (Word8)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU

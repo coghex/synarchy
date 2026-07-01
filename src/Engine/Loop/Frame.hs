@@ -11,11 +11,11 @@ import Control.Exception (displayException)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (readIORef, writeIORef)
 import Linear (identity)
 import Engine.Core.Defaults
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logInfoM, logWarnM, logAndThrowM)
+import Engine.Core.Log.Monad (logInfoM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
@@ -24,30 +24,23 @@ import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Config (brightnessToMultiplier)
 import Engine.Graphics.Window.Types (Window(..))
-import Engine.Graphics.Types (DevQueues(..), SwapchainInfo(..))
+import Engine.Graphics.Types (DevQueues(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Types.Descriptor
-import Engine.Input.Types (InputState(..))
 import Engine.Loop.Resource (validateDescriptorState, getFrameResources, 
                               getCommandBuffer, getDevice, getSwapchain,
                               getQueues, extractWindow)
 import Engine.Scene.Render
-import Engine.Scene.Base
 import Engine.Scene.Types
-import Engine.Scene.Types.Batch
 import UI.Render (renderUIPages)
 import UI.Tooltip (updateTooltipState)
-import World.Render (updateWorldTiles)
-import World.Grid (worldLayer)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_swapchain hiding (acquireNextImageKHRSafe)
-import GHC.Stack (HasCallStack)
 
 computeAmbientLight ∷ Float → Float
 computeAmbientLight sunAngle =
@@ -75,8 +68,9 @@ drawFrame = do
     resources ← getFrameResources state frameIdx
     device ← getDevice state
     
-    -- Wait for this frame's previous work to complete
-    liftIO $ waitForFences device (V.singleton (frInFlight resources)) True maxBound
+    -- Wait for this frame's previous work to complete. Result discard is
+    -- safe: timeout is maxBound, so non-SUCCESS throws as VulkanException.
+    _ ← liftIO $ waitForFences device (V.singleton (frInFlight resources)) True maxBound
 
     -- Try to acquire image BEFORE resetting fence
     swapchain ← getSwapchain state

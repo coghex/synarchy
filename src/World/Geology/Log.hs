@@ -7,16 +7,12 @@ module World.Geology.Log
     ) where
 
 import UPrelude
-import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.IO.Class (MonadIO)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
-                      , MaterialRegistry(..))
-import World.Plate (TectonicPlate(..), generatePlates)
-import World.Geology.Types
-import World.Hydrology.Types
+import World.Material (getMaterialProps, MaterialProps(..), MaterialRegistry)
+import World.Plate (generatePlates)
 
 -- * Timeline Summary
 
@@ -72,6 +68,8 @@ countEvent m (HydroEvent _)          = Map.insertWith (+) "Hydro Events" 1 m
 countEvent m (HydroModify _ _)       = Map.insertWith (+) "Hydro Modifications" 1 m
 countEvent m (RiverSegmentEvent _)   = Map.insertWith (+) "River Segments" 1 m
 countEvent m (RiverDeltaEvent _)     = Map.insertWith (+) "River Deltas" 1 m
+countEvent m (OreSheetEvent _)       = Map.insertWith (+) "Ore Sheets" 1 m
+countEvent m (GlacierMoraineEvent _) = Map.insertWith (+) "Glacier Moraines" 1 m
 
 featureTypeName ∷ FeatureShape → Text
 featureTypeName (VolcanicShape (ShieldVolcano _))    = "Shield Volcanoes"
@@ -251,6 +249,8 @@ formatEventDetailed (RiverDeltaEvent rdp) =
         GeoCoord mx my = rsEnd seg
     in "River Delta flow=" <> T.pack (show (rdpFlowRate rdp))
        <> " (" <> T.pack (show mx) <> ", " <> T.pack (show my) <> ")"
+formatEventDetailed (OreSheetEvent _) = "Ore Sheet"
+formatEventDetailed (GlacierMoraineEvent _) = "Glacier Moraine"
 
 -- | Format a volcanic feature event with type and coordinates.
 formatFeatureEvent ∷ FeatureShape → Text

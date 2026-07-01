@@ -9,9 +9,6 @@ module Engine.Core.Resource
 
 import UPrelude
 import Control.Exception (finally)
-import Control.Monad.IO.Class (MonadIO)
-import Control.Monad.State (MonadState)
-import Control.Monad.Except (MonadError)
 import Data.IORef (readIORef)
 import qualified Data.Text as T
 import Engine.Core.Log (logError, LogCategory(..))

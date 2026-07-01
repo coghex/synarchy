@@ -36,19 +36,14 @@ module World.Vegetation
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR, (.&.))
-import Data.Word (Word8, Word64)
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import World.Types
-import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
-import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Geology.Hash (valueNoise2D)
 import Engine.Asset.Handle (TextureHandle(..))
-import World.Render.Textures.Types (WorldTextures(..))
 
 vegNone ∷ Word8
 vegNone = 0
@@ -218,7 +213,7 @@ selectVegetation
     → Float   -- ^ random roll (0-1)
     → Word8   -- ^ variant (0-3)
     → Word8   -- ^ vegetation ID
-selectVegetation matId slopeId hasFluid elev
+selectVegetation matId slopeId hasFluid _elev
                  temp precip humid snow roll variant
 
     -- === EXCLUSION RULES ===

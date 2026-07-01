@@ -6,21 +6,17 @@ module Engine.Graphics.Vulkan.Init
   ) where
 
 import UPrelude
-import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFWRaw
 import Data.IORef (readIORef, writeIORef)
-import Foreign.Storable (sizeOf)
-import Linear (M44, identity)
-import Engine.Asset.Handle
+import Linear (identity)
 import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource)
 import Engine.Core.State
-import Engine.Core.Error.Exception
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logDebugSM, logInfoSM)
+import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Graphics.Base
 import Engine.Graphics.Config
 import Engine.Graphics.Camera
@@ -30,7 +26,6 @@ import Engine.Graphics.Font.Draw (createFontPipeline
                                  , createFontUIPipeline, createFontQuadBuffer)
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
-import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Descriptor
@@ -44,18 +39,15 @@ import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
 import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
-import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Texture.System
 import Engine.Graphics.Vulkan.Texture.Types
 import Engine.Graphics.Vulkan.Texture.DefaultFaceMap (createDefaultFaceMap
                                                      , DefaultFaceMap(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
-import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Vertex
 import Engine.Loop.Frame (computeAmbientLight)
 import Engine.Scene.Manager (createScene, setActiveScene)
-import Engine.Scene.Types
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends (SomeStruct(..))
@@ -261,7 +253,7 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
       uiCRef = uiCameraRef env
       bRef   = brightnessRef env
       psRef  = pixelSnapRef env
-  state ← gets graphicsState
+  _state ← gets graphicsState
   camera ← liftIO $ readIORef cRef
   brightnessInt ← liftIO $ readIORef bRef
   pixelSnap ← liftIO $ readIORef psRef

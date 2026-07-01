@@ -11,16 +11,15 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
-import Data.Maybe (mapMaybe, isJust)
+import Data.Maybe (mapMaybe)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, catch, finally)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..)
-                        , LoggerState)
+import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Command.Types (WorldCommand(..), FluidWriteback(..)
@@ -28,7 +27,7 @@ import World.Command.Types (WorldCommand(..), FluidWriteback(..)
 import Sim.Command.Types (SimCommand(..))
 import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
                        , emptySimState, emptySimWorldState)
-import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, activeToFluidCell)
+import Sim.Fluid.Types (fluidCellToActive, activeToFluidCell)
 import Sim.Fluid.Active (simulateActiveTick)
 
 startSimThread ∷ EngineEnv → IO ThreadState
@@ -302,7 +301,7 @@ activateChunk scs
     | otherwise =
         let terrV = scsTerrain scs
             fluidV = scsFluid scs
-            sz = V.length fluidV
+            _sz = V.length fluidV
             activeFluid = V.imap (\idx mfc →
                 case mfc of
                     Nothing → Nothing

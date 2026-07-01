@@ -1,4 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+-- Deliberate orphan: Serialize for HashSet, used by the save path
+-- (wgpLocationContentsSpawned rides into world.synworld).
+{-# OPTIONS_GHC -Wno-orphans #-}
 module World.Generate.Types
     ( WorldGenParams(..)
     , defaultWorldGenParams
@@ -23,7 +26,6 @@ import World.Time.Types
     , defaultMoonConfig
     )
 import World.Geology.Ore.Types (OreLevers, defaultOreLevers)
-import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)
 import World.Ocean.Types (OceanMap, OceanDistMap)
 import World.Flora.Types (FloraCatalog, emptyFloraCatalog)

@@ -12,7 +12,6 @@ import Data.IORef (readIORef)
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Control.Monad (forM_)
 
 -- | Run a script file and return a registry ref to its returned module
 --   table (invalid ref if the script returned no table), or the error

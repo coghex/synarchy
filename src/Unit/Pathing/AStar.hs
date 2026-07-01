@@ -18,8 +18,6 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet        as HS
 import qualified Data.Set            as Set
-import Data.List (foldl')
-import Data.Maybe (fromMaybe)
 import Unit.Pathing.Cost (stepCost, PathingConfig)
 import World.Tile.Types (WorldTileData)
 import World.Material (MaterialRegistry)

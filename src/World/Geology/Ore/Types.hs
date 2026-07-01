@@ -117,7 +117,8 @@ defaultOreLevers = OreLevers 1.0 1.0 1.0
 --   info panel; the per-tile truth lives in the strata themselves.
 newtype WorldOreDeposits = WorldOreDeposits
     { wodByChunk ∷ HM.HashMap ChunkCoord [(Word8, Int)]
-    } deriving (Show, Eq, Generic, NFData)
+    } deriving stock (Show, Eq, Generic)
+      deriving anyclass (NFData)
 
 instance Serialize WorldOreDeposits where
     put wod = put (HM.toList (wodByChunk wod))

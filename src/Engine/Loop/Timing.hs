@@ -6,16 +6,15 @@ module Engine.Loop.Timing
 import UPrelude
 import Data.IORef (readIORef, writeIORef)
 import Control.Concurrent (threadDelay)
-import Control.Monad (when)
-import Control.Monad.State (get, put)
+import Control.Monad.State (put)
 import Text.Printf (printf)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds, getPOSIXTime)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import qualified Data.Text as T
 import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugSM, logWarnSM, logInfoSM, logInfoM)
+import Engine.Core.Log.Monad (logDebugSM)
 
 updateFrameTiming ∷ EngineM ε σ ()
 updateFrameTiming = do

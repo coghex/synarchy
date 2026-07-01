@@ -1,6 +1,5 @@
 module Engine.Core.State where
 import UPrelude
-import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
@@ -11,7 +10,6 @@ import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
 import Control.Concurrent.STM.TVar (TVar)
 import System.Random (StdGen)
-import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Asset.YamlTextures
@@ -28,7 +26,6 @@ import Engine.Graphics.Vulkan.Capability (TextureSystemCapability(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Descriptor
-import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Texture.Types
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerCache)
 import Engine.Graphics.Window.Types

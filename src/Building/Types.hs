@@ -24,7 +24,6 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Page.Types (WorldPageId(..))
-import Unit.Direction (Direction(..))
 import Unit.Types (Animation(..))
 import Item.Types (ItemInstance)
 
@@ -32,7 +31,8 @@ import Item.Types (ItemInstance)
 --   "direction" key — DirS by convention — since they don't rotate.
 
 newtype BuildingId = BuildingId { unBuildingId ∷ Word32 }
-    deriving (Show, Eq, Ord, Generic, Hashable, Serialize)
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass (Hashable, Serialize)
 
 -- | Derived from elapsed time, NOT stored on the instance:
 --   elapsed < appear-anim duration → Appearing.

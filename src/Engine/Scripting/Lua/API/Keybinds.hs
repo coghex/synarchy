@@ -23,7 +23,6 @@ module Engine.Scripting.Lua.API.Keybinds
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Map as Map
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))

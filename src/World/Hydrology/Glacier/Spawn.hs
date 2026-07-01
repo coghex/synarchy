@@ -5,13 +5,8 @@ module World.Hydrology.Glacier.Spawn
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.Vector as V
-import World.Base (GeoCoord(..), GeoFeatureId(..))
-import World.Constants (seaLevel)
 import World.Types
-import World.Hydrology.Types
-import World.Geology.Types
 import World.Geology.Hash
 import World.Hydrology.Glacier.Common (getGlacierParams)
 
@@ -165,7 +160,7 @@ spawnMoraineLake seed periodIdx parentFid pf (events, tbs) =
 
         h2 = hashGeo seed fidInt 980
         h3 = hashGeo seed fidInt 981
-        h4 = hashGeo seed fidInt 982
+        _h4 = hashGeo seed fidInt 982
 
         lakeRadius = hashToRangeGeo h2 8 25
         -- Lake surface = moraine height (relative, will be

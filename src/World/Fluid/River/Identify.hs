@@ -53,10 +53,9 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
-import Control.Monad (when, forM_, foldM)
+import Control.Monad (foldM)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
-import Data.Word (Word8)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
 import World.Fluid.Lake.Identify (computeWorldEdgeOcean)
@@ -1028,7 +1027,7 @@ buildRivers
     → VU.Vector Int        -- ^ compId
     → Int                  -- ^ nComps
     → V.Vector River
-buildRivers worldSize terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
+buildRivers worldSize _terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
             isRiverTile compId nComps =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
@@ -1239,7 +1238,7 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
                         -- per step so the river never flows uphill.
                         -- Floor at @seaLevel + 1@ so the river hands
                         -- off cleanly to ocean at the path's end.
-                        let walk prevSurf [] = pure ()
+                        let walk _prevSurf [] = pure ()
                             walk prevSurf (p : rest) = do
                                 let preCarve = terrain VU.! p
                                     target =

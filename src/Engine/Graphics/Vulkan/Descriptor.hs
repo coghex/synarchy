@@ -10,28 +10,16 @@ module Engine.Graphics.Vulkan.Descriptor
   ) where
 
 import UPrelude
-import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Core.Error.Exception
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logDebugSM, logInfoSM)
-import Engine.Graphics.Types
+import Engine.Core.Log.Monad (logDebugSM)
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Vulkan.Core10
 import Vulkan.Zero
-import Vulkan.CStruct.Extends
-
--- | Default configuration
-defaultDescriptorConfig ∷ DescriptorManagerConfig
-defaultDescriptorConfig = DescriptorManagerConfig
-  { dmcMaxSets      = 10   -- Total sets
-  , dmcUniformCount = 10   -- Uniform buffer descriptors
-  , dmcSamplerCount = 20   -- 2 textures * 10 frames
-  }
 
 createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorPool
 createVulkanDescriptorPool device config = do

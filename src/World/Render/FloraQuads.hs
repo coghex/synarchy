@@ -8,12 +8,11 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
 import World.Types
-import World.Flora.Types (FloraInstance(..))
 
 -- | Tile pixel dimensions — must match GridConfig.
 baseTileW ∷ Float
@@ -35,7 +34,7 @@ floraToQuad
     → Float
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-floraToQuad lookupSlot lookupFmSlot textures facing
+floraToQuad lookupSlot lookupFmSlot _textures facing
             gx gy inst texHandle zSlice effDepth tileAlpha xOffset texSizes =
     let floraZ = fiZ inst
         relativeZ = floraZ - zSlice

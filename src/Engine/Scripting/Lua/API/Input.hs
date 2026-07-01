@@ -78,7 +78,7 @@ isMouseButtonDownFn backendState = do
 
 getWindowSizeFn ∷ EngineEnv → LuaBackendState
   → Lua.LuaE Lua.Exception Lua.NumResults
-getWindowSizeFn env backendState = do
+getWindowSizeFn env _backendState = do
   (w, h) ← Lua.liftIO $ readIORef (windowSizeRef env)
   Lua.pushnumber (Lua.Number (fromIntegral w))
   Lua.pushnumber (Lua.Number (fromIntegral h))
@@ -86,14 +86,14 @@ getWindowSizeFn env backendState = do
 
 getFramebufferSizeFn ∷ EngineEnv → LuaBackendState
   → Lua.LuaE Lua.Exception Lua.NumResults
-getFramebufferSizeFn env backendState = do
+getFramebufferSizeFn env _backendState = do
   (w, h) ← Lua.liftIO $ readIORef (framebufferSizeRef env)
   Lua.pushnumber (Lua.Number (fromIntegral w))
   Lua.pushnumber (Lua.Number (fromIntegral h))
   return 2
 
 getWorldCoordFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
-getWorldCoordFn env backendState = do
+getWorldCoordFn env _backendState = do
   sx ← Lua.tonumber 1
   sy ← Lua.tonumber 2
   case (sx, sy) of

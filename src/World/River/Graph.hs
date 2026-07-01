@@ -35,7 +35,8 @@ import World.Geology.Hash (wrappedDeltaUV)
 
 -- | Unique identifier for a node in the river graph.
 newtype RiverNodeId = RiverNodeId Int
-    deriving (Show, Eq, Ord, Generic, Serialize, NFData, Hashable)
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass (Serialize, NFData, Hashable)
 
 -- * Node kinds
 

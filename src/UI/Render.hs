@@ -10,11 +10,11 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.IORef (readIORef)
-import Engine.Asset.Handle (TextureHandle(..), FontHandle(..), toInt)
+import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
-import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
+import Engine.Core.Log.Monad (logDebugM, logWarnM)
+import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)

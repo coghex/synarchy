@@ -5,18 +5,15 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
-import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
+import Control.Concurrent (threadDelay, forkIO)
 import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
-import Engine.Core.Log (logDebug, logError, logWarn, logInfo, LogCategory(..))
+import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Thread
-import Engine.Core.Error.Exception (SystemError(..), ExceptionType(..))
 import Engine.Input.Types
-import Engine.Input.Callback
 import Engine.Scripting.Lua.Types
-import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt, findRightClickableElementAt
@@ -24,8 +21,7 @@ import UI.Manager (findClickableElementAt, findRightClickableElementAt
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
 import UI.Types (ElementHandle(..))
-import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
-                , FocusId(..), fmCurrentFocus)
+import UI.Focus (getInputMode, InputMode(..), FocusId(..), fmCurrentFocus)
 
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do

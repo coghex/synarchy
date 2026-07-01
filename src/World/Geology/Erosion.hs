@@ -10,8 +10,6 @@ module World.Geology.Erosion
 
 import UPrelude
 import World.Types
-import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
-import World.Geology.Types
 import qualified Data.HashMap.Strict as HM
 import World.Weather.Types (ClimateCoord(..))
 import World.Weather.Lookup (RegionGridCoords(..), regionGridCoords)

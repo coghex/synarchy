@@ -17,7 +17,6 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.Internal (wrapChunkCoordU)
 import World.Geology.Hash (wrappedDeltaUV)
 import World.Plate.Types (TectonicPlate)

@@ -15,23 +15,19 @@ module Engine.Scripting.Lua.API.Core
   ) where
 
 import UPrelude
-import Engine.Scripting.Types (ScriptValue(..))
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (EngineConfig(..), bootProfileTag)
-import Engine.Core.Log (logInfo, logThreadInfo, logWarn, logDebug, LogCategory(..))
+import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
-import qualified Data.ByteString as BS
 import qualified Data.Map as Map
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
-import Control.Monad (when, filterM, zipWithM_)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import System.Directory (listDirectory, doesDirectoryExist)
@@ -151,7 +147,7 @@ loadScriptFn env backendState lst = do
                     case result of
                         Right modRef → do
                             let dropDir (('/'):xs) = T.pack xs
-                                dropDir (x:xs    ) = dropDir xs
+                                dropDir (_x:xs    ) = dropDir xs
                                 dropDir _          = ""
                             logDebug logger CatLua $ "loaded: "
                                                   <> (dropDir (T.unpack (pathStr)))

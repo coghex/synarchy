@@ -8,7 +8,6 @@ module Engine.PlayerEvent
 
 import UPrelude
 import GHC.Generics (Generic)
-import Data.Word (Word32)
 import qualified Data.HashMap.Strict as HM
 
 -- | A player-visible event. Routed to up-to-three surfaces (log,

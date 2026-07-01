@@ -8,7 +8,6 @@ module Engine.Core.Init
   ) where
 
 import UPrelude
-import qualified Control.Monad.Logger.CallStack as Logger
 import Data.IORef (newIORef)
 import Data.Time.Clock (UTCTime(..))
 import Data.Time.Calendar (fromGregorian)
@@ -29,7 +28,6 @@ import System.IO (stdout)
 import Engine.Core.State
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
-import Engine.Core.Var
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (defaultCamera, defaultUICamera)
 import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..)
@@ -49,7 +47,7 @@ import Substance.Types (emptySubstanceManager)
 import Infection.Types (emptyInfectionManager)
 import Location.Types (emptyLocationRegistry)
 import LootTable.Types (emptyLootTableRegistry)
-import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
+import World.Types (emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
 import Unit.Pathing.Config (loadPathingConfig)

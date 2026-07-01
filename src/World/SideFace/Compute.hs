@@ -4,7 +4,6 @@ module World.SideFace.Compute
     ) where
 
 import UPrelude
-import Data.Bits (xor, shiftR)
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import World.Chunk.Types (ChunkCoord(..), chunkSize)

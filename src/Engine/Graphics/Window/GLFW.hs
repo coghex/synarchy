@@ -36,12 +36,10 @@ module Engine.Graphics.Window.GLFW
     -- * Raw init since tests run in IO
   , GLFW.init
   , GLFW.terminate
-  , GLFW.Window (..)
+  , GLFW.Window
   ) where
 
 import UPrelude
-import Control.Exception (IOException, catch, ioError)
-import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
@@ -54,10 +52,9 @@ import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , InitError(..))
-import Engine.Graphics.Base (GraphicsConfig(..))
 import Engine.Graphics.Window.Types
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import Vulkan.Core10 (Instance(..), AllocationCallbacks)
+import Vulkan.Core10 (Instance(..))
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)
 
 -- | Initialize GLFW with error handling
@@ -135,10 +132,6 @@ createRawWindow config = do
 destroyWindow ∷ Window → EngineM' ε ()
 destroyWindow (Window win) = liftIO $ GLFW.destroyWindow win
 
--- | Create a window with automatic cleanup registration
-initWindow ∷ WindowConfig → EngineM ε σ Window
-initWindow config = allocResource destroyWindow $ createWindow config
-
 -- | Show a window
 showWindow ∷ GLFW.Window → EngineM ε σ ()
 showWindow win = liftIO $ GLFW.showWindow win
@@ -162,10 +155,6 @@ getWindowSize = liftIO ∘ GLFW.getWindowSize
 -- | Get the current framebuffer size
 getFramebufferSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
 getFramebufferSize = liftIO ∘ GLFW.getFramebufferSize
-
--- | Set a window's title
-setWindowTitle ∷ GLFW.Window → Text → EngineM ε σ ()
-setWindowTitle win title = liftIO $ GLFW.setWindowTitle win ( T.unpack title )
 
 -- | Poll for pending events
 pollEvents ∷ EngineM ε σ ()

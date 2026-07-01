@@ -9,7 +9,6 @@ import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Material
 import World.Vegetation
-import World.Constants (seaLevel)
 import Structure.Types (emptyChunkStructures)
 
 -- | Generate a single flat loam chunk at seaLevel.

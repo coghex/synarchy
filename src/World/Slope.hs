@@ -21,8 +21,6 @@ module World.Slope
     ) where
 
 import UPrelude
-import Data.Bits ((.&.), (.|.), shiftL, testBit, shiftR, shiftL, xor)
-import Data.Word (Word8, Word32)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector.Storable as VS
@@ -30,7 +28,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import World.Types
 import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..)
-                      , MaterialRegistry(..))
+                      , MaterialRegistry)
 
 -- * Constants
 
@@ -349,7 +347,7 @@ slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → V.Vector (Maybe FluidCell)
          → (ChunkCoord → Maybe (VU.Vector Int))
          → Bool
-slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap neighborLookup =
+slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap _neighborLookup =
     let diff = myZ - neighborZ
 
         -- An absent neighbour (not-yet-loaded chunk, or beyond the world
