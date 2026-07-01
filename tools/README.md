@@ -27,8 +27,11 @@ content-identical across runs. Reports which tiles differ if the pipeline is
 non-deterministic.
 
 ```bash
-python3 tools/world_determinism.py --seed 137 --runs 10 --verbose
+python3 tools/world_determinism.py --seed 137 --verbose
 ```
+
+`--runs` defaults to 3; pass a higher count (e.g. `--runs 10`) only when
+chasing a suspected race.
 
 ### `world_baseline.py`
 Captures baseline outputs for every seed in `baselines/_seeds.json`. Records
@@ -36,13 +39,14 @@ determinism status, fluid stat envelopes, and issue count envelopes.
 
 ```bash
 # Capture all baselines
-python3 tools/world_baseline.py --runs 10
+python3 tools/world_baseline.py
 
 # Capture a single seed
-python3 tools/world_baseline.py --seed 42 --runs 10
+python3 tools/world_baseline.py --seed 42
 ```
 
 Writes `baselines/seed{N}_size{N}_region_{X1}_{Y1}_{X2}_{Y2}.json` per seed.
+`--runs` defaults to 3; pass a higher count only when chasing a suspected race.
 
 ### `world_check.py`
 Runs the regression suite: for every seed in `_seeds.json`, dumps N times,
@@ -80,7 +84,7 @@ python3 tools/world_check.py    # regression suite passes
 After an intentional change that improves (or legitimately alters) world
 generation output, re-capture baselines:
 ```bash
-python3 tools/world_baseline.py --runs 10
+python3 tools/world_baseline.py
 ```
 
 Baselines are per-machine and gitignored (`tools/baselines/` in `.gitignore`).
