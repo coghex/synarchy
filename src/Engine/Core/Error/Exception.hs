@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveDataTypeable, UnicodeSyntax #-}
+{-# LANGUAGE UnicodeSyntax #-}
 module Engine.Core.Error.Exception
   ( -- * Types
     EngineException(..)
@@ -25,7 +25,6 @@ import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError(..), throwError)
 import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack)
 import qualified Data.Text as T
-import Type.Reflection
 import qualified Vulkan.Core10 as Vk
 
 -- | Sum of every error domain in the engine
@@ -37,7 +36,7 @@ data ExceptionType
   | ExInit InitError         -- ^ Initialization errors
   | ExAsset AssetError     -- ^ Asset loading errors
   | ExLua LuaError         -- ^ Lua-specific errors
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data GraphicsError
   = VulkanDeviceLost         -- ^ Device was lost during operation
@@ -55,7 +54,7 @@ data GraphicsError
   | CleanupError             -- ^ Cleanup error
   | FontError                -- ^ Font rendering error
   | VulkanError Vk.Result    -- ^ Raw Vulkan error
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data ResourceError
   = ResourceNotFound FilePath          -- ^ Resource file not found
@@ -64,7 +63,7 @@ data ResourceError
   | InvalidResourceFormat T.Text       -- ^ Resource format is invalid
   | ResourceAllocationFailed T.Text    -- ^ Failed to allocate resource
   | ResourceCountMismatch T.Text       -- ^ Resource count mismatch
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data SystemError
   = GLFWError T.Text        -- ^ GLFW-related error
@@ -73,14 +72,14 @@ data SystemError
   | IOError T.Text         -- ^ General IO error
   | TimeoutError T.Text    -- ^ Operation timed out
   | TestError T.Text       -- ^ Test error
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data StateError
   = InvalidStateTransition T.Text  -- ^ Invalid state transition attempted
   | MissingRequiredState T.Text    -- ^ Required state component missing
   | StateValidationFailed T.Text   -- ^ State validation failed
   | InconsistentState T.Text       -- ^ State inconsistency detected
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data InitError
   = WindowCreationFailed    -- ^ Failed to create window
@@ -88,7 +87,7 @@ data InitError
   | DeviceCreationFailed   -- ^ Failed to create logical device
   | ExtensionNotSupported  -- ^ Required extension not supported
   | ValidationLayerNotSupported -- ^ Required validation layer not supported
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data AssetError
   = AssetNotFound AssetId           -- ^ Asset file not found
@@ -98,7 +97,7 @@ data AssetError
   | AssetAllocationFailed T.Text    -- ^ Failed to allocate asset
   | AssetCountMismatch T.Text       -- ^ Asset count mismatch
   | AssetFailedCleanup
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data LuaError
   = LuaSyntaxError T.Text        -- ^ Syntax error during Lua script parsing
@@ -109,19 +108,19 @@ data LuaError
   | LuaCallbackError T.Text      -- ^ Error occurred in a Lua->Haskell callback
   | LuaExecutionTimeout T.Text   -- ^ Lua script exceeded execution time limit
   | LuaGenericError T.Text       -- ^ General Lua error with a specific message
-  deriving (Show, Eq, Typeable)
+  deriving (Show, Eq)
 
 data EngineException = EngineException
   { errorType    ∷ ExceptionType  -- ^ Type of error
   , errorMsg     ∷ T.Text         -- ^ Error message
   , errorContext ∷ ErrorContext -- ^ Additional context
-  } deriving (Typeable)
+  }
 instance Eq EngineException where
   (==) a b = errorType a ≡ errorType b ∧ errorMsg a ≡ errorMsg b
 
 data ErrorContext = ErrorContext
   { contextCallStack ∷ CallStack
-  } deriving (Typeable)
+  }
 
 instance Show EngineException where
   show (EngineException etype msg ctx) = unlines

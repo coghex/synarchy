@@ -42,7 +42,7 @@ import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
                                     , VolcanicFeature(..), SuperVolcanoParams(..)
                                     , LavaDomeParams(..), FissureParams(..)
                                     , ShieldParams(..)
-                                    , TimelineParams(..), defaultTimelineParams)
+                                    , TimelineParams(..))
 import World.Plate (TectonicPlate(..))
 import World.Weather.Types (ClimateState, ClimateCoord)
 
@@ -231,7 +231,7 @@ data GeoState = GeoState
 -- | Initialize GeoState from plate data.
 --   Temperature varies by latitude: hot at equator, cold at poles.
 initGeoState ∷ Word64 → Int → [TectonicPlate] → GeoState
-initGeoState _seed worldSize plates =
+initGeoState _seed worldSize _plates =
     let _halfChunks = worldSize `div` 2
         regionsPerSide = worldSize `div` regionSize
         halfRegions = regionsPerSide `div` 2

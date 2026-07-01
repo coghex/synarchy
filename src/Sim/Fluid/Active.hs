@@ -72,7 +72,7 @@ deactivateInPlace scs =
 -- | Simulate one tick for a single active chunk.
 simulateActiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
                     → ChunkCoord → SimChunkState → (SimChunkState, Bool)
-simulateActiveChunk _allChunks coord scs =
+simulateActiveChunk _allChunks _coord scs =
     let terrainV = scsTerrain scs
         _sz = chunkSize * chunkSize
         (newActive, newDeco, changed) = runST $ do

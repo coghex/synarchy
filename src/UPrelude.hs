@@ -27,7 +27,6 @@ module UPrelude
 import Prelude.Unicode
 import qualified Prelude as P
 import Prelude hiding ((>>=), (=<<))
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Bits as B
 import qualified Data.Functor as F
