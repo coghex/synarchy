@@ -135,7 +135,7 @@ function uiManager.init(scriptId)
     menuFont = menuFontHandle
     titleFont = titleFontHandle
     
-    boxTexSet = boxTextures.load("assets/textures/box", "box")
+    boxTexSet = boxTextures.load("assets/textures/ui/box", "box")
     btnTexSet = boxTextures.load("assets/textures/ui/button", "button")
     
     mainMenu = require("scripts.main_menu")
