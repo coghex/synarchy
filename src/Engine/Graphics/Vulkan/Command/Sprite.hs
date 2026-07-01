@@ -6,6 +6,7 @@ module Engine.Graphics.Vulkan.Command.Sprite
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
 import Data.IORef (IORef, readIORef, modifyIORef')
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM)
@@ -72,6 +73,6 @@ renderSpritesWith selectPipeline cmdBuf state viewport scissor uniformSet
 
     V.forM_ spriteBatches $ \batch → do
         offset ← liftIO $ readIORef vertexOffsetRef
-        let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        let vertexCount = fromIntegral $ VS.length $ rbVertices batch
         cmdDraw cmdBuf vertexCount 1 offset 0
         liftIO $ modifyIORef' vertexOffsetRef (+ vertexCount)

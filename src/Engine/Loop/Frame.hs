@@ -10,6 +10,7 @@ import UPrelude
 import Control.Exception (displayException)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
 import qualified Data.Map as Map
 import Data.IORef (readIORef, writeIORef)
 import Linear (identity)
@@ -148,7 +149,7 @@ drawFrame = do
             updateUniformBufferForFrame win frameIdx liveCamera
 
             -- Prepare dynamic vertex buffer
-            let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
+            let totalVertices = V.sum $ V.map (fromIntegral . VS.length . rbVertices) batches
 
             dynamicBuffer ← if totalVertices > 0
                 then do

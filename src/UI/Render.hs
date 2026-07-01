@@ -7,6 +7,7 @@ module UI.Render
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
 import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.IORef (readIORef)
@@ -303,7 +304,7 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
 makeQuadVertices ∷ Float → Float → Float → Float 
                  → (Float, Float, Float, Float) 
                  → Float
-                 → V.Vector Vertex
+                 → VS.Vector Vertex
 makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
     let x0 = x
         y0 = y
@@ -319,4 +320,4 @@ makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
         v4' = mkVertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
         v5' = mkVertex (Vec2 x1 y1) (Vec2 1 1) col atlasId fmId
         v6' = mkVertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
-    in V.fromList [v1', v2', v3', v4', v5', v6']
+    in VS.fromList [v1', v2', v3', v4', v5', v6']
