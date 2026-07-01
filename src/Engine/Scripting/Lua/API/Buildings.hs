@@ -163,15 +163,21 @@ loadBuildingYamlFn env backendState = do
 
 -- * Spawn / destroy
 
--- | building.spawn(defName, gx, gy) — returns the new building id on
---   success, nil otherwise (unknown def, placement invalid). Placement
---   is validated server-side too so Lua scripts can't accidentally
---   place into water etc.
+-- | building.spawn(defName, gx, gy [, pageId]) — returns the new
+--   building id on success, nil otherwise (unknown def, placement
+--   invalid). Placement is validated server-side too so Lua scripts
+--   can't accidentally place into water etc. An explicit pageId (slot
+--   4) pins the spawn — AND the occupancy/terrain-Z check — to that
+--   live page (even hidden) instead of the active world: location
+--   content-spawning (#90) passes its own page so a building lands (and
+--   validates) on the page its location is on, not whichever happens to
+--   be visible. Omitted → the active world, as before (#76).
 buildingSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingSpawnFn env = do
     nameArg ← Lua.tostring 1
     xArg    ← Lua.tointeger 2
     yArg    ← Lua.tointeger 3
+    pageArg ← Lua.tostring 4
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
             let defName = TE.decodeUtf8 nameBS
@@ -179,27 +185,29 @@ buildingSpawnFn env = do
                 gy      = fromIntegral y
             mBid ← Lua.liftIO $ do
                 bm ← readIORef (buildingManagerRef env)
-                mActive ← activeWorldPage env
-                case (HM.lookup defName (bmDefs bm), mActive) of
-                    (Just def, Just (pid, _)) → do
-                        mWtd ← snapshotVisibleWorldTiles env
-                        case mWtd of
-                            Nothing  → pure Nothing
-                            -- Occupancy scoped to the active world (#76).
-                            Just wtd → case canPlaceAt
-                                    (bm { bmInstances =
-                                            buildingsOnPage pid (bmInstances bm) })
-                                    wtd def gx gy of
-                                NotPlaceable _ → pure Nothing
-                                Placeable → do
-                                    let gz = floorZAt wtd gx gy
-                                    bid ← atomicModifyIORef'
-                                            (buildingManagerRef env) $ \bm' →
-                                                let (bid', bm'') = nextBuildingId bm'
-                                                in (bm'', bid')
-                                    Q.writeQueue (buildingQueue env) $
-                                        BuildingSpawn bid defName gx gy gz pid
-                                    pure (Just bid)
+                mTarget ← case pageArg of
+                    Just pidBS → do
+                        let pid = WorldPageId (TE.decodeUtf8 pidBS)
+                        wm ← readIORef (worldManagerRef env)
+                        pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
+                    Nothing → activeWorldPage env
+                case (HM.lookup defName (bmDefs bm), mTarget) of
+                    (Just def, Just (pid, ws)) → do
+                        wtd ← readIORef (wsTilesRef ws)
+                        case canPlaceAt
+                                (bm { bmInstances =
+                                        buildingsOnPage pid (bmInstances bm) })
+                                wtd def gx gy of
+                            NotPlaceable _ → pure Nothing
+                            Placeable → do
+                                let gz = floorZAt wtd gx gy
+                                bid ← atomicModifyIORef'
+                                        (buildingManagerRef env) $ \bm' →
+                                            let (bid', bm'') = nextBuildingId bm'
+                                            in (bm'', bid')
+                                Q.writeQueue (buildingQueue env) $
+                                    BuildingSpawn bid defName gx gy gz pid
+                                pure (Just bid)
                     _ → pure Nothing
             case mBid of
                 Just (BuildingId n) → do

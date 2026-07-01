@@ -48,6 +48,7 @@ import Equipment.Types (emptyEquipmentClassManager)
 import Substance.Types (emptySubstanceManager)
 import Infection.Types (emptyInfectionManager)
 import Location.Types (emptyLocationRegistry)
+import LootTable.Types (emptyLootTableRegistry)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
@@ -151,6 +152,7 @@ initializeEngineWith logBackend = do
   substanceManagerRef ← newIORef emptySubstanceManager
   infectionManagerRef ← newIORef emptyInfectionManager
   locationDefsRef ← newIORef emptyLocationRegistry
+  lootTableRegistryRef ← newIORef emptyLootTableRegistry
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/), allocate the ring buffer and
   -- popup queue. Both TVars are multi-writer (world/unit/Lua threads
@@ -229,6 +231,7 @@ initializeEngineWith logBackend = do
         , substanceManagerRef      = substanceManagerRef
         , infectionManagerRef      = infectionManagerRef
         , locationDefsRef    = locationDefsRef
+        , lootTableRegistryRef = lootTableRegistryRef
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef
         , notificationOrder  = notificationOrder

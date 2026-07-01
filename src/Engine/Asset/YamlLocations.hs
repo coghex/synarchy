@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
 module Engine.Asset.YamlLocations
-    ( LocationYamlContent(..)
+    ( LocationYamlPosition(..)
+    , LocationYamlContent(..)
     , LocationYamlDef(..)
     , LocationYamlFile(..)
     , loadLocationYaml
@@ -13,18 +14,37 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
--- | One `{kind, id, count}` content entry. `count` defaults to 1.
+-- | A fixed relative tile offset from a location's anchor (#90).
+data LocationYamlPosition = LocationYamlPosition
+    { lypX ∷ !Int
+    , lypY ∷ !Int
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON LocationYamlPosition where
+    parseJSON = withObject "LocationYamlPosition" $ \v → LocationYamlPosition
+        ⊚ v .:? "x" .!= 0
+        ⊛ v .:? "y" .!= 0
+
+-- | One `{kind, id, count, position, faction, rolls}` content entry.
+--   `count` defaults to 1; `position`/`faction`/`rolls` are all
+--   optional (#90) — see 'Location.Types.LocationContent'.
 data LocationYamlContent = LocationYamlContent
-    { lycKind  ∷ !Text
-    , lycId    ∷ !Text
-    , lycCount ∷ !Int
+    { lycKind     ∷ !Text
+    , lycId       ∷ !Text
+    , lycCount    ∷ !Int
+    , lycPosition ∷ !(Maybe LocationYamlPosition)
+    , lycFaction  ∷ !(Maybe Text)
+    , lycRolls    ∷ !Int
     } deriving (Show, Eq, Generic)
 
 instance FromJSON LocationYamlContent where
     parseJSON = withObject "LocationYamlContent" $ \v → LocationYamlContent
         ⊚ v .:  "kind"
         ⊛ v .:  "id"
-        ⊛ v .:? "count" .!= 1
+        ⊛ v .:? "count"    .!= 1
+        ⊛ v .:? "position"
+        ⊛ v .:? "faction"
+        ⊛ v .:? "rolls"    .!= 1
 
 -- | The YAML shape of a location definition. Converted to
 --   'Location.Types.LocationDef' by the API loader.

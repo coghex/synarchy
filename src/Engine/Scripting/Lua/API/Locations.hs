@@ -56,16 +56,23 @@ loadLocationYamlFn env = do
             return 1
   where
     toContent c = LocationContent
-        { lconKind  = lycKind c
-        , lconId    = lycId c
-        , lconCount = lycCount c
+        { lconKind     = lycKind c
+        , lconId       = lycId c
+        , lconCount    = lycCount c
+        , lconPosition = (\p → (lypX p, lypY p)) ⊚ lycPosition c
+        , lconFaction  = lycFaction c
+        , lconRolls    = lycRolls c
         }
 
 -- | engine.listLocationDefs() → array of location def tables, in
 --   registration order. Each entry:
 --     { id, label, type, builder,
 --       anchor   = { tag, … },
---       contents = { { kind, id, count }, … } }
+--       contents = { { kind, id, count, rolls,
+--                      position = {x,y} | nil,
+--                      faction  = string | nil }, … } }
+--   `position` / `faction` fields are OMITTED (not set to a Lua nil
+--   value) when absent, so `entry.position` reads as nil either way.
 --   The Lua `locations` module wraps this as locations.listDefs().
 locationListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 locationListDefsFn env = do
@@ -97,6 +104,22 @@ locationListDefsFn env = do
             Lua.setfield (-2) "id"
             Lua.pushinteger (fromIntegral (lconCount c))
             Lua.setfield (-2) "count"
+            Lua.pushinteger (fromIntegral (lconRolls c))
+            Lua.setfield (-2) "rolls"
+            case lconPosition c of
+                Just (px, py) → do
+                    Lua.newtable
+                    Lua.pushinteger (fromIntegral px)
+                    Lua.setfield (-2) "x"
+                    Lua.pushinteger (fromIntegral py)
+                    Lua.setfield (-2) "y"
+                    Lua.setfield (-2) "position"
+                Nothing → return ()
+            case lconFaction c of
+                Just fac → do
+                    Lua.pushstring (TE.encodeUtf8 fac)
+                    Lua.setfield (-2) "faction"
+                Nothing → return ()
             Lua.rawseti (-2) j
         Lua.setfield (-2) "contents"
         Lua.rawseti (-2) i

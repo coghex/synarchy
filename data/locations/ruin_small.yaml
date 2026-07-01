@@ -6,8 +6,8 @@
 # LocationDef; the `builder` names a Lua function in scripts/locations.lua
 # that authors the geometry when the location is stamped.
 #
-# `contents` ids are NOT validated or resolved in this issue (#88) — the
-# content-spawning pass (#90) resolves them at spawn time.
+# `contents` ids are resolved at spawn time (#90), not here — an unknown
+# id or kind logs a warning and is skipped rather than crashing.
 locations:
   - id: ruin_small
     label: "Small Ruin"
@@ -24,6 +24,11 @@ locations:
     # optional (defaults: max_count 4, min_spacing 4).
     max_count: 6
     min_spacing: 5
-    # Reference content entry (raw ids, resolved later in #90).
+    # Content spawned once, the first time this location's chunk loads
+    # (#90). Fixed-position entries land at that exact anchor offset;
+    # entries without `position` scatter randomly within the room.
     contents:
-      - { kind: building, id: cargo_hold_S, count: 1 }
+      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }
+      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }
+      - { kind: item, id: rations, count: 1, position: {x: -1, y: 1} }
+      - { kind: loot_table, id: ruin_common, rolls: 2 }

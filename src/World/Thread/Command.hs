@@ -79,6 +79,8 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldClearAllStructuresCommand
                                  , handleWorldDigTileCommand
                                  , handleWorldAddTileCommand)
+import World.Thread.Command.Location
+    (handleWorldMarkLocationContentsSpawnedCommand)
 
 -- * Command Handler
 
@@ -183,6 +185,8 @@ handleWorldCommand env logger WorldDestroyAll
   = handleWorldDestroyAllCommand env logger
 handleWorldCommand env _ (WorldApplyFluids batch)
   = handleApplyFluidsCommand env batch
+handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId gx gy)
+  = handleWorldMarkLocationContentsSpawnedCommand env pageId gx gy
 
 -- | Sim → World: apply the sim's fluid writebacks to the ORIGINATING
 --   world's tile data, resolved by the batch's page id — not every

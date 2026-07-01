@@ -14,15 +14,28 @@ import GHC.Generics (Generic)
 import Data.List (sortOn)
 
 -- | One piece of content a location places when it is stamped — a
---   building, unit, or ground item, addressed by its raw id string.
---   The ids are NOT validated or resolved here: the world-gen overlay
---   (#89) and the content-spawning pass (#90) resolve them at spawn
---   time. `kind` is a free string tag ("building" / "unit" / "item")
---   so new content kinds don't force a schema change.
+--   building, unit, ground item, loot-table roll, or nested structure,
+--   addressed by its raw id string. The ids are NOT validated or
+--   resolved here: the content-spawning pass (#90) resolves them at
+--   spawn time. `kind` is a free string tag ("building" / "unit" /
+--   "item" / "loot_table" / "structure") so new content kinds don't
+--   force a schema change.
 data LocationContent = LocationContent
-    { lconKind  ∷ !Text  -- ^ "building" | "unit" | "item"
-    , lconId    ∷ !Text  -- ^ raw id string, resolved at spawn time
-    , lconCount ∷ !Int   -- ^ how many to place (defaults to 1)
+    { lconKind     ∷ !Text            -- ^ "building" | "unit" | "item"
+                                      --   | "loot_table" | "structure"
+    , lconId       ∷ !Text            -- ^ raw id string, resolved at spawn time
+    , lconCount    ∷ !Int             -- ^ how many to place (defaults to 1;
+                                      --   ignored by "loot_table", which
+                                      --   uses 'lconRolls' instead)
+    , lconPosition ∷ !(Maybe (Int, Int))
+                                      -- ^ fixed (x, y) offset from the
+                                      --   location anchor; 'Nothing' scatters
+                                      --   randomly within the structure
+                                      --   footprint instead
+    , lconFaction  ∷ !(Maybe Text)    -- ^ "unit" only: spawn-time faction tag
+                                      --   (defaults to "hostile" when omitted)
+    , lconRolls    ∷ !Int             -- ^ "loot_table" only: how many times
+                                      --   to roll the table (defaults to 1)
     } deriving (Show, Eq, Generic)
 
 -- | A data-driven location definition (data/locations/*.yaml). Mirrors

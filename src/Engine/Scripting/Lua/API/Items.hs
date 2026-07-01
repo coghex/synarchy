@@ -41,7 +41,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Scene.Types (SortableQuad(..))
 import World.Render.GroundItemQuads (hitTestGroundItemAt
                                     , renderGroundItemQuads)
-import World.Types (WorldManager(..), WorldState(..))
+import World.Types (WorldManager(..), WorldState(..), WorldPageId(..), wmWorlds)
 
 -- | If the preferred path doesn't exist on disk, swap in the equipment
 --   missing-texture placeholder so loadAndRegister has *something* to
@@ -197,6 +197,18 @@ loadItemYamlFn env backendState = do
 activeWorld ∷ EngineEnv → IO (Maybe WorldState)
 activeWorld = activeWorldState
 
+-- | Resolve which world page a ground-item op targets: a named page
+--   (any in wmWorlds, even hidden / non-active) when a page-id is
+--   given, else the active world. Location content-spawning (#90)
+--   passes the page id so an item spawned into a hidden secondary
+--   page's location lands on THAT page — mirrors
+--   'Engine.Scripting.Lua.API.Structure.resolveStructurePage'.
+resolveItemPage ∷ EngineEnv → Maybe Text → IO (Maybe WorldState)
+resolveItemPage env (Just pid) = do
+    mgr ← readIORef (worldManagerRef env)
+    pure $ lookup (WorldPageId pid) (wmWorlds mgr)
+resolveItemPage env Nothing = activeWorld env
+
 -- | item.listDefs() → array of {name, displayName, category, weight}
 --   Sorted by name for a stable debug-overlay listing.
 itemListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -217,18 +229,22 @@ itemListDefsFn env = do
         Lua.rawseti (Lua.nth 2) (fromIntegral i)
     return 1
 
--- | item.spawnGround(defName, x, y [, props]) → gid | nil
+-- | item.spawnGround(defName, x, y [, props] [, pageId]) → gid | nil
 --   Spawns an item into the world at float tile coords. Optional
 --   props table: fill, quality, condition (defaults 0/100/100).
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
---   the terrain.
+--   the terrain. An explicit pageId (slot 5) pins the spawn to that
+--   live page (even hidden) instead of the active world — location
+--   content-spawning (#90) passes its own page so an item lands on
+--   the page its location is on.
 itemSpawnGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemSpawnGroundFn env = do
     nameArg ← Lua.tostring 1
     xArg ← Lua.tonumber 2
     yArg ← Lua.tonumber 3
     propsTy ← Lua.ltype 4
+    pageArg ← Lua.tostring 5
     let getProp ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
         getProp key def = case propsTy of
             Lua.TypeTable → do
@@ -246,7 +262,7 @@ itemSpawnGroundFn env = do
         (Just nameBS, Just x, Just y) → do
             let name = TE.decodeUtf8 nameBS
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
-            mWs ← Lua.liftIO $ activeWorld env
+            mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8 <$> pageArg)
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
                     wght ← Lua.liftIO $

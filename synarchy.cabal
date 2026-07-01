@@ -453,6 +453,10 @@ library
                      Location.Overlay
                      Engine.Asset.YamlLocations
                      Engine.Scripting.Lua.API.Locations
+                     LootTable.Types
+                     LootTable.Roll
+                     Engine.Asset.YamlLootTables
+                     Engine.Scripting.Lua.API.LootTables
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
@@ -484,6 +488,7 @@ library
                      World.Thread.Command.Texture
                      World.Thread.Command.UI
                      World.Thread.Command.Edit
+                     World.Thread.Command.Location
                      World.Grid
                      World.Render
                      World.Render.Camera
