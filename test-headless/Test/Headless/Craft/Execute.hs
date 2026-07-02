@@ -29,6 +29,7 @@ mkInst name iid = ItemInstance
     , iiSharpness   = 100
     , iiContents    = []
     , iiInstanceId  = iid
+    , iiTemp        = Nothing
     }
 
 -- | The dagger recipe shape shipped in data/recipes/basic.yaml.

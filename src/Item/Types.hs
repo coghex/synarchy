@@ -253,6 +253,22 @@ data ItemInstance = ItemInstance
                                 --   stay unique across save/load. Field order
                                 --   is load-bearing (positional Generic
                                 --   Serialize) — appended for save v56.
+    , iiTemp        ∷ !(Maybe Float)
+                                -- ^ Temperature (°C) when it differs from the
+                                --   surroundings. Nothing = at ambient — the
+                                --   effective temperature is the tile's
+                                --   ambient (World.Weather.Ambient), which is
+                                --   what almost every item sits at, so the
+                                --   cooling tick skips it entirely. Just t =
+                                --   tracked: the per-page tick relaxes t
+                                --   toward the tile's ambient (Newtonian,
+                                --   rate ∝ ΔT / thermal mass — see
+                                --   Item.Temperature) and drops back to
+                                --   Nothing on arrival. Set hot by cooking /
+                                --   smelting outputs (via the temp Lua
+                                --   setters). Field order is load-bearing
+                                --   (positional Generic Serialize) — appended
+                                --   for save v68 (#344).
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A stable, order-independent signature of an item's nested contents

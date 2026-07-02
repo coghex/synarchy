@@ -6,6 +6,8 @@ module Engine.Scripting.Lua.API.Items
     , itemListGroundFn
     , itemRemoveGroundFn
     , itemGroundCountFn
+    , itemGetGroundTempFn
+    , itemSetGroundTempFn
     , itemHitTestAtFn
     , itemSelectFn
     , itemDeselectFn
@@ -32,6 +34,7 @@ import Engine.Asset.YamlItems
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
 import Item.Roll (rollItemWeight)
+import Item.Temperature (effectiveItemTemp)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import World.Cursor.Types (CursorState(..))
@@ -41,7 +44,9 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Scene.Types (SortableQuad(..))
 import World.Render.GroundItemQuads (hitTestGroundItemAt
                                     , renderGroundItemQuads)
-import World.Types (WorldManager(..), WorldState(..), WorldPageId(..), wmWorlds)
+import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
+                   , WorldGenParams(..), wmWorlds)
+import World.Weather.Ambient (ambientTempAt)
 
 -- | If the preferred path doesn't exist on disk, swap in the equipment
 --   missing-texture placeholder so loadAndRegister has *something* to
@@ -235,7 +240,8 @@ itemListDefsFn env = do
 
 -- | item.spawnGround(defName, x, y [, props] [, pageId]) → gid | nil
 --   Spawns an item into the world at float tile coords. Optional
---   props table: fill, quality, condition (defaults 0/100/100).
+--   props table: fill, quality, condition (defaults 0/100/100) and
+--   temp (°C — spawns the item hot/cold; omitted = at ambient, #344).
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
 --   the terrain. An explicit pageId (slot 5) pins the spawn to that
@@ -264,6 +270,7 @@ itemSpawnGroundFn env = do
     mFill ← getMaybeProp "fill"
     quality ← getProp "quality" 100.0
     condition ← getProp "condition" 100.0
+    mTemp ← getMaybeProp "temp"
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
             let name = TE.decodeUtf8 nameBS
@@ -291,6 +298,7 @@ itemSpawnGroundFn env = do
                             , iiSharpness = 100.0
                             , iiContents = []
                             , iiInstanceId = iid
+                            , iiTemp = mTemp
                             }
                     gid ← Lua.liftIO $
                         atomicModifyIORef' (wsGroundItemsRef ws) $
@@ -370,6 +378,75 @@ itemGroundCountFn env = do
             gis ← Lua.liftIO $ readIORef (wsGroundItemsRef ws)
             Lua.pushinteger (fromIntegral (HM.size (gisItems gis)))
             return 1
+
+-- | item.getGroundTemp(gid) → °C | nil. The ground item's effective
+--   temperature (#344): its tracked iiTemp when it's hotter/colder
+--   than its surroundings, else the ambient air at its own tile
+--   (elevation-corrected — World.Weather.Ambient). nil if the id
+--   doesn't exist (or the item is untracked and the page has no gen
+--   params to read an ambient from).
+itemGetGroundTempFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemGetGroundTempFn env = do
+    idArg ← Lua.tointeger 1
+    mT ← case idArg of
+        Nothing → pure Nothing
+        Just n → Lua.liftIO $ do
+            mWs ← activeWorld env
+            case mWs of
+                Nothing → pure Nothing
+                Just ws → do
+                    gis ← readIORef (wsGroundItemsRef ws)
+                    case HM.lookup (fromIntegral n) (gisItems gis) of
+                        Nothing → pure Nothing
+                        Just gi → do
+                            mp ← readIORef (wsGenParamsRef ws)
+                            let mAmb = fmap (\p → ambientTempAt
+                                    (wgpSeed p) (wgpPlates p)
+                                    (wgpClimateState p) (wgpWorldSize p)
+                                    (floor (giX gi)) (floor (giY gi))) mp
+                            pure $ case mAmb of
+                                Just amb → Just (effectiveItemTemp amb
+                                                     (giInst gi))
+                                Nothing  → iiTemp (giInst gi)
+    case mT of
+        Just t  → do
+            Lua.pushnumber (Lua.Number (realToFrac t))
+            return 1
+        Nothing → Lua.pushnil >> return 1
+
+-- | item.setGroundTemp(gid [, temp]) → bool. Sets a ground item's
+--   tracked temperature (°C) — the "this item was made hot/cold" hook
+--   (#344); the per-page tick then relaxes it toward the tile's
+--   ambient. Omitting temp (or passing nil) clears the tracked value —
+--   the item reads as "at ambient" again. False if the id doesn't
+--   exist.
+itemSetGroundTempFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemSetGroundTempFn env = do
+    idArg ← Lua.tointeger 1
+    tArg  ← Lua.tonumber 2
+    case idArg of
+        Nothing → Lua.pushboolean False >> return 1
+        Just n → do
+            let mT = case tArg of
+                    Just (Lua.Number d) → Just (realToFrac d ∷ Float)
+                    _                   → Nothing
+            mWs ← Lua.liftIO $ activeWorld env
+            case mWs of
+                Nothing → Lua.pushboolean False >> return 1
+                Just ws → do
+                    ok ← Lua.liftIO $
+                        atomicModifyIORef' (wsGroundItemsRef ws) $ \gis →
+                            case HM.lookup (fromIntegral n) (gisItems gis) of
+                                Nothing → (gis, False)
+                                Just gi →
+                                    let gi' = gi { giInst = (giInst gi)
+                                                     { iiTemp = mT } }
+                                    in ( gis { gisItems = HM.insert
+                                                 (fromIntegral n) gi'
+                                                 (gisItems gis) }
+                                       , True )
+                    Lua.pushboolean ok
+                    return 1
 
 -- | item.hitTestAt(px, py) → gid | nil — topmost ground item whose
 --   sprite contains the window-pixel point (unit.hitTestAt analog).
