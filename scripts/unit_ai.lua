@@ -218,6 +218,22 @@ local config = {
         -- and takes the shortfall (unit.transferItemToUnit preserves
         -- the instances). Capacity-gated per item like pickup.
         mule_fetch_arrival     = 1.5,
+        -- Construction designations (construct_job, #96). Executes the
+        -- construction-tool blueprints: structure pieces get sourced
+        -- (inventory → ground → mule), built in place, and placed;
+        -- building blueprints get STAKED (building.spawn) and handed to
+        -- the deliver/build_nearby machinery above. Base sits between
+        -- build_nearby (3.0) and deliver (4.0); the lock matches the
+        -- other menial-work locks (6.0) so dire needs still preempt.
+        -- construct_rate is worker-seconds of effort per real second;
+        -- a piece takes build_work / construct_rate seconds to build.
+        construct_scan_range    = 30.0,
+        construct_scan_chunks   = 2,     -- getPendingJobs region radius
+        construct_arrival_tiles = 1.5,
+        construct_base_utility  = 3.5,
+        construct_lock_utility  = 6.0,
+        construct_rate          = 1.0,
+        construct_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
         -- Auto-store materials. Utility curve = base · fill³ where
         -- fill = carrying_weight / carrying_capacity. Below ~65 %
         -- full the action sits under wander (0.8); past that it
@@ -2257,6 +2273,113 @@ local function findTechnomule(fromX, fromY)
     return best
 end
 
+-- Count ground items of a def within `range` tiles of (fromX, fromY).
+-- The middle rung of the sourcing ladder (inventory → ground → mule):
+-- loose materials near the site get hauled before the mule is tapped.
+local function groundCountOf(fromX, fromY, defName, range)
+    local n = 0
+    for _, g in ipairs(item.listGround() or {}) do
+        if g.defName == defName
+           and distance(fromX, fromY, g.x, g.y) <= range then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+-- Fetch loop against GROUND items: walk to the nearest instance of a
+-- wanted def and pick it up (item.pickupGround preserves the instance),
+-- one item per execute tick. `wants` = {defName → count}; entries are
+-- removed as they're satisfied or become unavailable (raced pickers,
+-- capacity) — the caller reconciles its plan against what actually
+-- landed in inventory afterwards. Returns true while still busy.
+local function fetchWantsFromGround(uid, wants, params, range)
+    local mat = next(wants)
+    if not mat then return false end
+    local info = unit.getInfo(uid)
+    if not info then return false end
+
+    local best, bestD = nil, range or math.huge
+    for _, g in ipairs(item.listGround() or {}) do
+        if g.defName == mat then
+            local d = distance(info.gridX, info.gridY, g.x, g.y)
+            if d <= bestD then best, bestD = g, d end
+        end
+    end
+    if not best then
+        -- None left in range (someone else collected them).
+        wants[mat] = nil
+        return next(wants) ~= nil
+    end
+
+    if bestD > params.pickup_arrival_tiles then
+        unit.moveTo(uid, best.x, best.y, mv.comfort(uid))  -- hauling → comfort
+        return true
+    end
+
+    unit.stop(uid)
+    -- Capacity gate at the moment of pickup, same as pickup_ground.
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    local w       = best.weight or deliverItemWeight(best.defName)
+    if carried + w > maxW then
+        engine.logWarn("fetch: unit " .. tostring(uid)
+            .. " at capacity (" .. string.format("%.1f", carried + w)
+            .. " > " .. string.format("%.1f", maxW)
+            .. " kg) — leaving ground " .. mat)
+        wants[mat] = nil
+        return next(wants) ~= nil
+    end
+    if item.pickupGround(uid, best.id) then
+        wants[mat] = wants[mat] - 1
+        if wants[mat] <= 0 then wants[mat] = nil end
+    end
+    -- On a raced pickup (false) the next tick re-scans.
+    return next(wants) ~= nil
+end
+
+-- Fetch loop against the technomule's stock: walk to the mule, then
+-- take everything wanted in one go (unit.transferItemToUnit preserves
+-- the instances). Entries are cleared even on shortfall — raced
+-- claimants and empty stock resolve by the caller reconciling against
+-- inventory. Returns true while still busy (walking).
+local function fetchWantsFromMule(uid, wants, info, params)
+    if not next(wants) then return false end
+    local mule = findTechnomule(info.gridX, info.gridY)
+    if not mule then
+        for k in pairs(wants) do wants[k] = nil end
+        return false
+    end
+
+    if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
+       > params.mule_fetch_arrival then
+        unit.moveTo(uid, mule.gridX, mule.gridY, mv.comfort(uid))  -- hauling → comfort
+        return true
+    end
+
+    unit.stop(uid)
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    for matType, count in pairs(wants) do
+        for _ = 1, count do
+            local w = deliverItemWeight(matType)
+            if carried + w > maxW then
+                engine.logWarn("fetch: unit " .. tostring(uid)
+                    .. " at capacity (" .. string.format("%.1f", carried + w)
+                    .. " > " .. string.format("%.1f", maxW)
+                    .. " kg) — leaving rest of " .. matType .. " on mule")
+                break
+            end
+            if not unit.transferItemToUnit(mule.uid, uid, matType) then
+                break    -- mule stock ran out (raced another claimant)
+            end
+            carried = carried + w
+        end
+        wants[matType] = nil
+    end
+    return false
+end
+
 -- How many units of matType still need a deliverer, considering both
 -- engine-side delivered counts AND other live acolytes' active
 -- claims. excludeUid lets the caller drop their own claim from the
@@ -2288,28 +2411,40 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
             local need      = building.getMaterialNeed(bid) or {}
             local delivered = building.getMaterialDelivered(bid) or {}
             -- My potential contribution per material: own inventory
-            -- first, then the technomule's stock for the shortfall.
-            -- (Concurrent claimants can both plan on the same mule
-            -- stock — the engine transfer fails gracefully for the
+            -- first, then nearby GROUND items, then the technomule's
+            -- stock for the rest of the shortfall (#96 sourcing ladder).
+            -- (Concurrent claimants can plan on the same ground item or
+            -- mule stock — the pickup/transfer fails gracefully for the
             -- loser and the next utility pass re-claims what's still
             -- needed, so the race resolves itself.)
             local mule = findTechnomule(fromX, fromY)
-            local claim, fromMule = {}, {}
-            local anyClaim, anyFromMule = false, false
+            local claim, fromGround, fromMule = {}, {}, {}
+            local anyClaim, anyFromGround, anyFromMule = false, false, false
             for matType, count in pairs(need) do
                 local remaining = remainingUnclaimedNeed(bid, matType,
                                        count, delivered, uid)
                 if remaining > 0 then
                     local have = inventoryCountOf(uid, matType)
+                    local groundHave = groundCountOf(fromX, fromY, matType,
+                                           params.deliver_scan_range)
                     local muleHave = mule
                         and inventoryCountOf(mule.uid, matType) or 0
-                    local bring = math.min(have + muleHave, remaining)
+                    local bring = math.min(have + groundHave + muleHave,
+                                           remaining)
                     if bring > 0 then
                         claim[matType] = bring
                         anyClaim = true
-                        if bring > have then
-                            fromMule[matType] = bring - have
-                            anyFromMule = true
+                        local short = bring - have
+                        if short > 0 then
+                            local fromG = math.min(groundHave, short)
+                            if fromG > 0 then
+                                fromGround[matType] = fromG
+                                anyFromGround = true
+                            end
+                            if short - fromG > 0 then
+                                fromMule[matType] = short - fromG
+                                anyFromMule = true
+                            end
                         end
                     end
                 end
@@ -2327,6 +2462,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
                             bid = bid, gridX = info.gridX, gridY = info.gridY,
                             tileW = tw, tileH = th, distance = d,
                             claim = claim,
+                            fromGround = anyFromGround and fromGround or nil,
                             fromMule = anyFromMule and fromMule or nil,
                         }
                         bestD = d
@@ -2354,64 +2490,6 @@ local function deliverUtility(uid, s, params)
     return params.deliver_utility
 end
 
--- Fetch phase of a delivery: walk to the technomule and take the
--- claimed shortfall. Returns true while still busy (walking /
--- transferring), false once the fetch list is empty (or abandoned —
--- mule gone, stock gone, or capacity hit; delivery proceeds with
--- whatever is actually in inventory, transferItemToBuilding breaks
--- gracefully on the rest).
-local function deliverFetchFromMule(uid, s, info, params)
-    local claim = s.deliveryClaim
-    if not claim.fromMule or not next(claim.fromMule) then
-        return false
-    end
-
-    local mule = findTechnomule(info.gridX, info.gridY)
-    if not mule then
-        claim.fromMule = nil
-        return false
-    end
-
-    if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
-       > params.mule_fetch_arrival then
-        unit.moveTo(uid, mule.gridX, mule.gridY, mv.comfort(uid))  -- hauling → comfort
-        return true
-    end
-
-    unit.stop(uid)
-    local carried = unit.getCarryingWeight(uid) or 0
-    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
-    for matType, count in pairs(claim.fromMule) do
-        local taken = 0
-        for _ = 1, count do
-            local w = deliverItemWeight(matType)
-            if carried + w > maxW then
-                engine.logWarn("deliver: unit " .. tostring(uid)
-                    .. " at capacity (" .. string.format("%.1f", carried + w)
-                    .. " > " .. string.format("%.1f", maxW)
-                    .. " kg) — leaving rest of " .. matType .. " on mule")
-                break
-            end
-            if not unit.transferItemToUnit(mule.uid, uid, matType) then
-                break    -- mule stock ran out (raced another claimant)
-            end
-            carried = carried + w
-            taken = taken + 1
-        end
-        claim.fromMule[matType] = nil
-        -- Whatever we couldn't take, we can't deliver — shrink the
-        -- claim so other acolytes' remaining-need math frees up the
-        -- difference immediately.
-        local shortfall = count - taken
-        if shortfall > 0 and claim.materials[matType] then
-            local kept = claim.materials[matType] - shortfall
-            claim.materials[matType] = kept > 0 and kept or nil
-        end
-    end
-    claim.fromMule = nil
-    return false
-end
-
 local function deliverExecute(uid, s, params)
     -- Lock in claim on first call so subsequent ticks (and other
     -- acolytes' utility checks) see the reservation.
@@ -2419,6 +2497,7 @@ local function deliverExecute(uid, s, params)
         local target = s.deliveryPendingTarget
         if not target then return end
         s.deliveryClaim = { bid = target.bid, materials = target.claim,
+                            fromGround = target.fromGround,
                             fromMule = target.fromMule }
         s.deliveryPendingTarget = nil
     end
@@ -2426,12 +2505,36 @@ local function deliverExecute(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then return end
 
-    -- Source the shortfall from the technomule before heading to the
-    -- build site (own inventory first, then the mule — by design).
-    if deliverFetchFromMule(uid, s, info, params) then return end
+    -- Source the shortfall before heading to the build site: own
+    -- inventory first, then nearby ground items, then the technomule
+    -- (#96 sourcing ladder).
+    local claim = s.deliveryClaim
+    if claim.fromGround then
+        if fetchWantsFromGround(uid, claim.fromGround, params,
+                                params.deliver_scan_range) then
+            return
+        end
+        claim.fromGround = nil
+    end
+    if claim.fromMule then
+        if fetchWantsFromMule(uid, claim.fromMule, info, params) then
+            return
+        end
+        claim.fromMule = nil
+    end
 
-    -- Fetch may have emptied the claim entirely (mule gone / raced).
-    if not next(s.deliveryClaim.materials) then
+    -- Reconcile the plan against what actually landed in inventory —
+    -- fetch sources can come up short (raced pickers, emptied mule,
+    -- capacity). Clamping the claim frees the difference for other
+    -- acolytes' remaining-need math immediately. Idempotent once the
+    -- fetch phases are done, so re-running it every tick is fine.
+    for matType, count in pairs(claim.materials) do
+        local have = inventoryCountOf(uid, matType)
+        claim.materials[matType] = have > 0 and math.min(count, have) or nil
+    end
+
+    -- Fetch may have emptied the claim entirely (sources gone / raced).
+    if not next(claim.materials) then
         s.deliveryClaim = nil
         return
     end
@@ -2772,6 +2875,401 @@ local function buildNearbyExecute(uid, s, params)
     end
     if bestX then
         unit.moveTo(uid, bestX, bestY, mv.comfort(uid))  -- going to build site → comfort
+    end
+end
+
+-----------------------------------------------------------
+-- Action: construct_job  (#96)
+--
+-- Executes construction designations (#95). Two job categories:
+--   * "building": walk to the blueprint and STAKE it — building.spawn
+--     places the Appearing ghost, the designation completes, and the
+--     existing deliver_to_build_site + build_nearby machinery takes
+--     over (materials gate + worker-rate progress, unchanged).
+--   * "structure": the full job — source the piece's materials
+--     (inventory → ground → mule, same ladder as delivery), walk
+--     beside the tile, pour work into the designation
+--     (construction.addJobProgress; the blueprint ghost solidifies as
+--     progress accrues), and at 1.0 place the piece via
+--     scripts/structures.lua and mark the job complete.
+--
+-- Claims: one worker per tile. The synchronous guard is a module-local
+-- registry (constructClaims, same shape as digClaims); the engine-side
+-- designation status ("claimed") is the durable/observable layer —
+-- getPendingJobs carries it, and the sweep below releases a dead or
+-- expired claimant's job back to "pending" so another acolyte picks it
+-- up. Claims from a save (or a Lua reload) arrive with no registry
+-- entry; they're adopted with an anonymous timer and released the same
+-- way if nobody refreshes them.
+--
+-- Material races between construct jobs (and against deliveries) are
+-- NOT reserved cross-unit: the fetch fails gracefully for the loser,
+-- the post-fetch inventory check releases the job back to pending, and
+-- the next scan re-plans — same self-heal as the mule-stock race.
+-----------------------------------------------------------
+local constructClaims = {}   -- "x,y" → { uid = ..., at = gameTime }
+
+local function constructKey(x, y) return x .. "," .. y end
+
+local function constructClaimedByOther(key, uid, now, timeout)
+    local c = constructClaims[key]
+    if not c or c.uid == uid then return false end
+    if now - c.at > timeout or (c.uid and not unit.exists(c.uid)) then
+        constructClaims[key] = nil
+        return false
+    end
+    return true
+end
+
+-- Structure-pack build costs, lazily loaded from the pack YAML's
+-- build: block (keyed by piece KIND — wall edges share one entry).
+-- false = pack has no build block (debug/stamp-only pack): its
+-- designations are skipped, nothing to cost the job with.
+local packBuildCache = {}
+local function packBuildInfo(pack, kind)
+    local p = packBuildCache[pack]
+    if p == nil then
+        local y = engine.loadYaml("data/structure_packs/" .. pack .. ".yaml")
+        p = (y and y.build) or false
+        packBuildCache[pack] = p
+    end
+    if not p then return nil end
+    return p[kind]
+end
+
+-- Release the unit's hold on its construct job. toPending flips the
+-- engine-side status back so another worker can take the tile;
+-- omitted = the designation is already gone (completed / cancelled).
+local function releaseConstructJob(s, uid, toPending)
+    local job = s.constructJob
+    if job then
+        local key = constructKey(job.x, job.y)
+        local c = constructClaims[key]
+        if c and c.uid == uid then constructClaims[key] = nil end
+        if toPending then
+            local wid = world.getActiveWorldId()
+            if wid then
+                construction.setJobStatus(wid, job.x, job.y, "pending")
+            end
+        end
+    end
+    s.constructJob = nil
+    s.constructCandidate = nil
+end
+
+-- Stale-claim sweep over the scanned job list: a "claimed" job whose
+-- claimant died is released immediately; one whose claim went
+-- unrefreshed past the timeout (stuck worker, adopted orphan from a
+-- save/reload) is released when the clock runs out. Any scanning
+-- acolyte runs this, so release doesn't depend on the claimant.
+local function sweepConstructClaims(wid, jobs, now, timeout)
+    for _, job in ipairs(jobs) do
+        if job.status == "claimed" then
+            local key = constructKey(job.x, job.y)
+            local c = constructClaims[key]
+            if not c then
+                -- Orphan (loaded save / script reload): adopt with an
+                -- anonymous timer so it frees up if nobody owns it.
+                constructClaims[key] = { uid = nil, at = now }
+            elseif (c.uid and not unit.exists(c.uid))
+                   or (now - c.at > timeout) then
+                constructClaims[key] = nil
+                construction.setJobStatus(wid, job.x, job.y, "pending")
+            end
+        end
+    end
+end
+
+-- Can this unit source every material the piece needs right now?
+-- (inventory + nearby ground + mule stock). Races lose gracefully at
+-- fetch time; this is only the "worth claiming" filter.
+local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
+    for matType, need in pairs(mats or {}) do
+        local have = inventoryCountOf(uid, matType)
+        if have < need then
+            local ground = groundCountOf(fromX, fromY, matType,
+                                         params.construct_scan_range)
+            if have + ground < need then
+                local mule = findTechnomule(fromX, fromY)
+                local muleHave = mule
+                    and inventoryCountOf(mule.uid, matType) or 0
+                if have + ground + muleHave < need then return false end
+            end
+        end
+    end
+    return true
+end
+
+-- Nearest viable pending job within construct_scan_range, or nil.
+-- Also runs the stale-claim sweep (the scan already paid for the job
+-- list). Buildings are always viable (staking needs no materials);
+-- structure jobs need a costed pack, a floor under a post, and
+-- sourceable materials.
+local function findConstructJob(uid, fromX, fromY, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return nil end
+    local ccx = math.floor(fromX / 16)   -- chunkSize
+    local ccy = math.floor(fromY / 16)
+    local r = params.construct_scan_chunks
+    local jobs = construction.getPendingJobs(ccx - r, ccy - r,
+                                             ccx + r, ccy + r)
+    if not jobs or #jobs == 0 then return nil end
+    local now = engine.gameTime()
+    sweepConstructClaims(wid, jobs, now, params.construct_claim_timeout)
+
+    local best, bestD = nil, params.construct_scan_range
+    for _, job in ipairs(jobs) do
+        if job.status == "pending"
+           and not constructClaimedByOther(constructKey(job.x, job.y),
+                                           uid, now,
+                                           params.construct_claim_timeout) then
+            local viable, build = false, nil
+            if job.category == "building" then
+                viable = true
+            else
+                build = packBuildInfo(job.pack, job.kind)
+                if build
+                   and (job.kind ~= "post"
+                        or structure.floorZAt(job.x, job.y))
+                   and constructMaterialsAvailable(uid, fromX, fromY,
+                           build.materials, params) then
+                    viable = true
+                end
+            end
+            if viable then
+                local d = distance(fromX, fromY, job.x + 0.5, job.y + 0.5)
+                if d <= bestD then
+                    job.dist = d
+                    job.build = build
+                    best, bestD = job, d
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function constructUtility(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return -math.huge end
+
+    -- Active job: finite lock-in (dire needs still preempt; the claim
+    -- and phase machine survive the interruption). Dropped when the
+    -- designation vanishes (player cancelled it, or a sweep handed the
+    -- tile to someone else and THEY finished it).
+    if s.constructJob then
+        local job = construction.getDesignationAt(wid, s.constructJob.x,
+                                                  s.constructJob.y)
+        if job then return params.construct_lock_utility end
+        releaseConstructJob(s, uid)
+    end
+
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+    local cand = findConstructJob(uid, info.gridX, info.gridY, params)
+    if not cand then return -math.huge end
+
+    s.constructCandidate = cand
+    local distFactor = math.max(0, 1 - cand.dist / params.construct_scan_range)
+    return params.construct_base_utility * distFactor
+end
+
+-- Stand position: centre of the neighbouring tile nearest the unit —
+-- beside the job tile, never on it (the piece appears in the air cell
+-- on top; a wall materialising around the builder's ankles is wrong).
+local function constructStandPos(job, px, py)
+    local bestX, bestY, bestD = nil, nil, math.huge
+    for _, o in ipairs({ {1, 0}, {-1, 0}, {0, 1}, {0, -1} }) do
+        local nx = job.x + o[1] + 0.5
+        local ny = job.y + o[2] + 0.5
+        local d = (nx - px) ^ 2 + (ny - py) ^ 2
+        if d < bestD then bestX, bestY, bestD = nx, ny, d end
+    end
+    return bestX, bestY
+end
+
+-- Place the finished piece via the structures module (same programmatic
+-- builders locations.lua uses; they read the active world's terrain).
+-- Posts designated without a floor are filtered at scan time, but the
+-- floor can vanish mid-job — placement then fails and we log rather
+-- than strand the job (materials are already spent; the designation
+-- still completes, mirroring "no partial-wall visuals" simplicity).
+local function placeStructurePiece(job)
+    local structures = require("scripts.structures")
+    if job.kind == "floor" then
+        structures.floor(job.x, job.y)
+    elseif job.kind == "ceiling" then
+        structures.ceiling(job.x, job.y)
+    elseif job.kind == "wall" then
+        structures.wall(job.x, job.y, job.edge or "ne")
+    elseif job.kind == "post" then
+        -- Designations carry no corner (the tool's hover pick does);
+        -- default to "n" until the tool grows a corner picker.
+        if not structures.post(job.x, job.y, job.edge or "n") then
+            engine.logWarn("construct: post at " .. job.x .. "," .. job.y
+                .. " lost its floor mid-job — skipping placement")
+        end
+    end
+end
+
+local function constructExecute(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local now = engine.gameTime()
+
+    -- Claim the scanned candidate: local registry (the synchronous
+    -- guard) + engine status (the durable/observable layer).
+    if not s.constructJob then
+        local cand = s.constructCandidate
+        if not cand then return end
+        local key = constructKey(cand.x, cand.y)
+        if constructClaimedByOther(key, uid, now,
+                                   params.construct_claim_timeout) then
+            s.constructCandidate = nil
+            return
+        end
+        constructClaims[key] = { uid = uid, at = now }
+        construction.setJobStatus(wid, cand.x, cand.y, "claimed")
+        s.constructCandidate = nil
+        cand.phase = "fetch"
+        -- Fetch shortfalls, planned once at claim time (inventory →
+        -- ground → mule). Reconciled against real inventory afterwards.
+        if cand.category ~= "building" then
+            cand.need = {}
+            cand.fromGround, cand.fromMule = {}, {}
+            local mule = findTechnomule(info.gridX, info.gridY)
+            for matType, need in pairs(cand.build.materials or {}) do
+                cand.need[matType] = need
+                local have = inventoryCountOf(uid, matType)
+                local short = need - have
+                if short > 0 then
+                    local ground = math.min(short,
+                        groundCountOf(info.gridX, info.gridY, matType,
+                                      params.construct_scan_range))
+                    if ground > 0 then cand.fromGround[matType] = ground end
+                    if short - ground > 0 and mule then
+                        cand.fromMule[matType] = short - ground
+                    end
+                end
+            end
+            cand.work = cand.build.build_work or 1.0
+        end
+        s.constructJob = cand
+        return
+    end
+
+    local job = s.constructJob
+    local key = constructKey(job.x, job.y)
+    -- A live claim by someone ELSE means ours expired while we were
+    -- preempted and the tile was legally re-claimed — walk away.
+    local c = constructClaims[key]
+    if c and c.uid ~= uid and c.uid and unit.exists(c.uid) then
+        s.constructJob = nil
+        return
+    end
+    constructClaims[key] = { uid = uid, at = now }   -- keep the claim fresh
+
+    -- Building blueprint: walk up and stake it, then hand off to the
+    -- delivery + build_nearby machinery.
+    if job.category == "building" then
+        local d = distance(info.gridX, info.gridY, job.x + 0.5, job.y + 0.5)
+        if d > 2.2 then
+            unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
+            return
+        end
+        unit.stop(uid)
+        local bid = building.spawn(job.building, job.x, job.y)
+        if bid then
+            construction.setJobStatus(wid, job.x, job.y, "complete")
+            releaseConstructJob(s, uid)
+        else
+            -- Placement invalid (terrain changed, overlap) — retrying
+            -- can't succeed, so cancel the blueprint and say so.
+            reportFailure(uid, "Can't build here — blueprint cancelled")
+            construction.cancelDesignation(job.x, job.y)
+            releaseConstructJob(s, uid)
+        end
+        return
+    end
+
+    -- Structure piece, phase 1: source materials.
+    if job.phase == "fetch" then
+        if fetchWantsFromGround(uid, job.fromGround, params,
+                                params.construct_scan_range) then
+            return
+        end
+        if fetchWantsFromMule(uid, job.fromMule, info, params) then
+            return
+        end
+        for matType, need in pairs(job.need) do
+            if inventoryCountOf(uid, matType) < need then
+                -- Sources came up short (raced / capacity) — release
+                -- the tile for someone who can cover it.
+                releaseConstructJob(s, uid, true)
+                return
+            end
+        end
+        job.phase = "walking"
+    end
+
+    -- Phase 2: stand beside the tile. Materials are consumed once, on
+    -- arrival — the moment construction starts.
+    if job.phase == "walking" then
+        local sx, sy = constructStandPos(job, info.gridX, info.gridY)
+        if distance(info.gridX, info.gridY, sx, sy)
+           <= params.construct_arrival_tiles then
+            unit.stop(uid)
+            if not job.consumed then
+                for matType, need in pairs(job.need) do
+                    for _ = 1, need do
+                        if not unit.removeItem(uid, matType) then
+                            reportFailure(uid,
+                                "Construction materials went missing")
+                            releaseConstructJob(s, uid, true)
+                            return
+                        end
+                    end
+                end
+                job.consumed = true
+            end
+            job.phase = "building"
+            s.lastConstructAt = now
+        else
+            unit.moveTo(uid, sx, sy, mv.comfort(uid))
+        end
+        return
+    end
+
+    -- Phase 3: pour work in. progress rides the designation (persisted,
+    -- drives the ghost's alpha ramp); the local copy just avoids a
+    -- read-back race with the async command queue.
+    if job.phase == "building" then
+        local elapsed = now - (s.lastConstructAt or now)
+        s.lastConstructAt = now
+        if elapsed > 0 then
+            local delta = params.construct_rate * elapsed / job.work
+            job.progress = (job.progress or 0) + delta
+            construction.addJobProgress(wid, job.x, job.y, delta)
+        end
+        if (job.progress or 0) >= 1.0 then
+            placeStructurePiece(job)
+            construction.setJobStatus(wid, job.x, job.y, "complete")
+            releaseConstructJob(s, uid)
+        end
+        return
+    end
+end
+
+-- Preempted mid-job (thirst, combat, player order): re-enter through
+-- the walking phase so the elapsed-time accumulator restarts — without
+-- this, a 60 s drink would land as 60 s of instant build progress.
+-- Consumed materials stay consumed (job.consumed guards the re-entry).
+local function constructOnExit(uid, s, params)
+    local job = s.constructJob
+    if job and job.phase == "building" then
+        job.phase = "walking"
     end
 end
 
@@ -3601,6 +4099,8 @@ unitAi.registerActions("acolyte", {
       execute = buildNearbyExecute },
     { name = "deliver_to_build_site", utility = deliverUtility,
       execute = deliverExecute },
+    { name = "construct_job", utility = constructUtility,
+      execute = constructExecute, onExit = constructOnExit },
     { name = "store_materials", utility = storeMaterialsUtility,
       execute = storeMaterialsExecute },
     { name = "dig_designation", utility = digUtility,

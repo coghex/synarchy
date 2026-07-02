@@ -230,6 +230,10 @@ echo 'return world.getChunkInfo(cx, cy)' | nc -w 2 localhost 8008
 # Single tile terrain — returns: surfaceZ, terrainSurfaceZ
 echo 'return world.getTerrainAt(gx, gy)' | nc -w 2 localhost 8008
 
+# Surface tile slope bitmask (bit0=N,1=E,2=S,3=W; 0=flat) — what the
+# dig + construction (#96) corner-progress displays write
+echo 'return world.getSlopeAt(gx, gy)' | nc -w 2 localhost 8008
+
 # Single tile fluid — returns: type(string), surface(int)
 echo 'return world.getFluidAt(gx, gy)' | nc -w 2 localhost 8008
 
@@ -299,6 +303,18 @@ in walking — the diagonal-corner-cut stuck-unit bug). `--mode {move,stamina}`/
 Note: `startFall` clears the move target on landing (AI re-issues after
 recovery), so a unit can't reach a goal across a fall in one `moveTo` —
 fall checks assert the fall mechanic + landing z, not arrival.
+
+### Testing construction build jobs headless
+
+Turnkey harness: **`python3 tools/construction_probe.py`** — the #96
+gate. Boots headless on a flat arena, designates structure pieces +
+a building via `construction.*` (#95), and asserts the construct_job
+AI end-to-end: claim (status observable), material sourcing (inventory
+→ ground items → technomule), progress accrual, piece placement,
+building staking, and dead-claimant claim release. `--phase` runs one
+phase; the stake phase runs LAST (the staked portal spawns its roster,
+which would contaminate later phases). Structure build costs live in
+the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
 
 ### Logging: event / combat / injury
 

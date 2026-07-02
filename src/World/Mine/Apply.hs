@@ -14,6 +14,7 @@
 --       persisted designations the same way edits replay.
 module World.Mine.Apply
     ( applyDigSlopeToChunk
+    , applyCornerSlopeToChunk
     , applyDigSlopes
     , applyDigSlopesTd
     ) where
@@ -37,20 +38,31 @@ import World.Tile.Types (WorldTileData(..))
 --   clearing replays deterministically.
 applyDigSlopeToChunk ∷ (Int, Int) → MineDesignation → LoadedChunk → LoadedChunk
 applyDigSlopeToChunk (gx, gy) md lc =
+    applyCornerSlopeToChunk (gx, gy) (mdZ md) (mdCorners md) lc
+
+-- | The corner-progress display, generalised over its source: write
+--   the slope mask for a 4-corner progress state into the chunk at
+--   (gx, gy, z). Mining feeds it 'mdCorners' (dig drains corners);
+--   construction (#96) feeds corners derived from a designation's
+--   build progress. Shared so both systems render work-in-progress
+--   through the one slope-variant pipeline.
+applyCornerSlopeToChunk ∷ (Int, Int) → Int → (Float, Float, Float, Float)
+                        → LoadedChunk → LoadedChunk
+applyCornerSlopeToChunk (gx, gy) z corners lc =
     let lx = gx - cx * chunkSize
         ly = gy - cy * chunkSize
         ChunkCoord cx cy = lcCoord lc
         idx = columnIndex lx ly
         col = lcTiles lc V.! idx
-        i = mdZ md - ctStartZ col
-        progressed = mdCorners md ≠ (1.0, 1.0, 1.0, 1.0)
+        i = z - ctStartZ col
+        progressed = corners ≠ (1.0, 1.0, 1.0, 1.0)
     in if lx < 0 ∨ lx ≥ chunkSize ∨ ly < 0 ∨ ly ≥ chunkSize
         ∨ i < 0 ∨ i ≥ VU.length (ctSlopes col)
        then lc
        else
         let col' = col
                 { ctSlopes = ctSlopes col VU.//
-                      [(i, digSlopeMask (mdCorners md))]
+                      [(i, digSlopeMask corners)]
                 , ctVeg = if progressed
                           then ctVeg col VU.// [(i, 0)]
                           else ctVeg col

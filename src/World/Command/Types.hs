@@ -115,6 +115,13 @@ data WorldCommand
         -- ^ Build AI (#96): mark a designation Claimed / Complete. A
         --   Complete designation is removed (the structure/building it
         --   represents now exists).
+    | WorldAddConstructProgress WorldPageId Int Int Float
+        -- ^ Build AI (#96): add build progress to the designation at
+        --   (gx, gy). Deltas are pre-normalised to the job's total
+        --   work (1.0 = done) and the sum is clamped to [0, 1]; the
+        --   ghost marker's alpha ramps with it. Completion (placing
+        --   the piece + removing the designation) stays Lua-side —
+        --   the AI resolves art/materials, so it owns final placement.
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
         -- ^ Ghost texture for committed construction designations, keyed
         --   by target category ("structure" | "building").

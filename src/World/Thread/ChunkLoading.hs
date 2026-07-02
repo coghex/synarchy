@@ -33,6 +33,7 @@ import World.Thread.Helpers (unWorldPageId)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopesTd)
+import World.Construct.Apply (applyConstructSlopesTd)
 import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
@@ -97,6 +98,7 @@ updateChunkLoading env _logger = do
                                 -- carry their saved edits this way.
                                 edits ← readIORef (wsEditsRef worldState)
                                 desigs ← readIORef (wsMineDesignationsRef worldState)
+                                cdesigs ← readIORef (wsConstructDesignationsRef worldState)
                                 let newChunks' = map (replayEdits edits) newChunks
                                 evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
@@ -131,7 +133,12 @@ updateChunkLoading env _logger = do
                                         digCoords = slopeRecomputeAffected
                                             (wgpWorldSize params) changed td''
                                         td6 = applyDigSlopesTd desigs digCoords td'''''
-                                    in (td6, evictedCoords)
+                                        -- Construction corner-progress
+                                        -- overrides (#96): same derived-
+                                        -- state contract as dig slopes.
+                                        td7 = applyConstructSlopesTd cdesigs
+                                                digCoords td6
+                                    in (td7, evictedCoords)
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -232,6 +239,7 @@ drainInitQueues env logger = do
                         -- the edits map is empty and this is a no-op.
                         edits ← readIORef (wsEditsRef worldState)
                         desigs ← readIORef (wsMineDesignationsRef worldState)
+                        cdesigs ← readIORef (wsConstructDesignationsRef worldState)
                         let newChunks' = map (replayEdits edits) newChunks
 
                         -- Insert new chunks, then recompute slopes
@@ -253,7 +261,11 @@ drainInitQueues env logger = do
                                 digCoords = slopeRecomputeAffected
                                     (wgpWorldSize params) coords td'
                                 td5 = applyDigSlopesTd desigs digCoords td''''
-                            in (td5, ())
+                                -- Construction corner-progress overrides
+                                -- (#96), same contract as dig slopes.
+                                td6 = applyConstructSlopesTd cdesigs
+                                        digCoords td5
+                            in (td6, ())
 
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump
