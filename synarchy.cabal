@@ -173,6 +173,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
+                   Test.Headless.Construct.Corners
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.River.Graph
@@ -541,6 +542,7 @@ library
                      World.Geology.Ore.Types
                      World.Mine.Types
                      World.Construct.Types
+                     World.Construct.Apply
                      World.Render.SpoilQuads
                      World.Gem
                      World.Spoil.Logic

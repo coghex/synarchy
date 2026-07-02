@@ -568,6 +568,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setCell" (worldSetCellFn env)
 
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
+  registerLuaFunction "getSlopeAt"   (worldGetSlopeAtFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
   registerLuaFunction "getSurfaceAt" (worldGetSurfaceAtFn env)
   registerLuaFunction "getChunkInfo" (worldGetChunkInfoFn env)

@@ -211,12 +211,24 @@ def phase_inventory(port: int) -> None:
         for x in (8, 9)))
     check("build progress accrued on the designation", progressed is not None)
 
+    # The mining-style corner-progress display: once ≥ 2 corners have
+    # drained (past ~40% of the job) the tile's slope mask goes
+    # non-zero, exactly like a mid-dig tile.
+    sloped = poll_until(port, 30, lambda: any(
+        send(port, f"return world.getSlopeAt({x}, 8)") not in ("0", "nil")
+        for x in (8, 9)))
+    check("corner-progress display visible mid-build (slope mask set)",
+          sloped is not None)
+
     done = poll_until(port, 60, lambda: (
         send(port, "return structure.hasAt(8, 8, 'floor')") == "true"
         and send(port, "return structure.hasAt(9, 8, 'floor')") == "true"
         and designation_at(port, 8, 8) is None
         and designation_at(port, 9, 8) is None))
     check("both floors placed and designations cleared", done is not None)
+    check("tiles returned to flat after completion",
+          send(port, "return world.getSlopeAt(8, 8)") == "0"
+          and send(port, "return world.getSlopeAt(9, 8)") == "0")
     destroy_unit(port, uid)
 
 

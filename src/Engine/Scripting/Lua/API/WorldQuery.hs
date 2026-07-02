@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.WorldQuery
     ( worldGetTerrainAtFn
+    , worldGetSlopeAtFn
     , worldGetFluidAtFn
     , worldGetSurfaceAtFn
     , worldGetChunkInfoFn
@@ -95,6 +96,39 @@ worldGetTerrainAtFn env = do
                     Lua.pushinteger (fromIntegral surfZ)
                     Lua.pushinteger (fromIntegral terrZ)
                     return 2
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.getSlopeAt(gx, gy) → slope bitmask | nil (chunk unloaded).
+--   The SURFACE tile's slope id (bit0=N, 1=E, 2=S, 3=W; 0 = flat) on
+--   the active world — the value the dig display and the construction
+--   corner-progress display (#96) write, so headless tests can assert
+--   a tile is visibly mid-work. Read-only sibling of world.setSlope.
+worldGetSlopeAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSlopeAtFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+                (coord, (lx, ly)) = globalToChunk gx gy
+                idx = ly * chunkSize + lx
+            mTd ← Lua.liftIO $ getWorldTileData env
+            case mTd >>= lookupChunk coord of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        z   = lcSurfaceMap lc VU.! idx
+                        i   = z - ctStartZ col
+                        s   = if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+                              then ctSlopes col VU.! i
+                              else 0
+                    Lua.pushinteger (fromIntegral s)
+                    return 1
         _ → do
             Lua.pushnil
             return 1

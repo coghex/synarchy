@@ -35,6 +35,7 @@ import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Save.Serialize (saveWorld)
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
+import World.Construct.Apply (applyConstructSlopes)
 import Building.Types (BuildingManager(..), unBuildingId, biPage)
 import Unit.Types (UnitManager(..), unUnitId, unitsOnPage, uiPage)
 import Unit.Sim.Types (UnitThreadState(..))
@@ -445,9 +446,11 @@ handleWorldLoadSaveCommand env logger pageId saveData
             when isActive $ sendGenLog env "Rebuilding arena page..."
             edits  ← readIORef (wsEditsRef worldState)
             desigs ← readIORef (wsMineDesignationsRef worldState)
+            cdesigs ← readIORef (wsConstructDesignationsRef worldState)
             -- Fixed StdGen: the gen only varies cosmetic surface grass, and
             -- a fixed seed keeps repeated loads of the same save identical.
-            let arenaChunks = map (applyDigSlopes desigs . replayEdits edits)
+            let arenaChunks = map ( applyConstructSlopes cdesigs
+                                  . applyDigSlopes desigs . replayEdits edits)
                                   (generateArenaChunks (mkStdGen 0))
                 chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
             _ ← evaluate (force arenaChunks)
@@ -543,7 +546,9 @@ handleWorldLoadSaveCommand env logger pageId saveData
                     }
             edits ← readIORef (wsEditsRef worldState)
             desigs ← readIORef (wsMineDesignationsRef worldState)
-            let centerChunk = applyDigSlopes desigs (replayEdits edits centerChunkRaw)
+            cdesigs ← readIORef (wsConstructDesignationsRef worldState)
+            let centerChunk = applyConstructSlopes cdesigs
+                    (applyDigSlopes desigs (replayEdits edits centerChunkRaw))
             atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                 (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                                , wtdMaxChunks = 200 }, ())

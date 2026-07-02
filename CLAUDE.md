@@ -230,6 +230,10 @@ echo 'return world.getChunkInfo(cx, cy)' | nc -w 2 localhost 8008
 # Single tile terrain — returns: surfaceZ, terrainSurfaceZ
 echo 'return world.getTerrainAt(gx, gy)' | nc -w 2 localhost 8008
 
+# Surface tile slope bitmask (bit0=N,1=E,2=S,3=W; 0=flat) — what the
+# dig + construction (#96) corner-progress displays write
+echo 'return world.getSlopeAt(gx, gy)' | nc -w 2 localhost 8008
+
 # Single tile fluid — returns: type(string), surface(int)
 echo 'return world.getFluidAt(gx, gy)' | nc -w 2 localhost 8008
 
