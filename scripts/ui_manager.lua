@@ -400,20 +400,14 @@ function uiManager.showMenu(menuName, params)
         if uiManager.moduleReady.worldView then worldView.hide() end
         if uiManager.moduleReady.hud then hud.hide() end
     end
-    -- The main debug overlay is only meaningful in the gameplay world
-    -- view and is never torn down by the menu's own pages. hud.hide()
-    -- handles it, but Settings opened from a game view keeps the HUD
-    -- alive (keepWorld) and so skips that path — leaving the F8 overlay
-    -- visible AND clickable (uiManager.onMouseDown still gives it first
-    -- crack via tryClaimClick) on the Settings screen. Hide it on every
-    -- menu transition regardless of keepWorld (#147).
-    pcall(function() require("scripts.debug").hide() end)
-    -- Same leak for an in-flight drag-select box (#146): the keepWorld
-    -- Settings path skips hud.hide(), so an armed/dragging box would
-    -- survive onto the Settings screen and could commit afterward. cancel()
-    -- abandons it (idempotent) on every menu transition regardless of
-    -- keepWorld.
-    pcall(function() require("scripts.unit_drag_select").cancel() end)
+    -- Sweep the widgets that must die on EVERY menu transition regardless
+    -- of keepWorld (#156) — the keepWorld Settings path skips hud.hide()
+    -- above, which would otherwise leave the F8 debug overlay visible AND
+    -- clickable (uiManager.onMouseDown still gives it first crack via
+    -- tryClaimClick, #147) and an in-flight drag-select box committable
+    -- (#146) on the Settings screen. One registry entry per widget; see
+    -- scripts/ui/view_teardown.lua for the per-widget rationale.
+    require("scripts.ui.view_teardown").run("menu")
     if uiManager.moduleReady.saveBrowser then saveBrowser.hide() end
     if uiManager.moduleReady.loadingScreen then loadingScreen.hide() end
     if uiManager.moduleReady.testArena and not keepWorld then testArena.hide() end
