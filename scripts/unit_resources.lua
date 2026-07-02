@@ -37,13 +37,26 @@ local unitResources = {}
 local KCAL_PER_KG_FAT  = 7700
 local KCAL_PER_KG_LEAN = 1800
 
--- Surplus regrowth: while hunger > 75% of max, divert this much
--- energy per real-second from the hunger pool into body mass at the
+-- Surplus regrowth: while the calorie store > 75% of max, divert this
+-- much energy per real-second from the store into body mass at the
 -- activity-dependent split (idle stores mostly fat, walking builds
 -- mostly muscle). Tunable — at 0.1 kcal/sec ≈ 0.017 kg fat/game-day
 -- at idle, which is slow; raise if regrowth feels imperceptible in
 -- testing.
 local REGROWTH_RATE_KCAL_PER_SEC = 0.1
+
+-- Two-layer food model (#93). The STOMACH meter ("hunger", filled by
+-- unit.feed) digests into the energy STORE ("calories", spent by
+-- metabolism) at this rate. ~3 kcal/s empties a full default-acolyte
+-- stomach (~713 kcal) in ~4 game-hours, and outpaces the idle burn
+-- (~0.92 kcal/s) ~3:1 so eating genuinely replenishes the store.
+-- Digestion PAUSES while the store is full — the stomach acts as a
+-- buffer, nothing is wasted (surplus-regrowth then drains the store
+-- into body mass, making room).
+local DIGESTION_RATE_KCAL_PER_SEC = 3.0
+-- kcal credited to the store per stomach-kcal digested. 1.0 = the
+-- digestible energy is already what the food's calorie value says.
+local DIGESTION_CONVERSION = 1.0
 
 -- Phase 4 catabolism / organ failure constants.
 --
@@ -158,22 +171,34 @@ local config = {
             -- this is the floor below which the unit doesn't recover.
             death_threshold    = 0.05,
         },
+        -- Two-layer food model (#93). "hunger" is the STOMACH meter:
+        -- filled by eating (unit.feed), drained ONLY by digestion
+        -- (tickDigestion — a coupled transfer, not a tickResource
+        -- drain, so this entry declares no drain at all; it exists so
+        -- the first-tick init seeds a live pool). The eat AI triggers
+        -- on this meter — the unit feels hungry, not depleted.
         hunger = {
-            max_from         = "max_hunger",
+            max_from = "max_hunger",
+        },
+        -- "calories" is the energy STORE digestion feeds. Everything
+        -- the old single-layer "hunger" pool drove now keys on this:
+        -- metabolic burn, surplus regrowth, catabolism (tickStarvation),
+        -- the starving alert, thermo heat gating and wound-heal rate.
+        calories = {
+            max_from         = "max_calories",
             -- Drain at metabolism_rate × activity_multiplier rather
             -- than a fixed constant. Walking burns ~1.5× idle BMR.
-            -- The hunger meter alone doesn't collapse the unit —
+            -- An empty store alone doesn't collapse the unit —
             -- fasting is energizing; weakness only kicks in after
             -- Phase 4 catabolism exhausts the fat reserves and the
             -- organ-failure stamina drain takes over.
             drain_metabolic  = true,
-            -- Surplus storage. While hunger > 75 % of max, divert
-            -- REGROWTH_RATE_KCAL_PER_SEC from the food pool into
-            -- body mass at the activity-dependent split. Both the
-            -- divert AND the metabolic drain run in the same tick,
-            -- so a well-fed unit empties its hunger pool a bit
-            -- faster than the BMR alone — that's the food being
-            -- stored.
+            -- Surplus storage. While calories > 75 % of max, divert
+            -- REGROWTH_RATE_KCAL_PER_SEC from the store into body
+            -- mass at the activity-dependent split. Both the divert
+            -- AND the metabolic drain run in the same tick, so a
+            -- well-fed unit empties its store a bit faster than the
+            -- BMR alone — that's the food being stored.
             surplus_regrowth = true,
         },
     },
@@ -226,7 +251,7 @@ local config = {
 -- Survival emits three player-events flavours:
 --   * survival_critical "X died of <cause>" on every unit.kill site
 --     (no debouncing — each unit dies once).
---   * survival_warning "X is starving"   when hunger hits 0
+--   * survival_warning "X is starving"   when the calorie store hits 0
 --   * survival_warning "X is dehydrated" when hydration < 25%
 --
 -- Warnings are debounced with hysteresis to avoid spamming the popup
@@ -244,8 +269,8 @@ local config = {
 local unitAlertState = {}  -- uid → { starvation = bool, dehydration = bool }
 
 -- Rearm thresholds (as fractions of max). Trigger thresholds are
--- "hunger ≤ 0" (the floor) and "hydration < 25%" per the design.
-local STARVATION_REARM_FRAC   = 0.25  -- clear flag when hunger > 25%
+-- "calories ≤ 0" (the floor) and "hydration < 25%" per the design.
+local STARVATION_REARM_FRAC   = 0.25  -- clear flag when calories > 25%
 local DEHYDRATION_TRIGGER_FRAC = 0.25  -- fire flag when hydration < 25%
 local DEHYDRATION_REARM_FRAC   = 0.50  -- clear flag when hydration > 50%
 
@@ -316,7 +341,7 @@ local function checkSurvivalAlerts(uid, resourceName, value, maxVal, pose, info)
     if pose == "dead" or not maxVal or maxVal <= 0 then return end
     local state = unitAlertState[uid] or {}
 
-    if resourceName == "hunger" then
+    if resourceName == "calories" then
         local rearm = maxVal * STARVATION_REARM_FRAC
         if not state.starvation then
             if value <= 0 then
@@ -383,8 +408,8 @@ function unitResources.init(scriptId)
 end
 
 -----------------------------------------------------------
--- Surplus regrowth (hunger > 75 %): divert REGROWTH_RATE_KCAL_PER_SEC
--- from the hunger pool into body mass.
+-- Surplus regrowth (calorie store > 75 %): divert
+-- REGROWTH_RATE_KCAL_PER_SEC from the store into body mass.
 --
 -- Split varies with activity:
 --   idle:    90 % fat / 10 % muscle (stored as reserve)
@@ -403,8 +428,8 @@ local function applyRegrowth(uid, activity, dt)
     local body   = unit.getStat(uid, "body_mass")
     local lean   = unit.getStat(uid, "lean_mass")
     local fat    = unit.getStat(uid, "fat_mass")
-    local hunger = unit.getStat(uid, "hunger")
-    if not (body and lean and fat and hunger) then return end
+    local store  = unit.getStat(uid, "calories")
+    if not (body and lean and fat and store) then return end
 
     local fatFrac, muscleFrac, exerciseBurn
     if activity == "walking" then
@@ -421,26 +446,56 @@ local function applyRegrowth(uid, activity, dt)
     local newFat    = math.max(0, fat  + fatDelta)
     local newLean   = math.max(0, lean + leanDelta)
     local newBody   = math.max(0, body + fatDelta + leanDelta)
-    local newHunger = math.max(0, hunger - REGROWTH_RATE_KCAL_PER_SEC * dt)
+    local newStore  = math.max(0, store - REGROWTH_RATE_KCAL_PER_SEC * dt)
 
     unit.setStat(uid, "fat_mass",  newFat)
     unit.setStat(uid, "lean_mass", newLean)
     unit.setStat(uid, "body_mass", newBody)
-    unit.setStat(uid, "hunger",    newHunger)
+    unit.setStat(uid, "calories",  newStore)
     unit.recomputeBody(uid)
 end
 
 -----------------------------------------------------------
+-- Digestion tick (#93): move kcal from the stomach meter ("hunger")
+-- into the energy store ("calories") at DIGESTION_RATE_KCAL_PER_SEC ×
+-- DIGESTION_CONVERSION. Runs AFTER the resource drains (the store has
+-- just paid this tick's metabolism) and BEFORE tickStarvation (so a
+-- unit still digesting food never catabolizes body mass).
+--
+-- The transfer is clamped by BOTH ends: what the stomach holds and
+-- what the store can absorb. A full store pauses digestion — the
+-- stomach is a buffer, nothing is wasted; surplus-regrowth drains the
+-- store into body mass, making room again.
+-----------------------------------------------------------
+local function tickDigestion(uid, dt)
+    local stomach = unit.getStat(uid, "hunger")
+    local store   = unit.getStat(uid, "calories")
+    local maxCal  = unit.getStat(uid, "max_calories")
+    if not (stomach and store and maxCal) then return end
+    if stomach <= 0 or store >= maxCal then return end
+
+    local room     = (maxCal - store) / DIGESTION_CONVERSION
+    local transfer = math.min(DIGESTION_RATE_KCAL_PER_SEC * dt,
+                              stomach, room)
+    if transfer <= 0 then return end
+
+    unit.setStat(uid, "hunger",   stomach - transfer)
+    unit.setStat(uid, "calories", math.min(maxCal,
+        store + transfer * DIGESTION_CONVERSION))
+end
+
+-----------------------------------------------------------
 -- Starvation tick (Phase 4). Runs once per unit per update, AFTER
--- the hunger resource has been drained, so it sees the post-drain
--- hunger value.
+-- the calorie store has been drained AND digestion has refilled it,
+-- so it sees the post-transfer store value — a unit with food still
+-- digesting never catabolizes.
 --
 -- Three outcomes per tick:
 --   1. lean ≤ min_lean → respiratory failure: unit.kill, return.
 --      (Lungs and heart are skeletal-or-cardiac muscle; once those
 --       waste below the floor, biology ends.)
---   2. hunger > 0 → no catabolism (the meter has slack).
---   3. hunger ≤ 0 → eat body mass to cover the kcal deficit:
+--   2. calories > 0 → no catabolism (the store has slack).
+--   3. calories ≤ 0 → eat body mass to cover the kcal deficit:
 --      - fat > min_fat: 95% from fat, 5% from muscle (slow shrink,
 --        visibly losing fat first).
 --      - fat ≤ min_fat: pure muscle catabolism (sharp wasting).
@@ -474,9 +529,9 @@ local function tickStarvation(uid, dt)
         return
     end
 
-    -- No deficit if hunger pool isn't empty yet.
-    local hunger = unit.getStat(uid, "hunger")
-    if not hunger or hunger > 0 then return end
+    -- No deficit if the calorie store isn't empty yet.
+    local store = unit.getStat(uid, "calories")
+    if not store or store > 0 then return end
 
     -- metabolism_rate is already activity-aware (Phase 3 refactor),
     -- so deficit is just rate × dt.
@@ -575,7 +630,7 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
     local drainConstant = (params.drain_constant or 0)
                         + (params.drain_constant_frac or 0) * maxVal
     -- Exertion scaling: a working/fighting unit burns its baseline pool
-    -- faster than an idle one. Opt-in (hydration) so hunger — which
+    -- faster than an idle one. Opt-in (hydration) so calories — which
     -- already folds the activity multiplier into metabolism_rate — isn't
     -- double-scaled.
     if params.drain_activity_scaled then
@@ -621,7 +676,7 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
     -- spam popups. See checkSurvivalAlerts for the trigger /
     -- rearm contract. This runs against `next` (post-write) so
     -- the threshold check matches what the engine just stored.
-    if resourceName == "hunger" or resourceName == "hydration" then
+    if resourceName == "calories" or resourceName == "hydration" then
         checkSurvivalAlerts(uid, resourceName, next, maxVal, pose, nil)
     end
 
@@ -1028,11 +1083,14 @@ function unitResources.update(dt)
                             tickResource(uid, info.defName, resourceName,
                                          params, activity, pose, dt)
                         end
-                        -- After resources have ticked (and hunger has
-                        -- drained), catabolism eats body mass if hunger is
-                        -- empty. Respiratory failure (lean ≤ min_lean) is the
-                        -- direct kill path here; the gradual organ-failure
-                        -- path lives in the stamina branch of tickResource.
+                        -- After resources have ticked (and the calorie
+                        -- store has drained), digestion refills the store
+                        -- from the stomach, THEN catabolism eats body mass
+                        -- if the store is still empty. Respiratory failure
+                        -- (lean ≤ min_lean) is the direct kill path here;
+                        -- the gradual organ-failure path lives in the
+                        -- stamina branch of tickResource.
+                        tickDigestion(uid, dt)
                         tickStarvation(uid, dt)
                         checkRevive(uid, defConfig)
                     end

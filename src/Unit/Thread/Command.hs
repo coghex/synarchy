@@ -834,7 +834,8 @@ seedBodyComposition rolled =
 
 -- | Recompute body-driven derived stats from live body composition.
 --   Reads height + body_mass + lean_mass + strength_base, writes
---   strength / max_hydration / max_hunger / carrying_capacity.
+--   strength / max_hydration / max_hunger / max_calories /
+--   carrying_capacity.
 --
 --   strength_base is the un-scaled potential rolled at spawn; on the
 --   first call (no strength_base yet) we promote the rolled "strength"
@@ -860,7 +861,16 @@ recomputeBodyDerivedStats s =
                                  Nothing → HM.lookupDefault 0 "strength" s
                 strength   = strBase * (ratio ** 0.7)
                 maxHydration = bm * 0.6
-                maxHunger    = bm * 20
+                -- Two-layer food model (#93): max_hunger is STOMACH
+                -- capacity (kcal of undigested food — ~713 kcal for a
+                -- default acolyte, a few meals); max_calories is the
+                -- energy STORE digestion feeds (kept at the old bm*20
+                -- pool size, ~1426 kcal ≈ a day of idle burn, so the
+                -- starvation timelines carry over). Both are seeded for
+                -- any body unit — only units with a LIVE hunger/calories
+                -- stat (unit_resources config) actually run the system.
+                maxHunger    = bm * 10
+                maxCalories  = bm * 20
                 -- Carrying capacity from muscle: more lean mass AND
                 -- more strength = more capacity, sub-linearly in both
                 -- so the product doesn't explode at the tails.
@@ -879,6 +889,7 @@ recomputeBodyDerivedStats s =
              $ HM.insert "strength"          strength
              $ HM.insert "max_hydration"     maxHydration
              $ HM.insert "max_hunger"        maxHunger
+             $ HM.insert "max_calories"      maxCalories
              $ HM.insert "carrying_capacity" carryCap s
         _ → s
 
@@ -961,9 +972,13 @@ rollInstance env itemMgr name mFill =
     case lookupItemDef name itemMgr of
         Nothing → return Nothing
         Just def → do
-            let fill = case (mFill, idContainer def) of
-                    (Just f, Just c) → max 0 (min f (icCapacity c))
-                    _                → 0
+            -- Explicit fill wins; otherwise the def's default_fill (a
+            -- quinoa sack spawns full, a canteen defaults empty). Both
+            -- clamp to capacity; non-containers always 0.
+            let fill = case idContainer def of
+                    Just c  → max 0 (min (icCapacity c)
+                                (fromMaybe (icDefaultFill c) mFill))
+                    Nothing → 0
             qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
             cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
             wght ← rollItemWeight def (statRNGRef env)

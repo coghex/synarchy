@@ -62,6 +62,12 @@ units:
       # (which spawns pre-stocked, see first_aid_kit.yaml). Injured units
       # path to it for treatment.
       - { item: "first_aid_kit",   count: 1 }
+      # Food depot too (#93): the expedition's ration reserve beyond the
+      # two each acolyte carries, plus bulk quinoa (the sacks spawn full
+      # via their default_fill; fetch-from-mule is how hungry units will
+      # restock once the foraging/fetch AI covers food).
+      - { item: "rations",         count: 20 }
+      - { item: "quinoa_sack",     count: 2 }
 
     # 8-part quadruped anchored to ~1.5 m shoulder height
     # (canine layout, scaled up).

@@ -97,6 +97,14 @@ local function formatStatus(uid, info)
                                    fmt2(curHun), fmt2(maxHun))
     end
 
+    local maxCal = stats.get(uid, "max_calories")
+    local curCal = unit.getStat(uid, "calories")
+    local caloriesLine = "Calories: ?"
+    if curCal and maxCal then
+        caloriesLine = string.format("Calories: %s / %s",
+                                     fmt2(curCal), fmt2(maxCal))
+    end
+
     return (info.defName or "(unnamed)")
         .. "\nActivity: " .. activity
         .. "\nFacing: " .. (info.facing or "?")
@@ -108,6 +116,7 @@ local function formatStatus(uid, info)
         .. "\n" .. staminaLine
         .. "\n" .. hydrationLine
         .. "\n" .. hungerLine
+        .. "\n" .. caloriesLine
 end
 
 local function formatPhysical(uid)

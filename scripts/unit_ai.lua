@@ -617,9 +617,16 @@ local function findFoodInInventory(uid)
     if not inv then return nil end
     local best, bestN = nil, -math.huge
     for _, it in ipairs(inv) do
-        local cal = it.food and it.food.nutrition and it.food.nutrition.calories
-        if cal and cal > bestN then
-            best, bestN = it, cal
+        local nut = it.food and it.food.nutrition
+        -- Edible kcal this item can yield right now: whole-item value
+        -- for discrete food (rations), remaining-fill value for bulk
+        -- food (a quinoa sack — an eaten-dry sack scores 0 and is
+        -- skipped; unit.feed removes those anyway).
+        local cal = nut and nut.calories or 0
+        local bulk = (nut and nut.caloriesPerKg or 0) * (it.currentFill or 0)
+        local avail = math.max(cal, bulk)
+        if avail > 0 and avail > bestN then
+            best, bestN = it, avail
         end
     end
     return best
@@ -639,14 +646,25 @@ local function eatExecute(uid, s, params)
     -- Already eating? Don't re-issue the anim mid-bite.
     if unit.getActivity(uid) == "eating" then return end
 
-    local food = findFoodInInventory(uid)
-    if not food then return end
+    -- A meal, not a bite (#93): keep feeding until the stomach meter is
+    -- full or the inventory runs out of food. Bounded — each unit.feed
+    -- consumes something real, but the cap keeps a pathological item
+    -- list finite (never lock the AI into an unbounded loop).
+    for _ = 1, 10 do
+        local hun    = unit.getStat(uid, "hunger")
+        local maxHun = unit.getStat(uid, "max_hunger")
+        if hun and maxHun and hun >= maxHun * 0.99 then break end
 
-    -- unit.feed is the authoritative consume-and-credit primitive: it
-    -- removes the item, clamps the credited calories to max_hunger
-    -- (overflow wasted, by design), and plays the eat anim. Returns the
-    -- kcal credited, or nil if the item couldn't be consumed.
-    if unit.feed(uid, food.defName) then
+        local food = findFoodInInventory(uid)
+        if not food then break end
+
+        -- unit.feed is the authoritative consume-and-credit primitive:
+        -- discrete food is removed whole (credit clamped to max_hunger,
+        -- overflow wasted by design); bulk food (quinoa sack) sheds just
+        -- enough fill to top the stomach up. Plays the eat anim. Returns
+        -- the kcal credited, or nil if the item couldn't be consumed.
+        if not unit.feed(uid, food.defName) then break end
+
         -- Food carries salt — the only way to recover from sweat-driven
         -- hyponatremia (the kidneys can't make sodium). See scripts/salts.lua.
         require("scripts.salts").mealSalt(uid)

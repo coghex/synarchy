@@ -140,26 +140,28 @@ scarSeverityThreshold ∷ Float
 scarSeverityThreshold = 0.3   -- wounds milder than this heal scar-free
 
 -- Calorie gating: a starving body heals slower (the food system's
--- "starving units heal significantly slower"). The unit's hunger/
--- max_hunger fraction drives a heal-rate multiplier — full above
--- calorieHealFloorFrac of the pool, ramping down to calorieHealMin at an
--- empty stomach.
+-- "starving units heal significantly slower"). The unit's calories/
+-- max_calories fraction (the ENERGY STORE, not the stomach meter — a
+-- unit with an empty stomach but a fed store heals fine) drives a
+-- heal-rate multiplier — full above calorieHealFloorFrac of the pool,
+-- ramping down to calorieHealMin at an empty store.
 calorieHealFloorFrac ∷ Float
 calorieHealFloorFrac = 0.5
 
 calorieHealMin ∷ Float
 calorieHealMin = 0.25
 
--- | Heal-rate multiplier from the unit's calorie (hunger) state. Gated on
---   the PRESENCE of a live "hunger" stat — that's the real "this unit runs
---   on calories" signal. max_hunger alone isn't: it's a body-derived stat
---   seeded for any unit with a body block (wildlife included), but only
---   hunger-system units (acolytes) ever get a draining "hunger" pool. A
---   unit without it — wildlife, or an acolyte before its first resource
---   tick — heals ungated rather than being mistaken for starving.
+-- | Heal-rate multiplier from the unit's calorie-store state. Gated on
+--   the PRESENCE of a live "calories" stat — that's the real "this unit
+--   runs on calories" signal. max_calories alone isn't: it's a body-
+--   derived stat seeded for any unit with a body block (wildlife
+--   included), but only food-system units (acolytes) ever get a draining
+--   "calories" pool. A unit without it — wildlife, or an acolyte before
+--   its first resource tick — heals ungated rather than being mistaken
+--   for starving.
 calorieHealMultiplier ∷ HM.HashMap Text Float → Float
 calorieHealMultiplier stats =
-    case (HM.lookup "hunger" stats, HM.lookup "max_hunger" stats) of
+    case (HM.lookup "calories" stats, HM.lookup "max_calories" stats) of
         (Just cur, Just maxH)
             | maxH > 0 →
                 let frac = cur / maxH
@@ -527,7 +529,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
             -- wire its rest state here and the bonus lights up.
             restMult = if uiPose inst == "sleeping" then sleepHealMult else 1.0
             -- A starving unit heals slower (calorie gating). Wildlife
-            -- without a hunger pool reads 1.0.
+            -- without a calorie store reads 1.0.
             calHealMlt = calorieHealMultiplier (uiStats inst)
             -- SYSTEMIC immune response (Ticker B), advanced once per unit.
             -- Ramps up (accelerating, × constitution) while anything is

@@ -23,9 +23,10 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | Optional container block. Items without this can't hold a fluid.
 data ItemYamlContainer = ItemYamlContainer
-    { iycCapacity   ∷ !Float
-    , iycHolds      ∷ !Text
-    , iycFillWeight ∷ !Float   -- kg per fill unit (1.0 = litres/water)
+    { iycCapacity    ∷ !Float
+    , iycHolds       ∷ !Text
+    , iycFillWeight  ∷ !Float   -- kg per fill unit (1.0 = litres/water)
+    , iycDefaultFill ∷ !Float   -- fill when the spawn site gives none
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlContainer where
@@ -33,6 +34,7 @@ instance FromJSON ItemYamlContainer where
         ⊚ v .:  "capacity"
         ⊛ v .:? "holds" .!= "water"
         ⊛ v .:? "fill_weight" .!= 1.0
+        ⊛ v .:? "default_fill" .!= 0.0
 
 -- | One entry in an item-container's default contents (first-aid kit /
 --   toolbox): which item, how many, and an optional fill for fillable
@@ -54,13 +56,16 @@ instance FromJSON ItemYamlContent where
 --   (protein / fat / carbohydrate / micronutrients) can add sibling
 --   keys without restructuring the schema or bumping the save version.
 data ItemYamlFood = ItemYamlFood
-    { iyfCalories ∷ !Float    -- ^ kcal restored per item (food.nutrition.calories)
+    { iyfCalories      ∷ !Float  -- ^ kcal per item (food.nutrition.calories)
+    , iyfCaloriesPerKg ∷ !Float  -- ^ kcal per kg of fill for BULK food
+                                 --   (food.nutrition.calories_per_kg)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlFood where
     parseJSON = withObject "ItemYamlFood" $ \v → do
         nut ← v .: "nutrition"
-        ItemYamlFood ⊚ nut .: "calories"
+        ItemYamlFood ⊚ nut .:? "calories" .!= 0.0
+                     ⊛ nut .:? "calories_per_kg" .!= 0.0
 
 -- | (min, max) range for a rolled spec — used by both quality and
 --   condition. Interpreted as a normal distribution clamped to the

@@ -651,7 +651,9 @@ local STAT_DEFS = {
     stamina      = { icon = "stamina",      name = "Stamina",
         desc = "Drives sustained physical effort. Drops with action, regenerates with rest." },
     hunger       = { icon = "hunger",       name = "Hunger",
-        desc = "Need for food. High hunger reduces stamina regen and eventually starves the unit." },
+        desc = "Stomach fullness (kcal of undigested food). Fills when the unit eats; drains as digestion feeds the calorie store. Low hunger triggers auto-eating." },
+    calories     = { icon = "hunger",       name = "Calories",
+        desc = "Energy store (kcal available to spend). Fed by digestion, drained by metabolism and activity. At 0 the body catabolizes fat, then muscle — starvation." },
     hydration    = { icon = "hydration",    name = "Hydration",
         desc = "Need for water. Drops faster than hunger; critical in hot climates." },
     blood        = { icon = "blood",        name = "Blood",
@@ -1524,10 +1526,10 @@ local function unitConditions(uid)
             out[#out + 1] = { name = "Dehydrated", icon = "hydration",
                 hint = "Water below 25%. Collapses near empty; find a water source." }
         end
-        local hu = stats.get(uid, "hunger")
-        if hu and hu <= 0 then
+        local cal = stats.get(uid, "calories")
+        if cal and cal <= 0 then
             out[#out + 1] = { name = "Starving", icon = "hunger",
-                hint = "Out of food — burning fat then muscle reserves to survive." }
+                hint = "Out of energy — burning fat then muscle reserves to survive." }
         end
     end
 
@@ -1614,6 +1616,8 @@ local function buildStatusPanel(rect, uid)
           colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) },
         { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
           colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) },
+        { key = "calories",  value = function(u) return fmtCurMax(u, "calories",  "max_calories")  end,
+          colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) },
         { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
           colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) },
         { key          = "carrying_capacity",
