@@ -48,14 +48,16 @@ floraAt env ws gx gy = do
             , Just sp ← [lookupSpecies (fiSpecies i) cat]
             ]
 
--- | world.getFloraAt(gx, gy) → {id, harvestable, regrowthRemaining} | nil
+-- | world.getFloraAt(gx, gy) → {id, harvestable, regrowthRemaining,
+--   tags} | nil
 --
 --   nil when the tile has no flora (or its chunk isn't loaded). When
 --   several instances share the tile, a harvestable species wins the
 --   report (a berry bush over the decorative dandelion beside it).
 --   @harvestable@ is true only for a harvestable SPECIES with no live
 --   regrowth timer; @regrowthRemaining@ is the timer in game-seconds
---   (0 when none).
+--   (0 when none). @tags@ is the species' harvest-tag array (#97 —
+--   "wood" marks a choppable tree; empty for non-harvestable flora).
 worldGetFloraAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetFloraAtFn env = do
     mGx ← Lua.tointeger 1
@@ -80,10 +82,11 @@ worldGetFloraAtFn env = do
                                 let timer = HM.lookupDefault 0 (gx, gy) harvests
                                 in Just ( fsName sp
                                         , isJust (fsHarvest sp) ∧ timer ≤ 0
-                                        , timer )
+                                        , timer
+                                        , maybe [] fhTags (fsHarvest sp) )
             case mResult of
                 Nothing → Lua.pushnil
-                Just (name, harvestable, timer) → do
+                Just (name, harvestable, timer, tags) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 name)
                     Lua.setfield (-2) "id"
@@ -91,27 +94,36 @@ worldGetFloraAtFn env = do
                     Lua.setfield (-2) "harvestable"
                     Lua.pushnumber (Lua.Number (realToFrac timer))
                     Lua.setfield (-2) "regrowthRemaining"
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] tags) $ \(i, tg) → do
+                        Lua.pushstring (TE.encodeUtf8 tg)
+                        Lua.rawseti (-2) (fromIntegral i)
+                    Lua.setfield (-2) "tags"
             return 1
         _ → Lua.pushnil >> return 1
 
--- | world.harvestFlora(gx, gy) → array of {id, gid} | nil
+-- | world.harvestFlora(gx, gy [, tag]) → array of {id, gid} | nil
 --
 --   Harvests the tile's (first) harvestable-species instance: rolls each
 --   yield entry's count, spawns the items as ground items scattered
 --   around the tile, starts the regrowth timer, and invalidates the quad
 --   cache so the depleted texture shows. One table entry per spawned
 --   ITEM — @gid@ is the ground-item id, ready for item.pickupGround.
---   nil when the tile has nothing harvestable (no flora / decorative
---   only / still regrowing) — the codebase signals failure with nil
---   rather than raising.
+--   With @tag@ (#97) only a species carrying that harvest tag is
+--   harvested — the chop AI passes "wood" so a shared tile can't trade
+--   its berry bush for the designated tree. nil when the tile has
+--   nothing (matching) harvestable — the codebase signals failure with
+--   nil rather than raising.
 worldHarvestFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldHarvestFloraFn env = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
+    mTag ← Lua.tostring 3
     case (mGx, mGy) of
         (Just gx', Just gy') → do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
+                tagFilter = TE.decodeUtf8 <$> mTag
             mSpawned ← Lua.liftIO $ do
                 mWs ← activeWorldState env
                 case mWs of
@@ -122,7 +134,8 @@ worldHarvestFloraFn env = do
                         let live = HM.lookupDefault 0 (gx, gy) harvests
                             mFh = listToMaybe
                                 [ fh | (_, sp) ← insts
-                                     , Just fh ← [fsHarvest sp] ]
+                                     , Just fh ← [fsHarvest sp]
+                                     , maybe True (`elem` fhTags fh) tagFilter ]
                         case mFh of
                             Just fh | live ≤ 0 → do
                                 spawned ← spawnYields env ws gx gy (fhYield fh)
@@ -187,22 +200,32 @@ spawnYields env ws gx gy yields = do
                             (fromIntegral gy + 0.5 + jv)
                     pure (name, gid)
 
--- | world.findHarvestableFlora(gx, gy, radius) → {gx, gy, id, dist} | nil
+-- | world.findHarvestableFlora(gx, gy, radius [, tag])
+--   → {gx, gy, id, dist} | nil
 --
 --   Nearest currently-harvestable flora tile within @radius@ tiles
 --   (Euclidean, clamped to 64 like getAreaFluid), scanning only LOADED
---   chunks. Skips tiles with a live regrowth timer. nil when nothing
---   harvestable is in range.
+--   chunks. Skips tiles with a live regrowth timer.
+--
+--   With @tag@ (#97): only species whose harvest tags include it — the
+--   chop tool/probe pass "wood" to find trees. WITHOUT a tag the call
+--   is the foraging AI's food search, so only species whose yield
+--   contains at least one EDIBLE item count: before choppable trees
+--   every harvestable was food and the distinction didn't exist, but a
+--   bare call must not send a starving unit to fell an oak for
+--   inedible logs. nil when nothing matching is in range.
 worldFindHarvestableFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldFindHarvestableFloraFn env = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     mRad ← Lua.tointeger 3
+    mTag ← Lua.tostring 4
     case (mGx, mGy) of
         (Just gx', Just gy') → do
             let gx = fromIntegral gx' ∷ Int
                 gy = fromIntegral gy' ∷ Int
                 radius = min 64 (max 1 (maybe 24 fromIntegral mRad)) ∷ Int
+                tagFilter = TE.decodeUtf8 <$> mTag
             mBest ← Lua.liftIO $ do
                 mWs ← activeWorldState env
                 case mWs of
@@ -211,18 +234,28 @@ worldFindHarvestableFloraFn env = do
                         tileData ← readIORef (wsTilesRef ws)
                         cat ← readIORef (floraCatalogRef env)
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        itemMgr ← readIORef (itemManagerRef env)
                         let (cLo, _) = globalToChunk (gx - radius) (gy - radius)
                             (cHi, _) = globalToChunk (gx + radius) (gy + radius)
                             ChunkCoord cx0 cy0 = cLo
                             ChunkCoord cx1 cy1 = cHi
                             r2 = radius * radius
+                            edibleYield fh = or
+                                [ isJust (idFood def)
+                                | (yName, _, _) ← fhYield fh
+                                , Just def ← [lookupItemDef yName itemMgr]
+                                ]
+                            wanted fh = case tagFilter of
+                                Just tg → tg `elem` fhTags fh
+                                Nothing → edibleYield fh
                             candidates =
                                 [ (d2, tgx, tgy, fsName sp)
                                 | cx ← [cx0 .. cx1], cy ← [cy0 .. cy1]
                                 , Just lc ← [lookupChunk (ChunkCoord cx cy) tileData]
                                 , i ← fcdInstances (lcFlora lc)
                                 , Just sp ← [lookupSpecies (fiSpecies i) cat]
-                                , isJust (fsHarvest sp)
+                                , Just fh ← [fsHarvest sp]
+                                , wanted fh
                                 , let (tgx, tgy) = chunkToGlobal (ChunkCoord cx cy)
                                         (fromIntegral (fiTileX i))
                                         (fromIntegral (fiTileY i))

@@ -56,6 +56,7 @@ import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.Construct
+import Engine.Scripting.Lua.API.Chop
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
@@ -450,6 +451,21 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setJobStatus"       (constructSetJobStatusFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
   Lua.setglobal (Lua.Name "construction")
+
+  -- Chop designation tool (#97). Mirrors the construction-designation
+  -- API: the tool drives setAnchor/clearAnchor/designate, the chop AI
+  -- drives nearestDesignation/getDesignationAt/cancelDesignation
+  -- (claims are Lua-side, like dig jobs — no engine job status).
+  Lua.newtable
+  registerLuaFunction "setAnchor"           (chopSetAnchorFn env)
+  registerLuaFunction "clearAnchor"         (chopClearAnchorFn env)
+  registerLuaFunction "designate"           (chopDesignateFn env)
+  registerLuaFunction "cancelDesignation"   (chopCancelDesignationFn env)
+  registerLuaFunction "getDesignationAt"    (chopGetDesignationAtFn env)
+  registerLuaFunction "getDesignationCount" (chopGetDesignationCountFn env)
+  registerLuaFunction "nearestDesignation"  (chopNearestDesignationFn env)
+  registerLuaFunction "setDesignateTexture" (chopSetDesignateTextureFn env)
+  Lua.setglobal (Lua.Name "chop")
 
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.

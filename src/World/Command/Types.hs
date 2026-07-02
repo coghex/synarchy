@@ -118,6 +118,24 @@ data WorldCommand
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
         -- ^ Ghost texture for committed construction designations, keyed
         --   by target category ("structure" | "building").
+    | WorldSetChopAnchor WorldPageId Int Int
+        -- ^ Chop tool (#97): first click anchors the designation
+        --   rectangle at (gx, gy). The render pass previews anchor→hover.
+    | WorldClearChopAnchor WorldPageId
+        -- ^ Chop tool: cancel the pending rectangle (right-click /
+        --   Escape / tool switch).
+    | WorldDesignateChop WorldPageId Int Int Int Int Text
+        -- ^ Chop tool: second click commits the rectangle
+        --   (gx1,gy1)–(gx2,gy2). Only tiles in loaded chunks holding a
+        --   currently-harvestable flora species carrying the given
+        --   harvest tag (the tool passes "wood") are designated, each at
+        --   its own surface z — trees grow across slopes, so unlike
+        --   mine/construct there is no per-z-level filter.
+    | WorldCancelChop WorldPageId Int Int
+        -- ^ Remove the chop designation at (gx, gy), if any (the chop
+        --   AI's completion, or a player cancel).
+    | WorldSetChopDesignateTexture WorldPageId TextureHandle
+        -- ^ Texture for committed chop-designation markers.
     | WorldDigTile WorldPageId Int Int Float Float Float Float Float
         -- ^ Apply dig progress to the designated tile at (gx, gy):
         --   pageId gx gy uxPos uyPos amount minerSkill perception.

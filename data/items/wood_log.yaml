@@ -1,0 +1,13 @@
+items:
+  - name: "wood_log"
+    display_name: "Wood Log"
+    sprite: "assets/textures/items/material/wood_log.png"
+    # A split trunk section an acolyte can shoulder — heavy enough
+    # that hauling a felled tree home takes trips (carry capacity is
+    # weight-gated). The organic construction material (#97): chop
+    # designations fell trees (data/flora harvestable wood yields),
+    # and build-job material sourcing (#96) consumes these.
+    weight: 12.0
+    category: Materials
+    make: world
+    material: wood
