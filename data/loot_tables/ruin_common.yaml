@@ -10,5 +10,9 @@ entries:
     weight: 3
   - id: first_aid_kit
     weight: 2
+  - id: shovel_steel
+    weight: 2
+  - id: steel_hardware
+    weight: 2
   - id: steel_dagger
     weight: 1

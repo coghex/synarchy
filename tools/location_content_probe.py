@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Headless location content-spawning probe (#90).
+"""Headless location content-spawning probe (#90) + ruin probe (#91).
 
 Issues #88/#89 give locations a definition and a place in the world;
 this checks the `contents` list actually spawns things when a
 location's chunk loads, end to end:
 
-  1. Visiting a `ruin_small` (contents: building, unit, item, loot_table)
-     spawns all of them: one `cargo_hold_S` building, one hostile
-     `acolyte` unit, one fixed-position `rations` ground item, and two
-     loot-table rolls (also ground items) — per ruin.
-  2. The one-time content-spawn flag survives a save -> quit -> fresh
-     restart -> load: revisiting the same chunk does NOT respawn
-     (counts stay exactly the same, not doubled).
+  1. Visiting a `ruin_small` (#91: a partially-collapsed room) spawns
+     its contents — two fixed-position ground items (`radio`,
+     `canteen_steel_2l`) and two `ruin_common` loot-table rolls (also
+     ground items) — per ruin, and NO units or buildings (units in
+     ruins are deferred by design). The geometry is a damaged
+     `room_small`: all 25 floors present, a breached perimeter (some
+     but not all of the 20 wall segments), exactly 3 corner posts, and
+     every piece carrying the pack's "damaged" variant texture path.
+  2. The one-time content-spawn flag AND the damaged geometry survive a
+     save -> quit -> fresh restart -> load: revisiting the same chunk
+     does NOT respawn (counts stay exactly the same, not doubled), the
+     breach pattern replays identically, and the pieces still resolve
+     to the damaged variant art (the #91 variant round-trip).
   3. An unknown content `kind` and an unknown content `id` both log a
      warning and are skipped rather than crashing the engine.
 
@@ -185,6 +191,43 @@ def wait_floor(port: int, gx: int, gy: int, page: str | None = None, tries: int 
     return False
 
 
+def ruin_geometry(port: int, gx: int, gy: int, page: str | None = None) -> tuple[int, int, int]:
+    """(floors, walls, posts) of the 5x5 ruin anchored at (gx, gy).
+    Counted server-side over the room footprint: 25 floor tiles, the 20
+    perimeter wall segments (nw/se run along x0/x1, ne/sw along y0/y1),
+    and the 4 corner posts."""
+    arg = f",'{page}'" if page else ""
+    lua = (
+        f"local f,w,p=0,0,0; "
+        f"for x={gx-2},{gx+2} do for y={gy-2},{gy+2} do "
+        f"if structure.hasAt(x,y,'floor'{arg}) then f=f+1 end end end; "
+        f"for y={gy-2},{gy+2} do "
+        f"if structure.hasAt({gx-2},y,'wall_nw'{arg}) then w=w+1 end "
+        f"if structure.hasAt({gx+2},y,'wall_se'{arg}) then w=w+1 end end; "
+        f"for x={gx-2},{gx+2} do "
+        f"if structure.hasAt(x,{gy-2},'wall_ne'{arg}) then w=w+1 end "
+        f"if structure.hasAt(x,{gy+2},'wall_sw'{arg}) then w=w+1 end end; "
+        f"for _,c in ipairs({{{{{gx-2},{gy-2},'post_n'}},{{{gx+2},{gy-2},'post_e'}},"
+        f"{{{gx+2},{gy+2},'post_s'}},{{{gx-2},{gy+2},'post_w'}}}}) do "
+        f"if structure.hasAt(c[1],c[2],c[3]{arg}) then p=p+1 end end; "
+        f"return f .. ',' .. w .. ',' .. p")
+    r = send(port, lua).strip('"')
+    try:
+        f, w, p = (int(v) for v in r.split(","))
+        return f, w, p
+    except ValueError:
+        return -1, -1, -1
+
+
+def floor_tex(port: int, gx: int, gy: int, page: str | None = None) -> str:
+    """Texture path of the floor piece at (gx, gy) — the persisted
+    variant identity (#91)."""
+    arg = f",'{page}'" if page else ""
+    r = send(port, f"local t=structure.getAt({gx},{gy},'floor'{arg}); "
+                   f"return t and t.tex or 'none'")
+    return r.strip('"')
+
+
 def unit_count(port: int, def_name: str) -> int:
     r = send(port, "return unit.list()")
     return len(re.findall(re.escape(def_name), r))
@@ -230,6 +273,7 @@ def main() -> int:
     failures: list[str] = []
     ruins: list[dict] = []
     counts1: dict = {}
+    geoms1: dict = {}
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
     proc = boot(args.port)
@@ -253,57 +297,72 @@ def main() -> int:
             if n != len(ruins):
                 failures.append(f"only {n}/{len(ruins)} ruin(s) stamped")
 
-            # Content spawning has its own settle time (unit spawn queues to
-            # the unit thread) — poll briefly for the expected counts.
+            # Content spawning has its own settle time — poll briefly
+            # for the expected ground-item count.
+            # Each ruin (#91): 2 fixed items (radio + canteen) + 2
+            # loot_table rolls, all ground items; NO units or buildings.
+            want_ground = 4 * len(ruins)
             counts1 = {}
             for _ in range(20):
                 counts1 = spawn_counts(args.port)
-                if (counts1["acolyte"] >= len(ruins)
-                        and counts1["cargo_hold_S"] >= len(ruins)):
+                if counts1["ground_total"] >= want_ground:
                     break
                 time.sleep(0.5)
             print(f"  spawned: {counts1}")
 
-            want_units = len(ruins)
-            want_buildings = len(ruins)
-            # Each ruin: 1 fixed `rations` + 2 loot_table rolls (from
-            # ruin_common: rations/first_aid_kit/steel_dagger).
-            want_ground = 3 * len(ruins)
-
-            if counts1["acolyte"] == want_units:
-                print(f"PASS: {want_units} 'acolyte' unit(s) spawned (1 per ruin, faction hostile)")
-            else:
-                failures.append(
-                    f"expected {want_units} acolyte unit(s), got {counts1['acolyte']}")
-
-            if counts1["cargo_hold_S"] == want_buildings:
-                print(f"PASS: {want_buildings} 'cargo_hold_S' building(s) spawned")
-            else:
-                failures.append(
-                    f"expected {want_buildings} cargo_hold_S building(s), "
-                    f"got {counts1['cargo_hold_S']}")
-
             if counts1["ground_total"] == want_ground:
                 print(f"PASS: {want_ground} ground item(s) spawned "
-                      f"(fixed 'rations' + 2 loot_table rolls per ruin)")
+                      f"(fixed radio + canteen + 2 loot_table rolls per ruin)")
             else:
                 failures.append(
                     f"expected {want_ground} ground item(s), got "
                     f"{counts1['ground_total']} ({counts1['ground_by_name']})")
 
-            rations = counts1["ground_by_name"].get("rations", 0)
-            if rations >= len(ruins):
-                print(f"PASS: fixed-position 'rations' item present ({rations} >= {len(ruins)})")
+            if counts1["acolyte"] == 0 and counts1["cargo_hold_S"] == 0:
+                print("PASS: no units or buildings spawned (out of scope for #91 ruins)")
             else:
-                failures.append(f"expected >= {len(ruins)} 'rations', got {rations}")
+                failures.append(
+                    f"ruin_small spawned units/buildings it shouldn't: {counts1}")
 
-            loot_names = {"rations", "first_aid_kit", "steel_dagger"}
+            for fixed in ("radio", "canteen_steel_2l"):
+                n = counts1["ground_by_name"].get(fixed, 0)
+                if n >= len(ruins):
+                    print(f"PASS: fixed-position '{fixed}' item present ({n} >= {len(ruins)})")
+                else:
+                    failures.append(f"expected >= {len(ruins)} '{fixed}', got {n}")
+
+            loot_names = {"rations", "first_aid_kit", "shovel_steel",
+                          "steel_hardware", "steel_dagger",
+                          "radio", "canteen_steel_2l"}
             unexpected = set(counts1["ground_by_name"]) - loot_names
             if not unexpected:
                 print("PASS: all spawned ground items resolve to known ids "
-                      "(fixed item + loot table entries)")
+                      "(fixed items + loot table entries)")
             else:
                 failures.append(f"unexpected ground item id(s): {unexpected}")
+
+            # #91 geometry: a ruin is a BREACHED room — all 25 floors,
+            # some but not all of the 20 perimeter wall segments, and
+            # exactly 3 of the 4 corner posts.
+            geoms1 = {}
+            for e in ruins:
+                f, w, p = ruin_geometry(args.port, e["gx"], e["gy"])
+                geoms1[(e["gx"], e["gy"])] = (f, w, p)
+                if f == 25 and 1 <= w <= 18 and p == 3:
+                    print(f"PASS: ruin at ({e['gx']},{e['gy']}) is breached "
+                          f"(floors {f}/25, walls {w}/20, posts {p}/4)")
+                else:
+                    failures.append(
+                        f"ruin at ({e['gx']},{e['gy']}) geometry wrong: "
+                        f"floors {f}/25 (want 25), walls {w}/20 (want 1..18), "
+                        f"posts {p}/4 (want 3)")
+
+            # #91 variant: the pieces persist the damaged texture path.
+            tex = floor_tex(args.port, ruins[0]["gx"], ruins[0]["gy"])
+            if "/damaged/" in tex:
+                print(f"PASS: ruin floor carries the damaged variant art ({tex})")
+            else:
+                failures.append(f"ruin floor texture is not the damaged variant: {tex}")
 
             send(args.port, "engine.saveWorld('wa', 'loc_content_probe'); return 'saved'")
             time.sleep(1.0)
@@ -333,6 +392,27 @@ def main() -> int:
             else:
                 failures.append(
                     f"contents respawned on reload: before={counts1} after={counts2}")
+
+            # #91: the damaged geometry replays identically from the edit
+            # log (same breach pattern — the builder did NOT re-run and
+            # re-roll), and the pieces still resolve to the damaged
+            # variant art (texture identity rides the structure palette).
+            for e in ruins:
+                g2 = ruin_geometry(args.port, e["gx"], e["gy"])
+                g1 = geoms1.get((e["gx"], e["gy"]))
+                if g2 == g1:
+                    print(f"PASS: ruin at ({e['gx']},{e['gy']}) replayed its "
+                          f"breach pattern exactly (floors/walls/posts {g2})")
+                else:
+                    failures.append(
+                        f"ruin at ({e['gx']},{e['gy']}) changed shape on "
+                        f"reload: before={g1} after={g2}")
+            tex = floor_tex(args.port, ruins[0]["gx"], ruins[0]["gy"])
+            if "/damaged/" in tex:
+                print(f"PASS: damaged variant survived save/load ({tex})")
+            else:
+                failures.append(
+                    f"ruin floor texture lost the damaged variant on reload: {tex}")
         finally:
             shutdown(args.port, proc)
     elif not ruins:
@@ -396,7 +476,8 @@ def main() -> int:
     finally:
         shutdown(args.port, proc)
 
-    # ---- Phase 4: a building content entry spawns correctly on a HIDDEN,
+    # ---- Phase 4: a building AND a unit content entry spawn correctly
+    #      on a HIDDEN,
     #      non-active page (#90 review fix — building.spawn now takes an
     #      explicit pageId, mirroring unit.spawn/item.spawnGround, and its
     #      occupancy/terrain-Z check is scoped to THAT page, not a snapshot
@@ -420,6 +501,7 @@ def main() -> int:
             "    min_spacing: 1\n"
             "    contents:\n"
             "      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }\n"
+            "      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }\n"
         )
     proc = boot(args.port)
     try:
@@ -467,6 +549,26 @@ def main() -> int:
                             failures.append(
                                 f"phase 4: no cargo_hold_S building at ({gx},{gy}) on "
                                 f"hidden page 'sw2' — building.list() returned: {blist!r}")
+                        # unit content (a KNOWN id) spawns too — the
+                        # unit-kind dispatch path, moved here now that
+                        # ruin_small itself is unit-free (#91). The spawn
+                        # happened while 'sw2' was hidden; unit.list is
+                        # active-world-only (#377), so show sw2 to observe
+                        # it — the hidden-spawn property is already proven.
+                        send(args.port, "world.show('sw2'); return 'ok'")
+                        n_units = 0
+                        for _ in range(20):
+                            n_units = unit_count(args.port, "acolyte")
+                            if n_units >= 1:
+                                break
+                            time.sleep(0.5)
+                        if n_units >= 1:
+                            print(f"PASS: unit content spawned on hidden page 'sw2' "
+                                  f"({n_units} acolyte)")
+                        else:
+                            failures.append(
+                                "phase 4: no acolyte unit spawned from dense_ruin "
+                                "unit content on hidden page 'sw2'")
     finally:
         shutdown(args.port, proc)
 

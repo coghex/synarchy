@@ -230,6 +230,82 @@ function builders.room_small(worldId, gx, gy, withCeiling)
         withCeiling and " (+ceiling)" or ""))
 end
 
+-- A partially-collapsed room_small (#91): same 5×5 footprint and piece
+-- order, but every piece uses the pack's "damaged" variant art, and the
+-- perimeter is BREACHED — one side loses a contiguous run of 2–3 wall
+-- segments, 1–2 stray segments fall elsewhere, and one corner post is
+-- gone (leaving its walls' ends uncapped, which reads as a broken edge).
+-- Wall pieces are cosmetic overlays (no collision), so every gap is
+-- walkable. All 25 floors are kept — texture damage only — because the
+-- stamper keys "already materialized" on the ANCHOR floor, and content
+-- scatter expects the interior intact.
+--
+-- The collapse pattern is a deterministic function of the anchor (a tiny
+-- Park–Miller PRNG seeded from gx,gy), so each ruin falls apart in its
+-- own way, but a rebuild of the same ruin collapses identically.
+local function collapseRng(gx, gy)
+    local s = (gx * 73856093 + gy * 19349663) % 2147483647
+    if s <= 0 then s = s + 2147483646 end
+    return function(n)   -- uniform 1..n
+        s = (s * 48271) % 2147483647
+        return (s % n) + 1
+    end
+end
+
+function builders.room_small_damaged(worldId, gx, gy)
+    local S = require("scripts.structures")
+    local r = ROOM_SMALL_RADIUS
+    local x0, x1 = gx - r, gx + r
+    local y0, y1 = gy - r, gy + r
+    local rand = collapseRng(gx, gy)
+    local baseZ = locations.flattenFootprint(worldId, x0, y0, x1, y1)
+
+    -- 1. floor across the whole footprint (damaged art, none missing)
+    for x = x0, x1 do
+        for y = y0, y1 do S.floor(x, y, worldId, baseZ, "damaged") end
+    end
+
+    -- 2. corner posts, minus one collapsed corner (1=n 2=e 3=s 4=w)
+    local lostPost = rand(4)
+    local posts = { { x0, y0, "n" }, { x1, y0, "e" },
+                    { x1, y1, "s" }, { x0, y1, "w" } }
+    for i, p in ipairs(posts) do
+        if i ~= lostPost then S.post(p[1], p[2], p[3], worldId, baseZ, "damaged") end
+    end
+
+    -- 3. perimeter walls, minus the breach + strays. Sides are indexed
+    --    1=nw 2=se 3=ne 4=sw; segment index i runs 0..4 along the side.
+    local breachSide = rand(4)
+    local breachLen  = 1 + rand(2)              -- 2..3 contiguous segments
+    local breachAt   = rand(6 - breachLen) - 1  -- 0-based start, fits in 0..4
+    local strays = {}
+    for _ = 1, rand(2) do
+        strays[#strays + 1] = { side = rand(4), i = rand(5) - 1 }
+    end
+    local function collapsed(side, i)
+        if side == breachSide and i >= breachAt and i < breachAt + breachLen then
+            return true
+        end
+        for _, st in ipairs(strays) do
+            if st.side == side and st.i == i then return true end
+        end
+        return false
+    end
+    for y = y0, y1 do
+        if not collapsed(1, y - y0) then S.wall(x0, y, "nw", worldId, baseZ, "damaged") end
+        if not collapsed(2, y - y0) then S.wall(x1, y, "se", worldId, baseZ, "damaged") end
+    end
+    for x = x0, x1 do
+        if not collapsed(3, x - x0) then S.wall(x, y0, "ne", worldId, baseZ, "damaged") end
+        if not collapsed(4, x - x0) then S.wall(x, y1, "sw", worldId, baseZ, "damaged") end
+    end
+    -- no ceiling — the roof fell in long ago
+
+    engine.logInfo(string.format(
+        "locations: room_small_damaged %dx%d at %d,%d (breach side %d len %d)",
+        x1 - x0 + 1, y1 - y0 + 1, gx, gy, breachSide, breachLen))
+end
+
 -- Resolve location `id` to its def, then call the builder it names.
 -- Returns true if the id was recognised and built.
 local function buildAt(id, gx, gy, worldId)
@@ -285,7 +361,8 @@ end
 -- for content entries that omit `position`. Add an entry here for
 -- each new builder's footprint; unknown builders fall back to the
 -- default.
-local FOOTPRINT_RADIUS = { room_small = ROOM_SMALL_RADIUS }
+local FOOTPRINT_RADIUS = { room_small         = ROOM_SMALL_RADIUS,
+                           room_small_damaged = ROOM_SMALL_RADIUS }
 local DEFAULT_FOOTPRINT_RADIUS = 2
 
 local function contentOffset(def, entry)

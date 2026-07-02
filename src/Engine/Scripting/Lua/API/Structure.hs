@@ -21,6 +21,7 @@ module Engine.Scripting.Lua.API.Structure
     , structureCountFn
     , structureFloorZAtFn
     , structureHasAtFn
+    , structureGetAtFn
     , structureLoadedCountFn
     , structureUnresolvedPaletteIdsFn
     , structureSetPaletteHandleFn
@@ -36,7 +37,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), activeWorldPage, activeWorldState)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
-import Structure.Palette (internPath, TexPalette(..))
+import Structure.Palette (internPath, lookupPath, TexPalette(..))
 import World.Types (wsTilesRef, wsStructureStageRef, wmWorlds, WorldPageId(..), WorldState)
 import World.Chunk.Types (LoadedChunk(..))
 import World.Tile.Types (WorldTileData(..), lookupChunk)
@@ -303,6 +304,43 @@ structureHasAtFn env = do
                     Lua.pushboolean (maybe False (const True) mSpd)
                     return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | structure.getAt(gx, gy, slot[, page]) → {z=, tex=, face=}|nil — the piece
+--   at this (tile, slot) with its texture/facemap PATHS resolved from the
+--   palette. The persisted texture identity of a piece IS its palette path
+--   (variant art included, #91), so this is how a headless test verifies a
+--   damaged wall is still damaged after a save/load. Same staging-then-
+--   authoritative lookup as hasAt.
+structureGetAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+structureGetAtFn env = do
+    gxA   ← Lua.tointeger 1
+    gyA   ← Lua.tointeger 2
+    slotA ← Lua.tostring 3
+    pageA ← Lua.tostring 4
+    case (gxA, gyA, slotA) of
+        (Just gx, Just gy, Just slotBS) →
+            case slotFromText (TE.decodeUtf8 slotBS) of
+                Nothing → Lua.pushnil >> return 1
+                Just slot → do
+                    mSpd ← Lua.liftIO $
+                        lookupStructure env (TE.decodeUtf8 <$> pageA)
+                                        (fromIntegral gx) (fromIntegral gy) slot
+                    case mSpd of
+                        Nothing → Lua.pushnil >> return 1
+                        Just spd → do
+                            pal ← Lua.liftIO $ readIORef (texPaletteRef env)
+                            Lua.newtable
+                            Lua.pushinteger (fromIntegral (spdGridZ spd))
+                            Lua.setfield (-2) "z"
+                            forM_ [ ("tex",  spdTexId spd)
+                                  , ("face", spdFaceId spd) ] $ \(k, i) →
+                                case lookupPath i pal of
+                                    Just p  → do
+                                        Lua.pushstring (TE.encodeUtf8 p)
+                                        Lua.setfield (-2) k
+                                    Nothing → pure ()
+                            return 1
+        _ → Lua.pushnil >> return 1
 
 -- | Look up a structure piece for the builder. Consults the read-your-writes
 --   staging cache first (a piece placed earlier in the SAME Lua call that the

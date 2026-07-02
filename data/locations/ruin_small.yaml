@@ -12,9 +12,11 @@ locations:
   - id: ruin_small
     label: "Small Ruin"
     type: ruin
-    # Lua builder (scripts/locations.lua `builders.room_small`): a 5x5
-    # RCT-style room — floor, corner posts, perimeter walls.
-    builder: room_small
+    # Lua builder (scripts/locations.lua `builders.room_small_damaged`,
+    # #91): a partially-collapsed 5x5 RCT-style room — damaged-variant
+    # floor / posts / walls, a walkable breach in the perimeter, one
+    # corner post gone, no ceiling.
+    builder: room_small_damaged
     # Terrain placement constraint tags read by the world-gen overlay
     # (#89) to filter candidate chunks. The room wants flat ground.
     anchor: [flat]
@@ -27,8 +29,10 @@ locations:
     # Content spawned once, the first time this location's chunk loads
     # (#90). Fixed-position entries land at that exact anchor offset;
     # entries without `position` scatter randomly within the room.
+    # A scavenge scene (#91): a dead radio and a dropped canteen where
+    # the occupants left them, plus 2 rolls of common ruin loot. Units
+    # in ruins are a future issue — none here by design.
     contents:
-      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }
-      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }
-      - { kind: item, id: rations, count: 1, position: {x: -1, y: 1} }
+      - { kind: item, id: radio, count: 1, position: {x: -1, y: -1} }
+      - { kind: item, id: canteen_steel_2l, count: 1, position: {x: 1, y: 0} }
       - { kind: loot_table, id: ruin_common, rolls: 2 }
