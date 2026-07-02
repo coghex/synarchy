@@ -18,6 +18,12 @@ worldgen; the arena has no flora), then checks:
      tree (real unit_ai stack), walks over, chops it, wood_log ground
      items appear, the designation clears, and the tile flips to
      regrowing (long timer).
+  5. Construction: the chopped logs satisfy a build job — a dungeon_1
+     POST (materials: wood_log, #96 build: block) designated beside
+     the stump gets built by the same acolyte, consuming a log off
+     the ground (the #97 acceptance that wood is a usable build
+     material). Posts need a floor under them (findConstructJob's
+     floorZAt guard), so a steel floor goes down first.
 
 Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
@@ -198,11 +204,46 @@ def main():
             print(f"  [FAIL] could not spawn woodcutter: {uid_s}")
             return 1
         time.sleep(2.0)
-        gave = send(port, f"return unit.addItem({uid},'axe_steel',0) "
-                          f"and 'yes' or 'no'").strip('"')
-        print(f"  [{'PASS' if gave == 'yes' else 'FAIL'}] axe granted: "
-              f"{gave}")
-        passed &= gave == "yes"
+        # Acolytes spawn at/over carrying capacity with a full toolkit
+        # (pick, shovel, axe, radio, rations, canteen) plus worn kit
+        # that unit.getCarryingWeight counts too. Shed everything but
+        # the axe so hauling a wood_log for the phase-5 build job can't
+        # brush carrying_capacity — the capacity STAT is a per-spawn
+        # roll (observed 17.9–24.2 kg), and the fetch capacity gate
+        # refusing the log reads as a stuck job (same shedding the
+        # construction probe does).
+        for it in ("pick_steel", "shovel_steel", "rations", "rations",
+                   "canteen_steel_2l", "radio"):
+            send(port, f"unit.removeItem({uid},'{it}'); return 'ok'")
+        # carrying_capacity is a per-spawn body-composition roll
+        # (observed 12.3–24.2 kg); on a weak roll even a bare unit in
+        # worn kit can't shoulder an 8 kg log and the phase-5 haul
+        # stalls at the fetch capacity gate. Pin the fixture: bulk the
+        # woodcutter up and recompute the derived stats — the probe
+        # tests chopping/hauling/building, not the physique lottery.
+        cap = send(port,
+                   f"local lean=unit.getStat({uid},'lean_mass'); "
+                   f"local body=unit.getStat({uid},'body_mass'); "
+                   f"if lean and body then "
+                   f"unit.setStat({uid},'lean_mass', lean*1.6); "
+                   f"unit.setStat({uid},'body_mass', body+lean*0.6); "
+                   f"unit.recomputeBody({uid}) end; "
+                   f"return unit.getStat({uid},'carrying_capacity') or -1")
+        try:
+            cap_ok = float(cap) >= 18.0
+        except ValueError:
+            cap_ok = False
+        if not cap_ok:
+            print(f"  [FAIL] could not pin carrying capacity "
+                  f"(got {cap})")
+            passed = False
+        has_axe = send(port,
+                       f"for _,it in ipairs(unit.getInventory({uid}) or {{}})"
+                       f" do if it.defName=='axe_steel' then return 'yes' end"
+                       f" end; return 'no'").strip('"')
+        print(f"  [{'PASS' if has_axe == 'yes' else 'FAIL'}] woodcutter "
+              f"carries an axe: {has_axe}")
+        passed &= has_axe == "yes"
         # Fresh acolytes spawn with the standing "find_water" goal
         # (DEFAULT_GOALS), whose search floor (~3.0) outranks menial
         # work (#306 bands) — and the water-search spiral happily walks
@@ -240,6 +281,70 @@ def main():
         print(f"  [{'PASS' if ok4 else 'FAIL'}] acolyte fells the tree "
               f"autonomously: designation_cleared={felled} "
               f"logs_on_ground={logs} tile_regrowing={regrowing}")
+        if not ok4:
+            print("\nSOME FAILED")
+            return 1
+
+        # --- 5. Chopped logs satisfy construction (#96 wiring) ---
+        # A dungeon_1 POST costs 1 wood_log (its build: block). Find a
+        # flat, dry, flora-free tile near the stump; the post needs a
+        # floor under it (findConstructJob skips floorless posts), so
+        # the acolyte first lays a steel floor from inventory, then
+        # builds the post from a felled log it hauls off the ground.
+        spot = send(port,
+                    f"for r=2,5 do for dx=-r,r do for dy=-r,r do "
+                    f"local x,y={tx}+dx,{ty}+dy; "
+                    f"if world.getSlopeAt(x,y)==0 and not world.getFluidAt(x,y)"
+                    f" and not world.getFloraAt(x,y)"
+                    f" and not chop.getDesignationAt('main_world',x,y) then "
+                    f"return x..','..y end end end end; return 'none'"
+                    ).strip('"')
+        if spot == "none":
+            print("  [FAIL] no flat buildable tile near the stump")
+            print("\nSOME FAILED")
+            return 1
+        px, py = (int(v) for v in spot.split(","))
+        send(port, f"unit.addItem({uid},'steel_plate',0); return 'ok'")
+        send(port, f"construction.designate('main_world',{px},{py},{px},{py},"
+                   f"'structure','dungeon_1','floor'); return 'ok'")
+        deadline = time.time() + 90.0
+        floored = False
+        while time.time() < deadline:
+            time.sleep(2.0)
+            if send(port,
+                    f"return structure.hasAt({px},{py},'floor')") == "true":
+                floored = True
+                break
+        if not floored:
+            print(f"  [FAIL] prerequisite floor never built at ({px},{py})")
+            print("\nSOME FAILED")
+            return 1
+
+        logs_before = count_logs_near(port, tx, ty, radius=8)
+        send(port, f"construction.designate('main_world',{px},{py},{px},{py},"
+                   f"'structure','dungeon_1','post'); return 'ok'")
+        time.sleep(0.5)
+        deadline = time.time() + 120.0
+        built = cleared = False
+        while time.time() < deadline:
+            time.sleep(2.0)
+            # The AI-placed post defaults to corner "n" and is stored
+            # under the composite kind (like wall_ne).
+            built = send(port, f"return structure.hasAt({px},{py},"
+                               f"'post_n')") == "true"
+            cleared = not isinstance(
+                jget(port, f"return construction.getDesignationAt("
+                           f"'main_world',{px},{py})"), dict)
+            if built and cleared:
+                break
+        logs_after = count_logs_near(port, tx, ty, radius=8)
+        consumed = logs_after < logs_before
+        ok5 = built and cleared and consumed
+        passed &= ok5
+        print(f"  [{'PASS' if ok5 else 'FAIL'}] post built from chopped "
+              f"logs at ({px},{py}): built={built} designation_cleared="
+              f"{cleared} log_consumed={consumed} "
+              f"(ground logs {logs_before}→{logs_after})")
 
         print("\n" + ("ALL CHOP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
