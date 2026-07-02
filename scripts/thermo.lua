@@ -29,9 +29,9 @@ local BASAL_HEAT    = 0.9    -- metabolic heat flux at rest (× metabolism stat)
 local ACTIVITY_HEAT = 0.6    -- extra heat while moving
 -- Starvation cuts heat generation: a body running on empty can't sustain
 -- full metabolic output, so it cools faster (low calories accelerate
--- hypothermia). Below HUNGER_HEAT_FLOOR_FRAC of the hunger pool the
+-- hypothermia). Below HUNGER_HEAT_FLOOR_FRAC of the calorie STORE the
 -- metabolic heat output ramps down linearly toward HUNGER_HEAT_MIN at an
--- empty stomach. Units with no hunger pool (wildlife) are unaffected.
+-- empty store. Units with no calorie store (wildlife) are unaffected.
 local HUNGER_HEAT_FLOOR_FRAC = 0.5
 local HUNGER_HEAT_MIN        = 0.6
 local LOSS_COEFF    = 0.10   -- heat lost per °C of body↔air gradient, / insulation
@@ -135,12 +135,14 @@ function thermo.tick(uid, info, dt)
     local clothing = (unit.getInsulation and unit.getInsulation(uid)) or 0
     local insul = INSUL_BASE + fatFrac * FAT_INSUL_K + clothing * CLOTHING_INSUL_K
 
-    -- Starvation factor: low calories throttle metabolic heat output.
+    -- Starvation factor: a low calorie STORE (not the stomach meter —
+    -- a unit with an empty stomach but a fed store keeps full output)
+    -- throttles metabolic heat.
     local calFactor = 1.0
-    local maxHun = unit.getStat(uid, "max_hunger")
-    local curHun = unit.getStat(uid, "hunger")
-    if maxHun and maxHun > 0 and curHun then
-        local frac = curHun / maxHun
+    local maxCal = unit.getStat(uid, "max_calories")
+    local curCal = unit.getStat(uid, "calories")
+    if maxCal and maxCal > 0 and curCal then
+        local frac = curCal / maxCal
         if frac < HUNGER_HEAT_FLOOR_FRAC then
             calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
                                           * (frac / HUNGER_HEAT_FLOOR_FRAC)

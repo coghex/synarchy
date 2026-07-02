@@ -38,6 +38,14 @@ data ItemContainer = ItemContainer
                               --   iiCurrentFill × this, so a bottle sheds
                               --   mass as each unit is drawn out and the
                               --   empty case (iiWeight) is what remains.
+    , icDefaultFill ∷ !Float  -- ^ fill a fresh instance spawns holding when
+                              --   the creation site doesn't say otherwise
+                              --   (loot rolls, bare item.spawnGround /
+                              --   unit.addItem). 0 for refillable vessels
+                              --   (canteens, bottles) — an explicit fill at
+                              --   the spawn site still wins. A quinoa sack
+                              --   sets this to its capacity so loot is
+                              --   never an empty bag.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A single stat-modifier conferred by wearing/holding this item.
@@ -95,13 +103,23 @@ data ItemArmor = ItemArmor
     , iaCovers    ∷ ![Text]   -- ^ body-part ids this piece protects
     } deriving (Show, Eq)
 
--- | Food properties — items with a Just here restore hunger when
---   eaten. ifCalories is the kcal value, clamped against the eater's
---   max_hunger (excess is wasted, item is still consumed). Parsed from a
---   `nutrition:` sub-object so future macronutrient fields slot in beside
---   it without a schema/save change.
+-- | Food properties — items with a Just here restore hunger (stomach
+--   kcal) when eaten. Two mutually exclusive shapes:
+--
+--   * DISCRETE food (rations): ifCalories > 0 — kcal per item consumed,
+--     the whole item is removed on eat.
+--   * BULK food (a quinoa sack): ifCaloriesPerKg > 0 — kcal per kg of the
+--     item's FILL; eating draws just enough fill (kg) to top up the
+--     eater's stomach and the item persists until its fill runs dry.
+--
+--   Credited kcal are clamped against the eater's max_hunger. Parsed from
+--   a `nutrition:` sub-object so future macronutrient fields slot in
+--   beside these without a schema/save change.
 data ItemFood = ItemFood
-    { ifCalories ∷ !Float   -- ^ kcal restored per item consumed
+    { ifCalories      ∷ !Float   -- ^ kcal per item consumed (0 = not
+                                 --   discrete food)
+    , ifCaloriesPerKg ∷ !Float   -- ^ kcal per kg of fill consumed (0 =
+                                 --   not bulk food)
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Immutable item definition — one per type loaded from YAML.

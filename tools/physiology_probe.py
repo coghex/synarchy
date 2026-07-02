@@ -207,7 +207,7 @@ def small_creature_section(port, seconds):
     return passed
 
 
-def _hunger(port, uid):
+def _calories(port, uid):
     r = send(port, f"return unit.getCalories({uid}) or -1")
     try:
         return float(r)
@@ -215,15 +215,35 @@ def _hunger(port, uid):
         return None
 
 
+def _stomach(port, uid):
+    r = send(port, f"return unit.getStat({uid},'hunger') or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def _sack_fill(port, uid):
+    r = send(port, f"local inv=unit.getInventory({uid}) or {{}}; "
+                   f"for _,it in ipairs(inv) do "
+                   f"if it.defName=='quinoa_sack' then return it.currentFill end end; "
+                   f"return -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
 def hunger_section(port, seconds):
-    """Calorie / hunger system (#92) regression coverage:
-      * Activity-scaled drain — a unit in combat burns calories AND water
-        faster than an idle one (mining/combat detected from currentAnim).
-      * unit.feed restores calories from a carried ration and refuses an
-        item the unit doesn't carry.
-      * Starvation trend — a unit with no food in a temperate climate loses
-        calories steadily (the no-food-starves timeline; full catabolism
-        death is the slow tail, guarded by the organ-failure machinery).
+    """Two-layer food system (#92/#93) regression coverage:
+      * Activity-scaled drain — a unit in combat burns its calorie STORE
+        AND water faster than an idle one (combat detected from currentAnim).
+      * unit.feed fills the STOMACH meter from a carried ration; digestion
+        then moves the meal into the calorie store over time; feed refuses
+        an item the unit doesn't carry.
+      * Bulk food — a quinoa sack spawns full (default_fill), feed draws
+        just enough kg of fill to top the stomach up, and an eaten-dry
+        sack is removed from the inventory.
       * Calorie→thermoregulation coupling — a starving unit in the cold
         generates less metabolic heat and ends colder than a fed one.
     All on the flat temperate arena, AI wander already neutralised."""
@@ -240,11 +260,13 @@ def hunger_section(port, seconds):
     if not idle or not actv:
         print("  [FAIL] hunger: could not spawn acolytes")
         return False
-    # Drop both below the 75%-surplus-regrowth band so we measure the bare
-    # metabolic burn, and strip rations so nothing tops them back up.
+    # Drop the STORE below the 75%-surplus-regrowth band so we measure the
+    # bare metabolic burn, EMPTY the stomach so digestion doesn't top the
+    # store back up mid-measurement, and strip rations so nothing refills.
     for u in idle + actv:
-        send(port, f"local u={u}; local mh=unit.getStat(u,'max_hunger'); "
-                   f"unit.setStat(u,'hunger',mh*0.5); "
+        send(port, f"local u={u}; local mc=unit.getStat(u,'max_calories'); "
+                   f"unit.setStat(u,'calories',mc*0.5); "
+                   f"unit.setStat(u,'hunger',0); "
                    f"unit.removeItem(u,'rations'); unit.removeItem(u,'rations'); "
                    f"return 'ok'")
     # Keep the active group in a combat anim: attack_quick is a ~0.4s
@@ -261,46 +283,109 @@ def hunger_section(port, seconds):
     def avg_hyd(group):
         return sum(float(send(port, f"return unit.getStat({u},'hydration') or 0"))
                    for u in group) / len(group)
-    h_idle0 = sum(_hunger(port, u) for u in idle) / len(idle)
-    h_actv0 = sum(_hunger(port, u) for u in actv) / len(actv)
+    h_idle0 = sum(_calories(port, u) for u in idle) / len(idle)
+    h_actv0 = sum(_calories(port, u) for u in actv) / len(actv)
     w_idle0 = avg_hyd(idle)
     w_actv0 = avg_hyd(actv)
     t_end = time.time() + win
     while time.time() < t_end:
         force_combat()
         time.sleep(0.2)   # leave the Lua thread room to run its resource tick
-    h_idleD = h_idle0 - sum(_hunger(port, u) for u in idle) / len(idle)
-    h_actvD = h_actv0 - sum(_hunger(port, u) for u in actv) / len(actv)
+    h_idleD = h_idle0 - sum(_calories(port, u) for u in idle) / len(idle)
+    h_actvD = h_actv0 - sum(_calories(port, u) for u in actv) / len(actv)
     w_idleD = w_idle0 - avg_hyd(idle)
     w_actvD = w_actv0 - avg_hyd(actv)
     ok1 = h_idleD > 0 and h_actvD > h_idleD * 1.3
     passed &= ok1
-    print(f"  [{'PASS' if ok1 else 'FAIL'}] hunger drains faster in combat: "
+    print(f"  [{'PASS' if ok1 else 'FAIL'}] calorie store drains faster in combat: "
           f"idle −{h_idleD:.1f} kcal vs combat −{h_actvD:.1f} kcal")
     ok1b = w_actvD > w_idleD       # hydration also activity-scaled
     passed &= ok1b
     print(f"  [{'PASS' if ok1b else 'FAIL'}] hydration drains faster in combat: "
           f"idle −{w_idleD:.4f} L vs combat −{w_actvD:.4f} L")
 
-    # --- 2. unit.feed restores calories; refuses what isn't carried ---
+    # --- 2. unit.feed fills the stomach; digestion moves it into the
+    #        store; feed refuses what isn't carried ---
     fed = spawn_batch(port, 1, "acolyte", x0=14)[0]
-    send(port, f"local u={fed}; unit.setStat(u,'hunger',unit.getStat(u,'max_hunger')*0.4); return 'ok'")
-    before = _hunger(port, fed)
+    # Clean slate: empty stomach, half-full store — one meal's journey is
+    # then visible on both meters.
+    send(port, f"local u={fed}; unit.setStat(u,'hunger',0); "
+               f"unit.setStat(u,'calories',unit.getStat(u,'max_calories')*0.5); "
+               f"return 'ok'")
+    before = _stomach(port, fed)
     credited = send(port, f"return unit.feed({fed},'rations') or -1")
-    after = _hunger(port, fed)
+    after = _stomach(port, fed)
     try:
         cred = float(credited)
     except ValueError:
         cred = -1
     ok2 = cred > 0 and after > before
     passed &= ok2
-    print(f"  [{'PASS' if ok2 else 'FAIL'}] unit.feed credits calories: "
+    print(f"  [{'PASS' if ok2 else 'FAIL'}] unit.feed fills the stomach: "
           f"+{cred:.0f} kcal ({before:.0f}→{after:.0f})")
+    # Digestion: over a short window the stomach drains and the store
+    # rises (transfer ~3 kcal/s dwarfs the ~0.9 kcal/s idle burn).
+    st0, ca0 = _stomach(port, fed), _calories(port, fed)
+    time.sleep(8.0)
+    st1, ca1 = _stomach(port, fed), _calories(port, fed)
+    ok2d = st1 < st0 - 2 and ca1 > ca0 + 2
+    passed &= ok2d
+    print(f"  [{'PASS' if ok2d else 'FAIL'}] digestion moves stomach→store: "
+          f"stomach {st0:.0f}→{st1:.0f}, store {ca0:.0f}→{ca1:.0f}")
     # Feeding an item the unit doesn't carry returns nil.
     no_carry = send(port, f"return unit.feed({fed},'nonexistent_food') and 'num' or 'nil'")
     ok2b = no_carry.strip().strip('"') == "nil"
     passed &= ok2b
     print(f"  [{'PASS' if ok2b else 'FAIL'}] unit.feed refuses non-carried item: {no_carry.strip()}")
+
+    # --- 2c. Bulk food (#93): quinoa sack spawns full via default_fill;
+    #         feed draws only the stomach deficit's worth of kg; an
+    #         eaten-dry sack is removed from the inventory.
+    bulk = spawn_batch(port, 1, "acolyte", x0=17)[0]
+    send(port, f"local u={bulk}; unit.removeItem(u,'rations'); "
+               f"unit.removeItem(u,'rations'); unit.setStat(u,'hunger',0); "
+               f"return 'ok'")
+    send(port, f"unit.addItem({bulk},'quinoa_sack'); return 'ok'")
+    fill0 = _sack_fill(port, bulk)
+    cred_bulk_s = send(port, f"return unit.feed({bulk},'quinoa_sack') or -1")
+    fill1 = _sack_fill(port, bulk)
+    st_bulk = _stomach(port, bulk)
+    max_hun = float(send(port, f"return unit.getStat({bulk},'max_hunger') or -1"))
+    try:
+        cred_bulk = float(cred_bulk_s)
+    except ValueError:
+        cred_bulk = -1
+    kg_drawn = (fill0 or 0) - (fill1 or 0)
+    # The credit must equal the full deficit (stomach was emptied right
+    # before the feed) and the kg drawn must match it at 3680 kcal/kg.
+    # The stomach READ is digestion-slack tolerant — it starts draining
+    # into the store the moment the meal lands (~3 kcal/s across the
+    # probe's send round-trips), so compare against the credit, not
+    # equality with max_hunger.
+    ok2c = (fill0 is not None and abs(fill0 - 5.0) < 1e-3        # default_fill
+            and cred_bulk > 0
+            and abs(cred_bulk - max_hun) < 1.0                   # full deficit
+            and st_bulk > max_hun * 0.9                          # topped up
+            and abs(kg_drawn - cred_bulk / 3680.0) < 1e-3)       # mass ↔ kcal
+    passed &= ok2c
+    print(f"  [{'PASS' if ok2c else 'FAIL'}] bulk feed draws stomach deficit from sack: "
+          f"fill {fill0}→{fill1} kg (−{kg_drawn:.3f}), +{cred_bulk:.0f} kcal, "
+          f"stomach {st_bulk:.0f}/{max_hun:.0f}")
+    # Drain-to-removal: swap in a nearly-empty sack (explicit tiny fill
+    # overrides default_fill), empty the stomach, eat it dry.
+    send(port, f"local u={bulk}; unit.removeItem(u,'quinoa_sack'); "
+               f"unit.addItem(u,'quinoa_sack',0.02); "
+               f"unit.setStat(u,'hunger',0); return 'ok'")
+    cred_dry_s = send(port, f"return unit.feed({bulk},'quinoa_sack') or -1")
+    fill_after = _sack_fill(port, bulk)   # -1 = no sack left
+    try:
+        cred_dry = float(cred_dry_s)
+    except ValueError:
+        cred_dry = -1
+    ok2e = abs(cred_dry - 0.02 * 3680.0) < 1.0 and fill_after == -1
+    passed &= ok2e
+    print(f"  [{'PASS' if ok2e else 'FAIL'}] eaten-dry sack is removed: "
+          f"+{cred_dry:.0f} kcal, sack {'gone' if fill_after == -1 else 'STILL PRESENT'}")
 
     # --- 3. Calorie→heat coupling: a starving body can't fuel shivering
     #        (or full basal burn), so cold-stressed it defends its
@@ -313,10 +398,13 @@ def hunger_section(port, seconds):
     starv = spawn_batch(port, 4, "acolyte", x0=1)
     feda  = spawn_batch(port, 4, "acolyte", x0=8)
     for u in starv:
-        send(port, f"local u={u}; unit.setStat(u,'hunger',1); "
+        # Empty STORE (thermo gates on it) and empty stomach so digestion
+        # can't quietly refill the store mid-window.
+        send(port, f"local u={u}; unit.setStat(u,'calories',1); "
+                   f"unit.setStat(u,'hunger',0); "
                    f"unit.setStat(u,'core_temp',34.0); return 'ok'")
     for u in feda:
-        send(port, f"local u={u}; unit.setStat(u,'hunger',unit.getStat(u,'max_hunger')); "
+        send(port, f"local u={u}; unit.setStat(u,'calories',unit.getStat(u,'max_calories')); "
                    f"unit.setStat(u,'core_temp',34.0); return 'ok'")
     time.sleep(max(seconds, 45.0))
     core_starv = avg_core(port, starv)
@@ -326,12 +414,13 @@ def hunger_section(port, seconds):
     print(f"  [{'PASS' if ok3 else 'FAIL'}] starving unit makes less heat (colder when cold-stressed): "
           f"starving {core_starv:.2f}°C vs fed {core_fed:.2f}°C")
 
-    # --- 4. Wildlife guard: a unit with no hunger system (bear — its body
-    #        block seeds max_hunger, but it has no hunger RESOURCE) must not
-    #        be feedable (that would conjure a permanent, never-draining
-    #        calorie pool) and reports no calorie reading. Regression guard
-    #        for the heal/thermo gating keying off a live "hunger" stat, not
-    #        the always-seeded max_hunger.
+    # --- 4. Wildlife guard: a unit with no food system (bear — its body
+    #        block seeds max_hunger/max_calories, but it has no hunger or
+    #        calories RESOURCE) must not be feedable (that would conjure a
+    #        permanent, never-draining stomach pool) and reports no calorie
+    #        reading. Regression guard for the heal/thermo gating keying
+    #        off a live "calories" stat and feed gating off a live
+    #        "hunger" stat, not the always-seeded maxima.
     bear = spawn_batch(port, 1, "bear_brown", x0=14)
     if bear:
         b = bear[0]
@@ -351,7 +440,7 @@ def hunger_section(port, seconds):
 
     # Clean up this section's units so they don't add tick load to the
     # climate scenarios that follow.
-    for u in idle + actv + [fed] + starv + feda + bear:
+    for u in idle + actv + [fed, bulk] + starv + feda + bear:
         send(port, f"unit.destroy({u}); return 'ok'")
     return passed
 

@@ -770,14 +770,23 @@ unitEatFn env = do
             Lua.pushboolean True
             return 1
 
--- | unit.feed(uid, itemId) — consume one food item from the unit's
---   inventory and credit its calories to the hunger pool (clamped to
---   max_hunger; the overflow is wasted, the item still consumed). Plays
---   the eat animation. Returns the kcal actually credited on success, or
---   nil if the unit doesn't carry the item or the item has no food data
---   (the codebase signals failure with nil rather than raising). The
---   authoritative consume-and-credit primitive; the auto-eat AI routes
---   through it.
+-- | unit.feed(uid, itemId) — eat from the unit's inventory and credit
+--   the kcal to the hunger meter (STOMACH fullness, clamped to
+--   max_hunger; digestion later moves it into the "calories" energy
+--   store). Two shapes, keyed off the item def's nutrition:
+--
+--   * DISCRETE food (ifCalories): consume one whole item, credit its
+--     kcal (overflow past a full stomach is wasted, the item is still
+--     consumed). Plays the eat animation.
+--   * BULK food (ifCaloriesPerKg): draw just enough fill (kg) from the
+--     first non-empty instance to top the stomach up; the item persists
+--     with reduced fill, and is removed once eaten dry. A full stomach
+--     draws nothing and the call fails (nil) without consuming.
+--
+--   Returns the kcal actually credited on success, or nil if the unit
+--   doesn't carry the item / the item has no food data (the codebase
+--   signals failure with nil rather than raising). The authoritative
+--   consume-and-credit primitive; the auto-eat AI routes through it.
 unitFeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitFeedFn env = do
     idArg   ← Lua.tointeger 1
@@ -801,17 +810,60 @@ unitFeedFn env = do
                             -- draining pool. Reject without consuming the item.
                             Just u  → case HM.lookup "hunger" (uiStats u) of
                                 Nothing  → (um, Nothing)  -- no hunger system
-                                Just cur → case removeFirstByName defName (uiInventory u) of
-                                    Nothing     → (um, Nothing)  -- not carried
-                                    Just newInv →
-                                        let stats0 = uiStats u
-                                            maxH   = HM.lookupDefault (cur + ifCalories food)
-                                                         "max_hunger" stats0
-                                            newH   = min maxH (cur + ifCalories food)
-                                            u'     = u { uiInventory = newInv
-                                                       , uiStats = HM.insert "hunger" newH stats0 }
-                                        in ( um { umInstances = HM.insert uid u' (umInstances um) }
-                                           , Just (newH - cur) )
+                                Just cur
+                                  | ifCaloriesPerKg food > 0 →
+                                    -- BULK: eat kg of fill, stomach-deficit
+                                    -- driven. maxH falls back to cur (deficit
+                                    -- 0 → reject) if max_hunger is missing.
+                                    let stats0  = uiStats u
+                                        maxH    = HM.lookupDefault cur
+                                                      "max_hunger" stats0
+                                        kgWant  = max 0 (maxH - cur)
+                                                    / ifCaloriesPerKg food
+                                        drawFrom [] = Nothing
+                                        drawFrom (it:rest)
+                                          | iiDefName it ≡ defName
+                                            ∧ iiCurrentFill it > 0 =
+                                              let kgEat   = min kgWant
+                                                                (iiCurrentFill it)
+                                                  newFill = iiCurrentFill it - kgEat
+                                                  -- An eaten-dry sack is spent
+                                                  -- packaging — drop it.
+                                                  rest'   = if newFill ≤ 1e-6
+                                                            then rest
+                                                            else it { iiCurrentFill
+                                                                        = newFill }
+                                                                 : rest
+                                              in if kgEat ≤ 0
+                                                 then Nothing
+                                                 else Just (kgEat, rest')
+                                          | otherwise =
+                                              (\(k, xs) → (k, it:xs))
+                                                  ⊚ drawFrom rest
+                                    in case drawFrom (uiInventory u) of
+                                        Nothing → (um, Nothing)
+                                        Just (kgEat, newInv) →
+                                            let newH = min maxH
+                                                         (cur + kgEat
+                                                            * ifCaloriesPerKg food)
+                                                u'   = u { uiInventory = newInv
+                                                         , uiStats = HM.insert
+                                                             "hunger" newH stats0 }
+                                            in ( um { umInstances = HM.insert uid u'
+                                                        (umInstances um) }
+                                               , Just (newH - cur) )
+                                  | otherwise →
+                                    case removeFirstByName defName (uiInventory u) of
+                                        Nothing     → (um, Nothing)  -- not carried
+                                        Just newInv →
+                                            let stats0 = uiStats u
+                                                maxH   = HM.lookupDefault (cur + ifCalories food)
+                                                             "max_hunger" stats0
+                                                newH   = min maxH (cur + ifCalories food)
+                                                u'     = u { uiInventory = newInv
+                                                           , uiStats = HM.insert "hunger" newH stats0 }
+                                            in ( um { umInstances = HM.insert uid u' (umInstances um) }
+                                               , Just (newH - cur) )
             case mCredited of
                 Just credited → do
                     Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid
@@ -824,16 +876,17 @@ unitFeedFn env = do
             Lua.pushnil
             return 1
 
--- | unit.getCalories(uid) — the unit's current calorie pool (the
---   "hunger" stat, kcal in the stomach). nil if the unit / stat is
---   absent. Pairs with max_hunger for the fraction.
+-- | unit.getCalories(uid) — the unit's current energy store (the
+--   "calories" stat: kcal available to spend, fed by digesting the
+--   stomach's "hunger" meter). nil if the unit / stat is absent.
+--   Pairs with max_calories for the fraction.
 unitGetCaloriesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetCaloriesFn env = do
     idArg ← Lua.tointeger 1
     case idArg of
         Just n → do
             let uid = UnitId (fromIntegral n)
-            mVal ← Lua.liftIO $ getEffectiveStat env uid "hunger"
+            mVal ← Lua.liftIO $ getEffectiveStat env uid "calories"
             case mVal of
                 Just v  → do
                     Lua.pushnumber (Lua.Number (realToFrac v))
@@ -1829,16 +1882,20 @@ unitAddItemFn env = do
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8 nameBS
-                fillIn  = case fillArg of
-                    Just (Lua.Number d) → realToFrac d ∷ Float
-                    _ → 0
+                mFillIn = case fillArg of
+                    Just (Lua.Number d) → Just (realToFrac d ∷ Float)
+                    _ → Nothing
             ok ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
                 case lookupItemDef defName itemMgr of
                     Nothing → return False
                     Just def → do
+                        -- No fill arg → the def's default_fill (a quinoa
+                        -- sack arrives full); explicit fill wins. Clamped
+                        -- to capacity, non-containers stay 0.
                         let clampedFill = case idContainer def of
-                                Just c  → max 0 (min fillIn (icCapacity c))
+                                Just c  → max 0 (min (icCapacity c)
+                                            (fromMaybe (icDefaultFill c) mFillIn))
                                 Nothing → 0
                         qual ← rollItemSpec (idQualitySpec def)
                                             (statRNGRef env)
@@ -4414,6 +4471,8 @@ unitGetInventoryFn env = do
                                 Lua.newtable                -- food.nutrition
                                 Lua.pushnumber (Lua.Number (realToFrac (ifCalories f)))
                                 Lua.setfield (-2) "calories"
+                                Lua.pushnumber (Lua.Number (realToFrac (ifCaloriesPerKg f)))
+                                Lua.setfield (-2) "caloriesPerKg"
                                 Lua.setfield (-2) "nutrition"
                                 Lua.setfield (-2) "food"
                             Nothing → pure ()

@@ -7,10 +7,13 @@ items:
     food:
       # Nutrition is a sub-object so future diet work (protein / fat /
       # carbohydrate / micronutrients) can add sibling keys beside
-      # calories without restructuring the schema.
+      # calories without restructuring the schema. `calories` marks
+      # DISCRETE food (whole item per eat); bulk food declares
+      # `calories_per_kg` instead (see quinoa_sack.yaml).
       nutrition:
-        # kcal restored per ration. 250 ≈ a small meal — about 19 % of a
-        # default acolyte's daily metabolism (~1318 kcal/day) and a hair
-        # below 18 % of max_hunger (~1426 kcal). Five rations roughly
-        # cover a day of idle metabolism.
+        # kcal credited to the stomach meter per ration. 250 ≈ a small
+        # meal — about 19 % of a default acolyte's daily metabolism
+        # (~1318 kcal/day) and ~35 % of stomach capacity (max_hunger,
+        # ~713 kcal). Five rations roughly cover a day of idle
+        # metabolism.
         calories: 250

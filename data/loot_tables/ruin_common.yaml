@@ -8,6 +8,8 @@ id: ruin_common
 entries:
   - id: rations
     weight: 3
+  - id: quinoa_sack
+    weight: 2
   - id: first_aid_kit
     weight: 2
   - id: shovel_steel

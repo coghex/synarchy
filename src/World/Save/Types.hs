@@ -117,7 +117,16 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 64  -- v64: WorldGenParams gains trailing
+currentSaveVersion = 65  -- v65: two-layer food model (#93) — the
+                         --      persisted "hunger" uiStats entry is
+                         --      redefined from energy store to STOMACH
+                         --      meter (max_hunger halves to bm*10) and a
+                         --      new "calories"/"max_calories" store takes
+                         --      over catabolism/thermo/heal gating.
+                         --      ItemContainer gains icDefaultFill and
+                         --      ItemFood gains ifCaloriesPerKg (both
+                         --      Generic Serialize, positional).
+                         -- v64: WorldGenParams gains trailing
                          --      'wgpLocationContentsSpawned' (one-time
                          --      content-spawn flag per chunk, independent
                          --      of the structure-geometry idempotency

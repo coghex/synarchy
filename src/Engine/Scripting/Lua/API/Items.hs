@@ -107,13 +107,17 @@ loadItemYamlFn env backendState = do
 
                     let container = fmap
                             (\c → ItemContainer
-                                { icCapacity   = iycCapacity c
-                                , icHolds      = iycHolds c
-                                , icFillWeight = iycFillWeight c
+                                { icCapacity    = iycCapacity c
+                                , icHolds       = iycHolds c
+                                , icFillWeight  = iycFillWeight c
+                                , icDefaultFill = iycDefaultFill c
                                 })
                             (iydContainer def)
                         food = fmap
-                            (\f → ItemFood { ifCalories = iyfCalories f })
+                            (\f → ItemFood
+                                { ifCalories      = iyfCalories f
+                                , ifCaloriesPerKg = iyfCaloriesPerKg f
+                                })
                             (iydFood def)
                         weapon = fmap
                             (\w → ItemWeapon
@@ -245,17 +249,19 @@ itemSpawnGroundFn env = do
     yArg ← Lua.tonumber 3
     propsTy ← Lua.ltype 4
     pageArg ← Lua.tostring 5
-    let getProp ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
-        getProp key def = case propsTy of
+    let getMaybeProp ∷ Lua.Name → Lua.LuaE Lua.Exception (Maybe Float)
+        getMaybeProp key = case propsTy of
             Lua.TypeTable → do
                 _ ← Lua.getfield 4 key
                 mv ← Lua.tonumber Lua.top
                 Lua.pop 1
                 pure $ case mv of
-                    Just (Lua.Number n) → realToFrac n
-                    _ → def
-            _ → pure def
-    fill ← getProp "fill" 0.0
+                    Just (Lua.Number n) → Just (realToFrac n)
+                    _ → Nothing
+            _ → pure Nothing
+        getProp ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
+        getProp key def = fromMaybe def ⊚ getMaybeProp key
+    mFill ← getMaybeProp "fill"
     quality ← getProp "quality" 100.0
     condition ← getProp "condition" 100.0
     case (nameArg, xArg, yArg) of
@@ -268,7 +274,15 @@ itemSpawnGroundFn env = do
                     wght ← Lua.liftIO $
                         rollItemWeight iDef (statRNGRef env)
                     iid ← Lua.liftIO $ freshItemInstanceId env
-                    let inst = ItemInstance
+                    -- No explicit fill from the caller → the def's
+                    -- default_fill (so a loot-rolled quinoa sack spawns
+                    -- holding quinoa). Explicit fill always wins; both
+                    -- clamp to capacity, non-containers stay 0.
+                    let fill = case idContainer iDef of
+                            Just c  → max 0 (min (icCapacity c)
+                                        (fromMaybe (icDefaultFill c) mFill))
+                            Nothing → 0
+                        inst = ItemInstance
                             { iiDefName = name
                             , iiCurrentFill = fill
                             , iiQuality = quality

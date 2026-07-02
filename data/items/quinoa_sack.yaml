@@ -1,0 +1,27 @@
+items:
+  # BULK food (#93): the sack is a fillable container of loose quinoa,
+  # measured in kg (fill unit = 1 kg of grain, like the antiseptic
+  # bottle's litres). Eating draws just enough fill to top up the
+  # eater's stomach — partial-amount consumption — and the sack sheds
+  # carried weight as it empties. An eaten-dry sack is spent packaging:
+  # unit.feed removes it from the inventory.
+  #
+  # `default_fill` makes a bare spawn (loot roll, debug addItem) arrive
+  # FULL — a looted sack is never an empty bag. An explicit fill at the
+  # spawn site still wins.
+  - name: "quinoa_sack"
+    display_name: "Quinoa Sack"
+    sprite: "assets/textures/items/supply/quinoa_sack.png"
+    weight: 0.15       # empty burlap sack; full mass = weight + 5 kg grain
+    category: Supplies
+    container:
+      capacity: 5.0    # kg of quinoa
+      holds: "quinoa"
+      fill_weight: 1.0 # 1 fill unit = 1 kg
+      default_fill: 5.0
+    food:
+      nutrition:
+        # kcal per kg of fill consumed. Dry quinoa is ~3680 kcal/kg —
+        # a full sack (~18,400 kcal) is roughly two weeks of idle burn
+        # for a default acolyte, against ~250 kcal per single ration.
+        calories_per_kg: 3680
