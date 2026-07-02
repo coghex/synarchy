@@ -316,6 +316,18 @@ phase; the stake phase runs LAST (the staked portal spawns its roster,
 which would contaminate later phases). Structure build costs live in
 the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
 
+### Testing crafting recipes headless
+
+Turnkey harness: **`python3 tools/craft_probe.py`** — the #325 gate.
+Boots headless on a flat arena and asserts the `craft.*` Lua API
+end-to-end: catalogue queries (`craft.get` / `craft.getNames`), the
+knowledge gate, all-or-nothing input+fuel consumption, and factory-new
+outputs (condition/sharpness 100). Recipes live in `data/recipes/*.yaml`
+(station tag, `inputs`, optional `fuel`/`knowledge`, `work`, `outputs`;
+loaded via `engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs
+one craft against a unit's inventory. No stations or AI yet — station
+defs are #326, the craft AI/bill layer is #329.
+
 ### Logging: event / combat / injury
 
 Three log panels share UI machinery and feed off three streams:

@@ -1,0 +1,31 @@
+# Crafting recipes (#325). Loaded at startup via engine.loadRecipeYaml
+# into the engine RecipeManager; queried + executed through the craft.*
+# Lua API.
+#
+# Schema (one entry under `recipes:`):
+#   id:        unique recipe key                          (required)
+#   name:      display name                               (default: id)
+#   station:   station-kind tag, e.g. "forge"/"furnace"   (required)
+#              — plain data until station defs land (#326)
+#   inputs:    list of { item, count }; count defaults 1  (required)
+#   fuel:      optional single { item, count } consumed alongside the
+#              inputs (fuel item content arrives with the smelting
+#              tier, #327)
+#   work:      effort to complete; data for the craft AI (#329),
+#              craft.execute itself is instant             (default: 0)
+#   outputs:   list of { item, count }; count defaults 1  (required)
+#   knowledge: optional knowledge the crafter must KNOW (present in
+#              uiKnowledge) for craft.execute to run
+#
+# Outputs spawn factory-new: condition + sharpness 100; quality still
+# rolls from the item def's spec (skill-scaled quality is #343).
+recipes:
+  - id: forge_steel_dagger
+    name: "Forge Steel Dagger"
+    station: forge
+    inputs:
+      - item: steel_bar
+        count: 2
+    work: 20
+    outputs:
+      - item: steel_dagger
