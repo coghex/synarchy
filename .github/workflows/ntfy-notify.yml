@@ -13,21 +13,24 @@ jobs:
           NUM: ${{ github.event.pull_request.number }}
           TITLE: ${{ github.event.pull_request.title }}
           URL: ${{ github.event.pull_request.html_url }}
-        run: curl -sS -H "Title: PR #$NUM opened" -H "Tags: rocket" -H "Click: $URL" -d "$TITLE — ready for review" "$NTFY_URL"
+        run: |
+          curl -sS -H "Title: PR #$NUM opened" -H "Tags: rocket" -H "Click: $URL" -d "$TITLE — ready for review" "$NTFY_URL"
       - name: PR reviewed approve
         if: ${{ github.event.action == 'labeled' && github.event.label.name == 'reviewed:approve' }}
         env:
           NTFY_URL: ${{ secrets.NTFY_URL }}
           NUM: ${{ github.event.pull_request.number }}
           URL: ${{ github.event.pull_request.html_url }}
-        run: curl -sS -H "Title: PR #$NUM reviewed: APPROVE" -H "Tags: white_check_mark" -H "Click: $URL" -d "Review approved — ready to finalize" "$NTFY_URL"
+        run: |
+          curl -sS -H "Title: PR #$NUM reviewed: APPROVE" -H "Tags: white_check_mark" -H "Click: $URL" -d "Review approved — ready to finalize" "$NTFY_URL"
       - name: PR reviewed changes
         if: ${{ github.event.action == 'labeled' && github.event.label.name == 'reviewed:changes' }}
         env:
           NTFY_URL: ${{ secrets.NTFY_URL }}
           NUM: ${{ github.event.pull_request.number }}
           URL: ${{ github.event.pull_request.html_url }}
-        run: curl -sS -H "Title: PR #$NUM reviewed: CHANGES REQUESTED" -H "Tags: warning" -H "Click: $URL" -d "Changes requested — needs fixes" "$NTFY_URL"
+        run: |
+          curl -sS -H "Title: PR #$NUM reviewed: CHANGES REQUESTED" -H "Tags: warning" -H "Click: $URL" -d "Changes requested — needs fixes" "$NTFY_URL"
       - name: PR merged
         if: ${{ github.event.action == 'closed' && github.event.pull_request.merged == true }}
         env:
@@ -35,4 +38,5 @@ jobs:
           NUM: ${{ github.event.pull_request.number }}
           URL: ${{ github.event.pull_request.html_url }}
           BASE: ${{ github.event.pull_request.base.ref }}
-        run: curl -sS -H "Title: PR #$NUM merged" -H "Tags: tada" -H "Click: $URL" -d "Merged to $BASE" "$NTFY_URL"
+        run: |
+          curl -sS -H "Title: PR #$NUM merged" -H "Tags: tada" -H "Click: $URL" -d "Merged to $BASE" "$NTFY_URL"
