@@ -1,0 +1,35 @@
+buildings:
+  - name: "furnace"
+    display_name: "Furnace"
+    category: "Production"
+    description: "A granite smelting furnace. Runs smelt recipes (ore + fuel to metal) and restores the condition of worn equipment."
+    sprite: "assets/textures/buildings/furnace/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"
+
+    # Worker-seconds at the solo rate (same scaling as cargo_hold_S:
+    # n^2 up to 3 workers, log taper above).
+    build_work: 180.0
+
+    # Required materials — gated before any progress can accrue.
+    # Stone body + steel reinforcement; granite chunks come out of any
+    # dig/mine designation, bars from the spawn loadout (or, once this
+    # furnace stands, from its own smelt recipes).
+    materials:
+      granite_chunk: 6
+      steel_bar:     2
+
+    # Staging space for craft inputs/fuel and outputs (kg). Uses the
+    # ordinary building-storage system (deposit/withdraw) — the craft
+    # AI (#329) stages here; craft.executeAt itself consumes from the
+    # crafter's inventory.
+    storage_capacity: 100.0
+
+    # Work-station operations (#326). Recipe `station` kinds this
+    # building can run, plus "repair" for the repair flows (#301):
+    # condition restoration happens at the furnace (reforging), edge
+    # honing at the workbench.
+    operations:
+      - smelt
+      - repair

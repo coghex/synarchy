@@ -318,15 +318,27 @@ the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
 
 ### Testing crafting recipes headless
 
-Turnkey harness: **`python3 tools/craft_probe.py`** — the #325 gate.
+Turnkey harness: **`python3 tools/craft_probe.py`** — the #325/#326 gate.
 Boots headless on a flat arena and asserts the `craft.*` Lua API
 end-to-end: catalogue queries (`craft.get` / `craft.getNames`), the
-knowledge gate, all-or-nothing input+fuel consumption, and factory-new
-outputs (condition/sharpness 100). Recipes live in `data/recipes/*.yaml`
-(station tag, `inputs`, optional `fuel`/`knowledge`, `work`, `outputs`;
-loaded via `engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs
-one craft against a unit's inventory. No stations or AI yet — station
-defs are #326, the craft AI/bill layer is #329.
+knowledge gate, all-or-nothing input+fuel consumption, factory-new
+outputs (condition/sharpness 100), and work stations. Recipes live in
+`data/recipes/*.yaml` (station tag = an operation name below, `inputs`,
+optional `fuel`/`knowledge`, `work`, `outputs`; loaded via
+`engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs one craft
+against a unit's inventory, station-blind (tests/debug console).
+
+Work stations (#326) are ordinary buildings whose def carries an
+`operations:` list (`data/buildings/furnace.yaml` = smelt+repair,
+`workbench.yaml` = forge+assemble+repair — repair ops are the hook the
+repair epic #299/#301 plugs into). They're built through the normal
+construction machinery (materials + build progress). Lua surface:
+`building.getOperations(bid)`, `building.findStation(op[,gx,gy])`
+(nearest BUILT station on the active page offering op), and
+`craft.executeAt(uid, recipeId, bid)` — craft.execute semantics gated
+on a Built station offering the recipe's station kind with the unit on
+or adjacent to the footprint (Chebyshev ≤ 1). The craft AI/bill layer
+is #329.
 
 ### Logging: event / combat / injury
 

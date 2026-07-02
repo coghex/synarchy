@@ -1,0 +1,32 @@
+buildings:
+  - name: "workbench"
+    display_name: "Workbench"
+    category: "Production"
+    description: "A heavy bench with an anvil, vise and tool rack. Runs forge and assembly recipes and hones the edge of worn blades."
+    sprite: "assets/textures/buildings/workbench/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"
+
+    # Worker-seconds at the solo rate — lighter build than the furnace.
+    build_work: 120.0
+
+    # Timber top on a steel frame; logs come from chop designations
+    # (#97), hardware/bars from the spawn loadout or the furnace.
+    materials:
+      wood_log:       4
+      steel_hardware: 4
+      steel_bar:      2
+
+    # Staging space for craft inputs and outputs (kg) via the ordinary
+    # building-storage system — see furnace.yaml.
+    storage_capacity: 100.0
+
+    # Work-station operations (#326): forge (bars → blades/tools),
+    # assemble (components → goods), and "repair" for the repair flows
+    # (#301) — sharpness honing lives here, per the shared-station
+    # decision on the crafting epic (#324).
+    operations:
+      - forge
+      - assemble
+      - repair
