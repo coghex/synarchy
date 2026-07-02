@@ -174,6 +174,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Construct.Corners
+                   Test.Headless.Craft.Execute
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.World.FloraGrowth
@@ -448,6 +449,7 @@ library
                      Engine.Scripting.Lua.API.Buildings
                      Engine.Scripting.Lua.API.Structure
                      Engine.Scripting.Lua.API.Construct
+                     Engine.Scripting.Lua.API.Chop
                      Engine.Scripting.Lua.API.Yaml
                      Structure.Palette
                      Engine.Scripting.Lua.API.Combat
@@ -464,6 +466,10 @@ library
                      Infection.Types
                      Engine.Asset.YamlInfection
                      Engine.Scripting.Lua.API.Infection
+                     Craft.Types
+                     Craft.Execute
+                     Engine.Asset.YamlRecipes
+                     Engine.Scripting.Lua.API.Craft
                      Location.Types
                      Location.Overlay.Types
                      Location.Overlay
@@ -545,6 +551,7 @@ library
                      World.Mine.Types
                      World.Construct.Types
                      World.Construct.Apply
+                     World.Chop.Types
                      World.Render.SpoilQuads
                      World.Gem
                      World.Spoil.Logic

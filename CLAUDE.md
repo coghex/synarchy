@@ -316,6 +316,18 @@ phase; the stake phase runs LAST (the staked portal spawns its roster,
 which would contaminate later phases). Structure build costs live in
 the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
 
+### Testing crafting recipes headless
+
+Turnkey harness: **`python3 tools/craft_probe.py`** — the #325 gate.
+Boots headless on a flat arena and asserts the `craft.*` Lua API
+end-to-end: catalogue queries (`craft.get` / `craft.getNames`), the
+knowledge gate, all-or-nothing input+fuel consumption, and factory-new
+outputs (condition/sharpness 100). Recipes live in `data/recipes/*.yaml`
+(station tag, `inputs`, optional `fuel`/`knowledge`, `work`, `outputs`;
+loaded via `engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs
+one craft against a unit's inventory. No stations or AI yet — station
+defs are #326, the craft AI/bill layer is #329.
+
 ### Flora growth runtime (#332)
 
 Flora growth is **derived** state: the calendar date advances (midnight
@@ -348,6 +360,13 @@ derives per instance, the fruiting window gates `harvestFlora`/
 `findHarvestableFlora` (clover stays open off-season), ages and reseed
 generations advance under `setDate` jumps, and the growth clock
 survives save → load.
+
+The growth window gates **bare (food) calls only**: `harvestFlora(gx,gy)`
+and `findHarvestableFlora(gx,gy,r)` without a tag. Tagged calls (#97 —
+the chop AI's `"wood"`) and the tile-level `getFloraAt().harvestable`
+flag (the chop-claim check reads it) deliberately skip it: a designated
+tree must stay choppable as a sprout or standing dead. Per-instance
+gated state lives in `getFloraGrowthAt`.
 
 ### Logging: event / combat / injury
 

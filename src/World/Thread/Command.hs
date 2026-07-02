@@ -41,7 +41,12 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldCancelConstructCommand
                                    , handleWorldSetConstructStatusCommand
                                    , handleWorldAddConstructProgressCommand
-                                   , handleWorldSetConstructDesignateTextureCommand)
+                                   , handleWorldSetConstructDesignateTextureCommand
+                                   , handleWorldSetChopAnchorCommand
+                                   , handleWorldClearChopAnchorCommand
+                                   , handleWorldDesignateChopCommand
+                                   , handleWorldCancelChopCommand
+                                   , handleWorldSetChopDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
@@ -132,6 +137,16 @@ handleWorldCommand env logger (WorldAddConstructProgress pageId gx gy delta)
   = handleWorldAddConstructProgressCommand env logger pageId gx gy delta
 handleWorldCommand env logger (WorldSetConstructDesignateTexture pageId cat texHandle)
   = handleWorldSetConstructDesignateTextureCommand env logger pageId cat texHandle
+handleWorldCommand env logger (WorldSetChopAnchor pageId gx gy)
+  = handleWorldSetChopAnchorCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldClearChopAnchor pageId)
+  = handleWorldClearChopAnchorCommand env logger pageId
+handleWorldCommand env logger (WorldDesignateChop pageId gx1 gy1 gx2 gy2 tag)
+  = handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag
+handleWorldCommand env logger (WorldCancelChop pageId gx gy)
+  = handleWorldCancelChopCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldSetChopDesignateTexture pageId texHandle)
+  = handleWorldSetChopDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
   = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)

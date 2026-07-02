@@ -56,12 +56,14 @@ import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.Construct
+import Engine.Scripting.Lua.API.Chop
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
+import Engine.Scripting.Lua.API.Craft
 import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.Flora
@@ -174,6 +176,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
   registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
   registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
+  registerLuaFunction "loadRecipeYaml" (loadRecipeYamlFn env)
   registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env)
   registerLuaFunction "listLocationDefs" (locationListDefsFn env)
   registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn env)
@@ -452,6 +455,21 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
   Lua.setglobal (Lua.Name "construction")
 
+  -- Chop designation tool (#97). Mirrors the construction-designation
+  -- API: the tool drives setAnchor/clearAnchor/designate, the chop AI
+  -- drives nearestDesignation/getDesignationAt/cancelDesignation
+  -- (claims are Lua-side, like dig jobs — no engine job status).
+  Lua.newtable
+  registerLuaFunction "setAnchor"           (chopSetAnchorFn env)
+  registerLuaFunction "clearAnchor"         (chopClearAnchorFn env)
+  registerLuaFunction "designate"           (chopDesignateFn env)
+  registerLuaFunction "cancelDesignation"   (chopCancelDesignationFn env)
+  registerLuaFunction "getDesignationAt"    (chopGetDesignationAtFn env)
+  registerLuaFunction "getDesignationCount" (chopGetDesignationCountFn env)
+  registerLuaFunction "nearestDesignation"  (chopNearestDesignationFn env)
+  registerLuaFunction "setDesignateTexture" (chopSetDesignateTextureFn env)
+  Lua.setglobal (Lua.Name "chop")
+
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.
   -- Write: equip / unequip (with kind validation against slot's accepted kind).
@@ -481,6 +499,16 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "get"      (infectionGetFn env)
   registerLuaFunction "getNames" (infectionGetNamesFn env)
   Lua.setglobal (Lua.Name "infection")
+
+  -- Craft global — the crafting recipe catalogue (#325), loaded from
+  -- data/recipes/*.yaml via engine.loadRecipeYaml. get/getNames are
+  -- read-only queries; execute runs one craft against a unit's
+  -- inventory (verify + consume inputs/fuel, produce outputs).
+  Lua.newtable
+  registerLuaFunction "get"      (craftGetFn env)
+  registerLuaFunction "getNames" (craftGetNamesFn env)
+  registerLuaFunction "execute"  (craftExecuteFn env)
+  Lua.setglobal (Lua.Name "craft")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml
   -- (loaded via engine.loadLootTableYaml). Consumed by a `loot_table`

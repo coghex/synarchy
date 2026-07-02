@@ -34,6 +34,7 @@ import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Construct.Corners as ConstructCorners
+import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
@@ -84,6 +85,7 @@ main = hspec $ do
     describe "Input.Bindings" InputBindings.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Construct.Corners" ConstructCorners.spec
+    describe "Craft.Execute" CraftExecute.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
