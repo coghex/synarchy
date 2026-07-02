@@ -23,33 +23,61 @@ M.kinds = { "wall", "floor", "ceiling", "post" }
 -- Temporary: log post/wall placement nodes to diagnose cap mismatches.
 M.debug = false
 
-local cache = nil
-local function handles()
-    if cache then return cache end
-    local pack = engine.loadYaml(PACK_DIR .. M.pack .. ".yaml")
-    if not pack then
+local packCache = nil
+local function packDef()
+    if packCache then return packCache end
+    packCache = engine.loadYaml(PACK_DIR .. M.pack .. ".yaml")
+    if not packCache then
         engine.logWarn("structures: failed to load pack '" .. M.pack .. "'")
-        return { walls = {} }
     end
-    cache = { walls = {} }
+    return packCache
+end
+
+-- Handle caches keyed by variant name ("" = the default art). A variant
+-- (#91: pack yaml `variants.<name>`) overrides any subset of piece/wall
+-- textures (and optionally facemaps); everything it doesn't list falls
+-- back to the default, so an unknown or partial variant still renders.
+local cache = {}
+local function handles(variant)
+    local key = variant or ""
+    if cache[key] then return cache[key] end
+    local pack = packDef()
+    if not pack then return { walls = {} } end
+    local over = { pieces = {}, walls = {} }
+    if variant then
+        local v = pack.variants and pack.variants[variant]
+        if v then
+            over = { pieces = v.pieces or {}, walls = v.walls or {} }
+        else
+            engine.logWarn("structures: pack '" .. M.pack ..
+                "' has no variant '" .. tostring(variant) .. "' — using default art")
+        end
+    end
+    local h = { walls = {} }
     -- non-wall pieces: handle + PATH for both texture and facemap (the path is
     -- passed to structure.place too → interned into the save palette).
     for slot, p in pairs(pack.pieces) do
-        cache[slot] = { tex = engine.loadTexture(p.texture), texPath = p.texture,
-                        face = engine.loadTexture(p.facemap), facePath = p.facemap }
+        local o = over.pieces[slot] or {}
+        local texPath, facePath = o.texture or p.texture, o.facemap or p.facemap
+        h[slot] = { tex = engine.loadTexture(texPath), texPath = texPath,
+                    face = engine.loadTexture(facePath), facePath = facePath }
     end
     -- walls: one sprite + the 4 cap facemap variants (handles + paths)
     for _, e in ipairs(WALL_DIRS) do
         local w = pack.walls[e]
+        local o = over.walls[e] or {}
+        local texPath = o.texture or w.texture
         local faces, facePaths = {}, {}
         for _, c in ipairs(WALL_CAPS) do
-            faces[c]     = engine.loadTexture(w.facemaps[c])
-            facePaths[c] = w.facemaps[c]
+            local fp = (o.facemaps and o.facemaps[c]) or w.facemaps[c]
+            faces[c]     = engine.loadTexture(fp)
+            facePaths[c] = fp
         end
-        cache.walls[e] = { tex = engine.loadTexture(w.texture), texPath = w.texture,
-                           face = faces, facePath = facePaths }
+        h.walls[e] = { tex = engine.loadTexture(texPath), texPath = texPath,
+                       face = faces, facePath = facePaths }
     end
-    return cache
+    cache[key] = h
+    return h
 end
 
 -- Map a fractional in-tile hover position to the nearest diamond edge
@@ -101,8 +129,11 @@ local CORNER_WALLS = { n = {"ne","nw"}, e = {"ne","se"},
 -- worldId (optional) targets a specific world page's terrain — locations
 -- stamped on a hidden/non-active page must read THAT page's height, not the
 -- active world's (#89). nil → the active world (the click-placement path).
-local function placeWall(gx, gy, e, worldId, baseZ)
-    local h = handles()
+-- variant (optional, #91) selects the pack's variant art (e.g. "damaged");
+-- nil → the default. NB a re-cap re-places the wall with the CALLER's
+-- variant — pass the variant the wall was built with.
+local function placeWall(gx, gy, e, worldId, baseZ, variant)
+    local h = handles(variant)
     local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 1
     local ends = WALL_ENDS[e]   -- {leftCorner, rightCorner}
     local capL = structure.hasAt(gx, gy, "post_" .. ends[1], worldId)
@@ -122,10 +153,10 @@ end
 
 -- A post just changed at tile (gx,gy)'s `corner`: re-cap that tile's own two
 -- walls touching the corner, so wall-then-post and post-then-wall converge.
-local function recapTileCorner(gx, gy, corner, worldId, baseZ)
+local function recapTileCorner(gx, gy, corner, worldId, baseZ, variant)
     for _, e in ipairs(CORNER_WALLS[corner]) do
         if structure.hasAt(gx, gy, "wall_" .. e, worldId) then
-            placeWall(gx, gy, e, worldId, baseZ)
+            placeWall(gx, gy, e, worldId, baseZ, variant)
         end
     end
 end
@@ -181,15 +212,18 @@ end
 -- ground a stamped room sits on (locations.flattenFootprint). When given, the
 -- piece is placed at that explicit z instead of re-reading terrain (which,
 -- right after the async flatten edits, would still report the old bumps).
-function M.floor(gx, gy, worldId, baseZ)
-    local h = handles()
+-- The optional trailing `variant` (#91) selects the pack's variant art
+-- (e.g. "damaged"); nil → the default. The chosen texture PATH is what the
+-- piece persists (structure palette), so a variant survives save/load.
+function M.floor(gx, gy, worldId, baseZ, variant)
+    local h = handles(variant)
     local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 1
     structure.place(gx, gy, "floor", h.floor.tex, h.floor.face, z,
                     h.floor.texPath, h.floor.facePath, worldId)
 end
 
-function M.ceiling(gx, gy, worldId, baseZ)
-    local h = handles()
+function M.ceiling(gx, gy, worldId, baseZ, variant)
+    local h = handles(variant)
     local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 2   -- one level above the floor
     structure.place(gx, gy, "ceiling", h.ceiling.tex, h.ceiling.face, z,
                     h.ceiling.texPath, h.ceiling.facePath, worldId)
@@ -199,19 +233,19 @@ end
 -- this tile's walls touching the corner. Returns true if placed. The post z
 -- comes from the existing floor (read from the same page), so it needs no
 -- terrain read.
-function M.post(gx, gy, corner, worldId, baseZ)
+function M.post(gx, gy, corner, worldId, baseZ, variant)
     local fz = structure.floorZAt(gx, gy, worldId)
     if not fz then return false end
-    local h = handles()
+    local h = handles(variant)
     structure.place(gx, gy, "post_" .. corner, h.post.tex, h.post.face, fz,
                     h.post.texPath, h.post.facePath, worldId)
-    recapTileCorner(gx, gy, corner, worldId, baseZ)
+    recapTileCorner(gx, gy, corner, worldId, baseZ, variant)
     return true
 end
 
 -- edge ∈ "ne"/"nw"/"se"/"sw". Caps to existing posts on this tile.
-function M.wall(gx, gy, edge, worldId, baseZ)
-    placeWall(gx, gy, edge, worldId, baseZ)
+function M.wall(gx, gy, edge, worldId, baseZ, variant)
+    placeWall(gx, gy, edge, worldId, baseZ, variant)
 end
 
 function M.clear() structure.clearAll() end

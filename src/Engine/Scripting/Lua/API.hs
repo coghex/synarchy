@@ -431,6 +431,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "paletteCount" (structurePaletteCountFn env)
   registerLuaFunction "floorZAt" (structureFloorZAtFn env)
   registerLuaFunction "hasAt"    (structureHasAtFn env)
+  registerLuaFunction "getAt"    (structureGetAtFn env)
   Lua.setglobal (Lua.Name "structure")
 
   -- Construction designation tool (#95). Mirrors the mine-designation
