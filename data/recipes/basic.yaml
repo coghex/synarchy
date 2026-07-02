@@ -5,8 +5,11 @@
 # Schema (one entry under `recipes:`):
 #   id:        unique recipe key                          (required)
 #   name:      display name                               (default: id)
-#   station:   station-kind tag, e.g. "forge"/"furnace"   (required)
-#              — plain data until station defs land (#326)
+#   station:   station operation, e.g. "smelt"/"forge"    (required)
+#              — matched against a building def's `operations:` list
+#              (#326): craft.executeAt only runs at a Built building
+#              offering it (furnace = smelt+repair, workbench =
+#              forge+assemble+repair)
 #   inputs:    list of { item, count }; count defaults 1  (required)
 #   fuel:      optional single { item, count } consumed alongside the
 #              inputs (fuel item content arrives with the smelting

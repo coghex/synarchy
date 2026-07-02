@@ -10,6 +10,7 @@ module Building.Types
     , nextBuildingId
     , currentActivity
     , materialsSatisfied
+    , footprintDist
     , buildingsOnPage
     , buildingsOnPages
     ) where
@@ -83,6 +84,13 @@ data BuildingDef = BuildingDef
       --   biMaterialsDelivered: materials consumed into the build are
       --   locked for future deconstruction recovery; storage items
       --   are free-floating cargo the player and AI move around.
+    , bdOperations  ∷ ![Text]
+      -- ^ Work-station operations this building offers once Built
+      --   (#326): recipe `station` kinds it can run ("smelt", "forge",
+      --   "assemble", …) plus "repair" for the repair flows (#301).
+      --   Empty (default) = not a work station. craft.executeAt
+      --   validates the recipe's rdStation against this list;
+      --   building.findStation routes by it.
     , bdAnimations  ∷ !(HM.HashMap Text Animation)
     , bdStateAnims  ∷ !(HM.HashMap Text Text)
       -- ^ "appearing" / "built" → animation name in bdAnimations.
@@ -200,6 +208,20 @@ materialsSatisfied ∷ BuildingInstance → BuildingDef → Bool
 materialsSatisfied inst def =
     all (\(t, n) → length (HM.lookupDefault [] t (biMaterialsDelivered inst)) >= n)
         (HM.toList (bdMaterials def))
+
+-- | Chebyshev distance from a tile to the nearest tile of a
+--   building's footprint. 0 = standing on it; 1 = adjacent (incl.
+--   diagonals) — the "close enough to work here" test shared by
+--   building.findStation and craft.executeAt (#326).
+footprintDist ∷ BuildingInstance → (Int, Int) → Int
+footprintDist inst (ux, uy) =
+    let ax = biAnchorX inst
+        ay = biAnchorY inst
+        bx = ax + biTileW inst - 1
+        by = ay + biTileH inst - 1
+        dx = maximum [ax - ux, 0, ux - bx]
+        dy = maximum [ay - uy, 0, uy - by]
+    in max dx dy
 
 currentActivity ∷ Double → BuildingInstance → BuildingDef → BuildingActivity
 currentActivity now inst def
