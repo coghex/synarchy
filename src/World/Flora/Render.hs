@@ -1,34 +1,42 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Flora.Render
     ( resolveFloraTexture
-    , findActiveCycleStage  -- exported for annual-cycle selection tests
+    , findActiveCycleStage  -- re-exported from World.Flora.Growth for
+                            -- annual-cycle selection tests
     ) where
 
 import UPrelude
-import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Flora.Types
+import World.Flora.Growth (floraGrowth, findActivePhase,
+                           findActiveCycleStage, FloraGrowth(..))
 
 -- * Texture Resolution
 
--- | Given a flora instance, the species catalog, and the
---   current world time, determine which texture to draw.
+-- | Given a flora instance, the species catalog, the calendar's year
+--   length, and the absolute world day ('worldAbsoluteDay'), determine
+--   which texture to draw.
 --
 --   Lookup chain:
 --
---     1. Determine active life phase (highest-age phase where
---        @lpAge <= fiAge@)
+--     1. Derive the instance's growth state ('World.Flora.Growth' —
+--        placement age + elapsed days scaled by health, with the
+--        generational reseed wrap) and pick the active life phase
+--        (highest-age phase where @lpAge <= age@)
 --     2. If the species has an annual cycle:
 --        find active cycle stage, check overrides, fall back to stage texture
 --     3. If no annual cycle, use life phase texture
 --     4. If no life phases, use @fsBaseTexture@
 
-resolveFloraTexture ∷ FloraCatalog → Int → FloraInstance → TextureHandle
-resolveFloraTexture catalog dayOfYear inst =
+resolveFloraTexture ∷ FloraCatalog → Int → Int → FloraInstance → TextureHandle
+resolveFloraTexture catalog daysPerYear absDay inst =
     case lookupSpecies (fiSpecies inst) catalog of
         Nothing      → TextureHandle 0
-        Just species → resolveSpeciesTexture species dayOfYear (fiAge inst)
+        Just species →
+            let dayOfYear = absDay `mod` max 1 daysPerYear
+                growth    = floraGrowth species absDay inst
+            in resolveSpeciesTexture species dayOfYear (fgAge growth)
 
 resolveSpeciesTexture ∷ FloraSpecies → Int → Float → TextureHandle
 resolveSpeciesTexture species dayOfYear age =
@@ -63,35 +71,3 @@ resolveSpeciesTexture species dayOfYear age =
                                 Just tex → tex       -- Phase+cycle override
                                 Nothing  → asTexture stage  -- Default cycle tex
                         Nothing → asTexture stage
-
--- * Helpers
-
--- | Find the highest-age phase where lpAge ≤ current age.
-findActivePhase ∷ HM.HashMap LifePhaseTag LifePhase → Float → Maybe LifePhase
-findActivePhase phases age =
-    let eligible = filter (\lp → lpAge lp ≤ age) (HM.elems phases)
-    in case eligible of
-        [] → Nothing
-        _  → Just $ maximumByKey (lifePhaseOrder . lpTag) eligible
-
--- | Find the active cycle stage: highest asStartDay ≤ dayOfYear.
---   Wraps around: if dayOfYear < all start days, use the last stage
---   (it wraps from the previous year).
-findActiveCycleStage ∷ [AnnualStage] → Int → Maybe AnnualStage
-findActiveCycleStage [] _ = Nothing
-findActiveCycleStage stages dayOfYear =
-    let sorted = sortOn asStartDay stages
-        eligible = filter (\s → asStartDay s ≤ dayOfYear) sorted
-    in case eligible of
-        [] → Just (last sorted)  -- Wrap: use the last stage from previous year
-        _  → Just (last eligible)
-
--- | Like maximumBy but takes a key function.
---   Callers must ensure the list is non-empty (findActivePhase guards
---   with a [] → Nothing pattern match before calling this).
-maximumByKey ∷ Ord b ⇒ (a → b) → [a] → a
-maximumByKey _ [x]    = x
-maximumByKey f (x:xs) = foldl' (\best y → if f y > f best then y else best) x xs
--- Unreachable: the only caller (findActivePhase) matches [] → Nothing
--- before reaching this, so the list is non-empty here by construction.
-maximumByKey _ []     = error "maximumByKey: empty list (caller failed to guard non-empty)"

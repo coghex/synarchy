@@ -13,6 +13,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetSunAngleFn
     , worldSetTimeFn
     , worldSetDateFn
+    , worldGetDateFn
     , worldSetTimeScaleFn
     , worldGetTimeScaleFn
     , worldGetActiveWorldIdFn
@@ -476,6 +477,44 @@ worldSetDateFn env = do
         _ → pure ()
 
     return 0
+
+-- | world.getDate(pageId) → {year, month, day, dayOfYear, absoluteDay} | nil
+-- Reads the named world's calendar date directly from 'wsDateRef'.
+-- dayOfYear is the zero-based year-relative ordinal (what the flora
+-- annual cycle selects on); absoluteDay is whole days since the world
+-- epoch (the #332 flora growth clock). nil when the pageId isn't
+-- registered. The date advances on its own now (midnight rollover in
+-- tickWorldTime) — this is how tests observe it.
+worldGetDateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetDateFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws → do
+                    (date, calendar) ← Lua.liftIO $ do
+                        d ← readIORef (wsDateRef ws)
+                        paramsM ← readIORef (wsGenParamsRef ws)
+                        pure (d, maybe defaultCalendarConfig wgpCalender paramsM)
+                    let WorldDate y mo d = date
+                    Lua.newtable
+                    Lua.pushinteger (fromIntegral y)
+                    Lua.setfield (-2) "year"
+                    Lua.pushinteger (fromIntegral mo)
+                    Lua.setfield (-2) "month"
+                    Lua.pushinteger (fromIntegral d)
+                    Lua.setfield (-2) "day"
+                    Lua.pushinteger (fromIntegral
+                        (worldDateToDayOfYear calendar date))
+                    Lua.setfield (-2) "dayOfYear"
+                    Lua.pushinteger (fromIntegral
+                        (worldAbsoluteDay calendar date))
+                    Lua.setfield (-2) "absoluteDay"
+                Nothing → Lua.pushnil
+        Nothing → Lua.pushnil
+    return 1
 
 -- | world.setTimeScale(pageId, scale)
 -- Set how fast time passes: game-minutes per real-second.

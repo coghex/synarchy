@@ -109,11 +109,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
-        -- Annual-cycle flora wants a year-relative ordinal day, not the
-        -- day-of-month field. Convert through the world calendar (falling
-        -- back to the default calendar when gen params aren't loaded yet).
+        -- Flora growth is derived from the absolute world day (#332):
+        -- the annual cycle takes its year-relative ordinal day from it,
+        -- and the life phase its derived age. Convert through the world
+        -- calendar (falling back to the default calendar when gen params
+        -- aren't loaded yet).
         calendar = maybe defaultCalendarConfig wgpCalender paramsM
-        dayOfYear = worldDateToDayOfYear calendar worldDate
+        daysPerYear = calendarDaysPerYear calendar
+        absDay = worldAbsoluteDay calendar worldDate
 
     -- Vertices carry a STABLE texture-handle id (#286); the bindless
     -- fragment shader resolves it to a live slot at draw time, so the
@@ -294,7 +297,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                     ∧ HM.member (gx, gy) harvests
                           texHandle = case (harvested, mHarvest) of
                               (True, Just fh) → fhHarvestedTexture fh
-                              _ → resolveFloraTexture floraCat dayOfYear inst'
+                              _ → resolveFloraTexture floraCat daysPerYear
+                                      absDay inst'
                     , actualZ > minBound  -- skip empty columns
                     , texHandle /= TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing

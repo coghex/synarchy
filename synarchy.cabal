@@ -176,6 +176,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Corners
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
+                   Test.Headless.World.FloraGrowth
                    Test.Headless.River.Graph
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.SlopeBit
@@ -603,6 +604,7 @@ library
                      World.Tile.Types
                      World.Time.Types
                      World.Flora.Types
+                     World.Flora.Growth
                      World.Flora.Placement
                      World.Flora.Render
                      World.Flora.Harvest
