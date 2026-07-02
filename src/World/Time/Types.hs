@@ -4,9 +4,13 @@ module World.Time.Types
     , defaultWorldTime
     , worldTimeToSunAngle
     , advanceWorldTime
+    , advanceWorldClock
     , WorldDate(..)
     , defaultWorldDate
     , worldDateToDayOfYear
+    , worldDateAddDays
+    , worldAbsoluteDay
+    , calendarDaysPerYear
     , CalendarConfig(..)
     , defaultCalendarConfig
     , SunConfig(..)
@@ -54,6 +58,30 @@ advanceWorldTime timeScale dtSeconds (WorldTime h m) =
         newH = floor wrapped `div` 60
         newM = floor wrapped `mod` 60
     in WorldTime (newH `mod` 24) (newM `mod` 60)
+
+-- | Advance the full world clock — time of day AND calendar date (#332).
+--   'advanceWorldTime' wraps at midnight without carrying the day, which
+--   left the world date frozen forever (the flora annual cycle selected
+--   by day-of-year could never move). This is the same minute arithmetic
+--   plus the carry: the number of midnights crossed rolls the date
+--   through the calendar. Returns the days rolled so the caller can
+--   invalidate date-dependent caches (flora textures) only when the day
+--   actually changed. A single tick can cross several midnights at high
+--   time scales.
+advanceWorldClock ∷ CalendarConfig → Float → Float → WorldTime → WorldDate
+                  → (WorldTime, WorldDate, Int)
+advanceWorldClock cc timeScale dtSeconds (WorldTime h m) date =
+    let totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
+        newTotal = totalMinutes + timeScale * dtSeconds
+        daysRolled = floor (newTotal / 1440.0) ∷ Int
+        wrapped = newTotal - 1440.0 * fromIntegral daysRolled
+        newH = floor wrapped `div` 60
+        newM = floor wrapped `mod` 60
+        time' = WorldTime (newH `mod` 24) (newM `mod` 60)
+        date' = if daysRolled > 0
+                then worldDateAddDays cc daysRolled date
+                else date
+    in (time', date', daysRolled)
 
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.
@@ -108,6 +136,35 @@ worldDateToDayOfYear cc (WorldDate _ month day) =
         m   = max 1 (min mpy month)
         d   = max 1 (min dpm day)
     in (m - 1) * dpm + (d - 1)
+
+-- | Days in a calendar year (fixed month length), floored at 1.
+calendarDaysPerYear ∷ CalendarConfig → Int
+calendarDaysPerYear cc =
+    max 1 (ccDaysPerMonth cc) * max 1 (ccMonthsPerYear cc)
+
+-- | Add whole days to a 'WorldDate', carrying through months and years
+--   with the calendar's fixed month length. Negative deltas are clamped
+--   to zero — the world clock never runs backwards on its own; rewinding
+--   is what 'world.setDate' is for.
+worldDateAddDays ∷ CalendarConfig → Int → WorldDate → WorldDate
+worldDateAddDays cc delta date@(WorldDate year _ _)
+    | delta ≤ 0 = date
+    | otherwise =
+        let dpm = max 1 (ccDaysPerMonth cc)
+            total = worldDateToDayOfYear cc date + delta
+            (yearsCarried, doy) = total `divMod` calendarDaysPerYear cc
+        in WorldDate (year + yearsCarried)
+                     (doy `div` dpm + 1)
+                     (doy `mod` dpm + 1)
+
+-- | Whole days elapsed since the world epoch (year 1, month 1, day 1 —
+--   'defaultWorldDate'), i.e. a monotonic absolute day counter. This is
+--   the flora growth clock: placement ages ('fiAge') are ages at day 0,
+--   so current age derives from this without any per-instance mutable
+--   state (World.Flora.Growth). Clamped at 0 for degenerate dates.
+worldAbsoluteDay ∷ CalendarConfig → WorldDate → Int
+worldAbsoluteDay cc date@(WorldDate year _ _) =
+    max 0 ((year - 1) * calendarDaysPerYear cc + worldDateToDayOfYear cc date)
 
 data CalendarConfig = CalendarConfig
     { ccDaysPerMonth  ∷ !Int      -- ^ e.g. 30

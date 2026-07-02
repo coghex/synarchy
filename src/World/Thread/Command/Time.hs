@@ -38,9 +38,16 @@ handleWorldSetDateCommand env logger pageId year month day = do
         <> T.pack (show month) <> "-" <> T.pack (show day)
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
-            atomicModifyIORef' (wsDateRef worldState) $ \_ →
-                (WorldDate year month day, ())
+        Just worldState → do
+            let newDate = WorldDate year month day
+            oldDate ← atomicModifyIORef' (wsDateRef worldState) $ \old →
+                (newDate, old)
+            -- Flora textures derive from the date (#332: annual stage +
+            -- derived age), so a date poke must invalidate cached quads
+            -- the same way the midnight rollover in tickWorldTime does —
+            -- otherwise world.setDate leaves stale flora visuals until
+            -- some unrelated invalidation.
+            when (oldDate /= newDate) $ bumpQuadCacheGen worldState
         Nothing →
             logDebug logger CatWorld $
                 "World not found for date update: " <> unWorldPageId pageId

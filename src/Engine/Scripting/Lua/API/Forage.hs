@@ -10,6 +10,7 @@
 --   as the WorldQuery reads and item.spawnGround.
 module Engine.Scripting.Lua.API.Forage
     ( worldGetFloraAtFn
+    , worldGetFloraGrowthAtFn
     , worldHarvestFloraFn
     , worldFindHarvestableFloraFn
     , itemGetFoodFn
@@ -24,6 +25,9 @@ import System.Random (randomR)
 import Engine.Core.State (EngineEnv(..), activeWorldState,
                           freshItemInstanceId)
 import World.Types
+import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
+                           growthPhaseTag, activeStageTag,
+                           lifePhaseText, annualStageText)
 import World.Generate.Coordinates (globalToChunk, chunkToGlobal)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
                    ItemFood(..), lookupItemDef)
@@ -48,16 +52,35 @@ floraAt env ws gx gy = do
             , Just sp ← [lookupSpecies (fiSpecies i) cat]
             ]
 
+-- | The world's growth clock (#332): (day-of-year, absolute day),
+--   converted through the page's calendar.
+growthClock ∷ WorldState → IO (Int, Int)
+growthClock ws = do
+    paramsM ← readIORef (wsGenParamsRef ws)
+    date ← readIORef (wsDateRef ws)
+    let calendar = maybe defaultCalendarConfig wgpCalender paramsM
+    pure ( worldDateToDayOfYear calendar date
+         , worldAbsoluteDay calendar date )
+
 -- | world.getFloraAt(gx, gy) → {id, harvestable, regrowthRemaining,
 --   tags} | nil
 --
 --   nil when the tile has no flora (or its chunk isn't loaded). When
---   several instances share the tile, a harvestable species wins the
---   report (a berry bush over the decorative dandelion beside it).
---   @harvestable@ is true only for a harvestable SPECIES with no live
---   regrowth timer; @regrowthRemaining@ is the timer in game-seconds
---   (0 when none). @tags@ is the species' harvest-tag array (#97 —
---   "wood" marks a choppable tree; empty for non-harvestable flora).
+--   several instances share the tile, an instance a bare harvest would
+--   take wins the report, then any harvestable species (a berry bush
+--   over the decorative dandelion beside it). @harvestable@ mirrors
+--   the query/action contract of a BARE world.harvestFlora: true only
+--   for a harvestable SPECIES with no live regrowth timer whose growth
+--   state is inside the #332 harvest window (in season, not dead, not
+--   a juvenile). @regrowthRemaining@ is the timer in game-seconds (0
+--   when none). @tags@ is the species' harvest-tag array (#97 — "wood"
+--   marks a choppable tree; empty for non-harvestable flora).
+--
+--   Designation flows must NOT read @harvestable@ (it is the
+--   forage-facing signal): the chop AI's claim check keys on
+--   @regrowthRemaining@ + @tags@, so a designated tree stays choppable
+--   as a sprout or standing dead. Per-instance gated state is
+--   world.getFloraGrowthAt.
 worldGetFloraAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetFloraAtFn env = do
     mGx ← Lua.tointeger 1
@@ -73,15 +96,22 @@ worldGetFloraAtFn env = do
                     Just ws → do
                         insts ← floraAt env ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
-                        let harvestFirst =
+                        (doy, absDay) ← growthClock ws
+                        let open (i, sp) =
+                                harvestOpen sp doy (floraGrowth sp absDay i)
+                            harvestables =
                                 [ p | p@(_, sp) ← insts
-                                    , isJust (fsHarvest sp) ] <> insts
+                                    , isJust (fsHarvest sp) ]
+                            harvestFirst =
+                                filter open harvestables
+                                <> harvestables <> insts
                         pure $ case harvestFirst of
                             [] → Nothing
-                            ((_, sp):_) →
+                            (p@(_, sp):_) →
                                 let timer = HM.lookupDefault 0 (gx, gy) harvests
                                 in Just ( fsName sp
                                         , isJust (fsHarvest sp) ∧ timer ≤ 0
+                                            ∧ open p
                                         , timer
                                         , maybe [] fhTags (fsHarvest sp) )
             case mResult of
@@ -102,6 +132,80 @@ worldGetFloraAtFn env = do
             return 1
         _ → Lua.pushnil >> return 1
 
+-- | world.getFloraGrowthAt(gx, gy) → array of {id, age, health, phase,
+--   stage, generation, dead, harvestable, regrowthRemaining} | nil
+--
+--   The growth-state inspection window (#332): one entry per flora
+--   instance on the tile, with the DERIVED state — effective age in
+--   game-days, life-phase / annual-stage names (or nil where the
+--   species defines none), placement health, reseed generation, and
+--   whether a harvest would yield right now. nil when the tile has no
+--   flora or its chunk isn't loaded. Poke the state by moving the
+--   clock: world.setDate / world.setTime / world.setTimeScale.
+worldGetFloraGrowthAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetFloraGrowthAtFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+            entries ← Lua.liftIO $ do
+                mWs ← activeWorldState env
+                case mWs of
+                    Nothing → pure []
+                    Just ws → do
+                        insts ← floraAt env ws gx gy
+                        harvests ← readIORef (wsFloraHarvestsRef ws)
+                        (doy, absDay) ← growthClock ws
+                        let timer = HM.lookupDefault 0 (gx, gy) harvests
+                        pure
+                            [ ( fsName sp, g
+                              , fiHealth i
+                              , lifePhaseText <$> growthPhaseTag sp g
+                              , annualStageText <$> activeStageTag sp doy
+                              , isJust (fsHarvest sp) ∧ timer ≤ 0
+                                  ∧ harvestOpen sp doy g
+                              , timer )
+                            | (i, sp) ← insts
+                            , let g = floraGrowth sp absDay i
+                            ]
+            case entries of
+                [] → Lua.pushnil
+                _  → do
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] entries) $
+                        \(n, (name, g, health, mPhase, mStage
+                             , harvestable, timer)) → do
+                            Lua.newtable
+                            Lua.pushstring (TE.encodeUtf8 name)
+                            Lua.setfield (-2) "id"
+                            Lua.pushnumber (Lua.Number (realToFrac (fgAge g)))
+                            Lua.setfield (-2) "age"
+                            Lua.pushnumber (Lua.Number (realToFrac health))
+                            Lua.setfield (-2) "health"
+                            case mPhase of
+                                Just t → do
+                                    Lua.pushstring (TE.encodeUtf8 t)
+                                    Lua.setfield (-2) "phase"
+                                Nothing → pure ()
+                            case mStage of
+                                Just t → do
+                                    Lua.pushstring (TE.encodeUtf8 t)
+                                    Lua.setfield (-2) "stage"
+                                Nothing → pure ()
+                            Lua.pushinteger (fromIntegral (fgGeneration g))
+                            Lua.setfield (-2) "generation"
+                            Lua.pushboolean (fgDead g)
+                            Lua.setfield (-2) "dead"
+                            Lua.pushboolean harvestable
+                            Lua.setfield (-2) "harvestable"
+                            Lua.pushnumber (Lua.Number (realToFrac timer))
+                            Lua.setfield (-2) "regrowthRemaining"
+                            Lua.rawseti (-2) (fromIntegral n)
+            return 1
+        _ → Lua.pushnil >> return 1
+
 -- | world.harvestFlora(gx, gy [, tag]) → array of {id, gid} | nil
 --
 --   Harvests the tile's (first) harvestable-species instance: rolls each
@@ -111,9 +215,13 @@ worldGetFloraAtFn env = do
 --   ITEM — @gid@ is the ground-item id, ready for item.pickupGround.
 --   With @tag@ (#97) only a species carrying that harvest tag is
 --   harvested — the chop AI passes "wood" so a shared tile can't trade
---   its berry bush for the designated tree. nil when the tile has
---   nothing (matching) harvestable — the codebase signals failure with
---   nil rather than raising.
+--   its berry bush for the designated tree. A BARE call is a forage,
+--   additionally gated on the #332 growth window (skips dead plants,
+--   juveniles, and fruiting species out of season); tagged calls
+--   address designation flows and skip the window — a standing-dead
+--   tree still chops. nil when the tile has nothing (matching)
+--   harvestable — the codebase signals failure with nil rather than
+--   raising.
 worldHarvestFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldHarvestFloraFn env = do
     mGx ← Lua.tointeger 1
@@ -131,11 +239,21 @@ worldHarvestFloraFn env = do
                     Just ws → do
                         insts ← floraAt env ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        (doy, absDay) ← growthClock ws
                         let live = HM.lookupDefault 0 (gx, gy) harvests
+                            -- #332: only the BARE (forage) call checks
+                            -- the growth window; a tagged call is a
+                            -- designation flow (chop "wood") and takes
+                            -- the plant in any growth state.
+                            windowOk i sp = case tagFilter of
+                                Just _  → True
+                                Nothing → harvestOpen sp doy
+                                              (floraGrowth sp absDay i)
                             mFh = listToMaybe
-                                [ fh | (_, sp) ← insts
+                                [ fh | (i, sp) ← insts
                                      , Just fh ← [fsHarvest sp]
-                                     , maybe True (`elem` fhTags fh) tagFilter ]
+                                     , maybe True (`elem` fhTags fh) tagFilter
+                                     , windowOk i sp ]
                         case mFh of
                             Just fh | live ≤ 0 → do
                                 spawned ← spawnYields env ws gx gy (fhYield fh)
@@ -208,12 +326,14 @@ spawnYields env ws gx gy yields = do
 --   chunks. Skips tiles with a live regrowth timer.
 --
 --   With @tag@ (#97): only species whose harvest tags include it — the
---   chop tool/probe pass "wood" to find trees. WITHOUT a tag the call
---   is the foraging AI's food search, so only species whose yield
---   contains at least one EDIBLE item count: before choppable trees
---   every harvestable was food and the distinction didn't exist, but a
---   bare call must not send a starving unit to fell an oak for
---   inedible logs. nil when nothing matching is in range.
+--   chop tool/probe pass "wood" to find trees, in any growth state (a
+--   standing-dead tree is still worth designating). WITHOUT a tag the
+--   call is the foraging AI's food search, so only species whose yield
+--   contains at least one EDIBLE item count (a bare call must not send
+--   a starving unit to fell an oak for inedible logs), further gated on
+--   the #332 growth window — off-season berry bushes don't distract
+--   the forager from the clover that still yields. nil when nothing
+--   matching is in range.
 worldFindHarvestableFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldFindHarvestableFloraFn env = do
     mGx ← Lua.tointeger 1
@@ -234,6 +354,7 @@ worldFindHarvestableFloraFn env = do
                         tileData ← readIORef (wsTilesRef ws)
                         cat ← readIORef (floraCatalogRef env)
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        (doy, absDay) ← growthClock ws
                         itemMgr ← readIORef (itemManagerRef env)
                         let (cLo, _) = globalToChunk (gx - radius) (gy - radius)
                             (cHi, _) = globalToChunk (gx + radius) (gy + radius)
@@ -256,6 +377,12 @@ worldFindHarvestableFloraFn env = do
                                 , Just sp ← [lookupSpecies (fiSpecies i) cat]
                                 , Just fh ← [fsHarvest sp]
                                 , wanted fh
+                                -- #332: the growth window gates the
+                                -- bare food search only (see above).
+                                , case tagFilter of
+                                    Just _  → True
+                                    Nothing → harvestOpen sp doy
+                                                  (floraGrowth sp absDay i)
                                 , let (tgx, tgy) = chunkToGlobal (ChunkCoord cx cy)
                                         (fromIntegral (fiTileX i))
                                         (fromIntegral (fiTileY i))

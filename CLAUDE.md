@@ -328,6 +328,48 @@ loaded via `engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs
 one craft against a unit's inventory. No stations or AI yet — station
 defs are #326, the craft AI/bill layer is #329.
 
+### Flora growth runtime (#332)
+
+Flora growth is **derived** state: the calendar date advances (midnight
+rollover on the world thread — it used to be frozen forever), and a
+plant's age / life phase / annual stage / reseed generation derive from
+the absolute world day plus its deterministic placement fields. No
+per-instance mutable state, nothing new in saves (the date already
+persists); chunk eviction/regen can't lose growth. `fiHealth` =
+placement-time habitat fitness and scales growth speed. Species whose
+annual cycle authors a `fruiting` stage (red_raspberry) harvest only in
+that window — unharvested fruit is lost at senescing; species without
+one (white_clover) stay open year-round. The #94 regrowth-timer map is
+still the only mutable flora state.
+
+```bash
+# Calendar date — dayOfYear drives the annual cycle, absoluteDay is the growth clock
+echo 'return world.getDate("main_world")' | nc -w 2 localhost 9008
+# Per-instance derived growth on a tile: array of {id, age, health, phase,
+# stage, generation, dead, harvestable, regrowthRemaining}
+echo 'return world.getFloraGrowthAt(gx, gy)' | nc -w 2 localhost 9008
+# Poke the clock (queued world command — poll getDate for it to land)
+echo 'world.setDate("main_world", 2, 7, 21)' | nc -w 2 localhost 9008
+```
+
+Turnkey harness: **`python3 tools/flora_growth_probe.py`** — the #332
+gate. Registers a max-tolerance `probe_berry` species (real raspberries
+are climate-gated and absent from many spawn regions), generates a real
+world, and asserts: the date ticks under the game clock, growth state
+derives per instance, the fruiting window gates `harvestFlora`/
+`findHarvestableFlora` (clover stays open off-season), ages and reseed
+generations advance under `setDate` jumps, and the growth clock
+survives save → load.
+
+The growth window gates **bare (food) calls only**: `harvestFlora(gx,gy)`
+and `findHarvestableFlora(gx,gy,r)` without a tag, plus the
+`getFloraAt().harvestable` flag, which mirrors exactly "would a bare
+harvestFlora yield here" (the query/action contract). Tagged calls
+(#97 — the chop AI's `"wood"`) deliberately skip the window, and the
+chop-claim check keys on `regrowthRemaining` + `tags`, NOT
+`harvestable` — a designated tree must stay choppable as a sprout or
+standing dead. Per-instance gated state lives in `getFloraGrowthAt`.
+
 ### Logging: event / combat / injury
 
 Three log panels share UI machinery and feed off three streams:
