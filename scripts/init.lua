@@ -4,16 +4,22 @@ local game = {}
 local shellScriptId = nil
 local uiScriptId = nil
 local debugScriptId = nil
+local debugAnimPanelScriptId = nil
 local unitManagerScriptId = nil
 local unitInfoPanelScriptId = nil
+local unitInfoV2ScriptId = nil
 local unitDragSelectScriptId = nil
 local unitResourcesScriptId = nil
 local unitAiScriptId = nil
 local buildToolScriptId = nil
 local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
+local locationStamperScriptId = nil
 local pauseScriptId = nil
 local buildingInfoPanelScriptId = nil
+local itemInfoPanelScriptId = nil
+local cargoInventoryPanelScriptId = nil
+local itemContentsPanelScriptId = nil
 local popupScriptId = nil
 local eventLogScriptId = nil
 local combatLogScriptId = nil
@@ -1078,11 +1084,17 @@ function game.shutdown()
     if tileEditorScriptId then
         engine.killScript(tileEditorScriptId)
     end
+    if locationStamperScriptId then
+        engine.killScript(locationStamperScriptId)
+    end
     if pauseScriptId then
         engine.killScript(pauseScriptId)
     end
     if buildingInfoPanelScriptId then
         engine.killScript(buildingInfoPanelScriptId)
+    end
+    if itemInfoPanelScriptId then
+        engine.killScript(itemInfoPanelScriptId)
     end
     if popupScriptId then
         engine.killScript(popupScriptId)
