@@ -300,6 +300,18 @@ Note: `startFall` clears the move target on landing (AI re-issues after
 recovery), so a unit can't reach a goal across a fall in one `moveTo` —
 fall checks assert the fall mechanic + landing z, not arrival.
 
+### Testing construction build jobs headless
+
+Turnkey harness: **`python3 tools/construction_probe.py`** — the #96
+gate. Boots headless on a flat arena, designates structure pieces +
+a building via `construction.*` (#95), and asserts the construct_job
+AI end-to-end: claim (status observable), material sourcing (inventory
+→ ground items → technomule), progress accrual, piece placement,
+building staking, and dead-claimant claim release. `--phase` runs one
+phase; the stake phase runs LAST (the staked portal spawns its roster,
+which would contaminate later phases). Structure build costs live in
+the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
+
 ### Logging: event / combat / injury
 
 Three log panels share UI machinery and feed off three streams:

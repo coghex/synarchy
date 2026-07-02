@@ -531,12 +531,20 @@ renderWorldCursorQuads env worldState tileAlpha = do
     let constructTexFor cd = case cdTarget cd of
             CtStructure _ → constructStructTexture cs'
             CtBuilding  _ → constructBuildingTexture cs'
+        -- Build-progress display (#96): the blueprint ghost solidifies
+        -- as the build AI pours progress in — a fresh designation sits
+        -- at 45 % alpha and ramps to opaque at progress 1.0 (the piece
+        -- itself then replaces the ghost). The mining analogue carves
+        -- terrain slopes per corner; construction ADDS material, so the
+        -- ramp is the marker-level equivalent.
+        constructAlphaFor cd =
+            tileAlpha * (0.45 + 0.55 * max 0.0 (min 1.0 (cdProgress cd)))
         constructDesignQuads
             | HM.null constructDesigns = V.empty
             | otherwise = V.fromList
                 [ worldCursorToQuad lookupSlot lookupFmSlot textures
                       facing dgx dgy (cdZ cd) zSlice effectiveDepth
-                      tileAlpha xOff tex
+                      (constructAlphaFor cd) xOff tex
                 | ((dgx, dgy), cd) ← HM.toList constructDesigns
                 , Just tex ← [constructTexFor cd]
                 , let (chunkCoord, _) = globalToChunk dgx dgy

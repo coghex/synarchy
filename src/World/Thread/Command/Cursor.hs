@@ -21,6 +21,7 @@ module World.Thread.Command.Cursor
     , handleWorldDesignateConstructCommand
     , handleWorldCancelConstructCommand
     , handleWorldSetConstructStatusCommand
+    , handleWorldAddConstructProgressCommand
     , handleWorldSetConstructDesignateTextureCommand
     ) where
 
@@ -364,6 +365,22 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
                     CsComplete → (HM.delete (gx, gy) m, ())
                     _          → (HM.adjust (\cd → cd { cdStatus = st })
                                            (gx, gy) m, ())
+        Nothing → pure ()
+
+-- | Build AI hook (#96): pour progress into a designation. Deltas are
+--   normalised to the job's total work (1.0 = done); the accumulated
+--   value is clamped to [0, 1]. Completion is NOT triggered here — the
+--   build AI watches the value and places the piece itself, then sends
+--   CsComplete.
+handleWorldAddConstructProgressCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Float → IO ()
+handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+                (HM.adjust (\cd → cd { cdProgress =
+                    max 0.0 (min 1.0 (cdProgress cd + delta)) }) (gx, gy) m, ())
         Nothing → pure ()
 
 handleWorldSetConstructDesignateTextureCommand ∷ EngineEnv → LoggerState
