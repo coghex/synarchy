@@ -18,7 +18,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Control.Monad (foldM, replicateM)
+import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
 import Engine.Core.Log (LogCategory(..), logInfo)
