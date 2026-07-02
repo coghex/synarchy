@@ -657,55 +657,17 @@ function hud.hide()
     if hud.zoom_page then
         UI.hidePage(hud.zoom_page)
     end
-    -- Suppress the info panel while the HUD is hidden. This both hides
-    -- the page and blocks background info watchers (which keep pushing
-    -- text for a still-selected object) from re-opening it over the menu.
-    -- hud.show() releases the suppression and restores from content (#134).
-    infoPanel.suppress("hud")
     if hud.global_page then
         UI.hidePage(hud.global_page)
     end
-    -- If any HUD-owned overlay happens to be open when the HUD hides
-    -- (e.g. world-view exits to main menu), hide it too so it doesn't
-    -- leak into the next screen. Each owns its own modal page / visible
-    -- flag, so hiding the HUD pages above does not cover them:
-    --   * event/combat/injury log panels (#84)
-    --   * notification popups (#85)
-    --   * right-click context menus (#86)
-    --   * item-contents popup (#100)
-    --   * per-unit log overlay (#104)
-    --   * cargo inventory popup (#99)
-    --   * main debug overlay (#147)
-    -- Ground-item selection (#175) is NOT cleared here: it lives in the
-    -- per-world cursor (wsCursorRef) and a Lua deselect resolves through
-    -- activeWorld, which head-falls-back to a different registered world
-    -- once this page leaves wmVisible — so it could clear the wrong
-    -- world. The world thread clears it deterministically in
-    -- handleWorldHideCommand, keyed on the exact page being hidden (which
-    -- worldView.hide()/testArena.hide() issue just before this runs).
-    --
-    -- Building selection (#176), by contrast, IS cleared here: it is a
-    -- single global id (bmSelected), not a per-world cursor, so deselect()
-    -- has no wrong-world hazard and is a no-op when nothing is selected.
-    -- Suppressing the panel alone is not enough — the building-info watcher
-    -- keeps polling building.getSelected() and re-pushing the selected
-    -- building into the panel's stored content, which hud.show() then
-    -- restores stale. Clearing the selection stops the repopulation.
-    building.deselect()
-    pcall(function() require("scripts.event_log").hide() end)
-    pcall(function() require("scripts.combat_log").hide() end)
-    pcall(function() require("scripts.injury_log_panel").hide() end)
-    pcall(function() require("scripts.popup").dismissAll() end)
-    pcall(function() require("scripts.ui.context_menu").hide() end)
-    pcall(function() require("scripts.item_contents_panel").closeIfOpen() end)
-    pcall(function() require("scripts.unit_log").hide() end)
-    pcall(function() require("scripts.cargo_inventory_panel").closeIfOpen() end)
-    pcall(function() require("scripts.debug").hide() end)
-    -- Active drag-select box (#146): its overlay page is independent of
-    -- the HUD pages hidden above, so a box in progress when the HUD
-    -- hides (e.g. world-view exits to a menu) would leak across the
-    -- transition. cancel() abandons it without committing a selection.
-    pcall(function() require("scripts.unit_drag_select").cancel() end)
+    -- Sweep every HUD-owned overlay / popup / selection that could leak
+    -- into the next screen (#156) — each owns its own modal page /
+    -- visible flag, so hiding the HUD pages above does not cover them.
+    -- One registry entry per widget; see scripts/ui/view_teardown.lua for
+    -- the per-widget rationale (including why the info panel is
+    -- SUPPRESSED rather than cleared — hud.show() releases it — and why
+    -- ground-item selection is deliberately NOT cleared on this path).
+    require("scripts.ui.view_teardown").run("hudHide")
 
     engine.logDebug("HUD hidden")
 end
@@ -832,30 +794,9 @@ end
 -- zoom closes that gap (#175). It also keeps hud.currentView authoritative
 -- so the HUD page never lags the camera.
 --
--- Teardown on each real transition:
---   * infoPanel.clear() — the shared HUD info panel.
---   * item-contents popup (#142): mounted on hud.world_page, so hiding
---     the page only takes it off-view; its logical state stays open and
---     could reappear stale. closeIfOpen() tears it down.
---   * cargo-inventory popup (#141): same story as the item-contents
---     popup — mounted on hud.world_page, so a band change only hides the
---     page while state.open stays true and the popup reappears stale on
---     return. closeIfOpen() (idempotent) tears it down on every band change.
---   * right-click context menu (#139): own modal page, anchored to the
---     click target; hide() it so it can't survive over the wrong view.
---   * ground-item selection (#175): per-world cursor state the item
---     watcher (item_info_panel.update) keeps polling and would use to
---     repopulate the panel. item.deselect() clears the active world's
---     selection — and here the world is still the visible/active one, so
---     activeWorld resolves correctly (unlike the menu-hide path, which is
---     handled engine-side in handleWorldHideCommand).
---   * chunk/tile cursor selection (#132): zoomSelectedPos (zoom-map chunk)
---     and worldSelectedTile (zoomed-in tile) also live in the per-world
---     cursor. infoPanel.clear() blanks the panel, but the selection itself
---     survives the band change, and pollCursorInfo only republishes on a
---     selection *change* — so without clearing it the highlight stays set
---     while the panel stays empty. clearZoom/WorldCursorSelect tear both
---     down with the panel.
+-- Per-widget logical-state teardown on each real transition is swept via
+-- the shared registry (scripts/ui/view_teardown.lua, #156) — one entry per
+-- overlay / popup / armed tool / selection, with the per-widget rationale.
 function hud.reconcileView()
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()
@@ -891,89 +832,11 @@ function hud.reconcileView()
     end
     hud.currentView = newView
 
-    infoPanel.clear()
-    require("scripts.item_contents_panel").closeIfOpen()
-    require("scripts.cargo_inventory_panel").closeIfOpen()
-    -- Right-click context menu (#139): it lives on its own modal page and
-    -- is anchored to the tile/unit/item under the click in the zoomed-in
-    -- view. Hiding the world/zoom pages above only takes it off-view; its
-    -- logical state stays open and it can reappear over the wrong view.
-    -- hide() is idempotent (no-op when no menu is open), so dismiss it on
-    -- every band change.
-    require("scripts.ui.context_menu").hide()
-    -- Active drag-select box (#146): the rect lives on its own
-    -- "drag_select_overlay" page, so the world/zoom page swap above
-    -- never touches it. An armed/dragging box would otherwise survive
-    -- the band change and resume or commit against the wrong view.
-    -- cancel() is idempotent (no-op when idle), so abandon any in-flight
-    -- box on every band change.
-    require("scripts.unit_drag_select").cancel()
-    -- Mine-designation anchor (#144): a pending first-corner anchor lives in
-    -- mine_tool's Lua state + the world cursor (mineAnchor) and renders a
-    -- preview grid. The tool only acts in zoomed_in, but nothing cleared the
-    -- anchor on a band change, so it survived off-view and could not be
-    -- canceled there (Escape/right-click are gated on the zoomed_in view).
-    -- cancel() is idempotent (clears Lua state + WorldClearMineAnchor is a
-    -- no-op when nothing is pending), so tear it down on every transition.
-    require("scripts.mine_tool").cancel()
-    -- Construction designation anchor (#95): same idempotent teardown as
-    -- the mine anchor above, so a pending rectangle can't survive off-view.
-    require("scripts.construct_tool").cancel()
-    -- Chop designation anchor (#97): same idempotent teardown.
-    require("scripts.chop_tool").cancel()
-    -- Build picker (#143): the picker panel lives on hud.world_page and
-    -- its "picker" mode persists across band changes. The world/zoom page
-    -- swap above only takes it off-view, so a picker opened in zoomed_in
-    -- stays logically alive and reappears stale when the world page is
-    -- next shown. hidePicker() is idempotent (destroyPicker no-ops with
-    -- no panel; mode only resets from "picker"), so tear it down on every
-    -- transition. It deliberately does NOT touch "placement" mode.
-    require("scripts.build_tool").hidePicker()
-    -- Build placement (#140): once the build tool enters "placement" mode,
-    -- its ghost preview and click handling keep running off the world
-    -- cursor regardless of the HUD view. The page swap above only takes
-    -- the world-page tool UI off-view, so placement stays live in
-    -- zoomed-out / fade-zone and keeps consuming clicks. exitPlacement()
-    -- is idempotent (clearGhost no-ops with no ghost; mode resets to
-    -- "off"), so cancel any in-progress placement on every band change.
-    require("scripts.build_tool").exitPlacement()
-    -- Arena tile-editor popup (#138): the test-arena tile editor lives on
-    -- hud.world_page and was only torn down on empty tile-info broadcasts,
-    -- tool changes, or arena exit. The page swap above only takes it
-    -- off-view, and zoom-map chunk selection produces non-empty HUD info
-    -- text, so neither the band change nor the empty-text clear path
-    -- closed it — it survived off-view and reappeared stale when the world
-    -- page returned. clear() is idempotent (destroyPopup no-ops with no
-    -- popup, and is a no-op outside arena mode), so tear it down on every
-    -- transition.
-    require("scripts.tile_editor").clear()
-    if newView ~= "zoomed_in" then
-        require("scripts.debug").hide()
-    end
-    item.deselect()
-    -- Building selection (#176): unlike the per-world cursor selections
-    -- below, building selection is a single global id (bmSelected), so the
-    -- page swap above never touches it and the building-info watcher keeps
-    -- polling building.getSelected() and re-pushing the same building into
-    -- the shared info panel — repopulating it stale after the band change.
-    -- deselect() clears the global selection and is a no-op when nothing is
-    -- selected, matching item.deselect() above; no wrong-world hazard since
-    -- there is no per-world building cursor to resolve through activeWorld.
-    building.deselect()
-    -- Chunk/tile cursor selection (#132): the zoom-map chunk selection
-    -- (zoomSelectedPos) and zoomed-in tile selection (worldSelectedTile)
-    -- both live in the per-world cursor (wsCursorRef), independent of the
-    -- HUD pages swapped above. The info panel is cleared on this transition
-    -- (infoPanel.clear() above), but pollCursorInfo only republishes when
-    -- the selection *changes* — so a selection that survives the band change
-    -- unchanged leaves the highlight logically set while the panel stays
-    -- blank until the user re-selects. Clear both selections here, exactly
-    -- like item.deselect() does for the ground-item selection, so the
-    -- highlight and panel tear down together. The clears are keyed on
-    -- hud.worldId (the visible/active world that owns this view, the same id
-    -- onMouseDown uses), and are no-ops when nothing is selected.
-    world.clearZoomCursorSelect(hud.worldId)
-    world.clearWorldCursorSelect(hud.worldId)
+    -- Sweep every overlay / popup / armed tool / selection that could
+    -- survive the page swap above (#156). One registry entry per widget;
+    -- see scripts/ui/view_teardown.lua for the per-widget rationale.
+    require("scripts.ui.view_teardown").run("zoomBand",
+        { worldId = hud.worldId, newView = newView })
 end
 
 -- Wheel hook (no UI element under cursor, no shift). Reconcile immediately
