@@ -179,7 +179,7 @@ instance FromJSON VideoConfigFile where
       windowMode ← case mWindowMode of
           Just wm → pure wm
           Nothing → do
-              fs ← videoObj .: "fullscreen" .!= False
+              fs ← videoObj .:? "fullscreen" .!= False
               pure $ if fs then Fullscreen else Windowed
       -- '.:? key .!= def' is the correct idiom for *optional* fields
       -- with a fallback: '.:' would fail the entire parse when a key
