@@ -362,11 +362,13 @@ generations advance under `setDate` jumps, and the growth clock
 survives save → load.
 
 The growth window gates **bare (food) calls only**: `harvestFlora(gx,gy)`
-and `findHarvestableFlora(gx,gy,r)` without a tag. Tagged calls (#97 —
-the chop AI's `"wood"`) and the tile-level `getFloraAt().harvestable`
-flag (the chop-claim check reads it) deliberately skip it: a designated
-tree must stay choppable as a sprout or standing dead. Per-instance
-gated state lives in `getFloraGrowthAt`.
+and `findHarvestableFlora(gx,gy,r)` without a tag, plus the
+`getFloraAt().harvestable` flag, which mirrors exactly "would a bare
+harvestFlora yield here" (the query/action contract). Tagged calls
+(#97 — the chop AI's `"wood"`) deliberately skip the window, and the
+chop-claim check keys on `regrowthRemaining` + `tags`, NOT
+`harvestable` — a designated tree must stay choppable as a sprout or
+standing dead. Per-instance gated state lives in `getFloraGrowthAt`.
 
 ### Logging: event / combat / injury
 

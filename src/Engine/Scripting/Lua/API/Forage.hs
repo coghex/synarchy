@@ -66,18 +66,20 @@ growthClock ws = do
 --   tags} | nil
 --
 --   nil when the tile has no flora (or its chunk isn't loaded). When
---   several instances share the tile, a harvestable species wins the
---   report (a berry bush over the decorative dandelion beside it).
---   @harvestable@ is true only for a harvestable SPECIES with no live
---   regrowth timer; @regrowthRemaining@ is the timer in game-seconds
---   (0 when none). @tags@ is the species' harvest-tag array (#97 —
---   "wood" marks a choppable tree; empty for non-harvestable flora).
+--   several instances share the tile, an instance a bare harvest would
+--   take wins the report, then any harvestable species (a berry bush
+--   over the decorative dandelion beside it). @harvestable@ mirrors
+--   the query/action contract of a BARE world.harvestFlora: true only
+--   for a harvestable SPECIES with no live regrowth timer whose growth
+--   state is inside the #332 harvest window (in season, not dead, not
+--   a juvenile). @regrowthRemaining@ is the timer in game-seconds (0
+--   when none). @tags@ is the species' harvest-tag array (#97 — "wood"
+--   marks a choppable tree; empty for non-harvestable flora).
 --
---   Deliberately NOT gated on the #332 growth window: this flag is the
---   shared "plant is there and not a regrowing stump" signal — the chop
---   AI's claim check reads it, and a designated tree must stay
---   claimable as a sprout or standing dead. The window gates the BARE
---   harvest/find calls below; per-instance gated state is
+--   Designation flows must NOT read @harvestable@ (it is the
+--   forage-facing signal): the chop AI's claim check keys on
+--   @regrowthRemaining@ + @tags@, so a designated tree stays choppable
+--   as a sprout or standing dead. Per-instance gated state is
 --   world.getFloraGrowthAt.
 worldGetFloraAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetFloraAtFn env = do
@@ -94,15 +96,22 @@ worldGetFloraAtFn env = do
                     Just ws → do
                         insts ← floraAt env ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
-                        let harvestFirst =
+                        (doy, absDay) ← growthClock ws
+                        let open (i, sp) =
+                                harvestOpen sp doy (floraGrowth sp absDay i)
+                            harvestables =
                                 [ p | p@(_, sp) ← insts
-                                    , isJust (fsHarvest sp) ] <> insts
+                                    , isJust (fsHarvest sp) ]
+                            harvestFirst =
+                                filter open harvestables
+                                <> harvestables <> insts
                         pure $ case harvestFirst of
                             [] → Nothing
-                            ((_, sp):_) →
+                            (p@(_, sp):_) →
                                 let timer = HM.lookupDefault 0 (gx, gy) harvests
                                 in Just ( fsName sp
                                         , isJust (fsHarvest sp) ∧ timer ≤ 0
+                                            ∧ open p
                                         , timer
                                         , maybe [] fhTags (fsHarvest sp) )
             case mResult of

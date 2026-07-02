@@ -5,10 +5,13 @@ Boots a headless engine on a real generated world (tree placement needs
 worldgen; the arena has no flora), then checks:
 
   1. API: world.findHarvestableFlora(..., 'wood') locates a tree;
-     world.getFloraAt reports it harvestable with a 'wood' tag; a BARE
-     findHarvestableFlora (the foraging AI's food search) does NOT
-     return the tree tile — wood yields are inedible, so the #97 tag
-     split must keep hungry units from felling oaks for dinner.
+     world.getFloraAt reports it with a 'wood' tag and no live
+     regrowth timer (its 'harvestable' flag is the FORAGE signal,
+     gated on the #332 growth window — the chop path keys on
+     tags + regrowthRemaining instead); a BARE findHarvestableFlora
+     (the foraging AI's food search) does NOT return the tree tile —
+     wood yields are inedible, so the #97 tag split must keep hungry
+     units from felling oaks for dinner.
   2. Designation: chop.designate commits a rectangle down to the tree
      tiles (chop.getDesignationAt / getDesignationCount);
      chop.cancelDesignation removes one.
@@ -132,11 +135,12 @@ def main():
             return 1
         tx, ty, species = found
         fl = jget(port, f"return world.getFloraAt({tx},{ty})")
-        ok1 = isinstance(fl, dict) and fl.get("harvestable") is True \
-              and "wood" in (fl.get("tags") or [])
+        ok1 = isinstance(fl, dict) and "wood" in (fl.get("tags") or []) \
+              and fl.get("regrowthRemaining", -1) == 0
         passed &= ok1
         print(f"  [{'PASS' if ok1 else 'FAIL'}] getFloraAt reports a "
-              f"choppable tree: {species} at ({tx},{ty}) → {fl}")
+              f"choppable tree (wood tag, no regrowth timer): "
+              f"{species} at ({tx},{ty}) → {fl}")
 
         bare = jget(port,
                     f"return world.findHarvestableFlora({tx},{ty},2)")
