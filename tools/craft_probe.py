@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crafting probe (#325 + #326) — recipe catalogue, craft.execute, stations.
+"""Crafting probe (#325 + #326 + #343) — catalogue, execute, stations, quality.
 
 Boots a headless engine on a flat arena, loads defs + data/recipes +
 data/buildings, spawns an acolyte, then checks the craft.* Lua API
@@ -21,6 +21,12 @@ end-to-end:
      refused at an unbuilt station, at the wrong station, from a
      non-adjacent unit and for an unknown building — and succeeds at the
      right built station with the unit adjacent, consuming like execute.
+  6. Quality (#343): a skill-tagged recipe's output iiQuality tracks the
+     crafter deterministically — 0.7*skill + 0.3*knowledge when the
+     recipe is knowledge-gated, plain skill level when not (the shipped
+     smithing-tagged dagger) — verified across two crafter builds via
+     unit.setSkill / unit.setKnowledge, through both craft.execute and
+     craft.executeAt at a built station.
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
@@ -32,7 +38,7 @@ TEST_YAML = f"{SPROOT}/craft_probe_recipes.yaml"
 # Station kind "smelt" = the furnace's operation (#326). Before stations
 # landed this said "furnace"; the recipe station vocabulary is the
 # operation names (smelt / forge / assemble).
-FUELLED_RECIPE = """\
+TEST_RECIPES = """\
 recipes:
   - id: craft_test_fuelled
     station: smelt
@@ -45,6 +51,14 @@ recipes:
       - item: granite_chunk
         count: 3
     knowledge: metallurgy
+  - id: craft_test_quality
+    station: forge
+    skill: probe_smith
+    knowledge: metallurgy
+    inputs:
+      - item: steel_bar
+    outputs:
+      - item: steel_dagger
 """
 
 
@@ -110,6 +124,14 @@ def bootstrap(port):
         sys.exit("arena page never became the active world")
     send(port, "return world.loadChunksInRegion(-1, -1, 2, 2)")
     send(port, "return world.waitForChunks(60)", timeout=65.0)
+    # unit_ai is auto-loaded at engine boot and its update() tick wanders
+    # every spawned unit headless. The station checks (phase 5+) assume
+    # the crafter STAYS on its spawn tile for footprint adjacency, so
+    # neutralise the AI tick (same trick as movement_probe) — nothing
+    # under test here needs the AI.
+    send(port,
+         "pcall(function() require('scripts.unit_ai').update = function() end end); "
+         "return 'ai-off'")
 
 
 def count_item(port, uid, name):
@@ -122,7 +144,8 @@ def instances_of(port, uid, name):
     r = jget(port,
         f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
         f"if it.defName=='{name}' then out[#out+1]={{id=it.instanceId,"
-        f"cond=it.condition or -1,sharp=it.sharpness}} end end; return out")
+        f"cond=it.condition or -1,sharp=it.sharpness,"
+        f"qual=it.quality or -1}} end end; return out")
     return r if isinstance(r, list) else []
 
 
@@ -200,6 +223,7 @@ def main():
               and r.get("work") == 20
               and r.get("inputs") == [{"item": "steel_bar", "count": 2}]
               and r.get("outputs") == [{"item": "steel_dagger", "count": 1}]
+              and r.get("skill") == "smithing"
               and "fuel" not in r and "knowledge" not in r)
         passed = check(passed, ok, "craft.get returns the recipe shape", r)
         ok = send(port, "return craft.get('nope') and 'yes' or 'nil'").strip('"') == "nil"
@@ -233,9 +257,9 @@ def main():
 
         # --- 4. Fuel + knowledge (probe-authored recipe) ---
         with open(TEST_YAML, "w") as f:
-            f.write(FUELLED_RECIPE)
+            f.write(TEST_RECIPES)
         n = int(float(send(port, f"return engine.loadRecipeYaml('{TEST_YAML}')")))
-        passed = check(passed, n == 1, "runtime loadRecipeYaml", f"count={n}")
+        passed = check(passed, n == 2, "runtime loadRecipeYaml", f"count={n}")
         # Deterministic pantry: strip spawn-loadout rations, then stock
         # exactly 1 bar + 1 ration (fuel demands 2).
         while count_item(port, uid, "rations") > 0:
@@ -339,6 +363,53 @@ def main():
         ok_e, msg = execute_at(port, uid, "forge_steel_dagger", 99999)
         passed = check(passed, not ok_e and "no such building" in msg,
                        "unknown building refused", msg)
+
+        # --- 6. Quality tracks the crafter (#343) ---
+        def craft_quality(recipe_id, bid=None):
+            """Craft one dagger, return the new instance's quality.
+            bid=None uses the station-less craft.execute debug verb;
+            a bid routes through craft.executeAt at that station."""
+            send(port, f"unit.addItem({uid},'steel_bar'); return 'ok'")
+            if recipe_id == "forge_steel_dagger":
+                send(port, f"unit.addItem({uid},'steel_bar'); return 'ok'")
+            prior = {d["id"] for d in instances_of(port, uid, "steel_dagger")}
+            if bid is None:
+                ok_e, msg = execute(port, uid, recipe_id)
+            else:
+                ok_e, msg = execute_at(port, uid, recipe_id, bid)
+            fresh = [d for d in instances_of(port, uid, "steel_dagger")
+                     if d["id"] not in prior]
+            if not ok_e or len(fresh) != 1:
+                return None, f"ok={ok_e} msg={msg} fresh={fresh}"
+            return fresh[0]["qual"], ""
+        # Skilled + learned: 0.7*90 + 0.3*80 = 87.
+        send(port, f"unit.setSkill({uid},'probe_smith',90); "
+                   f"unit.setKnowledge({uid},'metallurgy',80); return 'ok'")
+        q, detail = craft_quality("craft_test_quality")
+        ok = q is not None and abs(q - 87.0) < 0.01
+        passed = check(passed, ok, "skill 90 + knowledge 80 -> quality 87",
+                       detail or f"qual={q}")
+        # Clumsy + barely read the manual: 0.7*10 + 0.3*20 = 13.
+        send(port, f"unit.setSkill({uid},'probe_smith',10); "
+                   f"unit.setKnowledge({uid},'metallurgy',20); return 'ok'")
+        q, detail = craft_quality("craft_test_quality")
+        ok = q is not None and abs(q - 13.0) < 0.01
+        passed = check(passed, ok, "skill 10 + knowledge 20 -> quality 13",
+                       detail or f"qual={q}")
+        # Shipped recipe: skill-tagged, no knowledge gate -> plain skill.
+        send(port, f"unit.setSkill({uid},'smithing',55); return 'ok'")
+        q, detail = craft_quality("forge_steel_dagger")
+        ok = q is not None and abs(q - 55.0) < 0.01
+        passed = check(passed, ok,
+                       "shipped dagger quality = smithing level 55",
+                       detail or f"qual={q}")
+        # Same formula through the station path (#326 + #343): executeAt
+        # at the built workbench from phase 5.
+        q, detail = craft_quality("forge_steel_dagger", bid_w)
+        ok = q is not None and abs(q - 55.0) < 0.01
+        passed = check(passed, ok,
+                       "executeAt at workbench carries quality 55",
+                       detail or f"qual={q}")
 
         print("\n" + ("ALL CRAFT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1

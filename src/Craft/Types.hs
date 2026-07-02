@@ -49,6 +49,10 @@ data RecipeDef = RecipeDef
     , rdKnowledge ∷ !(Maybe Text)             -- ^ knowledge the crafter must
                                               --   KNOW (present in
                                               --   uiKnowledge) to execute
+    , rdSkill     ∷ !(Maybe Text)             -- ^ crafter skill that sets
+                                              --   output quality (#343);
+                                              --   Nothing = quality rolls
+                                              --   from the item def's spec
     } deriving (Show, Eq)
 
 -- | Everything a craft consumes: inputs plus the fuel line, if any.

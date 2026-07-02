@@ -12,7 +12,7 @@ import Data.Either (isLeft)
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import Craft.Execute (consumeIngredients, takeItemsByName)
+import Craft.Execute (consumeIngredients, takeItemsByName, craftQuality)
 import Craft.Types
 import Engine.Asset.YamlRecipes
 import Item.Types (ItemInstance(..))
@@ -43,6 +43,7 @@ daggerRecipe = RecipeDef
     , rdWork      = 20
     , rdOutputs   = [RecipeIngredient "steel_dagger" 1]
     , rdKnowledge = Nothing
+    , rdSkill     = Just "smithing"
     }
 
 -- | A fuelled variant whose fuel line repeats an input item.
@@ -71,6 +72,7 @@ spec = do
                         map ryiCount (ryInputs d) `shouldBe` [2]
                         ryFuel d `shouldBe` Nothing
                         ryKnowledge d `shouldBe` Nothing
+                        rySkill d `shouldBe` Just "smithing"
                         map ryiItem (ryOutputs d) `shouldBe` ["steel_dagger"]
                     ds → expectationFailure $
                         "expected exactly one recipe, got " <> show (length ds)
@@ -88,6 +90,7 @@ spec = do
                     , "    outputs:"
                     , "      - item: iron_bar"
                     , "    knowledge: metallurgy"
+                    , "    skill: smithing"
                     ]
             case parseFile src of
                 Left err → expectationFailure (show err)
@@ -98,6 +101,7 @@ spec = do
                         ryFuel d `shouldBe`
                             Just (RecipeYamlIngredient "coal_lump" 1)
                         ryKnowledge d `shouldBe` Just "metallurgy"
+                        rySkill d `shouldBe` Just "smithing"
                     ds → expectationFailure $
                         "expected exactly one recipe, got " <> show (length ds)
 
@@ -144,3 +148,23 @@ spec = do
                 `shouldSatisfy` isLeft
             fmap length (consumeIngredients fuelledRecipe full)
                 `shouldBe` Right 0
+
+    describe "Craft.Execute.craftQuality" $ do
+        it "without a knowledge gate, quality is the skill level" $ do
+            craftQuality 0 Nothing   `shouldBe` 0
+            craftQuality 55 Nothing  `shouldBe` 55
+            craftQuality 100 Nothing `shouldBe` 100
+        it "with a knowledge level, blends 70% skill / 30% knowledge" $ do
+            let near expect q = abs (q - expect) < 0.001
+            craftQuality 90 (Just 80) `shouldSatisfy` near 87
+            craftQuality 10 (Just 20) `shouldSatisfy` near 13
+            craftQuality 0 (Just 100) `shouldSatisfy` near 30
+        it "clamps to [0, 100]" $ do
+            craftQuality 150 Nothing    `shouldBe` 100
+            craftQuality (-10) Nothing  `shouldBe` 0
+            craftQuality 150 (Just 150) `shouldBe` 100
+        it "is monotone in both inputs" $ do
+            craftQuality 60 (Just 40) > craftQuality 40 (Just 40)
+                `shouldBe` True
+            craftQuality 40 (Just 60) > craftQuality 40 (Just 40)
+                `shouldBe` True

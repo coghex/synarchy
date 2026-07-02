@@ -7,6 +7,7 @@
 module Craft.Execute
     ( consumeIngredients
     , takeItemsByName
+    , craftQuality
     ) where
 
 import UPrelude
@@ -30,6 +31,18 @@ takeItemsByName name = go
             (x:xs)
                 | iiDefName x ≡ name → go (n - 1) xs
                 | otherwise          → (x :) ⊚ go n xs
+
+-- | Output quality for a skill-tagged recipe (#343): deterministic in
+--   the crafter, replacing the item-def quality roll. Both arguments
+--   are 0–100 levels (crafter's rdSkill level; the rdKnowledge level
+--   when the recipe is knowledge-gated — the gate itself has already
+--   passed by the time quality is computed). Skill dominates and the
+--   knowledge blends in at 30% — knowing the theory lifts a clumsy
+--   hand only so far. No botch: low skill just means low quality.
+craftQuality ∷ Float → Maybe Float → Float
+craftQuality skill mKnow = clamp 0 100 $ case mKnow of
+    Nothing → skill
+    Just k  → 0.7 * skill + 0.3 * k
 
 -- | Consume everything a recipe demands (inputs + fuel) from an
 --   inventory. Right = the inventory after consumption; Left = a
