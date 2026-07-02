@@ -63,6 +63,7 @@ import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
+import Engine.Scripting.Lua.API.Craft
 import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.Flora
@@ -175,6 +176,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
   registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
   registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
+  registerLuaFunction "loadRecipeYaml" (loadRecipeYamlFn env)
   registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env)
   registerLuaFunction "listLocationDefs" (locationListDefsFn env)
   registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn env)
@@ -499,6 +501,16 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "get"      (infectionGetFn env)
   registerLuaFunction "getNames" (infectionGetNamesFn env)
   Lua.setglobal (Lua.Name "infection")
+
+  -- Craft global — the crafting recipe catalogue (#325), loaded from
+  -- data/recipes/*.yaml via engine.loadRecipeYaml. get/getNames are
+  -- read-only queries; execute runs one craft against a unit's
+  -- inventory (verify + consume inputs/fuel, produce outputs).
+  Lua.newtable
+  registerLuaFunction "get"      (craftGetFn env)
+  registerLuaFunction "getNames" (craftGetNamesFn env)
+  registerLuaFunction "execute"  (craftExecuteFn env)
+  Lua.setglobal (Lua.Name "craft")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml
   -- (loaded via engine.loadLootTableYaml). Consumed by a `loot_table`

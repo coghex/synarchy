@@ -50,6 +50,7 @@ import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
 import Infection.Types (InfectionManager)
+import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
@@ -228,6 +229,10 @@ data EngineEnv = EngineEnv
     --   data/infections/*.yaml. The wound tick selects one (climate +
     --   site weighted) when a wound first festers; its aggressiveness /
     --   curable_by drive growth + cure.
+  , recipeManagerRef ∷ IORef RecipeManager
+    -- ^ Registry of crafting recipes loaded from data/recipes/*.yaml
+    --   (#325). Queried + executed via the `craft.*` Lua API; the
+    --   craft AI / bill layer (#329) will schedule against it.
   , locationDefsRef    ∷ IORef LocationRegistry
     -- ^ Registry of location defs (premade structures stamped into the
     --   world) loaded from data/locations/*.yaml at boot, after items /

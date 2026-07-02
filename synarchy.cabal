@@ -175,6 +175,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Construct.Corners
+                   Test.Headless.Craft.Execute
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.River.Graph
@@ -466,6 +467,10 @@ library
                      Infection.Types
                      Engine.Asset.YamlInfection
                      Engine.Scripting.Lua.API.Infection
+                     Craft.Types
+                     Craft.Execute
+                     Engine.Asset.YamlRecipes
+                     Engine.Scripting.Lua.API.Craft
                      Location.Types
                      Location.Overlay.Types
                      Location.Overlay

@@ -44,6 +44,7 @@ import Item.Types (emptyItemManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Substance.Types (emptySubstanceManager)
 import Infection.Types (emptyInfectionManager)
+import Craft.Types (emptyRecipeManager)
 import Location.Types (emptyLocationRegistry)
 import LootTable.Types (emptyLootTableRegistry)
 import World.Types (emptyWorldManager, emptyFloraCatalog)
@@ -148,6 +149,7 @@ initializeEngineWith logBackend = do
   equipmentClassManagerRef ← newIORef emptyEquipmentClassManager
   substanceManagerRef ← newIORef emptySubstanceManager
   infectionManagerRef ← newIORef emptyInfectionManager
+  recipeManagerRef ← newIORef emptyRecipeManager
   locationDefsRef ← newIORef emptyLocationRegistry
   lootTableRegistryRef ← newIORef emptyLootTableRegistry
   -- Player Events: load the notification registry (data/) merged
@@ -227,6 +229,7 @@ initializeEngineWith logBackend = do
         , equipmentClassManagerRef = equipmentClassManagerRef
         , substanceManagerRef      = substanceManagerRef
         , infectionManagerRef      = infectionManagerRef
+        , recipeManagerRef         = recipeManagerRef
         , locationDefsRef    = locationDefsRef
         , lootTableRegistryRef = lootTableRegistryRef
         , eventStoreRef      = eventStoreRef
