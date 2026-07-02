@@ -25,6 +25,7 @@ import World.Material (MaterialProps(..), registerMaterial
 import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
+import World.Generate.Arena (generateArenaChunks)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
@@ -321,67 +322,11 @@ handleWorldInitArenaCommand env logger pageId = do
     atomicModifyIORef' (loadProvenanceRef env) $ \m →
         (HM.map (HS.delete pageId) m, ())
 
-    -- Arena parameters
-    let arenaRadius = 2           -- 5×5 chunks
-        loamId     = 56 ∷ Word8  -- matLoam    = MaterialId 56
-        graniteId  = 1  ∷ Word8  -- matGranite = MaterialId 1
-        grassId    = 5  ∷ Word8  -- matGrass   = MaterialId 5
-        arenaZ     = seaLevel    -- z = 0 (surface)
-        loamLayers    = 4        -- top 4 tiles
-        graniteLayers = 12       -- 12 tiles below
-        arenaDepth    = loamLayers + graniteLayers
-        columnStartZ  = arenaZ - arenaDepth + 1   -- bottom of the column
-        chunkArea     = chunkSize * chunkSize     -- 256
-
-        -- Column material stack (shared across all columns): index 0 is
-        -- the bottom of the column, index (arenaDepth - 1) is the top.
-        -- Loam fills the top loamLayers; granite fills below.
-        columnMats   = VU.generate arenaDepth (\i →
-                         if i ≥ graniteLayers then loamId else graniteId)
-        columnSlopes = VU.replicate arenaDepth 0
-
-        generateChunk ∷ Int → V.Vector ColumnTiles → StdGen → V.Vector ColumnTiles
-        generateChunk 0    init _g = init
-        generateChunk area init g = generateChunk (area - 1)
-                                      (V.cons newelem init) newg
-            where (rand, newg) = randomR (0, 3) g
-                  actualId = grassId + rand
-                  -- Vegetation only on the top tile (the visible surface);
-                  -- granite + lower loam tiles get 0 so the renderer
-                  -- doesn't sprout grass underground after a dig.
-                  columnVeg = VU.generate arenaDepth (\i →
-                                if i ≡ arenaDepth - 1 then actualId else 0)
-                  newelem = (ColumnTiles
-                             { ctStartZ = columnStartZ
-                             , ctMats   = columnMats
-                             , ctSlopes = columnSlopes
-                             , ctVeg    = columnVeg
-                             })
-        flatSurfaceMap = VU.replicate chunkArea arenaZ
-        flatFluidMap   = V.replicate chunkArea Nothing
-        flatFlora      = emptyFloraChunkData
-        flatChunk      = generateChunk chunkArea V.empty gen
-
-        mkChunk cx cy = LoadedChunk
-            { lcCoord             = ChunkCoord cx cy
-            , lcTiles             = flatChunk
-            , lcSurfaceMap        = flatSurfaceMap
-            , lcTerrainSurfaceMap = flatSurfaceMap
-            , lcFluidMap          = flatFluidMap
-            , lcIceMap            = emptyIceMap
-            , lcFlora             = flatFlora
-            , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
-            , lcWaterTableMap    = VU.replicate (chunkSize * chunkSize) (arenaZ - 2)
-            , lcMagma             = Nothing
-            , lcStructures        = emptyChunkStructures
-            }
-
-        allChunks = [ mkChunk cx cy
-                    | cx ← [-arenaRadius .. arenaRadius]
-                    , cy ← [-arenaRadius .. arenaRadius]
-                    ]
-
-        chunkMap = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
+    -- Arena chunk set: shared with the save-load restore path (#365) so a
+    -- loaded arena page is rebuilt exactly like a fresh one.
+    let arenaZ    = seaLevel    -- z = 0 (surface)
+        allChunks = generateArenaChunks gen
+        chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
     -- Write tile data
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →

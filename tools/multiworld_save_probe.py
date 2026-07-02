@@ -31,12 +31,13 @@ What it does:
      membership; the cross-page negative checks (main_world's unit is NOT
      on second_world, and vice-versa) prove the pages didn't get merged.
 
-Why two real worlds and not world.initArena: the issue text suggested an
-arena as the secondary page, but loading a save that contains an arena
-page hangs the world thread (the arena's degenerate gen params break the
-regenerate-from-params load path) — tracked as #365. The feature this
-guards is multi-PAGE persistence of real generated worlds, so the test
-uses two of those.
+Arena pages (#365): loading a save containing a world.initArena page used
+to hang the world thread (the arena's synthetic gen params wedge the
+regenerate-from-params load path). Fixed by rebuilding arena pages through
+the shared flat builder on load; pass --arena to run this probe with an
+arena as the secondary page — it additionally asserts a pre-save
+world.addTile edit is replayed onto the rebuilt arena. The default run
+keeps two real generated worlds (the #219 gate) unchanged.
 
 Note on visibility ordering: world.show does not promote an
 ALREADY-visible page to the head of the visible stack (a documented
@@ -260,6 +261,49 @@ def populate_world(port: int, page: str, seed: int, size: int, plates: int
     return uid, bid
 
 
+ARENA_EDIT_TILE = (6, 6)  # tile raised pre-save; must survive the reload
+
+
+def populate_arena(port: int, page: str) -> tuple[int, int, int]:
+    """world.initArena `page`, show it, spawn a unit + cargo-hold building
+    on the flat ground, and raise one tile so the load path's edit replay
+    is exercised. Returns (unitId, buildingId, editedTileZ)."""
+    send(port, f"world.initArena('{page}'); return 'ok'")
+    send(port, f"world.show('{page}'); return 'ok'")
+    if not wait_active(port, page):
+        sys.exit(f"FAIL: {page} never became active")
+
+    gx, gy = 2, 2
+    # No explicit z: unit.spawn resolves the surface of the page it lands
+    # on, which is the arena's flat top.
+    uid = as_int(send(port,
+        f"return unit.spawn('acolyte', {gx}, {gy}, 'player')"))
+    bid = as_int(send(port,
+        f"return building.spawn('cargo_hold_S', {gx + 2}, {gy})"))
+    print(f"{page}: arena  unit=#{uid}  building=#{bid}")
+    if uid is None or uid < 0:
+        sys.exit(f"FAIL: unit.spawn rejected on arena {page}")
+    if bid is None or bid < 0:
+        sys.exit(f"FAIL: building.spawn rejected on arena {page}")
+
+    # Raise one tile (granite, material id 1). addTile runs on the world
+    # thread — poll until the surface reflects it.
+    ex, ey = ARENA_EDIT_TILE
+    base = as_int(send(port, f"local s = world.getTerrainAt({ex}, {ey}); return s"))
+    if base is None:
+        sys.exit(f"FAIL: could not read arena terrain at ({ex},{ey})")
+    send(port, f"return world.addTile('{page}', {ex}, {ey}, 1)")
+    for _ in range(50):
+        cur = as_int(send(port, f"local s = world.getTerrainAt({ex}, {ey}); return s"))
+        if cur == base + 1:
+            break
+        time.sleep(0.1)
+    else:
+        sys.exit(f"FAIL: arena addTile at ({ex},{ey}) never landed")
+    print(f"{page}: raised tile ({ex},{ey}) to z={base + 1}")
+    return uid, bid, base + 1
+
+
 class Checks:
     def __init__(self) -> None:
         self.failed = 0
@@ -277,6 +321,10 @@ def main() -> int:
     ap.add_argument("--seed2", type=int, default=7, help="second_world seed")
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--arena", action="store_true",
+                    help="second_world is a world.initArena page "
+                         "(#365 regression: arena pages must survive "
+                         "the save -> restart -> load round-trip)")
     args = ap.parse_args()
 
     # Unique per run (random, NOT pid-derived): a reused pid could collide
@@ -301,8 +349,12 @@ def main() -> int:
 
         u_mw, b_mw = populate_world(args.port, "main_world",
                                     args.seed, args.size, args.plates)
-        u_sw, b_sw = populate_world(args.port, "second_world",
-                                    args.seed2, args.size, args.plates)
+        arena_z = None
+        if args.arena:
+            u_sw, b_sw, arena_z = populate_arena(args.port, "second_world")
+        else:
+            u_sw, b_sw = populate_world(args.port, "second_world",
+                                        args.seed2, args.size, args.plates)
 
         # Leave only main_world visible so the post-load show toggles are
         # clean (see module docstring). Then save with main_world primary.
@@ -381,6 +433,16 @@ def main() -> int:
                f"main_world unit #{u_mw} is NOT on second_world ({sw_units})")
         chk.ok(b_sw in sw_bldgs,
                f"second_world building #{b_sw} is on second_world ({sw_bldgs})")
+
+        if args.arena and arena_z is not None:
+            # The pre-save addTile edit must have been replayed onto the
+            # rebuilt arena chunks (#365).
+            ex, ey = ARENA_EDIT_TILE
+            got = as_int(send(args.port,
+                f"local s = world.getTerrainAt({ex}, {ey}); return s"))
+            chk.ok(got == arena_z,
+                   f"arena edit at ({ex},{ey}) replayed on load "
+                   f"(z={got}, expected {arena_z})")
 
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
               f"{chk.failed} check(s) failed")
