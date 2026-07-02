@@ -119,7 +119,14 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 67  -- v67: WorldPageSave gains trailing
+currentSaveVersion = 68  -- v68: ItemInstance gains trailing 'iiTemp'
+                         --      (Maybe Float, °C; Nothing = at ambient)
+                         --      — item temperature + cooling toward the
+                         --      tile's ambient (#344). Rides in every
+                         --      serialized item (ground items, unit
+                         --      inventory/equipment/accessories snapshot,
+                         --      building storage/materials).
+                         -- v67: WorldPageSave gains trailing
                          --      'wpsChopDesignations' (#97) — chop
                          --      designations (tile → surface z). ToolMode
                          --      also gains ChopTool (appended, tag 5).

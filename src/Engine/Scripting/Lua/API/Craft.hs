@@ -213,4 +213,9 @@ rollOutputs env (ing, def) = replicateM (max 0 (riCount ing)) $ do
         , iiSharpness   = 100.0
         , iiContents    = []
         , iiInstanceId  = iid
+        -- At ambient for now — a recipe-declared output temperature
+        -- (hot bar off the smelter, 100 °C coffee) is the cooking
+        -- tier's slice (#344 provides the field + setters, #346 the
+        -- recipe schema hook).
+        , iiTemp        = Nothing
         }

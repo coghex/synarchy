@@ -8,6 +8,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
+import World.Thread.ItemTemp (tickItemTemperatures)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
@@ -43,6 +44,10 @@ tickWorldTime env dt = do
                     regrew ← atomicModifyIORef' (wsFloraHarvestsRef worldState) $
                         tickFloraHarvests dtGame
                     when regrew $ bumpQuadCacheGen worldState
+                    -- Item temperatures (#344) follow the same
+                    -- game-second clock: tracked (hot/cold) items on
+                    -- this page relax toward their tile's ambient.
+                    tickItemTemperatures env pageId worldState dtGame
 
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of
