@@ -7,6 +7,7 @@ import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import World.Types
+import World.Flora.Harvest (tickFloraHarvests)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
@@ -31,6 +32,17 @@ tickWorldTime env dt = do
                 let effScale = if paused then 0 else timeScale
                 atomicModifyIORef' (wsTimeRef worldState) $ \wt →
                     (advanceWorldTime effScale dt wt, ())
+                -- Flora regrowth (#94) follows the same clock: timers
+                -- count GAME-seconds (timeScale = game-minutes per
+                -- real-second, so dtGame = dt·scale·60) and freeze with
+                -- the pause flag like everything else on this page.
+                -- When a tile finishes regrowing its plant needs its
+                -- normal texture back → invalidate the quad cache.
+                let dtGame = dt * effScale * 60
+                when (dtGame > 0) $ do
+                    regrew ← atomicModifyIORef' (wsFloraHarvestsRef worldState) $
+                        tickFloraHarvests dtGame
+                    when regrew $ bumpQuadCacheGen worldState
 
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of

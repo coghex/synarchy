@@ -5,6 +5,8 @@ module Engine.Asset.YamlFlora
     , FloraYamlPhase(..)
     , FloraYamlCycleStage(..)
     , FloraYamlCycleOverride(..)
+    , FloraYamlHarvest(..)
+    , FloraYamlYield(..)
     , FloraYamlWorldGen(..)
     , loadFloraYaml
     , parsePhaseTag
@@ -13,6 +15,7 @@ module Engine.Asset.YamlFlora
 
 import UPrelude
 import GHC.Generics (Generic)
+import Control.Applicative ((<|>))
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
@@ -56,6 +59,47 @@ instance FromJSON FloraYamlCycleOverride where
         ⊚ v .: "phase"
         ⊛ v .: "cycle"
         ⊛ v .: "texture"
+
+-- | One yield entry of a harvestable plant: item id + count range.
+--   @count@ reads as a two-element list @[min, max]@; a bare int also
+--   works (@count: 2@ = exactly two). Absent = exactly one.
+data FloraYamlYield = FloraYamlYield
+    { fyyId  ∷ Text
+    , fyyMin ∷ Int
+    , fyyMax ∷ Int
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON FloraYamlYield where
+    parseJSON = withObject "FloraYamlYield" $ \v → do
+        iid ← v .: "id"
+        mCnt ← v .:? "count"
+        (lo, hi) ← case mCnt of
+            Nothing  → pure (1, 1)
+            Just val →
+                (do xs ← parseJSON val
+                    case xs of
+                        [lo, hi] → pure (lo, hi)
+                        _ → fail "yield count list must be [min, max]")
+                <|> ((\n → (n, n)) ⊚ parseJSON val)
+        pure (FloraYamlYield iid lo hi)
+
+-- | Optional @harvestable:@ block (#94). Plants without it are
+--   decorative only. @regrowth_time@ is in GAME seconds (86400 = one
+--   game-day ≈ 24 real-minutes at timeScale 1).
+data FloraYamlHarvest = FloraYamlHarvest
+    { fyhTags             ∷ [Text]
+    , fyhYield            ∷ [FloraYamlYield]
+    , fyhRegrowthTime     ∷ Float
+    , fyhHarvestedTexture ∷ Maybe Text   -- ^ Relative to @texDir@; absent
+                                         --   = plant hidden while regrowing
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON FloraYamlHarvest where
+    parseJSON = withObject "FloraYamlHarvest" $ \v → FloraYamlHarvest
+        ⊚ v .:? "tags" .!= []
+        ⊛ v .:? "yield" .!= []
+        ⊛ v .:  "regrowth_time"
+        ⊛ v .:? "harvested_texture"
 
 data FloraYamlWorldGen = FloraYamlWorldGen
     { fywCategory     ∷ Text
@@ -108,6 +152,7 @@ data FloraYamlDef = FloraYamlDef
     , fydPhases         ∷ [FloraYamlPhase]
     , fydAnnualCycle    ∷ [FloraYamlCycleStage]
     , fydCycleOverrides ∷ [FloraYamlCycleOverride]
+    , fydHarvest        ∷ Maybe FloraYamlHarvest
     , fydWorldGen       ∷ FloraYamlWorldGen
     } deriving (Show, Eq, Generic)
 
@@ -123,6 +168,7 @@ instance FromJSON FloraYamlDef where
         ⊛ v .:? "phases"       .!= []
         ⊛ v .:? "annualCycle"  .!= []
         ⊛ v .:? "cycleOverrides" .!= []
+        ⊛ v .:? "harvestable"
         ⊛ v .:  "worldGen"
 
 data FloraYamlFile = FloraYamlFile

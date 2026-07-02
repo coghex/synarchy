@@ -1,0 +1,25 @@
+items:
+  # Foraged wild food (#94) — the yields of harvestable flora
+  # (data/flora/*.yaml `harvestable:` blocks). Both are DISCRETE food:
+  # one item per eat, kcal credited to the stomach meter (see
+  # rations.yaml for the schema notes).
+  - name: "wild_berries"
+    display_name: "Wild Berries"
+    sprite: "assets/textures/items/supply/wild_berries.png"
+    weight: 0.15       # a generous handful
+    category: Supplies
+    food:
+      nutrition:
+        # A handful of raspberries. Deliberately light next to a ration
+        # (250) — foraging keeps a unit alive, but a bush's 1-3 handfuls
+        # per game-day are not a supply line.
+        calories: 60
+  - name: "wild_greens"
+    display_name: "Wild Greens"
+    sprite: "assets/textures/items/supply/wild_greens.png"
+    weight: 0.1
+    category: Supplies
+    food:
+      nutrition:
+        # Leafy forage — barely more than the effort of chewing it.
+        calories: 25

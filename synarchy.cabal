@@ -371,6 +371,7 @@ library
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.WorldQuery
+                     Engine.Scripting.Lua.API.Forage
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
@@ -602,6 +603,7 @@ library
                      World.Flora.Types
                      World.Flora.Placement
                      World.Flora.Render
+                     World.Flora.Harvest
                      World.Fluids
                      World.Fluid.Types
                      World.Fluid.Internal

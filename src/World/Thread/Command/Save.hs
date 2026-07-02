@@ -177,6 +177,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     (wsConstructDesignationsRef ws)
                                 groundItems ← readIORef (wsGroundItemsRef ws)
                                 spoilPiles ← readIORef (wsSpoilRef ws)
+                                floraHarvests ← readIORef (wsFloraHarvestsRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
                                 -- Camera: the VISIBLE page uses the live global
                                 -- Camera2D (authoritative position/zoom/facing
@@ -220,6 +221,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsBuildings   = buildings
                                     , wpsUnits       = units
                                     , wpsUnitSimStates = simStates
+                                    , wpsFloraHarvests = floraHarvests
                                     }
                     -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
@@ -430,6 +432,9 @@ handleWorldLoadSaveCommand env logger pageId saveData
             (wpsConstructDesignations wps)
         writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
         writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
+        -- Flora harvest state (#94): like designations, timers render/query
+        -- from the world-level map and need no chunk loading first.
+        writeIORef (wsFloraHarvestsRef worldState) (wpsFloraHarvests wps)
 
         -- #365: an arena page (world.initArena) carries SYNTHETIC gen params
         -- (wgpSeed 0, empty timeline, no plates, worldSize 100000) that the

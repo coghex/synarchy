@@ -51,6 +51,7 @@ import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
                                             , setNotificationOverridesFn)
 import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
+import Engine.Scripting.Lua.API.Forage
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
@@ -498,6 +499,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "deselect"     (itemDeselectFn env)
   registerLuaFunction "getSelected"  (itemGetSelectedFn env)
   registerLuaFunction "pickupGround" (itemPickupGroundFn env)
+  registerLuaFunction "getFood"      (itemGetFoodFn env)
   registerLuaFunction "debugQuads"   (itemDebugQuadsFn env)
   Lua.setglobal (Lua.Name "item")
 
@@ -586,6 +588,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldHasSpawnedLocationContentsFn env)
   registerLuaFunction "markLocationContentsSpawned"
     (worldMarkLocationContentsSpawnedFn env)
+  registerLuaFunction "getFloraAt" (worldGetFloraAtFn env)
+  registerLuaFunction "harvestFlora" (worldHarvestFloraFn env)
+  registerLuaFunction "findHarvestableFlora"
+    (worldFindHarvestableFloraFn env)
 
   Lua.setglobal (Lua.Name "world")
 

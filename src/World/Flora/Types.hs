@@ -15,6 +15,7 @@ module World.Flora.Types
     , AnnualCycleKey(..)
       -- * Species Definition
     , FloraSpecies(..)
+    , FloraHarvest(..)
     , newFloraSpecies
       -- * World Generation
     , FloraWorldGen(..)
@@ -131,6 +132,25 @@ instance Hashable AnnualCycleKey where
 
 -- * Species Definition
 
+-- | Harvestable-species data (#94): what foraging a tile of this plant
+--   yields, and how long the plant takes to regrow. Species without this
+--   block are decorative only. Yields reference item-registry def names;
+--   the count is rolled uniformly in [min, max] per harvest.
+data FloraHarvest = FloraHarvest
+    { fhTags             ∷ ![Text]
+      -- ^ Edible-part tags: fruit / nuts / leaves / roots. Informational
+      --   for now — season-gating on tags is future work.
+    , fhYield            ∷ ![(Text, Int, Int)]
+      -- ^ (item def name, min count, max count) per harvest.
+    , fhRegrowth         ∷ !Float
+      -- ^ GAME-seconds until the tile is harvestable again (86400 = one
+      --   game-day ≈ 24 real-minutes at timeScale 1).
+    , fhHarvestedTexture ∷ !TextureHandle
+      -- ^ Depleted visual drawn while regrowing (a berry bush with no
+      --   fruit). Handle 0 = no depleted art; the plant is hidden
+      --   (bare tile) until regrowth instead.
+    } deriving (Show, Eq, Generic, Serialize, NFData)
+
 data FloraSpecies = FloraSpecies
     { fsName           ∷ !Text
     , fsBaseTexture    ∷ !TextureHandle
@@ -138,6 +158,8 @@ data FloraSpecies = FloraSpecies
     , fsPhases         ∷ !(HM.HashMap LifePhaseTag LifePhase)
     , fsAnnualCycle    ∷ ![AnnualStage]
     , fsCycleOverrides ∷ !(HM.HashMap AnnualCycleKey TextureHandle)
+    , fsHarvest        ∷ !(Maybe FloraHarvest)
+      -- ^ Present ⇒ foraging units can harvest this species (#94).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 newFloraSpecies ∷ Text → TextureHandle → FloraSpecies
@@ -148,6 +170,7 @@ newFloraSpecies name baseTex = FloraSpecies
     , fsPhases         = HM.empty
     , fsAnnualCycle    = []
     , fsCycleOverrides = HM.empty
+    , fsHarvest        = Nothing
     }
 
 -- * World Generation Registration

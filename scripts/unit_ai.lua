@@ -105,10 +105,31 @@ local config = {
         -- (1 - hungerFrac) · eat_weight. Because it only fires past the
         -- 0.25 threshold, the term is always ≥ 0.75·10 = 7.5 > command
         -- (7.0) — a hungry unit interrupts orders to eat (#306).
-        -- Currently inventory-only — search_for_food (foraging from
-        -- flora) is Phase 6.
+        -- Inventory-only; a unit carrying nothing edible forages from
+        -- flora / ground food instead (forage below, #94).
         eat_max_fraction        = 0.25,
         eat_weight              = 10.0,
+        -- Foraging (#94). Fires when the stomach is below
+        -- forage_max_fraction AND the unit carries no food (eating
+        -- what you hold always beats going to get more). Utility =
+        -- base + scale·need², where need blends stomach emptiness
+        -- (×0.6) with calorie-STORE emptiness — the true starvation
+        -- signal. The quadratic ramp is the #306 dire-need shape:
+        --   fresh spawn, stomach half-empty:  ~1.7 — above wander,
+        --                                     far below command (7.0).
+        --   store half drained:               ~2.9 — still routine.
+        --   store ~10% (catabolism looming):  ~7.0 — crosses command:
+        --                                     the EMERGENCY override.
+        --   store empty (starving):           ~8.4 — above command
+        --                                     (7.0) and pickup (7.5),
+        --                                     below eat-in-hand (≥7.5,
+        --                                     →10) so food already
+        --                                     carried is always eaten
+        --                                     before more is fetched.
+        forage_max_fraction   = 0.5,
+        forage_search_radius  = 24,   -- tiles (engine caps at 64)
+        forage_base_weight    = 1.0,
+        forage_urgency_scale  = 7.4,
         -- Refilling. Utility ramps quadratically above the threshold:
         -- util = base + scale·x², x = (emptiness-0.25)/0.75 ∈ [0,1].
         --   25% empty (threshold): ~0.85 — beats wander, stays well
@@ -669,6 +690,152 @@ local function eatExecute(uid, s, params)
         -- hyponatremia (the kidneys can't make sodium). See scripts/salts.lua.
         require("scripts.salts").mealSalt(uid)
     end
+end
+
+-----------------------------------------------------------
+-- Action: forage (#94)
+--
+-- Acquire food from the LAND when the unit is hungry and carrying
+-- none: walk to the nearest harvestable flora tile
+-- (world.findHarvestableFlora), harvest it (the yield spawns as
+-- ground items), and pick the yield up — eat_from_inventory then
+-- takes over. If no harvestable plant is in range but edible ground
+-- items are, fetch those instead. The #94 emergency-hunger ladder is
+-- inventory → flora → ground food; the first rung is
+-- eat_from_inventory itself, which outranks forage whenever the unit
+-- actually carries food.
+--
+-- The "hard interrupt" for a critically hungry unit is the same
+-- mechanism every dire need uses here (#306): the utility ramps past
+-- follow_command as the calorie store empties, so a starving unit
+-- drops its orders and goes foraging. Finite by construction (peak
+-- base + scale = 8.4) — never math.huge.
+-----------------------------------------------------------
+local foodDefCache = {}   -- defName → bool: def has an edible food block
+
+local function isFoodDef(defName)
+    local c = foodDefCache[defName]
+    if c ~= nil then return c end
+    local f = item.getFood and item.getFood(defName)
+    local edible = (f ~= nil)
+        and ((f.calories or 0) > 0 or (f.caloriesPerKg or 0) > 0)
+    foodDefCache[defName] = edible
+    return edible
+end
+
+-- Blended food need ∈ [0,1]: stomach emptiness matters (it's what
+-- "feeling hungry" is) but the calorie STORE emptying is what actually
+-- kills — it dominates the ramp so the emergency fires on real
+-- starvation, not on a between-meals stomach.
+local function forageNeed(uid)
+    local hun    = unit.getStat(uid, "hunger")
+    local maxHun = unit.getStat(uid, "max_hunger")
+    if not hun or not maxHun or maxHun <= 0 then return 0, 1 end
+    local hungerFrac = hun / maxHun
+    local storeNeed = 0
+    local cal    = unit.getStat(uid, "calories")
+    local maxCal = unit.getStat(uid, "max_calories")
+    if cal and maxCal and maxCal > 0 then
+        storeNeed = 1 - math.max(0, math.min(1, cal / maxCal))
+    end
+    return math.max((1 - hungerFrac) * 0.6, storeNeed), hungerFrac
+end
+
+local function findGroundFood(ux, uy, radius)
+    local ground = item.listGround()
+    if not ground then return nil end
+    local best, bestD2 = nil, radius * radius + 1
+    for _, g in ipairs(ground) do
+        if isFoodDef(g.defName) then
+            local dx, dy = g.x - ux, g.y - uy
+            local d2 = dx * dx + dy * dy
+            if d2 < bestD2 then best, bestD2 = g, d2 end
+        end
+    end
+    return best
+end
+
+local function forageUtility(uid, s, params)
+    local need, hungerFrac = forageNeed(uid)
+    if hungerFrac >= params.forage_max_fraction then return -math.huge end
+    -- Carrying food? Eating it (eat_from_inventory) is the better
+    -- move — don't compete with it.
+    if findFoodInInventory(uid) then return -math.huge end
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+    local ux = math.floor(info.gridX)
+    local uy = math.floor(info.gridY)
+    -- Prefer a living plant; fall back to edible ground items.
+    local plant = world.findHarvestableFlora
+        and world.findHarvestableFlora(ux, uy, params.forage_search_radius)
+    if plant then
+        s.forageTarget = { kind = "flora", x = plant.gx, y = plant.gy }
+    else
+        local g = findGroundFood(info.gridX, info.gridY,
+                                 params.forage_search_radius)
+        if not g then
+            s.forageTarget = nil
+            return -math.huge
+        end
+        s.forageTarget = { kind = "ground", gid = g.id,
+                           x = math.floor(g.x), y = math.floor(g.y) }
+    end
+    return params.forage_base_weight
+         + params.forage_urgency_scale * need * need
+end
+
+local function forageExecute(uid, s, params)
+    -- Collecting: pull the harvested yield off the ground, one item
+    -- per tick. A failed pickup (capacity refusal / item gone) ends
+    -- the collection cleanly; whatever landed in the inventory is
+    -- eaten by eat_from_inventory on the next decisions.
+    if s.foragePhase == "collecting" then
+        local loot = s.forageLoot or {}
+        local nextGid = table.remove(loot)
+        if not nextGid or not item.pickupGround(uid, nextGid) then
+            s.foragePhase  = nil
+            s.forageLoot   = nil
+            s.forageTarget = nil
+        end
+        return
+    end
+
+    local tgt = s.forageTarget
+    if not tgt then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local utx = math.floor(info.gridX)
+    local uty = math.floor(info.gridY)
+    local cheb = math.max(math.abs(utx - tgt.x), math.abs(uty - tgt.y))
+
+    if cheb <= 1 then
+        if tgt.kind == "flora" then
+            local yields = world.harvestFlora(tgt.x, tgt.y)
+            if yields and #yields > 0 then
+                unit.pickup(uid)   -- bend-down anim over the plant
+                local gids = {}
+                for _, yi in ipairs(yields) do gids[#gids + 1] = yi.gid end
+                s.forageLoot  = gids
+                s.foragePhase = "collecting"
+            else
+                -- Raced / regrowing / decorative after all: forget the
+                -- target; the next decision re-finds.
+                s.forageTarget = nil
+            end
+        else
+            unit.pickup(uid)
+            item.pickupGround(uid, tgt.gid)
+            s.forageTarget = nil
+        end
+        return
+    end
+
+    -- Walk to it. Comfort pace for routine foraging; ordered pace when
+    -- genuinely starving (the same urgency that pushed the utility past
+    -- follow_command).
+    local need = forageNeed(uid)
+    local speed = (need > 0.8) and mv.ordered(uid) or mv.comfort(uid)
+    unit.moveTo(uid, tgt.x + 0.5, tgt.y + 0.5, speed)
 end
 
 -----------------------------------------------------------
@@ -3420,6 +3587,8 @@ unitAi.registerActions("acolyte", {
       execute = drinkExecute },
     { name = "eat_from_inventory", utility = eatUtility,
       execute = eatExecute },
+    { name = "forage", utility = forageUtility,
+      execute = forageExecute },
     { name = "refill_canteen", utility = refillUtility,
       execute = refillExecute },
     { name = "search_for_water", utility = searchUtility,
