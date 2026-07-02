@@ -999,6 +999,7 @@ rollInstance env itemMgr name mFill =
                 , iiSharpness   = 100.0
                 , iiContents    = contents
                 , iiInstanceId  = iid
+                , iiTemp        = Nothing
                 }
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
@@ -1070,6 +1071,7 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           , iiSharpness   = 100.0
                                           , iiContents    = []
                                           , iiInstanceId  = iid
+                                          , iiTemp        = Nothing
                                           }
                                         m
                 ) (return HM.empty) entries
@@ -1144,6 +1146,7 @@ buildStartingAccessories env logger itemMgr names = do
                 , iiSharpness   = 100.0
                 , iiContents    = []
                 , iiInstanceId  = iid
+                , iiTemp        = Nothing
                 }
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)

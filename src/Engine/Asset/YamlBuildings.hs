@@ -54,6 +54,9 @@ data BuildingYamlDef = BuildingYamlDef
     , bydBuildWork       ∷ !Float
     , bydMaterials       ∷ !(Map.Map Text Int)
     , bydStorageCapacity ∷ !Float
+    , bydOperations      ∷ ![Text]
+      -- ^ work-station operations offered when Built (#326); empty =
+      --   not a station
     , bydStateAnims      ∷ !(Map.Map Text Text)
     , bydAnimations      ∷ !(Map.Map Text BuildingYamlAnim)
     } deriving (Show, Eq, Generic)
@@ -73,6 +76,7 @@ instance FromJSON BuildingYamlDef where
         ⊛ v .:? "build_work"       .!= 0.0
         ⊛ v .:? "materials"        .!= Map.empty
         ⊛ v .:? "storage_capacity" .!= 0.0
+        ⊛ v .:? "operations"       .!= []
         ⊛ v .:? "state_animations" .!= Map.empty
         ⊛ v .:? "animations"       .!= Map.empty
 

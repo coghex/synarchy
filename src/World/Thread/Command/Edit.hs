@@ -555,6 +555,7 @@ spawnYieldItems env logger ws defName (gx, gy) n = do
                     , iiSharpness   = 100.0
                     , iiContents    = []
                     , iiInstanceId  = iid
+                    , iiTemp        = Nothing
                     }
             gis ← readIORef (wsGroundItemsRef ws)
             (px, py) ← pickScatterPos env gis

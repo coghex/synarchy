@@ -28,6 +28,8 @@ module Engine.Scripting.Lua.API.Buildings
     , buildingGetStorageFn
     , buildingGetStorageCapacityFn
     , buildingGetStorageWeightFn
+    , buildingGetOperationsFn
+    , buildingFindStationFn
     ) where
 
 import UPrelude
@@ -38,6 +40,8 @@ import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM)
+import Data.List (minimumBy)
+import Data.Ord (comparing)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import World.Page.Types (WorldPageId(..))
@@ -136,6 +140,7 @@ loadBuildingYamlFn env backendState = do
                             , bdBuildWork       = bydBuildWork def
                             , bdMaterials       = HM.fromList (Map.toList (bydMaterials def))
                             , bdStorageCapacity = bydStorageCapacity def
+                            , bdOperations      = bydOperations def
                             , bdAnimations      = animMap
                             , bdStateAnims      = stateAnims
                             }
@@ -713,6 +718,91 @@ buildingGetStorageWeightFn env = do
                 Nothing → do
                     Lua.pushnil
                     return 1
+
+-- | building.getOperations(bid) → array of operation tags from the
+--   def ("smelt", "forge", "assemble", "repair", …). Empty array for
+--   buildings that aren't work stations. nil if the bid or its def is
+--   gone. Def-level data (#326) — what the station CAN do; whether it
+--   currently can (Built) is getActivity's business.
+buildingGetOperationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetOperationsFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mOps ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure $ do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    def  ← HM.lookup (biDefName inst) (bmDefs bm)
+                    pure (bdOperations def)
+            case mOps of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just ops → do
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] ops) $ \(i, op) → do
+                        Lua.pushstring (TE.encodeUtf8 op)
+                        Lua.rawseti (-2) (fromIntegral i)
+                    return 1
+
+-- | building.findStation(op [, gx, gy]) → bid, gridX, gridY | nil.
+--   Nearest BUILT building on the ACTIVE world page whose def offers
+--   the operation (#326). Distance is Chebyshev from (gx, gy) to the
+--   closest footprint tile; omit the coords to get the lowest-id
+--   match. Ties break to the lowest id so results are deterministic
+--   (bmInstances is a HashMap). Ghost/under-construction stations
+--   never match — an unbuilt furnace can't smelt.
+buildingFindStationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingFindStationFn env = do
+    opArg ← Lua.tostring 1
+    gxArg ← Lua.tointeger 2
+    gyArg ← Lua.tointeger 3
+    case opArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just opBS → do
+            let op = TE.decodeUtf8 opBS
+                mFrom = case (gxArg, gyArg) of
+                    (Just x, Just y) → Just (fromIntegral x ∷ Int,
+                                             fromIntegral y ∷ Int)
+                    _                → Nothing
+            mBest ← Lua.liftIO $ do
+                bm      ← readIORef (buildingManagerRef env)
+                now     ← readIORef (gameTimeRef env)
+                mActive ← activeWorldPage env
+                pure $ case mActive of
+                    Nothing → Nothing
+                    Just (pid, _) →
+                        let candidates =
+                              [ (bid, inst)
+                              | (bid, inst) ← HM.toList
+                                    (buildingsOnPage pid (bmInstances bm))
+                              , Just def ← [HM.lookup (biDefName inst)
+                                                      (bmDefs bm)]
+                              , op `elem` bdOperations def
+                              , currentActivity now inst def ≡ Built ]
+                            rank (bid, inst) =
+                              ( maybe 0 (footprintDist inst) mFrom
+                              , unBuildingId bid )
+                        in case candidates of
+                            [] → Nothing
+                            cs → Just (minimumBy
+                                    (comparing rank) cs)
+            case mBest of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just (BuildingId n, inst) → do
+                    Lua.pushinteger (fromIntegral n)
+                    Lua.pushinteger (fromIntegral (biAnchorX inst))
+                    Lua.pushinteger (fromIntegral (biAnchorY inst))
+                    return 3
 
 -- | building.getActivity(id) — returns "appearing" while the appear
 --   animation is still playing, "built" afterwards. nil if the

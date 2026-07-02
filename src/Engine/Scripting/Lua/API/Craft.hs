@@ -4,13 +4,16 @@
 --   RecipeManager (mirrors engine.loadInfectionYaml); craft.get /
 --   craft.getNames give read-only access; craft.execute runs one craft
 --   against a unit's inventory — verify inputs + fuel, consume them,
---   produce the outputs. No stations or AI yet: station kind is data
---   carried by the recipe (#326), work is data for the craft AI (#329).
+--   produce the outputs. craft.executeAt is the station-aware variant
+--   (#326): same consumption, gated on a Built work station that
+--   offers the recipe's station kind with the unit adjacent. Work is
+--   data for the craft AI (#329).
 module Engine.Scripting.Lua.API.Craft
     ( loadRecipeYamlFn
     , craftGetFn
     , craftGetNamesFn
     , craftExecuteFn
+    , craftExecuteAtFn
     ) where
 
 import UPrelude
@@ -29,6 +32,9 @@ import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
                    lookupItemDef)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
+import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
+                       BuildingActivity(..), BuildingManager(..),
+                       currentActivity, footprintDist)
 
 -- | engine.loadRecipeYaml(path) — parse a YAML file of recipe defs,
 --   register each into the RecipeManager, return the count.
@@ -145,14 +151,74 @@ craftExecuteFn env = do
             let uid = UnitId (fromIntegral n)
                 rid = TE.decodeUtf8 ridBS
             result ← Lua.liftIO $ executeCraft env uid rid
-            finish result
-        _ → finish (Left "craft.execute: expected (uid, recipeId)")
+            pushOkErr result
+        _ → pushOkErr (Left "craft.execute: expected (uid, recipeId)")
+
+-- | craft.executeAt(uid, recipeId, bid) → ok, err?. The station-aware
+--   craft (#326): identical consumption semantics to craft.execute,
+--   but refused unless `bid` is a BUILT work station on the unit's
+--   world page whose def offers the recipe's station kind, with the
+--   unit standing on or adjacent to the footprint (Chebyshev ≤ 1).
+--   craft.execute stays station-blind (tests / debug console); the
+--   craft AI (#329) routes through this.
+craftExecuteAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftExecuteAtFn env = do
+    idArg  ← Lua.tointeger 1
+    ridArg ← Lua.tostring 2
+    bidArg ← Lua.tointeger 3
+    case (idArg, ridArg, bidArg) of
+        (Just n, Just ridBS, Just b) → do
+            let uid = UnitId (fromIntegral n)
+                rid = TE.decodeUtf8 ridBS
+                bid = BuildingId (fromIntegral b)
+            result ← Lua.liftIO $ do
+                gate ← validateStation env uid rid bid
+                case gate of
+                    Left err → return (Left err)
+                    Right () → executeCraft env uid rid
+            pushOkErr result
+        _ → pushOkErr
+                (Left "craft.executeAt: expected (uid, recipeId, buildingId)")
+
+-- | The station gate for craft.executeAt (#326). Read-only pre-checks
+--   — consumption re-verifies the inventory atomically inside
+--   executeCraft, so the only race is a unit stepping away between
+--   gate and swap, which at worst completes a craft it was adjacent
+--   for one tick earlier (same benign window as the construct AI's
+--   building queries).
+validateStation ∷ EngineEnv → UnitId → Text → BuildingId
+                → IO (Either Text ())
+validateStation env uid rid bid = do
+    rm  ← readIORef (recipeManagerRef env)
+    bm  ← readIORef (buildingManagerRef env)
+    um  ← readIORef (unitManagerRef env)
+    now ← readIORef (gameTimeRef env)
+    return $ do
+        recipe ← note ("unknown recipe " <> rid) (lookupRecipe rid rm)
+        inst   ← note "no such building" (HM.lookup bid (bmInstances bm))
+        def    ← note ("unknown building def " <> biDefName inst)
+                      (HM.lookup (biDefName inst) (bmDefs bm))
+        u      ← note "no such unit" (HM.lookup uid (umInstances um))
+        unless (uiPage u ≡ biPage inst) $
+            Left "station is on another world page"
+        unless (rdStation recipe `elem` bdOperations def) $
+            Left ("station " <> biDefName inst <> " does not offer "
+                  <> rdStation recipe)
+        unless (currentActivity now inst def ≡ Built) $
+            Left "station not built yet"
+        let utile = (floor (uiGridX u), floor (uiGridY u))
+        unless (footprintDist inst utile ≤ 1) $
+            Left "unit not adjacent to station"
   where
-    finish (Right ()) = Lua.pushboolean True >> return 1
-    finish (Left err) = do
-        Lua.pushboolean False
-        Lua.pushstring (TE.encodeUtf8 err)
-        return 2
+    note e = maybe (Left e) Right
+
+-- | Shared (ok) / (false, reason) return shape for the execute fns.
+pushOkErr ∷ Either Text () → Lua.LuaE Lua.Exception Lua.NumResults
+pushOkErr (Right ()) = Lua.pushboolean True >> return 1
+pushOkErr (Left err) = do
+    Lua.pushboolean False
+    Lua.pushstring (TE.encodeUtf8 err)
+    return 2
 
 -- | The IO side of craft.execute. Output instances are rolled BEFORE
 --   the unit-manager update (rolls + fresh ids are IO), then the
@@ -230,4 +296,9 @@ rollOutputs env (ing, def) = replicateM (max 0 (riCount ing)) $ do
         , iiSharpness   = 100.0
         , iiContents    = []
         , iiInstanceId  = iid
+        -- At ambient for now — a recipe-declared output temperature
+        -- (hot bar off the smelter, 100 °C coffee) is the cooking
+        -- tier's slice (#344 provides the field + setters, #346 the
+        -- recipe schema hook).
+        , iiTemp        = Nothing
         }

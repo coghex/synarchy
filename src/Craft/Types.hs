@@ -5,8 +5,10 @@
 --   from data/recipes/*.yaml via Engine.Asset.YamlRecipes into the
 --   engine-wide RecipeManager (mirrors Infection.Types / Substance.Types).
 --
---   Station kind is a plain string tag for now — station DEFS arrive with
---   the work-station issue (#326); the AI/bill layer (#329) reads rdWork.
+--   Station kind names a work-station OPERATION ("smelt", "forge",
+--   "assemble") — buildings advertise the operations they offer via
+--   bdOperations (#326) and craft.executeAt matches the two; the
+--   AI/bill layer (#329) reads rdWork.
 --
 --   Field prefix `rd` / `ri` to avoid colliding with other record
 --   namespaces.
@@ -33,10 +35,11 @@ data RecipeIngredient = RecipeIngredient
 data RecipeDef = RecipeDef
     { rdId        ∷ !Text                     -- ^ unique key
     , rdName      ∷ !Text                     -- ^ display name
-    , rdStation   ∷ !Text                     -- ^ station-kind tag
-                                              --   ("forge", "furnace", …);
-                                              --   resolves to a station def
-                                              --   when #326 lands
+    , rdStation   ∷ !Text                     -- ^ station operation
+                                              --   ("smelt", "forge",
+                                              --   "assemble", …); matched
+                                              --   against bdOperations by
+                                              --   craft.executeAt (#326)
     , rdInputs    ∷ ![RecipeIngredient]       -- ^ consumed materials
     , rdFuel      ∷ !(Maybe RecipeIngredient) -- ^ consumed fuel, if any
     , rdWork      ∷ !Float                    -- ^ effort to complete; the

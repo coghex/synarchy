@@ -90,6 +90,8 @@ module Engine.Scripting.Lua.API.Units
     , unitModifyItemFillFn
     , unitRepairItemFn
     , unitAddItemFn
+    , unitGetItemTempFn
+    , unitSetItemTempFn
     , unitGetVisibleTilesFn
     , unitGetFrameTextureFn
     , unitGetPortraitTextureFn
@@ -157,8 +159,11 @@ import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
 import qualified Unit.HitTest as HitTest
-import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
+import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..)
+                   , LoadedChunk(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
+import World.Weather.Ambient (ambientTempAt)
+import Item.Temperature (effectiveItemTemp)
 
 -- * YAML loading
 
@@ -1912,6 +1917,7 @@ unitAddItemFn env = do
                                 , iiSharpness   = 100.0
                                 , iiContents    = []
                                 , iiInstanceId  = iid
+                                , iiTemp        = Nothing
                                 }
                         atomicModifyIORef' (unitManagerRef env) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -1927,6 +1933,125 @@ unitAddItemFn env = do
         _ → do
             Lua.pushboolean False
             return 1
+
+-- | Ambient air temperature (°C) at a unit's tile, read from the unit's
+--   OWN page's gen params — the same elevation-corrected helper thermo
+--   and the item-cooling tick use (#308/#344). Nothing when the page has
+--   no live world or no gen params yet.
+unitAmbientTemp ∷ EngineEnv → UnitInstance → IO (Maybe Float)
+unitAmbientTemp env inst = do
+    wm ← readIORef (worldManagerRef env)
+    case lookup (uiPage inst) (wmWorlds wm) of
+        Nothing → pure Nothing
+        Just ws → do
+            mp ← readIORef (wsGenParamsRef ws)
+            pure $ fmap (\p → ambientTempAt (wgpSeed p) (wgpPlates p)
+                                  (wgpClimateState p) (wgpWorldSize p)
+                                  (floor (uiGridX inst))
+                                  (floor (uiGridY inst))) mp
+
+-- | The instance with this id, searched across the unit's inventory,
+--   equipment, and worn accessories (same reach as unit.repairItem).
+findHeldItemById ∷ Word64 → UnitInstance → Maybe ItemInstance
+findHeldItemById iid inst =
+    case [ it | it ← uiInventory inst
+                     ++ HM.elems (uiEquipment inst)
+                     ++ uiAccessories inst
+              , iiInstanceId it ≡ iid ] of
+        (it:_) → Just it
+        []     → Nothing
+
+-- | Rewrite the temperature of the instance with this id in a list;
+--   Nothing if no element matches. Preserves order (in-place slot).
+setTempInList ∷ Word64 → Maybe Float → [ItemInstance]
+              → Maybe [ItemInstance]
+setTempInList _   _  []     = Nothing
+setTempInList iid mT (x:xs)
+    | iiInstanceId x ≡ iid = Just (x { iiTemp = mT } : xs)
+    | otherwise            = (x :) ⊚ setTempInList iid mT xs
+
+-- | unit.getItemTemp(uid, instanceId) → °C | nil. The item's effective
+--   temperature (#344): its tracked iiTemp when it's hotter/colder than
+--   its surroundings, else the ambient at the holder's tile — a held
+--   item breathes the air its holder stands in. Searched across
+--   inventory, equipment, and accessories like unit.repairItem. nil if
+--   the unit or instance doesn't exist (or the item is untracked and no
+--   world/params exist to read an ambient from).
+unitGetItemTempFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetItemTempFn env = do
+    idArg   ← Lua.tointeger 1
+    instArg ← Lua.tointeger 2
+    case (idArg, instArg) of
+        (Just n, Just iidI) → do
+            let uid = UnitId (fromIntegral n)
+                iid = fromIntegral iidI ∷ Word64
+            mT ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → pure Nothing
+                    Just inst → case findHeldItemById iid inst of
+                        Nothing → pure Nothing
+                        Just it → do
+                            mAmb ← unitAmbientTemp env inst
+                            pure $ case mAmb of
+                                Just amb → Just (effectiveItemTemp amb it)
+                                Nothing  → iiTemp it
+            case mT of
+                Just t  → do
+                    Lua.pushnumber (Lua.Number (realToFrac t))
+                    return 1
+                Nothing → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
+-- | unit.setItemTemp(uid, instanceId [, temp]) → bool. Sets the held
+--   instance's tracked temperature (°C) — the generic "this item was
+--   made hot/cold" hook (#344): cooking / smelting outputs call this
+--   (or spawn with a temp prop) and the per-page tick then cools the
+--   item toward ambient. Omitting temp (or passing nil) clears the
+--   tracked value — the item snaps back to "at ambient". Same
+--   instance-id targeting across inventory / equipment / accessories
+--   as unit.repairItem. False if the unit or instance doesn't exist.
+unitSetItemTempFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetItemTempFn env = do
+    idArg   ← Lua.tointeger 1
+    instArg ← Lua.tointeger 2
+    tArg    ← Lua.tonumber 3
+    case (idArg, instArg) of
+        (Just n, Just iidI) → do
+            let uid = UnitId (fromIntegral n)
+                iid = fromIntegral iidI ∷ Word64
+                mT  = case tArg of
+                    Just (Lua.Number d) → Just (realToFrac d ∷ Float)
+                    _                   → Nothing
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing   → (um, False)
+                    Just inst →
+                        let commit inst' = um { umInstances =
+                                HM.insert uid inst' (umInstances um) }
+                        in case setTempInList iid mT (uiInventory inst) of
+                            Just inv' →
+                                (commit inst { uiInventory = inv' }, True)
+                            Nothing →
+                              case [ slot | (slot, it) ← HM.toList
+                                                (uiEquipment inst)
+                                          , iiInstanceId it ≡ iid ] of
+                                (slot:_) →
+                                    let eq' = HM.adjust
+                                            (\it → it { iiTemp = mT })
+                                            slot (uiEquipment inst)
+                                    in (commit inst { uiEquipment = eq' }
+                                       , True)
+                                [] →
+                                  case setTempInList iid mT
+                                           (uiAccessories inst) of
+                                    Just accs' →
+                                        (commit inst { uiAccessories =
+                                            accs' }, True)
+                                    Nothing → (um, False)
+            Lua.pushboolean ok
+            return 1
+        _ → Lua.pushboolean False >> return 1
 
 -- | unit.removeItem(uid, defName) → bool. Removes the FIRST inventory
 --   instance with the matching defName. Returns true if something was
@@ -4397,6 +4522,15 @@ unitGetInventoryFn env = do
                         Lua.setfield (-2) "weight"
                         Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        -- Tracked temperature (°C) — present only while
+                        -- the item is hotter/colder than its
+                        -- surroundings (#344); absent = at ambient
+                        -- (unit.getItemTemp gives the effective value).
+                        case iiTemp inst of
+                            Just t → do
+                                Lua.pushnumber (Lua.Number (realToFrac t))
+                                Lua.setfield (-2) "temp"
+                            Nothing → pure ()
                         -- Signature of nested contents so item-containers
                         -- (kits) split by internal state in the row key (#67A).
                         Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))

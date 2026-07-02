@@ -465,6 +465,14 @@ pushItemInstance inst itemMgr = do
     -- must show the live value, mirroring unit.getInventory.
     Lua.pushnumber (Lua.Number (realToFrac (iiSharpness inst)))
     Lua.setfield (-2) "sharpness"
+    -- Tracked temperature (°C) — present only while the item is
+    -- hotter/colder than its surroundings (#344); absent = at ambient
+    -- (unit.getItemTemp resolves the ambient-aware effective value).
+    case iiTemp inst of
+        Just t → do
+            Lua.pushnumber (Lua.Number (realToFrac t))
+            Lua.setfield (-2) "temp"
+        Nothing → pure ()
     -- Quality / condition only surface when the def declares them —
     -- items like canteens / rations don't have these qualities and
     -- shouldn't show "100%" in tooltips.
