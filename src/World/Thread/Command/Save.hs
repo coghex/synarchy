@@ -22,8 +22,10 @@ import World.Types
 import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand)
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
+import World.Generate.Arena (generateArenaChunks)
 import World.Grid (worldToGrid)
 import World.Generate.Constants (chunkLoadRadius)
+import System.Random (mkStdGen)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -429,132 +431,184 @@ handleWorldLoadSaveCommand env logger pageId saveData
         writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
         writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
 
-        -- 1b. Rebuild this page's zoom cache with per-chunk textures.
-        --     'buildTimeline' didn't run on this code path, so we don't have
-        --     the init-time bordered cache; pass Nothing and let
-        --     generateZoomTerrain recompute the per-chunk pipeline.
-        when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
-        let (zoomCache, chunkPixels) =
-                buildZoomCacheWithPixels params registry palette Nothing
-        _ ← evaluate (force zoomCache)
-        writeIORef (wsZoomCacheRef worldState) zoomCache
-        writeIORef (wsZoomAtlasRef worldState) Nothing
-        -- The zoom atlas + preview stage through GLOBAL env refs, and the GPU
-        -- upload writes one shared atlas to every world's wsZoomAtlasRef
-        -- (handleZoomAtlasUpload). So only the ACTIVE/visible page stages its
-        -- atlas; background pages keep their per-page zoom cache and adopt the
-        -- shared atlas if later shown (the existing single-atlas limitation —
-        -- background worlds are latent today).
-        when isActive $ do
-            _ ← evaluate (force chunkPixels)
-            sendGenLog env "Assembling zoom texture atlas..."
-            let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
-            _ ← evaluate (force atlas)
-            writeIORef (zoomAtlasDataRef env) $
-                Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
-            sendGenLog env "Rendering world preview..."
-            let preview = buildPreviewFromPixels params zoomCache chunkPixels
-            _ ← evaluate (force preview)
-            writeIORef (worldPreviewRef env) $
-                Just (piWidth preview, piHeight preview, piData preview)
+        -- #365: an arena page (world.initArena) carries SYNTHETIC gen params
+        -- (wgpSeed 0, empty timeline, no plates, worldSize 100000) that the
+        -- real pipeline cannot run: buildZoomCacheWithPixels / generateChunk
+        -- make no progress on them (world thread wedges, stranding every
+        -- later page of the restore), and 1e's elevationAtGlobal errors on
+        -- the empty plate list. Rebuild the flat arena exactly like
+        -- handleWorldInitArenaCommand instead, then replay this page's
+        -- saved edits onto it.
+        if isArenaParams params
+          then do
+            when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
+            when isActive $ sendGenLog env "Rebuilding arena page..."
+            edits  ← readIORef (wsEditsRef worldState)
+            desigs ← readIORef (wsMineDesignationsRef worldState)
+            -- Fixed StdGen: the gen only varies cosmetic surface grass, and
+            -- a fixed seed keeps repeated loads of the same save identical.
+            let arenaChunks = map (applyDigSlopes desigs . replayEdits edits)
+                                  (generateArenaChunks (mkStdGen 0))
+                chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
+            _ ← evaluate (force arenaChunks)
+            atomicModifyIORef' (wsTilesRef worldState) $ \_ →
+                (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+            -- Seed the sim thread with every eager chunk: they bypass the
+            -- init queue, so drainInitQueues never emits SimChunkLoaded for
+            -- them, and replayed fluid edits (movement_arena water/lava)
+            -- must reach the fluid sim.
+            forM_ arenaChunks $ \c →
+                Q.writeQueue (simQueue env) $
+                    SimChunkLoaded rid (lcCoord c)
+                        (lcFluidMap c) (lcTerrainSurfaceMap c)
+            writeIORef (wsInitQueueRef worldState) []
+            writeIORef phaseRef LoadDone
+            -- Arena analogue of 1e: flat ground at seaLevel; no
+            -- elevationAtGlobal (it errors on the arena's empty plates).
+            when isActive $ do
+                atomicModifyIORef' (cameraRef env) $ \_ →
+                    (Camera2D
+                        { camPosition     = (wpsCameraX wps, wpsCameraY wps)
+                        , camVelocity     = (0, 0)
+                        , camZoom         = wpsCameraZoom wps
+                        , camZoomVelocity = 0
+                        , camRotation     = 0
+                        , camFacing       = wpsCameraFacing wps
+                        , camDragging     = False
+                        , camDragOrigin   = (0, 0)
+                        , camZSlice       = seaLevel + surfaceHeadroom
+                        , camZTracking    = True
+                        }, ())
+                sendGenLog env "Save loaded: arena page rebuilt"
+                logInfo logger CatWorld $
+                    "Save loaded: arena page rebuilt: " <> unWorldPageId rid
+          else do
+            -- 1b. Rebuild this page's zoom cache with per-chunk textures.
+            --     'buildTimeline' didn't run on this code path, so we don't have
+            --     the init-time bordered cache; pass Nothing and let
+            --     generateZoomTerrain recompute the per-chunk pipeline.
+            when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
+            let (zoomCache, chunkPixels) =
+                    buildZoomCacheWithPixels params registry palette Nothing
+            _ ← evaluate (force zoomCache)
+            writeIORef (wsZoomCacheRef worldState) zoomCache
+            writeIORef (wsZoomAtlasRef worldState) Nothing
+            -- The zoom atlas + preview stage through GLOBAL env refs, and the GPU
+            -- upload writes one shared atlas to every world's wsZoomAtlasRef
+            -- (handleZoomAtlasUpload). So only the ACTIVE/visible page stages its
+            -- atlas; background pages keep their per-page zoom cache and adopt the
+            -- shared atlas if later shown (the existing single-atlas limitation —
+            -- background worlds are latent today).
+            when isActive $ do
+                _ ← evaluate (force chunkPixels)
+                sendGenLog env "Assembling zoom texture atlas..."
+                let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
+                _ ← evaluate (force atlas)
+                writeIORef (zoomAtlasDataRef env) $
+                    Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
+                sendGenLog env "Rendering world preview..."
+                let preview = buildPreviewFromPixels params zoomCache chunkPixels
+                _ ← evaluate (force preview)
+                writeIORef (worldPreviewRef env) $
+                    Just (piWidth preview, piHeight preview, piData preview)
 
-        -- 1c. Generate the center chunk synchronously for immediate display.
-        --     Use the canonical screen→grid→chunk conversion so the saved
-        --     camera facing targets the right chunk for synchronous regen.
-        when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-        when isActive $ sendGenLog env "Generating initial chunks..."
-        let centerCoord@(ChunkCoord camCX camCY) =
-                cameraChunkCoord (wpsCameraFacing wps)
-                                 (wpsCameraX wps)
-                                 (wpsCameraY wps)
-            (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
-                generateChunk registry catalog params centerCoord
-            seededSurf = VU.imap (\idx surfZ →
-                case cf V.! idx of
-                    Just fc → max surfZ (fcSurface fc)
-                    Nothing → surfZ
-                ) cs
-            centerChunkRaw = LoadedChunk
-                { lcCoord             = centerCoord
-                , lcTiles             = ct
-                , lcSurfaceMap        = seededSurf
-                , lcTerrainSurfaceMap = cterrain
-                , lcFluidMap          = cf
-                , lcIceMap            = cice
-                , lcFlora             = cflora
-                , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
-                , lcWaterTableMap    = cwt
-                , lcMagma            = cmagma
-                , lcStructures       = emptyChunkStructures
-                }
-        edits ← readIORef (wsEditsRef worldState)
-        desigs ← readIORef (wsMineDesignationsRef worldState)
-        let centerChunk = applyDigSlopes desigs (replayEdits edits centerChunkRaw)
-        atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-            (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
-                           , wtdMaxChunks = 200 }, ())
-        -- Seed sim with the synchronously-loaded center chunk. drainInitQueues
-        -- emits SimChunkLoaded only for the QUEUED remainder (below), so the
-        -- center — written straight to wsTilesRef, not queued — would otherwise
-        -- never reach the sim thread (after the SimDropWorld above cleared any
-        -- stale copy). Matches the per-chunk message the queue loader sends.
-        Q.writeQueue (simQueue env) $
-            SimChunkLoaded rid centerCoord
-                (lcFluidMap centerChunk) (lcTerrainSurfaceMap centerChunk)
+            -- 1c. Generate the center chunk synchronously for immediate display.
+            --     Use the canonical screen→grid→chunk conversion so the saved
+            --     camera facing targets the right chunk for synchronous regen.
+            when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
+            when isActive $ sendGenLog env "Generating initial chunks..."
+            let centerCoord@(ChunkCoord camCX camCY) =
+                    cameraChunkCoord (wpsCameraFacing wps)
+                                     (wpsCameraX wps)
+                                     (wpsCameraY wps)
+                (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
+                    generateChunk registry catalog params centerCoord
+                seededSurf = VU.imap (\idx surfZ →
+                    case cf V.! idx of
+                        Just fc → max surfZ (fcSurface fc)
+                        Nothing → surfZ
+                    ) cs
+                centerChunkRaw = LoadedChunk
+                    { lcCoord             = centerCoord
+                    , lcTiles             = ct
+                    , lcSurfaceMap        = seededSurf
+                    , lcTerrainSurfaceMap = cterrain
+                    , lcFluidMap          = cf
+                    , lcIceMap            = cice
+                    , lcFlora             = cflora
+                    , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
+                    , lcWaterTableMap    = cwt
+                    , lcMagma            = cmagma
+                    , lcStructures       = emptyChunkStructures
+                    }
+            edits ← readIORef (wsEditsRef worldState)
+            desigs ← readIORef (wsMineDesignationsRef worldState)
+            let centerChunk = applyDigSlopes desigs (replayEdits edits centerChunkRaw)
+            atomicModifyIORef' (wsTilesRef worldState) $ \_ →
+                (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
+                               , wtdMaxChunks = 200 }, ())
+            -- Seed sim with the synchronously-loaded center chunk. drainInitQueues
+            -- emits SimChunkLoaded only for the QUEUED remainder (below), so the
+            -- center — written straight to wsTilesRef, not queued — would otherwise
+            -- never reach the sim thread (after the SimDropWorld above cleared any
+            -- stale copy). Matches the per-chunk message the queue loader sends.
+            Q.writeQueue (simQueue env) $
+                SimChunkLoaded rid centerCoord
+                    (lcFluidMap centerChunk) (lcTerrainSurfaceMap centerChunk)
 
-        -- Stamp any placed location on the synchronously-regenerated centre
-        -- chunk (#89). Like Init's centre chunk it is written straight to
-        -- wsTilesRef and excluded from the init queue, so the chunk-loading
-        -- dispatch never sees it. A location saved un-stamped on the camera
-        -- chunk thus still materializes on load.
-        dispatchLocationStamps env params rid [centerChunk]
+            -- Stamp any placed location on the synchronously-regenerated centre
+            -- chunk (#89). Like Init's centre chunk it is written straight to
+            -- wsTilesRef and excluded from the init queue, so the chunk-loading
+            -- dispatch never sees it. A location saved un-stamped on the camera
+            -- chunk thus still materializes on load.
+            dispatchLocationStamps env params rid [centerChunk]
 
-        -- 1d. Queue the remaining initial chunks for progressive loading.
-        when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
-        let remainingCoords =
-                [ ChunkCoord cx cy
-                | cx ← [camCX - chunkLoadRadius .. camCX + chunkLoadRadius]
-                , cy ← [camCY - chunkLoadRadius .. camCY + chunkLoadRadius]
-                , not (cx ≡ camCX ∧ cy ≡ camCY)
-                ]
-            totalInitialChunks =
-                (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)
-        writeIORef (wsInitQueueRef worldState) remainingCoords
-        writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+            -- 1d. Queue the remaining initial chunks for progressive loading.
+            when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
+            let remainingCoords =
+                    [ ChunkCoord cx cy
+                    | cx ← [camCX - chunkLoadRadius .. camCX + chunkLoadRadius]
+                    , cy ← [camCY - chunkLoadRadius .. camCY + chunkLoadRadius]
+                    , not (cx ≡ camCX ∧ cy ≡ camCY)
+                    ]
+                totalInitialChunks =
+                    (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)
+            writeIORef (wsInitQueueRef worldState) remainingCoords
+            writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
 
-        -- 1e. Active page only: set the global camera (position/zoom/facing)
-        --     and its z-slice. elevationAtGlobal takes grid coords (gx, gy),
-        --     not world coords — go through worldToGrid (Render.hs:136 etc.).
-        when isActive $ do
-            let (camGX, camGY) = worldToGrid (wpsCameraFacing wps)
-                                             (wpsCameraX wps)
-                                             (wpsCameraY wps)
-                (surfaceElev, _mat) =
-                    elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
-                startZSlice = surfaceElev + surfaceHeadroom
-            -- Record-construction (not update) so every Camera2D field is set
-            -- explicitly: an update would preserve the prior camera's
-            -- transient state (pan/zoom velocity, mid-drag flag), and the
-            -- compiler now forces a decision if Camera2D gains a field.
-            atomicModifyIORef' (cameraRef env) $ \_ →
-                (Camera2D
-                    { camPosition     = (wpsCameraX wps, wpsCameraY wps)
-                    , camVelocity     = (0, 0)
-                    , camZoom         = wpsCameraZoom wps
-                    , camZoomVelocity = 0
-                    , camRotation     = 0
-                    , camFacing       = wpsCameraFacing wps
-                    , camDragging     = False
-                    , camDragOrigin   = (0, 0)
-                    , camZSlice       = startZSlice
-                    , camZTracking    = True
-                    }, ())
-            sendGenLog env $ "Save loaded: "
-                <> T.pack (show totalInitialChunks) <> " chunks queued"
-            logInfo logger CatWorld $ "Save loaded: "
-                <> T.pack (show totalInitialChunks) <> " chunks, "
-                <> "surface at z=" <> T.pack (show surfaceElev)
-                <> ": " <> unWorldPageId rid
+            -- 1e. Active page only: set the global camera (position/zoom/facing)
+            --     and its z-slice. elevationAtGlobal takes grid coords (gx, gy),
+            --     not world coords — go through worldToGrid (Render.hs:136 etc.).
+            when isActive $ do
+                let (camGX, camGY) = worldToGrid (wpsCameraFacing wps)
+                                                 (wpsCameraX wps)
+                                                 (wpsCameraY wps)
+                    (surfaceElev, _mat) =
+                        elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
+                    startZSlice = surfaceElev + surfaceHeadroom
+                -- Record-construction (not update) so every Camera2D field is set
+                -- explicitly: an update would preserve the prior camera's
+                -- transient state (pan/zoom velocity, mid-drag flag), and the
+                -- compiler now forces a decision if Camera2D gains a field.
+                atomicModifyIORef' (cameraRef env) $ \_ →
+                    (Camera2D
+                        { camPosition     = (wpsCameraX wps, wpsCameraY wps)
+                        , camVelocity     = (0, 0)
+                        , camZoom         = wpsCameraZoom wps
+                        , camZoomVelocity = 0
+                        , camRotation     = 0
+                        , camFacing       = wpsCameraFacing wps
+                        , camDragging     = False
+                        , camDragOrigin   = (0, 0)
+                        , camZSlice       = startZSlice
+                        , camZTracking    = True
+                        }, ())
+                sendGenLog env $ "Save loaded: "
+                    <> T.pack (show totalInitialChunks) <> " chunks queued"
+                logInfo logger CatWorld $ "Save loaded: "
+                    <> T.pack (show totalInitialChunks) <> " chunks, "
+                    <> "surface at z=" <> T.pack (show surfaceElev)
+                    <> ": " <> unWorldPageId rid
 
         -- 1f. Resolve this page's building/unit slices, stamped with its
         --     restore id, for the manager merge below. Buildings/units carry
