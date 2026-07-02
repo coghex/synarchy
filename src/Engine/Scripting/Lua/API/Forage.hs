@@ -193,6 +193,7 @@ spawnYields env ws gx gy yields = do
                             , iiSharpness   = 100.0
                             , iiContents    = []
                             , iiInstanceId  = iid
+                            , iiTemp        = Nothing
                             }
                     gid ← atomicModifyIORef' (wsGroundItemsRef ws) $
                         spawnGroundItem inst

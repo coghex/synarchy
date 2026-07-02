@@ -161,6 +161,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Injury
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.Stats
+                   Test.Headless.Item.Temperature
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.SelectTileZ
@@ -453,6 +454,7 @@ library
                      Engine.Scripting.Lua.API.Combat
                      Item.Types
                      Item.Roll
+                     Item.Temperature
                      Engine.Asset.YamlItems
                      Engine.Scripting.Lua.API.Items
                      Equipment.Types
@@ -494,6 +496,7 @@ library
                      World.Thread.Helpers
                      World.Thread.Cursor
                      World.Thread.Time
+                     World.Thread.ItemTemp
                      World.Thread.ChunkLoading
                      World.Thread.Command
                      World.Thread.Command.Basic
