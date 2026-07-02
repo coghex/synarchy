@@ -318,15 +318,20 @@ the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
 
 ### Testing crafting recipes headless
 
-Turnkey harness: **`python3 tools/craft_probe.py`** — the #325 gate.
+Turnkey harness: **`python3 tools/craft_probe.py`** — the #325/#343 gate.
 Boots headless on a flat arena and asserts the `craft.*` Lua API
 end-to-end: catalogue queries (`craft.get` / `craft.getNames`), the
-knowledge gate, all-or-nothing input+fuel consumption, and factory-new
-outputs (condition/sharpness 100). Recipes live in `data/recipes/*.yaml`
-(station tag, `inputs`, optional `fuel`/`knowledge`, `work`, `outputs`;
-loaded via `engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs
-one craft against a unit's inventory. No stations or AI yet — station
-defs are #326, the craft AI/bill layer is #329.
+knowledge gate, all-or-nothing input+fuel consumption, factory-new
+outputs (condition/sharpness 100), and crafter-derived quality. Recipes
+live in `data/recipes/*.yaml` (station tag, `inputs`, optional
+`fuel`/`knowledge`/`skill`, `work`, `outputs`; loaded via
+`engine.loadRecipeYaml`); `craft.execute(uid, recipeId)` runs one craft
+against a unit's inventory. A `skill`-tagged recipe sets output
+`iiQuality` deterministically from the crafter (#343): the skill level,
+blended 70/30 with the knowledge level when the recipe is
+knowledge-gated (`Craft.Execute.craftQuality`); untagged recipes keep
+the item-def quality roll. No stations or AI yet — station defs are
+#326, the craft AI/bill layer is #329.
 
 ### Flora growth runtime (#332)
 

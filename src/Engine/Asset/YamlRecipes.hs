@@ -38,6 +38,7 @@ data RecipeYamlDef = RecipeYamlDef
     , ryWork      ∷ !Float
     , ryOutputs   ∷ ![RecipeYamlIngredient]
     , ryKnowledge ∷ !(Maybe Text)
+    , rySkill     ∷ !(Maybe Text)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON RecipeYamlDef where
@@ -51,6 +52,7 @@ instance FromJSON RecipeYamlDef where
             ⊛ v .:? "work" .!= 0
             ⊛ v .:  "outputs"
             ⊛ v .:? "knowledge"
+            ⊛ v .:? "skill"
 
 newtype RecipeYamlFile = RecipeYamlFile
     { ryfRecipes ∷ [RecipeYamlDef]

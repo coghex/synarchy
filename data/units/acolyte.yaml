@@ -55,6 +55,10 @@ units:
       # via diminishing-returns curve. Affects slip chance and climb
       # speed. Acolytes are not professional climbers — start low.
       climbing: { base: 10.0, range: 10.0 }
+      # Smithing: sets crafted-output quality for skill-tagged recipes
+      # (craft.execute, #343). Acolytes arrive as novice smiths — the
+      # portal kit is manufactured, not hand-forged.
+      smithing: { base: 20.0, range: 15.0 }
       # Mining: scales dig speed (with strength) in the dig AI's
       # world.digTile amount — factor = strength · (0.5 + mining/100),
       # so level 50 ≈ baseline, level 0 digs at half rate. Gains XP

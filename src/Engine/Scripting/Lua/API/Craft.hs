@@ -24,7 +24,7 @@ import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
 import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Asset.YamlRecipes
 import Craft.Types
-import Craft.Execute (consumeIngredients)
+import Craft.Execute (consumeIngredients, craftQuality)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
                    lookupItemDef)
@@ -52,6 +52,7 @@ loadRecipeYamlFn env = do
                             , rdWork      = ryWork d
                             , rdOutputs   = map ingr (ryOutputs d)
                             , rdKnowledge = ryKnowledge d
+                            , rdSkill     = rySkill d
                             }
                     atomicModifyIORef' (recipeManagerRef env) $ \m →
                         (RecipeManager
@@ -78,8 +79,9 @@ pushIngredient i = do
     Lua.setfield (-2) "count"
 
 -- | craft.get(id) → table | nil. Read-only access to one recipe:
---   { id, name, station, work, knowledge?, inputs = [{item,count}…],
---     fuel = {item,count}?, outputs = [{item,count}…] }.
+--   { id, name, station, work, knowledge?, skill?,
+--     inputs = [{item,count}…], fuel = {item,count}?,
+--     outputs = [{item,count}…] }.
 craftGetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftGetFn env = do
     idArg ← Lua.tostring 1
@@ -103,6 +105,7 @@ craftGetFn env = do
                     putS "station" (rdStation d)
                     putN "work"    (rdWork d)
                     forM_ (rdKnowledge d) $ putS "knowledge"
+                    forM_ (rdSkill d)     $ putS "skill"
                     Lua.newtable
                     forM_ (zip [1..] (rdInputs d)) $ \(i, ing) → do
                         pushIngredient ing
@@ -130,7 +133,8 @@ craftGetNamesFn env = do
 
 -- | craft.execute(uid, recipeId) → ok, err?. Runs one craft against the
 --   unit's TOP-LEVEL inventory: knowledge gate, then all-or-nothing
---   consumption of inputs + fuel, then the outputs are appended. On
+--   consumption of inputs + fuel, then the outputs are appended — at
+--   crafter-derived quality when the recipe is skill-tagged (#343). On
 --   failure returns false plus a reason and the inventory is untouched.
 craftExecuteFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftExecuteFn env = do
@@ -176,6 +180,10 @@ executeCraft env uid rid = do
 
 -- | Verify knowledge + inputs and swap the new inventory in — pure, so
 --   it can live inside one atomicModifyIORef' on the unit manager.
+--   Skill-tagged recipes (#343) overwrite the outputs' rolled quality
+--   with craftQuality from the crafter's skill (absent skill = 0) and
+--   the gated knowledge's level, read here inside the same atomic
+--   update, so quality can't race a concurrent skill change.
 applyCraft ∷ RecipeDef → [ItemInstance] → UnitId → UnitManager
            → (UnitManager, Either Text ())
 applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
@@ -186,16 +194,25 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
         _ → case consumeIngredients recipe (uiInventory u) of
             Left err   → (um, Left err)
             Right inv' →
-                let u' = u { uiInventory = inv' ⧺ outs }
+                let outs' = case rdSkill recipe of
+                        Nothing → outs
+                        Just s  →
+                            let q = craftQuality
+                                     (HM.lookupDefault 0 s (uiSkills u))
+                                     ((\k → HM.lookup k (uiKnowledge u))
+                                        =≪ rdKnowledge recipe)
+                            in map (\o → o { iiQuality = q }) outs
+                    u' = u { uiInventory = inv' ⧺ outs' }
                 in ( um { umInstances = HM.insert uid u' (umInstances um) }
                    , Right () )
 
 -- | Roll one output line into fresh instances. A crafted item is
 --   factory-new: condition and sharpness start at 100 (per #325; loot
---   spawns roll condition to simulate age, crafts don't). Quality still
---   rolls from the def's spec — tying it to the crafter's skill is the
---   quality issue (#343). Containers spawn at their default fill, same
---   as unit.addItem.
+--   spawns roll condition to simulate age, crafts don't). Quality rolls
+--   from the def's spec here as the fallback for skill-less recipes;
+--   skill-tagged recipes overwrite it in applyCraft with the crafter-
+--   derived craftQuality (#343). Containers spawn at their default
+--   fill, same as unit.addItem.
 rollOutputs ∷ EngineEnv → (RecipeIngredient, ItemDef) → IO [ItemInstance]
 rollOutputs env (ing, def) = replicateM (max 0 (riCount ing)) $ do
     qual ← rollItemSpec (idQualitySpec def) (statRNGRef env)
