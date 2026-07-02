@@ -30,6 +30,7 @@ import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Spoil.Types (SpoilPiles)
+import World.Flora.Harvest (FloraHarvests)
 import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -117,7 +118,10 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 65  -- v65: two-layer food model (#93) — the
+currentSaveVersion = 66  -- v66: WorldPageSave gains trailing
+                         --      'wpsFloraHarvests' (#94) — harvested
+                         --      flora tiles with live regrowth timers.
+                         -- v65: two-layer food model (#93) — the
                          --      persisted "hunger" uiStats entry is
                          --      redefined from energy store to STOMACH
                          --      meter (max_hunger halves to bm*10) and a
@@ -246,6 +250,12 @@ data WorldPageSave = WorldPageSave
         -- ^ Per-unit sim state (position, pose, activity, target, path,
         --   *Until timers) for this page's units. Restored into utsRef on
         --   EngineEnv.
+    , wpsFloraHarvests ∷ !FloraHarvests
+        -- ^ Harvested flora tiles (#94): tile → regrowth game-seconds
+        --   remaining. Like designations, restored straight into
+        --   wsFloraHarvestsRef — render and queries need no chunk
+        --   loading first. Appended for save v66 (positional Generic
+        --   Serialize — field order is load-bearing).
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

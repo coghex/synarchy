@@ -127,6 +127,17 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    # Foraging (#94): raspberries are the reference FRUIT forage.
+    # regrowth_time is GAME seconds — 86400 = one game-day (~24 real-
+    # minutes at timeScale 1) before the bush fruits again. While
+    # regrowing the bush draws the fruit-stripped senescing art.
+    harvestable:
+      tags: [fruit]
+      yield:
+        - id: wild_berries
+          count: [1, 3]
+      regrowth_time: 86400
+      harvested_texture: "matured_senescing.png"
     worldGen:
       category: bush
       minTemp: -15

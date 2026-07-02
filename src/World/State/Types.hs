@@ -29,6 +29,7 @@ import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
+import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import Item.Ground (GroundItems, emptyGroundItems)
 
 data WorldState = WorldState
@@ -105,6 +106,12 @@ data WorldState = WorldState
       --   (WorldDesignateConstruct / cancel / set-status commands), read
       --   by the render pass (blueprint ghost) and the build AI (#96).
       --   Persisted in saves (wpsConstructDesignations).
+    , wsFloraHarvestsRef ∷ IORef FloraHarvests
+      -- ^ Harvested flora tiles (#94): tile (gx, gy) → regrowth
+      --   game-seconds remaining. World-level (NOT in lcFlora) so chunk
+      --   eviction can't wipe it; written by world.harvestFlora + the
+      --   regrowth tick, read by the flora render pass and the foraging
+      --   AI's queries. Persisted in saves (wpsFloraHarvests, v66).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -137,6 +144,7 @@ emptyWorldState = do
     wsSpoilRef ← newIORef emptySpoilPiles
     wsStructureStageRef ← newIORef emptyChunkStructures
     wsConstructDesignationsRef ← newIORef HM.empty
+    wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -146,7 +154,7 @@ emptyWorldState = do
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
-                        wsConstructDesignationsRef
+                        wsConstructDesignationsRef wsFloraHarvestsRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

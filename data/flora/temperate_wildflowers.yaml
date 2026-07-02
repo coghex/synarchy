@@ -103,6 +103,17 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    # Foraging (#94): clover is the reference LEAVES forage — thin
+    # pickings, but it grows everywhere and comes back in half a
+    # game-day (43200 game-seconds). Shows the wilted senescing art
+    # while regrowing.
+    harvestable:
+      tags: [leaves]
+      yield:
+        - id: wild_greens
+          count: [1, 2]
+      regrowth_time: 43200
+      harvested_texture: "senescing.png"
     worldGen:
       category: wildflower
       minTemp: 5

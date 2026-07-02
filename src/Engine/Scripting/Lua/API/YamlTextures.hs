@@ -262,6 +262,27 @@ registerFloraSpecies env backendState lteq catRef def = do
             _ → return ovMap
         ) HM.empty (fydCycleOverrides def)
 
+    -- Build the harvestable block (#94), loading the depleted texture
+    -- when the YAML names one (a berry bush with the fruit stripped).
+    harvest ← case fydHarvest def of
+        Nothing → return Nothing
+        Just yh → do
+            depletedH ← case fyhHarvestedTexture yh of
+                Nothing → return (TextureHandle 0)
+                Just tex → do
+                    let path = texDir <> "/" <> T.unpack tex
+                    h ← loadAndRegister env backendState lteq
+                            ("flora_harvested_" <> name) path
+                    atomicModifyIORef' texCount (\n → (n + 1, ()))
+                    return h
+            return $ Just FloraHarvest
+                { fhTags             = fyhTags yh
+                , fhYield            = [ (fyyId y, fyyMin y, fyyMax y)
+                                       | y ← fyhYield yh ]
+                , fhRegrowth         = fyhRegrowthTime yh
+                , fhHarvestedTexture = depletedH
+                }
+
     -- Assemble the FloraSpecies
     let species = FloraSpecies
             { fsName           = name
@@ -270,6 +291,7 @@ registerFloraSpecies env backendState lteq catRef def = do
             , fsPhases         = phases
             , fsAnnualCycle    = cycleStages
             , fsCycleOverrides = overrides
+            , fsHarvest        = harvest
             }
 
     -- Insert species into catalog

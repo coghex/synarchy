@@ -105,6 +105,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     floraCat ← readIORef (floraCatalogRef env)
     worldDate ← readIORef (wsDateRef worldState)
     texSizes ← readIORef (textureSizeRef env)
+    harvests ← readIORef (wsFloraHarvestsRef worldState)
 
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
@@ -280,7 +281,20 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           actualZ = findTopSolid col
                           inst' = inst { fiZ = actualZ }
                           (gx, gy) = chunkToGlobal coord tileX tileY
-                          texHandle = resolveFloraTexture floraCat dayOfYear inst'
+                          -- Harvested tile (#94): a HARVESTABLE species on
+                          -- a tile with a live regrowth timer draws its
+                          -- depleted texture (fruit stripped) — or nothing
+                          -- at all when the species has no depleted art
+                          -- (handle 0 falls out through the existing
+                          -- filter below). Decorative co-tenants on the
+                          -- same tile are unaffected.
+                          mHarvest = lookupSpecies (fiSpecies inst) floraCat
+                                       >>= fsHarvest
+                          harvested = isJust mHarvest
+                                    ∧ HM.member (gx, gy) harvests
+                          texHandle = case (harvested, mHarvest) of
+                              (True, Just fh) → fhHarvestedTexture fh
+                              _ → resolveFloraTexture floraCat dayOfYear inst'
                     , actualZ > minBound  -- skip empty columns
                     , texHandle /= TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
