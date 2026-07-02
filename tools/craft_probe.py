@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Crafting recipe probe (#325) — the recipe-catalogue + craft.execute gate.
+"""Crafting probe (#325 + #326) — recipe catalogue, craft.execute, stations.
 
-Boots a headless engine on a flat arena, loads defs + data/recipes, spawns
-an acolyte, then checks the craft.* Lua API end-to-end:
+Boots a headless engine on a flat arena, loads defs + data/recipes +
+data/buildings, spawns an acolyte, then checks the craft.* Lua API
+end-to-end:
 
   1. Catalogue: craft.getNames lists the shipped recipe; craft.get returns
      the full shape (station / work / inputs / outputs).
@@ -13,6 +14,13 @@ an acolyte, then checks the craft.* Lua API end-to-end:
      is refused without the knowledge, refused short of fuel (nothing
      consumed), and succeeds once knowledge + inputs + fuel are all
      present — consuming inputs AND fuel, producing a count>1 output.
+  5. Work stations (#326): furnace + workbench are built through the real
+     material-delivery + build-progress machinery; each advertises its
+     operations (building.getOperations); building.findStation routes by
+     operation and only matches BUILT stations; craft.executeAt is
+     refused at an unbuilt station, at the wrong station, from a
+     non-adjacent unit and for an unknown building — and succeeds at the
+     right built station with the unit adjacent, consuming like execute.
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
@@ -21,10 +29,13 @@ import argparse, glob, json, socket, subprocess, sys, time
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/craft_probe_recipes.yaml"
 
+# Station kind "smelt" = the furnace's operation (#326). Before stations
+# landed this said "furnace"; the recipe station vocabulary is the
+# operation names (smelt / forge / assemble).
 FUELLED_RECIPE = """\
 recipes:
   - id: craft_test_fuelled
-    station: furnace
+    station: smelt
     inputs:
       - item: steel_bar
     fuel:
@@ -84,6 +95,7 @@ def bootstrap(port):
         ("data/vegetation/*.yaml", "engine.loadVegetationYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
+        ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
     ]:
         for path in sorted(glob.glob(pattern)):
             send(port, f"{fn}('{path}'); return 'ok'")
@@ -120,6 +132,43 @@ def execute(port, uid, recipe_id):
         f"local ok,err = craft.execute({uid}, '{recipe_id}'); "
         f"return (ok and 'OK') or ('ERR:'..tostring(err))").strip('"')
     return raw == "OK", raw
+
+
+def execute_at(port, uid, recipe_id, bid):
+    """→ (ok: bool, err: str)."""
+    raw = send(port,
+        f"local ok,err = craft.executeAt({uid}, '{recipe_id}', {bid}); "
+        f"return (ok and 'OK') or ('ERR:'..tostring(err))").strip('"')
+    return raw == "OK", raw
+
+
+def spawn_station(port, uid, def_name, gx, gy, materials):
+    """Spawn def_name at (gx, gy) and deliver its build materials from
+    the unit through the real machinery (unit.addItem →
+    unit.transferItemToBuilding). Returns the building id, still
+    UNBUILT (no build progress accrued yet)."""
+    raw = send(port, f"return building.spawn('{def_name}', {gx}, {gy})")
+    try:
+        bid = int(float(raw))
+    except ValueError:
+        sys.exit(f"building.spawn('{def_name}') failed: {raw}")
+    for _ in range(50):        # spawn is queued to the building thread
+        if send(port, f"return building.getInfo({bid}) and 'yes' or 'no'"
+                ).strip('"') == "yes":
+            break
+        time.sleep(0.1)
+    else:
+        sys.exit(f"{def_name} instance never appeared")
+    for item, count in materials.items():
+        send(port,
+             f"for i=1,{count} do unit.addItem({uid},'{item}'); "
+             f"unit.transferItemToBuilding({uid},{bid},'{item}') end; "
+             f"return 'ok'")
+    sat = send(port, f"return building.areMaterialsSatisfied({bid}) "
+                     f"and 'yes' or 'no'").strip('"')
+    if sat != "yes":
+        sys.exit(f"{def_name} materials not satisfied after delivery")
+    return bid
 
 
 def check(passed, ok, label, detail=""):
@@ -211,6 +260,85 @@ def main():
         passed = check(passed, ok,
                        "fuelled craft consumes inputs+fuel, outputs count 3",
                        f"ok={ok_e} {msg}")
+
+        # --- 5. Work stations (#326) ---
+        defs = jget(port, "return building.listDefs()")
+        names5 = {d["name"] for d in defs} if isinstance(defs, list) else set()
+        passed = check(passed, {"furnace", "workbench"} <= names5,
+                       "station defs loaded", sorted(names5))
+        ok = send(port, "return building.findStation('smelt') and 'hit' or 'nil'"
+                  ).strip('"') == "nil"
+        passed = check(passed, ok, "findStation with nothing built → nil")
+
+        # Furnace one tile east of the unit at (2,2), materials through
+        # the real delivery machinery — but no build progress yet.
+        bid_f = spawn_station(port, uid, "furnace", 3, 2,
+                              {"granite_chunk": 6, "steel_bar": 2})
+        ok_e, msg = execute_at(port, uid, "craft_test_fuelled", bid_f)
+        passed = check(passed, not ok_e and "not built" in msg,
+                       "executeAt refused at unbuilt station", msg)
+        ops = jget(port, f"return building.getOperations({bid_f})")
+        ok = isinstance(ops, list) and sorted(ops) == ["repair", "smelt"]
+        passed = check(passed, ok, "furnace advertises smelt+repair", ops)
+        send(port, f"building.addBuildProgress({bid_f}, 200); return 'ok'")
+        act = send(port, f"return building.getActivity({bid_f})").strip('"')
+        passed = check(passed, act == "built", "furnace reaches built", act)
+        hit = send(port, f"local b=building.findStation('smelt'); return b or -1")
+        passed = check(passed, int(float(hit)) == bid_f,
+                       "findStation('smelt') → furnace", hit)
+        ok = send(port, "return building.findStation('no_such_op') and 'hit' or 'nil'"
+                  ).strip('"') == "nil"
+        passed = check(passed, ok, "findStation(unknown op) → nil")
+        ok_e, msg = execute_at(port, uid, "forge_steel_dagger", bid_f)
+        passed = check(passed, not ok_e and "does not offer" in msg,
+                       "wrong station refused (forge recipe at furnace)", msg)
+
+        # Workbench on the unit's other side.
+        bid_w = spawn_station(port, uid, "workbench", 1, 2,
+                              {"wood_log": 4, "steel_hardware": 4,
+                               "steel_bar": 2})
+        send(port, f"building.addBuildProgress({bid_w}, 150); return 'ok'")
+        hit = send(port, f"local b=building.findStation('forge'); return b or -1")
+        passed = check(passed, int(float(hit)) == bid_w,
+                       "findStation('forge') → workbench", hit)
+        # Both stations advertise "repair" — the routing hook the repair
+        # flows (#301/#302) plug into.
+        hit = send(port,
+                   f"local b=building.findStation('repair', 2, 2); return b or -1")
+        passed = check(passed, int(float(hit)) in (bid_f, bid_w),
+                       "findStation('repair') finds a station", hit)
+
+        # Success at the right station: same consumption as craft.execute.
+        send(port, f"unit.addItem({uid},'steel_bar'); "
+                   f"unit.addItem({uid},'steel_bar'); return 'ok'")
+        bars5 = count_item(port, uid, "steel_bar")
+        before_ids = {d["id"] for d in instances_of(port, uid, "steel_dagger")}
+        ok_e, msg = execute_at(port, uid, "forge_steel_dagger", bid_w)
+        new = [d for d in instances_of(port, uid, "steel_dagger")
+               if d["id"] not in before_ids]
+        ok = (ok_e and count_item(port, uid, "steel_bar") == bars5 - 2
+              and len(new) == 1 and new[0]["cond"] == 100)
+        passed = check(passed, ok, "executeAt at workbench crafts the dagger",
+                       f"{msg} new={new}")
+
+        # Smelt at the furnace (fuel + knowledge recipe from phase 4).
+        send(port, f"unit.addItem({uid},'steel_bar'); "
+                   f"unit.addItem({uid},'rations'); "
+                   f"unit.addItem({uid},'rations'); return 'ok'")
+        chunks5 = count_item(port, uid, "granite_chunk")
+        ok_e, msg = execute_at(port, uid, "craft_test_fuelled", bid_f)
+        ok = ok_e and count_item(port, uid, "granite_chunk") == chunks5 + 3
+        passed = check(passed, ok, "executeAt at furnace runs the smelt", msg)
+
+        # Adjacency: a far unit is refused before any consumption.
+        uid2 = int(float(send(port, "return unit.spawn('acolyte', 12, 12)")))
+        time.sleep(0.5)
+        ok_e, msg = execute_at(port, uid2, "forge_steel_dagger", bid_w)
+        passed = check(passed, not ok_e and "not adjacent" in msg,
+                       "far unit refused (not adjacent)", msg)
+        ok_e, msg = execute_at(port, uid, "forge_steel_dagger", 99999)
+        passed = check(passed, not ok_e and "no such building" in msg,
+                       "unknown building refused", msg)
 
         print("\n" + ("ALL CRAFT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1

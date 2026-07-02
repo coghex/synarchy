@@ -422,6 +422,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getStorage"          (buildingGetStorageFn env)
   registerLuaFunction "getStorageCapacity"  (buildingGetStorageCapacityFn env)
   registerLuaFunction "getStorageWeight"    (buildingGetStorageWeightFn env)
+  registerLuaFunction "getOperations"       (buildingGetOperationsFn env)
+  registerLuaFunction "findStation"         (buildingFindStationFn env)
   Lua.setglobal (Lua.Name "building")
 
   -- Structure global — debug builder for walls / floors / ceilings.
@@ -505,11 +507,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- Craft global — the crafting recipe catalogue (#325), loaded from
   -- data/recipes/*.yaml via engine.loadRecipeYaml. get/getNames are
   -- read-only queries; execute runs one craft against a unit's
-  -- inventory (verify + consume inputs/fuel, produce outputs).
+  -- inventory (verify + consume inputs/fuel, produce outputs);
+  -- executeAt (#326) additionally requires a Built work station
+  -- offering the recipe's station kind with the unit adjacent.
   Lua.newtable
   registerLuaFunction "get"      (craftGetFn env)
   registerLuaFunction "getNames" (craftGetNamesFn env)
   registerLuaFunction "execute"  (craftExecuteFn env)
+  registerLuaFunction "executeAt" (craftExecuteAtFn env)
   Lua.setglobal (Lua.Name "craft")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml
