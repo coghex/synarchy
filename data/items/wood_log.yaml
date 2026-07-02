@@ -1,0 +1,16 @@
+items:
+  - name: "wood_log"
+    display_name: "Wood Log"
+    sprite: "assets/textures/items/material/wood_log.png"
+    # A split trunk section an acolyte can shoulder — the heaviest
+    # common build material, so hauling a felled tree home takes trips
+    # (carry capacity is weight-gated: worn kit ~8 kg + one log ~16 kg
+    # brushes a weak acolyte's ~18 kg capacity roll; 12 kg made a log
+    # flatly uncarriable for such units). The organic construction
+    # material (#97): chop designations fell trees (data/flora
+    # harvestable wood yields), and build-job material sourcing (#96)
+    # consumes these — dungeon_1 posts cost one.
+    weight: 8.0
+    category: Materials
+    make: world
+    material: wood

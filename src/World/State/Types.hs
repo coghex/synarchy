@@ -28,6 +28,7 @@ import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
+import World.Chop.Types (ChopDesignations)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import Item.Ground (GroundItems, emptyGroundItems)
@@ -112,6 +113,12 @@ data WorldState = WorldState
       --   eviction can't wipe it; written by world.harvestFlora + the
       --   regrowth tick, read by the flora render pass and the foraging
       --   AI's queries. Persisted in saves (wpsFloraHarvests, v66).
+    , wsChopDesignationsRef ∷ IORef ChopDesignations
+      -- ^ Chop-designation set (#97): tile (gx, gy) → designation
+      --   (surface z; see World.Chop.Types). Written by the world
+      --   thread (WorldDesignateChop / cancel commands), read by the
+      --   render pass (marker) and the chop AI. Persisted in saves
+      --   (wpsChopDesignations, v67).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -145,6 +152,7 @@ emptyWorldState = do
     wsStructureStageRef ← newIORef emptyChunkStructures
     wsConstructDesignationsRef ← newIORef HM.empty
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
+    wsChopDesignationsRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -155,6 +163,7 @@ emptyWorldState = do
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
+                        wsChopDesignationsRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

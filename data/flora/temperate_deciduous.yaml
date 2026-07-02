@@ -51,6 +51,19 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    # Tree felling (#97): the white oak is the reference WOOD harvest.
+    # Unlike the fruit/greens forage tags (#94) the wood tag is never
+    # eaten — chop designations (chop.* / scripts/chop_tool.lua) target
+    # it and the yield is a construction material. regrowth_time is
+    # GAME seconds — four game-days before the stump regrows; while
+    # regrowing the tile draws the bare dead-tree art.
+    harvestable:
+      tags: [wood]
+      yield:
+        - id: wood_log
+          count: [3, 6]
+      regrowth_time: 345600
+      harvested_texture: "dead.png"
     worldGen:
       category: tree
       minTemp: 0
@@ -121,6 +134,14 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    # Choppable (#97) — slender trunks, fewer logs than the oak.
+    harvestable:
+      tags: [wood]
+      yield:
+        - id: wood_log
+          count: [2, 4]
+      regrowth_time: 259200
+      harvested_texture: "dead.png"
     worldGen:
       category: tree
       minTemp: -5
@@ -261,6 +282,14 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    # Choppable (#97) — dense hardwood, a solid yield.
+    harvestable:
+      tags: [wood]
+      yield:
+        - id: wood_log
+          count: [3, 5]
+      regrowth_time: 345600
+      harvested_texture: "dead.png"
     worldGen:
       category: tree
       minTemp: -2

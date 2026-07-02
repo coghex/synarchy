@@ -29,6 +29,7 @@ import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
+import World.Chop.Types (ChopDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
 import Item.Ground (GroundItems)
@@ -118,7 +119,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 66  -- v66: WorldPageSave gains trailing
+currentSaveVersion = 67  -- v67: WorldPageSave gains trailing
+                         --      'wpsChopDesignations' (#97) — chop
+                         --      designations (tile → surface z). ToolMode
+                         --      also gains ChopTool (appended, tag 5).
+                         -- v66: WorldPageSave gains trailing
                          --      'wpsFloraHarvests' (#94) — harvested
                          --      flora tiles with live regrowth timers.
                          -- v65: two-layer food model (#93) — the
@@ -256,6 +261,11 @@ data WorldPageSave = WorldPageSave
         --   wsFloraHarvestsRef — render and queries need no chunk
         --   loading first. Appended for save v66 (positional Generic
         --   Serialize — field order is load-bearing).
+    , wpsChopDesignations ∷ !ChopDesignations
+        -- ^ Chop designations (#97): tile → surface z. Like the other
+        --   designation layers, restored straight into
+        --   wsChopDesignationsRef; markers re-render from the stored z.
+        --   Appended for save v67.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

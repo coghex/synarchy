@@ -234,6 +234,14 @@ function game.onMouseDown(button, x, y)
         if constructTool.handleMouseDown(button, x, y) then
             return
         end
+
+        -- Chop designation tool claims clicks while active (anchor /
+        -- commit / cancel), same left=designate / right=cancel split
+        -- and #154 gate.
+        local chopTool = require("scripts.chop_tool")
+        if chopTool.handleMouseDown(button, x, y) then
+            return
+        end
     end
 
     if button == MOUSE_LEFT then
@@ -988,6 +996,11 @@ function game.onKeyDown(key)
     -- Construction tool's Esc cancels a pending designation anchor.
     local constructTool = require("scripts.construct_tool")
     if constructTool.handleKeyDown(key) then
+        return
+    end
+    -- Chop tool's Esc cancels a pending designation anchor.
+    local chopTool = require("scripts.chop_tool")
+    if chopTool.handleKeyDown(key) then
         return
     end
     -- ESC clears any active gameplay selection / cursor.

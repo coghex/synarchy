@@ -22,6 +22,7 @@ import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), spdGridZ)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
+import World.Chop.Types (ChopDesignation(..))
 import World.Render.ViewBounds (computeViewBounds, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
@@ -538,6 +539,24 @@ renderWorldCursorQuads env worldState tileAlpha = do
                                        vb camX chunkCoord]
                     ]
 
+    -- Chop-designation markers (#97): world annotations like the mine
+    -- markers, visible in every tool mode. Rendered from the surface z
+    -- stored at designation time.
+    chopDesigns ← readIORef (wsChopDesignationsRef worldState)
+    let chopDesignQuads = case chopDesignTexture cs' of
+            Nothing → V.empty
+            Just tex
+                | HM.null chopDesigns → V.empty
+                | otherwise → V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing dgx dgy (chZ cd) zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | ((dgx, dgy), cd) ← HM.toList chopDesigns
+                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+
     -- Construction-designation ghosts (#95): world annotations like the
     -- mine markers, visible in every tool mode. Each renders with the
     -- ghost texture for its target category (structure vs building).
@@ -668,13 +687,39 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     ]
             _ → V.empty
 
-    -- Mine + construction markers are world annotations: shown in every
-    -- tool mode. The mode only adds its own hover/preview on top.
-    let markerQuads = designQuads <> constructDesignQuads
+    -- Chop tool: anchor→hover rectangle preview. Unlike the mine /
+    -- construct previews there is NO per-z-level filter — the commit
+    -- takes wood-tagged flora at any surface z (forests span slopes) —
+    -- so every loaded tile in the rectangle previews at its own z.
+    let chopPreviewQuads = case (chopAnchor cs', hoverResult, worldCursorTexture cs') of
+            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex) →
+                let hx' = clampSide ax hx
+                    hy' = clampSide ay hy
+                    xLo = min ax hx'
+                    xHi = max ax hx'
+                    yLo = min ay hy'
+                    yHi = max ay hy'
+                in V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing gx gy z zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+            _ → V.empty
+
+    -- Mine + construction + chop markers are world annotations: shown in
+    -- every tool mode. The mode only adds its own hover/preview on top.
+    let markerQuads = designQuads <> constructDesignQuads <> chopDesignQuads
     return $ case toolMode of
         InfoTool      → markerQuads <> hoverQuads <> selectQuads
         MineTool      → markerQuads <> hoverQuads <> minePreviewQuads
         ConstructTool → markerQuads <> hoverQuads <> constructPreviewQuads
+        ChopTool      → markerQuads <> hoverQuads <> chopPreviewQuads
         _             → markerQuads
 
 -- | Find the topmost Z that has a non-zero material in a column.

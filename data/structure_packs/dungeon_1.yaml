@@ -20,7 +20,9 @@ name: dungeon_1
 build:
   floor:   { build_work: 3.0, materials: { steel_plate: 1 } }
   ceiling: { build_work: 3.0, materials: { steel_plate: 1 } }
-  post:    { build_work: 2.0, materials: { steel_bar: 1 } }
+  # Posts are timber (#97): the sink for chopped wood_log — tree
+  # felling feeds construction here (gate: tools/chop_probe.py).
+  post:    { build_work: 2.0, materials: { wood_log: 1 } }
   wall:    { build_work: 4.0, materials: { steel_bar: 2 } }
 
 pieces:

@@ -125,6 +125,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texToolBuildSelected   = engine.loadTexture("assets/textures/ui/hud/tool_build_selected.png")
     hud.texToolConstruct       = engine.loadTexture("assets/textures/ui/hud/tool_construct.png")
     hud.texToolConstructSelected = engine.loadTexture("assets/textures/ui/hud/tool_construct_selected.png")
+    hud.texToolChop            = engine.loadTexture("assets/textures/ui/hud/tool_chop.png")
+    hud.texToolChopSelected    = engine.loadTexture("assets/textures/ui/hud/tool_chop_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/ui/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/ui/hud/utility/zoom_hover.png")
     hud.texWorldSelect         = engine.loadTexture("assets/textures/ui/hud/utility/world_select.png")
@@ -138,6 +140,9 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- planned structure reads differently from a planned building.
     hud.texConstructStructure  = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_structure.png")
     hud.texConstructBuilding   = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_building.png")
+    -- Chop-designation marker (#97): green so a tree marked for felling
+    -- reads differently from a dig / build designation.
+    hud.texChopDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/chop_designate.png")
 
     -- Event-log toggle (top-left). Two states: default and selected
     -- (drawn while the event log panel is open). The combat-log
@@ -281,6 +286,9 @@ function hud.createUI()
         construction.setDesignateTexture(hud.worldId, "building",
             hud.texConstructBuilding)
     end
+    if hud.texChopDesignate then
+        chop.setDesignateTexture(hud.worldId, hud.texChopDesignate)
+    end
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -373,6 +381,12 @@ function hud.createUI()
                 tooltip     = "Construction designation tool",
             },
             {
+                name        = "tool_chop",
+                texDefault  = hud.texToolChop,
+                texSelected = hud.texToolChopSelected,
+                tooltip     = "Chop trees",
+            },
+            {
                 name        = "tool_default",
                 texDefault  = hud.texToolDefault,
                 texSelected = hud.texToolDefaultSelected,
@@ -385,7 +399,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 4,
+        selectedIndex = 5,   -- tool_default (the last item)
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -407,6 +421,9 @@ function hud.createUI()
             -- entry and cancels a pending anchor on exit.
             local constructTool = require("scripts.construct_tool")
             constructTool.onToolMode(itemName)
+            -- Route to the chop tool so a pending anchor cancels.
+            local chopTool = require("scripts.chop_tool")
+            chopTool.onToolMode(itemName)
             -- Route to the tile editor so its popup can hide on
             -- non-info tools.
             local tileEditor = require("scripts.tile_editor")
@@ -434,6 +451,10 @@ function hud.createUI()
     -- Construction designation tool (#95): same hud reference.
     local constructToolMod = require("scripts.construct_tool")
     constructToolMod.setup({ hud = hud })
+
+    -- Chop designation tool (#97): same hud reference.
+    local chopToolMod = require("scripts.chop_tool")
+    chopToolMod.setup({ hud = hud })
 
     -- Tile editor lives on the same world_page as the build tool.
     -- It uses the same box texture set + menu font; worldId is used
@@ -594,6 +615,9 @@ function hud.show()
     if hud.texConstructBuilding then
         construction.setDesignateTexture(hud.worldId, "building",
             hud.texConstructBuilding)
+    end
+    if hud.texChopDesignate then
+        chop.setDesignateTexture(hud.worldId, hud.texChopDesignate)
     end
 
     hud.visible = true
@@ -895,6 +919,8 @@ function hud.reconcileView()
     -- Construction designation anchor (#95): same idempotent teardown as
     -- the mine anchor above, so a pending rectangle can't survive off-view.
     require("scripts.construct_tool").cancel()
+    -- Chop designation anchor (#97): same idempotent teardown.
+    require("scripts.chop_tool").cancel()
     -- Build picker (#143): the picker panel lives on hud.world_page and
     -- its "picker" mode persists across band changes. The world/zoom page
     -- swap above only takes it off-view, so a picker opened in zoomed_in
