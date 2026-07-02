@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.API.Construct
     , constructGetDesignationCountFn
     , constructNearestDesignationFn
     , constructSetJobStatusFn
+    , constructAddJobProgressFn
     , constructSetDesignateTextureFn
     ) where
 
@@ -116,7 +117,11 @@ constructCancelDesignationFn env = do
 --     { x, y, z, category, status, progress,
 --       pack, kind, edge      -- structure targets
 --       building              -- building targets }
---   The build AI (#96) reads this to find work.
+--   The build AI (#96) reads this to find work. Jobs a worker has
+--   claimed ARE included, carrying status "claimed" — the AI filters on
+--   status when looking for fresh work (so a second worker still can't
+--   re-claim an owned tile) and uses the claimed entries to release
+--   stale claims (dead/vanished claimant) back to "pending" on timeout.
 constructGetPendingJobsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 constructGetPendingJobsFn env = do
     cx1Arg ← Lua.tonumber 1
@@ -131,13 +136,13 @@ constructGetPendingJobsFn env = do
                     let (ChunkCoord cx cy, _) = globalToChunk gx gy
                     in cx ≥ round cx1 ∧ cx ≤ round cx2
                      ∧ cy ≥ round cy1 ∧ cy ≤ round cy2
-                -- Only UNCLAIMED jobs: a job a worker has claimed
-                -- (setJobStatus "claimed") must drop out of the pending
-                -- list so a second worker scanning for work can't
-                -- re-claim the same tile. The owner re-finds its job by
-                -- tile via getDesignationAt.
-                jobs = [ kv | kv@(k, cd) ← HM.toList m
-                            , inRegion k, cdStatus cd == CsPending ]
+                -- Claimed jobs stay in the list WITH their status (#96):
+                -- consumers filter status == "pending" when scanning for
+                -- fresh work, and the AI's stale-claim sweep needs to see
+                -- claimed entries to release an expired/dead claimant's
+                -- job back to pending (acceptance: getPendingJobs shows
+                -- "claimed" while in progress, "pending" after release).
+                jobs = [ kv | kv@(k, _) ← HM.toList m, inRegion k ]
             Lua.newtable
             forM_ (zip [1 ∷ Int ..] jobs) $ \(i, ((gx, gy), cd)) → do
                 pushJobTable gx gy cd
@@ -235,6 +240,26 @@ constructSetJobStatusFn env = do
                     Q.writeQueue (worldQueue env) $
                         WorldSetConstructStatus pageId (round gx) (round gy) st
                 Nothing → pure ()
+        _ → pure ()
+    return 0
+
+-- | construction.addJobProgress(pageId, gx, gy, delta) — build AI (#96)
+--   pours work into a designation. delta is normalised to the job's
+--   total (1.0 = done); the engine clamps the sum to [0, 1]. The AI
+--   watches getDesignationAt().progress and finishes the job itself
+--   (place piece, then setJobStatus "complete").
+constructAddJobProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructAddJobProgressFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    deltaArg ← Lua.tonumber 4
+    case (pageIdArg, gxArg, gyArg, deltaArg) of
+        (Just pageIdBS, Just gx, Just gy, Just delta) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldAddConstructProgress pageId (round gx) (round gy)
+                    (realToFrac delta)
         _ → pure ()
     return 0
 

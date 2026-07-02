@@ -11,6 +11,18 @@
 
 name: dungeon_1
 
+# Build-job costs (#96), keyed by piece KIND — the four wall edges share
+# one entry. Read by the build AI (scripts/unit_ai.lua construct_job):
+#   materials  = item defs consumed when construction starts
+#   build_work = worker-seconds of effort at build rate 1.0
+# A pack without a build: block is debug/stamp-only — the AI skips its
+# designations (nothing to cost the job with).
+build:
+  floor:   { build_work: 3.0, materials: { steel_plate: 1 } }
+  ceiling: { build_work: 3.0, materials: { steel_plate: 1 } }
+  post:    { build_work: 2.0, materials: { steel_bar: 1 } }
+  wall:    { build_work: 4.0, materials: { steel_bar: 2 } }
+
 pieces:
   floor:
     texture: assets/textures/buildings/dungeon_1/floor.png

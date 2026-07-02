@@ -33,6 +33,7 @@ import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
+import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.River.Graph as RiverGraph
@@ -81,6 +82,7 @@ main = hspec $ do
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
+    describe "Construct.Corners" ConstructCorners.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "World.Calendar" Calendar.spec
     describe "River.Graph" RiverGraph.spec

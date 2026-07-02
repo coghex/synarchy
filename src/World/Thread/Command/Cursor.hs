@@ -21,6 +21,7 @@ module World.Thread.Command.Cursor
     , handleWorldDesignateConstructCommand
     , handleWorldCancelConstructCommand
     , handleWorldSetConstructStatusCommand
+    , handleWorldAddConstructProgressCommand
     , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetChopAnchorCommand
     , handleWorldClearChopAnchorCommand
@@ -33,7 +34,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Text as T
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
@@ -45,6 +46,8 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , ConstructDesignation(..)
                              , newConstructDesignation
                              , constructTargetCategory )
+import World.Construct.Apply ( applyConstructSlopeToChunk
+                             , clearConstructSlope )
 import World.Chop.Types (newChopDesignation)
 import World.Thread.Helpers (unWorldPageId)
 
@@ -353,24 +356,80 @@ handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldCancelConstructCommand env _logger pageId gx gy = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
-            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
-                (HM.delete (gx, gy) m, ())
+        Just worldState → do
+            mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
+                \m → (HM.delete (gx, gy) m, HM.lookup (gx, gy) m)
+            forM_ mCd $ resetConstructSlope worldState (gx, gy)
         Nothing → pure ()
 
--- | Build AI hook (#96): set a designation's status. Complete removes it.
+-- | Build AI hook (#96): set a designation's status. Complete removes it
+--   (and resets the corner-progress display back to flat ground — the
+--   placed piece takes over from there).
 handleWorldSetConstructStatusCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → ConstructStatus → IO ()
 handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
-            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
-                case st of
-                    CsComplete → (HM.delete (gx, gy) m, ())
+        Just worldState → do
+            mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
+                \m → case st of
+                    CsComplete → (HM.delete (gx, gy) m, HM.lookup (gx, gy) m)
                     _          → (HM.adjust (\cd → cd { cdStatus = st })
-                                           (gx, gy) m, ())
+                                           (gx, gy) m, Nothing)
+            forM_ mCd $ resetConstructSlope worldState (gx, gy)
         Nothing → pure ()
+
+-- | Build AI hook (#96): pour progress into a designation. Deltas are
+--   normalised to the job's total work (1.0 = done); the accumulated
+--   value is clamped to [0, 1]. Completion is NOT triggered here — the
+--   build AI watches the value and places the piece itself, then sends
+--   CsComplete. Each application re-stamps the tile's corner-progress
+--   display (the mining slope-mask pipeline, 'World.Construct.Apply')
+--   so the site visibly works corner-by-corner.
+handleWorldAddConstructProgressCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Float → IO ()
+handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState → do
+            mUpd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
+                \m → case HM.lookup (gx, gy) m of
+                    Nothing → (m, Nothing)
+                    Just cd →
+                        let cd' = cd { cdProgress = max 0.0 (min 1.0
+                                          (cdProgress cd + delta)) }
+                        in ( HM.insert (gx, gy) cd' m
+                           , Just (cdProgress cd, cd') )
+            forM_ mUpd $ \(prevProgress, cd') →
+                withConstructChunk worldState (gx, gy) $
+                    applyConstructSlopeToChunk (gx, gy) prevProgress cd'
+        Nothing → pure ()
+
+-- | Run a chunk transform for the designation tile's loaded chunk and
+--   invalidate the render caches — the same writeback the live dig
+--   path uses ('handleWorldDigTileCommand'). No-op when the chunk
+--   isn't loaded (the load path re-derives the display instead).
+withConstructChunk ∷ WorldState → (Int, Int)
+                   → (LoadedChunk → LoadedChunk) → IO ()
+withConstructChunk worldState (gx, gy) f = do
+    let (coord, _) = globalToChunk gx gy
+    td ← readIORef (wsTilesRef worldState)
+    case lookupChunk coord td of
+        Nothing → pure ()
+        Just lc → do
+            let lc' = f lc
+            atomicModifyIORef' (wsTilesRef worldState) $ \w →
+                (insertChunk lc' w, ())
+            bumpQuadCacheGen worldState
+            writeIORef (wsZoomQuadCacheRef worldState) Nothing
+            writeIORef (wsBgQuadCacheRef worldState)   Nothing
+
+-- | Reset a removed designation's corner-progress display to flat
+--   (guarded inside 'clearConstructSlope' to the designation's own
+--   mask, so natural/authored slopes are untouched).
+resetConstructSlope ∷ WorldState → (Int, Int) → ConstructDesignation → IO ()
+resetConstructSlope worldState (gx, gy) cd =
+    withConstructChunk worldState (gx, gy) $ clearConstructSlope (gx, gy) cd
 
 handleWorldSetConstructDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → Text → TextureHandle → IO ()

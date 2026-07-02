@@ -40,6 +40,7 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldDesignateConstructCommand
                                    , handleWorldCancelConstructCommand
                                    , handleWorldSetConstructStatusCommand
+                                   , handleWorldAddConstructProgressCommand
                                    , handleWorldSetConstructDesignateTextureCommand
                                    , handleWorldSetChopAnchorCommand
                                    , handleWorldClearChopAnchorCommand
@@ -132,6 +133,8 @@ handleWorldCommand env logger (WorldCancelConstruct pageId gx gy)
   = handleWorldCancelConstructCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st)
   = handleWorldSetConstructStatusCommand env logger pageId gx gy st
+handleWorldCommand env logger (WorldAddConstructProgress pageId gx gy delta)
+  = handleWorldAddConstructProgressCommand env logger pageId gx gy delta
 handleWorldCommand env logger (WorldSetConstructDesignateTexture pageId cat texHandle)
   = handleWorldSetConstructDesignateTextureCommand env logger pageId cat texHandle
 handleWorldCommand env logger (WorldSetChopAnchor pageId gx gy)

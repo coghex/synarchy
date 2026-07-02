@@ -449,6 +449,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getDesignationCount" (constructGetDesignationCountFn env)
   registerLuaFunction "nearestDesignation" (constructNearestDesignationFn env)
   registerLuaFunction "setJobStatus"       (constructSetJobStatusFn env)
+  registerLuaFunction "addJobProgress"     (constructAddJobProgressFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
   Lua.setglobal (Lua.Name "construction")
 
@@ -586,6 +587,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setCell" (worldSetCellFn env)
 
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
+  registerLuaFunction "getSlopeAt"   (worldGetSlopeAtFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
   registerLuaFunction "getSurfaceAt" (worldGetSurfaceAtFn env)
   registerLuaFunction "getChunkInfo" (worldGetChunkInfoFn env)

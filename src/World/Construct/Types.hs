@@ -20,6 +20,7 @@ module World.Construct.Types
     , ConstructDesignation(..)
     , ConstructDesignations
     , newConstructDesignation
+    , constructCorners
     , constructStatusToText
     , textToConstructStatus
     , constructTargetCategory
@@ -78,6 +79,20 @@ type ConstructDesignations = HM.HashMap (Int, Int) ConstructDesignation
 -- | Fresh designation: pending, no progress.
 newConstructDesignation ∷ Int → ConstructTarget → ConstructDesignation
 newConstructDesignation z tgt = ConstructDesignation z tgt CsPending 0.0
+
+-- | Corner-progress state derived from a designation's build progress
+--   (#96) — the input 'World.Mine.Types.digSlopeMask' expects, so a
+--   tile under construction renders through the SAME slope-variant
+--   corner display a mid-dig tile does. Corners drain in fixed
+--   NW→NE→SE→SW order, one quarter of the job each (a scalar can't
+--   carry the digger-side-first order mining gets from its live
+--   worker position — and it must stay derived, or the designation
+--   would need a schema change). progress 0 → all corners full
+--   (mask 0, nothing shown); progress 1 → all drained.
+constructCorners ∷ Float → (Float, Float, Float, Float)
+constructCorners progress =
+    let corner i = 1.0 - max 0.0 (min 1.0 (progress * 4.0 - fromIntegral i))
+    in (corner (0 ∷ Int), corner 1, corner 2, corner 3)
 
 constructStatusToText ∷ ConstructStatus → Text
 constructStatusToText CsPending  = "pending"
