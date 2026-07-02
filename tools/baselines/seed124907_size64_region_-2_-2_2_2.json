@@ -1,0 +1,60 @@
+{
+  "metadata": {
+    "seed": 124907,
+    "worldSize": 64,
+    "region": [
+      -2,
+      -2,
+      2,
+      2
+    ],
+    "captureRuns": 3
+  },
+  "determinism": {
+    "deterministic": true,
+    "distinctHashes": 1,
+    "hashes": [
+      "08b84c133521e44ebeef3458c233e115aae046e49fd3fecd276b9c812877c78e",
+      "08b84c133521e44ebeef3458c233e115aae046e49fd3fecd276b9c812877c78e",
+      "08b84c133521e44ebeef3458c233e115aae046e49fd3fecd276b9c812877c78e"
+    ]
+  },
+  "tileCount": 6400,
+  "elevationStats": {
+    "min": -92,
+    "max": 13,
+    "median": -72,
+    "count": 6400
+  },
+  "fluidStats": {
+    "dry": 110,
+    "ocean": 6290
+  },
+  "fluidEnvelope": {
+    "dry": {
+      "min": 110,
+      "max": 110,
+      "median": 110,
+      "all": [
+        110,
+        110,
+        110
+      ]
+    },
+    "ocean": {
+      "min": 6290,
+      "max": 6290,
+      "median": 6290,
+      "all": [
+        6290,
+        6290,
+        6290
+      ]
+    }
+  },
+  "auditEnvelope": {},
+  "representativeAudit": {
+    "summary": {},
+    "issues": {}
+  }
+}

@@ -12,7 +12,6 @@ import Data.IORef (newIORef)
 import Data.Time.Clock (UTCTime(..))
 import Data.Time.Calendar (fromGregorian)
 import qualified Data.Map as Map
-import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Control.Concurrent.STM (newTVarIO)

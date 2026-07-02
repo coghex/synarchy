@@ -1,0 +1,49 @@
+# Review gate: turns the label-based review workflow into a required
+# status check, so auto-merge waits for the review verdict as well as
+# CI. The formal GitHub review-approval mechanism can't be used here —
+# author and reviewer share one account, and GitHub refuses
+# self-approval — so the `reviewed:approve` label (already used by
+# ntfy-notify.yml) is the verdict, and this check enforces it.
+#
+# Flow:
+#   - PR opened / updated → "review-approved" check FAILS
+#     (red = "review verdict pending", merging blocked)
+#   - reviewer applies `reviewed:approve`  → check PASSES
+#   - new commits after approval          → label auto-removed
+#     (stale approvals don't carry a changed PR through; re-approve)
+name: review-gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+jobs:
+  # This job name is the required-status-check context.
+  review-approved:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the reviewed:approve label
+        run: |
+          if [ "${{ contains(github.event.pull_request.labels.*.name, 'reviewed:approve') }}" = "true" ]; then
+            echo "reviewed:approve present — gate open"
+          else
+            echo "no reviewed:approve label — review verdict pending"
+            exit 1
+          fi
+
+  # New commits invalidate a prior approval: strip the label so the
+  # gate closes until the reviewer re-approves the updated code. The
+  # removal fires an `unlabeled` event, which re-runs review-approved.
+  dismiss-stale-approval:
+    if: github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove reviewed:approve after new commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label reviewed:approve || true

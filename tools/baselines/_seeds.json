@@ -1,0 +1,250 @@
+{
+  "_comment": "Baseline seed set for world generation regression testing. Each entry specifies the seed, world size, region, and a brief description of why this seed is in the set.",
+  "_default_world_size": 32,
+  "_default_region": [
+    -4,
+    -4,
+    4,
+    4
+  ],
+  "seeds": [
+    {
+      "seed": 7,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "River-heavy world with historical chunk gap issues",
+      "quick": true
+    },
+    {
+      "seed": 42,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Original test seed; has lava and rivers",
+      "quick": true
+    },
+    {
+      "seed": 99,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Mixed terrain, moderate rivers"
+    },
+    {
+      "seed": 137,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Known race-prone (dry-below-sea, river chunk gaps)",
+      "quick": true
+    },
+    {
+      "seed": 250,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Heavy river coverage"
+    },
+    {
+      "seed": 314,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Volcanic terrain with sharp spikes",
+      "quick": true
+    },
+    {
+      "seed": 666,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Different geological signature"
+    },
+    {
+      "seed": 1337,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Heavy river coverage with many tributaries"
+    },
+    {
+      "seed": 2718,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Mostly clean reference"
+    },
+    {
+      "seed": 4096,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Mountainous terrain"
+    },
+    {
+      "seed": 4567,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Floating river anomaly + volcanic features"
+    },
+    {
+      "seed": 5050,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Race-prone with isolated islands"
+    },
+    {
+      "seed": 8080,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Clean baseline (no known issues)"
+    },
+    {
+      "seed": 9999,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Clean baseline (no known issues)"
+    },
+    {
+      "seed": 12321,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Race-prone with corner artifacts",
+      "quick": true
+    },
+    {
+      "seed": 13579,
+      "world_size": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "description": "Heavy volcanic with cross-chunk river gaps"
+    },
+    {
+      "seed": 42,
+      "world_size": 64,
+      "region": [
+        -2,
+        -2,
+        2,
+        2
+      ],
+      "description": "Larger world: original test seed at scale"
+    },
+    {
+      "seed": 137,
+      "world_size": 64,
+      "region": [
+        -2,
+        -2,
+        2,
+        2
+      ],
+      "description": "Larger world: previously-racy seed",
+      "quick": true
+    },
+    {
+      "seed": 124907,
+      "world_size": 64,
+      "region": [
+        -2,
+        -2,
+        2,
+        2
+      ],
+      "description": "Larger world: clean stress-test seed"
+    },
+    {
+      "seed": 997555,
+      "world_size": 64,
+      "region": [
+        -2,
+        -2,
+        2,
+        2
+      ],
+      "description": "Larger world: moderate chunk gaps"
+    },
+    {
+      "seed": 536686,
+      "world_size": 64,
+      "region": [
+        -2,
+        -2,
+        2,
+        2
+      ],
+      "description": "Larger world: heavy chunk gaps for regression coverage"
+    }
+  ],
+  "_comment_quick": "Entries tagged \"quick\": true form the iteration tier (world_check.py --quick, <1 min): rivers+gaps (7), lava+rivers (42), race-prone coastal (137/32), volcanic spikes (314), corner artifacts (12321), and one w64 (137/64) for scale coverage. The full 21-seed set is the pre-done gate."
+}

@@ -29,6 +29,20 @@ stays in seconds and the expensive gates run once, at the end.
    `python3 tools/world_baseline.py` (~7 min) and re-run world_check.
    Remember the save-version bump.
 
+Baselines (`tools/baselines/`) are **tracked in git** (#421): a fresh
+clone/worktree can run world_check directly, and a tier-3 re-capture
+lands in the PR diff where reviewers can see the intended drift. Don't
+edit baseline JSON by hand — regenerate with `world_baseline.py`.
+
+CI (`.github/workflows/ci.yml`, #436) runs on every PR and push to
+master, on Linux: full build with `-Werror` (the #435 warning-clean
+state is enforced, dependency warnings excluded), both test-suite
+builds, the headless suite, `test_audit.py`, and `world_check --quick`
+— all blocking. Worldgen output proved bit-identical between
+macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
+tracked baselines are platform-agnostic; a worldgen-output PR that
+skips its tier-3 rebaseline fails CI.
+
 Conventions that keep this fast — don't undo them:
 - hspec worldgen specs **share generated worlds** via
   `Test.Headless.Harness.sharedWorld env seed size plates` (one engine

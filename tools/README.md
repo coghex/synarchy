@@ -87,8 +87,17 @@ generation output, re-capture baselines:
 python3 tools/world_baseline.py
 ```
 
-Baselines are per-machine and gitignored (`tools/baselines/` in `.gitignore`).
-Each developer re-runs `world_baseline.py` locally after intentional changes.
+Baselines are **tracked in git** (#421): `tools/baselines/` is committed, so
+a fresh clone or worktree can run `world_check.py` immediately, and an
+intentional worldgen-output change ships its re-captured baselines in the
+same PR — the baseline diff is how reviewers see the intended drift. Never
+edit the baseline JSON by hand; always regenerate with `world_baseline.py`.
+
+CI (`.github/workflows/ci.yml`) runs `world_check.py --quick` as a blocking
+gate on every PR. Worldgen output is bit-identical across macOS/aarch64
+(where baselines are typically captured) and Linux/x86_64 (where CI runs),
+so there is one set of baselines for all platforms — a worldgen-output PR
+that forgets to rebaseline fails CI.
 
 ## Directory layout
 ```
