@@ -4,7 +4,7 @@ module World.Thread.Time
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
@@ -31,19 +31,34 @@ tickWorldTime env dt = do
             Just worldState → do
                 timeScale ← readIORef (wsTimeScaleRef worldState)
                 let effScale = if paused then 0 else timeScale
-                atomicModifyIORef' (wsTimeRef worldState) $ \wt →
-                    (advanceWorldTime effScale dt wt, ())
+                -- Advance time of day AND the calendar date (#332):
+                -- midnights crossed carry into wsDateRef, so day-of-year
+                -- driven state (flora annual cycle, derived flora age)
+                -- actually moves. Both refs are only written from this
+                -- thread (tick + queued set-time/date commands), so the
+                -- two-ref update can't race another writer.
+                wt ← readIORef (wsTimeRef worldState)
+                date ← readIORef (wsDateRef worldState)
+                paramsM ← readIORef (wsGenParamsRef worldState)
+                let calendar = maybe defaultCalendarConfig wgpCalender paramsM
+                    (wt', date', daysRolled) =
+                        advanceWorldClock calendar effScale dt wt date
+                writeIORef (wsTimeRef worldState) wt'
+                writeIORef (wsDateRef worldState) date'
                 -- Flora regrowth (#94) follows the same clock: timers
                 -- count GAME-seconds (timeScale = game-minutes per
                 -- real-second, so dtGame = dt·scale·60) and freeze with
                 -- the pause flag like everything else on this page.
                 -- When a tile finishes regrowing its plant needs its
-                -- normal texture back → invalidate the quad cache.
+                -- normal texture back → invalidate the quad cache. A
+                -- rolled day does too: flora textures derive from the
+                -- date (annual stage + derived age, #332).
                 let dtGame = dt * effScale * 60
                 when (dtGame > 0) $ do
                     regrew ← atomicModifyIORef' (wsFloraHarvestsRef worldState) $
                         tickFloraHarvests dtGame
-                    when regrew $ bumpQuadCacheGen worldState
+                    when (regrew ∨ daysRolled > 0) $
+                        bumpQuadCacheGen worldState
                     -- Item temperatures (#344) follow the same
                     -- game-second clock: tracked (hot/cold) items on
                     -- this page relax toward their tile's ambient.

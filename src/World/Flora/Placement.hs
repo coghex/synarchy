@@ -110,7 +110,7 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId
                     count = instanceCount cat h
                     maxAge = speciesMaxAge fid catalog
                 in [ mkInstance fid lx ly surfZ seed gx gy
-                         (i * 10 + j) count baseW maxAge
+                         (i * 10 + j) count baseW maxAge fitness
                    | j ← [0 .. count - 1]
                    ]
            else []
@@ -160,9 +160,13 @@ instanceCount cat h
 -- | Build one FloraInstance with deterministic sub-tile offset.
 --   ALL instances get a random offset (including trees with count=1).
 --   The offset is clamped by the footprint so the base stays on the tile.
+--   Health is the tile's habitat fitness (#332): the same 0–1
+--   'speciesFitness' that gated placement, so a plant in marginal
+--   habitat starts (and stays — climate is static) less healthy, which
+--   slows its derived growth (World.Flora.Growth).
 mkInstance ∷ FloraId → Int → Int → Int → Word64 → Int → Int
-           → Int → Int → Float → Float → FloraInstance
-mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge =
+           → Int → Int → Float → Float → Float → FloraInstance
+mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge health =
     let h = floraHash seed gx gy (fromIntegral i + 1)
         rawU = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
         rawV = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
@@ -188,7 +192,7 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge =
         , fiOffV      = offV
         , fiZ         = surfZ
         , fiAge       = age
-        , fiHealth    = 1.0
+        , fiHealth    = max 0.0 (min 1.0 health)
         , fiVariant   = variant
         , fiBaseWidth = baseWidth
         }

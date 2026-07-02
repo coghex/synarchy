@@ -550,6 +550,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setSunAngle" (worldSetSunAngleFn env)
   registerLuaFunction "setTime" (worldSetTimeFn env)
   registerLuaFunction "setDate" (worldSetDateFn env)
+  registerLuaFunction "getDate" (worldGetDateFn env)
   registerLuaFunction "setTimeScale" (worldSetTimeScaleFn env)
   registerLuaFunction "getTimeScale" (worldGetTimeScaleFn env)
   registerLuaFunction "getActiveWorldId" (worldGetActiveWorldIdFn env)
@@ -623,6 +624,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "markLocationContentsSpawned"
     (worldMarkLocationContentsSpawnedFn env)
   registerLuaFunction "getFloraAt" (worldGetFloraAtFn env)
+  registerLuaFunction "getFloraGrowthAt" (worldGetFloraGrowthAtFn env)
   registerLuaFunction "harvestFlora" (worldHarvestFloraFn env)
   registerLuaFunction "findHarvestableFlora"
     (worldFindHarvestableFloraFn env)

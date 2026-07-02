@@ -3766,10 +3766,13 @@ local function chopExecute(uid, s, params)
         end
         if not chop.getDesignationAt(wid, cand.x, cand.y) then return end
         -- A just-felled tree's designation removal is a queued world
-        -- command; the flora check keeps us from re-claiming the tile
-        -- in that window (a regrowing stump is not harvestable).
+        -- command; the regrowth-timer check keeps us from re-claiming
+        -- the tile in that window (a regrowing stump is not choppable).
+        -- NOT fl.harvestable: that flag is the bare-forage signal,
+        -- gated on the #332 growth window — a designated sprout or
+        -- standing-dead tree must stay choppable.
         local fl = world.getFloraAt(cand.x, cand.y)
-        if fl and not fl.harvestable then return end
+        if fl and (fl.regrowthRemaining or 0) > 0 then return end
         chopClaims[key] = { uid = uid, at = now }
         s.chopCandidate = nil
         s.chopJob = { x = cand.x, y = cand.y }
