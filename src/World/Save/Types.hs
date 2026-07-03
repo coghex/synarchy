@@ -119,7 +119,19 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 69  -- v69: coastline variety (#220) — worldgen
+currentSaveVersion = 70  -- v70: WorldGenParams gains trailing
+                         --      'wgpLocationStamped' (#424) — a dedicated
+                         --      one-time geometry-stamp flag per chunk,
+                         --      replacing the structure.hasAt(gx,gy,"floor")
+                         --      inference the lazy location stamper used to
+                         --      decide "already materialized". That check
+                         --      was fooled by a player clearing the anchor
+                         --      floor tile: the location was still stamped,
+                         --      but the guard saw "no floor" and re-ran the
+                         --      builder, clobbering edits. The new flag is
+                         --      independent of structure edits, like the
+                         --      existing wgpLocationContentsSpawned (#90).
+                         -- v69: coastline variety (#220) — worldgen
                          --      OUTPUT change, no schema change. The
                          --      serialized CoastalTable (GeoTimeline →
                          --      gtCoastal) now reaches 28 tiles inland

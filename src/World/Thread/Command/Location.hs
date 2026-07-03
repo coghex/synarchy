@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Thread.Command.Location
     ( handleWorldMarkLocationContentsSpawnedCommand
+    , handleWorldMarkLocationStampedCommand
     ) where
 
 import UPrelude
@@ -30,6 +31,29 @@ handleWorldMarkLocationContentsSpawnedCommand env pageId gx gy = do
                             { wgpLocationContentsSpawned =
                                 HS.insert coord
                                     (wgpLocationContentsSpawned params)
+                            }
+                        , ()
+                        )
+
+-- | One-time geometry-stamp flag (#424) — see
+--   'World.Command.Types.WorldMarkLocationStamped'. A no-op when the page
+--   or its gen params aren't live (mirrors the content-spawned handler
+--   above).
+handleWorldMarkLocationStampedCommand
+    ∷ EngineEnv → WorldPageId → Int → Int → IO ()
+handleWorldMarkLocationStampedCommand env pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing → pure ()
+        Just worldState → do
+            let (coord, _) = globalToChunk gx gy
+            atomicModifyIORef' (wsGenParamsRef worldState) $ \mParams →
+                case mParams of
+                    Nothing → (mParams, ())
+                    Just params →
+                        ( Just params
+                            { wgpLocationStamped =
+                                HS.insert coord (wgpLocationStamped params)
                             }
                         , ()
                         )

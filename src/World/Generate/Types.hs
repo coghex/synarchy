@@ -72,14 +72,24 @@ data WorldGenParams = WorldGenParams
     , wgpLocationContentsSpawned ∷ !(HS.HashSet ChunkCoord)
       -- ^ One-time content-spawn flag (#90): chunks whose placed
       --   location has already had its `contents` spawned (units,
-      --   items, buildings, …). Deliberately INDEPENDENT of the
-      --   structure-geometry idempotency check
-      --   (@structure.hasAt gx gy "floor"@) that gates re-STAMPING —
-      --   that check alone isn't enough for content: a floor-less
-      --   location type would re-run every chunk load, and a player
-      --   demolishing the floor would re-trigger a full re-stamp
-      --   including contents. Persisted alongside 'wgpLocationOverlay'
-      --   so a save never re-spawns contents already spawned.
+      --   items, buildings, …). Deliberately INDEPENDENT of
+      --   'wgpLocationStamped' below — that independence matters: a
+      --   floor-less location type would otherwise re-run every chunk
+      --   load, and a player demolishing the floor would otherwise
+      --   re-trigger a full re-stamp including contents. Persisted
+      --   alongside 'wgpLocationOverlay' so a save never re-spawns
+      --   contents already spawned.
+    , wgpLocationStamped ∷ !(HS.HashSet ChunkCoord)
+      -- ^ One-time geometry-stamp flag (#424): chunks whose placed
+      --   location has already had its builder run. Was formerly
+      --   inferred from @structure.hasAt gx gy "floor"@, but that
+      --   check is fooled by a player who later clears the anchor
+      --   floor tile — the location has still been materialized, but
+      --   the guard would see "no floor" and re-run the builder,
+      --   clobbering the player's edits. This flag is a dedicated
+      --   marker, set once on first stamp and never revisited by
+      --   player structure edits, so it stays true even after the
+      --   anchor tile is cleared.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -112,6 +122,7 @@ instance Serialize WorldGenParams where
         put (wgpTimelineParams p)
         put (wgpLocationOverlay p)
         put (wgpLocationContentsSpawned p)
+        put (wgpLocationStamped p)
     get = do
         seed       ← get
         ws         ← get
@@ -134,6 +145,7 @@ instance Serialize WorldGenParams where
         timelineP  ← get
         locOverlay ← get
         locSpawned ← get
+        locStamped ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -157,6 +169,7 @@ instance Serialize WorldGenParams where
             , wgpTimelineParams   = timelineP
             , wgpLocationOverlay  = locOverlay
             , wgpLocationContentsSpawned = locSpawned
+            , wgpLocationStamped  = locStamped
             , wgpVolcanoCtx       = vc
             }
 
@@ -188,6 +201,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpTimelineParams = defaultTimelineParams
     , wgpLocationOverlay = emptyLocationOverlay
     , wgpLocationContentsSpawned = HS.empty
+    , wgpLocationStamped = HS.empty
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

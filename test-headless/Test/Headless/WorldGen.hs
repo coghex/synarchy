@@ -210,6 +210,21 @@ spec = do
                 back = Cereal.decode (Cereal.encode p) ∷ Either String WorldGenParams
             fmap wgpLocationOverlay back `shouldBe` Right sample
 
+        it "geometry-stamp flag survives a WorldGenParams serialize round-trip (#424)" $ \_env → do
+            let sample = HS.fromList [ChunkCoord 1 2, ChunkCoord (-3) 4]
+                p = defaultWorldGenParams { wgpLocationStamped = sample }
+                back = Cereal.decode (Cereal.encode p) ∷ Either String WorldGenParams
+            fmap wgpLocationStamped back `shouldBe` Right sample
+
+        it "geometry-stamp flag is independent of the content-spawn flag (#424)" $ \_env → do
+            -- The two one-time flags are keyed by the same ChunkCoord but
+            -- must not alias each other's HashSet — a chunk marked stamped
+            -- is not thereby marked content-spawned, and vice versa.
+            let coord = ChunkCoord 5 (-2)
+                p = defaultWorldGenParams { wgpLocationStamped = HS.singleton coord }
+            HS.member coord (wgpLocationStamped p) `shouldBe` True
+            HS.member coord (wgpLocationContentsSpawned p) `shouldBe` False
+
         it "chunkSeamChebyshev measures across the U seam (#422)" $ \_env → do
             -- worldSize 8 → halfW 4, canonical u = cx − cy ∈ [−4, 4).
             -- (2, −1) and (−2, 3) are u-alias images of ONE physical chunk.
