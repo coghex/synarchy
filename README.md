@@ -4,7 +4,7 @@ Synarchy is a Haskell/Vulkan engine. It runs Ecce Homo, a colony/survival simula
 
 ## Prerequisites
 
-Vulkan to run. Vulkan SDK, glslang, and validation layers to develop, plus GHC (GHC2024) and cabal (>3.4) — other dependencies are installed by cabal. Developed primarily on macOS; works on Linux with minor adjustments (see `CLAUDE.md`).
+Vulkan to run. Vulkan SDK, glslang, and validation layers to develop, plus GHC (GHC2024) and cabal (>=3.16, matching `synarchy.cabal`'s `cabal-version` field) — other dependencies are installed by cabal. Developed primarily on macOS; works on Linux with minor adjustments (see `CLAUDE.md`).
 
 ## Building
 
@@ -24,7 +24,7 @@ The engine also has a **headless mode** (no window, no GPU) for scripted world g
 cabal test synarchy-test-headless
 ```
 
-`tools/` also has a large suite of Python-driven checks: world-generation regression tools (`world_check.py`, `world_audit.py`, ...) and ~20 headless **behavior probes** that boot a real headless engine to regression-test specific systems (combat animation, movement, physiology, crafting, construction, save/load, and more — see `tools/README.md`). `CLAUDE.md` documents which tier of tests to run for a given kind of change.
+`tools/` also has a large suite of Python-driven checks: world-generation regression tools (`world_check.py`, `world_audit.py`, ...), documented in `tools/README.md`, and ~20 headless **behavior probes** that boot a real headless engine to regression-test specific systems (combat animation, movement, physiology, crafting, construction, save/load, and more). `CLAUDE.md` documents each probe and which tier of tests to run for a given kind of change.
 
 ## Gameplay & simulation systems
 
