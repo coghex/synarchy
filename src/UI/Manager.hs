@@ -447,7 +447,7 @@ isPointInElement (px, py) element mgr =
         Nothing → False
         Just (ex, ey) →
             let (w, h) = ueSize element
-            in px ≥ ex ∧ px ≤ (ex + w) &&
+            in px ≥ ex ∧ px ≤ (ex + w) ∧
                py ≥ ey ∧ py ≤ (ey + h)
 
 -- | Walk every visible element in paint order, yielding the elements

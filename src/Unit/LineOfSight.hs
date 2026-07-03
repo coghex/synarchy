@@ -10,6 +10,7 @@
 module Unit.LineOfSight
     ( unitVisibleTiles
     , unitAwareness
+    , nightPerceptionFactor
     ) where
 
 import UPrelude
@@ -84,6 +85,8 @@ unitVisibleTiles env uid = do
 --
 --   Perception widens the range; facing is the defender's last sim
 --   heading (set by movement — a unit that walked up to its foe faces it).
+--   Result is scaled by 'nightPerceptionFactor': a defender senses an
+--   incoming blow less reliably in the dark (#315).
 unitAwareness ∷ EngineEnv → UnitInstance → UnitInstance → IO Float
 unitAwareness env defender attacker = do
     let defX = uiGridX defender
@@ -101,11 +104,32 @@ unitAwareness env defender attacker = do
         -- Same half-angle-60° cone test as the vision FOV (cos²60 = 0.25).
         inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
     blocked ← losBlockedBetween env defender attacker
-    pure $! if dist > perceptionRange ∨ blocked
+    sunAngle ← readIORef (sunAngleRef env)
+    pure $! nightPerceptionFactor sunAngle *
+            if dist > perceptionRange ∨ blocked
             then 0.0
             else if inFacingCone           then 1.0
             else if dist ≤ awareCloseRadius then awarePeripheral
             else 0.0
+
+-- | Multiplier on awareness from time of day: 1.0 at noon, dipping to
+--   'nightPerceptionFloor' at midnight, ramping smoothly through
+--   dawn/dusk. A cosine keyed to 'sunAngle' peaking at 0.5 (noon) and
+--   troughing at 0.0\/1.0 (midnight) — the mapping 'WorldTime' documents
+--   (@World.Time.Types@) — rather than reusing 'computeAmbientLight'
+--   (@Engine.Loop.Frame@), whose own phase is tuned for the lighting
+--   shader, not gameplay, and shouldn't be coupled to this.
+nightPerceptionFactor ∷ Float → Float
+nightPerceptionFactor sunAngle =
+    let angle = (sunAngle - 0.5) * 2 * π
+        height = cos angle ∷ Float
+    in nightPerceptionFloor + (1.0 - nightPerceptionFloor) * (height + 1.0) / 2.0
+
+-- | Awareness multiplier at deepest night (midnight). Reduced, not
+--   eliminated — an ambush still lands more easily at night, but a
+--   defender isn't stone-blind.
+nightPerceptionFloor ∷ Float
+nightPerceptionFloor = 0.5
 
 -- | Terrain line-of-sight between two units (true ⇒ a hill/wall blocks
 --   the sightline). Falls back to "clear" when no world is loaded (the
