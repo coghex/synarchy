@@ -72,6 +72,8 @@ The `dev` flag enables Vulkan validation layers, address sanitizer on macOS, and
 
 The executable is built with `-rtsopts`, so RTS behavior can be inspected and tuned at run time without a rebuild — e.g. append `+RTS -s` to a `--dump` run for a GC/allocation summary on stderr, or experiment with `-N<n>` / `-A<size>`. The baked-in default remains `-N -A128M`.
 
+Cost-centre profiling uses the `profile` flag (`-fprof-late` on top of the prod `-O2`): `cabal build exe:synarchy --enable-profiling -f profile --builddir=dist-prof`, then run with `+RTS -p -RTS`. **Must add `-N1`** (`+RTS -N1 -p -RTS`) — the baked-in default `-N` (multi-capability) segfaults the GHC 9.12.2 profiled RTS when combined with this codebase's `parListChunk`-sparked worldgen parallelism (crash inside `pushCostCentre`, see `docs/history/worldgen_timeline_profile_2026-07.md`). `-N1` also loses the ~6.9× parallel speedup on top of profiling's own overhead, so a profiled `--dump` run take minutes, not seconds — expect `waitForInit`'s timeout to fire before the dump's own JSON output stage, which is fine for profiling (the RTS still writes a complete final `.prof` report); it just means profiled runs aren't useful for capturing dump JSON, only cost-centre data.
+
 ## Language & Conventions
 
 - **Haskell with GHC2024**, cabal 3.16
