@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "725ca5506b6da7ddafad9459405995453672f2863781b38e3d3a6c886b042441",
-      "725ca5506b6da7ddafad9459405995453672f2863781b38e3d3a6c886b042441",
-      "725ca5506b6da7ddafad9459405995453672f2863781b38e3d3a6c886b042441"
+      "a910d1346d2fdfcc8c55a8a18fcd4487ef014f7bcb5f1b067da84fda332050cc",
+      "a910d1346d2fdfcc8c55a8a18fcd4487ef014f7bcb5f1b067da84fda332050cc",
+      "a910d1346d2fdfcc8c55a8a18fcd4487ef014f7bcb5f1b067da84fda332050cc"
     ]
   },
   "tileCount": 6400,
@@ -27,39 +27,39 @@
     "count": 6400
   },
   "fluidStats": {
-    "dry": 4902,
-    "lake": 1351,
-    "river": 147
+    "dry": 4803,
+    "lake": 1481,
+    "river": 116
   },
   "fluidEnvelope": {
     "dry": {
-      "min": 4902,
-      "max": 4902,
-      "median": 4902,
+      "min": 4803,
+      "max": 4803,
+      "median": 4803,
       "all": [
-        4902,
-        4902,
-        4902
+        4803,
+        4803,
+        4803
       ]
     },
     "lake": {
-      "min": 1351,
-      "max": 1351,
-      "median": 1351,
+      "min": 1481,
+      "max": 1481,
+      "median": 1481,
       "all": [
-        1351,
-        1351,
-        1351
+        1481,
+        1481,
+        1481
       ]
     },
     "river": {
-      "min": 147,
-      "max": 147,
-      "median": 147,
+      "min": 116,
+      "max": 116,
+      "median": 116,
       "all": [
-        147,
-        147,
-        147
+        116,
+        116,
+        116
       ]
     }
   },
@@ -75,33 +75,33 @@
       ]
     },
     "FLOATING_LAKE": {
-      "min": 96,
-      "max": 96,
-      "median": 96,
+      "min": 184,
+      "max": 184,
+      "median": 184,
       "all": [
-        96,
-        96,
-        96
+        184,
+        184,
+        184
       ]
     },
     "FLOATING_WATER": {
-      "min": 44,
-      "max": 44,
-      "median": 44,
+      "min": 23,
+      "max": 23,
+      "median": 23,
       "all": [
-        44,
-        44,
-        44
+        23,
+        23,
+        23
       ]
     },
     "ISOLATED_FLUID": {
-      "min": 13,
-      "max": 13,
-      "median": 13,
+      "min": 12,
+      "max": 12,
+      "median": 12,
       "all": [
-        13,
-        13,
-        13
+        12,
+        12,
+        12
       ]
     },
     "MULTI_ISLAND": {
@@ -125,47 +125,47 @@
       ]
     },
     "WATER_ABOVE_LAND": {
-      "min": 46,
-      "max": 46,
-      "median": 46,
+      "min": 25,
+      "max": 25,
+      "median": 25,
       "all": [
-        46,
-        46,
-        46
+        25,
+        25,
+        25
       ]
     },
     "WATER_CLIFF": {
-      "min": 46,
-      "max": 46,
-      "median": 46,
+      "min": 25,
+      "max": 25,
+      "median": 25,
       "all": [
-        46,
-        46,
-        46
+        25,
+        25,
+        25
       ]
     },
     "WATER_WATER_CLIFF": {
-      "min": 138,
-      "max": 138,
-      "median": 138,
+      "min": 110,
+      "max": 110,
+      "median": 110,
       "all": [
-        138,
-        138,
-        138
+        110,
+        110,
+        110
       ]
     }
   },
   "representativeAudit": {
     "summary": {
       "FLAT_ISOLATED_WATER": 21,
-      "FLOATING_LAKE": 96,
-      "FLOATING_WATER": 44,
-      "ISOLATED_FLUID": 13,
+      "FLOATING_LAKE": 184,
+      "FLOATING_WATER": 23,
+      "ISOLATED_FLUID": 12,
       "MULTI_ISLAND": 2,
       "RIVER_CHUNK_GAP": 1,
-      "WATER_ABOVE_LAND": 46,
-      "WATER_CLIFF": 46,
-      "WATER_WATER_CLIFF": 138
+      "WATER_ABOVE_LAND": 25,
+      "WATER_CLIFF": 25,
+      "WATER_WATER_CLIFF": 110
     },
     "issues": {
       "FLAT_ISOLATED_WATER": [
@@ -277,484 +277,924 @@
       ],
       "FLOATING_LAKE": [
         {
+          "x": 24,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 25,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=17 depth=17"
+        },
+        {
+          "x": 26,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 26,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=15 depth=19"
+        },
+        {
+          "x": 27,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 27,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 28,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=17 depth=17"
+        },
+        {
+          "x": 28,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=15 depth=19"
+        },
+        {
+          "x": 28,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
+        },
+        {
+          "x": 29,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 29,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=13 depth=21"
+        },
+        {
+          "x": 29,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
+        },
+        {
+          "x": 30,
+          "y": 44,
+          "details": "lake fluidSurf=34 terrainZ=17 depth=17"
+        },
+        {
+          "x": 30,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 30,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
+        },
+        {
+          "x": 30,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
+        },
+        {
+          "x": 31,
+          "y": 44,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 31,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=13 depth=21"
+        },
+        {
+          "x": 31,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
+        },
+        {
+          "x": 31,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
+        },
+        {
+          "x": 32,
+          "y": 43,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 32,
+          "y": 44,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 32,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
+        },
+        {
+          "x": 32,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
+        },
+        {
+          "x": 32,
+          "y": 47,
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
+        },
+        {
+          "x": 33,
+          "y": 42,
+          "details": "lake fluidSurf=34 terrainZ=17 depth=17"
+        },
+        {
+          "x": 33,
+          "y": 43,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 33,
+          "y": 44,
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
+        },
+        {
+          "x": 33,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
+        },
+        {
+          "x": 33,
+          "y": 46,
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
+        },
+        {
           "x": 33,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=5 depth=29"
+        },
+        {
+          "x": 34,
+          "y": 41,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 34,
+          "y": 42,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 34,
+          "y": 43,
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
+        },
+        {
+          "x": 34,
+          "y": 44,
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
+        },
+        {
+          "x": 34,
+          "y": 45,
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
         },
         {
           "x": 34,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=5 depth=29"
         },
         {
           "x": 34,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=13 depth=24"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
+        },
+        {
+          "x": 35,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 35,
+          "y": 40,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 35,
+          "y": 41,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 35,
+          "y": 42,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
+        },
+        {
+          "x": 35,
+          "y": 43,
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
+        },
+        {
+          "x": 35,
+          "y": 44,
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
         },
         {
           "x": 35,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 35,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 35,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
+        },
+        {
+          "x": 36,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 36,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 36,
+          "y": 40,
+          "details": "lake fluidSurf=34 terrainZ=15 depth=19"
+        },
+        {
+          "x": 36,
+          "y": 41,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
+        },
+        {
+          "x": 36,
+          "y": 42,
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
+        },
+        {
+          "x": 36,
+          "y": 43,
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 36,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 36,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=13 depth=24"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 36,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 36,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
+        },
+        {
+          "x": 37,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=17 depth=17"
+        },
+        {
+          "x": 37,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=15 depth=19"
+        },
+        {
+          "x": 37,
+          "y": 40,
+          "details": "lake fluidSurf=34 terrainZ=13 depth=21"
+        },
+        {
+          "x": 37,
+          "y": 41,
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
+        },
+        {
+          "x": 37,
+          "y": 42,
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
         },
         {
           "x": 37,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=20 depth=17"
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
         },
         {
           "x": 37,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=5 depth=29"
         },
         {
           "x": 37,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 37,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 37,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 38,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 38,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 38,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 38,
+          "y": 40,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
+        },
+        {
+          "x": 38,
+          "y": 41,
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 38,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=20 depth=17"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 38,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 38,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 38,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 38,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 38,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 39,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=17 depth=17"
+        },
+        {
+          "x": 39,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=15 depth=19"
+        },
+        {
+          "x": 39,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=13 depth=21"
+        },
+        {
+          "x": 39,
+          "y": 40,
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
         },
         {
           "x": 39,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=20 depth=17"
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
         },
         {
           "x": 39,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
         },
         {
           "x": 39,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=5 depth=29"
         },
         {
           "x": 39,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 39,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 39,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 39,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 40,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 40,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 40,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 40,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 40,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=20 depth=17"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 40,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 40,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 40,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 40,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 40,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 40,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 40,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 41,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 41,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 41,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
         },
         {
           "x": 41,
           "y": 39,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 41,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=19 depth=18"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 41,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 41,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 41,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 41,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 41,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 41,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 41,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 42,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 42,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 42,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
         },
         {
           "x": 42,
           "y": 39,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 42,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=19 depth=18"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 42,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 42,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 42,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 42,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 42,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 42,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 42,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 43,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 43,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 43,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
         },
         {
           "x": 43,
           "y": 39,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 43,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 43,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 43,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 43,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 43,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 43,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 43,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 43,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 44,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 44,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 44,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
         },
         {
           "x": 44,
           "y": 39,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 44,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 44,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 44,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 44,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 44,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 44,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 44,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 44,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 45,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 45,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 45,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
         },
         {
           "x": 45,
           "y": 39,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 45,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
         },
         {
           "x": 45,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
         },
         {
           "x": 45,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
         },
         {
           "x": 45,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=5 depth=29"
         },
         {
           "x": 45,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 45,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 45,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 45,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 46,
+          "y": 36,
+          "details": "lake fluidSurf=34 terrainZ=18 depth=16"
+        },
+        {
+          "x": 46,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 46,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=14 depth=20"
+        },
+        {
+          "x": 46,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=13 depth=21"
         },
         {
           "x": 46,
           "y": 40,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=11 depth=23"
         },
         {
           "x": 46,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 46,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=8 depth=26"
         },
         {
           "x": 46,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=6 depth=28"
         },
         {
           "x": 46,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=4 depth=30"
         },
         {
           "x": 46,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 46,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         },
         {
           "x": 46,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=1 depth=36"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
+        },
+        {
+          "x": 47,
+          "y": 37,
+          "details": "lake fluidSurf=34 terrainZ=16 depth=18"
+        },
+        {
+          "x": 47,
+          "y": 38,
+          "details": "lake fluidSurf=34 terrainZ=15 depth=19"
+        },
+        {
+          "x": 47,
+          "y": 39,
+          "details": "lake fluidSurf=34 terrainZ=13 depth=21"
+        },
+        {
+          "x": 47,
+          "y": 40,
+          "details": "lake fluidSurf=34 terrainZ=12 depth=22"
         },
         {
           "x": 47,
           "y": 41,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=10 depth=24"
         },
         {
           "x": 47,
           "y": 42,
-          "details": "lake fluidSurf=37 terrainZ=21 depth=16"
+          "details": "lake fluidSurf=34 terrainZ=9 depth=25"
         },
         {
           "x": 47,
           "y": 43,
-          "details": "lake fluidSurf=37 terrainZ=6 depth=31"
+          "details": "lake fluidSurf=34 terrainZ=7 depth=27"
         },
         {
           "x": 47,
           "y": 44,
-          "details": "lake fluidSurf=37 terrainZ=5 depth=32"
+          "details": "lake fluidSurf=34 terrainZ=5 depth=29"
         },
         {
           "x": 47,
           "y": 45,
-          "details": "lake fluidSurf=37 terrainZ=4 depth=33"
+          "details": "lake fluidSurf=34 terrainZ=3 depth=31"
         },
         {
           "x": 47,
           "y": 46,
-          "details": "lake fluidSurf=37 terrainZ=3 depth=34"
+          "details": "lake fluidSurf=34 terrainZ=2 depth=32"
         },
         {
           "x": 47,
           "y": 47,
-          "details": "lake fluidSurf=37 terrainZ=2 depth=35"
+          "details": "lake fluidSurf=34 terrainZ=1 depth=33"
         }
       ],
       "FLOATING_WATER": [
@@ -785,16 +1225,6 @@
         },
         {
           "x": -25,
-          "y": -17,
-          "details": "river terr=172 -> dry(-25,-18) terr=171 gap=1"
-        },
-        {
-          "x": -25,
-          "y": -16,
-          "details": "river terr=177 -> dry(-24,-16) terr=173 gap=4"
-        },
-        {
-          "x": -25,
           "y": -7,
           "details": "river terr=158 -> dry(-25,-6) terr=151 gap=7"
         },
@@ -802,11 +1232,6 @@
           "x": -25,
           "y": 26,
           "details": "river terr=39 -> dry(-24,26) terr=38 gap=1"
-        },
-        {
-          "x": -24,
-          "y": -17,
-          "details": "river terr=166 -> dry(-24,-18) terr=165 gap=1"
         },
         {
           "x": -24,
@@ -825,28 +1250,13 @@
         },
         {
           "x": -23,
-          "y": -17,
-          "details": "river terr=159 -> dry(-23,-18) terr=158 gap=1"
-        },
-        {
-          "x": -23,
           "y": -5,
           "details": "river terr=121 -> dry(-23,-4) terr=117 gap=4"
         },
         {
           "x": -22,
-          "y": -17,
-          "details": "river terr=153 -> dry(-22,-18) terr=150 gap=3"
-        },
-        {
-          "x": -22,
           "y": -5,
           "details": "river terr=115 -> dry(-22,-4) terr=109 gap=6"
-        },
-        {
-          "x": -21,
-          "y": -17,
-          "details": "river terr=145 -> dry(-21,-18) terr=141 gap=4"
         },
         {
           "x": -21,
@@ -874,34 +1284,14 @@
           "details": "river terr=45 -> dry(-22,2) terr=44 gap=1"
         },
         {
-          "x": -20,
-          "y": -17,
-          "details": "river terr=136 -> dry(-20,-18) terr=132 gap=4"
-        },
-        {
           "x": -19,
           "y": -30,
           "details": "river terr=99 -> dry(-19,-29) terr=97 gap=2"
         },
         {
-          "x": -19,
-          "y": -18,
-          "details": "river terr=122 -> dry(-19,-19) terr=121 gap=1"
-        },
-        {
-          "x": -19,
-          "y": -17,
-          "details": "river terr=129 -> dry(-18,-17) terr=123 gap=6"
-        },
-        {
           "x": -18,
           "y": -30,
           "details": "river terr=92 -> dry(-18,-29) terr=89 gap=3"
-        },
-        {
-          "x": -18,
-          "y": -18,
-          "details": "river terr=117 -> dry(-18,-19) terr=114 gap=3"
         },
         {
           "x": -18,
@@ -919,64 +1309,9 @@
           "details": "river terr=73 -> dry(-17,-27) terr=69 gap=4"
         },
         {
-          "x": -17,
-          "y": -18,
-          "details": "river terr=110 -> dry(-17,-19) terr=107 gap=3"
-        },
-        {
           "x": -16,
           "y": -29,
           "details": "river terr=71 -> dry(-15,-29) terr=64 gap=7"
-        },
-        {
-          "x": -16,
-          "y": -18,
-          "details": "river terr=105 -> dry(-16,-19) terr=103 gap=2"
-        },
-        {
-          "x": -15,
-          "y": -18,
-          "details": "river terr=100 -> dry(-15,-19) terr=98 gap=2"
-        },
-        {
-          "x": -14,
-          "y": -18,
-          "details": "river terr=95 -> dry(-14,-19) terr=92 gap=3"
-        },
-        {
-          "x": -13,
-          "y": -18,
-          "details": "river terr=90 -> dry(-13,-19) terr=87 gap=3"
-        },
-        {
-          "x": -12,
-          "y": -19,
-          "details": "river terr=77 -> dry(-12,-20) terr=70 gap=7"
-        },
-        {
-          "x": -12,
-          "y": -18,
-          "details": "river terr=84 -> dry(-11,-18) terr=78 gap=6"
-        },
-        {
-          "x": -11,
-          "y": -19,
-          "details": "river terr=66 -> dry(-11,-20) terr=57 gap=9"
-        },
-        {
-          "x": -10,
-          "y": -18,
-          "details": "river terr=62 -> dry(-9,-18) terr=60 gap=2"
-        },
-        {
-          "x": -10,
-          "y": -17,
-          "details": "river terr=72 -> dry(-9,-17) terr=68 gap=4"
-        },
-        {
-          "x": -10,
-          "y": -16,
-          "details": "river terr=80 -> dry(-9,-16) terr=78 gap=2"
         }
       ],
       "ISOLATED_FLUID": [
@@ -1029,11 +1364,6 @@
           "x": 22,
           "y": -1,
           "details": "lake surf=32 surrounded by dry"
-        },
-        {
-          "x": 41,
-          "y": 27,
-          "details": "lake surf=39 surrounded by dry"
         },
         {
           "x": 43,
@@ -1103,16 +1433,6 @@
         },
         {
           "x": -25,
-          "y": -17,
-          "details": "river surf=173 terr=172 -> land(-25,-18) terr=171 cliff=2"
-        },
-        {
-          "x": -25,
-          "y": -16,
-          "details": "river surf=178 terr=177 -> land(-24,-16) terr=173 cliff=5"
-        },
-        {
-          "x": -25,
           "y": -7,
           "details": "river surf=159 terr=158 -> land(-25,-6) terr=151 cliff=8"
         },
@@ -1120,11 +1440,6 @@
           "x": -25,
           "y": 26,
           "details": "river surf=40 terr=39 -> land(-24,26) terr=38 cliff=2"
-        },
-        {
-          "x": -24,
-          "y": -17,
-          "details": "river surf=167 terr=166 -> land(-24,-18) terr=165 cliff=2"
         },
         {
           "x": -24,
@@ -1143,28 +1458,13 @@
         },
         {
           "x": -23,
-          "y": -17,
-          "details": "river surf=160 terr=159 -> land(-23,-18) terr=158 cliff=2"
-        },
-        {
-          "x": -23,
           "y": -5,
           "details": "river surf=122 terr=121 -> land(-23,-4) terr=117 cliff=5"
         },
         {
           "x": -22,
-          "y": -17,
-          "details": "river surf=154 terr=153 -> land(-22,-18) terr=150 cliff=4"
-        },
-        {
-          "x": -22,
           "y": -5,
           "details": "river surf=116 terr=115 -> land(-22,-4) terr=109 cliff=7"
-        },
-        {
-          "x": -21,
-          "y": -17,
-          "details": "river surf=146 terr=145 -> land(-21,-18) terr=141 cliff=5"
         },
         {
           "x": -21,
@@ -1192,34 +1492,14 @@
           "details": "river surf=46 terr=45 -> land(-22,2) terr=44 cliff=2"
         },
         {
-          "x": -20,
-          "y": -17,
-          "details": "river surf=137 terr=136 -> land(-20,-18) terr=132 cliff=5"
-        },
-        {
           "x": -19,
           "y": -30,
           "details": "river surf=100 terr=99 -> land(-19,-29) terr=97 cliff=3"
         },
         {
-          "x": -19,
-          "y": -18,
-          "details": "river surf=123 terr=122 -> land(-19,-19) terr=121 cliff=2"
-        },
-        {
-          "x": -19,
-          "y": -17,
-          "details": "river surf=130 terr=129 -> land(-18,-17) terr=123 cliff=7"
-        },
-        {
           "x": -18,
           "y": -30,
           "details": "river surf=93 terr=92 -> land(-18,-29) terr=89 cliff=4"
-        },
-        {
-          "x": -18,
-          "y": -18,
-          "details": "river surf=118 terr=117 -> land(-18,-19) terr=114 cliff=4"
         },
         {
           "x": -18,
@@ -1237,64 +1517,9 @@
           "details": "river surf=74 terr=73 -> land(-17,-27) terr=69 cliff=5"
         },
         {
-          "x": -17,
-          "y": -18,
-          "details": "river surf=111 terr=110 -> land(-17,-19) terr=107 cliff=4"
-        },
-        {
           "x": -16,
           "y": -29,
           "details": "river surf=72 terr=71 -> land(-15,-29) terr=64 cliff=8"
-        },
-        {
-          "x": -16,
-          "y": -18,
-          "details": "river surf=106 terr=105 -> land(-16,-19) terr=103 cliff=3"
-        },
-        {
-          "x": -15,
-          "y": -18,
-          "details": "river surf=101 terr=100 -> land(-15,-19) terr=98 cliff=3"
-        },
-        {
-          "x": -14,
-          "y": -18,
-          "details": "river surf=96 terr=95 -> land(-14,-19) terr=92 cliff=4"
-        },
-        {
-          "x": -13,
-          "y": -18,
-          "details": "river surf=91 terr=90 -> land(-13,-19) terr=87 cliff=4"
-        },
-        {
-          "x": -12,
-          "y": -19,
-          "details": "river surf=78 terr=77 -> land(-12,-20) terr=70 cliff=8"
-        },
-        {
-          "x": -12,
-          "y": -18,
-          "details": "river surf=85 terr=84 -> land(-11,-18) terr=78 cliff=7"
-        },
-        {
-          "x": -11,
-          "y": -19,
-          "details": "river surf=67 terr=66 -> land(-11,-20) terr=57 cliff=10"
-        },
-        {
-          "x": -10,
-          "y": -18,
-          "details": "river surf=63 terr=62 -> land(-9,-18) terr=60 cliff=3"
-        },
-        {
-          "x": -10,
-          "y": -17,
-          "details": "river surf=73 terr=72 -> land(-9,-17) terr=68 cliff=5"
-        },
-        {
-          "x": -10,
-          "y": -16,
-          "details": "river surf=81 terr=80 -> land(-9,-16) terr=78 cliff=3"
         }
       ],
       "WATER_CLIFF": [
@@ -1335,16 +1560,6 @@
         },
         {
           "x": -25,
-          "y": -17,
-          "details": "river surf=173 -> dry(-25,-18) terr=171 cliff=2"
-        },
-        {
-          "x": -25,
-          "y": -16,
-          "details": "river surf=178 -> dry(-24,-16) terr=173 cliff=5"
-        },
-        {
-          "x": -25,
           "y": -7,
           "details": "river surf=159 -> dry(-25,-6) terr=151 cliff=8"
         },
@@ -1352,11 +1567,6 @@
           "x": -25,
           "y": 26,
           "details": "river surf=40 -> dry(-24,26) terr=38 cliff=2"
-        },
-        {
-          "x": -24,
-          "y": -17,
-          "details": "river surf=167 -> dry(-24,-18) terr=165 cliff=2"
         },
         {
           "x": -24,
@@ -1375,28 +1585,13 @@
         },
         {
           "x": -23,
-          "y": -17,
-          "details": "river surf=160 -> dry(-23,-18) terr=158 cliff=2"
-        },
-        {
-          "x": -23,
           "y": -5,
           "details": "river surf=122 -> dry(-23,-4) terr=117 cliff=5"
         },
         {
           "x": -22,
-          "y": -17,
-          "details": "river surf=154 -> dry(-22,-18) terr=150 cliff=4"
-        },
-        {
-          "x": -22,
           "y": -5,
           "details": "river surf=116 -> dry(-22,-4) terr=109 cliff=7"
-        },
-        {
-          "x": -21,
-          "y": -17,
-          "details": "river surf=146 -> dry(-21,-18) terr=141 cliff=5"
         },
         {
           "x": -21,
@@ -1424,34 +1619,14 @@
           "details": "river surf=46 -> dry(-22,2) terr=44 cliff=2"
         },
         {
-          "x": -20,
-          "y": -17,
-          "details": "river surf=137 -> dry(-20,-18) terr=132 cliff=5"
-        },
-        {
           "x": -19,
           "y": -30,
           "details": "river surf=100 -> dry(-19,-29) terr=97 cliff=3"
         },
         {
-          "x": -19,
-          "y": -18,
-          "details": "river surf=123 -> dry(-19,-19) terr=121 cliff=2"
-        },
-        {
-          "x": -19,
-          "y": -17,
-          "details": "river surf=130 -> dry(-18,-17) terr=123 cliff=7"
-        },
-        {
           "x": -18,
           "y": -30,
           "details": "river surf=93 -> dry(-18,-29) terr=89 cliff=4"
-        },
-        {
-          "x": -18,
-          "y": -18,
-          "details": "river surf=118 -> dry(-18,-19) terr=114 cliff=4"
         },
         {
           "x": -18,
@@ -1469,64 +1644,9 @@
           "details": "river surf=74 -> dry(-17,-27) terr=69 cliff=5"
         },
         {
-          "x": -17,
-          "y": -18,
-          "details": "river surf=111 -> dry(-17,-19) terr=107 cliff=4"
-        },
-        {
           "x": -16,
           "y": -29,
           "details": "river surf=72 -> dry(-15,-29) terr=64 cliff=8"
-        },
-        {
-          "x": -16,
-          "y": -18,
-          "details": "river surf=106 -> dry(-16,-19) terr=103 cliff=3"
-        },
-        {
-          "x": -15,
-          "y": -18,
-          "details": "river surf=101 -> dry(-15,-19) terr=98 cliff=3"
-        },
-        {
-          "x": -14,
-          "y": -18,
-          "details": "river surf=96 -> dry(-14,-19) terr=92 cliff=4"
-        },
-        {
-          "x": -13,
-          "y": -18,
-          "details": "river surf=91 -> dry(-13,-19) terr=87 cliff=4"
-        },
-        {
-          "x": -12,
-          "y": -19,
-          "details": "river surf=78 -> dry(-12,-20) terr=70 cliff=8"
-        },
-        {
-          "x": -12,
-          "y": -18,
-          "details": "river surf=85 -> dry(-11,-18) terr=78 cliff=7"
-        },
-        {
-          "x": -11,
-          "y": -19,
-          "details": "river surf=67 -> dry(-11,-20) terr=57 cliff=10"
-        },
-        {
-          "x": -10,
-          "y": -18,
-          "details": "river surf=63 -> dry(-9,-18) terr=60 cliff=3"
-        },
-        {
-          "x": -10,
-          "y": -17,
-          "details": "river surf=73 -> dry(-9,-17) terr=68 cliff=5"
-        },
-        {
-          "x": -10,
-          "y": -16,
-          "details": "river surf=81 -> dry(-9,-16) terr=78 cliff=3"
         }
       ],
       "WATER_WATER_CLIFF": [
@@ -1772,16 +1892,6 @@
         },
         {
           "x": -25,
-          "y": -17,
-          "details": "river surf=173 -> water nbr surf=167 diff=6"
-        },
-        {
-          "x": -25,
-          "y": -16,
-          "details": "river surf=178 -> water nbr surf=173 diff=5"
-        },
-        {
-          "x": -25,
           "y": -7,
           "details": "river surf=159 -> water nbr surf=151 diff=8"
         },
@@ -1794,11 +1904,6 @@
           "x": -24,
           "y": -26,
           "details": "river surf=141 -> water nbr surf=134 diff=7"
-        },
-        {
-          "x": -24,
-          "y": -17,
-          "details": "river surf=167 -> water nbr surf=160 diff=7"
         },
         {
           "x": -24,
@@ -1822,11 +1927,6 @@
         },
         {
           "x": -23,
-          "y": -17,
-          "details": "river surf=160 -> water nbr surf=154 diff=6"
-        },
-        {
-          "x": -23,
           "y": -5,
           "details": "river surf=122 -> water nbr surf=116 diff=6"
         },
@@ -1837,11 +1937,6 @@
         },
         {
           "x": -22,
-          "y": -17,
-          "details": "river surf=154 -> water nbr surf=146 diff=8"
-        },
-        {
-          "x": -22,
           "y": -5,
           "details": "river surf=116 -> water nbr surf=109 diff=7"
         },
@@ -1849,11 +1944,6 @@
           "x": -21,
           "y": -26,
           "details": "river surf=110 -> water nbr surf=98 diff=12"
-        },
-        {
-          "x": -21,
-          "y": -17,
-          "details": "river surf=146 -> water nbr surf=137 diff=9"
         },
         {
           "x": -21,
@@ -1912,11 +2002,6 @@
         },
         {
           "x": -20,
-          "y": -17,
-          "details": "river surf=137 -> water nbr surf=130 diff=7"
-        },
-        {
-          "x": -20,
           "y": 1,
           "details": "river surf=56 -> water nbr surf=54 diff=2"
         },
@@ -1962,16 +2047,6 @@
         },
         {
           "x": -19,
-          "y": -18,
-          "details": "river surf=123 -> water nbr surf=118 diff=5"
-        },
-        {
-          "x": -19,
-          "y": -17,
-          "details": "river surf=130 -> water nbr surf=123 diff=7"
-        },
-        {
-          "x": -19,
           "y": 1,
           "details": "river surf=54 -> water nbr surf=51 diff=3"
         },
@@ -2004,11 +2079,6 @@
           "x": -18,
           "y": -26,
           "details": "river surf=74 -> water nbr surf=62 diff=12"
-        },
-        {
-          "x": -18,
-          "y": -18,
-          "details": "river surf=118 -> water nbr surf=111 diff=7"
         },
         {
           "x": -18,
@@ -2062,11 +2132,6 @@
         },
         {
           "x": -17,
-          "y": -18,
-          "details": "river surf=111 -> water nbr surf=106 diff=5"
-        },
-        {
-          "x": -17,
           "y": 2,
           "details": "river surf=38 -> water nbr surf=34 diff=4"
         },
@@ -2106,11 +2171,6 @@
           "details": "river surf=50 -> water nbr surf=38 diff=12"
         },
         {
-          "x": -16,
-          "y": -18,
-          "details": "river surf=106 -> water nbr surf=101 diff=5"
-        },
-        {
           "x": -15,
           "y": -28,
           "details": "river surf=51 -> water nbr surf=41 diff=10"
@@ -2131,11 +2191,6 @@
           "details": "river surf=41 -> water nbr surf=38 diff=3"
         },
         {
-          "x": -15,
-          "y": -18,
-          "details": "river surf=101 -> water nbr surf=96 diff=5"
-        },
-        {
           "x": -14,
           "y": -28,
           "details": "river surf=41 -> water nbr surf=38 diff=3"
@@ -2144,81 +2199,6 @@
           "x": -14,
           "y": -28,
           "details": "river surf=41 -> water nbr surf=38 diff=3"
-        },
-        {
-          "x": -14,
-          "y": -18,
-          "details": "river surf=96 -> water nbr surf=91 diff=5"
-        },
-        {
-          "x": -13,
-          "y": -18,
-          "details": "river surf=91 -> water nbr surf=85 diff=6"
-        },
-        {
-          "x": -12,
-          "y": -19,
-          "details": "river surf=78 -> water nbr surf=67 diff=11"
-        },
-        {
-          "x": -12,
-          "y": -18,
-          "details": "river surf=85 -> water nbr surf=78 diff=7"
-        },
-        {
-          "x": -11,
-          "y": -19,
-          "details": "river surf=67 -> water nbr surf=55 diff=12"
-        },
-        {
-          "x": -11,
-          "y": -13,
-          "details": "river surf=103 -> water nbr surf=100 diff=3"
-        },
-        {
-          "x": -11,
-          "y": -12,
-          "details": "river surf=106 -> water nbr surf=103 diff=3"
-        },
-        {
-          "x": -10,
-          "y": -20,
-          "details": "river surf=48 -> water nbr surf=39 diff=9"
-        },
-        {
-          "x": -10,
-          "y": -19,
-          "details": "river surf=55 -> water nbr surf=48 diff=7"
-        },
-        {
-          "x": -10,
-          "y": -18,
-          "details": "river surf=63 -> water nbr surf=55 diff=8"
-        },
-        {
-          "x": -10,
-          "y": -17,
-          "details": "river surf=73 -> water nbr surf=63 diff=10"
-        },
-        {
-          "x": -10,
-          "y": -16,
-          "details": "river surf=81 -> water nbr surf=73 diff=8"
-        },
-        {
-          "x": -10,
-          "y": -15,
-          "details": "river surf=88 -> water nbr surf=81 diff=7"
-        },
-        {
-          "x": -10,
-          "y": -14,
-          "details": "river surf=94 -> water nbr surf=88 diff=6"
-        },
-        {
-          "x": -10,
-          "y": -13,
-          "details": "river surf=100 -> water nbr surf=94 diff=6"
         }
       ]
     }
