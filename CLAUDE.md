@@ -316,6 +316,26 @@ phase; the stake phase runs LAST (the staked portal spawns its roster,
 which would contaminate later phases). Structure build costs live in
 the pack YAML's `build:` block (`data/structure_packs/*.yaml`).
 
+### Testing derived unit roles headless
+
+Roles (#265) are DERIVED labels, never assigned: the highest work
+skill ≥ 30 (with +5 switch hysteresis) names the role — mining→Miner,
+woodcutting→Woodcutter, construction→Builder, smithing→Smith, else
+Laborer; units with no work skills (wildlife, technomule) have none.
+Definitions + weights live in `scripts/unit_roles.lua`; the role
+multiplies matching work-action ENTRY utilities (on-role ×1.4,
+off-role ×0.7 — never the 6.0 in-progress locks, never survival/
+combat/orders). Skills grow with use (dig→mining, fell→woodcutting,
+piece placed→construction), so units specialise emergently. Query with
+`unitAi.getRole(uid)`; the unit-info header Role row displays it.
+
+Turnkey harness: **`python3 tools/role_probe.py`** — the #265 gate.
+Boots headless on a real world (needs a tree) and asserts derivation +
+hysteresis + demotion, no-role species, steering (same geometry, a
+woodcutter picks the chop job while a miner picks the dig job), and
+work-XP growth incl. the legacy-save lazy seeding path
+(`grantWorkXP`).
+
 ### Testing crafting recipes headless
 
 Turnkey harness: **`python3 tools/craft_probe.py`** — the

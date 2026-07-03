@@ -29,6 +29,9 @@ package.loaded["scripts.unit_ai"] = unitAi
 -- Shared comfort/ordered/sprint speed model (see movement_speed.lua).
 local mv = require("scripts.movement_speed")
 local brain = require("scripts.brain")
+-- Derived roles (#265): skill-derived labels that weight work-action
+-- ENTRY utilities (locks stay untouched — see unit_roles.lua header).
+local roles = require("scripts.unit_roles")
 
 -- Report a FAILED job/task to the player as a red unit_warning in the
 -- event log (and the unit's per-unit Log). The engine coalesces
@@ -43,6 +46,20 @@ local function reportFailure(uid, msg)
     else
         engine.emitEventForUnit("unit_warning", msg, uid)
     end
+end
+
+-- Grant work-skill XP, seeding the key first when it's missing:
+-- unit.addXP no-ops on a skill the unit doesn't have, and units from
+-- saves that predate a skill (woodcutting/construction, #265) lack the
+-- key. Seed at the acolyte.yaml base (25) so a legacy veteran starts a
+-- new skill as the same novice a fresh spawn rolls around.
+local WORK_SKILL_SEED = 25.0
+local function grantWorkXP(uid, skill, amount)
+    if amount <= 0 then return end
+    if not unit.getSkill(uid, skill) then
+        unit.setSkill(uid, skill, WORK_SKILL_SEED)
+    end
+    unit.addXP(uid, skill, amount)
 end
 
 -----------------------------------------------------------
@@ -69,6 +86,12 @@ end
 -- a routine goal; and a goal only climbs above a command when the
 -- underlying NEED (thirst→drink/refill) does, which is derived. See the
 -- FOLLOW_COMMAND_UTILITY block and the per-action notes for the values.
+--
+-- Derived roles (#265) reshuffle preference WITHIN the routine band
+-- only: work ENTRY utilities are multiplied by ×1.4 (on-role) / ×0.7
+-- (off-role), capped by construction below the 6.0 locks (max weighted
+-- entry = deliver 4.0 · 1.4 = 5.6), so a role can never lift routine
+-- work over a player order or drop an in-progress job's lock.
 local config = {
     acolyte = {
         thought_interval = 1.0,    -- seconds between decisions
@@ -234,6 +257,9 @@ local config = {
         construct_lock_utility  = 6.0,
         construct_rate          = 1.0,
         construct_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
+        construct_xp_per_piece  = 1.0,   -- construction XP per placed
+                                         -- piece (#265; diminishing via
+                                         -- applySkillXP, like mining)
         -- Auto-store materials. Utility curve = base · fill³ where
         -- fill = carrying_weight / carrying_capacity. Below ~65 %
         -- full the action sits under wander (0.8); past that it
@@ -296,6 +322,9 @@ local config = {
                                       -- deliberately slower than foraging)
         chop_equip_seconds   = 1.0,
         chop_claim_timeout   = 30.0,  -- stale-claim expiry (seconds)
+        chop_xp_per_fell     = 2.0,   -- woodcutting XP per felled tree
+                                      -- (#265): a fell is one chunky job
+                                      -- vs dig's 1.0/tile
         chop_stock_target    = 20,    -- colony logs at which urgency floors
         chop_stock_floor     = 0.5,
         chop_bare_speed      = 0.25,  -- no axe: hacking with what's at hand
@@ -376,6 +405,10 @@ local SEARCH_DIRECTIONS = {
 --   commandedTask      = { x, y, speed, startedAt } | nil,
 --   knownWaterSources  = { {x, y}, ... },   -- dedup'd by distance;
 --                                           -- empty list = none known
+--   role               = "miner"|"woodcutter"|"builder"|"smith"
+--                        |"laborer"| nil,   -- derived each thought
+--                                           -- tick (unit_roles.lua);
+--                                           -- nil = not a worker
 -- }
 unitAi.aiState = unitAi.aiState or {}
 local aiState = unitAi.aiState
@@ -2519,7 +2552,9 @@ local function deliverUtility(uid, s, params)
     if not target then return -math.huge end
 
     s.deliveryPendingTarget = target
-    return params.deliver_utility
+    -- Role weight (#265) on the entry only — the 6.0 claim lock above
+    -- stays flat. Max weighted entry = 4.0 · 1.4 = 5.6 < 6.0.
+    return params.deliver_utility * roles.weight(s, "deliver_to_build_site")
 end
 
 local function deliverExecute(uid, s, params)
@@ -2699,6 +2734,7 @@ local function storeMaterialsUtility(uid, s, params)
 
     s.storeTarget = target.bid
     return params.store_base_utility * fill * fill * fill
+         * roles.weight(s, "store_materials")
 end
 
 local function storeMaterialsExecute(uid, s, params)
@@ -2862,6 +2898,7 @@ local function buildNearbyUtility(uid, s, params)
     end
 
     return params.build_base_utility * fill * distFactor
+         * roles.weight(s, "build_nearby")
 end
 
 local function buildNearbyExecute(uid, s, params)
@@ -3104,6 +3141,7 @@ local function constructUtility(uid, s, params)
     s.constructCandidate = cand
     local distFactor = math.max(0, 1 - cand.dist / params.construct_scan_range)
     return params.construct_base_utility * distFactor
+         * roles.weight(s, "construct_job")
 end
 
 -- Stand position: centre of the neighbouring tile nearest the unit —
@@ -3281,13 +3319,20 @@ local function constructExecute(uid, s, params)
         local elapsed = now - (s.lastConstructAt or now)
         s.lastConstructAt = now
         if elapsed > 0 then
-            local delta = params.construct_rate * elapsed / job.work
+            -- Construction skill scales the pour rate the same way
+            -- mining scales dig and woodcutting scales chop: level 50
+            -- ≈ baseline, level 0 half rate (#265).
+            local conSkill = unit.getSkill(uid, "construction") or 25.0
+            local delta = params.construct_rate * (0.5 + conSkill / 100.0)
+                        * elapsed / job.work
             job.progress = (job.progress or 0) + delta
             construction.addJobProgress(wid, job.x, job.y, delta)
         end
         if (job.progress or 0) >= 1.0 then
             placeStructurePiece(job)
             construction.setJobStatus(wid, job.x, job.y, "complete")
+            grantWorkXP(uid, "construction",
+                        params.construct_xp_per_piece or 0)
             releaseConstructJob(s, uid)
         end
         return
@@ -3430,6 +3475,7 @@ local function digUtility(uid, s, params)
 
     local distFactor = math.max(0, 1 - dist / params.dig_scan_range)
     return params.dig_base_utility * math.min(speed, 1.0) * distFactor
+         * roles.weight(s, "dig_designation")
 end
 
 -- Corner geometry (grid space, matches mdCorners order NW,NE,SE,SW):
@@ -3747,6 +3793,7 @@ local function chopUtility(uid, s, params)
     local distFactor = math.max(0, 1 - dist / params.chop_scan_range)
     return params.chop_base_utility * distFactor
          * woodStockFactor(uid, params)
+         * roles.weight(s, "chop_designation")
 end
 
 local function chopExecute(uid, s, params)
@@ -3833,10 +3880,15 @@ local function chopExecute(uid, s, params)
         local dt = math.min(now - (s.lastChopAt or now), 2.0)
         s.lastChopAt = now
         -- Muscle swings the axe; an axe bites deeper than bare hands.
+        -- Woodcutting skill rides along like mining does for dig:
+        -- level 50 ≈ baseline, level 0 half rate (#265). Legacy-save
+        -- units without the key fell at the yaml novice base.
         local strength = unit.getStat(uid, "strength") or 1.0
         local speed = bestChopSpeed(uid, params)
+        local wcSkill = unit.getSkill(uid, "woodcutting") or 25.0
         s.chopProgress = (s.chopProgress or 0)
-                       + params.chop_rate * speed * strength * dt
+                       + params.chop_rate * speed * strength
+                       * (0.5 + wcSkill / 100.0) * dt
         if s.chopProgress >= 1.0 then
             -- Felled. The "wood" tag scopes the harvest so a shared
             -- tile can't trade its berry bush for the tree; the yield
@@ -3844,6 +3896,7 @@ local function chopExecute(uid, s, params)
             -- nil result (species died / raced) still completes.
             world.harvestFlora(job.x, job.y, "wood")
             chop.cancelDesignation(job.x, job.y)
+            grantWorkXP(uid, "woodcutting", params.chop_xp_per_fell or 0)
             chopComplete(uid, s)
         end
         return
@@ -4538,6 +4591,11 @@ local function tickOne(uid, defName)
 
     if engine.gameTime() < s.nextActionAt then return end
 
+    -- Re-derive the unit's role (#265) once per thought tick, before
+    -- scoring — the work entry utilities below read s.role via
+    -- roles.weight.
+    roles.update(uid, s)
+
     -- Score every action; pick the highest. Ties → first in list.
     local bestAction, bestScore = nil, -math.huge
     for _, a in ipairs(actList) do
@@ -4732,6 +4790,15 @@ end
 -----------------------------------------------------------
 function unitAi.getState(uid)
     return aiState[uid]
+end
+
+-- | Public: the unit's derived role (#265) — "miner" | "woodcutter" |
+--   "builder" | "smith" | "laborer", or nil for non-workers (wildlife,
+--   technomule) and units the AI hasn't ticked yet. The unit-info
+--   panel maps it through unit_roles.display for the header Role row.
+function unitAi.getRole(uid)
+    local s = aiState[uid]
+    return s and s.role or nil
 end
 
 -- | Public: how many acolytes are currently standing within Chebyshev
