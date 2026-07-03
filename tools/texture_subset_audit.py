@@ -13,10 +13,16 @@ equipment/items). For each subset this reports:
 Subsets that intentionally reuse an EXISTING generic asset (vegetation ->
 utility/blanktexture.png, the established "unmapped id" convention; world
 materials -> utility/notexture.png, the established "no material"
-convention; equipment -> its own missing_equipment.png, already wired in
-Engine.Scripting.Lua.API.Items.resolveSpritePath) are reported against
-that shared asset rather than a new per-subset one — no new art needed
-for those.
+convention; items -> ui/placeholders/missing_equipment.png, already wired
+in Engine.Scripting.Lua.API.Items.resolveSpritePath; equipment classes ->
+ui/placeholders/humanoid_silhouette_blank.png, a pre-existing dimension-
+matched blank silhouette wired in
+Engine.Scripting.Lua.API.Equipment.loadEquipmentYamlFn) are reported
+against that shared asset rather than a new per-subset one — no new art
+needed for those. Items (data/items, `sprite:` icons) and equipment
+classes (data/equipment, `silhouette:` body outlines) are two distinct
+runtime loaders with two distinct fallbacks, so they're audited as
+separate subsets even though they share a data domain.
 
 Icon families (skill/stat/status/injury/infection/knowledge) reference
 icons by bare basename resolved at runtime via a directory-listing index
@@ -141,10 +147,16 @@ SUBSETS = [
         "missing_entities": lambda: regex_missing("data/materials"),
     },
     {
-        "name": "equipment/items",
+        "name": "items",
         "unknown": "assets/textures/ui/placeholders/missing_equipment.png",
         "shared_fallback": "already wired: Engine.Scripting.Lua.API.Items.resolveSpritePath",
-        "missing_entities": lambda: regex_missing("data/items") + regex_missing("data/equipment"),
+        "missing_entities": lambda: regex_missing("data/items"),
+    },
+    {
+        "name": "equipment (silhouettes)",
+        "unknown": "assets/textures/ui/placeholders/humanoid_silhouette_blank.png",
+        "shared_fallback": "already wired: Engine.Scripting.Lua.API.Equipment.loadEquipmentYamlFn",
+        "missing_entities": lambda: regex_missing("data/equipment"),
     },
 ]
 
