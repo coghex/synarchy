@@ -62,7 +62,7 @@ cabal test synarchy-test-headless
   - `UI` — focus, text input, tooltips, UI rendering
 - `app/Main.hs` — executable entry point (draw loop)
 - `test/`, `test-headless/` — hspec test suites (`synarchy-test-graphical`, `synarchy-test-headless`)
-- `tools/` — Python worldgen regression tools and headless behavior probes (see `tools/README.md`)
+- `tools/` — Python worldgen regression tools (see `tools/README.md`) and headless behavior probes (see `CLAUDE.md`)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
 - `config/` — YAML config (keybinds, video, pathing, notifications, world-gen defaults)
 - `data/` — game data YAML (buildings, items, units, flora, recipes, materials, structure packs, ...)
