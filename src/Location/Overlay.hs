@@ -28,6 +28,7 @@ module Location.Overlay
     ( computeLocationOverlay
     , ChunkMetrics(..)
     , chunkMetricsAt
+    , chunkSeamChebyshev
     ) where
 
 import UPrelude
@@ -108,7 +109,17 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers def
     | otherwise = fst (foldl' placeDef (emptyLocationOverlay, HS.empty) defsSorted)
   where
     half = worldSize `div` 2
-    allCoords = [ ChunkCoord cx cy | cx ← [-half .. half - 1], cy ← [-half .. half - 1] ]
+    -- One candidate per PHYSICAL chunk. The raw square grid double-covers
+    -- the seam neighbourhood (a near-seam chunk appears at its canonical
+    -- coord AND a u-alias), so an unfiltered scan could place one def
+    -- twice on the same physical chunk — and an alias-keyed entry would
+    -- never stamp, because chunk loading canonicalises through
+    -- 'wrapChunkCoordU' before insert ('World.Thread.ChunkLoading'), so
+    -- overlay lookups only ever see canonical coords.
+    allCoords = [ coord
+                | cx ← [-half .. half - 1], cy ← [-half .. half - 1]
+                , let coord = ChunkCoord cx cy
+                , wrapChunkCoordU worldSize coord ≡ coord ]
 
     -- Land chunks (not ocean, not glacier, above sea level) with metrics.
     landMetrics ∷ [(ChunkCoord, ChunkMetrics)]
@@ -192,8 +203,10 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers def
                                  (HM.insert coord lid ov')
                                  (HS.insert coord occ)
                                  rest
-        tooClose (ChunkCoord ax ay) (ChunkCoord bx by) =
-            max (abs (ax - bx)) (abs (ay - by)) < minSpacing
+        -- Seam-aware (#422): two chunks just across the u-wrap are
+        -- physical neighbours even though their raw coords are half a
+        -- world apart.
+        tooClose a b = chunkSeamChebyshev worldSize a b < minSpacing
 
     scoreFor ∷ Text → ChunkCoord → Word64
     scoreFor lid (ChunkCoord cx cy) =
@@ -203,6 +216,21 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers def
             h3 = (h2 `xor` (h2 `shiftR` 33)) * 0xff51afd7ed558ccd
             h4 = (h3 `xor` (h3 `shiftR` 33)) * 0xc4ceb9fe1a85ec53
         in  h4 `xor` (h4 `shiftR` 33)
+
+-- | Chebyshev distance between two chunk coords under the cylindrical
+--   u-wrap (the 'wrapChunkCoordU' topology): the minimum raw Chebyshev
+--   distance over the three u-alias images of the first coord. Shifting
+--   u by ±w moves a coord by (±w/2, ∓w/2) — v = cx + cy is
+--   glacier-bounded and never wraps, so one alias step each way covers
+--   every canonical pair. Equals the raw distance for interior pairs
+--   and for non-wrapping (arena / zero-size) worlds.
+chunkSeamChebyshev ∷ Int → ChunkCoord → ChunkCoord → Int
+chunkSeamChebyshev worldSize (ChunkCoord ax ay) (ChunkCoord bx by)
+    | halfW ≤ 0 = raw 0
+    | otherwise = minimum [ raw k | k ← [-1, 0, 1] ]
+  where
+    halfW = worldSize `div` 2
+    raw k = max (abs (ax + k * halfW - bx)) (abs (ay - k * halfW - by))
 
 -- | FNV-1a hash of a location id — a fully deterministic salt (no
 --   dependence on hashable's per-run seed) so the overlay is identical
