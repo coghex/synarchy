@@ -18,14 +18,14 @@ import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
-import Unit.Stats (rollStat, pickName)
+import Unit.Stats (rollStat, pickName, applyItemBuffs)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         lookupEquipmentClass)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
-                  , ItemBuff(..), ItemManager(..), lookupItemDef
+                  , ItemManager(..), lookupItemDef
                   , itemTotalWeight)
 import Engine.Core.Log (LoggerState)
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
@@ -1088,32 +1088,20 @@ defModifierMap def = foldl' insertOne HM.empty (udModifiers def)
             others   = filter (\x → smSource x ≢ smSource m) existing
         in HM.insert stat (m : others) acc
 
--- | Fold an accessory's buffs into a modifier map. Mirrors
---   Engine.Scripting.Lua.API.Equipment.applyItemBuffs but kept here to
---   avoid the import cycle between Unit.Thread.Command and Equipment.
---   Source string = item display_name; same-source entries collapse.
+-- | Fold an accessory's buffs into a modifier map: def lookup + the
+--   shared Unit.Stats.applyItemBuffs (which handles condition scaling,
+--   the percent axis, and same-source collapse). Items without a def
+--   in scope contribute nothing.
 applyAccessoryBuffs ∷ ItemManager
                     → HM.HashMap Text [StatModifier]
                     → ItemInstance
                     → HM.HashMap Text [StatModifier]
 applyAccessoryBuffs itemMgr mods inst =
     case lookupItemDef (iiDefName inst) itemMgr of
-        Nothing → mods
-        Just iDef → foldl' (applyOne iDef) mods (idBuffs iDef)
-  where
-    applyOne iDef acc b =
-        let cond  = iiCondition inst
-            delta = if ibScalesWithCondition b
-                      then ibAmount b * (cond / 100)
-                      else ibAmount b
-            src   = idDisplayName iDef
-            m     = StatModifier { smDelta = delta
-                                 , smSource = src
-                                 , smExpiry = Nothing
-                                 , smPercent = 0 }
-            existing = HM.lookupDefault [] (ibStat b) acc
-            others   = filter (\x → smSource x ≢ src) existing
-        in HM.insert (ibStat b) (m : others) acc
+        Nothing   → mods
+        Just iDef → applyItemBuffs (idDisplayName iDef)
+                                   (iiCondition inst)
+                                   (idBuffs iDef) mods
 
 -- | Resolve a unit def's starting_accessories into ItemInstances.
 --   Unknown items log a warning and are dropped. Quality + condition

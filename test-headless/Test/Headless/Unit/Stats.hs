@@ -8,8 +8,11 @@ module Test.Headless.Unit.Stats (spec) where
 import UPrelude
 import Test.Hspec
 import System.Random (mkStdGen)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Unit.Stats (rollStat, effectiveStat, applySkillXP, pickName)
+import Item.Types (ItemBuff(..))
+import Unit.Stats (rollStat, effectiveStat, applySkillXP, applyItemBuffs,
+                   pickName)
 import Unit.Types (StatModifier(..), NamePool(..))
 
 -- | Roll one stat with the given seed and return just the value.
@@ -114,6 +117,76 @@ spec = do
         it "clamps at 0 when a negative percent overshoots" $
             effectiveStat 0 10.0 [mkPct (-1.5) "drain" Nothing]
               `shouldBe` 0.0
+
+    let mkBuff st amt pct scales = ItemBuff
+            { ibStat = st, ibAmount = amt, ibPercent = pct
+            , ibScalesWithCondition = scales }
+        modsFor stat m = HM.lookupDefault [] stat m
+    describe "applyItemBuffs (#392)" $ do
+        it "flat buff at full condition → delta only" $ do
+            let m = applyItemBuffs "Goggles" 100
+                        [mkBuff "perception" 1.0 0 True] HM.empty
+            case modsFor "perception" m of
+                [sm] → do
+                    smDelta sm   `shouldBe` 1.0
+                    smPercent sm `shouldBe` 0.0
+                    smSource sm  `shouldBe` "Goggles"
+                    smExpiry sm  `shouldBe` Nothing
+                other → expectationFailure ("expected 1 modifier, got "
+                                            ⧺ show (length other))
+        it "percent-only buff lands on the smPercent axis" $ do
+            let m = applyItemBuffs "Amulet" 100
+                        [mkBuff "perception" 0 0.1 False] HM.empty
+            case modsFor "perception" m of
+                [sm] → do
+                    smDelta sm   `shouldBe` 0.0
+                    smPercent sm `shouldBe` 0.1
+                other → expectationFailure ("expected 1 modifier, got "
+                                            ⧺ show (length other))
+        it "condition scales BOTH amount and percent (50% → half)" $ do
+            let m = applyItemBuffs "Amulet" 50
+                        [mkBuff "perception" 2.0 0.1 True] HM.empty
+            case modsFor "perception" m of
+                [sm] → do
+                    smDelta sm   `shouldBe` 1.0
+                    smPercent sm `shouldBe` 0.05
+                other → expectationFailure ("expected 1 modifier, got "
+                                            ⧺ show (length other))
+        it "non-scaling buff ignores condition" $ do
+            let m = applyItemBuffs "Amulet" 50
+                        [mkBuff "perception" 2.0 0.1 False] HM.empty
+            case modsFor "perception" m of
+                [sm] → do
+                    smDelta sm   `shouldBe` 2.0
+                    smPercent sm `shouldBe` 0.1
+                other → expectationFailure ("expected 1 modifier, got "
+                                            ⧺ show (length other))
+        it "re-applying the same source replaces, not stacks" $ do
+            let buffs = [mkBuff "perception" 1.0 0.1 True]
+                m0 = applyItemBuffs "Goggles" 100 buffs HM.empty
+                m1 = applyItemBuffs "Goggles" 50  buffs m0
+            case modsFor "perception" m1 of
+                [sm] → do
+                    smDelta sm   `shouldBe` 0.5
+                    smPercent sm `shouldBe` 0.05
+                other → expectationFailure ("expected 1 modifier, got "
+                                            ⧺ show (length other))
+        it "different sources on the same stat stack" $ do
+            let m = applyItemBuffs "Amulet" 100
+                        [mkBuff "perception" 0 0.1 False]
+                        (applyItemBuffs "Goggles" 100
+                            [mkBuff "perception" 1.0 0 False] HM.empty)
+            length (modsFor "perception" m) `shouldBe` 2
+        it "one item's buffs land on their respective stats" $ do
+            let m = applyItemBuffs "Exosuit" 100
+                        [ mkBuff "strength"   2.0 0    False
+                        , mkBuff "perception" 0   0.25 False ] HM.empty
+            (smDelta   <$> modsFor "strength"   m) `shouldBe` [2.0]
+            (smPercent <$> modsFor "perception" m) `shouldBe` [0.25]
+        it "end-to-end: effectiveStat sees (base+delta)×(1+percent)" $ do
+            let m = applyItemBuffs "Exoskeleton" 100
+                        [mkBuff "strength" 2.0 0.5 False] HM.empty
+            effectiveStat 0 10.0 (modsFor "strength" m) `shouldBe` 18.0
 
     describe "applySkillXP" $ do
         let approx target v = abs (v - target) < 1e-4
