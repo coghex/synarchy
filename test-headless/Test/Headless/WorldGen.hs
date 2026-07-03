@@ -28,7 +28,10 @@ import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
 import Location.Types (LocationDef(..))
-import Location.Overlay (computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..))
+import Location.Overlay
+    ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..)
+    , chunkSeamChebyshev
+    )
 
 spec ∷ SpecWith EngineEnv
 spec = do
@@ -207,3 +210,45 @@ spec = do
                 p = defaultWorldGenParams { wgpLocationOverlay = sample }
                 back = Cereal.decode (Cereal.encode p) ∷ Either String WorldGenParams
             fmap wgpLocationOverlay back `shouldBe` Right sample
+
+        it "chunkSeamChebyshev measures across the U seam (#422)" $ \_env → do
+            -- worldSize 8 → halfW 4, canonical u = cx − cy ∈ [−4, 4).
+            -- (2, −1) and (−2, 3) are u-alias images of ONE physical chunk.
+            chunkSeamChebyshev 8 (ChunkCoord 2 (-1)) (ChunkCoord (-2) 3)
+                `shouldBe` 0
+            -- Physically adjacent across the seam; raw Chebyshev says 4.
+            chunkSeamChebyshev 8 (ChunkCoord 2 (-1)) (ChunkCoord (-2) 2)
+                `shouldBe` 1
+            -- Interior pairs keep the raw distance.
+            chunkSeamChebyshev 8 (ChunkCoord 0 0) (ChunkCoord 2 1)
+                `shouldBe` 2
+            -- Non-wrapping (arena / zero-size) world: raw distance.
+            chunkSeamChebyshev 0 (ChunkCoord 2 (-1)) (ChunkCoord (-2) 3)
+                `shouldBe` 4
+
+        it "enforces minSpacing across the U seam and never places aliases (#422)" $ \_env → do
+            -- Pure pass at worldSize 8 over water-free synthetic tables;
+            -- [] anchors leave every land chunk a candidate, so the
+            -- placements crowd the seam. Pre-#422 nearly every seed here
+            -- placed a same-def pair whose alias images touch — several
+            -- (e.g. seed 6) placed the SAME physical chunk twice, once
+            -- under its canonical coord and once under its u-alias.
+            let ws = 8
+                def = mkDef "seam_test" []
+                noLakes  = gtWorldLakes  emptyTimeline
+                noRivers = gtWorldRivers emptyTimeline
+                placedFor seed =
+                    let plates = generatePlates seed ws 3
+                    in HM.keys (computeLocationOverlay seed ws plates
+                                    HS.empty HM.empty noLakes noRivers [def])
+                allPlaced = map placedFor [0 .. 15]
+            -- The scenario must actually exercise placement (a mostly
+            -- submerged seed may legitimately place nothing).
+            sum (map length allPlaced) `shouldSatisfy` (≥ 8)
+            forM_ allPlaced $ \placed → do
+                forM_ placed $ \c → wrapChunkCoordU ws c `shouldBe` c
+                forM_ [ (a, b) | (i, a) ← zip [0 ∷ Int ..] placed
+                               , (j, b) ← zip [0 ∷ Int ..] placed
+                               , i < j ] $ \(a, b) →
+                    chunkSeamChebyshev ws a b
+                        `shouldSatisfy` (≥ ldMinSpacing def)
