@@ -15,7 +15,7 @@ module UI.TextBuffer
 
 import UPrelude
 import qualified Data.Text as T
-import UI.Focus (TextBuffer(..))
+import UI.Types (TextBuffer(..))
 
 -- | Insert character at cursor position
 insertChar ∷ Char → TextBuffer → TextBuffer

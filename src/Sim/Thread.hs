@@ -30,6 +30,27 @@ import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
 import Sim.Fluid.Types (fluidCellToActive, activeToFluidCell)
 import Sim.Fluid.Active (simulateActiveTick)
 
+-- | Settle-tick countdown for a freshly generated/loaded chunk. Newly
+--   generated fluid starts further from equilibrium than a
+--   previously-settled chunk being nudged awake, so it gets a longer
+--   countdown than 'reactivateSettleTicks'.
+newChunkSettleTicks ∷ Int
+newChunkSettleTicks = 64
+
+-- | Settle-tick countdown for a chunk that was already settled and is
+--   being re-agitated: a world reactivation, a tile edit, or an edit
+--   that lands before the chunk has ever loaded. Shorter than
+--   'newChunkSettleTicks' since it's re-equilibrating, not settling
+--   from scratch.
+reactivateSettleTicks ∷ Int
+reactivateSettleTicks = 24
+
+-- | Hard cap on synchronous settle iterations for 'SimFastSettleAll'
+--   (the dump path) — a safety net against runaway settling, not
+--   expected to be hit in practice.
+maxFastSettleIterations ∷ Int
+maxFastSettleIterations = 500
+
 startSimThread ∷ EngineEnv → IO ThreadState
 startSimThread env = do
     logger ← readIORef (loggerRef env)
@@ -137,7 +158,7 @@ handleSimCommand env logger simStateRef cmd = do
             writeIORef simStateRef $
                 modifyWorld pid (\sws → sws
                     { swsActive = True
-                    , swsChunks = HM.map (\scs → scs { scsSettleTicks = 24 })
+                    , swsChunks = HM.map (\scs → scs { scsSettleTicks = reactivateSettleTicks })
                                          (swsChunks sws)
                     }) ss
             logDebug logger CatWorld $ "Sim: world activated " <> tshow pid
@@ -164,7 +185,7 @@ handleSimCommand env logger simStateRef cmd = do
                     { scsFluid       = fluidMap
                     , scsTerrain     = terrainMap
                     , scsGenFluid    = fluidMap
-                    , scsSettleTicks = 64
+                    , scsSettleTicks = newChunkSettleTicks
                     , scsActive      = False
                     , scsActiveFluid = V.replicate sz Nothing
                     , scsEquilTicks  = 0
@@ -189,13 +210,13 @@ handleSimCommand env logger simStateRef cmd = do
                     Just scs → scs { scsFluid       = fluidMap
                                    , scsTerrain     = terrainMap
                                    , scsGenFluid    = fluidMap
-                                   , scsSettleTicks = 24
+                                   , scsSettleTicks = reactivateSettleTicks
                                    }
                     Nothing  → SimChunkState
                         { scsFluid       = fluidMap
                         , scsTerrain     = terrainMap
                         , scsGenFluid    = fluidMap
-                        , scsSettleTicks = 24
+                        , scsSettleTicks = reactivateSettleTicks
                         , scsActive      = False
                         , scsActiveFluid = V.replicate sz Nothing
                         , scsEquilTicks  = 0
@@ -236,12 +257,11 @@ handleSimCommand env logger simStateRef cmd = do
             -- guarded against was removed), so scsFluid is already fresh.
             -- Run sim ticks synchronously (no sleeping) for every world
             -- until all its chunks are settled and inactive. Capped at
-            -- maxIterations as a safety net. Explicitly unpause — the dump
-            -- path pauses the sim before chunks load, but simulateActiveTick
-            -- is a no-op while paused, so the synchronous settle below would
-            -- do nothing.
-            let maxIterations = 500 ∷ Int
-                settled = HM.map (fastSettleWorld maxIterations) (ssWorlds ss)
+            -- maxFastSettleIterations as a safety net. Explicitly unpause —
+            -- the dump path pauses the sim before chunks load, but
+            -- simulateActiveTick is a no-op while paused, so the synchronous
+            -- settle below would do nothing.
+            let settled = HM.map (fastSettleWorld maxFastSettleIterations) (ssWorlds ss)
                 -- Mark every chunk dirty so the whole settled state is
                 -- emitted to the world thread.
                 dirtied = HM.map (\sws →
