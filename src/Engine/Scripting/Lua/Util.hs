@@ -10,7 +10,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaScript(..))
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import qualified HsLua as Lua
 import qualified Data.Text as T
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Control.Concurrent.STM (readTVarIO)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)

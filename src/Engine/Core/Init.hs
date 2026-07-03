@@ -11,7 +11,7 @@ import UPrelude
 import Data.IORef (newIORef)
 import Data.Time.Clock (UTCTime(..))
 import Data.Time.Calendar (fromGregorian)
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Control.Concurrent.STM (newTVarIO)

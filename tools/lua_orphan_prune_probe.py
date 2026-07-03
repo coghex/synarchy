@@ -239,7 +239,8 @@ def main() -> int:
 
         # Save + load. The engine fires onSaveLoaded after the load
         # settles; the reconcile should prune A while keeping B.
-        print(f"saveWorld -> {send(args.port, f'return engine.saveWorld(\"arena\",\"{SAVE_NAME}\")')}")
+        save_cmd = f'return engine.saveWorld("arena","{SAVE_NAME}")'
+        print(f"saveWorld -> {send(args.port, save_cmd)}")
         # saveWorld returns on enqueue — wait for the file to actually land
         # before loading, or loadSave races the write / reads a stale dir.
         if not wait_save_written(SAVE_NAME):
@@ -250,7 +251,8 @@ def main() -> int:
         # the Lua loop can't tick script update()s against the half-restored
         # singletons during the load window.
         send(args.port, "engine.setPaused(false); return 'ok'", expect_result=False)
-        print(f"loadSave -> {send(args.port, f'return engine.loadSave(\"{SAVE_NAME}\")')}")
+        load_cmd = f'return engine.loadSave("{SAVE_NAME}")'
+        print(f"loadSave -> {send(args.port, load_cmd)}")
         # Right after loadSave returns (world thread hasn't finished the load),
         # the engine must already be paused — frozen for the load window.
         load_paused = send(args.port, "return engine.isPaused()")

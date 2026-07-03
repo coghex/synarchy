@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
+import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.CursorInfo as CursorInfo
@@ -68,6 +69,7 @@ main = hspec $ do
         describe "Column Exposure" Exposure.spec
         describe "Zoom/Detail Parity" ZoomParity.spec
         describe "Border Probe" BorderProbe.spec
+        describe "Asset.TextureFallback" TextureFallback.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec

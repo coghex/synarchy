@@ -117,7 +117,7 @@ import World.Page.Types (WorldPageId(..))
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStat(..), UnitYamlSkill(..),
                                UnitYamlBody(..), UnitYamlBodyAttr(..),
@@ -189,16 +189,21 @@ loadUnitYamlFn env backendState = do
                     let name      = uydName def
                         spritePath = T.unpack (uydSprite def)
 
+                    resolvedSprite ← resolveTexturePath env "Unit sprite"
+                                         (unknownUnitTexture DirS) spritePath
                     handle ← loadAndRegister env backendState lteq
-                                 ("unit_" <> name) spritePath
+                                 ("unit_" <> name) resolvedSprite
 
                     -- Load the optional authored portrait (info panel).
                     -- Nothing → the UI mirrors the live animation frame.
                     portraitH ← case uydPortrait def of
                         Nothing → return Nothing
-                        Just p  → Just <$> loadAndRegister env backendState lteq
-                                     ("unit_" <> name <> "_portrait")
-                                     (T.unpack p)
+                        Just p  → do
+                            resolvedP ← resolveTexturePath env "Unit portrait"
+                                            (unknownUnitTexture DirS) (T.unpack p)
+                            Just <$> loadAndRegister env backendState lteq
+                                         ("unit_" <> name <> "_portrait")
+                                         resolvedP
 
                     -- Resolve the name pool (#264). The id maps to a
                     -- file alongside the units dir: data/names/<id>.yaml.
@@ -218,9 +223,11 @@ loadUnitYamlFn env backendState = do
                                     <> "' in unit " <> name <> ", skipping"
                                 return acc
                             Just dir → do
+                                resolved ← resolveTexturePath env "Unit directional sprite"
+                                               (unknownUnitTexture dir) (T.unpack texPath)
                                 h ← loadAndRegister env backendState lteq
                                         ("unit_" <> name <> "_" <> dirKey)
-                                        (T.unpack texPath)
+                                        resolved
                                 return (Map.insert dir h acc)
                         ) Map.empty (Map.toList (uydDirectionalSprites def))
 
@@ -235,13 +242,15 @@ loadUnitYamlFn env backendState = do
                                         <> "' of unit " <> name <> ", skipping"
                                     return accF
                                 Just dir → do
-                                    handles ← mapM (\(i, p) →
+                                    handles ← mapM (\(i, p) → do
+                                        resolved ← resolveTexturePath env "Unit animation frame"
+                                                       (unknownUnitTexture dir) (T.unpack p)
                                         loadAndRegister env backendState lteq
                                             ("unit_" <> name
                                              <> "_" <> animName
                                              <> "_" <> dirKey
                                              <> "_" <> T.pack (show i))
-                                            (T.unpack p)
+                                            resolved
                                         ) (zip [(0 ∷ Int)..] framePaths)
                                     return (Map.insert dir
                                               (V.fromList handles) accF)
@@ -3817,6 +3826,24 @@ parseDirKey t = case T.toLower t of
     "east"       → Just DirE
     "south-east" → Just DirSE
     _            → Nothing
+
+-- | Static per-direction placeholder for a unit whose declared
+--   sprite/portrait/animation-frame texture is missing on disk (#478) —
+--   one flat pose per compass direction; every animation reuses its
+--   direction's pose until #485 gives it real frames. Non-directional
+--   slots (base sprite, portrait) default to the south-facing pose.
+unknownUnitTexture ∷ Direction → FilePath
+unknownUnitTexture dir =
+    "assets/textures/units/unknown_unit/rotations/" <> dirName dir <> ".png"
+  where
+    dirName DirS  = "south"
+    dirName DirSW = "south-west"
+    dirName DirW  = "west"
+    dirName DirNW = "north-west"
+    dirName DirN  = "north"
+    dirName DirNE = "north-east"
+    dirName DirE  = "east"
+    dirName DirSE = "south-east"
 
 -- | unit.getItemContents(uid, defName[, instanceId]) → array of { defName,
 --   displayName, count, fill, condition, weight, ... }, GROUPED by item type
