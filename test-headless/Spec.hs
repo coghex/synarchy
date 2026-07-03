@@ -14,6 +14,7 @@ import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
+import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
@@ -67,6 +68,7 @@ main = hspec $ do
         describe "Border Probe" BorderProbe.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
+    describe "WorldGen.BedDepth" BedDepth.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec
