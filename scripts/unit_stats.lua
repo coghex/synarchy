@@ -75,6 +75,8 @@ stats.activityMultiplier = activityMultiplier
 local derived = {
     -- Stamina pool size = endurance * 10. Larger endurance means
     -- the unit can exert itself longer before stamina runs out.
+    -- NB: mirrored on the Haskell side by Combat.Resolution.maxStaminaFor
+    -- (the combat thread can't call into Lua) — change in lockstep.
     max_stamina = function(uid)
         local e = unit.getStat(uid, "endurance")
         return e and e * 10 or nil

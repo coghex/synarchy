@@ -48,7 +48,7 @@ import Engine.Core.Log (logDebug, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , UnitManager(..), BodyPart(..), Wound(..), woundEffSeverity
-                  , Scar(..))
+                  , Scar(..), bloodMassRatio)
 import Unit.Command.Types (UnitCommand(..))
 import qualified System.Random as Random
 import World.State.Types (WorldState(..))
@@ -694,7 +694,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
                                 mergedImm
             newBlood   = uiBlood inst - totalDrain
             bodyMass   = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
-            maxBlood   = bodyMass * 0.075
+            maxBlood   = bodyMass * bloodMassRatio
             unconsCut  = maxBlood * unconsciousFraction
             newWoundsR = reverse newWounds
             -- Gangrene death: a VITAL part rotted past the lethal threshold.

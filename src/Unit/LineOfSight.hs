@@ -1,7 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 -- | Per-unit line-of-sight. A unit's visible tile set is the
 -- intersection of:
---   * a circular radius (perception * 6 tiles),
+--   * a circular radius (perception × 'awareRangeTiles' tiles),
 --   * a 120° cone centered on the unit's facing direction,
 --   * line-of-sight against terrain Z (a hill in the way blocks vision).
 --
@@ -43,7 +43,8 @@ unitVisibleTiles env uid = do
                         wtd ← readIORef (wsTilesRef ws)
                         let perception = HM.lookupDefault 1.0 "perception"
                                             (uiStats inst)
-                            radius = max 1 (floor (perception * 6) ∷ Int)
+                            radius = max 1 (floor (realToFrac perception
+                                                   * awareRangeTiles) ∷ Int)
                             ux = floor (uiGridX inst) ∷ Int
                             uy = floor (uiGridY inst) ∷ Int
                             uz = uiGridZ inst

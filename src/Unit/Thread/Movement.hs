@@ -61,6 +61,11 @@ data UnitMoveStats = UnitMoveStats
                                --   pullup vs has to wall-climb first.
     }
 
+-- | Baseline human body height in metres — the default when a unit
+--   declares no "height" stat.
+baselineUnitHeight ∷ Float
+baselineUnitHeight = 1.8
+
 defaultMoveStats ∷ UnitMoveStats
 defaultMoveStats = UnitMoveStats
     { umsBodyMass  = 70.0
@@ -69,17 +74,18 @@ defaultMoveStats = UnitMoveStats
     , umsDexterity = 1.0
     , umsStrength  = 1.0
     , umsRunThreshold = 1.0e9  -- no def → never auto-run (sentinel high)
-    , umsHeight    = 1.8       -- baseline human height
+    , umsHeight    = baselineUnitHeight
     }
 
 -- | Metres of body height needed to mantle one full z-level. A unit's
 --   climb "reach" (z-levels it can pull up onto without wall-climbing) is
---   height / this. Tuned so a baseline acolyte (1.8 m) reaches exactly
---   1 z — i.e. a 1-z cliff is handled entirely by the pullup, with no
---   vertical wall-climb, matching "acolytes are tall enough to climb a
---   1-z cliff and should go almost straight to the pullup".
+--   height / this. EQUAL to 'baselineUnitHeight' by design — a baseline
+--   acolyte (1.8 m) reaches exactly 1 z, i.e. a 1-z cliff is handled
+--   entirely by the pullup, with no vertical wall-climb, matching
+--   "acolytes are tall enough to climb a 1-z cliff and should go almost
+--   straight to the pullup".
 heightPerClimbZ ∷ Float
-heightPerClimbZ = 1.8
+heightPerClimbZ = baselineUnitHeight
 
 -- | How many z-levels the unit can mantle (pull up onto) given its height.
 climbReachZ ∷ UnitMoveStats → Float
@@ -128,7 +134,8 @@ tickAllMovement dt env utsRef = do
                 , umsDexterity = HM.lookupDefault 1.0  "dexterity"  (uiStats  inst)
                 , umsStrength  = HM.lookupDefault 1.0  "strength"   (uiStats  inst)
                 , umsRunThreshold = runFrac * maxSp
-                , umsHeight    = HM.lookupDefault 1.8  "height"     (uiStats  inst)
+                , umsHeight    = HM.lookupDefault baselineUnitHeight
+                                                       "height"     (uiStats  inst)
                 }
             Nothing → defaultMoveStats
     uts ← readIORef utsRef
