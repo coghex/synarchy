@@ -335,6 +335,26 @@ local config = {
         -- is the closest two-handed-tool visual.
         chop_equip_anim = "standing_to_holding_pickaxe",
         chop_work_anim  = "using_pickaxe",
+        -- Craft bills (craft_job, #329). Works the per-station bill
+        -- queue (craft.addBill → engine-side Craft.Bills): claim a
+        -- bill, source the recipe's inputs + fuel (inventory → ground
+        -- → mule, the #96 ladder), stand beside the Built station,
+        -- pour work in, and at 1.0 execute the craft + lay the outputs
+        -- down at the station. Base sits with the other menial work
+        -- (between dig 2.0 and deliver 4.0); the lock matches the
+        -- menial-work locks (6.0) so dire needs still preempt.
+        -- craft_rate is worker-seconds of effort per real second; a
+        -- recipe takes work / (craft_rate · (0.5 + skill/100)) seconds.
+        craft_scan_range    = 30.0,
+        craft_base_utility  = 3.2,
+        craft_lock_utility  = 6.0,
+        craft_rate          = 1.0,
+        craft_claim_timeout = 30.0,  -- stale-claim expiry (game seconds;
+                                     -- enforced engine-side by
+                                     -- craft.claimBill)
+        craft_xp_per_craft  = 1.5,   -- trade-skill XP per completed
+                                     -- craft (#265; diminishing via
+                                     -- applySkillXP, like the others)
         -- Ground-item pickup (player order via right-click → Pick up).
         -- An explicit pickup is a player order peer to a move order, so
         -- it sits just ABOVE follow_command (7.0): commandMove and
@@ -3350,6 +3370,347 @@ local function constructOnExit(uid, s, params)
     end
 end
 
+-----------------------------------------------------------
+-- Action: craft_job  (#329)
+--
+-- Executes craft bills: standing per-station orders (craft.addBill,
+-- UI = #330) against the recipe catalogue (#325) at Built work
+-- stations (#326). The engine owns the queue AND the claims
+-- (Craft.Bills — craft.claimBill is an atomic engine-side
+-- compare-and-swap with the stale-claim rules built in, so unlike
+-- construct/dig there is no module-local claim registry); this action
+-- is the worker loop: claim a bill, source the recipe's inputs + fuel
+-- (inventory → ground → mule, the #96 ladder), walk beside the
+-- station, pour work into the bill (craft.addBillProgress,
+-- skill-scaled), and at 1.0 fire the craft itself (craft.executeAt —
+-- knowledge gate + all-or-nothing consumption + production in one
+-- atomic verb), lay the outputs down at the station
+-- (unit.dropItemToGround: visible, and sourceable as the ground rung
+-- of the fetch ladder — stockpile hauling is future work), grant XP,
+-- and advance the bill (craft.completeBillCycle), rolling straight
+-- into the next cycle when the bill has more.
+--
+-- Skill: the recipe's `skill` tag when present, else "smithing" (the
+-- generic crafting trade). Scales the work rate the way construction
+-- scales pour (level 50 ≈ baseline, level 0 half rate, #265) and
+-- receives the completion XP — which feeds the Smith role. Output
+-- QUALITY is untouched here: that stays the #343 engine rule (only
+-- skill-TAGGED recipes derive quality from the crafter).
+--
+-- Material races against deliveries and other crafters are NOT
+-- reserved cross-unit: the fetch fails gracefully for the loser, the
+-- post-fetch inventory check hands the bill back, and the next scan
+-- re-plans — same self-heal as construction.
+-----------------------------------------------------------
+
+local function craftSkillOf(recipe)
+    return recipe.skill or "smithing"
+end
+
+-- Everything one craft cycle consumes: inputs plus fuel, summed by
+-- def name (mirrors Craft.Types.recipeDemands).
+local function craftDemands(recipe)
+    local d = {}
+    for _, ing in ipairs(recipe.inputs or {}) do
+        d[ing.item] = (d[ing.item] or 0) + (ing.count or 1)
+    end
+    if recipe.fuel then
+        d[recipe.fuel.item] = (d[recipe.fuel.item] or 0)
+                            + (recipe.fuel.count or 1)
+    end
+    return d
+end
+
+-- Is the bill held by someone else whose claim is still fresh?
+-- Mirrors the engine's claimAvailable staleness rules so the utility
+-- scan doesn't chase bills it can't win (the authoritative check is
+-- still the atomic craft.claimBill at claim time).
+local function billClaimedByOther(bill, uid, now, timeout)
+    if not bill.claimant or bill.claimant == uid then return false end
+    if not unit.exists(bill.claimant) then return false end
+    return (now - (bill.claimedAt or 0)) <= timeout
+end
+
+-- Can this unit source every demand right now (inventory + nearby
+-- ground + mule stock)? Races lose gracefully at fetch time; this is
+-- only the "worth claiming" filter, same as construction's.
+local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
+    for item, need in pairs(demands) do
+        local have = inventoryCountOf(uid, item)
+        if have < need then
+            local ground = groundCountOf(fromX, fromY, item,
+                                         params.craft_scan_range)
+            if have + ground < need then
+                local mule = findTechnomule(fromX, fromY)
+                local muleHave = mule
+                    and inventoryCountOf(mule.uid, item) or 0
+                if have + ground + muleHave < need then return false end
+            end
+        end
+    end
+    return true
+end
+
+-- Nearest workable bill within craft_scan_range, or nil. Workable =
+-- station alive + Built on the active world, nobody else's fresh
+-- claim, knowledge gate cleared, and demands sourceable.
+local function findCraftBill(uid, fromX, fromY, params)
+    local bills = craft.getBills()
+    if not bills or #bills == 0 then return nil end
+    local now = engine.gameTime()
+    local best, bestD = nil, params.craft_scan_range
+    for _, bill in ipairs(bills) do
+        if not billClaimedByOther(bill, uid, now,
+                                  params.craft_claim_timeout) then
+            local binfo = building.getInfo(bill.station)
+            if binfo and building.getActivity(bill.station) == "built" then
+                local recipe = craft.get(bill.recipe)
+                if recipe
+                   and (not recipe.knowledge
+                        or unit.getKnowledge(uid, recipe.knowledge)) then
+                    local demands = craftDemands(recipe)
+                    if craftMaterialsAvailable(uid, fromX, fromY,
+                                               demands, params) then
+                        local tw = binfo.tileW or 1
+                        local th = binfo.tileH or 1
+                        local d = distance(fromX, fromY,
+                                           binfo.gridX + tw / 2,
+                                           binfo.gridY + th / 2)
+                        if d <= bestD then
+                            best = { bill = bill, recipe = recipe,
+                                     demands = demands, dist = d }
+                            bestD = d
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- Release the unit's hold on its craft job. toPending hands the bill
+-- back engine-side so another crafter can take it; omitted = the bill
+-- is already gone (completed / cancelled) or owned by someone else.
+local function releaseCraftJob(s, uid, toPending)
+    if s.craftJob and toPending then
+        craft.releaseBill(s.craftJob.billId)
+    end
+    s.craftJob = nil
+    s.craftCandidate = nil
+end
+
+local function craftUtility(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return -math.huge end
+
+    -- Active job: finite lock-in (dire needs still preempt; the
+    -- engine-side claim survives the interruption, and its timeout
+    -- re-opens the bill if we're gone too long). Dropped when the
+    -- bill vanishes (player cancelled / finished by whoever took our
+    -- expired claim) or when someone else legally owns it now.
+    if s.craftJob then
+        local bill = craft.getBill(s.craftJob.billId)
+        if bill and (not bill.claimant or bill.claimant == uid) then
+            return params.craft_lock_utility
+        end
+        if bill then
+            -- Re-claimed by another crafter while we were preempted —
+            -- walk away WITHOUT releasing their claim.
+            s.craftJob = nil
+            s.craftCandidate = nil
+        else
+            releaseCraftJob(s, uid)
+        end
+    end
+
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+    local cand = findCraftBill(uid, info.gridX, info.gridY, params)
+    if not cand then return -math.huge end
+
+    s.craftCandidate = cand
+    local distFactor = math.max(0, 1 - cand.dist / params.craft_scan_range)
+    return params.craft_base_utility * distFactor
+         * roles.weight(s, "craft_job")
+end
+
+local function craftExecute(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local now = engine.gameTime()
+
+    -- Claim the scanned candidate: one atomic engine-side CAS. The
+    -- loser of a race just clears its candidate and re-plans.
+    if not s.craftJob then
+        local cand = s.craftCandidate
+        if not cand then return end
+        s.craftCandidate = nil
+        if not craft.claimBill(cand.bill.id, uid,
+                               params.craft_claim_timeout) then
+            return
+        end
+        -- Fetch shortfalls, planned once at claim time (inventory →
+        -- ground → mule). Reconciled against real inventory after.
+        local need, fromGround, fromMule = {}, {}, {}
+        local mule = findTechnomule(info.gridX, info.gridY)
+        for item, count in pairs(cand.demands) do
+            need[item] = count
+            local have = inventoryCountOf(uid, item)
+            local short = count - have
+            if short > 0 then
+                local ground = math.min(short,
+                    groundCountOf(info.gridX, info.gridY, item,
+                                  params.craft_scan_range))
+                if ground > 0 then fromGround[item] = ground end
+                if short - ground > 0 and mule then
+                    fromMule[item] = short - ground
+                end
+            end
+        end
+        s.craftJob = {
+            billId   = cand.bill.id,
+            bid      = cand.bill.station,
+            recipeId = cand.recipe.id,
+            work     = cand.recipe.work or 0,
+            skill    = craftSkillOf(cand.recipe),
+            outputs  = cand.recipe.outputs or {},
+            need     = need,
+            fromGround = fromGround,
+            fromMule   = fromMule,
+            phase    = "fetch",
+        }
+        return
+    end
+
+    local job = s.craftJob
+    -- The bill can vanish (player cancel) or pass to another crafter
+    -- (our claim expired while preempted) at any point — bail cleanly.
+    local bill = craft.getBill(job.billId)
+    if not bill then
+        releaseCraftJob(s, uid)
+        return
+    end
+    if bill.claimant and bill.claimant ~= uid then
+        s.craftJob = nil
+        return
+    end
+    -- Keep the claim fresh (claimBill by the holder is a refresh).
+    craft.claimBill(job.billId, uid, params.craft_claim_timeout)
+
+    -- Phase 1: source inputs + fuel.
+    if job.phase == "fetch" then
+        if fetchWantsFromGround(uid, job.fromGround, params,
+                                params.craft_scan_range) then
+            return
+        end
+        if fetchWantsFromMule(uid, job.fromMule, info, params) then
+            return
+        end
+        for item, count in pairs(job.need) do
+            if inventoryCountOf(uid, item) < count then
+                -- Sources came up short (raced / capacity) — hand the
+                -- bill back for someone who can cover it.
+                releaseCraftJob(s, uid, true)
+                return
+            end
+        end
+        job.phase = "walking"
+    end
+
+    -- Phase 2: stand beside the station — nearest border tile, same
+    -- walk as deliver (craft.executeAt requires Chebyshev ≤ 1).
+    if job.phase == "walking" then
+        local binfo = building.getInfo(job.bid)
+        if not binfo then          -- station demolished mid-job
+            releaseCraftJob(s, uid, true)
+            return
+        end
+        local tw, th = binfo.tileW or 1, binfo.tileH or 1
+        local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
+        if chebToFootprint(utx, uty, binfo.gridX, binfo.gridY,
+                           tw, th) > 1 then
+            local bestX, bestY, bestD = nil, nil, math.huge
+            for dx = -1, tw do
+                for dy = -1, th do
+                    if dx == -1 or dx == tw or dy == -1 or dy == th then
+                        local nx = binfo.gridX + dx + 0.5
+                        local ny = binfo.gridY + dy + 0.5
+                        local d = distance(info.gridX, info.gridY, nx, ny)
+                        if d < bestD then bestX, bestY, bestD = nx, ny, d end
+                    end
+                end
+            end
+            if bestX then
+                unit.moveTo(uid, bestX, bestY, mv.comfort(uid))
+            end
+            return
+        end
+        unit.stop(uid)
+        job.phase = "working"
+        s.lastCraftAt = now
+        return
+    end
+
+    -- Phase 3: pour work into the bill. Progress rides the engine
+    -- (persisted; a replacement crafter resumes rather than restarts)
+    -- and the verbs are synchronous, so the returned value is
+    -- authoritative — no local copy needed.
+    if job.phase == "working" then
+        local elapsed = now - (s.lastCraftAt or now)
+        s.lastCraftAt = now
+        local progress = bill.progress or 0
+        if elapsed > 0 and job.work > 0 then
+            -- The trade skill scales the pour rate the same way
+            -- mining scales dig and construction scales build:
+            -- level 50 ≈ baseline, level 0 half rate (#265).
+            local level = unit.getSkill(uid, job.skill) or 0.0
+            local delta = params.craft_rate * (0.5 + level / 100.0)
+                        * elapsed / job.work
+            progress = craft.addBillProgress(job.billId, delta) or progress
+        end
+        if job.work <= 0 then progress = 1.0 end
+        if progress >= 1.0 then
+            local ok, err = craft.executeAt(uid, job.recipeId, job.bid)
+            if not ok then
+                -- Inventory raced away / station broke between ticks —
+                -- hand the bill back and let the next scan re-plan.
+                engine.logWarn("craft_job: executeAt failed for unit "
+                    .. tostring(uid) .. ": " .. tostring(err))
+                releaseCraftJob(s, uid, true)
+                return
+            end
+            -- Outputs landed in inventory; lay them down at the
+            -- station so they're visible + sourceable.
+            for _, out in ipairs(job.outputs) do
+                for _ = 1, (out.count or 1) do
+                    unit.dropItemToGround(uid, out.item)
+                end
+            end
+            grantWorkXP(uid, job.skill, params.craft_xp_per_craft or 0)
+            local remaining = craft.completeBillCycle(job.billId)
+            if remaining and remaining ~= 0 then
+                job.phase = "fetch"      -- next cycle: source again
+            else
+                releaseCraftJob(s, uid)  -- bill done and gone
+            end
+        end
+        return
+    end
+end
+
+-- Preempted mid-work (thirst, combat, player order): re-enter through
+-- the walking phase so the elapsed-time accumulator restarts — same
+-- guard as construction's onExit.
+local function craftOnExit(uid, s, params)
+    local job = s.craftJob
+    if job and job.phase == "working" then
+        job.phase = "walking"
+    end
+end
+
 -- Bear-specific candidates live in scripts/bear_ai.lua. Future
 -- wildlife scripts (panda_ai, polar_bear_ai, …) plug in the same
 -- way via unitAi.registerActions / unitAi.setConfig + their own
@@ -4413,6 +4774,8 @@ unitAi.registerActions("acolyte", {
       execute = deliverExecute },
     { name = "construct_job", utility = constructUtility,
       execute = constructExecute, onExit = constructOnExit },
+    { name = "craft_job", utility = craftUtility,
+      execute = craftExecute, onExit = craftOnExit },
     { name = "store_materials", utility = storeMaterialsUtility,
       execute = storeMaterialsExecute },
     { name = "dig_designation", utility = digUtility,

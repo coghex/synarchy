@@ -361,6 +361,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getImmunities" (unitGetImmunitiesFn env)
   registerLuaFunction "getInsulation" (unitGetInsulationFn env)
   registerLuaFunction "dropEquipmentToGround" (unitDropEquipmentToGroundFn env)
+  registerLuaFunction "dropItemToGround" (unitDropItemToGroundFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)
   registerLuaFunction "getLastAttacker" (unitGetLastAttackerFn env)
@@ -511,11 +512,24 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- inventory (verify + consume inputs/fuel, produce outputs);
   -- executeAt (#326) additionally requires a Built work station
   -- offering the recipe's station kind with the unit adjacent.
+  -- The bill verbs (#329) manage the active world's per-station
+  -- standing-order queue (Craft.Bills): addBill / cancelBill /
+  -- getBill / getBills are the queue surface (UI #330);
+  -- claimBill / releaseBill / addBillProgress / completeBillCycle
+  -- are the craft AI's job lifecycle.
   Lua.newtable
   registerLuaFunction "get"      (craftGetFn env)
   registerLuaFunction "getNames" (craftGetNamesFn env)
   registerLuaFunction "execute"  (craftExecuteFn env)
   registerLuaFunction "executeAt" (craftExecuteAtFn env)
+  registerLuaFunction "addBill"           (craftAddBillFn env)
+  registerLuaFunction "cancelBill"        (craftCancelBillFn env)
+  registerLuaFunction "getBill"           (craftGetBillFn env)
+  registerLuaFunction "getBills"          (craftGetBillsFn env)
+  registerLuaFunction "claimBill"         (craftClaimBillFn env)
+  registerLuaFunction "releaseBill"       (craftReleaseBillFn env)
+  registerLuaFunction "addBillProgress"   (craftAddBillProgressFn env)
+  registerLuaFunction "completeBillCycle" (craftCompleteBillCycleFn env)
   Lua.setglobal (Lua.Name "craft")
 
   -- Repair global (#301) — the policy layer on top of unit.repairItem

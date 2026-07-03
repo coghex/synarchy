@@ -83,6 +83,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetImmunitiesFn
     , unitGetInsulationFn
     , unitDropEquipmentToGroundFn
+    , unitDropItemToGroundFn
     , unitGetBloodFn
     , unitGetPainFn
     , unitGetLastAttackerFn
@@ -2170,6 +2171,56 @@ unitDropEquipmentToGroundFn env = do
                                                   { uiEquipment =
                                                       HM.delete slotId
                                                         (uiEquipment inst) }
+                                            in ( um { umInstances =
+                                                        HM.insert uid inst'
+                                                          (umInstances um) }
+                                               , Just (it, uiGridX inst,
+                                                           uiGridY inst) )
+                    case mDrop of
+                        Nothing → Lua.pushboolean False >> return 1
+                        Just (it, gx, gy) → do
+                            _ ← Lua.liftIO $
+                                atomicModifyIORef' (wsGroundItemsRef ws) $
+                                    spawnGroundItem it gx gy
+                            Lua.pushboolean True
+                            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | unit.dropItemToGround(uid, defName) → bool. Removes the FIRST
+--   inventory instance with the matching defName and lays it on the
+--   ground at the unit's tile, PRESERVING the exact ItemInstance
+--   (condition / sharpness / quality / fill) — the inventory inverse
+--   of item.pickupGround, and the inventory sibling of
+--   unit.dropEquipmentToGround. The craft AI (#329) deposits crafted
+--   outputs at the station with it, so they're visible and sourceable
+--   (ground items are a rung of the #96 fetch ladder). Returns false
+--   if the unit is gone, carries no such item, or no world is active
+--   (the item stays in the inventory rather than vanishing).
+unitDropItemToGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDropItemToGroundFn env = do
+    uidArg  ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (uidArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid     = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8Lenient nameBS
+            -- Resolve the world FIRST so we never strip the item from
+            -- the unit when there's nowhere to drop it.
+            mWs ← Lua.liftIO $ activeWorldU env
+            case mWs of
+                Nothing → Lua.pushboolean False >> return 1
+                Just ws → do
+                    mDrop ← Lua.liftIO $
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, Nothing)
+                                Just inst →
+                                    case popFirstByName defName
+                                             (uiInventory inst) of
+                                        Nothing → (um, Nothing)
+                                        Just (it, rest) →
+                                            let inst' = inst
+                                                  { uiInventory = rest }
                                             in ( um { umInstances =
                                                         HM.insert uid inst'
                                                           (umInstances um) }
