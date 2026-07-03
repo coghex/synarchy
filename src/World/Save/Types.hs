@@ -119,7 +119,17 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 68  -- v68: ItemInstance gains trailing 'iiTemp'
+currentSaveVersion = 69  -- v69: coastline variety (#220) — worldgen
+                         --      OUTPUT change, no schema change. The
+                         --      serialized CoastalTable (GeoTimeline →
+                         --      gtCoastal) now reaches 28 tiles inland
+                         --      and encodes steepness-driven coast
+                         --      profiles; base terrain near convergent
+                         --      land-ocean margins keeps its mountains
+                         --      (continentalShelf modulation). Old
+                         --      saves would replay stale coastlines
+                         --      against new chunk regen.
+                         -- v68: ItemInstance gains trailing 'iiTemp'
                          --      (Maybe Float, °C; Nothing = at ambient)
                          --      — item temperature + cooling toward the
                          --      tile's ambient (#344). Rides in every

@@ -1009,16 +1009,19 @@ QUALITY_THRESHOLDS = {
                                   # 5803 before the wt rework)
     "DESERT_SOIL_ON_SLOPE": 250,  # observed max 150 (seed 123 w128); 1.5× policy
     "FLAT_ISOLATED_WATER":   90,  # observed max 59 (seed 5050)
-    "FLOATING_WATER":       300,  # observed max 176 (seed 250) after the
-                                  # river-component labelling fix (save
-                                  # v29) keeps width wings: downhill-side
-                                  # bank tiles previously detached+culled
-                                  # now render, so rivers reach valley
-                                  # edges. Gap histogram is 1-5z bank
-                                  # steps (max 15) — the category's
-                                  # "often legitimate cliff" case, not a
-                                  # new artifact class. Recalibrated
-                                  # 2026-06-11 (was 150, obs max 52).
+    "FLOATING_WATER":       500,  # observed max 319 (seed 12321) after
+                                  # coastline variety (#220, save v69):
+                                  # cliff coasts + coastal mountains kept
+                                  # by the steepness field make legitimate
+                                  # water-adjacent cliffs common by
+                                  # design. Gap histogram is ≥95% 1-8z
+                                  # bank steps; the deep outliers are
+                                  # high-altitude tarns/rivers against
+                                  # valley headwalls (surf 97-183), not
+                                  # coastal artifacts. 1.5× obs-max per
+                                  # the calibration policy. Previously
+                                  # 300 (obs max 176, recalibrated
+                                  # 2026-06-11; before that 150).
     "ISOLATED_FLUID":        90,  # observed max 74 (seed 2718; was 77
                                   # even with old constants)
     "LAKE_HOLE":             25,  # observed max 0 after the terrainZ<surf
@@ -1056,8 +1059,12 @@ QUALITY_THRESHOLDS = {
     "LAKE_UNDER_TERRAIN":   500,  # not observed; underground lakes possible
     "MID_RIVER_CLIFF":     1500,  # observed max 1046 (downstream gradient)
     "RIVER_UNDER_TERRAIN":  500,  # observed max 251 (underground rivers OK)
-    "WATER_ABOVE_LAND":     300,  # observed max 152 (steep valleys)
-    "WATER_CLIFF":          300,  # observed max 152
+    "WATER_ABOVE_LAND":     500,  # observed max 323 after #220 coastline
+                                  # variety (was 152, steep valleys) —
+                                  # same rationale + histogram as
+                                  # FLOATING_WATER above.
+    "WATER_CLIFF":          500,  # observed max 323 after #220 — see
+                                  # FLOATING_WATER rationale.
     "WATER_WATER_CLIFF":   3500,  # observed max 2704 (seed 13579) after the
                                   # #21 refinement: river-involved 1-z steps
                                   # (natural downhill flow) excluded, lake-to-
