@@ -216,4 +216,13 @@ data WorldCommand
         --   — so a later chunk (re)load never respawns them. The world
         --   thread is the sole owner of WorldGenParams; Lua queues this
         --   rather than mutating wsGenParamsRef directly.
+    | WorldMarkLocationStamped WorldPageId Int Int
+        -- ^ worldId, gx, gy. One-time geometry-stamp flag (#424): marks the
+        --   chunk containing (gx, gy) as having had its placed location's
+        --   builder run, in 'WorldGenParams.wgpLocationStamped' — so a
+        --   later chunk (re)load never re-stamps it, even if the player has
+        --   since cleared the anchor floor tile the old structure.hasAt
+        --   guard relied on. The world thread is the sole owner of
+        --   WorldGenParams; Lua queues this rather than mutating
+        --   wsGenParamsRef directly.
     deriving (Show)

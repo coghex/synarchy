@@ -161,12 +161,13 @@ updateChunkLoading env _logger = do
 -- | Dispatch a location-stamp request to the Lua thread for any
 --   just-loaded chunk the overlay (#89) places a location on. Issued on
 --   EVERY load of the chunk (fresh gen, eviction reload, or after a
---   save/load) — the Lua stamper skips it when the geometry is already
---   present (structure.hasAt), so repeats are cheap no-ops. Consulting
---   the persisted overlay on every chunk load is what makes a location
---   materialize even if the world was saved before it was first stamped:
---   there is no async queue to drain, only the overlay (which always
---   rides the save) and the chunk-load trigger.
+--   save/load) — the Lua stamper skips it once already stamped (the
+--   persisted 'World.Generate.Types.wgpLocationStamped' flag, #424), so
+--   repeats are cheap no-ops. Consulting the persisted overlay on every
+--   chunk load is what makes a location materialize even if the world was
+--   saved before it was first stamped: there is no async queue to drain,
+--   only the overlay (which always rides the save) and the chunk-load
+--   trigger.
 dispatchLocationStamps ∷ EngineEnv → WorldGenParams → WorldPageId
                        → [LoadedChunk] → IO ()
 dispatchLocationStamps env params pageId chunks =

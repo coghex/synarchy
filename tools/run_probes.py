@@ -72,6 +72,8 @@ PROBES = [
      "location content spawning + ruin probe (#90, #91)"),
     ("location_overlay", "location_overlay_probe.py", True,
      "world-gen location-overlay placement (#89)"),
+    ("location_stamp_idempotent", "location_stamp_idempotent_probe.py", True,
+     "geometry-stamp idempotency survives a cleared anchor floor + save/reload (#424)"),
     ("lua_orphan_prune", "lua_orphan_prune_probe.py", True,
      "Lua per-id AI state pruned (not inherited) after a save load (#195)"),
     ("medic_coord", "medic_coord_probe.py", True,

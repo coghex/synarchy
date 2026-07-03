@@ -17,6 +17,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetAmbientAtFn
     , worldListPlacedLocationsFn
     , worldHasSpawnedLocationContentsFn
+    , worldHasStampedLocationFn
     ) where
 
 import UPrelude
@@ -806,5 +807,40 @@ worldHasSpawnedLocationContentsFn env = do
                                 in pure (HS.member coord
                                     (wgpLocationContentsSpawned params))
             Lua.pushboolean spawned
+            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | world.hasStampedLocation(gx, gy [, pageId]) → bool. One-time
+--   geometry-stamp flag (#424): true once the chunk containing (gx, gy)
+--   has had its placed location's builder run. This is the idempotency
+--   check 'scripts/location_stamper.lua' consults instead of
+--   @structure.hasAt gx gy "floor"@ — a check that a player clearing the
+--   anchor floor tile would otherwise defeat. With no page argument the
+--   active world is read; false when no such world or its gen params
+--   aren't live.
+worldHasStampedLocationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldHasStampedLocationFn env = do
+    gxA ← Lua.tointeger 1
+    gyA ← Lua.tointeger 2
+    pageA ← Lua.tostring 3
+    case (gxA, gyA) of
+        (Just gx, Just gy) → do
+            stamped ← Lua.liftIO $ do
+                mWs ← case pageA of
+                    Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+                    Nothing    → activeWorldState env
+                case mWs of
+                    Nothing → pure False
+                    Just ws → do
+                        mParams ← readIORef (wsGenParamsRef ws)
+                        case mParams of
+                            Nothing → pure False
+                            Just params →
+                                let (coord, _) =
+                                        globalToChunk (fromIntegral gx)
+                                                       (fromIntegral gy)
+                                in pure (HS.member coord
+                                    (wgpLocationStamped params))
+            Lua.pushboolean stamped
             return 1
         _ → Lua.pushboolean False >> return 1

@@ -12,10 +12,16 @@
 -- re-materializes that location when its chunk next loads — the overlay
 -- always rides the save, and the chunk-load trigger always consults it.
 --
--- Idempotency: stamping lands in the edit log (structure.place / setCell),
--- which replays on chunk reload. So a chunk that loads again already carries
--- its geometry; we detect that with structure.hasAt and skip — never
--- stamping twice, and never clobbering a location the player has edited.
+-- Idempotency (#424): a dedicated persisted marker — world.hasStampedLocation
+-- / world.markLocationStamped, keyed by chunk like the #90 content-spawn
+-- flag below — tracks whether this chunk's location has been stamped.
+-- Earlier this inferred "already stamped" from structure.hasAt(gx, gy,
+-- "floor"), which stamping's own edit-log replay keeps true across a normal
+-- reload — but a player who later clears the anchor floor tile (an
+-- ordinary, otherwise-editable structure piece) made that check go false
+-- again, so the next chunk load re-ran the builder and clobbered whatever
+-- of the location the player had edited. The dedicated flag is set once,
+-- on first stamp, and is never touched by structure edits.
 --
 -- Multiworld: the builders read terrain with an explicit page id
 -- (locations.stamp -> the #88 builder -> world.getTerrainAt(gx,gy,pageId)),
@@ -37,12 +43,13 @@ local locations = require("scripts.locations")
 function stamper.onStampLocation(pageId, locId, gx, gy)
     gx, gy = math.floor(gx), math.floor(gy)
     -- Already materialized ON THIS PAGE (stamped earlier this session, or
-    -- its edits replayed on reload)? Then this is a repeat load — skip.
-    -- The pageId is essential: without it the check resolves to the active
-    -- world, so unrelated geometry there could suppress a valid stamp on a
-    -- hidden secondary page.
-    if not structure.hasAt(gx, gy, "floor", pageId) then
+    -- on a prior load this session/save)? Then this is a repeat load —
+    -- skip. The pageId is essential: without it the check resolves to the
+    -- active world, so unrelated state there could suppress a valid stamp
+    -- on a hidden secondary page.
+    if not world.hasStampedLocation(gx, gy, pageId) then
         locations.stamp(locId, gx, gy, pageId)
+        world.markLocationStamped(gx, gy, pageId)
     end
     locations.spawnContents(locId, gx, gy, pageId)
 end
