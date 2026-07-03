@@ -28,7 +28,6 @@ module Location.Overlay
     ( computeLocationOverlay
     , ChunkMetrics(..)
     , chunkMetricsAt
-    , chunkSeamChebyshev
     ) where
 
 import UPrelude
@@ -37,7 +36,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import World.Chunk.Types (ChunkCoord(..), chunkSize, wrapChunkCoordU)
+import World.Chunk.Types (ChunkCoord(..), chunkSize, wrapChunkCoordU, chunkSeamChebyshev)
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier)
 import World.Material (MaterialId, matGlacier)
 import World.Ocean.Types (OceanMap, OceanDistMap, oceanDistAt)
@@ -216,21 +215,6 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers def
             h3 = (h2 `xor` (h2 `shiftR` 33)) * 0xff51afd7ed558ccd
             h4 = (h3 `xor` (h3 `shiftR` 33)) * 0xc4ceb9fe1a85ec53
         in  h4 `xor` (h4 `shiftR` 33)
-
--- | Chebyshev distance between two chunk coords under the cylindrical
---   u-wrap (the 'wrapChunkCoordU' topology): the minimum raw Chebyshev
---   distance over the three u-alias images of the first coord. Shifting
---   u by ±w moves a coord by (±w/2, ∓w/2) — v = cx + cy is
---   glacier-bounded and never wraps, so one alias step each way covers
---   every canonical pair. Equals the raw distance for interior pairs
---   and for non-wrapping (arena / zero-size) worlds.
-chunkSeamChebyshev ∷ Int → ChunkCoord → ChunkCoord → Int
-chunkSeamChebyshev worldSize (ChunkCoord ax ay) (ChunkCoord bx by)
-    | halfW ≤ 0 = raw 0
-    | otherwise = minimum [ raw k | k ← [-1, 0, 1] ]
-  where
-    halfW = worldSize `div` 2
-    raw k = max (abs (ax + k * halfW - bx)) (abs (ay - k * halfW - by))
 
 -- | FNV-1a hash of a location id — a fully deterministic salt (no
 --   dependence on hashable's per-run seed) so the overlay is identical

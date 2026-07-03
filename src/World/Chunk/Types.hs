@@ -2,6 +2,7 @@
 module World.Chunk.Types
     ( ChunkCoord(..)
     , wrapChunkCoordU
+    , chunkSeamChebyshev
     , Chunk
     , ColumnIndex
     , columnIndex
@@ -53,6 +54,21 @@ wrapChunkCoordU worldSize cc@(ChunkCoord cx cy)
             cy'      = (v - wrappedU) `div` 2
         in ChunkCoord cx' cy'
   where w = (worldSize `div` 2) * 2
+
+-- | Chebyshev distance between two chunk coords under the cylindrical
+--   u-wrap (the 'wrapChunkCoordU' topology): the minimum raw Chebyshev
+--   distance over the three u-alias images of the first coord. Shifting
+--   u by ±w moves a coord by (±w/2, ∓w/2) — v = cx + cy is
+--   glacier-bounded and never wraps, so one alias step each way covers
+--   every canonical pair. Equals the raw distance for interior pairs
+--   and for non-wrapping (arena / zero-size) worlds.
+chunkSeamChebyshev ∷ Int → ChunkCoord → ChunkCoord → Int
+chunkSeamChebyshev worldSize (ChunkCoord ax ay) (ChunkCoord bx by)
+    | halfW ≤ 0 = raw 0
+    | otherwise = minimum [ raw k | k ← [-1, 0, 1] ]
+  where
+    halfW = worldSize `div` 2
+    raw k = max (abs (ax + k * halfW - bx)) (abs (ay - k * halfW - by))
 
 -- | A single column's tile data: contiguous z-range of non-air tiles.
 --   Tiles from csStartZ to csStartZ + VU.length csMats - 1.
