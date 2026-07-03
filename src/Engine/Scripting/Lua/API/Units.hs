@@ -3045,6 +3045,14 @@ unitGetInfoFn env = do
                             Just ss | isLocomoting (usState ss) →
                                 maybe 0 mtSpeed (usTarget ss)
                             _ → 0
+                        -- Signed slope grade under the moving unit (#375):
+                        -- positive = heading uphill (1.0 = straight up a
+                        -- ramp), negative = downhill. Same locomotion gate
+                        -- as moveSpeed, so a stationary unit reads 0.
+                        moveGrade = case HM.lookup uid (utsSimStates uts) of
+                            Just ss | isLocomoting (usState ss) →
+                                usMoveGrade ss
+                            _ → 0
                         -- True while the unit is in a fall KNOCKDOWN (a
                         -- self-timed getup is pending). Lets the survival
                         -- revive logic leave knockdowns to the movement
@@ -3053,12 +3061,12 @@ unitGetInfoFn env = do
                         knockedDown = case HM.lookup uid (utsSimStates uts) of
                             Just ss → maybe False (const True) (usGetUpAt ss)
                             _       → False
-                    pure (inst, mDef, moveSpeed, knockedDown)
+                    pure (inst, mDef, moveSpeed, moveGrade, knockedDown)
             case mPair of
                 Nothing → do
                     Lua.pushnil
                     return 1
-                Just (inst, mDef, moveSpeed, knockedDown) → do
+                Just (inst, mDef, moveSpeed, moveGrade, knockedDown) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
                     Lua.setfield (-2) "defName"
@@ -3092,6 +3100,8 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "animStart"
                     Lua.pushnumber (Lua.Number (realToFrac moveSpeed))
                     Lua.setfield (-2) "moveSpeed"
+                    Lua.pushnumber (Lua.Number (realToFrac moveGrade))
+                    Lua.setfield (-2) "moveGrade"
                     Lua.pushboolean knockedDown
                     Lua.setfield (-2) "knockedDown"
                     -- equipmentClass is per-def, not per-instance. Only

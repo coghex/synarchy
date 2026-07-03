@@ -178,6 +178,25 @@ M.courses.ramp_detour = function()
              note = "1-high wall x=3; only y=0 is a ramp — unit should funnel to it, not climb" }
 end
 
+-- Sustained uphill (#375). A 6-step staircase of walkable ramps rising
+-- 1 z per tile (x=3..8), topped by a flat plateau — every step is a
+-- ramp, so the unit WALKS the whole ascent (no climb transitions) but
+-- spends a long stretch on a full uphill grade. The flat approach
+-- (x<3) gives the harness a same-run baseline speed to compare the
+-- ascent against, and the sustained grade is what drains stamina in
+-- the uphill stamina phase.
+M.courses.ramp_climb = function()
+    for i = 0, 5 do
+        -- Column x=3+i stands i+1 high; its top is a W-facing ramp
+        -- tapering down to the previous step.
+        M.plateau(3 + i, -3, 3 + i, 3, i + 1, LOAM)
+        for gy = -3, 3 do M.setSlope(3 + i, gy, M.baseZ + i + 1, SLOPE_W) end
+    end
+    M.plateau(9, -3, 12, 3, 6, LOAM)   -- flat summit for the goal
+    return { name = "ramp_climb", sx = -3, sy = 0, gx = 11, gy = 0,
+             note = "6-tile ramp staircase x=3..8 (+1z each); walk the whole ascent, slower than the flat approach" }
+end
+
 -- Ramp-vs-cliff CHOICE (symptom #3). A 1-high plateau whose face is a
 -- cliff straight ahead of the unit, but with a single walkable ramp a
 -- short detour to the north. With the cost fix (ramps cheap, cliffs

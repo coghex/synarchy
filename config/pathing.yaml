@@ -55,3 +55,15 @@ replan_cost_threshold: 5.0
 # the first A* horizon is found once it walks close enough). Lower =
 # units detour around milder soft ground; set very high to disable.
 material_replan_margin: 0.25
+
+# Fraction of move SPEED lost at full uphill grade (#375) — walking
+# straight up a ramp's fall line. 0.5 = half speed straight uphill; a
+# diagonal traverse loses proportionally less. Routing is unaffected
+# (ramp_factor above already biases routes); this slows the traversal
+# itself. Clamped to at most 0.9 (units never drop below 10% speed).
+uphill_speed_penalty: 0.5
+
+# Fraction of move speed GAINED at full downhill grade. Deliberately
+# mild — downhill is neutral-to-slightly-faster, never a sprint
+# multiplier. Clamped to at most 0.5.
+downhill_speed_bonus: 0.1

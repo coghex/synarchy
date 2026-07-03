@@ -28,6 +28,8 @@ spec = do
                     , "lake_penalty: 6.0"
                     , "replan_cost_threshold: 7.0"
                     , "material_replan_margin: 8.0"
+                    , "uphill_speed_penalty: 0.6"
+                    , "downhill_speed_bonus: 0.2"
                     ]
             decode yaml `shouldBe` Right PathingConfig
                 { pcClimbFactor         = 1.0
@@ -38,6 +40,8 @@ spec = do
                 , pcLakePenalty         = 6.0
                 , pcReplanCostThreshold = 7.0
                 , pcMaterialReplanMargin = 8.0
+                , pcUphillSpeedPenalty  = 0.6
+                , pcDownhillSpeedBonus  = 0.2
                 }
 
     describe "partial document keeps defaults for omitted keys" $
@@ -66,6 +70,8 @@ spec = do
                 , pcLakePenalty         = -5.0
                 , pcReplanCostThreshold = -6.0
                 , pcMaterialReplanMargin = -7.0
+                , pcUphillSpeedPenalty  = -8.0
+                , pcDownhillSpeedBonus  = -9.0
                 } `shouldBe` PathingConfig
                 { pcClimbFactor         = 0.0
                 , pcRampFactor          = 0.0
@@ -75,7 +81,17 @@ spec = do
                 , pcLakePenalty         = 0.0
                 , pcReplanCostThreshold = 0.0
                 , pcMaterialReplanMargin = 0.0
+                , pcUphillSpeedPenalty  = 0.0
+                , pcDownhillSpeedBonus  = 0.0
                 }
+
+        it "caps the slope speed modifiers (a penalty ≥ 1 would stop a unit dead)" $ do
+            pcUphillSpeedPenalty (normalizePathingConfig
+                defaultPathingConfig { pcUphillSpeedPenalty = 1.5 })
+                `shouldBe` 0.9
+            pcDownhillSpeedBonus (normalizePathingConfig
+                defaultPathingConfig { pcDownhillSpeedBonus = 3.0 })
+                `shouldBe` 0.5
 
         it "leaves a valid config unchanged" $
             normalizePathingConfig defaultPathingConfig `shouldBe` defaultPathingConfig

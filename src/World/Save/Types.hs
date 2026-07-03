@@ -119,7 +119,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 70  -- v70: WorldGenParams gains trailing
+currentSaveVersion = 71  -- v71: UnitSimState gains usMoveGrade (uphill
+                         --      slope speed/stamina, #375) — positional
+                         --      Generic Serialize, so the appended field
+                         --      shifts the record layout.
+                         -- v70: WorldGenParams gains trailing
                          --      'wgpLocationStamped' (#424) — a dedicated
                          --      one-time geometry-stamp flag per chunk,
                          --      replacing the structure.hasAt(gx,gy,"floor")
