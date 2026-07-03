@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "250c3e93030bb6f4d470f8126b34ddf83a3a88eb2c6775ea57a749e4348813f3",
-      "250c3e93030bb6f4d470f8126b34ddf83a3a88eb2c6775ea57a749e4348813f3",
-      "250c3e93030bb6f4d470f8126b34ddf83a3a88eb2c6775ea57a749e4348813f3"
+      "2406c8c01790bef83498525cf513219f53cee68ae464311efa3e89615e9b44a2",
+      "2406c8c01790bef83498525cf513219f53cee68ae464311efa3e89615e9b44a2",
+      "2406c8c01790bef83498525cf513219f53cee68ae464311efa3e89615e9b44a2"
     ]
   },
   "tileCount": 20736,
@@ -106,13 +106,13 @@
       ]
     },
     "FLOATING_WATER": {
-      "min": 12,
-      "max": 12,
-      "median": 12,
+      "min": 10,
+      "max": 10,
+      "median": 10,
       "all": [
-        12,
-        12,
-        12
+        10,
+        10,
+        10
       ]
     },
     "ISOLATED_FLUID": {
@@ -123,6 +123,16 @@
         1,
         1,
         1
+      ]
+    },
+    "MID_RIVER_CLIFF": {
+      "min": 6,
+      "max": 6,
+      "median": 6,
+      "all": [
+        6,
+        6,
+        6
       ]
     },
     "MULTI_ISLAND": {
@@ -171,8 +181,9 @@
       "DESERT_SOIL_ON_SLOPE": 2,
       "FLAT_ISOLATED_WATER": 1,
       "FLOATING_LAKE": 4,
-      "FLOATING_WATER": 12,
+      "FLOATING_WATER": 10,
       "ISOLATED_FLUID": 1,
+      "MID_RIVER_CLIFF": 6,
       "MULTI_ISLAND": 2,
       "WATER_ABOVE_LAND": 12,
       "WATER_CLIFF": 12,
@@ -228,16 +239,6 @@
         },
         {
           "x": 36,
-          "y": -64,
-          "details": "river terr=17 -> dry(35,-64) terr=13 gap=4"
-        },
-        {
-          "x": 36,
-          "y": -63,
-          "details": "river terr=13 -> dry(35,-63) terr=11 gap=2"
-        },
-        {
-          "x": 36,
           "y": -62,
           "details": "river terr=10 -> dry(35,-62) terr=9 gap=1"
         },
@@ -289,6 +290,38 @@
           "details": "lake surf=0 surrounded by dry"
         }
       ],
+      "MID_RIVER_CLIFF": [
+        {
+          "x": 34,
+          "y": -63,
+          "details": "river surf=9 (terr=6) -> water nbr surf=7 (terr=6) surf_diff=2 terr_diff=0"
+        },
+        {
+          "x": 36,
+          "y": -63,
+          "details": "river surf=14 (terr=10) -> water nbr surf=11 (terr=10) surf_diff=3 terr_diff=0"
+        },
+        {
+          "x": 37,
+          "y": -63,
+          "details": "river surf=16 (terr=12) -> water nbr surf=13 (terr=12) surf_diff=3 terr_diff=0"
+        },
+        {
+          "x": 38,
+          "y": -63,
+          "details": "river surf=18 (terr=15) -> water nbr surf=14 (terr=13) surf_diff=4 terr_diff=2"
+        },
+        {
+          "x": 43,
+          "y": -60,
+          "details": "river surf=6 (terr=3) -> water nbr surf=3 (terr=2) surf_diff=3 terr_diff=1"
+        },
+        {
+          "x": 44,
+          "y": -61,
+          "details": "river surf=9 (terr=6) -> water nbr surf=5 (terr=4) surf_diff=4 terr_diff=2"
+        }
+      ],
       "MULTI_ISLAND": [
         {
           "x": 5,
@@ -310,12 +343,12 @@
         {
           "x": 36,
           "y": -64,
-          "details": "river surf=18 terr=17 -> land(35,-64) terr=13 cliff=5"
+          "details": "river surf=18 terr=13 -> land(35,-64) terr=13 cliff=5"
         },
         {
           "x": 36,
           "y": -63,
-          "details": "river surf=14 terr=13 -> land(35,-63) terr=11 cliff=3"
+          "details": "river surf=14 terr=10 -> land(35,-63) terr=11 cliff=3"
         },
         {
           "x": 36,

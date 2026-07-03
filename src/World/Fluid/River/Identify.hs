@@ -45,6 +45,10 @@ module World.Fluid.River.Identify
     , riverThreshold
       -- * Exported for tests (Test.Headless.WorldGen.WrapSeam)
     , labelRiverComponents
+      -- * Exported for tests (Test.Headless.WorldGen.BedDepth)
+    , computeBedDepth
+    , depthFromRadius
+    , maxBedDepth
     ) where
 
 import UPrelude
@@ -63,6 +67,7 @@ import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), Lake(..) )
 import World.Fluid.River.Types
     ( River(..), WorldRivers(..), RiverChunkEntry(..), emptyWorldRivers )
+import World.Plate (wrappedValueNoise2D)
 import World.Weather.Lookup (LocalClimate(..), lookupLocalClimate)
 import World.Weather.Types (ClimateState)
 
@@ -169,13 +174,16 @@ stepDir worldTiles idx d
 
 -- | Run the full river identification pipeline.
 identifyWorldRivers
-    ∷ Int                  -- ^ worldSize (chunks per side)
+    ∷ Word64               -- ^ world seed (pool/riffle bed noise, #223)
+    → Int                  -- ^ worldSize (chunks per side)
     → WorldLakes
     → VU.Vector Int        -- ^ world terrain (worldTiles²)
     → ClimateState
     → Int                  -- ^ waterfall quantum (max surface drop / step)
+    → (Int → Int → Float)  -- ^ rift-intensity field (#223)
     → WorldRivers
-identifyWorldRivers worldSize lakes terrain climate waterfallQuantum0 =
+identifyWorldRivers seed worldSize lakes terrain climate waterfallQuantum0
+                    riftAt =
     let -- Guard: a non-positive quantum would flatten / break the
         -- stepped-gorge clamp, so floor it at 1 regardless of config source.
         waterfallQuantum = max 1 waterfallQuantum0
@@ -206,8 +214,8 @@ identifyWorldRivers worldSize lakes terrain climate waterfallQuantum0 =
             worldTiles terrain lakeIdAt dir spillwayOf
             precipUnits evapUnits ascOrder
 
-    in traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf
-                   dir flow ascOrder waterfallQuantum
+    in traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf
+                   dir flow ascOrder waterfallQuantum riftAt
 
 -- * Climate → flow units
 --
@@ -568,7 +576,8 @@ sortDescOn key = foldr insertDesc []
 --   them into connected components, compute quantised surface z, and
 --   build per-chunk bitmasks.
 traceRivers
-    ∷ Int                  -- ^ worldSize
+    ∷ Word64               -- ^ world seed (pool/riffle bed noise)
+    → Int                  -- ^ worldSize
     → VU.Vector Int        -- ^ terrain
     → VU.Vector Int        -- ^ lakeIdAt
     → VU.Vector Int        -- ^ isSpillwayOf
@@ -577,9 +586,10 @@ traceRivers
     → VU.Vector Int        -- ^ flow
     → VU.Vector Int        -- ^ ascending z order
     → Int                  -- ^ waterfall quantum (max surface drop / step)
+    → (Int → Int → Float)  -- ^ rift-intensity field
     → WorldRivers
-traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
-            ascOrder waterfallQuantum =
+traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
+            ascOrder waterfallQuantum riftAt =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
         half       = worldTiles `div` 2
@@ -612,7 +622,7 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         -- 'clampCentreSurfaces'; widened tiles inherit the lowest
         -- centre's surface so the water plane stays flat across the
         -- river's cross-section).
-        (isRiverTile, widthRadius, surfZ) =
+        (isRiverTile, widthRadius, surfZ, perpDist) =
             expandWidth worldTiles terrain dir flow isRiverCentre centreSurf
 
         -- Step 2: label connected components — plain 4-adjacency over
@@ -635,9 +645,9 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         -- added to the bitmask with width 0; surface descends to
         -- @seaLevel + 1@ at the path's end.
         worldOcean = computeWorldEdgeOcean terrain worldTiles
-        (isRiverTileB, compIdB, widthRadiusB, surfZB) =
+        (isRiverTileB, compIdB, widthRadiusB, surfZB, perpDistB) =
             addBreakthroughs worldTiles isRiverTileF compIdF dir terrain
-                             worldOcean widthRadius surfZ
+                             worldOcean widthRadius surfZ perpDist
 
         -- Step 3.5: lateral waterfall clamp. The chain clamp (1c-pre)
         -- bounds steps along flow edges only; meander necks and
@@ -658,11 +668,18 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         byChunk = buildRiverChunkIndex worldSize half isRiverTileB compIdB
                                        surfZL widthRadiusB
 
+        -- Step 5.5 (#223): per-tile bed depth. Ordinary reaches keep
+        -- the flat 'depthFromRadius' fit; confined (canyon-walled)
+        -- and tectonically-rifted reaches deepen, with a thalweg
+        -- cross-section and pool/riffle variation along the channel.
+        bedDepth = computeBedDepth seed worldSize terrain isRiverTileB
+                                   widthRadiusB perpDistB surfZL riftAt
+
         -- Step 6: per-tile carve delta. Includes breakthrough path
         -- tiles, which can have large delta where they cut through
         -- coastal mountains.
         carveDelta = computeCarveDelta worldTiles terrain
-                                       isRiverTileB widthRadiusB surfZL
+                                       isRiverTileB bedDepth surfZL
         carveByChunk = buildCarveDeltaIndex worldSize half isRiverTileB
                                             carveDelta
 
@@ -824,7 +841,7 @@ expandWidth
     → VU.Vector Int        -- ^ flow
     → VU.Vector Bool       -- ^ isRiverCentre (after extension)
     → VU.Vector Int        -- ^ waterfall-clamped per-centre surface z
-    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int)
+    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int)
 expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
     let nTiles = worldTiles * worldTiles
         -- Don't widen into terrain that rises too far above the river's
@@ -839,12 +856,19 @@ expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
         isR    ← VUM.replicate nTiles False
         width  ← VUM.replicate nTiles (-1   ∷ Int)
         surfZ  ← VUM.replicate nTiles minBound
-        let updateTile tIdx r s = do
+        -- Perpendicular distance from the channel centreline (0 =
+        -- centre tile, k = k-th wing tile out). Drives the thalweg
+        -- cross-section in 'computeBedDepth'; min wins when a tile
+        -- is claimed by several centres.
+        perp   ← VUM.replicate nTiles (maxBound ∷ Int)
+        let updateTile tIdx r s p = do
                 VUM.write isR tIdx True
                 curR ← VUM.read width tIdx
                 when (r > curR) (VUM.write width tIdx r)
                 curS ← VUM.read surfZ tIdx
                 when (curS ≡ minBound ∨ s < curS) (VUM.write surfZ tIdx s)
+                curP ← VUM.read perp tIdx
+                when (p < curP) (VUM.write perp tIdx p)
             walkWing centreIdx r perpD = do
                 centreS ← VUM.read surfZ centreIdx
                 let maxBank = centreS + depthFromRadius r + bankSlack
@@ -865,19 +889,20 @@ expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
                                     when (nT ≠ minBound
                                           ∧ nT ≤ maxBank
                                           ∧ nT ≥ minBank) $ do
-                                        updateTile nxt r centreS
+                                        updateTile nxt r centreS k
                                         loop (k + 1) nxt
                 loop 1 centreIdx
         forM_ [0 .. nTiles - 1] $ \i → when (isRiverCentre VU.! i) $ do
             let surf = centreSurf VU.! i
                 r    = widthRadiusFromFlow (flow VU.! i)
-            updateTile i r surf
+            updateTile i r surf 0
             when (r > 0) $
                 forM_ (perpDirs (dir VU.! i)) (walkWing i r)
         isRf   ← VU.unsafeFreeze isR
         widthF ← VU.unsafeFreeze width
         surfZf ← VU.unsafeFreeze surfZ
-        pure (isRf, widthF, surfZf)
+        perpF  ← VU.unsafeFreeze perp
+        pure (isRf, widthF, surfZf, perpF)
 
 -- | Carve depth in z for a given width radius. v2 user-approved:
 --   narrow rivers (radius 0/1) carve 1 z; wider rivers carve deeper
@@ -1213,9 +1238,11 @@ addBreakthroughs
     → VU.Vector Bool       -- ^ worldOcean
     → VU.Vector Int        -- ^ widthRadius
     → VU.Vector Int        -- ^ surfZ
-    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int)
+    → VU.Vector Int        -- ^ perpDist
+    → ( VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int
+      , VU.Vector Int )
 addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
-                 widthRadius surfZ =
+                 widthRadius surfZ perpDist =
     let nTiles = worldTiles * worldTiles
         mouths = findStrandedMouths nTiles isRiverTile dir terrain
     in runST $ do
@@ -1223,6 +1250,7 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
         compM  ← VU.thaw compId
         widthM ← VU.thaw widthRadius
         surfM  ← VU.thaw surfZ
+        perpM  ← VU.thaw perpDist
         forM_ mouths $ \m → do
             let mSurf = surfZ VU.! m
                 mCid  = compId VU.! m
@@ -1247,6 +1275,9 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
                                 VUM.write isRM   p True
                                 curW ← VUM.read widthM p
                                 when (curW < 0) (VUM.write widthM p 0)
+                                -- Path tiles are their own centreline.
+                                curP ← VUM.read perpM p
+                                when (curP > 0) (VUM.write perpM p 0)
                                 VUM.write compM  p mCid
                                 VUM.write surfM  p target
                                 walk target rest
@@ -1255,7 +1286,8 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
         compF  ← VU.unsafeFreeze compM
         widthF ← VU.unsafeFreeze widthM
         surfF  ← VU.unsafeFreeze surfM
-        pure (isRf, compF, widthF, surfF)
+        perpF  ← VU.unsafeFreeze perpM
+        pure (isRf, compF, widthF, surfF, perpF)
 
 -- | Per-tile carve delta in z — the FINAL channel-bed fit, the second
 --   of the two-stage hydrology (see the note at the 'identifyWorldRivers'
@@ -1278,10 +1310,10 @@ computeCarveDelta
     ∷ Int                  -- ^ worldTiles
     → VU.Vector Int        -- ^ terrain
     → VU.Vector Bool       -- ^ isRiverTile
-    → VU.Vector Int        -- ^ widthRadius
+    → VU.Vector Int        -- ^ per-tile bed depth ('computeBedDepth')
     → VU.Vector Int        -- ^ surfaceZ
     → VU.Vector Int
-computeCarveDelta worldTiles terrain isRiverTile widthRadius surfZ =
+computeCarveDelta worldTiles terrain isRiverTile bedDepth surfZ =
     let nTiles = worldTiles * worldTiles
     in VU.generate nTiles $ \i →
         if not (isRiverTile VU.! i)
@@ -1289,9 +1321,171 @@ computeCarveDelta worldTiles terrain isRiverTile widthRadius surfZ =
         else
           let preCarve = terrain VU.! i
               surf     = surfZ   VU.! i
-              r        = max 0 (widthRadius VU.! i)
-              depth    = depthFromRadius r
+              depth    = bedDepth VU.! i
           in max 0 (preCarve - surf + depth)
+
+-- * Bed depth model (#223)
+
+-- | Valley-wall height (above the water surface) at which a reach
+--   starts counting as confined; each 'canyonConfSlope' z above that
+--   adds one z of bed depth, up to 'canyonConfCap'. Calibrated on the
+--   seed-42 w128 wall-height census: at 12/4 the first boost lands at
+--   walls 16 z above the water surface (~15% of river mileage), the
+--   cap at 32+ z — ordinary hilly valleys stay on the flat shallow
+--   fit and only genuine gorges deepen.
+canyonConfMin, canyonConfSlope, canyonConfCap ∷ Int
+canyonConfMin   = 12
+canyonConfSlope = 4
+canyonConfCap   = 5
+
+-- | Chebyshev radius of the wall-height scan around each river tile.
+--   Deliberately tight: a wall 2 tiles from the water IS the channel
+--   wall; wider scans read nearby hills as confinement and boost
+--   every mountain-adjacent reach.
+canyonScanRadius ∷ Int
+canyonScanRadius = 2
+
+-- | Rift-intensity floor below which the tectonic bed bonus is zero,
+--   and the maximum bonus (z) a fully-rifted reach adds.
+riftBedThreshold ∷ Float
+riftBedThreshold = 0.25
+
+riftBedCap ∷ Int
+riftBedCap = 3
+
+-- | Hard cap on the water column a canyon/rift reach can carve.
+maxBedDepth ∷ Int
+maxBedDepth = 9
+
+-- | Wavelength (tiles) of the pool/riffle bed noise on deep reaches.
+poolRiffleScale ∷ Int
+poolRiffleScale = 12
+
+-- | Per-tile channel bed depth (z of water column the carve fits).
+--
+--   Ordinary reaches keep the historical behaviour EXACTLY: depth =
+--   'depthFromRadius' width, flat across the cross-section — the
+--   issue #223 requirement is that lowland rivers stay shallow and
+--   flat. A reach only deepens when it has a canyon/rift *boost*:
+--
+--     * confinement — the highest terrain within 'canyonScanRadius'
+--       tiles stands ≥ 'canyonConfMin' z above the water surface
+--       (gorges through plateaus, breakthrough cuts, rift shoulders);
+--     * rift intensity — the tile sits on a divergent plate boundary
+--       ('riftTectonicIntensity' ≥ 'riftBedThreshold').
+--
+--   The boost is smoothed along the channel (two Jacobi passes over
+--   river-tile 4-neighbours) so depth never pops tile-to-tile, then
+--   shaped by a thalweg profile (deepest at the centreline, one z
+--   shallower per wing tile out) and pool/riffle value noise (±1–2 z
+--   at 'poolRiffleScale' wavelength) so deep beds read as carved
+--   channels rather than flat boxes. Result clamped to
+--   [1, 'maxBedDepth']. The carve stays lower-only downstream —
+--   deeper targets only ever LOWER the bed further below the fixed
+--   water surface.
+computeBedDepth
+    ∷ Word64               -- ^ world seed
+    → Int                  -- ^ worldSize (chunks per side)
+    → VU.Vector Int        -- ^ terrain (pre-carve)
+    → VU.Vector Bool       -- ^ isRiverTile
+    → VU.Vector Int        -- ^ widthRadius
+    → VU.Vector Int        -- ^ perpDist (0 = centreline)
+    → VU.Vector Int        -- ^ surfaceZ
+    → (Int → Int → Float)  -- ^ rift-intensity field
+    → VU.Vector Int
+computeBedDepth seed worldSize terrain isRiverTile widthRadius perpDist
+                surfZ riftAt =
+    let worldTiles = worldSize * chunkSize
+        nTiles     = worldTiles * worldTiles
+        half       = worldTiles `div` 2
+
+        -- Highest terrain within the scan window, minus the water
+        -- surface. Grid edges clamp; near-seam correctness comes from
+        -- the stitched grid's double coverage (same convention as the
+        -- rest of this module).
+        wallAbove i =
+            let bx = i `mod` worldTiles
+                by = i `div` worldTiles
+                x0 = max 0 (bx - canyonScanRadius)
+                x1 = min (worldTiles - 1) (bx + canyonScanRadius)
+                y0 = max 0 (by - canyonScanRadius)
+                y1 = min (worldTiles - 1) (by + canyonScanRadius)
+                goY y !acc
+                    | y > y1 = acc
+                    | otherwise = goY (y + 1) (goX y x0 acc)
+                goX y x !acc
+                    | x > x1 = acc
+                    | otherwise =
+                        let t = terrain VU.! (y * worldTiles + x)
+                            acc' = if t ≡ minBound then acc else max acc t
+                        in goX y (x + 1) acc'
+            in goY y0 minBound - surfZ VU.! i
+
+        rawBoost = VU.generate nTiles $ \i →
+            if not (isRiverTile VU.! i)
+            then 0
+            else
+              let confB = min canyonConfCap
+                              (max 0 ((wallAbove i - canyonConfMin)
+                                      `div` canyonConfSlope))
+                  gx = (i `mod` worldTiles) - half
+                  gy = (i `div` worldTiles) - half
+                  rift = riftAt gx gy
+                  riftB = if rift < riftBedThreshold
+                          then 0
+                          else min riftBedCap
+                                   (round (fromIntegral riftBedCap * rift))
+              in confB + riftB
+
+        -- Two smoothing passes over river 4-neighbours: kills
+        -- tile-to-tile depth pops where the wall scan enters/leaves
+        -- a cliff's window.
+        smoothPass bv = VU.generate nTiles $ \i →
+            if not (isRiverTile VU.! i)
+            then 0
+            else
+              let bx = i `mod` worldTiles
+                  by = i `div` worldTiles
+                  neigh = [ j
+                          | (dx, dy) ← [(1,0),(-1,0),(0,1),(0,-1)]
+                          , let nx = bx + dx
+                                ny = by + dy
+                          , nx ≥ 0, nx < worldTiles
+                          , ny ≥ 0, ny < worldTiles
+                          , let j = ny * worldTiles + nx
+                          , isRiverTile VU.! j
+                          ]
+                  s = sum (map (bv VU.!) neigh)
+                  n = length neigh
+              in (2 * (bv VU.! i) + s) `div` (2 + n)
+
+        boost = smoothPass (smoothPass rawBoost)
+
+    in VU.generate nTiles $ \i →
+        if not (isRiverTile VU.! i)
+        then 0
+        else
+          let base = depthFromRadius (max 0 (widthRadius VU.! i))
+              b    = boost VU.! i
+          in if b ≤ 0
+             then base
+             else
+               let gx = (i `mod` worldTiles) - half
+                   gy = (i `div` worldTiles) - half
+                   -- [0,1] noise → {−1, 0, +1, +2}
+                   pool = round (wrappedValueNoise2D seed worldSize gx gy
+                                                     poolRiffleScale
+                                 * 3.0 ∷ Float) - 1
+                   perp = min 8 (perpDist VU.! i)
+                   raw  = max 1 (min maxBedDepth (base + b + pool - perp))
+                   -- The boost may only deepen while the bed stays
+                   -- ABOVE sea level — a boosted bed at seaLevel or
+                   -- below reclassifies the channel as ocean in an
+                   -- oceanic chunk. Where the water surface is too
+                   -- low to afford any extra depth, fall back to the
+                   -- exact unboosted fit (master-identical mouths).
+                   aboveSea = surfZ VU.! i - (seaLevel + 1)
+               in max base (min raw aboveSea)
 
 -- | Bucket the per-tile carve delta into per-chunk vectors so chunk
 --   gen can look up its slice in O(1). Only chunks that touch a river

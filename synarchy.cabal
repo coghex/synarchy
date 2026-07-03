@@ -154,6 +154,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
+                   Test.Headless.WorldGen.BedDepth
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
@@ -629,6 +630,7 @@ library
                      World.Fluid.IceLevel
                      World.Fluid.Lake.Types
                      World.Fluid.Lake.Identify
+                     World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
                      World.Fluid.Lava

@@ -10,7 +10,8 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import World.Types
-import World.Plate (generatePlates, wrapGlobalU, elevationAtGlobal)
+import World.Plate (generatePlates, wrapGlobalU, elevationAtGlobal
+                   , riftFieldMemo)
 import World.Material (MaterialRegistry, MaterialId, matGlacier)
 import World.Generate.Constants (chunkBorder)
 import World.Fluid.River (fixupSegmentContinuity)
@@ -18,6 +19,7 @@ import World.Generate.Timeline.Fast (applyTimelineFastFrom)
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
 import World.Fluid.IceLevel (computeIceLevelGrid)
+import World.Fluid.Lake.Graben (grabenCarveIndex)
 import World.Fluid.Lake.Identify (identifyWorldLakes, computeRenderedOcean)
 import World.Fluid.Seabed (identifySeabed)
 import World.Fluid.Seabed.Types (emptySeabedTable)
@@ -234,16 +236,27 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
 
         -- The seabed pass (below) supersedes the flat seaLevel−1
         -- floor carve for sub-sea basins, so drop the lake table's
-        -- carve deltas — seabed covers every clamped-lake tile and
-        -- carves it to the ramp instead (which is still ≤ seaLevel−1,
-        -- so the surface fills). Keeps the two mechanisms from
-        -- double-carving.
-        finalLakes = finalLakes0 { wlCarveDelta = HM.empty }
+        -- clamp carve deltas — seabed covers every clamped-lake tile
+        -- and carves it to the ramp instead (which is still ≤
+        -- seaLevel−1, so the surface fills). Keeps the two mechanisms
+        -- from double-carving. In their place ride the graben deltas
+        -- (#223): rift-lake bed carves for INLAND lakes only
+        -- (lkSurface > seaLevel), which the seabed pass never touches.
+        finalLakes = finalLakes0
+            { wlCarveDelta = grabenCarveIndex seed worldSize worldTerrain
+                                              riftAt finalLakes0 }
 
-        finalRivers = identifyWorldRivers worldSize finalLakes
+        -- Inland rift-intensity field (#223): shared by the river
+        -- bed-depth model and the graben lake carve so both agree on
+        -- where the world is rifting. Memoized once — cell samples
+        -- are reused across every per-tile query below.
+        riftAt = riftFieldMemo seed worldSize plates
+
+        finalRivers = identifyWorldRivers seed worldSize finalLakes
                                           worldTerrain
                                           (tbsClimateState s2)
                                           waterfallQuantum
+                                          riftAt
 
         -- Global seabed pass (save v26): continental-margin relief
         -- (shelf + slope profile blended with the natural floor),
