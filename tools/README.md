@@ -1,9 +1,13 @@
-# World generation development tools
+# Development tools
 
-Python scripts for auditing, checking determinism, and regression-testing
-the world generation pipeline.
+Python scripts for auditing/regression-testing world generation, and for
+driving/verifying engine and game-logic behavior against a real headless
+engine instance.
 
-## Scripts
+## World generation tools
+
+Scripts for auditing, checking determinism, and regression-testing the
+world generation pipeline (dump-only — no TCP, no interaction).
 
 ### `world_audit.py`
 Runs the `synarchy --dump` command (or reads a pre-generated dump) and
@@ -73,7 +77,7 @@ each check correctly identifies the issue it's meant to catch.
 python3 tools/test_audit.py
 ```
 
-## Workflow
+### Workflow
 
 Before committing a change:
 ```bash
@@ -99,6 +103,99 @@ gate on every PR. Worldgen output is bit-identical across macOS/aarch64
 so there is one set of baselines for all platforms — a worldgen-output PR
 that forgets to rebaseline fails CI.
 
+## Behavior probes (headless engine)
+
+Unlike the worldgen tools above (which shell out to `--dump`, no TCP), these
+scripts boot a **real headless engine** (`--headless --port NNNN`), drive it
+over the debug-console TCP protocol (see the repo-root `CLAUDE.md` "Headless
+Mode & Debug Console" section for the protocol itself), and assert on the
+result. They're first-class regression harnesses — each one is the gate for
+a specific system or bug, referenced from `CLAUDE.md` and PR descriptions —
+but because they boot a full engine (and some generate a real world on top
+of that), they're **much slower** than the dump-only tools above: a few
+seconds of engine boot at minimum, tens of seconds to a couple of minutes
+when a scenario needs actual world generation. They are not part of the
+default test tiers; run the ones relevant to what you changed.
+
+Each probe is self-contained (own `main()`, own engine boot/teardown, own
+default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
+plus `sys.exit(0 or 1)`. Most take `--port` to avoid colliding with another
+running instance; two (`cargo_capacity_probe.py`, `disarm_probe.py`) take no
+flags at all and hardcode their port.
+
+**Gotcha:** not every probe uses `argparse` — the two flagless ones above
+have no `--help` handling either, so passing `--help` doesn't print usage
+and exit, it silently runs the *actual probe* (which boots a real engine and
+can hang for minutes if you weren't expecting that). Check the header
+docstring instead of reaching for `--help` when in doubt.
+
+"Boot" below is `arena` (flat synthetic terrain via
+`scripts/movement_arena.lua`, no world generation — fast) or `worldgen`
+(generates a real world at a given seed/size — slower, scales with size).
+
+| Probe | Gates | Boot | Purpose |
+|-------|-------|------|---------|
+| `cargo_capacity_probe.py` | #189 | arena | `depositToCargo` weighs the actual `ItemInstance` (fill + nested contents), not the item def's base weight. |
+| `chop_probe.py` | #97 | worldgen | Chop-designation layer + chop AI + `wood_log` yield, end to end. |
+| `collapse_crawl_probe.py` | #304 | arena | Collapse↔crawl pose hysteresis in `tickInjuries`. |
+| `combat_anim_probe.py` | general combat/animation guard | worldgen | Drives a real fight headless; samples `currentAnim` to verify swing and death animations actually play. |
+| `concussion_revive_probe.py` | #304 | arena (shares boot helpers with `collapse_crawl_probe.py`) | `checkRevive` concussion-band hysteresis (companion to `collapse_crawl_probe.py`). |
+| `construction_probe.py` | #96 | arena | `construct_job` AI end-to-end: claim, material sourcing, progress accrual, piece placement, staking, dead-claimant release. |
+| `craft_probe.py` | #325, #326, #343, #327 | arena | `craft.*` API: catalogue, execute, work stations, crafter-derived quality, smelting. |
+| `disarm_probe.py` | #193 | worldgen | Disabled-hand auto-drop must re-fire. |
+| `flora_growth_probe.py` | #332 | worldgen | Derived flora growth/age/phase under the advancing calendar; fruiting-window gating; survives save/load. |
+| `follow_command_priority_probe.py` | #306 | arena | Follow-command priority against other AI goals. |
+| `foraging_probe.py` | #94 | worldgen | Foraging AI + harvestable-flora gating. |
+| `infection_probe.py` | general infection-system guard | arena | Infection growth / antiseptic prevention / antibiotic cure / sepsis meter, end-to-end. |
+| `injury_log_probe.py` | logging arc (general) | arena | Injury-log stream roundtrip: `injury.emit`/`drainEvents`, `unit.injure`, `emitEventForUnit` tagging. |
+| `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
+| `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
+| `location_content_probe.py` | #90, #91 | worldgen + arena | Location content spawning + ruin probe. |
+| `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
+| `lua_orphan_prune_probe.py` | #195 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load. |
+| `medic_coord_probe.py` | squad-medic coordination (general) | arena | `bestMedicFor`/`medicAvailable` distance-discounted selection fix. |
+| `movement_probe.py` | movement arc (general, closed) | arena | Obstacle-course movement (pathing/climbs/falls/ramps) via `movement_arena.lua` courses; `--list` shows courses. |
+| `multiworld_save_probe.py` | #214, #219 | worldgen + arena | Multi-world save → quit → restart → load; cross-page entity survival. |
+| `physiology_probe.py` | homeostasis (general) | arena | Thermoregulation/circulation sanity across controlled environments (temperate/arctic/humid-heat). |
+| `repair_item_probe.py` | #300 | worldgen | `unit.repairItem` primitive. |
+| `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
+| `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
+| `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
+| `thermo_altitude_probe.py` | #308 | worldgen (size 128) | Altitude-lapse thermal effect. |
+
+Invocation is bare `python3 tools/<name>.py` for sane defaults; most accept
+`--port`/`--seed`/`--size` overrides and a handful have scenario-specific
+flags (`--course`, `--phase`, `--attacker`/`--target`, ...) — see the
+script's header docstring for its exact flag set.
+
+### `run_probes.py` — opt-in aggregate runner
+
+Runs a selection of the probes above back-to-back and prints a per-probe
+PASS/FAIL summary, exiting non-zero if any failed.
+
+```bash
+# Run everything (slow — boots ~27 engines in sequence)
+python3 tools/run_probes.py
+
+# Run a subset, matched by substring against the probe name
+python3 tools/run_probes.py --only combat,movement
+
+# List known probes and exit
+python3 tools/run_probes.py --list
+
+# Override --port on probes that support it (the two flagless ones keep
+# their own hardcoded port regardless)
+python3 tools/run_probes.py --port 9500
+```
+
+It shells out to each probe as its own subprocess and runs them
+**sequentially, one engine at a time** — it does not attempt to make probes
+share a single running engine (they're independent scripts with their own
+boot/teardown, not built around an injectable engine handle), so the total
+cost is roughly the sum of each probe's own boot + scenario time. That
+makes a full run slow (easily 15+ minutes); it is *not* part of any default
+test tier — see `CLAUDE.md` Testing Tiers.
+
 ## Directory layout
 ```
 tools/
@@ -108,6 +205,8 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
+├── run_probes.py           (opt-in aggregate behavior-probe runner)
+├── *_probe.py              (headless behavior probes — see above)
 └── baselines/
     ├── _seeds.json         (seed list config)
     └── seed*.json          (per-seed baseline data)

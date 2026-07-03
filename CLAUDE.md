@@ -28,6 +28,15 @@ stays in seconds and the expensive gates run once, at the end.
    w128 volcano exposure case, +~25 s), then re-capture baselines
    `python3 tools/world_baseline.py` (~7 min) and re-run world_check.
    Remember the save-version bump.
+4. **Behavior probes — opt-in, not a default gate.** ~27 headless
+   `tools/*_probe.py` scripts each boot a real engine and gate one
+   specific system/bug (combat anim, movement, construction, saves,
+   physiology, ...) — see `tools/README.md` for the full list. They're
+   slow (each pays its own engine-boot cost, more when it generates a
+   real world) and aren't run as part of tiers 1–3. Run the ones
+   relevant to what you touched, or `python3 tools/run_probes.py
+   --only <substrings>` (bare `run_probes.py` runs all of them — low
+   tens of minutes, only for a deliberate full sweep).
 
 Baselines (`tools/baselines/`) are **tracked in git** (#421): a fresh
 clone/worktree can run world_check directly, and a tier-3 re-capture
