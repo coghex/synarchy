@@ -2,6 +2,7 @@
 module World.Render.Quads
     ( renderWorldQuads
     , renderWorldCursorQuads
+    , structureFrontWallClear
     ) where
 
 import UPrelude
@@ -13,13 +14,13 @@ import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import World.Types
 import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileSideHeight, applyFacing)
-import Structure.Types (StructureSlot(..), spdGridZ)
+import Structure.Types (StructureSlot(..), ChunkStructures, spdGridZ)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Chop.Types (ChopDesignation(..))
@@ -143,23 +144,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
             Just lc' → Just (lcTerrainSurfaceMap lc')
             Nothing  → Nothing
 
-        -- #418: a flora/veg billboard sitting in front of a structure's FRONT
-        -- wall must draw over the WHOLE wall, not slice through the wall's
-        -- depth-sorted strips (#417). A single-depth sprite otherwise beats
-        -- the wall's back strips but loses its clamped south strips → the
-        -- "leaf over the wall / frond cut off" straddle. Here we find the
-        -- highest front-wall strip key the sprite at (gx,gy) is spatially IN
-        -- FRONT of, so the caller lifts the sprite's key just above it and it
-        -- clears the entire strip range as one unit. Returns Nothing when no
-        -- such wall is near (the sprite keeps its normal key).
-        --
-        -- The strip-key formula mirrors 'frontWallStrips'/'tieBreak' in
-        -- Structure.Render (SE 0.0006, SW 0.0005; the clamped south strip
-        -- anchors at the S vertex (wgx+1,wgy+1)) — keep them in sync. The
-        -- applyFacing depth test keeps it rotation-correct. Wall lookups cross
-        -- chunks; the per-chunk gate below keeps it free where there are none.
-        seTag = fromIntegral (fromEnum SWallSE) ∷ Word8
-        swTag = fromIntegral (fromEnum SWallSW) ∷ Word8
         -- Chunks that actually carry structures. A sprite is only considered
         -- for the lift when its chunk is within ONE chunk of one of these, so
         -- the check stays a no-op in structure-free areas — but, unlike a
@@ -168,26 +152,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
         -- already resolves that wall cross-chunk).
         structureChunkCoords =
             [ lcCoord lc | lc ← chunks, not (HM.null (lcStructures lc)) ]
-        structureFrontWallClear gx gy =
-            let (fa, fb) = applyFacing facing gx gy
-                spriteDepth = fa + fb
-                wallKeyAt wgx wgy tag tieB = do
-                    let (cc, _) = globalToChunk wgx wgy
-                    lc' ← HM.lookup cc (wtdChunks tileData)
-                    spd ← HM.lookup (wgx, wgy, tag) (lcStructures lc')
-                    let (sa, sb) = applyFacing facing (wgx + 1) (wgy + 1)
-                        scDepth  = sa + sb
-                    if spriteDepth < scDepth   -- sprite is NOT fully in front
-                       then Nothing
-                       else Just (fromIntegral scDepth
-                                  + fromIntegral (spdGridZ spd - zSlice) * 0.001
-                                  + tieB)
-                cands = [ wallKeyAt (gx + dx) (gy + dy) tag tieB
-                        | dx ← [-2 .. 2], dy ← [-2 .. 2], (dx, dy) ≠ (0, 0)
-                        , (tag, tieB) ← [(seTag, 0.0006 ∷ Float), (swTag, 0.0005)] ]
-            in case [ k | Just k ← cands ] of
-                 [] → Nothing
-                 ks → Just (maximum ks)
+        structLookup cc = lcStructures ⊚ HM.lookup cc (wtdChunks tileData)
 
         -- Cached pass: widen the bounds by the pan margin so the camera
         -- can travel that far before cameraChanged forces a rebuild
@@ -216,16 +181,18 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 -- or adjacent to one carrying structures (rooms are localised —
                 -- most chunks are nowhere near one, so this is a no-op there).
                 -- Adjacency (not same-chunk-only) is what lets a sprite across
-                -- a chunk seam from a wall still get lifted. A qualifying sprite
-                -- is raised to sit fully in front of any front wall it overlaps;
+                -- a chunk seam from a wall still get lifted — measured with
+                -- 'chunkSeamChebyshev' so a wall just across the cylindrical
+                -- U seam still qualifies (#423). A qualifying sprite is raised
+                -- to sit fully in front of any front wall it overlaps;
                 -- everything else is untouched.
-                ChunkCoord ccx ccy = coord
                 chunkNearStructures =
-                    any (\(ChunkCoord sx sy) → abs (sx - ccx) ≤ 1 ∧ abs (sy - ccy) ≤ 1)
+                    any (\sc → chunkSeamChebyshev worldSize sc coord ≤ 1)
                         structureChunkCoords
                 bump gx gy q
                     | not chunkNearStructures = q
-                    | otherwise = case structureFrontWallClear gx gy of
+                    | otherwise = case structureFrontWallClear facing worldSize
+                                           zSlice structLookup gx gy of
                         Just c  → q { sqSortKey = max (sqSortKey q) (c + 0.0001) }
                         Nothing → q
 
@@ -431,6 +398,77 @@ renderWorldQuads env worldState zoomAlpha snap = do
             -- low at typical visible-chunk counts (~20–100).
             `using` parListChunk 4 rdeepseq
     return $! V.concat chunkVectors
+
+-- | #418: a flora/veg billboard sitting in front of a structure's FRONT
+--   wall must draw over the WHOLE wall, not slice through the wall's
+--   depth-sorted strips (#417). A single-depth sprite otherwise beats
+--   the wall's back strips but loses its clamped south strips → the
+--   "leaf over the wall / frond cut off" straddle. This finds the
+--   highest front-wall strip key the sprite at (gx,gy) is spatially IN
+--   FRONT of, so the caller lifts the sprite's key just above it and it
+--   clears the entire strip range as one unit. Returns Nothing when no
+--   such wall is near (the sprite keeps its normal key).
+--
+--   The strip-key formula mirrors 'frontWallStrips'/'tieBreak' in
+--   Structure.Render (SE 0.0006, SW 0.0005; the clamped south strip
+--   anchors at the S vertex (wgx+1,wgy+1)) — keep them in sync. The
+--   applyFacing depth test keeps it rotation-correct. Wall lookups cross
+--   chunks; the per-chunk gate at the call site keeps it free where
+--   there are none.
+--
+--   Seam-aware (#423): loaded chunks are keyed by canonical (u-wrapped)
+--   coords ('World.Thread.ChunkLoading'), and a chunk's structures are
+--   keyed by tile coords in that canonical frame. A neighbour probed
+--   just across the cylindrical U seam therefore needs BOTH its chunk
+--   coord canonicalised and its tile key shifted by the same wrap
+--   delta, or the wall on the far side is silently missed.
+structureFrontWallClear
+    ∷ CameraFacing
+    → Int                                   -- ^ world size in chunks
+    → Int                                   -- ^ camera z-slice
+    → (ChunkCoord → Maybe ChunkStructures)  -- ^ loaded-chunk structure lookup
+    → Int → Int                             -- ^ sprite tile (gx, gy)
+    → Maybe Float
+structureFrontWallClear facing worldSize zSlice structLookup gx gy =
+    let (fa, fb) = applyFacing facing gx gy
+        spriteDepth = fa + fb
+        seTag = fromIntegral (fromEnum SWallSE) ∷ Word8
+        swTag = fromIntegral (fromEnum SWallSW) ∷ Word8
+        wallKeyAt wgx wgy tag tieB = do
+            let (ccRaw@(ChunkCoord rcx rcy), _) = globalToChunk wgx wgy
+                cc@(ChunkCoord ccx ccy) = wrapChunkCoordU worldSize ccRaw
+                -- Tile key in the stored (canonical) chunk's frame. The
+                -- chunk wrap shifts u by whole worlds and preserves
+                -- v = cx + cy, so this is the identity away from the seam.
+                sgx = wgx + (ccx - rcx) * chunkSize
+                sgy = wgy + (ccy - rcy) * chunkSize
+            structs ← structLookup cc
+            spd ← HM.lookup (sgx, sgy, tag) structs
+            -- The wall's strips sort at keys computed from its STORED
+            -- coords, while the sprite's own key is in its local frame.
+            -- The u-wrap preserves v = gx + gy, so at north/south facings
+            -- (depth = ±v) the two frames agree and the cross-seam lift
+            -- is exact. At east/west facings depth follows u, which the
+            -- wrap shifts by a whole world width — the wall renders
+            -- nowhere near the sprite on screen there, and lifting
+            -- against its key would only corrupt the sprite's local
+            -- ordering: skip when the frames disagree.
+            let (sa, sb) = applyFacing facing (sgx + 1) (sgy + 1)
+                scDepth  = sa + sb
+                (la, lb) = applyFacing facing (wgx + 1) (wgy + 1)
+                localDepth = la + lb
+            if spriteDepth < localDepth   -- sprite is NOT fully in front
+               ∨ scDepth ≠ localDepth     -- frames disagree (E/W seam)
+               then Nothing
+               else Just (fromIntegral scDepth
+                          + fromIntegral (spdGridZ spd - zSlice) * 0.001
+                          + tieB)
+        cands = [ wallKeyAt (gx + dx) (gy + dy) tag tieB
+                | dx ← [-2 .. 2], dy ← [-2 .. 2], (dx, dy) ≠ (0, 0)
+                , (tag, tieB) ← [(seTag, 0.0006 ∷ Float), (swTag, 0.0005)] ]
+    in case [ k | Just k ← cands ] of
+         [] → Nothing
+         ks → Just (maximum ks)
 
 -- * World Cursor Quads (generated every frame, not cached)
 

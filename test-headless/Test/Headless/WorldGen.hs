@@ -29,9 +29,8 @@ import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
 import Location.Types (LocationDef(..))
 import Location.Overlay
-    ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..)
-    , chunkSeamChebyshev
-    )
+    ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..) )
+-- chunkSeamChebyshev comes in via World.Types (World.Chunk.Types, #423)
 
 spec ∷ SpecWith EngineEnv
 spec = do
