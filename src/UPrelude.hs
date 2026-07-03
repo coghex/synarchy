@@ -143,7 +143,11 @@ clamp minVal maxVal x
 
 instance Serialize Text where
     put txt = put $ T.encodeUtf8 txt
-    get     = fmap T.decodeUtf8 S.get
+    get     = do
+        bs ← S.get
+        case T.decodeUtf8' bs of
+            Left err  → fail ("Text field is not valid UTF-8: " <> show err)
+            Right txt → pure txt
 
 instance (Serialize k, Serialize v, Eq k, Hashable k)
     ⇒ Serialize (HM.HashMap k v) where

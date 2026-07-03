@@ -2,7 +2,7 @@
 module Engine.Input.Bindings where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Yaml as Yaml

@@ -6,7 +6,7 @@ module Engine.Scene.Batch.Sprite
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
 import Engine.Scene.Base (NodeType(..), Transform2D(..))

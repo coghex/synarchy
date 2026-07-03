@@ -725,7 +725,8 @@ local STAT_DEFS = {
 
 -- engine.loadTexture caches by path, but we keep a per-key map so each
 -- key resolves to a (texture, def) pair once and we don't re-hit the
--- engine each rebuild. Missing icons silently fall back to text.
+-- engine each rebuild. A miss with no per-family "<kind>_unknown" entry
+-- falls back to text (#478).
 local iconCache = {}
 
 -- Icons live in kind subfolders (assets/textures/icons/<kind>/<name>.png) but
@@ -746,15 +747,21 @@ local function buildIconIndex()
     end
 end
 
-local function loadIconFor(iconKey)
+-- `kind` (one of ICON_SUBDIRS) is the row's icon family, used ONLY as a
+-- last resort when iconKey itself has no match — picks that family's
+-- "<kind>_unknown" placeholder (#478) instead of degrading to text.
+-- Cache key includes kind since the same iconKey could miss under a
+-- different family default from a different panel.
+local function loadIconFor(iconKey, kind)
     if not iconKey then return nil end
-    if iconCache[iconKey] ~= nil then
-        return iconCache[iconKey] or nil
+    local cacheKey = iconKey .. "|" .. (kind or "")
+    if iconCache[cacheKey] ~= nil then
+        return iconCache[cacheKey] or nil
     end
     if not iconIndex then buildIconIndex() end
-    local path = iconIndex[iconKey]
+    local path = iconIndex[iconKey] or (kind and iconIndex[kind .. "_unknown"])
     local tex  = path and engine.loadTexture(path) or nil
-    iconCache[iconKey] = tex or false
+    iconCache[cacheKey] = tex or false
     return tex
 end
 
@@ -798,14 +805,14 @@ end
 -- align="left" puts a coloured, abbreviated name right after the icon — the
 -- condition/injury look.
 local function placeIconStatRow(rect, rowIndex, statKey, valueText,
-                                  tooltipOverride, valueTooltip, opts)
+                                  tooltipOverride, valueTooltip, opts, kind)
     local rowTop = rect.y + CONTENT_TOP_PAD + rowIndex * CONTENT_ROW_H
     local y      = rowTop + CONTENT_FONT_SIZE
                  + math.floor((CONTENT_ROW_H - CONTENT_FONT_SIZE) / 2)
                  - math.floor(CONTENT_FONT_SIZE * 0.3)
 
     local def     = STAT_DEFS[statKey]
-    local iconTex = loadIconFor(def and def.icon or statKey)
+    local iconTex = loadIconFor(def and def.icon or statKey, kind)
     if iconTex then
         local iconY = rowTop + math.floor((CONTENT_ROW_H - ICON_SIZE) / 2)
         local iconId = UI.newSprite(
@@ -1136,9 +1143,14 @@ end
 --     value = function(uid) end,
 --     tooltip = optional icon-tooltip ({text,hint} or function),
 --     valueTooltip = optional value-tooltip (function(uid) → {text,hint}),
+--     kind = optional per-row icon family override (see `kind` param)
 --   }
 -- Rows whose value() returns nil are skipped so the layout stays compact.
-local function buildIconStatPanel(rect, uid, rowDefs)
+-- `kind` (one of the ICON_SUBDIRS families) is this panel's default icon
+-- family, used for the "<kind>_unknown" fallback on an icon miss (#478) —
+-- a row's own `kind` field overrides it (buildStatusPanel mixes
+-- status/injury/infection rows in one list).
+local function buildIconStatPanel(rect, uid, rowDefs, kind)
     local visibleRows = {}
     for _, r in ipairs(rowDefs) do
         if r.value(uid) ~= nil then
@@ -1187,7 +1199,7 @@ local function buildIconStatPanel(rect, uid, rowDefs)
             rowOpts.color = r.colorFn(uid) or rowOpts.color
         end
         local valLbl, y, lay = placeIconStatRow(rowRect, i - 1, r.key,
-            r.value(uid) or "?", tt, vtt, rowOpts)
+            r.value(uid) or "?", tt, vtt, rowOpts, r.kind or kind)
         refs[i] = {
             valLbl     = valLbl,
             fn         = r.value,
@@ -1703,6 +1715,7 @@ local function buildStatusPanel(rect, uid)
         local tt = { text = disp, hint = hint }
         rows[#rows + 1] = {
             key          = g.icon,
+            kind         = "injury",
             value        = function() return disp end,
             opts         = { fontSize = CONDITION_FONT_SIZE,
                              color = injuries.severityColor(inj.severity),
@@ -1729,6 +1742,7 @@ local function buildStatusPanel(rect, uid)
         local tt = { text = inf.name, hint = hint }
         rows[#rows + 1] = {
             key          = inf.icon,
+            kind         = "infection",
             value        = function() return disp end,
             opts         = { fontSize = CONDITION_FONT_SIZE, color = col,
                              align = "left", abbreviate = true },
@@ -1747,6 +1761,7 @@ local function buildStatusPanel(rect, uid)
         local tt = { text = sc.name, hint = hint }
         rows[#rows + 1] = {
             key          = sc.icon,
+            kind         = "injury",
             value        = function() return sc.name end,
             opts         = { fontSize = CONDITION_FONT_SIZE,
                              color = { 0.55, 0.55, 0.55, 1.0 },
@@ -1776,7 +1791,7 @@ local function buildStatusPanel(rect, uid)
         }
     end
 
-    return buildIconStatPanel(rect, uid, rows)
+    return buildIconStatPanel(rect, uid, rows, "status")
 end
 
 -- Row spec helper for engine-side stats. Icon tooltip = stat name +
@@ -1843,14 +1858,14 @@ local function buildPhysicalPanel(rect, uid)
               }
           end,
         },
-    })
+    }, "stat")
 end
 
 local function buildMentalPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
         statRow("intelligence"),
         statRow("perception"),
-    })
+    }, "stat")
 end
 
 local function buildSkillPanel(rect, uid)
@@ -1875,7 +1890,7 @@ local function buildSkillPanel(rect, uid)
             } or nil,
         }
     end
-    return buildIconStatPanel(rect, uid, rows)
+    return buildIconStatPanel(rect, uid, rows, "skill")
 end
 
 -- Compose the weight tooltip from the body-composition stats. body_mass
@@ -1933,7 +1948,7 @@ local function buildKnowledgePanel(rect, uid)
     local rows = {}
     for _, r in ipairs(known)   do rows[#rows + 1] = r end
     for _, r in ipairs(unknown) do rows[#rows + 1] = r end
-    return buildIconStatPanel(rect, uid, rows)
+    return buildIconStatPanel(rect, uid, rows, "knowledge")
 end
 
 local PANEL_BUILDERS = {

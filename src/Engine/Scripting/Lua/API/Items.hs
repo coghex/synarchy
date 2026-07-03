@@ -24,11 +24,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import System.Directory (doesFileExist)
 import Engine.Core.State (EngineEnv(..), activeWorldState, freshItemInstanceId)
-import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
+import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlTextures (lookupTextureName)
 import Engine.Asset.YamlItems
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
@@ -66,14 +65,7 @@ brokenEquipmentTexName ∷ Text
 brokenEquipmentTexName = "broken_equipment"
 
 resolveSpritePath ∷ EngineEnv → FilePath → IO FilePath
-resolveSpritePath env preferred = do
-    exists ← doesFileExist preferred
-    if exists then return preferred else do
-        logger ← readIORef (loggerRef env)
-        logWarn logger CatAsset $
-            "Item sprite missing: " <> T.pack preferred
-            <> " — substituting " <> T.pack missingEquipmentTexture
-        return missingEquipmentTexture
+resolveSpritePath env = resolveTexturePath env "Item sprite" missingEquipmentTexture
 
 -- | item.loadYaml(path) — parses a YAML file of item defs, loads each
 --   item's sprite, and registers the defs into the ItemManager.

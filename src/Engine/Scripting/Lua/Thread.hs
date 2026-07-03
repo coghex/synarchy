@@ -33,14 +33,14 @@ import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.List (find)
 import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, tryPutMVar)
 import Control.Concurrent.STM.TQueue (TQueue, newTQueue)
-import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
+import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch, finally)
 
@@ -84,7 +84,7 @@ startLuaThread env = do
                           , scriptPaused    = False
                           }
                     
-                    atomically $ modifyTVar (lbsScripts backendState) $
+                    atomically $ modifyTVar' (lbsScripts backendState) $
                         Map.insert initScriptId initScript
                     
                     logDebug logger CatLua $ "Lua script module loaded with ID: " 
@@ -211,7 +211,7 @@ runLuaLoop env ls stateRef debugQueue = do
                             let dt = scriptTickRate script
                             _ ← callModuleFunction ls (scriptModuleRef script) "update" [ScriptNumber dt]
                             return ()
-                          atomically $ modifyTVar (lbsScripts ls) $
+                          atomically $ modifyTVar' (lbsScripts ls) $
                             Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
                       pure True
               )
@@ -384,11 +384,11 @@ executeDebugLua lst cmdText = Lua.runWith lst $ do
                 _ → do
                     err ← Lua.tostring (-1)
                     Lua.pop 1
-                    return $ "error: " <> maybe "unknown" TE.decodeUtf8 err
+                    return $ "error: " <> maybe "unknown" TE.decodeUtf8Lenient err
         _ → do
             err ← Lua.tostring (-1)
             Lua.pop 1
-            return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8 err
+            return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8Lenient err
 
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 processLuaMsgs env ls stateRef = do

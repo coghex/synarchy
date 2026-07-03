@@ -18,7 +18,7 @@ import Engine.Core.State (EngineEnv(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
 
 isKeyDownFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
@@ -28,7 +28,7 @@ isKeyDownFn backendState = do
     Just keyBS → do
       isDown ← Lua.liftIO $ do
         inputState ← readIORef (lbsInputState backendState)
-        let keyName = TE.decodeUtf8 keyBS
+        let keyName = TE.decodeUtf8Lenient keyBS
         return $ checkKeyDown keyName inputState
       Lua.pushboolean isDown
     Nothing → Lua.pushboolean False
@@ -42,7 +42,7 @@ isActionDownFn env backendState = do
       isDown ← Lua.liftIO $ do
         inputState ← readIORef (lbsInputState backendState)
         bindings ← readIORef (keyBindingsRef env)
-        let actionName = TE.decodeUtf8 actionBS
+        let actionName = TE.decodeUtf8Lenient actionBS
         return $ isActionDown actionName bindings inputState
       Lua.pushboolean isDown
     Nothing → Lua.pushboolean False
