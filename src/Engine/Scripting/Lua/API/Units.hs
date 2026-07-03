@@ -89,6 +89,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetWeaponClassFn
     , unitModifyItemFillFn
     , unitRepairItemFn
+    , applyRepairToUnit
+    , findHeldItemById
     , unitAddItemFn
     , unitGetItemTempFn
     , unitSetItemTempFn
@@ -1744,36 +1746,12 @@ unitRepairItemFn env = do
             mRes ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, Nothing)
-                    Just inst →
-                        -- Inventory, then equipment, then worn accessories;
-                        -- an instance id is unique to one physical item so at
-                        -- most one branch fires.
-                        let commit inst' = um { umInstances =
-                                  HM.insert uid inst' (umInstances um) }
-                        in case repairInList iid condD sharpD (uiInventory inst) of
-                            Just (inv', _, r) →
-                                (commit inst { uiInventory = inv' }, Just r)
-                            Nothing →
-                              case repairInEquip iid condD sharpD
-                                                 (uiEquipment inst) of
-                                Just (eq', _, r) →
-                                    (commit inst { uiEquipment = eq' }, Just r)
-                                Nothing →
-                                  case repairInList iid condD sharpD
-                                                    (uiAccessories inst) of
-                                    Just (accs', _, r) →
-                                        -- Re-derive buffs from the WHOLE worn
-                                        -- list (with the repaired instance in
-                                        -- it), in equip order, so a same-source
-                                        -- duplicate's last-equipped copy stays
-                                        -- the live one — repairing an older
-                                        -- duplicate must not hijack the buff.
-                                        let mods' = refreshAccessoryBuffs itemMgr
-                                                      accs' (uiModifiers inst)
-                                        in ( commit inst { uiAccessories = accs'
-                                                         , uiModifiers   = mods' }
-                                           , Just r )
-                                    Nothing → (um, Nothing)
+                    Just inst → case applyRepairToUnit iid condD sharpD itemMgr inst of
+                        Nothing            → (um, Nothing)
+                        Just (inst', r) →
+                            ( um { umInstances = HM.insert uid inst'
+                                                           (umInstances um) }
+                            , Just r )
             case mRes of
                 Nothing → Lua.pushnil >> return 1
                 Just (defName, cond1, sharp1, cApp, sApp) → do
@@ -1848,6 +1826,28 @@ refreshAccessoryBuffs ∷ ItemManager → [ItemInstance]
                       → HM.HashMap Text [StatModifier]
 refreshAccessoryBuffs itemMgr accs mods0 =
     foldl' (\mods inst → applyAccessoryBuffs itemMgr inst mods) mods0 accs
+
+-- | The pure core of unit.repairItem (#300) and the repair.repairAt
+--   policy layer (#301): search inventory, then equipment, then worn
+--   accessories for `iid` and apply the deltas there, refreshing
+--   condition-scaled accessory buffs same as above. Nothing if the unit
+--   holds no instance with that id.
+applyRepairToUnit ∷ Word64 → Float → Float → ItemManager → UnitInstance
+                  → Maybe (UnitInstance, (Text, Float, Float, Float, Float))
+applyRepairToUnit iid condD sharpD itemMgr inst =
+    case repairInList iid condD sharpD (uiInventory inst) of
+        Just (inv', _, r) → Just (inst { uiInventory = inv' }, r)
+        Nothing →
+          case repairInEquip iid condD sharpD (uiEquipment inst) of
+            Just (eq', _, r) → Just (inst { uiEquipment = eq' }, r)
+            Nothing →
+              case repairInList iid condD sharpD (uiAccessories inst) of
+                Just (accs', _, r) →
+                    let mods' = refreshAccessoryBuffs itemMgr accs'
+                                                       (uiModifiers inst)
+                    in Just (inst { uiAccessories = accs'
+                                  , uiModifiers   = mods' }, r)
+                Nothing → Nothing
 
 -- | Apply one accessory's buffs to a modifier map: def lookup + the
 --   shared Unit.Stats.applyItemBuffs. The modifier source is the item's

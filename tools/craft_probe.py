@@ -309,8 +309,8 @@ def main():
         passed = check(passed, not ok_e and "not built" in msg,
                        "executeAt refused at unbuilt station", msg)
         ops = jget(port, f"return building.getOperations({bid_f})")
-        ok = isinstance(ops, list) and sorted(ops) == ["repair", "smelt"]
-        passed = check(passed, ok, "furnace advertises smelt+repair", ops)
+        ok = isinstance(ops, list) and sorted(ops) == ["repair_condition", "smelt"]
+        passed = check(passed, ok, "furnace advertises smelt+repair_condition", ops)
         send(port, f"building.addBuildProgress({bid_f}, 200); return 'ok'")
         act = send(port, f"return building.getActivity({bid_f})").strip('"')
         passed = check(passed, act == "built", "furnace reaches built", act)
@@ -332,12 +332,17 @@ def main():
         hit = send(port, f"local b=building.findStation('forge'); return b or -1")
         passed = check(passed, int(float(hit)) == bid_w,
                        "findStation('forge') → workbench", hit)
-        # Both stations advertise "repair" — the routing hook the repair
-        # flows (#301/#302) plug into.
+        # The repair flows (#301/#302) split condition/sharpness into
+        # separate station operations, so findStation routes each to
+        # its own building instead of a shared generic "repair" tag.
         hit = send(port,
-                   f"local b=building.findStation('repair', 2, 2); return b or -1")
-        passed = check(passed, int(float(hit)) in (bid_f, bid_w),
-                       "findStation('repair') finds a station", hit)
+                   f"local b=building.findStation('repair_condition', 2, 2); return b or -1")
+        passed = check(passed, int(float(hit)) == bid_f,
+                       "findStation('repair_condition') → furnace", hit)
+        hit = send(port,
+                   f"local b=building.findStation('repair_sharpness', 2, 2); return b or -1")
+        passed = check(passed, int(float(hit)) == bid_w,
+                       "findStation('repair_sharpness') → workbench", hit)
 
         # Success at the right station: same consumption as craft.execute.
         send(port, f"unit.addItem({uid},'steel_bar'); "

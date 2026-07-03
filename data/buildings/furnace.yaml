@@ -27,9 +27,12 @@ buildings:
     storage_capacity: 100.0
 
     # Work-station operations (#326). Recipe `station` kinds this
-    # building can run, plus "repair" for the repair flows (#301):
-    # condition restoration happens at the furnace (reforging), edge
-    # honing at the workbench.
+    # building can run, plus "repair_condition" for the repair flows
+    # (#301): condition restoration (reforging) happens at the
+    # furnace; edge honing ("repair_sharpness") lives at the workbench
+    # instead — the two axes are split operations so findStation/
+    # executeAt routes to the right station instead of either matching
+    # a shared generic "repair" tag.
     operations:
       - smelt
-      - repair
+      - repair_condition

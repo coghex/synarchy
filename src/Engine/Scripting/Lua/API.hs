@@ -64,6 +64,7 @@ import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
 import Engine.Scripting.Lua.API.Craft
+import Engine.Scripting.Lua.API.Repair
 import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.Flora
@@ -516,6 +517,18 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "execute"  (craftExecuteFn env)
   registerLuaFunction "executeAt" (craftExecuteAtFn env)
   Lua.setglobal (Lua.Name "craft")
+
+  -- Repair global (#301) — the policy layer on top of unit.repairItem
+  -- (#300): repair flows are recipe entries tagged with a repair axis
+  -- (data/recipes/repair.yaml), gated on the same Built/adjacent
+  -- station rules as craft.executeAt. get/getNames are read-only,
+  -- restricted to repair-tagged recipes; repairAt runs one repair
+  -- against a targeted item instance.
+  Lua.newtable
+  registerLuaFunction "get"      (repairGetFn env)
+  registerLuaFunction "getNames" (repairGetNamesFn env)
+  registerLuaFunction "repairAt" (repairAtFn env)
+  Lua.setglobal (Lua.Name "repair")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml
   -- (loaded via engine.loadLootTableYaml). Consumed by a `loot_table`

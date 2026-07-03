@@ -8,8 +8,8 @@
 #   station:   station operation, e.g. "smelt"/"forge"    (required)
 #              — matched against a building def's `operations:` list
 #              (#326): craft.executeAt only runs at a Built building
-#              offering it (furnace = smelt+repair, workbench =
-#              forge+assemble+repair)
+#              offering it (furnace = smelt+repair_condition,
+#              workbench = forge+assemble+repair_sharpness)
 #   inputs:    list of { item, count }; count defaults 1  (required)
 #   fuel:      optional single { item, count } consumed alongside the
 #              inputs (fuel item content arrives with the smelting
@@ -23,6 +23,11 @@
 #              quality = skill level, blended 70/30 with the knowledge
 #              level when the recipe is knowledge-gated, clamped 0-100.
 #              Omitted = quality rolls from the item def's spec.
+#   repair_axis: optional "condition"/"sharpness" (#301) — marks this a
+#              REPAIR recipe run through repair.repairAt (targets an
+#              existing item instance) rather than craft.execute/
+#              executeAt, which refuse repair-tagged recipes. See
+#              data/recipes/repair.yaml.
 #
 # Outputs spawn factory-new: condition + sharpness 100.
 recipes:

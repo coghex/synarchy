@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
 -- | YAML loader for data/recipes/*.yaml. Mirrors Engine.Asset.YamlInfection.
 --   The on-disk schema is documented in data/recipes/basic.yaml.
+--   `repair_axis` (#301) marks a recipe as a REPAIR flow (data/recipes/
+--   repair.yaml) rather than a craft — see Craft.Types.rdRepairAxis.
 module Engine.Asset.YamlRecipes
     ( RecipeYamlIngredient(..)
     , RecipeYamlDef(..)
@@ -39,11 +41,23 @@ data RecipeYamlDef = RecipeYamlDef
     , ryOutputs   ∷ ![RecipeYamlIngredient]
     , ryKnowledge ∷ !(Maybe Text)
     , rySkill     ∷ !(Maybe Text)
+    , ryRepairAxis ∷ !(Maybe Text)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON RecipeYamlDef where
     parseJSON = withObject "RecipeYamlDef" $ \v → do
-        rid ← v .: "id"
+        rid  ← v .: "id"
+        axis ← v .:? "repair_axis"
+        -- Reject anything but the two known axes HERE, at the only
+        -- entry point for repair_axis, so a typo (e.g. "sharpnes")
+        -- fails the whole file's load instead of silently becoming a
+        -- recipe that repairs the wrong axis (Craft.Types.RepairAxis
+        -- is what makes that failure mode impossible downstream).
+        case axis of
+            Just a | a ≢ "condition" ∧ a ≢ "sharpness" →
+                fail (T.unpack ("repair_axis must be \"condition\" or "
+                                 <> "\"sharpness\", got " <> a))
+            _ → pure ()
         RecipeYamlDef rid
             ⊚ v .:? "name" .!= rid
             ⊛ v .:  "station"
@@ -53,6 +67,7 @@ instance FromJSON RecipeYamlDef where
             ⊛ v .:  "outputs"
             ⊛ v .:? "knowledge"
             ⊛ v .:? "skill"
+            ⊛ pure axis
 
 newtype RecipeYamlFile = RecipeYamlFile
     { ryfRecipes ∷ [RecipeYamlDef]
