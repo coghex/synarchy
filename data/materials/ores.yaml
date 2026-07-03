@@ -7,6 +7,9 @@ materials:
     drainage: 0.05
     pick_speed: 0.9
     shovel_speed: 0.2
+    # Chunk yields (#327): mined iron ore comes out as smeltable
+    # blocks, same accumulator as granite → granite_chunk.
+    dig_chunk: iron_ore_chunk
     tile: "assets/textures/world/iron_ore/iron_ore.png"
     zoom: "assets/textures/world/zoommap/iron_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/iron_ore_chunk_background.png"
@@ -51,6 +54,7 @@ materials:
     drainage: 0.05
     pick_speed: 0.95
     shovel_speed: 0.2
+    dig_chunk: copper_ore_chunk
     tile: "assets/textures/world/copper_ore/copper_ore.png"
     zoom: "assets/textures/world/zoommap/copper_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/copper_ore_chunk_background.png"
@@ -62,6 +66,7 @@ materials:
     drainage: 0.05
     pick_speed: 0.95
     shovel_speed: 0.2
+    dig_chunk: tin_ore_chunk
     tile: "assets/textures/world/tin_ore/tin_ore.png"
     zoom: "assets/textures/world/zoommap/tin_ore_chunk.png"
     bg:   "assets/textures/world/zoommap/tin_ore_chunk_background.png"

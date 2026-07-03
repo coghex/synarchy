@@ -1,0 +1,27 @@
+items:
+  # Furnace fuel (#327), dug from the three carbonaceous seams
+  # (data/materials/carbonaceous.yaml dig_chunk). Lighter than rock
+  # chunks (coal density ~1.3–1.5 vs granite 2.7). Grade matters:
+  # the smelt recipes burn 3 lignite / 2 bituminous / 1 anthracite
+  # per batch, mirroring their real energy density.
+  - name: "lignite_chunk"
+    display_name: "Lignite Chunk"
+    sprite: "assets/textures/items/material/lignite_chunk.png"
+    weight: 5.0
+    category: Materials
+    make: world
+    material: lignite
+  - name: "bituminous_coal_chunk"
+    display_name: "Bituminous Coal Chunk"
+    sprite: "assets/textures/items/material/bituminous_coal_chunk.png"
+    weight: 5.0
+    category: Materials
+    make: world
+    material: bituminous_coal
+  - name: "anthracite_chunk"
+    display_name: "Anthracite Chunk"
+    sprite: "assets/textures/items/material/anthracite_chunk.png"
+    weight: 5.0
+    category: Materials
+    make: world
+    material: anthracite

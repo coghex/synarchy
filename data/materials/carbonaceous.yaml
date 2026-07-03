@@ -7,6 +7,11 @@ materials:
     drainage: 0.15
     pick_speed: 1.1
     shovel_speed: 0.5
+    # Chunk yields (#327): dug coal comes out as furnace fuel, same
+    # accumulator as granite → granite_chunk. Grade shows up in the
+    # smelt recipes' fuel counts (3 lignite / 2 bituminous /
+    # 1 anthracite per batch).
+    dig_chunk: lignite_chunk
     tile: "assets/textures/world/lignite/lignite.png"
     zoom: "assets/textures/world/zoommap/lignite_chunk.png"
     bg:   "assets/textures/world/zoommap/lignite_chunk_background.png"
@@ -18,6 +23,7 @@ materials:
     drainage: 0.1
     pick_speed: 1.1
     shovel_speed: 0.4
+    dig_chunk: bituminous_coal_chunk
     tile: "assets/textures/world/bituminous_coal/bituminous_coal.png"
     zoom: "assets/textures/world/zoommap/bituminous_coal_chunk.png"
     bg:   "assets/textures/world/zoommap/bituminous_coal_chunk_background.png"
@@ -29,6 +35,7 @@ materials:
     drainage: 0.08
     pick_speed: 1.0
     shovel_speed: 0.3
+    dig_chunk: anthracite_chunk
     tile: "assets/textures/world/anthracite/anthracite.png"
     zoom: "assets/textures/world/zoommap/anthracite_chunk.png"
     bg:   "assets/textures/world/zoommap/anthracite_chunk_background.png"

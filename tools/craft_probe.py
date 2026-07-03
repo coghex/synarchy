@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Crafting probe (#325 + #326 + #343) — catalogue, execute, stations, quality.
+"""Crafting probe (#325 + #326 + #343 + #327) — catalogue, execute,
+stations, quality, smelting.
 
 Boots a headless engine on a flat arena, loads defs + data/recipes +
 data/buildings, spawns an acolyte, then checks the craft.* Lua API
@@ -27,6 +28,12 @@ end-to-end:
      smithing-tagged dagger) — verified across two crafter builds via
      unit.setSkill / unit.setKnowledge, through both craft.execute and
      craft.executeAt at a built station.
+  7. Smelting tier (#327): the shipped data/recipes/smelting.yaml set —
+     all six recipes in the catalogue, the coal-grade fuel ladder
+     (3 lignite / 2 bituminous / 1 anthracite), steel smelted at the
+     built furnace (ore + coal consumed, 4 bars out), short-fuel
+     refusal leaving the pantry untouched, and the bronze pair
+     (copper + tin chunks → bronze bars).
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
@@ -410,6 +417,72 @@ def main():
         passed = check(passed, ok,
                        "executeAt at workbench carries quality 55",
                        detail or f"qual={q}")
+
+        # --- 7. Smelting tier (#327) ---
+        names7 = jget(port, "return craft.getNames()")
+        smelts = {"smelt_steel_lignite", "smelt_steel_bituminous",
+                  "smelt_steel_anthracite", "smelt_bronze_lignite",
+                  "smelt_bronze_bituminous", "smelt_bronze_anthracite"}
+        ok = isinstance(names7, list) and smelts <= set(names7)
+        passed = check(passed, ok, "all six smelt recipes in the catalogue",
+                       sorted(smelts - set(names7)) if isinstance(names7, list)
+                       else names7)
+        r = jget(port, "return craft.get('smelt_steel_anthracite')")
+        ok = (isinstance(r, dict) and r.get("station") == "smelt"
+              and r.get("inputs") == [{"item": "iron_ore_chunk", "count": 1}]
+              and r.get("fuel") == {"item": "anthracite_chunk", "count": 1}
+              and r.get("outputs") == [{"item": "steel_bar", "count": 4}])
+        passed = check(passed, ok, "steel smelt shape (ore + coal -> 4 bars)", r)
+        def fuel_count(grade):
+            r7 = jget(port, f"return craft.get('smelt_steel_{grade}')")
+            return r7.get("fuel", {}).get("count") if isinstance(r7, dict) else None
+        ladder = {g: fuel_count(g)
+                  for g in ("lignite", "bituminous", "anthracite")}
+        ok = ladder == {"lignite": 3, "bituminous": 2, "anthracite": 1}
+        passed = check(passed, ok, "coal-grade fuel ladder 3/2/1", ladder)
+
+        # Steel at the built furnace from phase 5: ore + coal in, bars out.
+        send(port, f"unit.addItem({uid},'iron_ore_chunk'); "
+                   f"unit.addItem({uid},'anthracite_chunk'); return 'ok'")
+        bars7 = count_item(port, uid, "steel_bar")
+        ok_e, msg = execute_at(port, uid, "smelt_steel_anthracite", bid_f)
+        ok = (ok_e and count_item(port, uid, "steel_bar") == bars7 + 4
+              and count_item(port, uid, "iron_ore_chunk") == 0
+              and count_item(port, uid, "anthracite_chunk") == 0)
+        passed = check(passed, ok,
+                       "furnace smelts steel: ore+coal consumed, 4 bars out",
+                       msg)
+
+        # Lignite grade: 2 chunks is short of the 3 demanded — refused
+        # with nothing consumed; the third makes it go.
+        send(port, f"unit.addItem({uid},'iron_ore_chunk'); "
+                   f"unit.addItem({uid},'lignite_chunk'); "
+                   f"unit.addItem({uid},'lignite_chunk'); return 'ok'")
+        ok_e, msg = execute_at(port, uid, "smelt_steel_lignite", bid_f)
+        ok = (not ok_e and "missing" in msg and "lignite_chunk" in msg
+              and count_item(port, uid, "iron_ore_chunk") == 1
+              and count_item(port, uid, "lignite_chunk") == 2)
+        passed = check(passed, ok, "short lignite refused, pantry untouched",
+                       msg)
+        send(port, f"unit.addItem({uid},'lignite_chunk'); return 'ok'")
+        bars7 = count_item(port, uid, "steel_bar")
+        ok_e, msg = execute_at(port, uid, "smelt_steel_lignite", bid_f)
+        ok = (ok_e and count_item(port, uid, "steel_bar") == bars7 + 4
+              and count_item(port, uid, "lignite_chunk") == 0)
+        passed = check(passed, ok, "3 lignite fuel the same smelt", msg)
+
+        # Bronze: copper + tin pair, bituminous fuel.
+        send(port, f"unit.addItem({uid},'copper_ore_chunk'); "
+                   f"unit.addItem({uid},'tin_ore_chunk'); "
+                   f"unit.addItem({uid},'bituminous_coal_chunk'); "
+                   f"unit.addItem({uid},'bituminous_coal_chunk'); return 'ok'")
+        ok_e, msg = execute_at(port, uid, "smelt_bronze_bituminous", bid_f)
+        ok = (ok_e and count_item(port, uid, "bronze_bar") == 4
+              and count_item(port, uid, "copper_ore_chunk") == 0
+              and count_item(port, uid, "tin_ore_chunk") == 0
+              and count_item(port, uid, "bituminous_coal_chunk") == 0)
+        passed = check(passed, ok,
+                       "furnace smelts bronze: copper+tin+coal -> 4 bars", msg)
 
         print("\n" + ("ALL CRAFT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1

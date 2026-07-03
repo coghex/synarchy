@@ -1,0 +1,11 @@
+items:
+  # Smelted from copper + tin ore at the furnace (#327,
+  # data/recipes/smelting.yaml). The bronze-gear fabrication tier
+  # (#328) consumes these, same as steel_bar feeds the steel recipes.
+  - name: "bronze_bar"
+    display_name: "Bronze Bar"
+    sprite: "assets/textures/items/material/bar_bronze.png"
+    weight: 0.5
+    category: Materials
+    make: foundry
+    material: bronze
