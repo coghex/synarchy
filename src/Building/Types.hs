@@ -87,8 +87,10 @@ data BuildingDef = BuildingDef
     , bdOperations  ∷ ![Text]
       -- ^ Work-station operations this building offers once Built
       --   (#326): recipe `station` kinds it can run ("smelt", "forge",
-      --   "assemble", …) plus "repair" for the repair flows (#301).
-      --   Empty (default) = not a work station. craft.executeAt
+      --   "assemble", …) plus "repair_condition"/"repair_sharpness"
+      --   for the repair flows (#301) — split per wear axis so
+      --   findStation/executeAt route unambiguously to the right
+      --   station. Empty (default) = not a work station. craft.executeAt
       --   validates the recipe's rdStation against this list;
       --   building.findStation routes by it.
     , bdAnimations  ∷ !(HM.HashMap Text Animation)

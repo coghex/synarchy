@@ -475,6 +475,7 @@ library
                      Craft.Execute
                      Engine.Asset.YamlRecipes
                      Engine.Scripting.Lua.API.Craft
+                     Engine.Scripting.Lua.API.Repair
                      Location.Types
                      Location.Overlay.Types
                      Location.Overlay

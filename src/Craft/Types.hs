@@ -53,6 +53,18 @@ data RecipeDef = RecipeDef
                                               --   output quality (#343);
                                               --   Nothing = quality rolls
                                               --   from the item def's spec
+    , rdRepairAxis ∷ !(Maybe Text)            -- ^ #301: "condition" or
+                                              --   "sharpness" marks this as
+                                              --   a REPAIR recipe rather
+                                              --   than a craft — it targets
+                                              --   an existing item instance
+                                              --   (repair.repairAt) instead
+                                              --   of producing rdOutputs.
+                                              --   Nothing (the default) is
+                                              --   an ordinary craft recipe;
+                                              --   craft.execute/executeAt
+                                              --   refuse recipes with this
+                                              --   set.
     } deriving (Show, Eq)
 
 -- | Everything a craft consumes: inputs plus the fuel line, if any.

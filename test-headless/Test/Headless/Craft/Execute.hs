@@ -44,6 +44,7 @@ daggerRecipe = RecipeDef
     , rdOutputs   = [RecipeIngredient "steel_dagger" 1]
     , rdKnowledge = Nothing
     , rdSkill     = Just "smithing"
+    , rdRepairAxis = Nothing
     }
 
 -- | A fuelled variant whose fuel line repeats an input item.
@@ -73,7 +74,42 @@ spec = do
                         ryFuel d `shouldBe` Nothing
                         ryKnowledge d `shouldBe` Nothing
                         rySkill d `shouldBe` Just "smithing"
+                        ryRepairAxis d `shouldBe` Nothing
                         map ryiItem (ryOutputs d) `shouldBe` ["steel_dagger"]
+                    ds → expectationFailure $
+                        "expected exactly one recipe, got " <> show (length ds)
+
+        it "parses the shipped data/recipes/repair.yaml (#301)" $ do
+            r ← Yaml.decodeFileEither "data/recipes/repair.yaml"
+            case r of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [cond, sharp] → do
+                        ryId cond `shouldBe` "repair_condition"
+                        ryStation cond `shouldBe` "repair_condition"
+                        ryRepairAxis cond `shouldBe` Just "condition"
+                        map ryiItem (ryInputs cond) `shouldBe` ["lignite_chunk"]
+                        ryOutputs cond `shouldBe` []
+                        ryId sharp `shouldBe` "repair_sharpness"
+                        ryStation sharp `shouldBe` "repair_sharpness"
+                        ryRepairAxis sharp `shouldBe` Just "sharpness"
+                        map ryiItem (ryInputs sharp) `shouldBe` ["whetstone"]
+                        ryOutputs sharp `shouldBe` []
+                    ds → expectationFailure $
+                        "expected exactly two recipes, got " <> show (length ds)
+
+        it "repair_axis defaults to Nothing when omitted" $ do
+            let src = BS8.pack $ unlines
+                    [ "recipes:"
+                    , "  - id: plain_craft"
+                    , "    station: forge"
+                    , "    inputs: []"
+                    , "    outputs: []"
+                    ]
+            case parseFile src of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [d] → ryRepairAxis d `shouldBe` Nothing
                     ds → expectationFailure $
                         "expected exactly one recipe, got " <> show (length ds)
 

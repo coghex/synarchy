@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
 -- | YAML loader for data/recipes/*.yaml. Mirrors Engine.Asset.YamlInfection.
 --   The on-disk schema is documented in data/recipes/basic.yaml.
+--   `repair_axis` (#301) marks a recipe as a REPAIR flow (data/recipes/
+--   repair.yaml) rather than a craft — see Craft.Types.rdRepairAxis.
 module Engine.Asset.YamlRecipes
     ( RecipeYamlIngredient(..)
     , RecipeYamlDef(..)
@@ -39,6 +41,7 @@ data RecipeYamlDef = RecipeYamlDef
     , ryOutputs   ∷ ![RecipeYamlIngredient]
     , ryKnowledge ∷ !(Maybe Text)
     , rySkill     ∷ !(Maybe Text)
+    , ryRepairAxis ∷ !(Maybe Text)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON RecipeYamlDef where
@@ -53,6 +56,7 @@ instance FromJSON RecipeYamlDef where
             ⊛ v .:  "outputs"
             ⊛ v .:? "knowledge"
             ⊛ v .:? "skill"
+            ⊛ v .:? "repair_axis"
 
 newtype RecipeYamlFile = RecipeYamlFile
     { ryfRecipes ∷ [RecipeYamlDef]
