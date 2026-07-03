@@ -1,0 +1,40 @@
+# Repair flows (#301) — the policy layer on top of the unit.repairItem
+# primitive (#300). These are ordinary recipe entries (same schema as
+# data/recipes/basic.yaml) tagged with `repair_axis`, which marks them
+# as REPAIR rather than craft: repair.repairAt (Engine.Scripting.Lua.
+# API.Repair) targets an existing item instance and restores that axis
+# to 100 instead of producing `outputs`. craft.execute/executeAt refuse
+# repair-tagged recipes.
+#
+# Sharpness and condition are separate-but-similar wear axes (Item/
+# Types.hs) restored at separate stations, so each gets its own
+# station operation ("repair_condition" / "repair_sharpness" —
+# data/buildings/furnace.yaml, workbench.yaml) rather than sharing a
+# generic "repair" tag that could route to either building.
+#
+# Cost is material-gated (ties repair into the existing economy, like
+# crafting): reforging a damaged body burns furnace fuel; honing an
+# edge burns a whetstone (fully consumed per use — see data/items/
+# whetstone.yaml for why not a multi-use wearing tool). One visit
+# always restores the axis fully to 100, whether the item arrived
+# lightly worn or fully broken (condition 0) — a metered/partial
+# restore is a possible future refinement, not settled here.
+recipes:
+  - id: repair_condition
+    name: "Reforge (restore condition)"
+    station: repair_condition
+    repair_axis: condition
+    inputs:
+      - item: lignite_chunk
+        count: 1
+    work: 15
+    outputs: []
+  - id: repair_sharpness
+    name: "Hone edge (restore sharpness)"
+    station: repair_sharpness
+    repair_axis: sharpness
+    inputs:
+      - item: whetstone
+        count: 1
+    work: 10
+    outputs: []

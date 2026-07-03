@@ -23,10 +23,12 @@ buildings:
     storage_capacity: 100.0
 
     # Work-station operations (#326): forge (bars → blades/tools),
-    # assemble (components → goods), and "repair" for the repair flows
-    # (#301) — sharpness honing lives here, per the shared-station
-    # decision on the crafting epic (#324).
+    # assemble (components → goods), and "repair_sharpness" for the
+    # repair flows (#301) — edge honing lives here, per the
+    # shared-station decision on the crafting epic (#324); condition
+    # restoration ("repair_condition") is the furnace's job instead —
+    # see furnace.yaml for why the axes are split operations.
     operations:
       - forge
       - assemble
-      - repair
+      - repair_sharpness

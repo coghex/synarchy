@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.Craft
     , craftGetNamesFn
     , craftExecuteFn
     , craftExecuteAtFn
+    , pushRecipe
+    , validateStation
     ) where
 
 import UPrelude
@@ -59,6 +61,7 @@ loadRecipeYamlFn env = do
                             , rdOutputs   = map ingr (ryOutputs d)
                             , rdKnowledge = ryKnowledge d
                             , rdSkill     = rySkill d
+                            , rdRepairAxis = toRepairAxis ⊚ ryRepairAxis d
                             }
                     atomicModifyIORef' (recipeManagerRef env) $ \m →
                         (RecipeManager
@@ -74,6 +77,12 @@ loadRecipeYamlFn env = do
             return 1
   where
     ingr i = RecipeIngredient { riItem = ryiItem i, riCount = ryiCount i }
+    -- Total given Engine.Asset.YamlRecipes' parser already rejects any
+    -- repair_axis value but "condition"/"sharpness" — this is the ONE
+    -- place raw YAML text becomes a RepairAxis; every consumer past
+    -- this point works with the sum type, not a string to compare.
+    toRepairAxis "sharpness" = RepairSharpness
+    toRepairAxis _           = RepairCondition
 
 -- | Push a RecipeIngredient as a Lua `{ item, count }` table.
 pushIngredient ∷ RecipeIngredient → Lua.LuaE Lua.Exception ()
@@ -83,6 +92,39 @@ pushIngredient i = do
     Lua.setfield (-2) "item"
     Lua.pushinteger (fromIntegral (riCount i))
     Lua.setfield (-2) "count"
+
+-- | Push a RecipeDef as a Lua table: { id, name, station, work,
+--   knowledge?, skill?, repairAxis?, inputs = [{item,count}…],
+--   fuel = {item,count}?, outputs = [{item,count}…] }. Shared by
+--   craft.get and repair.get (Engine.Scripting.Lua.API.Repair) so both
+--   accessors report the identical shape.
+pushRecipe ∷ RecipeDef → Lua.LuaE Lua.Exception ()
+pushRecipe d = do
+    Lua.newtable
+    let putS k v = Lua.pushstring (TE.encodeUtf8 v)
+                   >> Lua.setfield (-2) k
+        putN k v = Lua.pushnumber (Lua.Number (realToFrac v))
+                   >> Lua.setfield (-2) k
+    putS "id"      (rdId d)
+    putS "name"    (rdName d)
+    putS "station" (rdStation d)
+    putN "work"    (rdWork d)
+    forM_ (rdKnowledge d)  $ putS "knowledge"
+    forM_ (rdSkill d)      $ putS "skill"
+    forM_ (rdRepairAxis d) $ \axis → putS "repairAxis" (repairAxisName axis)
+    Lua.newtable
+    forM_ (zip [1..] (rdInputs d)) $ \(i, ing) → do
+        pushIngredient ing
+        Lua.rawseti (-2) i
+    Lua.setfield (-2) "inputs"
+    forM_ (rdFuel d) $ \f → do
+        pushIngredient f
+        Lua.setfield (-2) "fuel"
+    Lua.newtable
+    forM_ (zip [1..] (rdOutputs d)) $ \(i, ing) → do
+        pushIngredient ing
+        Lua.rawseti (-2) i
+    Lua.setfield (-2) "outputs"
 
 -- | craft.get(id) → table | nil. Read-only access to one recipe:
 --   { id, name, station, work, knowledge?, skill?,
@@ -100,32 +142,7 @@ craftGetFn env = do
                 pure (lookupRecipe key m)
             case mDef of
                 Nothing → Lua.pushnil >> return 1
-                Just d → do
-                    Lua.newtable
-                    let putS k v = Lua.pushstring (TE.encodeUtf8 v)
-                                   >> Lua.setfield (-2) k
-                        putN k v = Lua.pushnumber (Lua.Number (realToFrac v))
-                                   >> Lua.setfield (-2) k
-                    putS "id"      (rdId d)
-                    putS "name"    (rdName d)
-                    putS "station" (rdStation d)
-                    putN "work"    (rdWork d)
-                    forM_ (rdKnowledge d) $ putS "knowledge"
-                    forM_ (rdSkill d)     $ putS "skill"
-                    Lua.newtable
-                    forM_ (zip [1..] (rdInputs d)) $ \(i, ing) → do
-                        pushIngredient ing
-                        Lua.rawseti (-2) i
-                    Lua.setfield (-2) "inputs"
-                    forM_ (rdFuel d) $ \f → do
-                        pushIngredient f
-                        Lua.setfield (-2) "fuel"
-                    Lua.newtable
-                    forM_ (zip [1..] (rdOutputs d)) $ \(i, ing) → do
-                        pushIngredient ing
-                        Lua.rawseti (-2) i
-                    Lua.setfield (-2) "outputs"
-                    return 1
+                Just d  → pushRecipe d >> return 1
 
 -- | craft.getNames() → array of all loaded recipe ids.
 craftGetNamesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -231,6 +248,8 @@ executeCraft env uid rid = do
     rm ← readIORef (recipeManagerRef env)
     case lookupRecipe rid rm of
         Nothing → return (Left ("unknown recipe " <> rid))
+        Just recipe | rdRepairAxis recipe ≢ Nothing →
+            return (Left (rid <> " is a repair recipe: use repair.repairAt"))
         Just recipe → do
             im ← readIORef (itemManagerRef env)
             case mapM (resolve im) (rdOutputs recipe) of

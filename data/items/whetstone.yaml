@@ -1,0 +1,14 @@
+items:
+  # Repair consumable (#301): honing an edge at the workbench burns one
+  # of these (repair.repairAt / repair_sharpness, data/recipes/
+  # repair.yaml). Fully consumed per use rather than a multi-use
+  # wearing tool — the simplest cost model that still ties sharpness
+  # repair into the economy; a "wears down over N uses" refinement is
+  # future work, not settled by this issue.
+  - name: "whetstone"
+    display_name: "Whetstone"
+    sprite: "assets/textures/items/material/whetstone.png"
+    weight: 0.3
+    category: "Materials"
+    make: "acolyte"
+    material: "stone"

@@ -720,7 +720,8 @@ buildingGetStorageWeightFn env = do
                     return 1
 
 -- | building.getOperations(bid) → array of operation tags from the
---   def ("smelt", "forge", "assemble", "repair", …). Empty array for
+--   def ("smelt", "forge", "assemble", "repair_condition",
+--   "repair_sharpness", …). Empty array for
 --   buildings that aren't work stations. nil if the bid or its def is
 --   gone. Def-level data (#326) — what the station CAN do; whether it
 --   currently can (Built) is getActivity's business.
