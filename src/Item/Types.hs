@@ -57,10 +57,17 @@ data ItemBuff = ItemBuff
       -- ^ stat name, e.g. "perception", "strength".
     , ibAmount              ∷ !Float
       -- ^ base bonus amount. Positive for buff, negative for debuff.
+    , ibPercent             ∷ !Float
+      -- ^ percentage bonus, fractional like the unit-level modifiers
+      --   block (0.1 = +10%). Lands on the modifier's smPercent axis:
+      --   effectiveStat = (base + Σdeltas) × (1 + Σpercents). 0 for
+      --   purely additive buffs (#392).
     , ibScalesWithCondition ∷ !Bool
       -- ^ when True, the applied bonus = amount × (condition/100). A
       --   100%-condition technogoggles confers the full +1; a 50%
-      --   pair confers +0.5. When False the bonus is flat.
+      --   pair confers +0.5. When False the bonus is flat. The same
+      --   factor scales the percent component (a worn 50%-condition
+      --   "+10%" buff confers +5%).
     } deriving (Show, Eq)
 
 -- | Weapon-specific stats. Combined with the item's `idMaterial`

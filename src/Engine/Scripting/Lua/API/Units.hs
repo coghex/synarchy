@@ -156,7 +156,7 @@ import Item.Ground (spawnGroundItem)
 import Combat.Wounds (bleedRateFor, kindBleedFactor)
 import Combat.Types (pushInjuryEvent)
 import Unit.LineOfSight (unitVisibleTiles)
-import Unit.Stats (rollStat, effectiveStat, applySkillXP)
+import Unit.Stats (rollStat, effectiveStat, applySkillXP, applyItemBuffs)
 import qualified Unit.Selection as Sel
 import qualified Unit.HitTest as HitTest
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..)
@@ -1849,8 +1849,8 @@ refreshAccessoryBuffs ∷ ItemManager → [ItemInstance]
 refreshAccessoryBuffs itemMgr accs mods0 =
     foldl' (\mods inst → applyAccessoryBuffs itemMgr inst mods) mods0 accs
 
--- | Apply one accessory's buffs to a modifier map. Mirrors
---   `Equipment.applyItemBuffs`: the modifier source is the item's
+-- | Apply one accessory's buffs to a modifier map: def lookup + the
+--   shared Unit.Stats.applyItemBuffs. The modifier source is the item's
 --   display_name and same-source modifiers on a stat collapse, so this
 --   REPLACES that source's stale modifier rather than stacking. A no-op
 --   for items with no buffs (or no def in scope).
@@ -1860,19 +1860,9 @@ applyAccessoryBuffs ∷ ItemManager → ItemInstance
 applyAccessoryBuffs itemMgr inst mods =
     case lookupItemDef (iiDefName inst) itemMgr of
         Nothing   → mods
-        Just iDef →
-            let src  = idDisplayName iDef
-                cond = iiCondition inst
-                applyOne acc b =
-                    let delta = if ibScalesWithCondition b
-                                  then ibAmount b * (cond / 100)
-                                  else ibAmount b
-                        m = StatModifier { smDelta = delta, smSource = src
-                                         , smExpiry = Nothing, smPercent = 0 }
-                        existing = HM.lookupDefault [] (ibStat b) acc
-                        others   = filter (\x → smSource x ≢ src) existing
-                    in HM.insert (ibStat b) (m : others) acc
-            in foldl' applyOne mods (idBuffs iDef)
+        Just iDef → applyItemBuffs (idDisplayName iDef)
+                                   (iiCondition inst)
+                                   (idBuffs iDef) mods
 
 -- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
 --   to the unit's inventory. Fill is clamped to the def's container
@@ -4578,6 +4568,9 @@ unitGetInventoryFn env = do
                                             Lua.pushnumber (Lua.Number
                                                 (realToFrac (ibAmount b)))
                                             Lua.setfield (-2) "amount"
+                                            Lua.pushnumber (Lua.Number
+                                                (realToFrac (ibPercent b)))
+                                            Lua.setfield (-2) "percent"
                                             Lua.pushboolean
                                                 (ibScalesWithCondition b)
                                             Lua.setfield (-2)

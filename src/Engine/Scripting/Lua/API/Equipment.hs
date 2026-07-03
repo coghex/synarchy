@@ -32,6 +32,7 @@ import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
                    itemContentsSig, itemTotalWeight)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
                    UnitDef(..), StatModifier(..))
+import Unit.Stats (applyItemBuffs)
 
 -- | equipment.loadYaml(path) — parses a YAML file describing one or
 --   more equipment classes, loads each class's silhouette texture, and
@@ -171,34 +172,6 @@ removeFirstFromInventoryWhere p = go []
     go acc (x:xs)
         | p x       = (reverse acc ++ xs, Just x)
         | otherwise = go (x : acc) xs
-
--- | Effective buff delta after applying condition scaling.
-buffEffectiveDelta ∷ ItemBuff → Float → Float
-buffEffectiveDelta b cond
-    | ibScalesWithCondition b = ibAmount b * (cond / 100)
-    | otherwise               = ibAmount b
-
--- | Apply every buff on an item to the unit's `uiModifiers`. Source
---   string is the item's display_name; identical sources on the same
---   stat collapse via the existing dedup-by-source rule.
-applyItemBuffs ∷ ItemInstance → ItemDef
-               → HM.HashMap Text [StatModifier]
-               → HM.HashMap Text [StatModifier]
-applyItemBuffs inst iDef mods = foldl' applyOne mods (idBuffs iDef)
-  where
-    src   = idDisplayName iDef
-    cond  = iiCondition inst
-    applyOne acc b =
-        let delta = buffEffectiveDelta b cond
-            m     = StatModifier
-                      { smDelta  = delta
-                      , smSource = src
-                      , smExpiry = Nothing
-                      , smPercent = 0
-                      }
-            existing = HM.lookupDefault [] (ibStat b) acc
-            others   = filter (\x → smSource x ≢ src) existing
-        in HM.insert (ibStat b) (m : others) acc
 
 -- | Remove every modifier with @source@ across all stats. Mirrors
 --   `unit.removeModifier` exactly so equip/unequip stay symmetric.
@@ -532,7 +505,8 @@ pushItemInstance inst itemMgr = do
                     Lua.setfield (-2) "bluntEffectiveness"
                     Lua.setfield (-2) "weapon"
                 Nothing → pure ()
-            -- Buffs: pushed as an array of { stat, amount, scalesWithCondition }
+            -- Buffs: pushed as an array of
+            -- { stat, amount, percent, scalesWithCondition }
             unless (null (idBuffs iDef)) $ do
                 Lua.newtable
                 forM_ (zip [1 ∷ Int ..] (idBuffs iDef)) $ \(i, b) → do
@@ -541,6 +515,8 @@ pushItemInstance inst itemMgr = do
                     Lua.setfield (-2) "stat"
                     Lua.pushnumber (Lua.Number (realToFrac (ibAmount b)))
                     Lua.setfield (-2) "amount"
+                    Lua.pushnumber (Lua.Number (realToFrac (ibPercent b)))
+                    Lua.setfield (-2) "percent"
                     Lua.pushboolean (ibScalesWithCondition b)
                     Lua.setfield (-2) "scalesWithCondition"
                     Lua.rawseti (-2) (fromIntegral i)
@@ -592,7 +568,10 @@ equipmentEquipAccessoryFn env = do
                                         -- Apply the accessory's buffs to the
                                         -- unit's modifier list so combat /
                                         -- stat display sees them immediately.
-                                        let mods' = applyItemBuffs newI d
+                                        let mods' = applyItemBuffs
+                                                       (idDisplayName d)
+                                                       (iiCondition newI)
+                                                       (idBuffs d)
                                                        (uiModifiers inst)
                                             inst' = inst
                                               { uiInventory   = newInv

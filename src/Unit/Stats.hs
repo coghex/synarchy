@@ -14,12 +14,15 @@ module Unit.Stats
     , boxMuller
     , effectiveStat
     , applySkillXP
+    , applyItemBuffs
     , pickName
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import System.Random (StdGen, randomR)
+import Item.Types (ItemBuff(..))
 import Unit.Types (StatModifier(..), NamePool(..))
 
 -- | One standard-normal sample via Box-Muller. Returns (z, newGen).
@@ -70,6 +73,33 @@ effectiveStat now base mods =
     isActive m = case smExpiry m of
         Nothing → True
         Just t  → now < t
+
+-- | Fold an item's buffs into a unit's modifier map — the single
+--   implementation behind spawn-time accessory buffs, equip-time buff
+--   application, and the condition-refresh path (#392). @src@ is the
+--   item's display name (the label the stat tooltip shows); same-source
+--   modifiers on a stat collapse (replace, not stack), so re-applying
+--   at a new condition updates the live modifier instead of duplicating
+--   it. A buff with scales_with_condition confers
+--   @amount × (condition/100)@ — the same factor scales the percent
+--   component, so a worn item's percentage bonus degrades with it.
+applyItemBuffs ∷ T.Text → Float → [ItemBuff]
+               → HM.HashMap T.Text [StatModifier]
+               → HM.HashMap T.Text [StatModifier]
+applyItemBuffs src cond buffs mods0 = foldl' applyOne mods0 buffs
+  where
+    scale b | ibScalesWithCondition b = cond / 100
+            | otherwise               = 1
+    applyOne acc b =
+        let m = StatModifier
+                  { smDelta   = ibAmount b * scale b
+                  , smSource  = src
+                  , smExpiry  = Nothing
+                  , smPercent = ibPercent b * scale b
+                  }
+            existing = HM.lookupDefault [] (ibStat b) acc
+            others   = filter (\x → smSource x ≢ src) existing
+        in HM.insert (ibStat b) (m : others) acc
 
 {-# NOINLINE rollStat #-}
 rollStat ∷ Float → Float → StdGen → (Float, StdGen)
