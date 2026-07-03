@@ -11,7 +11,6 @@ import Control.DeepSeq (NFData)
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BSI
-import System.IO.Unsafe (unsafePerformIO)
 import World.Types (ZoomChunkEntry(..), WorldGenParams(..))
 import World.Render.Zoom.Types (zoomTileSize)
 
@@ -55,9 +54,7 @@ buildPreviewFromPixels params cache pixels =
                  , BS.index chunkPx (off + 3) )
             else (0, 0, 0, 255)
 
-        pixelData = unsafePerformIO $ do
-            fptr ← BSI.mallocByteString totalBytes
-            withForeignPtr fptr $ \ptr → do
+        pixelData = BSI.unsafeCreate totalBytes $ \ptr → do
                 -- Fill background
                 forM_ [0 .. imgW * imgH - 1] $ \i → do
                     pokeByteOff ptr (i * 4 + 0) (0 ∷ Word8)
@@ -99,8 +96,6 @@ buildPreviewFromPixels params cache pixels =
                         writePixel (px + 2) (py + 1) rr rg rb ra
                         writePixel (px + 3) (py + 1) rr rg rb ra
 
-            return $ BSI.fromForeignPtr fptr 0 totalBytes
-
     in PreviewImage imgW imgH pixelData
 
 -- * Fallback: Build Preview from ZoomChunkEntry summary (used when per-chunk pixel data is not available)
@@ -113,9 +108,7 @@ buildPreviewImage params cache =
         imgH      = worldSize
         totalBytes = imgW * imgH * 4
 
-        pixelData = unsafePerformIO $ do
-            fptr ← BSI.mallocByteString totalBytes
-            withForeignPtr fptr $ \ptr → do
+        pixelData = BSI.unsafeCreate totalBytes $ \ptr → do
                 forM_ [0 .. imgW * imgH - 1] $ \i → do
                     pokeByteOff ptr (i * 4 + 0) (0 ∷ Word8)
                     pokeByteOff ptr (i * 4 + 1) (0 ∷ Word8)
@@ -143,8 +136,6 @@ buildPreviewImage params cache =
                                 pokeByteOff ptr (idx + 3) a
                         writePixel px
                         writePixel ((px + 1) `mod` imgW)
-
-            return $ BSI.fromForeignPtr fptr 0 totalBytes
 
     in PreviewImage imgW imgH pixelData
 

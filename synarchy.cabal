@@ -701,6 +701,7 @@ library
                  , vector
                  , vector-algorithms
                  , vector-th-unbox
+                 , primitive
                  , cereal
                  , yaml
                  , aeson

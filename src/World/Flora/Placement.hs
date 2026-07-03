@@ -14,7 +14,8 @@ import World.Types
 import World.Vegetation (isBarrenMaterial)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
-import System.IO.Unsafe (unsafePerformIO)
+import Control.Monad.ST (runST)
+import Control.Monad.Primitive (PrimMonad, PrimState)
 
 -- * Chunk Flora Computation
 
@@ -32,7 +33,7 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
 
         tileOrder = shuffledIndices seed cx cy chunkArea
 
-        allInstances = unsafePerformIO $ do
+        allInstances = runST $ do
             occupied ← VUM.replicate chunkArea (0 ∷ Word8)
             let go [] acc = return (reverse acc)
                 go (idx:rest) acc = do
@@ -72,7 +73,7 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
 
     in FloraChunkData allInstances
 
-markOccupied ∷ VUM.IOVector Word8 → Int → Int → Int → Int → IO ()
+markOccupied ∷ PrimMonad m ⇒ VUM.MVector (PrimState m) Word8 → Int → Int → Int → Int → m ()
 markOccupied occupied cx cy radius chunkSz =
     forM_ [negate radius .. radius] $ \dx →
         forM_ [negate radius .. radius] $ \dy → do
