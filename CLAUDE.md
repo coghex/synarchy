@@ -57,7 +57,7 @@ Conventions that keep this fast — don't undo them:
   the suite, and don't grow the baseline seed list without tagging the
   quick tier accordingly.
 
-**Do NOT use `-f dev` for routine work.** The project is 360+ modules; a full prod rebuild takes ~1.5 minutes (parallelized via the `semaphore:` setting in `cabal.project`), and flag-profile switches force one. The default (prod) profile is what the test suite, dump tool, and binaries are expected to run under, and what every code change should be validated against.
+**Do NOT use `-f dev` for routine work.** The project is 360+ modules; a full prod rebuild takes ~1.5 minutes (parallelized via `ghc-options: -j` in `cabal.project` — NOT cabal's `semaphore:` jobserver, which deadlocks under concurrent worktree builds, #471), and flag-profile switches force one. The default (prod) profile is what the test suite, dump tool, and binaries are expected to run under, and what every code change should be validated against.
 
 The `dev` flag enables Vulkan validation layers, address sanitizer on macOS, and `ENGINE_DEBUG` plumbing. Reach for it only when actively chasing a graphics or memory bug. When you do, give it its own build dir so the two profiles' artifacts coexist and flipping back is free: `cabal build -f dev --builddir=dist-dev` (every `cabal run`/`test` in that profile needs the same `-f dev --builddir=dist-dev` pair; plain commands keep using the prod `dist-newstyle`). Production builds use `-O2 -optc-O3`.
 
