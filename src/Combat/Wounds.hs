@@ -526,10 +526,12 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
             coreTemp = HM.lookupDefault 37.0 "core_temp" (uiStats inst)
             feverSuppress = max feverSuppressFloor
                               (1 - feverSuppressK * max 0 (coreTemp - 38))
-            -- A unit at rest heals faster. DORMANT hook: no unit is
-            -- currently "sleeping" (acolytes have no sleep/bed system
-            -- yet — only the bear AI uses the word). When one lands,
-            -- wire its rest state here and the bonus lights up.
+            -- A unit at rest heals faster: sleeping pose applies
+            -- sleepHealMult, everything else uses 1.0. No AI currently
+            -- drives uiPose to "sleeping" (bear_ai.lua's rest cycle
+            -- tracks its own bearPosture field separately, not
+            -- uiPose), but the moment something does, the bonus
+            -- applies with no further wiring needed here.
             restMult = if uiPose inst == "sleeping" then sleepHealMult else 1.0
             -- A starving unit heals slower (calorie gating). Wildlife
             -- without a calorie store reads 1.0.
