@@ -15,16 +15,20 @@ unsigned char* stb_load_font (const char* path, int* size_out) {
     // get file size
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
     fseek(f, 0, SEEK_SET);
     // allocate and read
-    unsigned char* buffer = (unsigned char*)malloc(size);
+    unsigned char* buffer = (unsigned char*)malloc((size_t)size);
     if (!buffer) {
         fclose(f);
         return NULL;
     }
-    size_t read = fread(buffer, 1, size, f);
+    size_t read = fread(buffer, 1, (size_t)size, f);
     fclose(f);
-    if (read != size) {
+    if (read != (size_t)size) {
         free(buffer);
         return NULL;
     }
