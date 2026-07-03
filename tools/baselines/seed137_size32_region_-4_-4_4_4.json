@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "84679f3e308c65ed09220adc0ccbd39b94a8ff50089f545e5c747830554a8e9b",
-      "84679f3e308c65ed09220adc0ccbd39b94a8ff50089f545e5c747830554a8e9b",
-      "84679f3e308c65ed09220adc0ccbd39b94a8ff50089f545e5c747830554a8e9b"
+      "0ad4864b310b4bf5128227bbf33e556a7ae194fe867a16e70028a42ee25db8d1",
+      "0ad4864b310b4bf5128227bbf33e556a7ae194fe867a16e70028a42ee25db8d1",
+      "0ad4864b310b4bf5128227bbf33e556a7ae194fe867a16e70028a42ee25db8d1"
     ]
   },
   "tileCount": 20736,
@@ -107,13 +107,13 @@
       ]
     },
     "FLOATING_WATER": {
-      "min": 80,
-      "max": 80,
-      "median": 80,
+      "min": 64,
+      "max": 64,
+      "median": 64,
       "all": [
-        80,
-        80,
-        80
+        64,
+        64,
+        64
       ]
     },
     "ISOLATED_FLUID": {
@@ -124,6 +124,16 @@
         3,
         3,
         3
+      ]
+    },
+    "MID_RIVER_CLIFF": {
+      "min": 14,
+      "max": 14,
+      "median": 14,
+      "all": [
+        14,
+        14,
+        14
       ]
     },
     "MULTI_ISLAND": {
@@ -181,8 +191,9 @@
     "summary": {
       "FLAT_ISOLATED_WATER": 27,
       "FLOATING_LAKE": 1478,
-      "FLOATING_WATER": 80,
+      "FLOATING_WATER": 64,
       "ISOLATED_FLUID": 3,
+      "MID_RIVER_CLIFF": 14,
       "MULTI_ISLAND": 5,
       "RIVER_CHUNK_GAP": 20,
       "WATER_ABOVE_LAND": 80,
@@ -7726,16 +7737,6 @@
           "details": "river terr=94 -> dry(-64,-16) terr=93 gap=1"
         },
         {
-          "x": -63,
-          "y": -7,
-          "details": "river terr=21 -> dry(-64,-7) terr=20 gap=1"
-        },
-        {
-          "x": -61,
-          "y": -8,
-          "details": "river terr=35 -> dry(-60,-8) terr=31 gap=4"
-        },
-        {
           "x": -60,
           "y": -14,
           "details": "river terr=91 -> dry(-60,-13) terr=90 gap=1"
@@ -7768,17 +7769,12 @@
         {
           "x": -58,
           "y": -13,
-          "details": "river terr=75 -> dry(-57,-13) terr=71 gap=4"
+          "details": "river terr=73 -> dry(-57,-13) terr=71 gap=2"
         },
         {
           "x": -58,
           "y": -12,
-          "details": "river terr=67 -> dry(-57,-12) terr=63 gap=4"
-        },
-        {
-          "x": -58,
-          "y": -10,
-          "details": "river terr=43 -> dry(-57,-10) terr=40 gap=3"
+          "details": "river terr=64 -> dry(-57,-12) terr=63 gap=1"
         },
         {
           "x": -58,
@@ -7803,12 +7799,12 @@
         {
           "x": -55,
           "y": 76,
-          "details": "river terr=18 -> dry(-55,75) terr=16 gap=2"
+          "details": "river terr=17 -> dry(-55,75) terr=16 gap=1"
         },
         {
           "x": -55,
           "y": 77,
-          "details": "river terr=22 -> dry(-56,77) terr=19 gap=3"
+          "details": "river terr=21 -> dry(-56,77) terr=19 gap=2"
         },
         {
           "x": -54,
@@ -7819,16 +7815,6 @@
           "x": -54,
           "y": 76,
           "details": "river terr=23 -> dry(-54,75) terr=20 gap=3"
-        },
-        {
-          "x": -53,
-          "y": -17,
-          "details": "river terr=57 -> dry(-52,-17) terr=56 gap=1"
-        },
-        {
-          "x": -53,
-          "y": -16,
-          "details": "river terr=54 -> dry(-53,-15) terr=53 gap=1"
         },
         {
           "x": -53,
@@ -7847,18 +7833,8 @@
         },
         {
           "x": -53,
-          "y": 71,
-          "details": "river terr=12 -> dry(-54,71) terr=10 gap=2"
-        },
-        {
-          "x": -53,
           "y": 75,
           "details": "river terr=24 -> dry(-54,75) terr=20 gap=4"
-        },
-        {
-          "x": -52,
-          "y": -16,
-          "details": "river terr=52 -> dry(-51,-16) terr=51 gap=1"
         },
         {
           "x": -52,
@@ -7868,7 +7844,7 @@
         {
           "x": -52,
           "y": 71,
-          "details": "river terr=17 -> dry(-52,70) terr=14 gap=3"
+          "details": "river terr=15 -> dry(-52,70) terr=14 gap=1"
         },
         {
           "x": -52,
@@ -7892,23 +7868,8 @@
         },
         {
           "x": -51,
-          "y": 67,
-          "details": "river terr=7 -> dry(-52,67) terr=6 gap=1"
-        },
-        {
-          "x": -51,
-          "y": 68,
-          "details": "river terr=9 -> dry(-52,68) terr=8 gap=1"
-        },
-        {
-          "x": -51,
-          "y": 69,
-          "details": "river terr=13 -> dry(-52,69) terr=10 gap=3"
-        },
-        {
-          "x": -51,
           "y": 70,
-          "details": "river terr=19 -> dry(-52,70) terr=14 gap=5"
+          "details": "river terr=16 -> dry(-52,70) terr=14 gap=2"
         },
         {
           "x": -51,
@@ -7938,7 +7899,7 @@
         {
           "x": -48,
           "y": 67,
-          "details": "river terr=20 -> dry(-49,67) terr=13 gap=7"
+          "details": "river terr=17 -> dry(-49,67) terr=13 gap=4"
         },
         {
           "x": -48,
@@ -7953,7 +7914,7 @@
         {
           "x": -43,
           "y": 63,
-          "details": "river terr=49 -> dry(-43,62) terr=46 gap=3"
+          "details": "river terr=48 -> dry(-43,62) terr=46 gap=2"
         },
         {
           "x": -36,
@@ -8071,54 +8032,24 @@
           "details": "river terr=18 -> dry(70,-37) terr=17 gap=1"
         },
         {
-          "x": 72,
-          "y": -62,
-          "details": "river terr=56 -> dry(71,-62) terr=53 gap=3"
-        },
-        {
-          "x": 72,
-          "y": -61,
-          "details": "river terr=50 -> dry(71,-61) terr=47 gap=3"
-        },
-        {
-          "x": 73,
-          "y": -63,
-          "details": "river terr=69 -> dry(72,-63) terr=65 gap=4"
-        },
-        {
-          "x": 73,
-          "y": -57,
-          "details": "river terr=33 -> dry(72,-57) terr=30 gap=3"
-        },
-        {
-          "x": 74,
-          "y": -64,
-          "details": "river terr=83 -> dry(73,-64) terr=78 gap=5"
-        },
-        {
-          "x": 74,
-          "y": -60,
-          "details": "river terr=53 -> dry(74,-59) terr=50 gap=3"
-        },
-        {
           "x": 75,
           "y": -60,
-          "details": "river terr=59 -> dry(75,-59) terr=55 gap=4"
+          "details": "river terr=56 -> dry(75,-59) terr=55 gap=1"
         },
         {
           "x": 76,
           "y": -59,
-          "details": "river terr=59 -> dry(75,-59) terr=55 gap=4"
+          "details": "river terr=57 -> dry(75,-59) terr=55 gap=2"
         },
         {
           "x": 76,
           "y": -58,
-          "details": "river terr=53 -> dry(75,-58) terr=49 gap=4"
+          "details": "river terr=51 -> dry(75,-58) terr=49 gap=2"
         },
         {
           "x": 76,
           "y": -57,
-          "details": "river terr=46 -> dry(75,-57) terr=42 gap=4"
+          "details": "river terr=45 -> dry(75,-57) terr=42 gap=3"
         }
       ],
       "ISOLATED_FLUID": [
@@ -8136,6 +8067,78 @@
           "x": 78,
           "y": -39,
           "details": "lake surf=24 surrounded by dry"
+        }
+      ],
+      "MID_RIVER_CLIFF": [
+        {
+          "x": -58,
+          "y": -7,
+          "details": "river surf=23 (terr=20) -> water nbr surf=19 (terr=18) surf_diff=4 terr_diff=2"
+        },
+        {
+          "x": -54,
+          "y": 74,
+          "details": "river surf=16 (terr=13) -> water nbr surf=14 (terr=13) surf_diff=2 terr_diff=0"
+        },
+        {
+          "x": -53,
+          "y": 71,
+          "details": "river surf=13 (terr=9) -> water nbr surf=10 (terr=10) surf_diff=3 terr_diff=1"
+        },
+        {
+          "x": -53,
+          "y": 73,
+          "details": "river surf=17 (terr=14) -> water nbr surf=15 (terr=14) surf_diff=2 terr_diff=0"
+        },
+        {
+          "x": -53,
+          "y": 73,
+          "details": "river surf=17 (terr=14) -> water nbr surf=14 (terr=13) surf_diff=3 terr_diff=1"
+        },
+        {
+          "x": -52,
+          "y": -16,
+          "details": "river surf=53 (terr=50) -> water nbr surf=50 (terr=49) surf_diff=3 terr_diff=1"
+        },
+        {
+          "x": -51,
+          "y": 67,
+          "details": "river surf=8 (terr=5) -> water nbr surf=6 (terr=5) surf_diff=2 terr_diff=0"
+        },
+        {
+          "x": -47,
+          "y": 62,
+          "details": "river surf=11 (terr=8) -> water nbr surf=7 (terr=6) surf_diff=4 terr_diff=2"
+        },
+        {
+          "x": 67,
+          "y": -56,
+          "details": "river surf=23 (terr=19) -> water nbr surf=20 (terr=19) surf_diff=3 terr_diff=0"
+        },
+        {
+          "x": 68,
+          "y": -56,
+          "details": "river surf=25 (terr=21) -> water nbr surf=21 (terr=20) surf_diff=4 terr_diff=1"
+        },
+        {
+          "x": 69,
+          "y": -56,
+          "details": "river surf=24 (terr=19) -> water nbr surf=21 (terr=20) surf_diff=3 terr_diff=1"
+        },
+        {
+          "x": 72,
+          "y": -56,
+          "details": "river surf=26 (terr=22) -> water nbr surf=22 (terr=21) surf_diff=4 terr_diff=1"
+        },
+        {
+          "x": 73,
+          "y": -55,
+          "details": "river surf=23 (terr=20) -> water nbr surf=19 (terr=18) surf_diff=4 terr_diff=2"
+        },
+        {
+          "x": 74,
+          "y": -56,
+          "details": "river surf=29 (terr=25) -> water nbr surf=25 (terr=23) surf_diff=4 terr_diff=2"
         }
       ],
       "MULTI_ISLAND": [
@@ -8276,12 +8279,12 @@
         {
           "x": -63,
           "y": -7,
-          "details": "river surf=22 terr=21 -> land(-64,-7) terr=20 cliff=2"
+          "details": "river surf=22 terr=18 -> land(-64,-7) terr=20 cliff=2"
         },
         {
           "x": -61,
           "y": -8,
-          "details": "river surf=36 terr=35 -> land(-60,-8) terr=31 cliff=5"
+          "details": "river surf=36 terr=31 -> land(-60,-8) terr=31 cliff=5"
         },
         {
           "x": -60,
@@ -8316,17 +8319,17 @@
         {
           "x": -58,
           "y": -13,
-          "details": "river surf=76 terr=75 -> land(-57,-13) terr=71 cliff=5"
+          "details": "river surf=76 terr=73 -> land(-57,-13) terr=71 cliff=5"
         },
         {
           "x": -58,
           "y": -12,
-          "details": "river surf=68 terr=67 -> land(-57,-12) terr=63 cliff=5"
+          "details": "river surf=68 terr=64 -> land(-57,-12) terr=63 cliff=5"
         },
         {
           "x": -58,
           "y": -10,
-          "details": "river surf=44 terr=43 -> land(-57,-10) terr=40 cliff=4"
+          "details": "river surf=44 terr=38 -> land(-57,-10) terr=40 cliff=4"
         },
         {
           "x": -58,
@@ -8351,12 +8354,12 @@
         {
           "x": -55,
           "y": 76,
-          "details": "river surf=19 terr=18 -> land(-55,75) terr=16 cliff=3"
+          "details": "river surf=19 terr=17 -> land(-55,75) terr=16 cliff=3"
         },
         {
           "x": -55,
           "y": 77,
-          "details": "river surf=23 terr=22 -> land(-56,77) terr=19 cliff=4"
+          "details": "river surf=23 terr=21 -> land(-56,77) terr=19 cliff=4"
         },
         {
           "x": -54,
@@ -8371,12 +8374,12 @@
         {
           "x": -53,
           "y": -17,
-          "details": "river surf=58 terr=57 -> land(-52,-17) terr=56 cliff=2"
+          "details": "river surf=58 terr=53 -> land(-52,-17) terr=56 cliff=2"
         },
         {
           "x": -53,
           "y": -16,
-          "details": "river surf=55 terr=54 -> land(-53,-15) terr=53 cliff=2"
+          "details": "river surf=55 terr=51 -> land(-53,-15) terr=53 cliff=2"
         },
         {
           "x": -53,
@@ -8396,7 +8399,7 @@
         {
           "x": -53,
           "y": 71,
-          "details": "river surf=13 terr=12 -> land(-54,71) terr=10 cliff=3"
+          "details": "river surf=13 terr=10 -> land(-54,71) terr=10 cliff=3"
         },
         {
           "x": -53,
@@ -8406,7 +8409,7 @@
         {
           "x": -52,
           "y": -16,
-          "details": "river surf=53 terr=52 -> land(-51,-16) terr=51 cliff=2"
+          "details": "river surf=53 terr=50 -> land(-51,-16) terr=51 cliff=2"
         },
         {
           "x": -52,
@@ -8416,7 +8419,7 @@
         {
           "x": -52,
           "y": 71,
-          "details": "river surf=18 terr=17 -> land(-52,70) terr=14 cliff=4"
+          "details": "river surf=18 terr=15 -> land(-52,70) terr=14 cliff=4"
         },
         {
           "x": -52,
@@ -8441,22 +8444,22 @@
         {
           "x": -51,
           "y": 67,
-          "details": "river surf=8 terr=7 -> land(-52,67) terr=6 cliff=2"
+          "details": "river surf=8 terr=5 -> land(-52,67) terr=6 cliff=2"
         },
         {
           "x": -51,
           "y": 68,
-          "details": "river surf=10 terr=9 -> land(-52,68) terr=8 cliff=2"
+          "details": "river surf=10 terr=6 -> land(-52,68) terr=8 cliff=2"
         },
         {
           "x": -51,
           "y": 69,
-          "details": "river surf=14 terr=13 -> land(-52,69) terr=10 cliff=4"
+          "details": "river surf=14 terr=10 -> land(-52,69) terr=10 cliff=4"
         },
         {
           "x": -51,
           "y": 70,
-          "details": "river surf=20 terr=19 -> land(-52,70) terr=14 cliff=6"
+          "details": "river surf=20 terr=16 -> land(-52,70) terr=14 cliff=6"
         },
         {
           "x": -51,
@@ -8486,7 +8489,7 @@
         {
           "x": -48,
           "y": 67,
-          "details": "river surf=21 terr=20 -> land(-49,67) terr=13 cliff=8"
+          "details": "river surf=21 terr=17 -> land(-49,67) terr=13 cliff=8"
         },
         {
           "x": -48,
@@ -8501,7 +8504,7 @@
         {
           "x": -43,
           "y": 63,
-          "details": "river surf=50 terr=49 -> land(-43,62) terr=46 cliff=4"
+          "details": "river surf=50 terr=48 -> land(-43,62) terr=46 cliff=4"
         },
         {
           "x": -36,
@@ -8621,52 +8624,52 @@
         {
           "x": 72,
           "y": -62,
-          "details": "river surf=57 terr=56 -> land(71,-62) terr=53 cliff=4"
+          "details": "river surf=57 terr=52 -> land(71,-62) terr=53 cliff=4"
         },
         {
           "x": 72,
           "y": -61,
-          "details": "river surf=51 terr=50 -> land(71,-61) terr=47 cliff=4"
+          "details": "river surf=51 terr=46 -> land(71,-61) terr=47 cliff=4"
         },
         {
           "x": 73,
           "y": -63,
-          "details": "river surf=70 terr=69 -> land(72,-63) terr=65 cliff=5"
+          "details": "river surf=70 terr=64 -> land(72,-63) terr=65 cliff=5"
         },
         {
           "x": 73,
           "y": -57,
-          "details": "river surf=34 terr=33 -> land(72,-57) terr=30 cliff=4"
+          "details": "river surf=34 terr=30 -> land(72,-57) terr=30 cliff=4"
         },
         {
           "x": 74,
           "y": -64,
-          "details": "river surf=84 terr=83 -> land(73,-64) terr=78 cliff=6"
+          "details": "river surf=84 terr=77 -> land(73,-64) terr=78 cliff=6"
         },
         {
           "x": 74,
           "y": -60,
-          "details": "river surf=54 terr=53 -> land(74,-59) terr=50 cliff=4"
+          "details": "river surf=54 terr=49 -> land(74,-59) terr=50 cliff=4"
         },
         {
           "x": 75,
           "y": -60,
-          "details": "river surf=60 terr=59 -> land(75,-59) terr=55 cliff=5"
+          "details": "river surf=60 terr=56 -> land(75,-59) terr=55 cliff=5"
         },
         {
           "x": 76,
           "y": -59,
-          "details": "river surf=60 terr=59 -> land(75,-59) terr=55 cliff=5"
+          "details": "river surf=60 terr=57 -> land(75,-59) terr=55 cliff=5"
         },
         {
           "x": 76,
           "y": -58,
-          "details": "river surf=54 terr=53 -> land(75,-58) terr=49 cliff=5"
+          "details": "river surf=54 terr=51 -> land(75,-58) terr=49 cliff=5"
         },
         {
           "x": 76,
           "y": -57,
-          "details": "river surf=47 terr=46 -> land(75,-57) terr=42 cliff=5"
+          "details": "river surf=47 terr=45 -> land(75,-57) terr=42 cliff=5"
         }
       ],
       "WATER_CLIFF": [
