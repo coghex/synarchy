@@ -1,8 +1,24 @@
 packages: .
 
--- Parallel builds (#443). The library is one 360+-module package, so
--- package-level `jobs` alone can't help; `semaphore: True` makes cabal
--- create a jobserver semaphore and pass -jsem to GHC (9.8+), letting the
--- single --make session compile modules in parallel up to $ncpus.
+-- Parallel builds (#443, reworked for #471). The library is one
+-- 360+-module package, so package-level `jobs` alone can't parallelize
+-- it; the per-package `ghc-options: -j` below makes each ghc --make
+-- session compile modules in parallel up to $ncpus.
 jobs: $ncpus
-semaphore: True
+
+-- Do NOT re-enable `semaphore: True` (cabal's -jsem jobserver): the
+-- cabal 3.16 jsem protocol is unsound under concurrent cabal
+-- invocations — the normal multi-worktree workflow here. Semaphore
+-- names derive from process CPU time (near-deterministic, so every
+-- invocation contends on the same few names), the named kernel objects
+-- outlive killed builds, and a client blocked on an unlinked-and-
+-- recreated name parks forever with zero CPU: multi-hour silent build
+-- hangs (#471). Upstream redesigned the protocol (v2, unreleased);
+-- revisit only when a released cabal/GHC pair speaks v2. Plain `-j`
+-- gives the same module-level parallelism with no cross-process state;
+-- concurrent worktree builds may oversubscribe cores, which degrades
+-- gracefully instead of deadlocking.
+semaphore: False
+
+package synarchy
+  ghc-options: -j
