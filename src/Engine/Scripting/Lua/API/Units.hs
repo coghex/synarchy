@@ -1531,8 +1531,8 @@ unitGetInsulationFn env = do
 
 -- | unit.getBlood(uid) → { current, max } | nil
 --
---   max is body_mass × 0.075 (real-world blood ratio). current is
---   the spawn-time-seeded value minus per-tick bleed loss. Both in
+--   max is body_mass × 'bloodMassRatio'. current is the
+--   spawn-time-seeded value minus per-tick bleed loss. Both in
 --   litres.
 unitGetBloodFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetBloodFn env = do
@@ -1550,7 +1550,7 @@ unitGetBloodFn env = do
                                                  (uiStats inst)
                             rate = maybe 0.0 (\d → bleedRateFor d inst)
                                      (HM.lookup (uiDefName inst) (umDefs um))
-                        in return $ Just (uiBlood inst, bm * 0.075, rate)
+                        in return $ Just (uiBlood inst, bm * bloodMassRatio, rate)
             case mPair of
                 Nothing → Lua.pushnil >> return 1
                 Just (cur, mx, rate) → do

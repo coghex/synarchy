@@ -15,6 +15,7 @@ import Control.Monad.ST (ST, runST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidCell(..))
+import World.SideFace.Base (SideDecoType(..), sideDecoBase)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
 
@@ -432,7 +433,9 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                                         { afcVolume = afcVolume d + fromIntegral actual })
                             fd ← readSTRef flowDirRef
                             writeSTRef flowDirRef (fd .|. ((1 ∷ Word8) `shiftL` dirBit))
-                            MVU.write decoMv idx (17 + fromIntegral (dirBit `mod` 4))
+                            MVU.write decoMv idx
+                                (sideDecoBase DecoWaterfall
+                                    + fromIntegral (dirBit `mod` 4))
                             writeSTRef changedRef True
                 newFD ← readSTRef flowDirRef
                 when (newFD ≠ afcFlowDir afc) $ do

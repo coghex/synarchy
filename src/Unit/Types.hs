@@ -4,6 +4,7 @@ module Unit.Types
     , StatModifier(..)
     , Wound(..)
     , woundEffSeverity
+    , bloodMassRatio
     , Scar(..)
     , BodyPart(..)
     , NaturalWeapon(..)
@@ -176,6 +177,14 @@ data Wound = Wound
 woundEffSeverity ∷ Wound → Float
 woundEffSeverity w =
     max (woundSeverity w * (1 - woundHeal w)) (woundNecrosis w)
+
+-- | Blood volume as a fraction of body mass (litres per kg) — the
+--   real-world ~7.5 % ratio. Single source of truth for every
+--   max-blood computation (spawn seed, wound tick, speed penalty,
+--   Lua info panel); max_blood is always recomputed live from the
+--   CURRENT body_mass so wasting/regrowth carries through.
+bloodMassRatio ∷ Float
+bloodMassRatio = 0.075
 
 -- | A healed-over wound left as a permanent mark. Descriptive record
 --   for now (shown in the unit's Status tab); the data is here to hang
@@ -545,7 +554,7 @@ data UnitInstance = UnitInstance
       --   (scaled by constitution). Shown in the Status tab via immunity.png.
     , uiBlood       ∷ !Float
       -- ^ Current blood volume in litres. Spawn-time seeded to
-      --   body_mass × 0.075 (≈7.5 % real-world ratio). Drained by
+      --   body_mass × 'bloodMassRatio'. Drained by
       --   bleeding wounds in the wound tick. Below 30 % of max
       --   → Collapsed pose; ≤ 0 → Dead pose + exsanguination
       --   death event. Max is recomputed from body_mass each read

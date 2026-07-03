@@ -730,14 +730,14 @@ isTransitioning _                   = False
 --   max_hydration / max_hunger / carrying_capacity / strength_base.
 --   No-op if any of height/bulk/bodyfat is missing (e.g. for unit
 --   types that don't declare a body block).
--- | Spawn-time blood-volume seed in litres. Real-world ratio is
---   ~7.5 % of body_mass — applied via the rolled stats map so units
---   without a body block (no body_mass) start at 0 and won't bleed.
+-- | Spawn-time blood-volume seed in litres ('bloodMassRatio' of
+--   body_mass) — applied via the rolled stats map so units without a
+--   body block (no body_mass) start at 0 and won't bleed.
 --   The wound-tick code computes max_blood lazily from current
 --   body_mass on each read, so wasting/regrowth carries through.
 bloodSeedFromStats ∷ HM.HashMap Text Float → Float
 bloodSeedFromStats s = case HM.lookup "body_mass" s of
-    Just bm → bm * 0.075
+    Just bm → bm * bloodMassRatio
     Nothing → 0.0
 
 -- | Movement-speed multiplier derived from the unit's wounds + blood.
@@ -767,7 +767,7 @@ injurySpeedMult inst =
         torsoSev = sum [ woundEffSeverity w
                        | w ← uiWounds inst, woundPart w == "torso" ]
         bodyMass = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
-        maxBlood = bodyMass * 0.075
+        maxBlood = bodyMass * bloodMassRatio
         bloodFrac = if maxBlood > 0
                     then max 0 (min 1 (uiBlood inst / maxBlood))
                     else 1
@@ -812,7 +812,7 @@ seedBodyComposition rolled =
                 -- own frame mass, so a tiny animal's healthy lean/fat are
                 -- never clamped above its own body mass — body composition
                 -- stays coherent at ANY size (mouse → dragon), which keeps
-                -- every mass-derived quantity (blood = body·0.075,
+                -- every mass-derived quantity (blood = body·bloodMassRatio,
                 -- max_salt = body·k, BMR = 22·(body−fat)+…) sane. At human
                 -- bulk these reproduce the old 0.44h² / 4.4h² floors.
                 minFat    = minFatFrac  * bodyMass

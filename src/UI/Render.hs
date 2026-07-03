@@ -24,10 +24,14 @@ import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatch(..))
 import UI.Types
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
+import World.Grid (uiLayerThreshold)
 
--- | Base layer offset for UI (world uses 0-9)
+-- | Base layer offset for UI (world uses the layers below it). Derived
+--   from 'World.Grid.uiLayerThreshold' — the same value that drives
+--   'Engine.Scene.Batch.Visibility.isUILayer' and the scene render
+--   split — so the two pipelines can't disagree about where UI starts.
 uiLayerBase ∷ Int
-uiLayerBase = 10
+uiLayerBase = let LayerId t = uiLayerThreshold in fromIntegral t
 
 unLayerId ∷ LayerId → Word32
 unLayerId (LayerId i) = fromIntegral i

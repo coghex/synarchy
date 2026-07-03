@@ -644,6 +644,17 @@ statOr name def inst = HM.lookupDefault def name (uiStats inst)
 skillOr ∷ Text → Float → UnitInstance → Float
 skillOr name def inst = HM.lookupDefault def name (uiSkills inst)
 
+-- | The unit's stamina pool size. max_stamina is canonically a DERIVED
+--   stat in Lua's @scripts/unit_stats.lua@ (@stats.get@: an explicit
+--   per-unit \"max_stamina\" attribute wins, else @endurance × 10@) and
+--   is never written back into uiStats, so the combat thread can't just
+--   read it — this helper mirrors that dispatch exactly. If the Lua
+--   formula changes, change this in lockstep.
+maxStaminaFor ∷ UnitInstance → Float
+maxStaminaFor inst = case HM.lookup "max_stamina" (uiStats inst) of
+    Just m  → m
+    Nothing → statOr "endurance" 1.0 inst * 10.0
+
 weightedReachFactor ∷ Float → Float
 weightedReachFactor bladeCm = clamp 0.0 1.0 (bladeCm / 100.0)
 
@@ -1017,7 +1028,7 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
         -- A winded fighter still hits (floor 0.3); absent stamina ⇒ full.
         staminaFrac = case HM.lookup "stamina" (uiStats atk) of
             Nothing → 1.0
-            Just s  → let maxS = statOr "endurance" 1.0 atk * 10.0
+            Just s  → let maxS = maxStaminaFor atk
                       in if maxS ≤ 0 then 1.0 else clamp 0.3 1.0 (s / maxS)
         pain     = painFor atk
         work     = eHuman * str * modeWork mode * skillEff * staminaFrac
@@ -1295,11 +1306,9 @@ staminaCostFraction Heavy = 0.25
 --   (the same tick path that handles walking drain), so we don't fire
 --   UnitCollapse / UnitKill from here.
 --
---   max_stamina is recomputed live in Lua's unit_stats wrapper as
---   `endurance × 10`, but the engine doesn't have that derivation —
---   it only sees what's actually stored in uiStats. We use the live
---   "endurance" stat to compute the same value so a unit with a fresh
---   buff or wound to endurance pays the right fraction.
+--   max_stamina comes from 'maxStaminaFor' (the mirror of Lua's
+--   unit_stats derivation), computed from the live stats so a unit
+--   with a fresh buff or wound to endurance pays the right fraction.
 applyStaminaDrain ∷ EngineEnv → Word32 → AttackMode → IO ()
 applyStaminaDrain env atkRaw mode =
     atomicModifyIORef' (unitManagerRef env) $ \um →
@@ -1309,9 +1318,7 @@ applyStaminaDrain env atkRaw mode =
             Just inst →
                 let stamina   = HM.lookupDefault 0.0 "stamina"
                                                   (uiStats inst)
-                    endurance = HM.lookupDefault 1.0 "endurance"
-                                                  (uiStats inst)
-                    maxStam   = endurance * 10.0
+                    maxStam   = maxStaminaFor inst
                     cost      = staminaCostFraction mode * maxStam
                     new       = max 0.0 (stamina - cost)
                     -- Stance spent on the swing (absent ⇒ full 1.0).
