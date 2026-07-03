@@ -213,12 +213,11 @@ data SaveMetadata = SaveMetadata
 --   buildings/units/sim-states — lives here. A 'SaveData' carries a list
 --   of these ('sdWorlds') plus the genuinely global fields.
 --
---   Splitting per-world state into its own record is the foundation for
---   persisting every live world page in one save (epic #214): today
---   exactly one page (the active world) is written, but the shape already
---   supports many. Like 'SaveData', this is encoded positionally by
---   cereal's Generic instance, so any layout change bumps
---   'currentSaveVersion'.
+--   Splitting per-world state into its own record is what lets every
+--   live world page be persisted in one save (epic #214): the save
+--   command snapshots every page in 'wmWorlds' into one 'WorldPageSave'
+--   each. Like 'SaveData', this is encoded positionally by cereal's
+--   Generic instance, so any layout change bumps 'currentSaveVersion'.
 data WorldPageSave = WorldPageSave
     { wpsPageId       ∷ !WorldPageId
         -- ^ The id this page had at save time. On load the active page
@@ -286,9 +285,10 @@ data WorldPageSave = WorldPageSave
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is
---   carried in 'sdWorlds' (one 'WorldPageSave' per saved page — today
---   just the active world); the remaining fields are genuinely global,
---   shared by every page or describing the save as a whole.
+--   carried in 'sdWorlds' (one 'WorldPageSave' per saved page — every
+--   live page, not just the active one); the remaining fields are
+--   genuinely global, shared by every page or describing the save as
+--   a whole.
 --
 --   Schema is versioned via the file header — see saveMagic /
 --   currentSaveVersion / SaveHeader above. Bump currentSaveVersion
@@ -329,8 +329,8 @@ data SaveData = SaveData
         -- ^ Pages that were visible (wmVisible) at save time, so the
         --   loaded game comes up showing what the player last saw.
     , sdWorlds       ∷ ![WorldPageSave]
-        -- ^ Every saved world page. Today exactly one (the active world);
-        --   #216 will populate this from all of wmWorlds.
+        -- ^ Every saved world page, one entry per live page in
+        --   wmWorlds at save time.
     } deriving (Show, Serialize, Generic)
 
 -- | The primary/active world page in a save — the one that restores as

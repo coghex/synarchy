@@ -2,6 +2,7 @@
 module Engine.Scene.Render where
 
 import UPrelude
+import Data.Maybe (fromJust)
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import qualified Data.Map as Map
