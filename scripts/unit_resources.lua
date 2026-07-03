@@ -27,7 +27,14 @@ local salts    = require("scripts.salts")
 local cardio   = require("scripts.cardio")
 local brain    = require("scripts.brain")
 
-local unitResources = {}
+-- Self-register in package.loaded so engine.loadScript (which uses
+-- dofile and creates a fresh chunk) and require return the same
+-- instance — otherwise a test harness that requires this module (e.g.
+-- movement_probe neutralising the resource tick, mirroring its unit_ai
+-- treatment) would mutate a dead copy while the engine ticks the real
+-- one. Same pattern as scripts/unit_ai.lua and scripts/debug.lua.
+local unitResources = package.loaded["scripts.unit_resources"] or {}
+package.loaded["scripts.unit_resources"] = unitResources
 
 -----------------------------------------------------------
 -- Tuning constants — Phase 3+ survival math
@@ -85,6 +92,22 @@ local ORGAN_FAILURE_DRAIN_PER_SEC = 0.5
 -- 1e-4 kg = 0.1 g — orders of magnitude above the ~1e-7 Float32
 -- noise but biologically negligible.
 local FAT_FLOOR_TOL = 1e-4
+
+-- Uphill exertion (#375). The engine reports the signed slope grade the
+-- unit is walking (getInfo.moveGrade: 1.0 = straight up a ramp's fall
+-- line, negative = downhill). Climbing multiplies the EFFORT the
+-- speed-drain models: the drain ratio uses speed × (1 + K·grade) in
+-- place of speed, so a unit holding its commanded pace up a full grade
+-- burns like it's moving (1 + K)× faster. At K = 0.5 a comfort-pace
+-- ascent burns (1.5)² = 2.25× the aerobic supply (close to the ~2.4×
+-- stair-climbing-vs-walking energy multiple), a net drain that leaves
+-- a baseline acolyte's pool nearly spent after ~5 z of continuous
+-- full-grade ascent — instead of the flat-ground equilibrium. Downhill
+-- and flat leave the model untouched (grade ≤ 0 clamps to 0):
+-- descending is easier on the legs, not free stamina. Endurance and
+-- encumbrance already shape comfort itself, so they scale this the
+-- same way they scale all locomotion drain.
+local UPHILL_EXERTION_PER_GRADE = 0.5
 
 -- Per-def resource config. Drain is a per-second constant. Regen
 -- factors are multiplied by endurance: a high-endurance unit recovers
@@ -648,10 +671,16 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
         -- drain as (speed/comfort)². Comfort speed is the equilibrium
         -- (net 0); slower regenerates, sprinting drains hard. Overrides
         -- both the activity regen factor and the flat drain_walking.
+        -- Uphill grade (#375) multiplies the effort side: sustained
+        -- ascent drains even at comfort pace (see UPHILL_EXERTION_PER_
+        -- GRADE); flat and downhill leave the model unchanged.
         local supply  = (params.move_regen_factor or 0.5) * endurance
-        local v       = (unit.getInfo(uid) or {}).moveSpeed or 0
+        local info    = unit.getInfo(uid) or {}
+        local v       = info.moveSpeed or 0
+        local grade   = math.max(0, info.moveGrade or 0)
+        local effort  = v * (1 + UPHILL_EXERTION_PER_GRADE * grade)
         local comfort = movementSpeed.comfort(uid)
-        local ratio   = (comfort > 0) and (v / comfort) or 1
+        local ratio   = (comfort > 0) and (effort / comfort) or 1
         regen         = supply
         drainActivity = supply * ratio * ratio
     else
