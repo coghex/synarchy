@@ -46,7 +46,18 @@ data RecipeYamlDef = RecipeYamlDef
 
 instance FromJSON RecipeYamlDef where
     parseJSON = withObject "RecipeYamlDef" $ \v → do
-        rid ← v .: "id"
+        rid  ← v .: "id"
+        axis ← v .:? "repair_axis"
+        -- Reject anything but the two known axes HERE, at the only
+        -- entry point for repair_axis, so a typo (e.g. "sharpnes")
+        -- fails the whole file's load instead of silently becoming a
+        -- recipe that repairs the wrong axis (Craft.Types.RepairAxis
+        -- is what makes that failure mode impossible downstream).
+        case axis of
+            Just a | a ≢ "condition" ∧ a ≢ "sharpness" →
+                fail (T.unpack ("repair_axis must be \"condition\" or "
+                                 <> "\"sharpness\", got " <> a))
+            _ → pure ()
         RecipeYamlDef rid
             ⊚ v .:? "name" .!= rid
             ⊛ v .:  "station"
@@ -56,7 +67,7 @@ instance FromJSON RecipeYamlDef where
             ⊛ v .:  "outputs"
             ⊛ v .:? "knowledge"
             ⊛ v .:? "skill"
-            ⊛ v .:? "repair_axis"
+            ⊛ pure axis
 
 newtype RecipeYamlFile = RecipeYamlFile
     { ryfRecipes ∷ [RecipeYamlDef]

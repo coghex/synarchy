@@ -19,6 +19,8 @@ module Craft.Types
     , RecipeManager(..)
     , emptyRecipeManager
     , lookupRecipe
+    , RepairAxis(..)
+    , repairAxisName
     ) where
 
 import UPrelude
@@ -30,6 +32,23 @@ data RecipeIngredient = RecipeIngredient
     { riItem  ∷ !Text   -- ^ item def name (Item.Types.idName)
     , riCount ∷ !Int    -- ^ how many; parser defaults omitted counts to 1
     } deriving (Show, Eq)
+
+-- | Which wear axis a repair recipe (#301) restores. A proper sum
+--   type rather than raw Text so an invalid value CANNOT reach
+--   RecipeDef — Engine.Asset.YamlRecipes' parser is the only producer
+--   of a `Just Text` axis and rejects anything but "condition"/
+--   "sharpness" at parse time (a malformed recipe never enters the
+--   catalogue), and every RepairAxis consumer pattern-matches both
+--   constructors exhaustively (no wildcard fallback), so a future
+--   third axis can't silently alias onto the wrong one either.
+data RepairAxis = RepairCondition | RepairSharpness
+    deriving (Show, Eq)
+
+-- | The YAML/Lua-facing spelling of an axis — round-trips with the
+--   `repair_axis` vocabulary ("condition"/"sharpness").
+repairAxisName ∷ RepairAxis → Text
+repairAxisName RepairCondition = "condition"
+repairAxisName RepairSharpness = "sharpness"
 
 -- | One recipe from the YAML catalogue.
 data RecipeDef = RecipeDef
@@ -53,8 +72,7 @@ data RecipeDef = RecipeDef
                                               --   output quality (#343);
                                               --   Nothing = quality rolls
                                               --   from the item def's spec
-    , rdRepairAxis ∷ !(Maybe Text)            -- ^ #301: "condition" or
-                                              --   "sharpness" marks this as
+    , rdRepairAxis ∷ !(Maybe RepairAxis)      -- ^ #301: Just marks this as
                                               --   a REPAIR recipe rather
                                               --   than a craft — it targets
                                               --   an existing item instance

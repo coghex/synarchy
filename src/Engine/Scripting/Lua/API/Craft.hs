@@ -61,7 +61,7 @@ loadRecipeYamlFn env = do
                             , rdOutputs   = map ingr (ryOutputs d)
                             , rdKnowledge = ryKnowledge d
                             , rdSkill     = rySkill d
-                            , rdRepairAxis = ryRepairAxis d
+                            , rdRepairAxis = toRepairAxis ⊚ ryRepairAxis d
                             }
                     atomicModifyIORef' (recipeManagerRef env) $ \m →
                         (RecipeManager
@@ -77,6 +77,12 @@ loadRecipeYamlFn env = do
             return 1
   where
     ingr i = RecipeIngredient { riItem = ryiItem i, riCount = ryiCount i }
+    -- Total given Engine.Asset.YamlRecipes' parser already rejects any
+    -- repair_axis value but "condition"/"sharpness" — this is the ONE
+    -- place raw YAML text becomes a RepairAxis; every consumer past
+    -- this point works with the sum type, not a string to compare.
+    toRepairAxis "sharpness" = RepairSharpness
+    toRepairAxis _           = RepairCondition
 
 -- | Push a RecipeIngredient as a Lua `{ item, count }` table.
 pushIngredient ∷ RecipeIngredient → Lua.LuaE Lua.Exception ()
@@ -105,7 +111,7 @@ pushRecipe d = do
     putN "work"    (rdWork d)
     forM_ (rdKnowledge d)  $ putS "knowledge"
     forM_ (rdSkill d)      $ putS "skill"
-    forM_ (rdRepairAxis d) $ putS "repairAxis"
+    forM_ (rdRepairAxis d) $ \axis → putS "repairAxis" (repairAxisName axis)
     Lua.newtable
     forM_ (zip [1..] (rdInputs d)) $ \(i, ing) → do
         pushIngredient ing

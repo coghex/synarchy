@@ -30,7 +30,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Craft.Types (RecipeManager(..), RecipeDef(..), lookupRecipe)
+import Craft.Types (RecipeManager(..), RecipeDef(..), lookupRecipe,
+                    RepairAxis(..), repairAxisName)
 import Craft.Execute (consumeIngredients)
 import Engine.Scripting.Lua.API.Craft (pushRecipe, validateStation)
 import Item.Types (ItemInstance(..), ItemManager)
@@ -136,7 +137,7 @@ runRepairAt env uid rid iid bid = do
 --   all-or-nothing, then restore that axis to 100. All three checks
 --   run before any mutation, so a refusal at any stage leaves the unit
 --   manager untouched.
-applyRepairAt ∷ Text → RecipeDef → Word64 → ItemManager → UnitId
+applyRepairAt ∷ RepairAxis → RecipeDef → Word64 → ItemManager → UnitId
               → UnitManager
               → (UnitManager, Either Text (Text, Float, Float, Float, Float))
 applyRepairAt axis recipe iid itemMgr uid um = case HM.lookup uid (umInstances um) of
@@ -146,15 +147,15 @@ applyRepairAt axis recipe iid itemMgr uid um = case HM.lookup uid (umInstances u
         Just it →
             let current = axisValue axis it
             in if current ≥ 100
-                then (um, Left ("already at full " <> axis))
+                then (um, Left ("already at full " <> repairAxisName axis))
                 else case consumeIngredients recipe (uiInventory u) of
                     Left err → (um, Left err)
                     Right inv' →
                         let u1 = u { uiInventory = inv' }
                             delta = 100 - current
                             (condD, sharpD) = case axis of
-                                "sharpness" → (0, delta)
-                                _           → (delta, 0)
+                                RepairCondition → (delta, 0)
+                                RepairSharpness → (0, delta)
                         in case applyRepairToUnit iid condD sharpD itemMgr u1 of
                             Nothing → (um, Left "no such item instance")
                             Just (u2, r) →
@@ -162,5 +163,5 @@ applyRepairAt axis recipe iid itemMgr uid um = case HM.lookup uid (umInstances u
                                                                (umInstances um) }
                                 , Right r )
   where
-    axisValue "sharpness" = iiSharpness
-    axisValue _           = iiCondition
+    axisValue RepairCondition = iiCondition
+    axisValue RepairSharpness = iiSharpness

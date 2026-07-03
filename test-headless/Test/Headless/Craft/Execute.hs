@@ -113,6 +113,20 @@ spec = do
                     ds → expectationFailure $
                         "expected exactly one recipe, got " <> show (length ds)
 
+        it "rejects an invalid repair_axis instead of silently defaulting" $ do
+            let src = BS8.pack $ unlines
+                    [ "recipes:"
+                    , "  - id: broken_repair"
+                    , "    station: repair_sharpness"
+                    , "    repair_axis: sharpnes"  -- typo: not "sharpness"
+                    , "    inputs: []"
+                    , "    outputs: []"
+                    ]
+            case parseFile src of
+                Left _  → pure ()
+                Right _ → expectationFailure
+                    "expected a parse failure for an invalid repair_axis"
+
         it "defaults name/work/count and reads fuel + knowledge" $ do
             let src = BS8.pack $ unlines
                     [ "recipes:"
