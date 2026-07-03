@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.YamlTextures
     , loadVegetationYamlFn
     , loadFloraYamlFn
     , loadAndRegister
+    , resolveTexturePath
     , getTextureHandleFn
     ) where
 
@@ -14,8 +15,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', newIORef, IORef)
+import System.Directory (doesFileExist)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
@@ -24,6 +26,21 @@ import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
 import World.Material (MaterialProps(..), registerMaterial)
+
+-- | If a yaml-declared texture path doesn't exist on disk, substitute the
+--   given subset fallback so 'loadAndRegister' has something to queue,
+--   instead of crashing at draw time (#478). Logged so missing assets are
+--   visible during iteration. The fallback path itself isn't checked — if
+--   you delete it too, you'll get the usual broken-texture behaviour.
+resolveTexturePath ∷ EngineEnv → Text → FilePath → FilePath → IO FilePath
+resolveTexturePath env label fallback preferred = do
+    exists ← doesFileExist preferred
+    if exists then return preferred else do
+        logger ← readIORef (loggerRef env)
+        logWarn logger CatAsset $
+            label <> " texture missing: " <> T.pack preferred
+            <> " — substituting " <> T.pack fallback
+        return fallback
 
 -- | Parse a material YAML, load all referenced textures (tile/zoom/bg),
 --   register name-to-handle mappings, and queue load requests.
@@ -47,12 +64,19 @@ loadMaterialYamlFn env backendState = do
                 let (lteq, _) = lbsMsgQueues backendState
                 total ← foldM (\acc def → do
                     let name = mdName def
+                        unknownMaterial = "assets/textures/utility/notexture.png"
+                    tilePath ← resolveTexturePath env "Material tile"
+                                   unknownMaterial (T.unpack (mdTile def))
+                    zoomPath ← resolveTexturePath env "Material zoom"
+                                   unknownMaterial (T.unpack (mdZoom def))
+                    bgPath   ← resolveTexturePath env "Material background"
+                                   unknownMaterial (T.unpack (mdBg def))
                     tileH ← loadAndRegister env backendState lteq
-                                ("mat_tile_" <> name) (T.unpack (mdTile def))
+                                ("mat_tile_" <> name) tilePath
                     zoomH ← loadAndRegister env backendState lteq
-                                ("mat_zoom_" <> name) (T.unpack (mdZoom def))
+                                ("mat_zoom_" <> name) zoomPath
                     bgH   ← loadAndRegister env backendState lteq
-                                ("mat_bg_"   <> name) (T.unpack (mdBg def))
+                                ("mat_bg_"   <> name) bgPath
 
                     -- Also register by numeric ID for world.setTexture
                     -- compatibility: "mat_tile_56" etc.
@@ -123,8 +147,11 @@ loadVegetationYamlFn env backendState = do
                     varCount ← foldM (\vacc (idx, texPath) → do
                         let vegId = baseId + fromIntegral idx
                             regName = "veg_tile_" <> T.pack (show vegId)
+                        resolved ← resolveTexturePath env "Vegetation variant"
+                                       "assets/textures/utility/blanktexture.png"
+                                       (T.unpack texPath)
                         _ ← loadAndRegister env backendState lteq
-                                regName (T.unpack texPath)
+                                regName resolved
                         return (vacc + 1)
                         ) (0 ∷ Int) (zip [0..] variants)
                     return (acc + varCount)
@@ -184,6 +211,9 @@ loadFloraYamlFn env backendState = do
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
 
+unknownFloraTexture ∷ FilePath
+unknownFloraTexture = "assets/textures/flora/unknown_flora.png"
+
 registerFloraSpecies ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
                      → IORef FloraCatalog → FloraYamlDef → IO Int
 registerFloraSpecies env backendState lteq catRef def = do
@@ -201,8 +231,10 @@ registerFloraSpecies env backendState lteq catRef def = do
             []    → texDir <> "/matured.png"
 
     -- Load base texture
+    resolvedBase ← resolveTexturePath env "Flora base"
+                       unknownFloraTexture baseTexPath
     baseH ← loadAndRegister env backendState lteq
-                ("flora_base_" <> name) baseTexPath
+                ("flora_base_" <> name) resolvedBase
     texCount ← newIORef (1 ∷ Int)
 
     -- Build lifecycle
@@ -221,8 +253,10 @@ registerFloraSpecies env backendState lteq catRef def = do
             Nothing → return phaseMap
             Just tag → do
                 let path = texDir <> "/" <> T.unpack (fypTexture yp)
+                resolved ← resolveTexturePath env "Flora phase"
+                               unknownFloraTexture path
                 h ← loadAndRegister env backendState lteq
-                        ("flora_phase_" <> name <> "_" <> fypTag yp) path
+                        ("flora_phase_" <> name <> "_" <> fypTag yp) resolved
                 atomicModifyIORef' texCount (\n → (n + 1, ()))
                 let phase = LifePhase
                         { lpTag     = tag
@@ -238,8 +272,10 @@ registerFloraSpecies env backendState lteq catRef def = do
             Nothing → return stages
             Just tag → do
                 let path = texDir <> "/" <> T.unpack (fycsTexture ycs)
+                resolved ← resolveTexturePath env "Flora annual-cycle stage"
+                               unknownFloraTexture path
                 h ← loadAndRegister env backendState lteq
-                        ("flora_cycle_" <> name <> "_" <> fycsTag ycs) path
+                        ("flora_cycle_" <> name <> "_" <> fycsTag ycs) resolved
                 atomicModifyIORef' texCount (\n → (n + 1, ()))
                 let stage = AnnualStage
                         { asTag      = tag
@@ -254,9 +290,11 @@ registerFloraSpecies env backendState lteq catRef def = do
         case (parsePhaseTag (fycoPhase yco), parseCycleTag (fycoCycle yco)) of
             (Just pTag, Just cTag) → do
                 let path = texDir <> "/" <> T.unpack (fycoTexture yco)
+                resolved ← resolveTexturePath env "Flora cycle override"
+                               unknownFloraTexture path
                 h ← loadAndRegister env backendState lteq
                         ("flora_ov_" <> name <> "_" <> fycoPhase yco
-                         <> "_" <> fycoCycle yco) path
+                         <> "_" <> fycoCycle yco) resolved
                 atomicModifyIORef' texCount (\n → (n + 1, ()))
                 return (HM.insert (AnnualCycleKey pTag cTag) h ovMap)
             _ → return ovMap
@@ -271,8 +309,10 @@ registerFloraSpecies env backendState lteq catRef def = do
                 Nothing → return (TextureHandle 0)
                 Just tex → do
                     let path = texDir <> "/" <> T.unpack tex
+                    resolved ← resolveTexturePath env "Flora harvested"
+                                   unknownFloraTexture path
                     h ← loadAndRegister env backendState lteq
-                            ("flora_harvested_" <> name) path
+                            ("flora_harvested_" <> name) resolved
                     atomicModifyIORef' texCount (\n → (n + 1, ()))
                     return h
             return $ Just FloraHarvest

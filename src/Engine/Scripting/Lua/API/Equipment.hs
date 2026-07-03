@@ -23,7 +23,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlEquipment
 import Equipment.Types
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
@@ -33,6 +33,15 @@ import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
                    UnitDef(..), StatModifier(..))
 import Unit.Stats (applyItemBuffs)
+
+-- | Canonical equipment-class fallback (#478): the pre-existing blank
+--   humanoid silhouette (no slot artwork baked in), same dimensions as
+--   an ordinary class silhouette, so a bad `silhouette:` path in
+--   data/equipment/*.yaml substitutes here instead of reaching the
+--   Vulkan texture loader with a nonexistent file.
+missingEquipmentSilhouette ∷ FilePath
+missingEquipmentSilhouette =
+    "assets/textures/ui/placeholders/humanoid_silhouette_blank.png"
 
 -- | equipment.loadYaml(path) — parses a YAML file describing one or
 --   more equipment classes, loads each class's silhouette texture, and
@@ -55,8 +64,11 @@ loadEquipmentYamlFn env backendState = do
 
                 total ← foldM (\acc c → do
                     let regName = "equipment_" <> eycName c
+                    silhouettePath ← resolveTexturePath env
+                        "Equipment silhouette" missingEquipmentSilhouette
+                        (T.unpack (eycSilhouette c))
                     handle ← loadAndRegister env backendState lteq
-                                regName (T.unpack (eycSilhouette c))
+                                regName silhouettePath
 
                     let slots = map
                             (\s → EquipmentSlot
