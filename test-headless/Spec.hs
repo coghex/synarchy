@@ -28,6 +28,7 @@ import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
+import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.Spoil as Spoil
@@ -84,6 +85,7 @@ main = hspec $ do
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
+    describe "World.Save.Serialize" SaveSerialize.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.Spoil" Spoil.spec
     describe "WorldGen.SoilGate" SoilGate.spec

@@ -384,11 +384,11 @@ executeDebugLua lst cmdText = Lua.runWith lst $ do
                 _ → do
                     err ← Lua.tostring (-1)
                     Lua.pop 1
-                    return $ "error: " <> maybe "unknown" TE.decodeUtf8 err
+                    return $ "error: " <> maybe "unknown" TE.decodeUtf8Lenient err
         _ → do
             err ← Lua.tostring (-1)
             Lua.pop 1
-            return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8 err
+            return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8Lenient err
 
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 processLuaMsgs env ls stateRef = do

@@ -178,7 +178,7 @@ loadUnitYamlFn env backendState = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 defs ← loadUnitYaml logger filePath
@@ -480,7 +480,7 @@ unitSpawnFn env = do
             Lua.pushnumber (-1)
             return 1
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
                 gx = case xArg of
                          Just (Lua.Number n) → realToFrac n
                          _                   → 0.0
@@ -490,9 +490,9 @@ unitSpawnFn env = do
                 -- Resolve faction: slot 5 wins if present, else slot 4
                 -- (only when it's actually a Lua string), else default.
                 factionId = case factionArg5 of
-                    Just fbs → TE.decodeUtf8 fbs
+                    Just fbs → TE.decodeUtf8Lenient fbs
                     Nothing → case factionArg4 of
-                        Just fbs → TE.decodeUtf8 fbs
+                        Just fbs → TE.decodeUtf8Lenient fbs
                         Nothing  → "wildlife"
 
             result ← Lua.liftIO $ do
@@ -505,7 +505,7 @@ unitSpawnFn env = do
                 -- doesn't resolve to a live world.
                 mActive ← case pageArg6 of
                     Just pbs → do
-                        let pid = WorldPageId (TE.decodeUtf8 pbs)
+                        let pid = WorldPageId (TE.decodeUtf8Lenient pbs)
                         wm ← readIORef (worldManagerRef env)
                         pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                     Nothing  → activeWorldPage env
@@ -810,7 +810,7 @@ unitFeedFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
             mCredited ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
                 case lookupItemDef defName itemMgr >>= idFood of
@@ -942,7 +942,7 @@ unitTransitionToFn env = do
     let stride = case mStrideArg of
             Just s | s ≥ 1 → fromIntegral s
             _              → 1
-    case (idArg, mPoseBS >>= parsePose . TE.decodeUtf8) of
+    case (idArg, mPoseBS >>= parsePose . TE.decodeUtf8Lenient) of
         (Just n, Just target) → do
             let uid = UnitId (fromIntegral n)
             Lua.liftIO $ Q.writeQueue (unitQueue env) $
@@ -1091,7 +1091,7 @@ unitGetAnimDurationFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBs) → do
             let uid      = UnitId (fromIntegral n)
-                animName = TE.decodeUtf8 nameBs
+                animName = TE.decodeUtf8Lenient nameBs
             mDur ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
                 case HM.lookup uid (umInstances um) of
@@ -1211,7 +1211,7 @@ unitGetWoundSeverityOnFn env = do
     case (idArg, partArg) of
         (Just n, Just pbs) → do
             let uid     = UnitId (fromIntegral n)
-                partId  = TE.decodeUtf8 pbs
+                partId  = TE.decodeUtf8Lenient pbs
             mTotal ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
                 case HM.lookup uid (umInstances um) of
@@ -1682,7 +1682,7 @@ unitModifyItemFillFn env = do
     case (idArg, nameArg, deltaArg) of
         (Just n, Just nameBS, Just (Lua.Number d)) → do
             let uid     = UnitId (fromIntegral n)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
                 delta   = realToFrac d ∷ Float
             applied ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
@@ -1885,7 +1885,7 @@ unitAddItemFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
                 mFillIn = case fillArg of
                     Just (Lua.Number d) → Just (realToFrac d ∷ Float)
                     _ → Nothing
@@ -2064,7 +2064,7 @@ unitRemoveItemFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
             removed ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
@@ -2151,7 +2151,7 @@ unitDropEquipmentToGroundFn env = do
     case (uidArg, slotArg) of
         (Just n, Just slotBS) → do
             let uid    = UnitId (fromIntegral n)
-                slotId = TE.decodeUtf8 slotBS
+                slotId = TE.decodeUtf8Lenient slotBS
             -- Resolve the world FIRST so we never strip the item from the
             -- unit when there's nowhere to drop it.
             mWs ← Lua.liftIO $ activeWorldU env
@@ -2210,7 +2210,7 @@ unitTransferItemToBuildingFn env = do
         (Just nU, Just nB, Just nameBS) → do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
             mItem ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, Nothing)
@@ -2294,7 +2294,7 @@ unitTransferItemToUnitFn env = do
         (Just nF, Just nT, Just nameBS) | nF ≠ nT → do
             let fromUid = UnitId (fromIntegral nF)
                 toUid   = UnitId (fromIntegral nT)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case (HM.lookup fromUid (umInstances um),
                       HM.lookup toUid   (umInstances um)) of
@@ -2336,7 +2336,7 @@ unitDepositToCargoFn env = do
         (Just nU, Just nB, Just nameBS) → do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
             -- Capacity pre-check: read-only snapshot. Weighs the ACTUAL
             -- ItemInstance that will be popped below (the first match in
@@ -2443,7 +2443,7 @@ unitWithdrawFromCargoFn env = do
         (Just nU, Just nB, Just nameBS) → do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
             mItem ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
@@ -2593,7 +2593,7 @@ unitGetSkillFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             mVal ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
                 case HM.lookup uid (umInstances um) of
@@ -2627,7 +2627,7 @@ unitSetSkillFn env = do
     case (idArg, nameArg, valArg) of
         (Just n, Just nameBS, Just (Lua.Number v)) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
                 lvl  = max 0 (realToFrac v)
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
@@ -2654,7 +2654,7 @@ unitGetKnowledgeFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             mVal ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
                 pure $ HM.lookup uid (umInstances um)
@@ -2676,7 +2676,7 @@ unitSetKnowledgeFn env = do
     case (idArg, nameArg, valArg) of
         (Just n, Just nameBS, Just (Lua.Number v)) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
                 lvl  = max 0 (realToFrac v)
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
@@ -2735,7 +2735,7 @@ unitAddXPFn env = do
     case (idArg, nameArg, amtArg) of
         (Just n, Just nameBS, Just (Lua.Number amt)) → do
             let uid    = UnitId (fromIntegral n)
-                name   = TE.decodeUtf8 nameBS
+                name   = TE.decodeUtf8Lenient nameBS
                 amount = realToFrac amt
             mVal ← Lua.liftIO $
                 atomicModifyIORef' (unitManagerRef env) $ \um →
@@ -3251,7 +3251,7 @@ unitSetAnimFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ do
                 now ← readIORef (gameTimeRef env)
                 atomicModifyIORef' (unitManagerRef env) $ \um →
@@ -3282,7 +3282,7 @@ unitSetAnimOverrideFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $
                 atomicModifyIORef' (unitManagerRef env) $ \um →
                     case HM.lookup uid (umInstances um) of
@@ -3328,7 +3328,7 @@ unitSetFacingFn env = do
     case (idArg, dirArg) of
         (Just n, Just dirBS) → do
             let uid    = UnitId (fromIntegral n)
-                dirTxt = T.toUpper (TE.decodeUtf8 dirBS)
+                dirTxt = T.toUpper (TE.decodeUtf8Lenient dirBS)
             case parseDir dirTxt of
                 Nothing → do
                     Lua.pushboolean False
@@ -3444,7 +3444,7 @@ unitGetStatFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             mVal ← Lua.liftIO $ getEffectiveStat env uid name
             case mVal of
                 Just v  → do
@@ -3468,7 +3468,7 @@ unitGetStatBaseFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             mVal ← Lua.liftIO $ getOrRollStat env uid name
             case mVal of
                 Just v  → do
@@ -3493,7 +3493,7 @@ unitSetStatFn env = do
     case (idArg, nameArg, valArg) of
         (Just n, Just nameBS, Just (Lua.Number v)) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
                 clamped = max 0 (realToFrac v)
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
@@ -3558,8 +3558,8 @@ unitAddModifierFn env = do
     case (idArg, nameArg, deltaArg, srcArg) of
         (Just n, Just nameBS, Just (Lua.Number d), Just srcBS) → do
             let uid   = UnitId (fromIntegral n)
-                name  = TE.decodeUtf8 nameBS
-                src   = TE.decodeUtf8 srcBS
+                name  = TE.decodeUtf8Lenient nameBS
+                src   = TE.decodeUtf8Lenient srcBS
                 delta = realToFrac d
                 pct   = case pctMaybe of
                             Just (Lua.Number p) → realToFrac p
@@ -3608,7 +3608,7 @@ unitRemoveModifierFn env = do
     case (idArg, srcArg) of
         (Just n, Just srcBS) → do
             let uid = UnitId (fromIntegral n)
-                src = TE.decodeUtf8 srcBS
+                src = TE.decodeUtf8Lenient srcBS
             removed ← Lua.liftIO $
                 atomicModifyIORef' (unitManagerRef env) $ \um →
                     case HM.lookup uid (umInstances um) of
@@ -3649,7 +3649,7 @@ unitGetModifiersFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid  = UnitId (fromIntegral n)
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             mMods ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
                 case HM.lookup uid (umInstances um) of
@@ -3864,7 +3864,7 @@ unitGetItemContentsFn env = do
     case (idArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid    = UnitId (fromIntegral n)
-                want   = TE.decodeUtf8 nameBS
+                want   = TE.decodeUtf8Lenient nameBS
                 wantId = maybe 0 fromIntegral instArg
             mRes ← Lua.liftIO $ do
                 um      ← readIORef (unitManagerRef env)
@@ -4252,7 +4252,7 @@ unitFrostbiteFn env = do
         (Just n, Just partBS, Just (Lua.Number d)) → do
             now ← Lua.liftIO $ readIORef (gameTimeRef env)
             let uid   = UnitId (fromIntegral n)
-                part  = TE.decodeUtf8 partBS
+                part  = TE.decodeUtf8Lenient partBS
                 delta = max 0 (realToFrac d)
                 isFb w = woundKind w ≡ "frostbite" ∧ woundPart w ≡ part
             result ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
@@ -4441,8 +4441,8 @@ unitInjureFn env = do
                     Just (Lua.Number b) → max 0 (min 1 (realToFrac b))
                     _                   → 1.0
                 w = Wound
-                    { woundPart     = TE.decodeUtf8 partBS
-                    , woundKind     = TE.decodeUtf8 kindBS
+                    { woundPart     = TE.decodeUtf8Lenient partBS
+                    , woundKind     = TE.decodeUtf8Lenient kindBS
                     , woundSeverity = max 0 (min 1 (realToFrac sev))
                     , woundAt       = now
                     , woundBandage  = bandage
@@ -4464,8 +4464,8 @@ unitInjureFn env = do
             Lua.liftIO $ when ok $
                 pushInjuryEvent (injuryEventsRef env) now (fromIntegral n)
                     "injure"
-                    [ ("part",      TE.decodeUtf8 partBS)
-                    , ("woundKind", TE.decodeUtf8 kindBS)
+                    [ ("part",      TE.decodeUtf8Lenient partBS)
+                    , ("woundKind", TE.decodeUtf8Lenient kindBS)
                     , ("severity",  T.pack (show (woundSeverity w))) ]
             Lua.pushboolean ok
             return 1
