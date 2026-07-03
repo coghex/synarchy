@@ -47,7 +47,7 @@ import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
                                    BuildingYamlTileSize(..), loadBuildingYaml)
 import qualified Engine.Core.Queue as Q
@@ -85,21 +85,26 @@ loadBuildingYamlFn env backendState = do
                 total ← foldM (\acc def → do
                     let name      = bydName def
                         spritePath = T.unpack (bydSprite def)
+                        unknownBuilding = "assets/textures/buildings/unknown_building.png"
 
+                    resolvedSprite ← resolveTexturePath env "Building sprite"
+                                          unknownBuilding spritePath
                     handle ← loadAndRegister env backendState lteq
-                                 ("building_" <> name) spritePath
+                                 ("building_" <> name) resolvedSprite
 
                     -- Build animations: frame textures are loaded via
                     -- the same loader. We only key by the single
                     -- direction "default" (mapped to DirS internally).
                     animMap ← foldM (\accA (animName, animDef) → do
                         frameMap ← foldM (\accF (_dirKey, framePaths) → do
-                            handles ← mapM (\(i, p) →
+                            handles ← mapM (\(i, p) → do
+                                resolved ← resolveTexturePath env "Building animation frame"
+                                               unknownBuilding (T.unpack p)
                                 loadAndRegister env backendState lteq
                                     ("building_" <> name
                                      <> "_" <> animName
                                      <> "_" <> T.pack (show i))
-                                    (T.unpack p)
+                                    resolved
                                 ) (zip [(0 ∷ Int)..] framePaths)
                             return (Map.insert DirS
                                       (V.fromList handles) accF)
