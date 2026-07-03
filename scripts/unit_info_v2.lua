@@ -2192,8 +2192,19 @@ local function buildItemHint(it, equippedSlot)
     end
     if it.buffs then
         for _, b in ipairs(it.buffs) do
-            local line = string.format("%s + %g",
-                capitalizeStat(b.stat), b.amount)
+            -- "Perception + 1", "Perception + 10%", or both:
+            -- "Perception + 1 + 10%". Percent arrives fractional
+            -- (0.1 = +10%), same convention as unit modifiers.
+            local parts = {}
+            if (b.amount or 0) ~= 0 then
+                parts[#parts + 1] = string.format("%g", b.amount)
+            end
+            if (b.percent or 0) ~= 0 then
+                parts[#parts + 1] = string.format("%g%%", b.percent * 100)
+            end
+            if #parts == 0 then parts[1] = "0" end
+            local line = capitalizeStat(b.stat)
+                .. " + " .. table.concat(parts, " + ")
             if b.scalesWithCondition and it.condition then
                 line = line .. string.format(" (x%.2f)", it.condition / 100)
             end

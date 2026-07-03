@@ -176,6 +176,7 @@ loadItemYamlFn env backendState = do
                                 (\b → ItemBuff
                                     { ibStat = iybStat b
                                     , ibAmount = iybAmount b
+                                    , ibPercent = iybPercent b
                                     , ibScalesWithCondition =
                                         iybScalesWithCondition b
                                     })

@@ -22,6 +22,7 @@ import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Item.Temperature as ItemTemp
+import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
@@ -73,6 +74,7 @@ main = hspec $ do
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "Item.Temperature" ItemTemp.spec
+    describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.Spoil" Spoil.spec

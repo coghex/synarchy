@@ -82,16 +82,21 @@ instance FromJSON ItemYamlRollSpec where
 
 -- | One stat-modifier conferred by equipping an item.
 --   YAML shape: `{ stat: perception, amount: 1, scales_with_condition: true }`.
+--   `percent` is fractional and matches the unit-level modifiers block
+--   (0.1 = +10%); a buff can declare `amount`, `percent`, or both
+--   (#392). Both default to 0 so either can stand alone.
 data ItemYamlBuff = ItemYamlBuff
     { iybStat                ∷ !Text
     , iybAmount              ∷ !Float
+    , iybPercent             ∷ !Float
     , iybScalesWithCondition ∷ !Bool
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlBuff where
     parseJSON = withObject "ItemYamlBuff" $ \v → ItemYamlBuff
         ⊚ v .:  "stat"
-        ⊛ v .:  "amount"
+        ⊛ v .:? "amount"  .!= 0.0
+        ⊛ v .:? "percent" .!= 0.0
         ⊛ v .:? "scales_with_condition" .!= False
 
 -- | Optional weapon block on an item def. Geometric + material
