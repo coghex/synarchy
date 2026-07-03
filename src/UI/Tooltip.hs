@@ -42,6 +42,17 @@ import UI.Manager
 hintLineGap ∷ Float
 hintLineGap = 2
 
+-- | Title-line leading: fudge added past 'tsFontSize' to cover descender
+--   overshoot. Shared by the size pass ('computeBoxSize') and the layout
+--   pass ('repositionAndAnimate') so they can't drift apart.
+titleLeadingPx ∷ Float
+titleLeadingPx = 4
+
+-- | Hint-line leading, same purpose as 'titleLeadingPx' but for the
+--   (smaller) hint font.
+hintLeadingPx ∷ Float
+hintLeadingPx = 3
+
 -- | Split the hint on '\n' so multi-line hints render as a stack of
 --   text elements instead of a single overflow line. Empty Maybe ⇒
 --   no lines.
@@ -53,7 +64,7 @@ hintLines content = case ttHint content of
 -- | Per-line height (cap + leading). Used both for layout (computing
 --   total hint section height) and for the per-line Y stepping.
 hintLineHeight ∷ TooltipStyle → Float
-hintLineHeight style = tsHintFontSize style + 3
+hintLineHeight style = tsHintFontSize style + hintLeadingPx
 
 -- | Run one frame of the tooltip subsystem. Called from the render
 --   loop after input has been applied and before 'renderUIPages'.
@@ -377,7 +388,7 @@ repositionAndAnimate _pageH content (mx, my) (fbW, fbH) fontCache mgr =
         -- Section dimensions. Anything with a 0 height is treated as
         -- "missing" and skipped from the stack.
         titleH = case ttText content of
-            Just _ | isFontSet (tsFont style) → tsFontSize style + 4
+            Just _ | isFontSet (tsFont style) → tsFontSize style + titleLeadingPx
             _ → 0
         hintLineN = length (hintLines content)
         hintH = if hintLineN > 0 ∧ isFontSet (tsFont style)
@@ -454,7 +465,7 @@ stackSections ∷ (Float, Float, Float) → Float → Float → Float → Float
               → (Float, Float, Float, Float, Float)
 stackSections (gTSep, gSepH, gHSpr) titleH sepH hintH spriteH =
     let advance prevHadContent gapHere y h
-          | h ≤ 0 = (y, y, False ∨ prevHadContent)
+          | h ≤ 0 = (y, y, prevHadContent)
           | prevHadContent = (y + gapHere, y + gapHere + h, True)
           | otherwise = (y, y + h, True)
         (titleY, after1, h1) = advance False 0     0      titleH
@@ -505,7 +516,7 @@ computeBoxSize ∷ FontCache → TooltipStyle → TooltipContent → (Float, Flo
 computeBoxSize fontCache style content =
     let titleW = textPixelWidth fontCache style content
         titleH = case ttText content of
-            Just _ | isFontSet (tsFont style) → tsFontSize style + 4
+            Just _ | isFontSet (tsFont style) → tsFontSize style + titleLeadingPx
             _ → 0
         hintW = hintPixelWidth fontCache style content
         hintLineN = length (hintLines content)
