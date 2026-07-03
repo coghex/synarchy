@@ -8,10 +8,9 @@
 -- renders the log). Both sides intentionally live in this module so
 -- adding a new command/event variant only touches one file.
 --
--- Skeleton phase: only one command and one event are defined.
--- Resolution itself is a no-op until the next slice — the thread
--- exists so we can validate the wiring end-to-end before there's
--- anything interesting to wire.
+-- Currently one command variant (`CombatAttack`) and one event
+-- record (`CombatEvent`) cover the full attack→resolution→log path;
+-- new variants land here as combat grows beyond melee attacks.
 module Combat.Types
     ( CombatCommand(..)
     , CombatEvent(..)

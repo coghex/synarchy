@@ -1,13 +1,11 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 
--- | Combat thread skeleton.
+-- | Combat thread.
 --
 -- The thread drains the combat command queue (`combatQueue` on
--- `EngineEnv`) and processes each command — for now there's a single
--- placeholder handler that logs the command and otherwise does
--- nothing. Resolution (hit/miss/damage/wound/death) will replace the
--- no-op in the next slice, with each resolution step pushing
--- `CombatEvent`s onto `combatEventsRef`.
+-- `EngineEnv`) and dispatches each command to `Combat.Resolution`,
+-- which runs full resolution (hit roll, body part, damage, wound,
+-- death check) and pushes `CombatEvent`s onto `combatEventsRef`.
 --
 -- The thread also exists to give the combat sim an obvious home that
 -- doesn't share contention with the unit thread (which is doing
@@ -116,9 +114,8 @@ combatLoop env stateRef tick = do
                 Just n  → combatLoop env stateRef n
                 Nothing → pure ()
 
--- | Drain the command queue and dispatch each command. Skeleton phase:
---   we only log incoming commands. Real resolution lands in the next
---   slice as `Combat.Resolution.processAttack`.
+-- | Drain the command queue and dispatch each command to
+--   'handleCommand' for resolution.
 processAllCommands ∷ EngineEnv → IO ()
 processAllCommands env = go
   where

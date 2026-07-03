@@ -15,10 +15,12 @@
 --     / clamp(constitution, 0.5, 2.0)
 --
 -- heal_per_sec(w, constitution) =
---     healingBase × (1 - severity)^2 × clamp(constitution, 0.3, 3.0)
---   (only applied if the wound's bleed_per_sec < bleedClotThreshold —
---   actively-bleeding wounds don't heal yet; Phase 3 layers in
---   clotting time / first-aid.)
+--     healBaseRate × clotFactor(woundClot) × restMult ×
+--     clamp(constitution, 0.3, 3.0) × infectionMult × calorieMult
+--   clotFactor ramps from healClotFloor (open wound) up to 1.0 (fully
+--   clotted); woundClot itself advances elsewhere in this module
+--   (bandages/dressings/time), and infection/calorie state gate the
+--   rate further.
 --
 -- Wounds with severity < woundCleanupThreshold are dropped from the
 -- list to keep the per-tick scan cheap.
@@ -134,7 +136,8 @@ healClotFloor = 0.05   -- an un-clotted wound heals at 5 % of the rate
                        -- (clot scales it from this floor up to full)
 
 sleepHealMult ∷ Float
-sleepHealMult = 4.0    -- rest/sleep speed-up (DORMANT — see restMult)
+sleepHealMult = 4.0    -- rest/sleep heal speed-up, applied via restMult
+                        -- below when uiPose == "sleeping"
 
 scarSeverityThreshold ∷ Float
 scarSeverityThreshold = 0.3   -- wounds milder than this heal scar-free
