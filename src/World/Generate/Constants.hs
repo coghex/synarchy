@@ -18,10 +18,12 @@ viewDepth ∷ Int
 viewDepth = 250
 
 -- | Border size around each chunk for neighbor lookups.
---   Must be larger than maxCoastalDist (in Coastal.hs) so that
---   adjacent chunks' bordered regions overlap at ALL ocean tiles
---   within beach distance of the chunk boundary. The extra margin
---   prevents seams where one chunk's BFS sees an ocean tile but
---   the neighbor's border doesn't include it.
+--   (Historically this had to exceed maxCoastalDist so adjacent
+--   chunks' windowed coastal BFS agreed; since the save-v25 global
+--   coastal pass, chunk gen just replays per-tile table deltas and
+--   coastal reach is independent of this border — #220 widened
+--   maxCoastalDist to 28 > chunkBorder with no seam risk. The border
+--   still bounds every OTHER windowed neighborhood op in the chunk
+--   pipeline; see the chunk-pipeline window-op rule.)
 chunkBorder ∷ Int
 chunkBorder = 14

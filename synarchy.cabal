@@ -153,6 +153,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.ZoomParity
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
+                   Test.Headless.WorldGen.CoastBreach
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config

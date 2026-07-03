@@ -13,6 +13,12 @@ module World.Plate
     , classifyBoundary
     , isGlacierZone
     , isBeyondGlacier
+      -- * Coastal tectonic steepness (#220)
+    , coastCellSize
+    , coastCellsInU
+    , coastCellSteepness
+    , coastSteepAt
+    , coastTectonicSteepness
       -- * wrapping
     , wrapGlobalX
     , wrapGlobalU
@@ -206,6 +212,82 @@ classifyBoundary worldSize plateA plateB =
        else if approach < divergentThreshold
             then Divergent (abs approach)
             else Transform shear
+
+-- * Coastal Tectonic Steepness (#220)
+
+-- | Cell size (tiles, in u/v space) of the coarse grid the coastal
+--   steepness field is sampled on. Coarse enough that interpolation
+--   between samples is smooth over many tiles — the June #220 attempt
+--   proved per-tile boundary classification produces pillars and
+--   floating lakes at margin transitions.
+coastCellSize ∷ Int
+coastCellSize = 24
+
+-- | Number of u-cells: snapped so the cell grid tiles the cylinder
+--   exactly (same trick as 'wrappedValueNoise2D') — a tile and its
+--   wrap alias interpolate the same physical samples.
+coastCellsInU ∷ Int → Int
+coastCellsInU worldSize =
+    let w = worldWidthTiles worldSize
+    in max 1 (round (fromIntegral w / fromIntegral coastCellSize ∷ Float))
+
+-- | How steep a coast the boundary type wants. Convergent margins
+--   push mountains to the sea; divergent margins slope gently away.
+boundarySteepness ∷ BoundaryType → Float
+boundarySteepness (Convergent s) = 0.8 + 0.2 * min 1.0 s
+boundarySteepness (Transform  _) = 0.5
+boundarySteepness (Divergent  _) = 0.1
+
+-- | Steepness sample at one coarse cell center. @ju@ is the u-cell
+--   index (any integer — the physical position wraps), @jv@ the
+--   v-cell index. Fades toward gentle away from the plate boundary so
+--   coasts deep inside a plate ignore its far-off margin type.
+coastCellSteepness ∷ Word64 → Int → [TectonicPlate] → Int → Int → Float
+coastCellSteepness seed worldSize plates ju jv =
+    let wsc = computeWorldScale worldSize
+        w = worldWidthTiles worldSize
+        effCell = fromIntegral w / fromIntegral (coastCellsInU worldSize) ∷ Float
+        uC = (fromIntegral ju + 0.5) * effCell
+        vC = (fromIntegral jv + 0.5) * fromIntegral coastCellSize ∷ Float
+        gxC = round ((uC + vC) / 2.0)
+        gyC = round ((vC - uC) / 2.0)
+        (gx', gy') = wrapGlobalU worldSize gxC gyC
+        ((plateA, distA), (plateB, distB)) =
+            twoNearestPlates seed worldSize plates gx' gy'
+        boundaryDist = abs (distB - distA) / 2.0
+        base = boundarySteepness (classifyBoundary worldSize plateA plateB)
+        nearR = scaleDist wsc 40.0
+        fadeR = max 1.0 (scaleDist wsc 200.0)
+        fade = 1.0 - smoothstep (clamp01 ((boundaryDist - nearR) / fadeR))
+    in base * fade
+
+-- | Interpolate a steepness field at a tile from a cell sampler.
+--   Shared by the direct query ('coastTectonicSteepness') and the
+--   memoized grid in the global coastal pass, so both see the exact
+--   same field.
+coastSteepAt ∷ (Int → Int → Float) → Int → Int → Int → Float
+coastSteepAt sample worldSize gx gy =
+    let w = worldWidthTiles worldSize
+        effCell = fromIntegral w / fromIntegral (coastCellsInU worldSize) ∷ Float
+        fu = fromIntegral (gx - gy) / effCell
+        fv = fromIntegral (gx + gy) / fromIntegral coastCellSize ∷ Float
+        iu = floor fu ∷ Int
+        iv = floor fv ∷ Int
+        tu = smoothstep (fu - fromIntegral iu)
+        tv = smoothstep (fv - fromIntegral iv)
+        s00 = sample iu       iv
+        s10 = sample (iu + 1) iv
+        s01 = sample iu       (iv + 1)
+        s11 = sample (iu + 1) (iv + 1)
+    in lerp tv (lerp tu s00 s10) (lerp tu s01 s11)
+
+-- | Smooth, coherent "how tectonically steep is the coast here"
+--   field in [0,1]. Pure function of seed + plates, so the base
+--   terrain ('continentalShelf' modulation) and the global coastal
+--   pass agree on which margins keep their mountains.
+coastTectonicSteepness ∷ Word64 → Int → [TectonicPlate] → Int → Int → Float
+coastTectonicSteepness seed worldSize plates =
+    coastSteepAt (coastCellSteepness seed worldSize plates) worldSize
 
 -- * Glacier Border
 
@@ -419,6 +501,18 @@ valueContribution seed worldSize gx gy wsc isLand mness =
           | otherwise    = 0.0
     in raw * round amp
 
+-- | Gated sampling of the coastal steepness field for the shelf
+--   modulation: only mixed land→ocean margins within the lowland
+--   pull range pay for the field lookup (4 cell samples, each a
+--   'twoNearestPlates' + 'classifyBoundary').
+shelfSteepMod ∷ Word64 → Int → [TectonicPlate] → WorldScale
+              → TectonicPlate → TectonicPlate → Float → Int → Int → Float
+shelfSteepMod seed worldSize plates wsc plateA plateB boundaryDist gx gy
+    | plateIsLand plateA ∧ not (plateIsLand plateB)
+      ∧ abs boundaryDist < coastLowlandRange wsc
+        = coastTectonicSteepness seed worldSize plates gx gy
+    | otherwise = 0.0
+
 elevationAtGlobal ∷ Word64 → [TectonicPlate] → Int → Int → Int → (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy =
     let (gx', gy') = wrapGlobalU worldSize gx gy
@@ -433,6 +527,8 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundary = classifyBoundary worldSize plateA plateB
             boundaryEffect = boundaryElevation wsc boundary plateA plateB boundaryDist
             shelfEffect = continentalShelf wsc plateA plateB boundaryDist
+                (shelfSteepMod seed worldSize plates wsc plateA plateB
+                    boundaryDist gx' gy')
             mness = mountainness wsc boundaryDist
             ridge = ridgeContribution seed worldSize gx' gy' wsc mness
             valN  = valueContribution seed worldSize gx' gy' wsc
@@ -456,6 +552,8 @@ elevationAtGlobal seed plates worldSize gx gy =
         boundaryEffect = boundaryElevation wsc boundary
                            plateA plateB boundaryDist
         shelfEffect = continentalShelf wsc plateA plateB boundaryDist
+            (shelfSteepMod seed worldSize plates wsc plateA plateB
+                boundaryDist gx' gy')
 
         mness = mountainness wsc boundaryDist
         ridge = ridgeContribution seed worldSize gx' gy' wsc mness
@@ -567,14 +665,24 @@ transformEffect wsc boundaryDist =
 
 -- * Continental Shelf
 
+-- | Range over which the land side of a mixed margin is pulled down
+--   toward sea level. Shared by 'continentalShelf' and the gate in
+--   'elevationAtGlobal' that decides whether the coastal steepness
+--   field is worth sampling.
+coastLowlandRange ∷ WorldScale → Float
+coastLowlandRange wsc = max 4.0 (scaleDist wsc 20.0)
+
 -- | Smooth the base elevation gap at land-ocean plate boundaries.
 --   On the ocean side: raises the deep ocean floor toward sea level,
 --   creating a gradual continental shelf slope.
 --   On the land side: lowers coastal terrain toward sea level,
---   creating coastal lowlands instead of flat plateaus.
+--   creating coastal lowlands instead of flat plateaus. @steepMod@
+--   (the #220 coastal steepness field, 0 = gentle margin, 1 = fully
+--   convergent) scales that pull away so convergent margins keep
+--   their natural mountains all the way to the waterline.
 continentalShelf ∷ WorldScale → TectonicPlate → TectonicPlate
-                 → Float → Int
-continentalShelf wsc plateA plateB boundaryDist
+                 → Float → Float → Int
+continentalShelf wsc plateA plateB boundaryDist steepMod
     -- Ocean plate near land plate: continental shelf
     | not (plateIsLand plateA) ∧ plateIsLand plateB =
         let shelfRange = max 6.0 (scaleDist wsc 40.0)
@@ -592,7 +700,7 @@ continentalShelf wsc plateA plateB boundaryDist
            else 0
     -- Land plate near ocean plate: coastal lowlands
     | plateIsLand plateA ∧ not (plateIsLand plateB) =
-        let lowlandRange = max 4.0 (scaleDist wsc 20.0)
+        let lowlandRange = coastLowlandRange wsc
             dist = abs boundaryDist
             t = clamp01 (dist / lowlandRange)
             t' = t * t
@@ -602,7 +710,7 @@ continentalShelf wsc plateA plateB boundaryDist
             coastTarget = fromIntegral seaLevel + 2.0
             drop' = landElev - coastTarget
         in if drop' > 0
-           then negate (round (drop' * (1.0 - t')))
+           then negate (round (drop' * (1.0 - t') * (1.0 - steepMod)))
            else 0
     | otherwise = 0
 

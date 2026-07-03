@@ -14,47 +14,148 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "08b84c133521e44ebeef3458c233e115aae046e49fd3fecd276b9c812877c78e",
-      "08b84c133521e44ebeef3458c233e115aae046e49fd3fecd276b9c812877c78e",
-      "08b84c133521e44ebeef3458c233e115aae046e49fd3fecd276b9c812877c78e"
+      "f271898d4cf3bae9525d3a020a40ce2f76f8f39944510fdae7f733972bfdefae",
+      "f271898d4cf3bae9525d3a020a40ce2f76f8f39944510fdae7f733972bfdefae",
+      "f271898d4cf3bae9525d3a020a40ce2f76f8f39944510fdae7f733972bfdefae"
     ]
   },
   "tileCount": 6400,
   "elevationStats": {
     "min": -92,
-    "max": 13,
+    "max": 8,
     "median": -72,
     "count": 6400
   },
   "fluidStats": {
-    "dry": 110,
-    "ocean": 6290
+    "dry": 118,
+    "ocean": 6274,
+    "river": 8
   },
   "fluidEnvelope": {
     "dry": {
-      "min": 110,
-      "max": 110,
-      "median": 110,
+      "min": 118,
+      "max": 118,
+      "median": 118,
       "all": [
-        110,
-        110,
-        110
+        118,
+        118,
+        118
       ]
     },
     "ocean": {
-      "min": 6290,
-      "max": 6290,
-      "median": 6290,
+      "min": 6274,
+      "max": 6274,
+      "median": 6274,
       "all": [
-        6290,
-        6290,
-        6290
+        6274,
+        6274,
+        6274
+      ]
+    },
+    "river": {
+      "min": 8,
+      "max": 8,
+      "median": 8,
+      "all": [
+        8,
+        8,
+        8
       ]
     }
   },
-  "auditEnvelope": {},
+  "auditEnvelope": {
+    "FLOATING_WATER": {
+      "min": 1,
+      "max": 1,
+      "median": 1,
+      "all": [
+        1,
+        1,
+        1
+      ]
+    },
+    "WATER_ABOVE_LAND": {
+      "min": 1,
+      "max": 1,
+      "median": 1,
+      "all": [
+        1,
+        1,
+        1
+      ]
+    },
+    "WATER_CLIFF": {
+      "min": 1,
+      "max": 1,
+      "median": 1,
+      "all": [
+        1,
+        1,
+        1
+      ]
+    },
+    "WATER_WATER_CLIFF": {
+      "min": 4,
+      "max": 4,
+      "median": 4,
+      "all": [
+        4,
+        4,
+        4
+      ]
+    }
+  },
   "representativeAudit": {
-    "summary": {},
-    "issues": {}
+    "summary": {
+      "FLOATING_WATER": 1,
+      "WATER_ABOVE_LAND": 1,
+      "WATER_CLIFF": 1,
+      "WATER_WATER_CLIFF": 4
+    },
+    "issues": {
+      "FLOATING_WATER": [
+        {
+          "x": 46,
+          "y": -32,
+          "details": "river terr=7 -> dry(45,-32) terr=6 gap=1"
+        }
+      ],
+      "WATER_ABOVE_LAND": [
+        {
+          "x": 46,
+          "y": -32,
+          "details": "river surf=8 terr=7 -> land(45,-32) terr=6 cliff=2"
+        }
+      ],
+      "WATER_CLIFF": [
+        {
+          "x": 46,
+          "y": -32,
+          "details": "river surf=8 -> dry(45,-32) terr=6 cliff=2"
+        }
+      ],
+      "WATER_WATER_CLIFF": [
+        {
+          "x": 46,
+          "y": -32,
+          "details": "river surf=8 -> water nbr surf=5 diff=3"
+        },
+        {
+          "x": 46,
+          "y": -31,
+          "details": "river surf=5 -> water nbr surf=3 diff=2"
+        },
+        {
+          "x": 47,
+          "y": -32,
+          "details": "river surf=9 -> water nbr surf=5 diff=4"
+        },
+        {
+          "x": 47,
+          "y": -31,
+          "details": "river surf=5 -> water nbr surf=3 diff=2"
+        }
+      ]
+    }
   }
 }

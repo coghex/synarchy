@@ -14,62 +14,89 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "68761b543638f341a86314e8134203ceb3ff2ec06614769e9e816ccc2c6e05d2",
-      "68761b543638f341a86314e8134203ceb3ff2ec06614769e9e816ccc2c6e05d2",
-      "68761b543638f341a86314e8134203ceb3ff2ec06614769e9e816ccc2c6e05d2"
+      "c9ab6e5abfefc65b9764aabce92ade9a73e046827a617ba0d7e5135670fd52b6",
+      "c9ab6e5abfefc65b9764aabce92ade9a73e046827a617ba0d7e5135670fd52b6",
+      "c9ab6e5abfefc65b9764aabce92ade9a73e046827a617ba0d7e5135670fd52b6"
     ]
   },
   "tileCount": 6400,
   "elevationStats": {
-    "min": -11,
+    "min": 1,
     "max": 29,
     "median": 14,
     "count": 6400
   },
   "fluidStats": {
-    "dry": 6071,
-    "lake": 329
+    "dry": 6290,
+    "lake": 34,
+    "river": 76
   },
   "fluidEnvelope": {
     "dry": {
-      "min": 6071,
-      "max": 6071,
-      "median": 6071,
+      "min": 6290,
+      "max": 6290,
+      "median": 6290,
       "all": [
-        6071,
-        6071,
-        6071
+        6290,
+        6290,
+        6290
       ]
     },
     "lake": {
-      "min": 329,
-      "max": 329,
-      "median": 329,
+      "min": 34,
+      "max": 34,
+      "median": 34,
       "all": [
-        329,
-        329,
-        329
+        34,
+        34,
+        34
+      ]
+    },
+    "river": {
+      "min": 76,
+      "max": 76,
+      "median": 76,
+      "all": [
+        76,
+        76,
+        76
       ]
     }
   },
   "auditEnvelope": {
     "FLAT_ISOLATED_WATER": {
-      "min": 2,
-      "max": 2,
-      "median": 2,
+      "min": 3,
+      "max": 3,
+      "median": 3,
       "all": [
-        2,
-        2,
-        2
+        3,
+        3,
+        3
+      ]
+    },
+    "WATER_WATER_CLIFF": {
+      "min": 5,
+      "max": 5,
+      "median": 5,
+      "all": [
+        5,
+        5,
+        5
       ]
     }
   },
   "representativeAudit": {
     "summary": {
-      "FLAT_ISOLATED_WATER": 2
+      "FLAT_ISOLATED_WATER": 3,
+      "WATER_WATER_CLIFF": 5
     },
     "issues": {
       "FLAT_ISOLATED_WATER": [
+        {
+          "x": 15,
+          "y": -30,
+          "details": "river surf=5 terr=4 water_nbrs=1 terr_range=1"
+        },
         {
           "x": 35,
           "y": -12,
@@ -79,6 +106,33 @@
           "x": 45,
           "y": -15,
           "details": "lake surf=14 terr=13 water_nbrs=1 terr_range=1"
+        }
+      ],
+      "WATER_WATER_CLIFF": [
+        {
+          "x": -32,
+          "y": -23,
+          "details": "river surf=6 -> water nbr surf=4 diff=2"
+        },
+        {
+          "x": -32,
+          "y": -22,
+          "details": "river surf=8 -> water nbr surf=6 diff=2"
+        },
+        {
+          "x": -31,
+          "y": -23,
+          "details": "river surf=7 -> water nbr surf=5 diff=2"
+        },
+        {
+          "x": -30,
+          "y": -23,
+          "details": "river surf=8 -> water nbr surf=6 diff=2"
+        },
+        {
+          "x": 23,
+          "y": -31,
+          "details": "river surf=10 -> water nbr surf=8 diff=2"
         }
       ]
     }

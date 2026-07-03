@@ -14,47 +14,223 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "940975c02839d1d966caffa3b141f5de6d4d6d9e186ce1bc27d272d85eaf52de",
-      "940975c02839d1d966caffa3b141f5de6d4d6d9e186ce1bc27d272d85eaf52de",
-      "940975c02839d1d966caffa3b141f5de6d4d6d9e186ce1bc27d272d85eaf52de"
+      "3d314942ed2be836bc4992116c40e7ada807a7d40e7fcdf0324cb2dd49e4d5fb",
+      "3d314942ed2be836bc4992116c40e7ada807a7d40e7fcdf0324cb2dd49e4d5fb",
+      "3d314942ed2be836bc4992116c40e7ada807a7d40e7fcdf0324cb2dd49e4d5fb"
     ]
   },
   "tileCount": 6400,
   "elevationStats": {
     "min": -1,
-    "max": 31,
+    "max": 30,
     "median": 12,
     "count": 6400
   },
   "fluidStats": {
-    "dry": 2793,
-    "lake": 3607
+    "dry": 3077,
+    "lake": 3062,
+    "river": 261
   },
   "fluidEnvelope": {
     "dry": {
-      "min": 2793,
-      "max": 2793,
-      "median": 2793,
+      "min": 3077,
+      "max": 3077,
+      "median": 3077,
       "all": [
-        2793,
-        2793,
-        2793
+        3077,
+        3077,
+        3077
       ]
     },
     "lake": {
-      "min": 3607,
-      "max": 3607,
-      "median": 3607,
+      "min": 3062,
+      "max": 3062,
+      "median": 3062,
       "all": [
-        3607,
-        3607,
-        3607
+        3062,
+        3062,
+        3062
+      ]
+    },
+    "river": {
+      "min": 261,
+      "max": 261,
+      "median": 261,
+      "all": [
+        261,
+        261,
+        261
       ]
     }
   },
-  "auditEnvelope": {},
+  "auditEnvelope": {
+    "FLAT_ISOLATED_WATER": {
+      "min": 8,
+      "max": 8,
+      "median": 8,
+      "all": [
+        8,
+        8,
+        8
+      ]
+    },
+    "ISOLATED_FLUID": {
+      "min": 2,
+      "max": 2,
+      "median": 2,
+      "all": [
+        2,
+        2,
+        2
+      ]
+    },
+    "MULTI_ISLAND": {
+      "min": 2,
+      "max": 2,
+      "median": 2,
+      "all": [
+        2,
+        2,
+        2
+      ]
+    },
+    "WATER_WATER_CLIFF": {
+      "min": 10,
+      "max": 10,
+      "median": 10,
+      "all": [
+        10,
+        10,
+        10
+      ]
+    }
+  },
   "representativeAudit": {
-    "summary": {},
-    "issues": {}
+    "summary": {
+      "FLAT_ISOLATED_WATER": 8,
+      "ISOLATED_FLUID": 2,
+      "MULTI_ISLAND": 2,
+      "WATER_WATER_CLIFF": 10
+    },
+    "issues": {
+      "FLAT_ISOLATED_WATER": [
+        {
+          "x": -3,
+          "y": 33,
+          "details": "lake surf=12 terr=11 water_nbrs=1 terr_range=1"
+        },
+        {
+          "x": -3,
+          "y": 35,
+          "details": "lake surf=12 terr=11 water_nbrs=1 terr_range=1"
+        },
+        {
+          "x": 21,
+          "y": -22,
+          "details": "river surf=13 terr=12 water_nbrs=1 terr_range=1"
+        },
+        {
+          "x": 27,
+          "y": 40,
+          "details": "lake surf=12 terr=11 water_nbrs=1 terr_range=1"
+        },
+        {
+          "x": 39,
+          "y": 26,
+          "details": "lake surf=21 terr=20 water_nbrs=0 terr_range=0"
+        },
+        {
+          "x": 42,
+          "y": 17,
+          "details": "lake surf=21 terr=20 water_nbrs=0 terr_range=0"
+        },
+        {
+          "x": 43,
+          "y": 16,
+          "details": "lake surf=21 terr=20 water_nbrs=1 terr_range=1"
+        },
+        {
+          "x": 44,
+          "y": 16,
+          "details": "lake surf=21 terr=20 water_nbrs=1 terr_range=1"
+        }
+      ],
+      "ISOLATED_FLUID": [
+        {
+          "x": 39,
+          "y": 26,
+          "details": "lake surf=21 surrounded by dry"
+        },
+        {
+          "x": 42,
+          "y": 17,
+          "details": "lake surf=21 surrounded by dry"
+        }
+      ],
+      "MULTI_ISLAND": [
+        {
+          "x": -19,
+          "y": 37,
+          "details": "size=2 dry cluster surrounded by lake"
+        },
+        {
+          "x": -13,
+          "y": 41,
+          "details": "size=2 dry cluster surrounded by lake"
+        }
+      ],
+      "WATER_WATER_CLIFF": [
+        {
+          "x": 30,
+          "y": -16,
+          "details": "river surf=16 -> water nbr surf=14 diff=2"
+        },
+        {
+          "x": 36,
+          "y": 6,
+          "details": "river surf=14 -> water nbr surf=12 diff=2"
+        },
+        {
+          "x": 37,
+          "y": 6,
+          "details": "river surf=15 -> water nbr surf=13 diff=2"
+        },
+        {
+          "x": 38,
+          "y": 6,
+          "details": "river surf=16 -> water nbr surf=14 diff=2"
+        },
+        {
+          "x": 39,
+          "y": 5,
+          "details": "river surf=16 -> water nbr surf=14 diff=2"
+        },
+        {
+          "x": 40,
+          "y": 2,
+          "details": "river surf=16 -> water nbr surf=14 diff=2"
+        },
+        {
+          "x": 41,
+          "y": 3,
+          "details": "river surf=18 -> water nbr surf=16 diff=2"
+        },
+        {
+          "x": 42,
+          "y": -2,
+          "details": "river surf=18 -> water nbr surf=16 diff=2"
+        },
+        {
+          "x": 45,
+          "y": -5,
+          "details": "river surf=21 -> water nbr surf=19 diff=2"
+        },
+        {
+          "x": 45,
+          "y": -4,
+          "details": "river surf=21 -> water nbr surf=19 diff=2"
+        }
+      ]
+    }
   }
 }
