@@ -89,10 +89,12 @@ data Wound = Wound
       -- ^ "slash" / "stab" / "blunt" — drives bleed_factor, pain
       --   factor, healing characteristics, and combat-log flavor.
     , woundSeverity ∷ !Float
-      -- ^ current 0..1; ticks down via natural healing, ticks up
-      --   only when a new hit on the same part is grouped in
-      --   (Phase 3 will fold compatible new wounds into existing
-      --   ones; Phase 2.1 just appends).
+      -- ^ inflicted severity 0..1, static for the wound's lifetime.
+      --   The EFFECTIVE severity used elsewhere (pain, bleed,
+      --   impairment) is `woundSeverity × (1 - woundHeal)`, which
+      --   eases as `woundHeal` advances. A new hit always appends a
+      --   fresh 'Wound'; existing wounds on the same part aren't
+      --   merged.
     , woundAt       ∷ !Double
       -- ^ gameTime (seconds) when inflicted.
     , woundBandage  ∷ !Float
@@ -225,8 +227,10 @@ data BodyPart = BodyPart
       --   "radius"). Defaults to bpId when the YAML omits it.
     , bpParent          ∷ !(Maybe Text)
       -- ^ Attached part id (so severing an arm later cascades to
-      --   the hand). For 2.1 the parent chain is read but not yet
-      --   acted on; severity is per-part.
+      --   the hand). Traversed by 'Combat.Wounds.propagateSevering'
+      --   (destroyed parent → sever child), 'Unit.Fall.fallInjuries'
+      --   (macro region → subparts), and 'Combat.Resolution' (subpart
+      --   targeting); severity itself stays per-part.
     , bpVital           ∷ !Bool
     , bpAreaWeight      ∷ !Float
     , bpTacticalValue   ∷ !Float

@@ -29,7 +29,6 @@ import World.Geology.Hash
 --   the target, we return noModification. This makes
 --   carving idempotent across multiple geological ages.
 applyRiverCarve ∷ RiverParams → Int → Int → Int → Int → GeoModification
--- DEBUG STEP 1: carving only, no delta deposit
 applyRiverCarve river worldSize gx gy baseElev =
     findDeepestCarve worldSize gx gy baseElev (rpSegments river)
 

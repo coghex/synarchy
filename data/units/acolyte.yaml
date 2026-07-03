@@ -446,13 +446,15 @@ units:
       # Falling. Engine triggers Standing → Falling when a movement
       # step drops dz ≥ fallTriggerDz (currently 2). The Falling
       # transition's duration scales with the drop distance at
-      # fallSpeedZ tiles/sec. At impact, the engine reads usFallImpact
-      # (= dz × body_mass/50 / toughness) and picks the outcome:
-      #   * impact ≤ 1.5  → no anim chain, walks off (acolyte dz=1).
-      #   * impact ≤ 5.0  → Falling → Collapsed (landing anim plays
-      #                     as the transition; Lua revives later via
-      #                     the collapsed-to-standing path).
-      #   * impact > 5.0  → snaps to Dead pose, death anim plays.
+      # fallSpeedZ tiles/sec. Every such fall is a knockdown: it plays
+      # the Collapsed landing anim, then sits knocked down until
+      # usGetUpAt. Landing stamps the drop onto usPendingFallDrop, and
+      # Unit.Fall.fallInjuries (mass × g × height vs. each body part's
+      # tissue resistance) turns it into a SET of fracture/concussion
+      # wounds; the worst of them sizes the getup stun
+      # (Unit.Fall.fallStunFor). Death is NOT decided here — a tall
+      # fall kills by inflicting a lethal (vital severity ≥ 1) injury
+      # that the Lua injury tick acts on.
       falling-idle:            falling         # held mid-air if ever stable
       standing-to-falling:     falling         # the descent loop
       falling-to-collapsed:    landing         # landing → collapse

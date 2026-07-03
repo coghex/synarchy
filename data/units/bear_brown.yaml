@@ -255,8 +255,10 @@ units:
                                                   # bear "crawling" = lying
 
       # Falling. Engine triggers Standing → Falling when dz ≥
-      # fallTriggerDz (2). At impact, the engine picks the outcome
-      # from usFallImpact: walk-off, collapse, or kill.
+      # fallTriggerDz (2). Every such fall is a knockdown (Collapsed
+      # landing anim); Unit.Fall.fallInjuries turns the drop into
+      # fracture/concussion wounds, and a lethal one kills via the
+      # Lua injury tick (death isn't decided at landing).
       falling-idle:                falling        # held mid-air (unreached)
       standing-to-falling:         falling        # descent loop
       falling-to-collapsed:        landing        # landing → collapse

@@ -503,7 +503,3 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
 -- erosion the center experiences is hydraulic, which now responds to
 -- real slope.
 
--- `applyTimelineFast` and its helpers moved to `World.Generate.Timeline.Fast`
--- so `Geology.Timeline.compactRiverEvents` can call them too. Re-exported
--- below for existing call sites.
-
