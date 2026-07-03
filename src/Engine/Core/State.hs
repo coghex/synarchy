@@ -1,7 +1,7 @@
 module Engine.Core.State where
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS

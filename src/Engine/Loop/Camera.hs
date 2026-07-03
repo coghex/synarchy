@@ -13,7 +13,7 @@ module Engine.Loop.Camera
     ) where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Monad (EngineM, liftIO)

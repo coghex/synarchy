@@ -11,7 +11,7 @@ module Engine.Scene.Graph
   ) where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..))
 import Engine.Scene.Base

@@ -30,7 +30,7 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad

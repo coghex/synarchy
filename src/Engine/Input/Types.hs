@@ -2,7 +2,7 @@
 module Engine.Input.Types where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Graphics.UI.GLFW as GLFW
 
 data InputState = InputState

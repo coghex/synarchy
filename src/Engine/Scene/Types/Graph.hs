@@ -5,7 +5,7 @@ module Engine.Scene.Types.Graph
   ) where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Engine.Scene.Base (ObjectId)
 import Engine.Scene.Types.Node (SceneNode)
 

@@ -3,7 +3,7 @@ module Engine.Scene.Manager where
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Engine.Scene.Base
 import Engine.Scene.Types
