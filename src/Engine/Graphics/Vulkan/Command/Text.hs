@@ -8,7 +8,7 @@ module Engine.Graphics.Vulkan.Command.Text
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Core.Log (LogCategory(..))

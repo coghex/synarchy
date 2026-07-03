@@ -2,7 +2,7 @@
 module Engine.Input.Thread where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, forkIO)

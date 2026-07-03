@@ -18,7 +18,7 @@ import Engine.Core.State (EngineEnv(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef)
 
 isKeyDownFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults

@@ -6,7 +6,7 @@ module Engine.Asset.Types where
 
 import UPrelude
 import qualified Data.Vector as V
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.IORef (IORef, newIORef)
 import Vulkan.Core10
 import Engine.Asset.Base (AssetId, AssetStatus)

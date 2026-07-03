@@ -5,7 +5,7 @@ import UPrelude
 import Data.Maybe (fromJust)
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef
 import Engine.Core.Log (LogCategory(..))

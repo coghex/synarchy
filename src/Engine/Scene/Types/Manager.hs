@@ -7,7 +7,7 @@ module Engine.Scene.Types.Manager
   ) where
 
 import UPrelude
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Engine.Scene.Types.Graph (SceneGraph)
 import Engine.Scene.Types.Batch (BatchManager, createBatchManager)

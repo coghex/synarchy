@@ -24,9 +24,9 @@ import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
-import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
+import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Control.Monad.IO.Class (liftIO)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -100,7 +100,7 @@ setTickIntervalFn env backendState = do
    case (scriptIdNum, interval) of
        (Just sid, Just (Lua.Number seconds)) → Lua.liftIO $ do
            currentSecs ← nowSeconds
-           atomically $ modifyTVar (lbsScripts backendState) $
+           atomically $ modifyTVar' (lbsScripts backendState) $
                Map.adjust (\s → s { scriptTickRate = seconds
                                   , scriptNextTick = currentSecs + seconds
                                   }) (fromIntegral sid)
@@ -163,7 +163,7 @@ loadScriptFn env backendState lst = do
                                     , scriptPaused    = False
                                     }
 
-                            atomically $ modifyTVar (lbsScripts backendState) $
+                            atomically $ modifyTVar' (lbsScripts backendState) $
                                 Map.insert sid script
 
                             when (isValidRef modRef) $
@@ -198,7 +198,7 @@ killScriptFn env backendState lst = do
                     when (isValidRef (scriptModuleRef script)) $ do
                         _ ← callModuleFunction backendState (scriptModuleRef script) "shutdown" []
                         Lua.runWith lst $ Lua.unref Lua.registryindex (scriptModuleRef script)
-                    atomically $ modifyTVar (lbsScripts backendState) $
+                    atomically $ modifyTVar' (lbsScripts backendState) $
                         Map.delete (fromIntegral sid)
                     logDebug logger CatLua $ "Lua script destroyed: ID " 
                                    <> T.pack (show sid)
@@ -210,7 +210,7 @@ pauseScriptFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 pauseScriptFn backendState = do
     sidNum ← Lua.tointeger 1
     case sidNum of
-        Just sid → Lua.liftIO $ atomically $ modifyTVar (lbsScripts backendState) $
+        Just sid → Lua.liftIO $ atomically $ modifyTVar' (lbsScripts backendState) $
             Map.adjust (\s → s { scriptPaused = True }) (fromIntegral sid)
         _ → return ()
     return 0
@@ -221,7 +221,7 @@ resumeScriptFn backendState = do
     case sidNum of
         Just sid → Lua.liftIO $ do
             currentSecs ← nowSeconds
-            atomically $ modifyTVar (lbsScripts backendState) $
+            atomically $ modifyTVar' (lbsScripts backendState) $
                 Map.adjust (\s → s { scriptPaused = False, scriptNextTick = currentSecs })
                            (fromIntegral sid)
         _ → return ()
