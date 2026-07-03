@@ -1,10 +1,10 @@
 # Synarchy
 
-Synarchy is a colony/survival simulation game with procedurally generated worlds, written in Haskell on a custom Vulkan renderer. Units live on a tile-based world with real geology, hydrology, and weather; they fight, build, craft, farm, and get hurt in a layered combat/injury/physiology simulation, all driven from a Lua scripting layer on top of the engine.
+Synarchy is a Haskell/Vulkan engine. It runs Ecce Homo, a colony/survival simulation game with procedurally generated worlds. This repository holds both: the engine (`src/Engine`) and the game built on it (world generation, units, combat, construction, crafting, UI — Haskell + Lua).
 
 ## Prerequisites
 
-To run you just need Vulkan installed. For development you need the Vulkan SDK, glslang, and validation layers installed, as well as GHC (GHC2024) and cabal (>3.4) — any other libraries will be installed by cabal. This project is developed primarily on macOS but works on Linux with minor adjustments (see `CLAUDE.md`).
+Vulkan to run. Vulkan SDK, glslang, and validation layers to develop, plus GHC (GHC2024) and cabal (>3.4) — other dependencies are installed by cabal. Developed primarily on macOS; works on Linux with minor adjustments (see `CLAUDE.md`).
 
 ## Building
 
@@ -12,9 +12,9 @@ To run you just need Vulkan installed. For development you need the Vulkan SDK, 
 
 ## Usage
 
-To run the game, use `cabal run synarchy`. Use `ENGINE_DEBUG=Vulkan,Graphics,etc...` to get debug output from those subsystems.
+`cabal run synarchy` to run the game. `ENGINE_DEBUG=Vulkan,Graphics,etc...` for debug output from those subsystems.
 
-The engine also supports a **headless mode** (no window, no GPU) for scripted world generation, automated testing, and agent workflows — see the Debug Console section below and `CLAUDE.md` for the full headless API (world generation, unit/combat queries, save/load, dump mode).
+The engine also has a **headless mode** (no window, no GPU) for scripted world generation, automated testing, and agent workflows — see the Debug Console section below and `CLAUDE.md` for the full headless API (world generation, unit/combat queries, save/load, dump mode).
 
 ## Testing
 
@@ -120,3 +120,11 @@ The default port is 8008. Pass `--port` to both the engine and the client to use
 ## Known Issues
 
 - On macOS you will get junk in stdout — Apple says there is no way around this, which is wild, even redirecting stdout doesn't work.
+
+## Contributing
+
+Issues and PRs are welcome — bug reports, feature requests, and design discussion included. Read `CLAUDE.md` first: it covers build commands, testing tiers, save/load conventions, and headless-agent workflows.
+
+## License
+
+MIT — see `LICENSE`.
