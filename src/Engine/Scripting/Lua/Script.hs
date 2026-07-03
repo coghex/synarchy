@@ -39,7 +39,7 @@ loadModuleRef path = do
         _ → do
             err ← Lua.tostring (-1)
             Lua.settop top0
-            return (Left (maybe "unknown error" TE.decodeUtf8 err))
+            return (Left (maybe "unknown error" TE.decodeUtf8Lenient err))
   where
     invalidRef = Lua.Reference (fromIntegral Lua.refnil)
 
@@ -66,7 +66,7 @@ callModuleFunction ls modRef funcName args = do
                     _ → do
                         err ← Lua.tostring (-1)
                         Lua.pop 2                      -- error object + module table
-                        return (Just (maybe "unknown error" TE.decodeUtf8 err))
+                        return (Just (maybe "unknown error" TE.decodeUtf8Lenient err))
             else do
                 Lua.pop 2
                 return Nothing

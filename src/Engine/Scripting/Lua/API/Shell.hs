@@ -71,11 +71,11 @@ shellTryLoadAndRun src = do
                 _ → do
                     err ← Lua.tostring (-1)
                     Lua.pop 1
-                    return $ Left $ maybe "Unknown error" TE.decodeUtf8 err
+                    return $ Left $ maybe "Unknown error" TE.decodeUtf8Lenient err
         _ → do
             err ← Lua.tostring (-1)
             Lua.pop 1
-            return $ Left $ maybe "Parse error" TE.decodeUtf8 err
+            return $ Left $ maybe "Parse error" TE.decodeUtf8Lenient err
 
 -- | Create a sandboxed environment for shell execution
 -- This creates a global 'shellSandbox' table with only safe functions

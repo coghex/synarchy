@@ -111,7 +111,7 @@ processLines conn cmdQueue builtin buf =
         Just idx →
             let (line, rest) = BS.splitAt idx buf
                 remaining = BS.drop 1 rest  -- skip the \n
-                cmdText = T.strip $ TE.decodeUtf8 line
+                cmdText = T.strip $ TE.decodeUtf8Lenient line
             in if T.null cmdText
                then do
                    sendAll conn "> "

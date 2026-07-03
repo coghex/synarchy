@@ -227,7 +227,7 @@ luaLogPcallError logger ctx = do
     err ← Lua.tostring (-1)
     Lua.pop 1
     Lua.liftIO $ logWarn logger CatLua $
-        ctx <> ": " <> maybe "<no message>" TE.decodeUtf8 err
+        ctx <> ": " <> maybe "<no message>" TE.decodeUtf8Lenient err
 
 -- | Invoke `require("scripts.lib.save_modules").serializeAll()` and
 --   read the resulting `{ name → blob }` table into a HashMap.

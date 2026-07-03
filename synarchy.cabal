@@ -167,6 +167,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.World.Save.Sanitize
+                   Test.Headless.World.Save.Serialize
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.SelectTileZ
                    Test.Headless.World.Spoil
