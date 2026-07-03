@@ -86,7 +86,9 @@ groupByFontAndLayer nodes =
       -- guarantees nodeFont is Just for every element here.
       keyed = map (\grp → case grp of
                       [] → error "Empty group"
-                      (n:_) → ((fromJust $ nodeFont n, nodeLayer n), grp)) grouped
+                      (n:_) → case nodeFont n of
+                                Nothing → error "groupByFontAndLayer: nodeFont invariant violated"
+                                Just f → ((f, nodeLayer n), grp)) grouped
   in keyed
 
 convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch
