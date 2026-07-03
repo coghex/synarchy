@@ -2,7 +2,7 @@ categories:
   building:
     log: true
     pause: false
-    popup: false
+    popup: true
   combat:
     log: true
     pause: false
@@ -23,9 +23,17 @@ categories:
     log: true
     pause: false
     popup: true
+  unit_event:
+    log: true
+    pause: false
+    popup: false
   unit_status:
     log: true
     pause: false
+    popup: false
+  unit_warning:
+    log: true
+    pause: true
     popup: false
   weather:
     log: true
