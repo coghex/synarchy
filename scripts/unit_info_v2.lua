@@ -65,6 +65,7 @@ unitInfoV2.lastContentTab = nil
 -- Header
 unitInfoV2.headerNameLabelId   = nil  -- the name row; refreshed per active unit (#264)
 unitInfoV2.headerTypeLabelId   = nil  -- the "acolyte" row; refreshed per active unit
+unitInfoV2.headerRoleLabelId   = nil  -- the role row; refreshed per active unit from unit_ai (#265)
 unitInfoV2.headerActionLabelId = nil  -- the action row; refreshed per active unit from unit_ai
 
 -- Equipment section. equipRect is the section rect; equipElements is
@@ -3318,10 +3319,11 @@ end
 -----------------------------------------------------------
 -- Header: stacks Name / Type / Role / Action rows in a virtual rect.
 -- No box around it; section boundaries are marked by horizontal rules.
--- Name (#264), Type and Action are live — Name shows the unit's personal
--- name (or species label for the unnamed), Type shows the unit's def
--- name, Action shows the current AI action mapped through ACTION_DISPLAY
--- below. Role remains a placeholder (see #265).
+-- All four rows are live — Name shows the unit's personal name (#264,
+-- or species label for the unnamed), Type shows the unit's def name,
+-- Role shows the derived role (#265, unitAi.getRole mapped through
+-- unit_roles.display; "—" for non-workers), Action shows the current
+-- AI action mapped through ACTION_DISPLAY below.
 -----------------------------------------------------------
 
 -- Map unit_ai action names → human-readable display strings.
@@ -3340,24 +3342,30 @@ local ACTION_DISPLAY = {
     build_nearby       = "Working",
     deliver_to_build_site = "Delivering materials",
     store_materials       = "Storing materials",
+    construct_job      = "Constructing",
+    dig_designation    = "Digging",
+    chop_designation   = "Chopping",
+    forage             = "Foraging",
+    pickup_ground      = "Picking up",
+    treat_ally         = "Treating ally",
+    engage             = "Engaging",
+    retreat            = "Retreating",
+    attack_target      = "Fighting",
 }
 
 local function placeHeader(x, y, w, h)
-    -- Row 4 starts as a dash; the tick refresh fills it in from the
-    -- selected unit's currentAction.
-    local rows = { "Name", "acolyte", "Role", "—" }
+    -- Rows 3 and 4 start as dashes; the tick refresh fills them in
+    -- from the selected unit's derived role and currentAction.
+    local rows = { "Name", "acolyte", "—", "—" }
     local rowH = math.floor(h / #rows)
     local fontSize = 16
     for i, text in ipairs(rows) do
-        local isLive = (i == 1 or i == 2 or i == 4)  -- name + type + action are real content
         local lblId = label.new({
             name     = "unit_info_v2_header_row" .. i,
             text     = text,
             font     = hud.menuFont,
             fontSize = fontSize,
-            color    = isLive
-                          and {1.0, 1.0, 1.0, 1.0}      -- bright
-                          or  {0.75, 0.75, 0.75, 1.0},  -- placeholders: dim
+            color    = {1.0, 1.0, 1.0, 1.0},
             page     = unitInfoV2.page,
             uiscale  = 1.0,
         })
@@ -3371,6 +3379,8 @@ local function placeHeader(x, y, w, h)
             unitInfoV2.headerNameLabelId = lblId
         elseif i == 2 then
             unitInfoV2.headerTypeLabelId = lblId
+        elseif i == 3 then
+            unitInfoV2.headerRoleLabelId = lblId
         elseif i == 4 then
             unitInfoV2.headerActionLabelId = lblId
         end
@@ -3644,15 +3654,26 @@ function unitInfoV2.update(dt)
         label.setText(unitInfoV2.headerTypeLabelId, typeName)
     end
 
-    -- Header action row: pull currentAction from unit_ai and map it
-    -- through ACTION_DISPLAY. Unmapped names show raw so unknown
-    -- actions are visible rather than blank.
-    if unitInfoV2.activeUid and unitInfoV2.headerActionLabelId then
+    -- Header role + action rows: pull the derived role (#265) and
+    -- currentAction from unit_ai. Actions map through ACTION_DISPLAY;
+    -- unmapped names show raw so unknown actions are visible rather
+    -- than blank. Non-workers (wildlife, technomule) have no role and
+    -- show "—".
+    if unitInfoV2.activeUid
+       and (unitInfoV2.headerRoleLabelId or unitInfoV2.headerActionLabelId) then
         local unitAi = require("scripts.unit_ai")
         local aiSt = unitAi.getState and unitAi.getState(unitInfoV2.activeUid)
-        local action = aiSt and aiSt.currentAction
-        local text = (action and (ACTION_DISPLAY[action] or action)) or "—"
-        label.setText(unitInfoV2.headerActionLabelId, text)
+        if unitInfoV2.headerRoleLabelId then
+            local unitRoles = require("scripts.unit_roles")
+            local role = aiSt and aiSt.role
+            label.setText(unitInfoV2.headerRoleLabelId,
+                          unitRoles.display(role) or "—")
+        end
+        if unitInfoV2.headerActionLabelId then
+            local action = aiSt and aiSt.currentAction
+            local text = (action and (ACTION_DISPLAY[action] or action)) or "—"
+            label.setText(unitInfoV2.headerActionLabelId, text)
+        end
     end
 
     -- Refresh every visible tab's portrait. Prefer the unit def's

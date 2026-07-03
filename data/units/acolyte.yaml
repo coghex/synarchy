@@ -65,6 +65,17 @@ units:
       # per completed tile (dig_xp_per_tile in unit_ai params).
       # Acolytes arrive as novice excavators — wide spread.
       mining:  { base: 25.0, range: 30.0 }
+      # Woodcutting: scales chop rate in the chop AI the same way —
+      # factor = 0.5 + woodcutting/100. Gains XP per felled tree
+      # (chop_xp_per_fell). Feeds the derived Woodcutter role (#265).
+      # Same novice spread as mining so a fresh cohort has a natural
+      # mix of talents.
+      woodcutting: { base: 25.0, range: 30.0 }
+      # Construction: scales the construct AI's build-progress rate —
+      # factor = 0.5 + construction/100. Gains XP per structure piece
+      # placed (construct_xp_per_piece). Feeds the derived Builder
+      # role (#265).
+      construction: { base: 25.0, range: 30.0 }
       # Leap/grapple: acolytes arrive untrained — a lunge is a rare,
       # costly move only a skilled fighter pulls off, so these grow with
       # XP from a low base rather than starting combat-ready.
