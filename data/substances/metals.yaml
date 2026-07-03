@@ -24,3 +24,14 @@ substances:
     stab_resistance:    0.95
     slash_resistance:   0.95
     blunt_resistance:   0.60
+  - name: bronze
+    density:            8.80
+    tensile_strength:   400
+    yield_strength:     200    # work-hardened tin bronze
+    shear_strength:     260
+    fracture_toughness: 60
+    hardness:           140    # Brinell, hardened bronze
+    # Softer than steel across the board; blunt deforms it readily.
+    stab_resistance:    0.85
+    slash_resistance:   0.85
+    blunt_resistance:   0.45

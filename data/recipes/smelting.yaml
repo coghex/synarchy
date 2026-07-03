@@ -1,0 +1,90 @@
+# Smelting tier (#327) — ore + fuel → metal bars, run at the furnace
+# (station operation "smelt", data/buildings/furnace.yaml). The base of
+# the crafting chain: fabrication (#328) consumes the bars these emit.
+#
+# Supply is fully mined (M1): every input is a dig_chunk yield —
+# iron/copper/tin ore chunks from data/materials/ores.yaml, coal chunks
+# from data/materials/carbonaceous.yaml.
+#
+# Coal grade = fuel efficiency, expressed as recipe variants (the fuel
+# line is a single item): one batch burns 3 lignite / 2 bituminous /
+# 1 anthracite, mirroring their real energy density. Ratios: one 10 kg
+# ore chunk → 4 × 0.5 kg bars (~20% metal yield); bronze pairs a copper
+# with a tin chunk (the coal is fuel only — for steel it also supplies
+# the carbon, hence no separate iron_bar step).
+recipes:
+  - id: smelt_steel_lignite
+    name: "Smelt Steel (lignite)"
+    station: smelt
+    inputs:
+      - item: iron_ore_chunk
+    fuel:
+      item: lignite_chunk
+      count: 3
+    work: 30
+    outputs:
+      - item: steel_bar
+        count: 4
+  - id: smelt_steel_bituminous
+    name: "Smelt Steel (bituminous coal)"
+    station: smelt
+    inputs:
+      - item: iron_ore_chunk
+    fuel:
+      item: bituminous_coal_chunk
+      count: 2
+    work: 30
+    outputs:
+      - item: steel_bar
+        count: 4
+  - id: smelt_steel_anthracite
+    name: "Smelt Steel (anthracite)"
+    station: smelt
+    inputs:
+      - item: iron_ore_chunk
+    fuel:
+      item: anthracite_chunk
+      count: 1
+    work: 30
+    outputs:
+      - item: steel_bar
+        count: 4
+  - id: smelt_bronze_lignite
+    name: "Smelt Bronze (lignite)"
+    station: smelt
+    inputs:
+      - item: copper_ore_chunk
+      - item: tin_ore_chunk
+    fuel:
+      item: lignite_chunk
+      count: 3
+    work: 30
+    outputs:
+      - item: bronze_bar
+        count: 4
+  - id: smelt_bronze_bituminous
+    name: "Smelt Bronze (bituminous coal)"
+    station: smelt
+    inputs:
+      - item: copper_ore_chunk
+      - item: tin_ore_chunk
+    fuel:
+      item: bituminous_coal_chunk
+      count: 2
+    work: 30
+    outputs:
+      - item: bronze_bar
+        count: 4
+  - id: smelt_bronze_anthracite
+    name: "Smelt Bronze (anthracite)"
+    station: smelt
+    inputs:
+      - item: copper_ore_chunk
+      - item: tin_ore_chunk
+    fuel:
+      item: anthracite_chunk
+      count: 1
+    work: 30
+    outputs:
+      - item: bronze_bar
+        count: 4

@@ -1,0 +1,26 @@
+items:
+  # Uniform ~10 kg ore blocks the dig-yield accumulator extracts while
+  # mining the matching ore material (data/materials/ores.yaml
+  # dig_chunk) — same convention as granite_chunk. The smelting tier
+  # (#327, data/recipes/smelting.yaml) consumes them at the furnace.
+  - name: "iron_ore_chunk"
+    display_name: "Iron Ore Chunk"
+    sprite: "assets/textures/items/material/iron_ore_chunk.png"
+    weight: 10.0
+    category: Materials
+    make: world
+    material: iron_ore
+  - name: "copper_ore_chunk"
+    display_name: "Copper Ore Chunk"
+    sprite: "assets/textures/items/material/copper_ore_chunk.png"
+    weight: 10.0
+    category: Materials
+    make: world
+    material: copper_ore
+  - name: "tin_ore_chunk"
+    display_name: "Tin Ore Chunk"
+    sprite: "assets/textures/items/material/tin_ore_chunk.png"
+    weight: 10.0
+    category: Materials
+    make: world
+    material: tin_ore
