@@ -8,7 +8,8 @@
 --   are the #358 "reports its role + parameters" surface. Network
 --   attachment / energy balance are #359/#360, not here.
 module Engine.Scripting.Lua.API.Power
-    ( powerPlaceNodeFn
+    ( powerIsPlaceableFn
+    , powerPlaceNodeFn
     , powerGetNodeFn
     , powerGetNodeForBuildingFn
     , powerListNodesFn
@@ -31,6 +32,22 @@ import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
 import Unit.Pathing.Cost (lookupTerrainZ)
 import Item.Types (ItemInstance(..))
 import Power.Types
+
+-- | power.isPlaceable(itemDefName) → bool. Lets a caller (the build
+--   tool's placement click) decide whether a def routes through
+--   power.placeNode (item-consuming) or the free building.spawn path,
+--   without hardcoding the placeable-item name list a second time in
+--   Lua — the single source of truth stays 'powerNodeSpecFor'.
+powerIsPlaceableFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+powerIsPlaceableFn _env = do
+    nameArg ← Lua.tostring 1
+    let placeable = case nameArg of
+            Nothing → False
+            Just bs → case powerNodeSpecFor (TE.decodeUtf8Lenient bs) of
+                Just _  → True
+                Nothing → False
+    Lua.pushboolean placeable
+    return 1
 
 -- | power.placeNode(uid, itemDefName, gx, gy [, pageId]) → nodeId,
 --   buildingId on success, or nil, reason on failure. Pops one

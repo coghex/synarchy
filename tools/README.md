@@ -159,6 +159,7 @@ docstring instead of reaching for `--help` when in doubt.
 | `movement_probe.py` | movement arc (general, closed) | arena | Obstacle-course movement (pathing/climbs/falls/ramps) via `movement_arena.lua` courses; `--list` shows courses. |
 | `multiworld_save_probe.py` | #214, #219 | worldgen + arena | Multi-world save → quit → restart → load; cross-page entity survival. |
 | `physiology_probe.py` | homeostasis (general) | arena | Thermoregulation/circulation sanity across controlled environments (temperate/arctic/humid-heat). |
+| `power_probe.py` | #358 | arena | Build-tool-routed power-node placement: `buildTool.commitPlacement` consumes an item off the selected unit for `power.*`-placeable defs (ordinary buildings stay free), role/parameter reporting, no leakage onto non-power buildings, save → quit → restart → load reconnects nodes to buildings. |
 | `repair_item_probe.py` | #300 | worldgen | `unit.repairItem` primitive. |
 | `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |

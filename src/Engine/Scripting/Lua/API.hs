@@ -540,6 +540,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- getNodeForBuilding / listNodes are read-only queries reporting each
   -- node's role + parameters. Network attachment (#359/#360) isn't here.
   Lua.newtable
+  registerLuaFunction "isPlaceable"       (powerIsPlaceableFn env)
   registerLuaFunction "placeNode"         (powerPlaceNodeFn env)
   registerLuaFunction "getNode"           (powerGetNodeFn env)
   registerLuaFunction "getNodeForBuilding" (powerGetNodeForBuildingFn env)

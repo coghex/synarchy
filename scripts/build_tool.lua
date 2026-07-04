@@ -25,7 +25,14 @@
 --   * Picking an icon → enterPlacement(defName)
 --   * In placement mode, each tick we snap world.getHoverTile() to
 --     int coords, ask building.canPlaceAt, and call building.setGhost.
---   * Left-click on a valid tile → building.spawn + exitPlacement.
+--   * Left-click on a valid tile → commitPlacement + exitPlacement.
+--     commitPlacement (#358) routes power.isPlaceable defs (solar_panel /
+--     high_voltage_battery) through power.placeNode against whichever
+--     currently-selected unit carries a matching item — consuming it and
+--     registering a power node — and falls through to the free
+--     building.spawn for everything else, same as before. A power-item
+--     click with no carrying unit selected fails without leaving
+--     placement mode (see commitPlacement).
 --   * Right-click / Esc → exitPlacement (no spawn).
 --
 -- Singleton via package.loaded so init.lua's input hooks see the same
@@ -507,6 +514,44 @@ function buildTool.update(dt)
     buildTool.state.lastHoverTile = { igx, igy }
 end
 
+-- One selected unit carrying at least one instance of defName, or nil.
+-- Mirrors cargo_inventory_panel.lua's adjacentSelectedUnit pattern for
+-- sourcing a player-issued inventory action from the current selection
+-- — no adjacency requirement here (ghost placement is a top-down
+-- action like every other building.spawn placement, not a "walk over
+-- there" one).
+local function carryingSelectedUnit(defName)
+    local sel = unit.getSelected() or {}
+    for _, uid in ipairs(sel) do
+        for _, it in ipairs(unit.getInventory(uid) or {}) do
+            if it.defName == defName then return uid end
+        end
+    end
+    return nil
+end
+
+-- Commit a placement at an already hit-tested tile. Power items
+-- (#358: solar_panel / high_voltage_battery) consume a matching item
+-- off a selected unit via power.placeNode; everything else places for
+-- free via building.spawn, same as before. Extracted from
+-- handleMouseDown (and exposed on buildTool) so it's exercisable
+-- without simulating a real screen click / camera pick — see
+-- tools/power_probe.py.
+--
+-- Returns the placed building id, or nil + a reason on failure.
+function buildTool.commitPlacement(defName, gx, gy)
+    if power.isPlaceable(defName) then
+        local uid = carryingSelectedUnit(defName)
+        if not uid then
+            return nil, "no selected unit carries " .. defName
+        end
+        local nodeId, buildingIdOrErr = power.placeNode(uid, defName, gx, gy)
+        if not nodeId then return nil, buildingIdOrErr end
+        return buildingIdOrErr
+    end
+    return building.spawn(defName, gx, gy)
+end
+
 -----------------------------------------------------------
 -- Mouse hooks. Called from init.lua's onMouseDown.
 -- Return true if we consumed the click.
@@ -539,17 +584,22 @@ function buildTool.handleMouseDown(button, x, y)
         local valid = building.canPlaceAt(buildTool.state.selectedDef,
                                           igx, igy)
         if valid then
-            local id = building.spawn(buildTool.state.selectedDef,
-                                      igx, igy)
+            local defName = buildTool.state.selectedDef
+            local id, err = buildTool.commitPlacement(defName, igx, igy)
             if id then
-                engine.logInfo("BuildTool: placed " ..
-                    buildTool.state.selectedDef ..
+                engine.logInfo("BuildTool: placed " .. defName ..
                     " (id=" .. tostring(id) ..
                     ") at " .. igx .. "," .. igy)
-            end
-            buildTool.exitPlacement()
-            if buildTool.hud and buildTool.hud.selectDefaultTool then
-                buildTool.hud.selectDefaultTool()
+                buildTool.exitPlacement()
+                if buildTool.hud and buildTool.hud.selectDefaultTool then
+                    buildTool.hud.selectDefaultTool()
+                end
+            else
+                -- Stay in placement (same as an invalid-tile click) so
+                -- the player can select a carrying unit and retry,
+                -- rather than getting bounced out of the tool.
+                engine.logInfo("BuildTool: could not place " .. defName ..
+                    (err and (": " .. tostring(err)) or ""))
             end
         end
         return true
