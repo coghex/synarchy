@@ -181,6 +181,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
+                   Test.Headless.Graphics.AmbientLight
                    Test.Headless.Construct.Corners
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
