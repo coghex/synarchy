@@ -58,6 +58,13 @@ units:
       - { item: "steel_hardware",  count: 25 }
       - { item: "electric_motor",  count: 5 }
       - { item: "processing_unit", count: 5 }
+      # Power epic (#357) starter kit (#358): enough to place one source
+      # + one storage node right away, plus wire stock for the future
+      # #359 builder. ~56 kg added — the mule's total stays well inside
+      # its ~250 kg average capacity (see the note above).
+      - { item: "solar_panel",          count: 2 }
+      - { item: "high_voltage_battery", count: 2 }
+      - { item: "wiring",               count: 20 }
       # The mule is the mobile medical depot — it carries the first-aid kit
       # (which spawns pre-stocked, see first_aid_kit.yaml). Injured units
       # path to it for treatment.
@@ -68,6 +75,14 @@ units:
       # restock once the foraging/fetch AI covers food).
       - { item: "rations",         count: 20 }
       - { item: "quinoa_sack",     count: 2 }
+      # Cooking depot too (#346): brew_coffee's raw ingredients. Neither
+      # has a production loop yet — water isn't drawn from a canteen/
+      # river source and coffee_grounds isn't farmed — so like the food
+      # depot above, this is the real shipped source until those land;
+      # fetch-from-mule (the same #96 sourcing ladder construct_job and
+      # craft_job already use) is how a kitchen gets restocked.
+      - { item: "water",           count: 20 }
+      - { item: "coffee_grounds",  count: 20 }
 
     # 8-part quadruped anchored to ~1.5 m shoulder height
     # (canine layout, scaled up).

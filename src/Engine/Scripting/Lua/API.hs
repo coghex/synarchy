@@ -64,6 +64,7 @@ import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Infection
 import Engine.Scripting.Lua.API.Craft
+import Engine.Scripting.Lua.API.Power
 import Engine.Scripting.Lua.API.Repair
 import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.LootTables
@@ -517,7 +518,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- standing-order queue (Craft.Bills): addBill / cancelBill /
   -- getBill / getBills are the queue surface (UI #330);
   -- claimBill / releaseBill / addBillProgress / completeBillCycle
-  -- are the craft AI's job lifecycle.
+  -- are the craft AI's job lifecycle. setBillPaused / reorderBill are
+  -- the #330 station panel's pause + manual-reorder controls.
   Lua.newtable
   registerLuaFunction "get"      (craftGetFn env)
   registerLuaFunction "getNames" (craftGetNamesFn env)
@@ -531,7 +533,22 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "releaseBill"       (craftReleaseBillFn env)
   registerLuaFunction "addBillProgress"   (craftAddBillProgressFn env)
   registerLuaFunction "completeBillCycle" (craftCompleteBillCycleFn env)
+  registerLuaFunction "setBillPaused"     (craftSetBillPausedFn env)
+  registerLuaFunction "reorderBill"       (craftReorderBillFn env)
   Lua.setglobal (Lua.Name "craft")
+
+  -- Power global (#358) — the placeable power-node registry. placeNode
+  -- pops a solar_panel/high_voltage_battery item out of a unit's
+  -- inventory and turns it into a persistent power node; getNode /
+  -- getNodeForBuilding / listNodes are read-only queries reporting each
+  -- node's role + parameters. Network attachment (#359/#360) isn't here.
+  Lua.newtable
+  registerLuaFunction "isPlaceable"       (powerIsPlaceableFn env)
+  registerLuaFunction "placeNode"         (powerPlaceNodeFn env)
+  registerLuaFunction "getNode"           (powerGetNodeFn env)
+  registerLuaFunction "getNodeForBuilding" (powerGetNodeForBuildingFn env)
+  registerLuaFunction "listNodes"         (powerListNodesFn env)
+  Lua.setglobal (Lua.Name "power")
 
   -- Repair global (#301) — the policy layer on top of unit.repairItem
   -- (#300): repair flows are recipe entries tagged with a repair axis

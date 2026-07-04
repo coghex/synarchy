@@ -20,6 +20,7 @@ local buildingInfoPanelScriptId = nil
 local itemInfoPanelScriptId = nil
 local cargoInventoryPanelScriptId = nil
 local itemContentsPanelScriptId = nil
+local craftingPanelScriptId = nil
 local popupScriptId = nil
 local eventLogScriptId = nil
 local combatLogScriptId = nil
@@ -122,6 +123,13 @@ function game.init(scriptId)
     -- refresh cadence.
     itemContentsPanelScriptId = engine.loadScript(
         "scripts/item_contents_panel.lua", 0.2)
+
+    -- Crafting station bills popup (#330): the player-facing view onto
+    -- a station's craft-bill queue — right-click "Bills" on a building
+    -- offering a craft operation. 0.2s tick; the module throttles its
+    -- own queue-progress refresh to ~1s internally.
+    craftingPanelScriptId = engine.loadScript(
+        "scripts/crafting_panel.lua", 0.2)
 
     -- Popup: receives engine.emitEvent broadcasts (onShowPopup) and
     -- renders OK-dismissable popups. Slow tick (1.0s) — render work
@@ -483,16 +491,27 @@ function game.onMouseDown(button, x, y)
         if not gameplayActive then
             return
         end
-        -- Storage building right-click → "Contents" menu, regardless
-        -- of unit selection. Move commands still work on non-cargo
-        -- tiles. building.hitTestAt takes framebuffer pixel coords
-        -- via the same conversion the tile-menu branch uses below.
+        -- Storage / work-station building right-click → "Contents" /
+        -- "Bills" menu, regardless of unit selection. Move commands
+        -- still work on non-cargo, non-station tiles. building.hitTestAt
+        -- takes framebuffer pixel coords via the same conversion the
+        -- tile-menu branch uses below. A single building can offer BOTH
+        -- (a workshop with cargo storage), so this hit-tests once and
+        -- builds one combined menu instead of two competing ones.
         do
-            local cargoBid = building.hitTestAt(x, y)
-            if cargoBid then
-                local cap = building.getStorageCapacity(cargoBid)
-                local activity = building.getActivity(cargoBid)
-                if cap and cap > 0 and activity == "built" then
+            local hitBid = building.hitTestAt(x, y)
+            if hitBid then
+                local activity = building.getActivity(hitBid)
+                local cap = building.getStorageCapacity(hitBid)
+                local ops = building.getOperations(hitBid)
+                local hasStorage = cap and cap > 0 and activity == "built"
+                -- Bills can be queued on an under-construction station
+                -- (craft.addBill only refuses an unbuilt bid if the
+                -- station doesn't exist at all — the craft AI simply
+                -- won't work it until Built), so this doesn't gate on
+                -- activity the way Contents does.
+                local hasStation = ops and #ops > 0
+                if hasStorage or hasStation then
                     local fbW, fbH = engine.getFramebufferSize()
                     local ww, wh   = engine.getWindowSize()
                     local mx, my   = x, y
@@ -500,16 +519,25 @@ function game.onMouseDown(button, x, y)
                         mx = x * (fbW / ww)
                         my = y * (fbH / wh)
                     end
-                    local contextMenu =
-                        require("scripts.ui.context_menu")
-                    local cargoPanel =
-                        require("scripts.cargo_inventory_panel")
-                    contextMenu.show({
-                        { label = "Contents",
-                          callback = function()
-                              cargoPanel.openFor(cargoBid, mx, my)
-                          end },
-                    }, mx, my)
+                    local contextMenu = require("scripts.ui.context_menu")
+                    local items = {}
+                    if hasStorage then
+                        local cargoPanel =
+                            require("scripts.cargo_inventory_panel")
+                        table.insert(items, { label = "Contents",
+                            callback = function()
+                                cargoPanel.openFor(hitBid, mx, my)
+                            end })
+                    end
+                    if hasStation then
+                        local craftingPanel =
+                            require("scripts.crafting_panel")
+                        table.insert(items, { label = "Bills",
+                            callback = function()
+                                craftingPanel.show(hitBid)
+                            end })
+                    end
+                    contextMenu.show(items, mx, my)
                     return
                 end
             end
@@ -928,6 +956,10 @@ function game.onKeyDown(key)
         local itemContents = require("scripts.item_contents_panel")
         if itemContents.handleKeyDown(key) then return end
 
+        -- Crafting station bills popup (#330) — same tier.
+        local craftingPanel = require("scripts.crafting_panel")
+        if craftingPanel.handleKeyDown(key) then return end
+
         local popup = require("scripts.popup")
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")
@@ -1065,6 +1097,9 @@ function game.shutdown()
     end
     if itemContentsPanelScriptId then
         engine.killScript(itemContentsPanelScriptId)
+    end
+    if craftingPanelScriptId then
+        engine.killScript(craftingPanelScriptId)
     end
     if shellScriptId then
         engine.killScript(shellScriptId)

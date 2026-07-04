@@ -22,6 +22,7 @@ module Craft.Bills
     ( BillId(..)
     , CraftBill(..)
     , CraftBills(..)
+    , ReorderDirection(..)
     , emptyCraftBills
     , addBill
     , removeBill
@@ -32,13 +33,15 @@ module Craft.Bills
     , releaseBill
     , addBillProgress
     , completeBillCycle
+    , setBillPaused
+    , reorderBill
     , pruneToStations
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
-import Data.List (sortOn)
+import Data.List (sortOn, findIndex)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -77,6 +80,17 @@ data CraftBill = CraftBill
       --   across a release so a replacement crafter resumes rather
       --   than restarts (inputs are only consumed at cycle end, so
       --   nothing is lost either way).
+    , cbSeq       ∷ !Int
+      -- ^ Manual queue-order key (#330's "reorder"), independent of
+      --   'cbId' so it can be freely rewritten. Starts equal to the
+      --   bill's id; 'reorderBill' swaps it with a neighbour's.
+      --   'billsForStation' sorts on this, not 'cbId'.
+    , cbPaused    ∷ !Bool
+      -- ^ #330's "pause": a paused bill can never be freshly claimed
+      --   (not even via a dead/stale-claimant takeover — see
+      --   'claimAvailable'), but a claimant already on it when it's
+      --   paused keeps working to the end of the current cycle rather
+      --   than being ripped off mid-craft.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | The per-world bill set. The id counter lives inside so it
@@ -104,6 +118,8 @@ addBill station recipe count bills =
             , cbClaimant  = Nothing
             , cbClaimedAt = 0
             , cbProgress  = 0
+            , cbSeq       = fromIntegral (cbsNextId bills)
+            , cbPaused    = False
             }
     in ( bills { cbsBills  = HM.insert bid bill (cbsBills bills)
                , cbsNextId = cbsNextId bills + 1 }
@@ -120,10 +136,12 @@ lookupBill ∷ BillId → CraftBills → Maybe CraftBill
 lookupBill bid = HM.lookup bid . cbsBills
 
 -- | All bills queued at one station (the #330 station panel's view).
---   Sorted by id so listing order is stable (oldest first).
+--   Sorted by 'cbSeq' — oldest-first at add time, but freely
+--   rewritable by 'reorderBill' (unlike 'cbId', which is immutable and
+--   only used for lookup).
 billsForStation ∷ BuildingId → CraftBills → [CraftBill]
 billsForStation station =
-    sortOn cbId . filter ((≡ station) . cbStation) . HM.elems . cbsBills
+    sortOn cbSeq . filter ((≡ station) . cbStation) . HM.elems . cbsBills
 
 -- | Can @uid@ take (or keep) this bill? Yes when it's unclaimed, when
 --   @uid@ already holds it (a refresh), or when the standing claim has
@@ -132,13 +150,19 @@ billsForStation station =
 --   The staleness rules mirror the construct AI's claim sweep, but
 --   live engine-side so recovery doesn't depend on any worker
 --   scanning.
+--
+--   A paused bill ('cbPaused') can never be FRESHLY claimed — not even
+--   via the dead-claimant or stale-timeout takeover paths — but the
+--   worker who already holds it may keep refreshing: pausing stops new
+--   work from starting, it doesn't rip an in-progress craft away
+--   mid-cycle.
 claimAvailable ∷ Double → Double → (UnitId → Bool) → UnitId → CraftBill
                → Bool
 claimAvailable now timeout alive uid bill = case cbClaimant bill of
-    Nothing → True
+    Nothing → not (cbPaused bill)
     Just c  → c ≡ uid
-            ∨ not (alive c)
-            ∨ now - cbClaimedAt bill > timeout
+            ∨ (not (cbPaused bill)
+               ∧ (not (alive c) ∨ now - cbClaimedAt bill > timeout))
 
 -- | Claim (or refresh) a bill for @uid@. False when the bill doesn't
 --   exist or someone else's claim is still fresh. Run inside one
@@ -195,6 +219,45 @@ completeBillCycle bid bills = case lookupBill bid bills of
                              , cbRemaining = cbRemaining bill - 1 }
             in ( bills { cbsBills = HM.insert bid bill' (cbsBills bills) }
                , Just (cbRemaining bill') )
+
+-- | Toggle a bill's paused flag. Claim/progress are untouched — pause
+--   only gates future claims (see 'claimAvailable'). False for an
+--   unknown id.
+setBillPaused ∷ BillId → Bool → CraftBills → (CraftBills, Bool)
+setBillPaused bid paused bills = case lookupBill bid bills of
+    Nothing → (bills, False)
+    Just bill →
+        let bill' = bill { cbPaused = paused }
+        in (bills { cbsBills = HM.insert bid bill' (cbsBills bills) }, True)
+
+-- | #330's manual reorder: swap with the immediate neighbour (in
+--   current 'billsForStation' order, at the SAME station) one step up
+--   or down. False when the bill is unknown or already at that end of
+--   its station's queue.
+data ReorderDirection = MoveUp | MoveDown
+    deriving (Show, Eq)
+
+reorderBill ∷ ReorderDirection → BillId → CraftBills → (CraftBills, Bool)
+reorderBill dir bid bills = case lookupBill bid bills of
+    Nothing → (bills, False)
+    Just bill →
+        let queue = billsForStation (cbStation bill) bills
+        in case findIndex ((≡ bid) . cbId) queue of
+            Nothing → (bills, False)
+            Just i →
+                let j = case dir of
+                        MoveUp   → i - 1
+                        MoveDown → i + 1
+                in if j < 0 ∨ j ≥ length queue
+                   then (bills, False)
+                   else
+                       let neighbor  = queue !! j
+                           bill'     = bill     { cbSeq = cbSeq neighbor }
+                           neighbor' = neighbor { cbSeq = cbSeq bill }
+                           inserted  = HM.insert bid bill'
+                                     $ HM.insert (cbId neighbor) neighbor'
+                                     $ cbsBills bills
+                       in (bills { cbsBills = inserted }, True)
 
 -- | Drop bills whose station isn't in the given id set — the save-load
 --   defense (a bill whose station's def was deregistered between

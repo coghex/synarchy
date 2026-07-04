@@ -3458,6 +3458,19 @@ local function billClaimedByOther(bill, uid, now, timeout)
     return (now - (bill.claimedAt or 0)) <= timeout
 end
 
+-- Is this bill paused against a FRESH claim by uid? Mirrors the
+-- engine's claimAvailable pause gate (#330): a paused bill refuses
+-- every claimant except the one who already holds it, so a worker
+-- mid-cycle on a bill that gets paused finishes that cycle, but no one
+-- (including uid) may start a new claim on it. Without this check
+-- findCraftBill kept nominating paused bills as candidates, and the
+-- doomed craft.claimBill call at commit time (which the engine
+-- correctly refuses) left the worker repeatedly picking a bill it can
+-- never win instead of reachable unpaused work.
+local function billPausedForUs(bill, uid)
+    return bill.paused and bill.claimant ~= uid
+end
+
 -- Count of defName across BUILT storage buildings (cargo holds) on
 -- the active world — the stockpile rung of the craft sourcing ladder.
 -- No range limit, same rationale as the mule: stored materials are
@@ -3596,8 +3609,9 @@ local function findCraftBill(uid, fromX, fromY, params)
     local now = engine.gameTime()
     local best, bestD = nil, params.craft_scan_range
     for _, bill in ipairs(bills) do
-        if not billClaimedByOther(bill, uid, now,
-                                  params.craft_claim_timeout) then
+        if not billPausedForUs(bill, uid)
+           and not billClaimedByOther(bill, uid, now,
+                                      params.craft_claim_timeout) then
             local binfo = building.getInfo(bill.station)
             if binfo and building.getActivity(bill.station) == "built" then
                 local recipe = craft.get(bill.recipe)

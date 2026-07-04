@@ -34,7 +34,8 @@ import World.Fluid.River.Types (emptyWorldRivers)
 import World.Fluid.Ocean (computeOceanMap)
 import World.Generate.InitTerrain
     (BorderedTerrainCache, borderedToInterior
-    , computeChunkTimelinePipeline, finishBorderedPipeline)
+    , computeChunkTimelinePipeline, finishBorderedPipeline
+    , buildPlateBaseCache)
 import World.Geology.Coastal (identifyCoastalErosion)
 import World.Geology.Coastal.Types (CoastalTable, emptyCoastalTable)
 import World.Generate.Timeline (applyTimelineFast)
@@ -305,6 +306,11 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
 --   Per-chunk work is parallelized via @parListChunk 64 rdeepseq@
 --   (forcing each chunk's vectors to NF inside its spark so they
 --   land already-evaluated when the consumer reads them).
+--
+--   #500: the plate-base ('elevationAtGlobal') half of each chunk's
+--   work is shared via 'buildPlateBaseCache', computed once up front
+--   (its own parallel pass) rather than recomputed independently by
+--   every chunk whose 14-tile border overlaps it.
 buildTimelineStageCache
     ∷ Word64
     → [TectonicPlate]
@@ -318,10 +324,12 @@ buildTimelineStageCache seed plates worldSize registry timeline =
                      | cx ← [-halfChunks .. halfChunks - 1]
                      , cy ← [-halfChunks .. halfChunks - 1]
                      ]
+        baseCache = buildPlateBaseCache seed plates worldSize
         runOne coord =
             ( coord
             , computeChunkTimelinePipeline seed plates worldSize
-                                            registry timeline coord
+                                            registry timeline
+                                            (Just baseCache) coord
             )
         chunkResults = map runOne allCoords
                        `using` parListChunk 64 rdeepseq

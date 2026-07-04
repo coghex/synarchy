@@ -45,6 +45,7 @@ daggerRecipe = RecipeDef
     , rdKnowledge = Nothing
     , rdSkill     = Just "smithing"
     , rdRepairAxis = Nothing
+    , rdOutputTemp = Nothing
     }
 
 -- | A fuelled variant whose fuel line repeats an input item.
@@ -165,6 +166,54 @@ spec = do
             case parseFile src of
                 Left _  → pure ()
                 Right _ → expectationFailure "expected a parse failure"
+
+        it "output_temp defaults to Nothing when omitted" $ do
+            let src = BS8.pack $ unlines
+                    [ "recipes:"
+                    , "  - id: plain_craft"
+                    , "    station: forge"
+                    , "    inputs: []"
+                    , "    outputs: []"
+                    ]
+            case parseFile src of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [d] → ryOutputTemp d `shouldBe` Nothing
+                    ds → expectationFailure $
+                        "expected exactly one recipe, got " <> show (length ds)
+
+        it "reads output_temp (#344/#346)" $ do
+            let src = BS8.pack $ unlines
+                    [ "recipes:"
+                    , "  - id: brew_test"
+                    , "    station: cooking"
+                    , "    inputs: []"
+                    , "    outputs: []"
+                    , "    output_temp: 100"
+                    ]
+            case parseFile src of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [d] → ryOutputTemp d `shouldBe` Just 100
+                    ds → expectationFailure $
+                        "expected exactly one recipe, got " <> show (length ds)
+
+        it "parses the shipped data/recipes/basic_food.yaml (#346)" $ do
+            r ← Yaml.decodeFileEither "data/recipes/basic_food.yaml"
+            case r of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [d] → do
+                        ryId d `shouldBe` "brew_coffee"
+                        ryStation d `shouldBe` "cooking"
+                        rySkill d `shouldBe` Just "cooking"
+                        ryKnowledge d `shouldBe` Just "basic_cuisine"
+                        map ryiItem (ryInputs d)
+                            `shouldBe` ["water", "coffee_grounds"]
+                        map ryiItem (ryOutputs d) `shouldBe` ["coffee_pot"]
+                        ryOutputTemp d `shouldBe` Just 100
+                    ds → expectationFailure $
+                        "expected exactly one recipe, got " <> show (length ds)
 
     describe "Craft.Execute.takeItemsByName" $ do
         it "removes exactly n first-matching instances" $ do
