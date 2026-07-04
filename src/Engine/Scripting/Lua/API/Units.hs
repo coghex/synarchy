@@ -2092,22 +2092,13 @@ removeFirstByName name (x:xs)
     | iiDefName x ≡ name = Just xs
     | otherwise          = (x :) <$> removeFirstByName name xs
 
--- | Like removeFirstByName but EXTRACTS the popped instance so the
---   caller can route it somewhere else (e.g. into a building's
---   biMaterialsDelivered).
-popFirstByName ∷ Text → [ItemInstance] → Maybe (ItemInstance, [ItemInstance])
-popFirstByName _ [] = Nothing
-popFirstByName name (x:xs)
-    | iiDefName x ≡ name = Just (x, xs)
-    | otherwise          = fmap (\(it, rest) → (it, x:rest))
-                                (popFirstByName name xs)
-
--- | Like 'popFirstByName' but also reports the 0-based index the item
---   was removed from. Cross-owner transfers carry this so a failed
---   move can splice the instance back at its ORIGINAL position rather
---   than the front — UI (unit.getInventory / building.getStorage) and
---   gameplay rely on stable insertion order, so a rolled-back transfer
---   must leave the source list byte-for-byte unchanged.
+-- | Like 'removeFirstByName' but EXTRACTS the popped instance AND
+--   reports the 0-based index it was removed from. Cross-owner
+--   transfers carry this so a failed move can splice the instance back
+--   at its ORIGINAL position rather than the front — UI
+--   (unit.getInventory / building.getStorage) and gameplay rely on
+--   stable insertion order, so a rolled-back transfer must leave the
+--   source list byte-for-byte unchanged.
 popFirstByNameIx ∷ Text → [ItemInstance]
                 → Maybe (ItemInstance, Int, [ItemInstance])
 popFirstByNameIx = go 0
@@ -2217,10 +2208,10 @@ unitDropItemToGroundFn env = do
                             case HM.lookup uid (umInstances um) of
                                 Nothing → (um, Nothing)
                                 Just inst →
-                                    case popFirstByName defName
+                                    case popFirstByNameIx defName
                                              (uiInventory inst) of
                                         Nothing → (um, Nothing)
-                                        Just (it, rest) →
+                                        Just (it, _, rest) →
                                             let inst' = inst
                                                   { uiInventory = rest }
                                             in ( um { umInstances =
@@ -2381,15 +2372,22 @@ unitTransferItemToBuildingFn env = do
             Lua.pushboolean False
             return 1
 
--- | unit.transferItemToUnit(fromUid, toUid, defName) → bool. Atomic
---   move of one ItemInstance from one unit's inventory to another's.
---   Both units live in the same manager ref, so the pop and the push
---   happen in a single atomicModifyIORef' — the item can never be
---   duplicated or dropped by a thread interleaving. Quality /
+-- | unit.transferItemToUnit(fromUid, toUid, defName[, instanceId]) →
+--   bool. Atomic move of one ItemInstance from one unit's inventory to
+--   another's. Both units live in the same manager ref, so the pop and
+--   the push happen in a single atomicModifyIORef' — the item can
+--   never be duplicated or dropped by a thread interleaving. Quality /
 --   condition / currentFill are preserved exactly (this is how
 --   acolytes pull build materials off the technomule without
 --   re-rolling them). No capacity check here — the Lua caller gates
 --   on carrying capacity the same way pickup does.
+--   Optional 4th arg: transfer the EXACT source instance (itemMatches,
+--   same convention as depositToCargo/equip/equipAccessory) — without
+--   it, a caller pulling back a specific instance it fetched earlier
+--   (#302's repair AI returning spare gear to the technomule) could
+--   silently pop a DIFFERENT same-defName item the source happens to
+--   also be carrying. Absent/0 → first defName match (legacy/AI callers
+--   moving fungible materials, where any matching instance will do).
 --   Returns false if either unit is missing or the source lacks a
 --   matching item; the transfer is all-or-nothing.
 unitTransferItemToUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -2397,18 +2395,21 @@ unitTransferItemToUnitFn env = do
     fromArg ← Lua.tointeger 1
     toArg   ← Lua.tointeger 2
     nameArg ← Lua.tostring 3
+    instArg ← Lua.tointeger 4
     case (fromArg, toArg, nameArg) of
         (Just nF, Just nT, Just nameBS) | nF ≠ nT → do
             let fromUid = UnitId (fromIntegral nF)
                 toUid   = UnitId (fromIntegral nT)
                 defName = TE.decodeUtf8Lenient nameBS
+                wantId  = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case (HM.lookup fromUid (umInstances um),
                       HM.lookup toUid   (umInstances um)) of
                     (Just uF, Just uT) →
-                        case popFirstByName defName (uiInventory uF) of
+                        case popFirstWhereIx (itemMatches wantId defName)
+                                             (uiInventory uF) of
                             Nothing → (um, False)
-                            Just (item, newInv) →
+                            Just (item, _, newInv) →
                                 let uF' = uF { uiInventory = newInv }
                                     uT' = uT { uiInventory =
                                                  uiInventory uT ++ [item] }
