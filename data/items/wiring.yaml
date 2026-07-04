@@ -1,0 +1,15 @@
+items:
+  # Foundation of the power epic (#357): the wire-structure construction
+  # material for the #359 wire object/builder (not yet placeable itself —
+  # #358 only stocks it as a spawn item). Factory-made like
+  # electric_motor/processing_unit — only condition degrades, no quality
+  # roll.
+  - name: "wiring"
+    display_name: "Wiring"
+    sprite: "assets/textures/items/material/wiring.png"
+    weight: 0.5
+    category: Materials
+    make: factory
+    condition:
+      min: 100
+      max: 100

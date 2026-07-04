@@ -1,0 +1,13 @@
+items:
+  # Foundation of the power epic (#357): a placeable generation node
+  # (#358). Factory-made like electric_motor/processing_unit — only
+  # condition degrades, no quality roll.
+  - name: "solar_panel"
+    display_name: "Solar Panel"
+    sprite: "assets/textures/items/material/solar_panel.png"
+    weight: 8.0
+    category: Materials
+    make: factory
+    condition:
+      min: 100
+      max: 100

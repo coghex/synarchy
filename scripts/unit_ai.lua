@@ -335,6 +335,31 @@ local config = {
         -- is the closest two-handed-tool visual.
         chop_equip_anim = "standing_to_holding_pickaxe",
         chop_work_anim  = "using_pickaxe",
+        -- Equipment repair (repair_job, #302). AI-autonomous kit
+        -- maintenance: an acolyte notices its own or the technomule's
+        -- gear has degraded past a threshold and carries it to the
+        -- right #301 station (furnace = condition, workbench =
+        -- sharpness). Utility shape:
+        --   util = base · severity(item)
+        -- severity is tiered: a broken (condition 0) item scores a
+        -- flat band (armor higher than weapons — broken armor gives
+        -- ZERO protection vs. a broken weapon's 0.15× effectiveness,
+        -- Combat/Resolution.hs), otherwise a quadratic ramp toward the
+        -- threshold. base=1.2 keeps the top tier (armor, 2.5) at 3.0
+        -- unweighted / 4.2 role-weighted — under every 6.0 lock and
+        -- deliver's 5.6 weighted ceiling (see unit_roles.lua). Lock-in
+        -- while fetching/walking/repairing is finite, matching
+        -- dig/chop/construct (dire needs still preempt).
+        repair_condition_threshold    = 50.0,
+        repair_sharpness_threshold    = 50.0,
+        repair_severity_broken_weapon = 1.5,
+        repair_severity_broken_armor  = 2.5,
+        repair_base_utility  = 1.2,
+        repair_lock_utility  = 6.0,
+        repair_scan_range    = 30.0,   -- ground-item consumable search radius
+        repair_claim_timeout = 30.0,   -- stale-claim expiry (seconds)
+        repair_xp_per_repair = 1.0,    -- smithing XP (#265) — the "smith"
+                                       -- role's first real work action
         -- Craft bills (craft_job, #329). Works the per-station bill
         -- queue (craft.addBill → engine-side Craft.Bills): claim a
         -- bill, source the recipe's inputs + fuel (inventory → ground
@@ -3433,6 +3458,19 @@ local function billClaimedByOther(bill, uid, now, timeout)
     return (now - (bill.claimedAt or 0)) <= timeout
 end
 
+-- Is this bill paused against a FRESH claim by uid? Mirrors the
+-- engine's claimAvailable pause gate (#330): a paused bill refuses
+-- every claimant except the one who already holds it, so a worker
+-- mid-cycle on a bill that gets paused finishes that cycle, but no one
+-- (including uid) may start a new claim on it. Without this check
+-- findCraftBill kept nominating paused bills as candidates, and the
+-- doomed craft.claimBill call at commit time (which the engine
+-- correctly refuses) left the worker repeatedly picking a bill it can
+-- never win instead of reachable unpaused work.
+local function billPausedForUs(bill, uid)
+    return bill.paused and bill.claimant ~= uid
+end
+
 -- Count of defName across BUILT storage buildings (cargo holds) on
 -- the active world — the stockpile rung of the craft sourcing ladder.
 -- No range limit, same rationale as the mule: stored materials are
@@ -3571,8 +3609,9 @@ local function findCraftBill(uid, fromX, fromY, params)
     local now = engine.gameTime()
     local best, bestD = nil, params.craft_scan_range
     for _, bill in ipairs(bills) do
-        if not billClaimedByOther(bill, uid, now,
-                                  params.craft_claim_timeout) then
+        if not billPausedForUs(bill, uid)
+           and not billClaimedByOther(bill, uid, now,
+                                      params.craft_claim_timeout) then
             local binfo = building.getInfo(bill.station)
             if binfo and building.getActivity(bill.station) == "built" then
                 local recipe = craft.get(bill.recipe)
@@ -4377,6 +4416,362 @@ local function chopOnExit(uid, s, params)
 end
 
 -----------------------------------------------------------
+-- Action: repair_job  (#302 — repair AI: utility + go-to-station-and-repair)
+--
+-- AI-autonomous equipment maintenance: an acolyte notices its own (or
+-- the technomule's spare) gear has degraded past a threshold and
+-- carries it to the right station (#301: furnace for condition,
+-- workbench for sharpness) to restore it via repair.repairAt.
+--
+-- Unlike dig/chop/construct, there is no engine-side spatial
+-- designation here: a repair target is a specific item INSTANCE that
+-- lives inside a unit's inventory/equipment/accessories or on the
+-- technomule, not on the map, so a tile-keyed designation layer
+-- doesn't apply. The claim table below (repairClaims, keyed by
+-- instanceId) plays the same race-guard role a shared tile's
+-- designation status does for dig/chop/construct.
+--
+-- Player-designated repair (right-click a specific item → mark for
+-- repair) is deliberately out of scope for v1: the issue leaves
+-- player-vs-autonomous open, and "acolytes maintain their own kit"
+-- (the issue's own phrasing) has direct precedent in treat_ally /
+-- forage / store_materials — all needs-driven, zero player input.
+--
+-- Ground-item targeting is ALSO out of scope: item.listGround() does
+-- not expose instanceId/condition/sharpness, so a degraded item
+-- dropped on the ground can't be identified or verified headless
+-- (a follow-up would add those fields to Items.hs). Scanning covers:
+-- own inventory, own equipment, own accessories, and the nearest
+-- technomule's inventory (spare gear stored there).
+--
+-- State on s:
+--   repairJob = { instanceId, defName, axis, recipeId, consumable,
+--                 consumableCount, groundWant, muleWant, groundDone,
+--                 onMule, itemFetched, bid }
+--   repairPhase = "fetch_item" | "fetch_consumable" | "walking"
+--               | "repairing"
+-----------------------------------------------------------
+
+local repairUtility, repairExecute, repairOnExit
+
+do
+local repairClaims = {}   -- instanceId → { uid, at }
+
+local function repairClaimedByOther(iid, uid, now, timeout)
+    local c = repairClaims[iid]
+    if not c or c.uid == uid then return false end
+    if now - c.at > timeout or not unit.exists(c.uid) then
+        repairClaims[iid] = nil
+        return false
+    end
+    return true
+end
+
+local function releaseRepairJob(s, uid)
+    if s.repairJob then
+        local c = repairClaims[s.repairJob.instanceId]
+        if c and c.uid == uid then repairClaims[s.repairJob.instanceId] = nil end
+    end
+    s.repairJob = nil
+    s.repairPhase = nil
+end
+
+-- Abort the current job. If the target item was already fetched off
+-- the mule (job.itemFetched, set once fetch_item's transfer lands), it
+-- is now sitting in THIS unit's own inventory — return it before
+-- releasing, or it silently disappears from the mule's stock into
+-- whichever acolyte was mid-job when something else failed later
+-- (missing consumable, a destroyed station, a last-second repair
+-- failure, ...). Every abort past fetch_item must go through this
+-- instead of a bare releaseRepairJob.
+local function abortRepairJob(uid, s, info)
+    local job = s.repairJob
+    if job and job.itemFetched and info then
+        local mule = findTechnomule(info.gridX, info.gridY)
+        if mule then
+            -- Targeted by instanceId: without it, a defName-only
+            -- transfer could pop a DIFFERENT axe_steel this unit
+            -- happens to also be carrying (its own starting gear),
+            -- sending that back instead and leaving the actually-
+            -- fetched (possibly still-degraded) instance stranded here.
+            unit.transferItemToUnit(uid, mule.uid, job.defName, job.instanceId)
+        end
+    end
+    releaseRepairJob(s, uid)
+end
+
+-- How urgent is repairing this one item, and which axis? Condition is
+-- checked before sharpness — a broken/low-condition item is
+-- combat-catastrophic (zero armor protection, or a crippled weapon)
+-- while low sharpness only reduces penetration, so it's repaired
+-- first; the AI picks up a remaining sharpness need on a later tick.
+-- Returns severity, axis — or nil if the item doesn't need repair.
+local function repairSeverity(it, params)
+    if it.condition ~= nil and it.condition < params.repair_condition_threshold then
+        if it.condition <= 0 then
+            local band = (it.kind == "armor")
+                and params.repair_severity_broken_armor
+                or params.repair_severity_broken_weapon
+            return band, "condition"
+        end
+        local x = 1 - (it.condition / params.repair_condition_threshold)
+        return x * x, "condition"
+    end
+    if it.sharpness and it.sharpness < params.repair_sharpness_threshold then
+        local x = 1 - (it.sharpness / params.repair_sharpness_threshold)
+        return x * x, "sharpness"
+    end
+    return nil, nil
+end
+
+-- Best repair candidate among ownerUid's inventory + equipped gear +
+-- accessories. Skips anything already claimed by another live unit.
+local function scanHeldItems(ownerUid, actingUid, onMule, now, params)
+    local best, bestSev = nil, 0
+    local function consider(it)
+        if repairClaimedByOther(it.instanceId, actingUid, now,
+                                params.repair_claim_timeout) then
+            return
+        end
+        local sev, axis = repairSeverity(it, params)
+        if sev and sev > bestSev then
+            best, bestSev = {
+                instanceId = it.instanceId, defName = it.defName,
+                axis = axis, severity = sev, onMule = onMule,
+            }, sev
+        end
+    end
+    for _, it in ipairs(unit.getInventory(ownerUid) or {}) do consider(it) end
+    for _, it in pairs(equipment.getLoadout(ownerUid) or {}) do consider(it) end
+    for _, it in ipairs(equipment.getAccessories(ownerUid) or {}) do consider(it) end
+    return best
+end
+
+-- Own gear first (no fetch needed); only look to the mule's spare
+-- stock when the unit itself carries nothing worth repairing.
+local function findRepairCandidate(uid, info, params)
+    local now = engine.gameTime()
+    local best = scanHeldItems(uid, uid, false, now, params)
+    if best then return best end
+    local mule = findTechnomule(info.gridX, info.gridY)
+    if not mule then return nil end
+    return scanHeldItems(mule.uid, uid, true, now, params)
+end
+
+function repairUtility(uid, s, params)
+    if s.repairJob then return params.repair_lock_utility end
+
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+
+    local cand = findRepairCandidate(uid, info, params)
+    if not cand then return -math.huge end
+
+    -- Only claim if a station for this axis is actually reachable —
+    -- mirrors dig's tool gate / construct's materials-available check.
+    -- building.findStation ranks candidates by Chebyshev distance from
+    -- the given (gx, gy), but its Lua.tointeger argument parsing only
+    -- accepts whole numbers — a raw unit position like 16.5 silently
+    -- fails to parse, and it falls back to "no distance info" (lowest
+    -- building id wins, ignoring proximity entirely). Floor first.
+    local recipeId = "repair_" .. cand.axis
+    if not building.findStation(recipeId, math.floor(info.gridX),
+                                math.floor(info.gridY)) then
+        return -math.huge
+    end
+
+    local recipe = repair.get(recipeId)
+    local input = recipe and recipe.inputs and recipe.inputs[1]
+    if not input then return -math.huge end
+
+    -- Capacity feasibility: a mule-sourced item adds its own weight on
+    -- pickup, and the recipe's consumable adds more on top — a unit
+    -- whose remaining headroom can't cover both would otherwise claim,
+    -- fail to fetch, and immediately re-claim the SAME candidate (still
+    -- degraded, now sitting in its own inventory) forever — a repeated
+    -- "unit_warning" pause storm (config/notifications.yaml pauses on
+    -- that category) instead of a clean "can't do this job right now" bail.
+    local needed = 0
+    if cand.onMule then
+        needed = needed + deliverItemWeight(cand.defName)
+    end
+    if inventoryCountOf(uid, input.item) < (input.count or 1) then
+        needed = needed + deliverItemWeight(input.item) * (input.count or 1)
+    end
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW = unit.getStat(uid, "carrying_capacity") or math.huge
+    if carried + needed > maxW then return -math.huge end
+
+    cand.recipeId = recipeId
+    cand.consumable = input.item
+    cand.consumableCount = input.count or 1
+    s.repairCandidate = cand
+    return params.repair_base_utility * cand.severity
+         * roles.weight(s, "repair_job")
+end
+
+function repairExecute(uid, s, params)
+    local info = unit.getInfo(uid)
+    if not info then abortRepairJob(uid, s, info); return end
+    local now = engine.gameTime()
+
+    -- Claim a fresh job from the scored candidate.
+    if not s.repairJob then
+        local cand = s.repairCandidate
+        if not cand then return end
+        s.repairCandidate = nil
+        if repairClaimedByOther(cand.instanceId, uid, now,
+                                params.repair_claim_timeout) then
+            return
+        end
+        repairClaims[cand.instanceId] = { uid = uid, at = now }
+        s.repairJob = {
+            instanceId = cand.instanceId, defName = cand.defName,
+            axis = cand.axis, recipeId = cand.recipeId,
+            consumable = cand.consumable, consumableCount = cand.consumableCount,
+            onMule = cand.onMule,
+        }
+        s.repairPhase = cand.onMule and "fetch_item" or "fetch_consumable"
+        -- Cancel any in-flight moveTo the PREVIOUS action left running
+        -- (e.g. a wander/search-spiral step): the switch-or-idle
+        -- dispatch gate only re-fires execute() while activity=="idle",
+        -- so a stale walking activity would strand this phase machine
+        -- forever (the stuck-walk watchdog above exists for the same
+        -- class of bug). Later phases re-issue their own moveTo.
+        unit.stop(uid)
+        return
+    end
+
+    local job = s.repairJob
+    -- Keep the claim fresh while the job is held.
+    repairClaims[job.instanceId] = { uid = uid, at = now }
+
+    if s.repairPhase == "fetch_item" then
+        local mule = findTechnomule(info.gridX, info.gridY)
+        if not mule then releaseRepairJob(s, uid); return end
+        if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
+           > params.mule_fetch_arrival then
+            unit.moveTo(uid, mule.gridX, mule.gridY, mv.comfort(uid))
+            return
+        end
+        unit.stop(uid)
+        -- Targeted by instanceId: the mule may carry more than one
+        -- axe_steel, and a defName-only transfer could grab the wrong
+        -- copy. transferItemToUnit only succeeds if this EXACT flagged
+        -- instance is still on the mule (a raced claimant taking the
+        -- specific instance first fails cleanly here, same as any other
+        -- instance no longer being found).
+        if not unit.transferItemToUnit(mule.uid, uid, job.defName, job.instanceId) then
+            releaseRepairJob(s, uid)   -- raced — someone else took it; never fetched
+            return
+        end
+        -- The flagged instance is now in our own inventory — any abort
+        -- from here on must return it (abortRepairJob).
+        job.itemFetched = true
+        s.repairPhase = "fetch_consumable"
+        return
+    end
+
+    if s.repairPhase == "fetch_consumable" then
+        if inventoryCountOf(uid, job.consumable) >= job.consumableCount then
+            s.repairPhase = "walking"
+            return
+        end
+        -- Ground (rung 2), then the mule (rung 3) — tried against
+        -- SEPARATE want-tables, one per rung. fetchWantsFromGround/Mule
+        -- assume the caller pre-splits ground vs mule portions the way
+        -- deliverExecute's claim.fromGround/claim.fromMule do; sharing
+        -- ONE table between both calls is wrong — a ground miss clears
+        -- the entry entirely (`wants[mat] = nil`), so a shared table
+        -- would short-circuit the mule fallback on every ground miss.
+        if not job.groundDone then
+            job.groundWant = job.groundWant
+                or { [job.consumable] = job.consumableCount }
+            if fetchWantsFromGround(uid, job.groundWant, params,
+                                    params.repair_scan_range) then
+                return
+            end
+            job.groundDone = true
+            if inventoryCountOf(uid, job.consumable) >= job.consumableCount then
+                s.repairPhase = "walking"
+                return
+            end
+        end
+        job.muleWant = job.muleWant or { [job.consumable] = job.consumableCount }
+        if fetchWantsFromMule(uid, job.muleWant, info, params) then
+            return
+        end
+        if inventoryCountOf(uid, job.consumable) < job.consumableCount then
+            -- No lignite_chunk/whetstone anywhere reachable. Give up —
+            -- re-evaluate next tick (camping the job gains nothing).
+            reportFailure(uid, "No " .. job.consumable
+                .. " available to repair " .. job.defName)
+            abortRepairJob(uid, s, info)
+            return
+        end
+        s.repairPhase = "walking"
+        return
+    end
+
+    if s.repairPhase == "walking" then
+        if not job.bid then
+            job.bid = building.findStation(job.recipeId, math.floor(info.gridX),
+                                           math.floor(info.gridY))
+            if not job.bid then abortRepairJob(uid, s, info); return end
+        end
+        local binfo = building.getInfo(job.bid)
+        if not binfo then abortRepairJob(uid, s, info); return end
+        local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
+        local tw, th = binfo.tileW or 1, binfo.tileH or 1
+        local cheb = chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th)
+        if cheb <= 1 then
+            unit.stop(uid)
+            s.repairPhase = "repairing"
+            return
+        end
+        local bestX, bestY, bestD = nil, nil, math.huge
+        for dx = -1, tw do
+            for dy = -1, th do
+                if dx == -1 or dx == tw or dy == -1 or dy == th then
+                    local nx, ny = binfo.gridX + dx + 0.5, binfo.gridY + dy + 0.5
+                    local d = distance(info.gridX, info.gridY, nx, ny)
+                    if d < bestD then bestX, bestY, bestD = nx, ny, d end
+                end
+            end
+        end
+        if bestX then unit.moveTo(uid, bestX, bestY, mv.comfort(uid)) end
+        return
+    end
+
+    if s.repairPhase == "repairing" then
+        local r, err = repair.repairAt(uid, job.recipeId, job.instanceId, job.bid)
+        if not r then
+            if not (err and err:find("already at full")) then
+                reportFailure(uid, "Repair failed: " .. tostring(err))
+            end
+            abortRepairJob(uid, s, info)
+            return
+        end
+        grantWorkXP(uid, "smithing", params.repair_xp_per_repair or 0)
+        -- Spare gear fetched off the mule goes back once restored.
+        -- abortRepairJob's "return the fetched item" step (keyed on
+        -- job.itemFetched, targeted by instanceId) handles this the
+        -- same way a mid-job abort does.
+        abortRepairJob(uid, s, info)
+    end
+end
+
+-- Preemption (thirst, combat, order): only the final approach needs
+-- resetting — mid-fetch phases re-evaluate fresh every tick anyway.
+function repairOnExit(uid, s, params)
+    if s.repairPhase == "repairing" then
+        s.repairPhase = "walking"
+    end
+end
+
+end
+
+-----------------------------------------------------------
 -- Action: pickup_ground
 --
 -- Player-ordered pickup of a ground item (right-click → Pick up;
@@ -4884,6 +5279,8 @@ unitAi.registerActions("acolyte", {
       execute = digExecute, onExit = digOnExit },
     { name = "chop_designation", utility = chopUtility,
       execute = chopExecute, onExit = chopOnExit },
+    { name = "repair_job", utility = repairUtility,
+      execute = repairExecute, onExit = repairOnExit },
     { name = "pickup_ground", utility = pickupUtility,
       execute = pickupExecute },
 })

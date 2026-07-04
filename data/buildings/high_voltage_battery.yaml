@@ -1,0 +1,12 @@
+buildings:
+  # Foundation of the power epic (#357): a placeable storage node
+  # (#358), placed instantly out of inventory via power.placeNode —
+  # see solar_panel.yaml for why build_work is left at its 0 default.
+  - name: "high_voltage_battery"
+    display_name: "High-Voltage Battery"
+    category: "Power"
+    description: "Stores power for use when the sun isn't shining."
+    sprite: "assets/textures/buildings/high_voltage_battery/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"
