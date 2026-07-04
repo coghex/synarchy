@@ -183,6 +183,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Corners
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
+                   Test.Headless.Power.Types
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.World.FloraGrowth
@@ -481,6 +482,8 @@ library
                      Craft.Bills
                      Engine.Asset.YamlRecipes
                      Engine.Scripting.Lua.API.Craft
+                     Power.Types
+                     Engine.Scripting.Lua.API.Power
                      Engine.Scripting.Lua.API.Repair
                      Location.Types
                      Location.Overlay.Types

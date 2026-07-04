@@ -30,6 +30,7 @@ import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
+import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
@@ -120,7 +121,12 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 72  -- v72: WorldPageSave gains trailing
+currentSaveVersion = 73  -- v73: WorldPageSave gains trailing
+                         --      'wpsPowerNodes' (#358) — the per-world
+                         --      power-node registry (placed solar-panel/
+                         --      battery source + storage nodes; role +
+                         --      peak watts / capacity Wh; Power.Types).
+                         -- v72: WorldPageSave gains trailing
                          --      'wpsCraftBills' (#329) — the per-world
                          --      craft-bill queue (station orders +
                          --      claim/progress state; Craft.Bills).
@@ -309,6 +315,12 @@ data WorldPageSave = WorldPageSave
         --   BuildingIds, which restore verbatim (see wpsBuildings), so
         --   bills reconnect to their stations; restore prunes bills
         --   whose station was orphaned. Appended for save v72.
+    , wpsPowerNodes ∷ !PowerNodes
+        -- ^ Power-node registry (#358): placed solar-panel/battery
+        --   source + storage nodes (role + parameters). Like craft
+        --   bills, references a BuildingId that restores verbatim (see
+        --   wpsBuildings); restore prunes nodes whose building was
+        --   orphaned. Appended for save v73.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is
