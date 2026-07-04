@@ -22,6 +22,7 @@ local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
 local brokenOverlay = require("scripts.ui.broken_overlay")
 local qualityTier = require("scripts.ui.quality_tier")
+local repairStatus = require("scripts.ui.repair_status")
 local stats       = require("scripts.unit_stats")
 local injuries    = require("scripts.injuries")
 local knowledge   = require("scripts.knowledge")
@@ -2208,6 +2209,13 @@ local function buildItemHint(it, equippedSlot)
             it.weapon.slashEffectiveness or 0,
             it.weapon.bluntEffectiveness or 0)
     end
+    -- Repair designation/queue state (#303): "in progress" once a unit
+    -- has claimed the repair job, else "queued (priority)" once the
+    -- player has flagged it via the row's context menu.
+    local repairHint = repairStatus.hintLine(it)
+    if repairHint then
+        hintLines[#hintLines + 1] = repairHint
+    end
     if it.buffs then
         for _, b in ipairs(it.buffs) do
             -- "Perception + 1", "Perception + 10%", or both:
@@ -2393,8 +2401,8 @@ local function rebuildEquipmentSection()
                 -- condition / weapon stats / equipped slot) here as
                 -- they do in the inventory list.
                 UI.setTooltipRich(iconElemId, {
-                    text = qualityTier.withSuffix(
-                        eq.displayName or eq.defName or s.name, eq),
+                    text = repairStatus.withSuffix(qualityTier.withSuffix(
+                        eq.displayName or eq.defName or s.name, eq), eq),
                     hint = buildItemHint(eq, s.id),
                 })
                 UI.setClickable(iconElemId, true)
@@ -2466,8 +2474,8 @@ local function rebuildEquipmentSection()
                 UI.setClickable(iconId, true)
                 UI.setOnRightClick(iconId, "onAccessoryRowRightClick")
                 UI.setTooltipRich(iconId, {
-                    text = qualityTier.withSuffix(
-                        it.displayName or it.defName, it),
+                    text = repairStatus.withSuffix(qualityTier.withSuffix(
+                        it.displayName or it.defName, it), it),
                     hint = buildItemHint(it, "(worn)"),
                 })
                 table.insert(unitInfoV2.equipElements,
@@ -2921,7 +2929,8 @@ local function rebuildInventorySection()
         local nameX = listX + textPad + iconSz + textPad
         local nameMaxPx = (listX + listW - textPad - wW) - nameX
                         - math.floor(4 * uiscale)
-        local rawName = qualityTier.withSuffix(it.displayName, it)
+        local rawName = repairStatus.withSuffix(
+            qualityTier.withSuffix(it.displayName, it), it)
         if (it.stackCount or 1) > 1 then
             rawName = string.format("%s ×%d", rawName, it.stackCount)
         end
@@ -2963,7 +2972,8 @@ local function rebuildInventorySection()
         UI.setOnRightClick(hitId, "onInventoryItemRightClick")
 
         UI.setTooltipRich(hitId, {
-            text = qualityTier.withSuffix(it.displayName, it),
+            text = repairStatus.withSuffix(
+                qualityTier.withSuffix(it.displayName, it), it),
             hint = buildItemHint(it, it.equipped and it.equippedSlot or nil),
         })
 
@@ -3195,6 +3205,15 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
         }
     end
 
+    -- Repair queue (#303): flag/unflag this item so the AI's
+    -- autonomous repair job (#302) picks it ahead of the unit's other
+    -- degraded gear. Absent entirely once a unit has already claimed
+    -- the repair (repairStatus.menuItem returns nil).
+    local repairMenuItem = repairStatus.menuItem(item)
+    if repairMenuItem then
+        items[#items + 1] = repairMenuItem
+    end
+
     -- Storage: append "Store in <cargo>" entries for each adjacent
     -- built cargo. Equipped/accessory items can't be deposited
     -- directly (player must unequip first). The deposit API enforces
@@ -3288,6 +3307,14 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
         }
     end
 
+    -- Repair queue (#303): the equipped item itself, if any.
+    if rec.equippedItem then
+        local repairMenuItem = repairStatus.menuItem(rec.equippedItem)
+        if repairMenuItem then
+            items[#items + 1] = repairMenuItem
+        end
+    end
+
     local contextMenu = require("scripts.ui.context_menu")
     local mx, my = engine.getMousePosition()
     local fbW, fbH = engine.getFramebufferSize()
@@ -3324,6 +3351,12 @@ function unitInfoV2.handleAccessoryRowRightClick(elemHandle)
                 unitInfoV2.lastEquipKey = nil
             end,
         } }
+    end
+
+    -- Repair queue (#303): the accessory item itself.
+    local repairMenuItem = repairStatus.menuItem(row.item)
+    if repairMenuItem then
+        items[#items + 1] = repairMenuItem
     end
 
     local contextMenu = require("scripts.ui.context_menu")
@@ -3370,6 +3403,7 @@ local ACTION_DISPLAY = {
     chop_designation   = "Chopping",
     forage             = "Foraging",
     pickup_ground      = "Picking up",
+    repair_job         = "Repairing",
     treat_ally         = "Treating ally",
     engage             = "Engaging",
     retreat            = "Retreating",

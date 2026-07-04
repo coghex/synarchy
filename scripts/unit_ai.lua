@@ -4443,6 +4443,38 @@ local repairUtility, repairExecute, repairOnExit
 do
 local repairClaims = {}   -- instanceId → { uid, at }
 
+-- Player-facing "prioritize repair" flag (#303 UI). Purely a
+-- candidate-selection preference: a flagged instance always wins
+-- scanHeldItems's pick among a unit's OWN repair candidates over an
+-- unflagged one, severity ties broken as before. Deliberately NOT
+-- folded into the severity/utility math in repairUtility below —
+-- repair's entry utility is tuned so its ceiling (broken armor: 2.5 ×
+-- 1.2 base × 1.4 role weight = 4.2) sits under every other action's
+-- 6.0 in-progress lock (see the comment on the repair config above);
+-- boosting it here would risk a prioritized repair preempting some
+-- other unit's already-claimed job. Cleared automatically once the
+-- item is actually repaired (or found already full) — see the
+-- "repairing" phase below.
+local repairPriority = {}   -- instanceId → true
+
+function unitAi.setRepairPriority(instanceId, flag)
+    if not instanceId then return end
+    if flag then repairPriority[instanceId] = true
+    else repairPriority[instanceId] = nil end
+end
+
+function unitAi.isRepairPriority(instanceId)
+    return instanceId ~= nil and repairPriority[instanceId] == true
+end
+
+-- uid of whoever currently holds this item's repair claim, or nil.
+-- Doesn't distinguish claim phase (fetch/walk/repair) — the UI only
+-- needs "somebody's on it".
+function unitAi.getRepairClaimant(instanceId)
+    local c = repairClaims[instanceId]
+    return c and c.uid or nil
+end
+
 local function repairClaimedByOther(iid, uid, now, timeout)
     local c = repairClaims[iid]
     if not c or c.uid == uid then return false end
@@ -4512,19 +4544,26 @@ end
 
 -- Best repair candidate among ownerUid's inventory + equipped gear +
 -- accessories. Skips anything already claimed by another live unit.
+-- A player-prioritized item (unitAi.setRepairPriority) always beats a
+-- non-prioritized one regardless of severity; among same-priority
+-- candidates the more severe one wins, as before.
 local function scanHeldItems(ownerUid, actingUid, onMule, now, params)
-    local best, bestSev = nil, 0
+    local best, bestSev, bestPri = nil, 0, false
     local function consider(it)
         if repairClaimedByOther(it.instanceId, actingUid, now,
                                 params.repair_claim_timeout) then
             return
         end
         local sev, axis = repairSeverity(it, params)
-        if sev and sev > bestSev then
-            best, bestSev = {
+        if not sev then return end
+        local pri = repairPriority[it.instanceId] == true
+        local better = (pri and not bestPri)
+                     or (pri == bestPri and sev > bestSev)
+        if better then
+            best, bestSev, bestPri = {
                 instanceId = it.instanceId, defName = it.defName,
                 axis = axis, severity = sev, onMule = onMule,
-            }, sev
+            }, sev, pri
         end
     end
     for _, it in ipairs(unit.getInventory(ownerUid) or {}) do consider(it) end
@@ -4732,13 +4771,18 @@ function repairExecute(uid, s, params)
     if s.repairPhase == "repairing" then
         local r, err = repair.repairAt(uid, job.recipeId, job.instanceId, job.bid)
         if not r then
-            if not (err and err:find("already at full")) then
+            if err and err:find("already at full") then
+                -- Nothing left to do on this axis; stop advertising it
+                -- as prioritized (#303) rather than leaving a stale flag.
+                repairPriority[job.instanceId] = nil
+            else
                 reportFailure(uid, "Repair failed: " .. tostring(err))
             end
             abortRepairJob(uid, s, info)
             return
         end
         grantWorkXP(uid, "smithing", params.repair_xp_per_repair or 0)
+        repairPriority[job.instanceId] = nil   -- restored (#303)
         -- Spare gear fetched off the mule goes back once restored.
         -- abortRepairJob's "return the fetched item" step (keyed on
         -- job.itemFetched, targeted by instanceId) handles this the
