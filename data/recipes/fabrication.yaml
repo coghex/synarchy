@@ -1,0 +1,77 @@
+# Fabrication tier (#328) — steel_bar → tools, weapons, and
+# construction stock, run at the workbench (data/buildings/
+# workbench.yaml, station "forge"). Sits alongside the existing
+# forge_steel_dagger recipe (data/recipes/basic.yaml), which this set
+# follows in schema and station choice.
+#
+# Tools/weapons are skill-gated like the dagger (quality tracks the
+# crafter's smithing skill instead of the item def's own quality roll).
+# Construction stock (steel_plate/steel_hardware) is uniform stamped
+# goods — the item defs carry no quality spec, so no skill tag is
+# needed; the ratios aren't mass-conserving (same stylization as the
+# smelting tier's ore-to-bar yield).
+#
+# Deliberately NOT in this pass (per the issue's open questions):
+#   - wool_gambeson / leather_boots / leather_gloves — no raw wool or
+#     leather item/source exists yet (only the spawn-freebie armor
+#     pieces reference "material: pleated_wool"/"leather" for combat
+#     resistance, not a craftable input). Needs a harvesting/sourcing
+#     design before a recipe can consume it.
+#   - electric_motor / processing_unit — "make: factory", not player-
+#     fabricable; the issue itself notes these gate a future power/
+#     tech tier via the "assemble" station, not this one.
+recipes:
+  - id: forge_pick_steel
+    name: "Forge Steel Pick"
+    station: forge
+    skill: smithing
+    inputs:
+      - item: steel_bar
+        count: 2
+    work: 20
+    outputs:
+      - item: pick_steel
+
+  - id: forge_shovel_steel
+    name: "Forge Steel Shovel"
+    station: forge
+    skill: smithing
+    inputs:
+      - item: steel_bar
+        count: 2
+    work: 20
+    outputs:
+      - item: shovel_steel
+
+  - id: forge_axe_steel
+    name: "Forge Steel Axe"
+    station: forge
+    skill: smithing
+    inputs:
+      - item: steel_bar
+        count: 2
+    work: 20
+    outputs:
+      - item: axe_steel
+
+  - id: forge_steel_plate
+    name: "Stamp Steel Plate"
+    station: forge
+    inputs:
+      - item: steel_bar
+        count: 1
+    work: 15
+    outputs:
+      - item: steel_plate
+        count: 2
+
+  - id: forge_steel_hardware
+    name: "Stamp Steel Hardware"
+    station: forge
+    inputs:
+      - item: steel_bar
+        count: 1
+    work: 10
+    outputs:
+      - item: steel_hardware
+        count: 4
