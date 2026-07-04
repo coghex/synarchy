@@ -121,7 +121,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 73  -- v73: WorldPageSave gains trailing
+currentSaveVersion = 74  -- v74: CraftBill (nested in WorldPageSave's
+                         --      wpsCraftBills) gains trailing 'cbSeq'
+                         --      and 'cbPaused' (#330's manual-reorder
+                         --      + pause bill controls).
+                         -- v73: WorldPageSave gains trailing
                          --      'wpsPowerNodes' (#358) — the per-world
                          --      power-node registry (placed solar-panel/
                          --      battery source + storage nodes; role +

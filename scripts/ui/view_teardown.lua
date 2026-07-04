@@ -63,6 +63,13 @@ local registry = {
       zoomBand = function() require("scripts.cargo_inventory_panel").closeIfOpen() end,
       hudHide  = function() require("scripts.cargo_inventory_panel").closeIfOpen() end },
 
+    -- Crafting station bills popup (#330): same story — mounted on
+    -- hud.world_page, own module-level "open" state, opened via
+    -- right-click. closeIfOpen() is idempotent.
+    { name = "crafting_panel",
+      zoomBand = function() require("scripts.crafting_panel").closeIfOpen() end,
+      hudHide  = function() require("scripts.crafting_panel").closeIfOpen() end },
+
     -- Right-click context menu (#139/#86): lives on its own modal page,
     -- anchored to the tile/unit/item under the click. Page swaps never
     -- touch it, so it could survive over the wrong view or leak into the
