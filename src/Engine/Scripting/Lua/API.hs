@@ -656,6 +656,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldHasSpawnedLocationContentsFn env)
   registerLuaFunction "markLocationContentsSpawned"
     (worldMarkLocationContentsSpawnedFn env)
+  registerLuaFunction "hasStampedLocation"
+    (worldHasStampedLocationFn env)
+  registerLuaFunction "markLocationStamped"
+    (worldMarkLocationStampedFn env)
   registerLuaFunction "getFloraAt" (worldGetFloraAtFn env)
   registerLuaFunction "getFloraGrowthAt" (worldGetFloraGrowthAtFn env)
   registerLuaFunction "harvestFlora" (worldHarvestFloraFn env)

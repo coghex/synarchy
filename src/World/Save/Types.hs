@@ -120,10 +120,26 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 70  -- v70: WorldPageSave gains trailing
+currentSaveVersion = 72  -- v72: WorldPageSave gains trailing
                          --      'wpsCraftBills' (#329) — the per-world
                          --      craft-bill queue (station orders +
                          --      claim/progress state; Craft.Bills).
+                         -- v71: UnitSimState gains usMoveGrade (uphill
+                         --      slope speed/stamina, #375) — positional
+                         --      Generic Serialize, so the appended field
+                         --      shifts the record layout.
+                         -- v70: WorldGenParams gains trailing
+                         --      'wgpLocationStamped' (#424) — a dedicated
+                         --      one-time geometry-stamp flag per chunk,
+                         --      replacing the structure.hasAt(gx,gy,"floor")
+                         --      inference the lazy location stamper used to
+                         --      decide "already materialized". That check
+                         --      was fooled by a player clearing the anchor
+                         --      floor tile: the location was still stamped,
+                         --      but the guard saw "no floor" and re-ran the
+                         --      builder, clobbering edits. The new flag is
+                         --      independent of structure edits, like the
+                         --      existing wgpLocationContentsSpawned (#90).
                          -- v69: coastline variety (#220) — worldgen
                          --      OUTPUT change, no schema change. The
                          --      serialized CoastalTable (GeoTimeline →
@@ -292,7 +308,7 @@ data WorldPageSave = WorldPageSave
         --   incl. claim + cycle progress. Station references are
         --   BuildingIds, which restore verbatim (see wpsBuildings), so
         --   bills reconnect to their stations; restore prunes bills
-        --   whose station was orphaned. Appended for save v70.
+        --   whose station was orphaned. Appended for save v72.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

@@ -56,6 +56,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetSlopeFn
     , worldSetCellFn
     , worldMarkLocationContentsSpawnedFn
+    , worldMarkLocationStampedFn
     ) where
 
 import UPrelude
@@ -784,6 +785,29 @@ worldMarkLocationContentsSpawnedFn env = do
                 case mPid of
                     Just pid → Q.writeQueue (worldQueue env) $
                         WorldMarkLocationContentsSpawned pid
+                            (fromIntegral gx) (fromIntegral gy)
+                    Nothing  → pure ()
+            return 0
+        _ → return 0
+
+-- | world.markLocationStamped(gx, gy [, pageId]) — one-time geometry-stamp
+--   flag (#424). An explicit pageId targets that live page (even hidden);
+--   omitted defaults to the active world. No-op (queues nothing) when
+--   neither resolves to a live page.
+worldMarkLocationStampedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldMarkLocationStampedFn env = do
+    gxArg   ← Lua.tointeger 1
+    gyArg   ← Lua.tointeger 2
+    pageArg ← Lua.tostring 3
+    case (gxArg, gyArg) of
+        (Just gx, Just gy) → do
+            Lua.liftIO $ do
+                mPid ← case pageArg of
+                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8 pidBS)))
+                    Nothing    → (fmap fst) <$> activeWorldPage env
+                case mPid of
+                    Just pid → Q.writeQueue (worldQueue env) $
+                        WorldMarkLocationStamped pid
                             (fromIntegral gx) (fromIntegral gy)
                     Nothing  → pure ()
             return 0

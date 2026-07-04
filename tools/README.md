@@ -153,6 +153,7 @@ docstring instead of reaching for `--help` when in doubt.
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
 | `location_content_probe.py` | #90, #91 | worldgen + arena | Location content spawning + ruin probe. |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
+| `location_stamp_idempotent_probe.py` | #424 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load. |
 | `lua_orphan_prune_probe.py` | #195 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load. |
 | `medic_coord_probe.py` | squad-medic coordination (general) | arena | `bestMedicFor`/`medicAvailable` distance-discounted selection fix. |
 | `movement_probe.py` | movement arc (general, closed) | arena | Obstacle-course movement (pathing/climbs/falls/ramps) via `movement_arena.lua` courses; `--list` shows courses. |

@@ -123,6 +123,16 @@ data UnitSimState = UnitSimState
     --   fall (descend only, xy pinned). Set by startJump, cleared on
     --   landing in handleTransitionExpiry.
     , usJumpApex ∷ !(Maybe Float)
+    -- | Signed grade of the ground the unit is currently walking (#375):
+    --   positive = heading uphill (1.0 = straight up a ramp's fall line),
+    --   negative = downhill, 0 = flat or not moving. Written by the
+    --   movement tick every step (and reset when the unit isn't
+    --   stepping); read by the Lua stamina drain via `unit.getInfo`'s
+    --   `moveGrade` so sustained uphill travel taxes endurance. Purely
+    --   transient — re-derived every tick — but it rides through saves
+    --   with the rest of the record (harmless; stale for at most one
+    --   tick after load).
+    , usMoveGrade ∷ !Float
     } deriving (Show, Eq, Generic, Serialize)
 
 data MoveTarget = MoveTarget

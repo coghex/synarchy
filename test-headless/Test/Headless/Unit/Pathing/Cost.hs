@@ -10,7 +10,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
+import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
@@ -60,6 +60,37 @@ customChunk f =
         , lcSurfaceMap        = surfV
         , lcTerrainSurfaceMap = terrV
         , lcFluidMap          = fluidV
+        , lcIceMap            = emptyIceMap
+        , lcFlora             = emptyFloraChunkData
+        , lcSideDeco          = VU.empty
+        , lcWaterTableMap     = VU.empty
+        , lcMagma             = Nothing
+        , lcStructures        = emptyChunkStructures
+        }
+
+-- | Build a single chunk with per-tile (terrainZ, surface slope bits).
+--   Unlike the fixtures above this fills lcTiles — `slopeGrade` reads
+--   slope bits out of the column data (`ctSlopes`), not the surface map.
+slopedChunk ∷ ((Int, Int) → (Int, Word8)) → LoadedChunk
+slopedChunk f =
+    let area = chunkSize * chunkSize
+        terrV = VU.generate area $ \i →
+            let (lx, ly) = (i `mod` chunkSize, i `div` chunkSize)
+            in fst (f (lx, ly))
+        colV = V.generate area $ \i →
+            let (lx, ly) = (i `mod` chunkSize, i `div` chunkSize)
+                (z, bits) = f (lx, ly)
+            in ColumnTiles { ctStartZ = z
+                           , ctMats   = VU.singleton 1
+                           , ctSlopes = VU.singleton bits
+                           , ctVeg    = VU.singleton 0
+                           }
+    in LoadedChunk
+        { lcCoord             = ChunkCoord 0 0
+        , lcTiles             = colV
+        , lcSurfaceMap        = terrV
+        , lcTerrainSurfaceMap = terrV
+        , lcFluidMap          = V.replicate area Nothing
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
@@ -188,3 +219,56 @@ spec = do
             it "replan cost threshold sits between flat and 1-z climb" $ do
                 pcReplanCostThreshold pc `shouldSatisfy` (> sqrt 2)
                 pcReplanCostThreshold pc `shouldSatisfy` (< 1.0 + pcClimbFactor pc)
+
+    describe "Unit.Pathing.Cost.slopeGrade (#375)" $ do
+        -- One ramp tile at (8, 5): a W-facing slope (bit 3) at its
+        -- surface z — the west neighbour is 1 z below, so downhill
+        -- points west and heading east is straight uphill.
+        let rampBitsW = 8 ∷ Word8
+            wtd = worldWith $ slopedChunk $ \(lx, ly) →
+                if (lx, ly) ≡ (8, 5) then (6, rampBitsW) else (5, 0)
+
+        it "heading straight up the fall line reads +1" $
+            slopeGrade wtd 8 5 6 (1, 0) `shouldSatisfy` approxEq 1.0
+
+        it "heading straight down the fall line reads -1" $
+            slopeGrade wtd 8 5 6 (-1, 0) `shouldSatisfy` approxEq (-1.0)
+
+        it "heading across the slope reads 0" $
+            slopeGrade wtd 8 5 6 (0, 1) `shouldSatisfy` approxEq 0.0
+
+        it "a diagonal ascent reads the partial grade (≈ 0.707)" $ do
+            let d = 1 / sqrt 2
+            slopeGrade wtd 8 5 6 (d, -d) `shouldSatisfy` approxEq d
+
+        it "flat tiles read 0 whatever the heading" $
+            slopeGrade wtd 4 4 5 (1, 0) `shouldSatisfy` approxEq 0.0
+
+        it "missing slope data (unloaded chunk) reads 0" $
+            slopeGrade wtd 50 50 5 (1, 0) `shouldSatisfy` approxEq 0.0
+
+        it "a degenerate crest (opposing bits) reads 0" $ do
+            -- E|W both set: the downhill vectors cancel.
+            let wtd' = worldWith $ slopedChunk $ \(lx, ly) →
+                    if (lx, ly) ≡ (8, 5) then (6, 2 ⌄ 8) else (5, 0)
+            slopeGrade wtd' 8 5 6 (1, 0) `shouldSatisfy` approxEq 0.0
+
+    describe "Unit.Pathing.Cost.slopeSpeedFactor (#375)" $ do
+        it "full uphill grade halves speed at the default penalty" $
+            slopeSpeedFactor pc 1.0
+                `shouldSatisfy` approxEq (1 - pcUphillSpeedPenalty pc)
+
+        it "full downhill grade gives the mild bonus" $
+            slopeSpeedFactor pc (-1.0)
+                `shouldSatisfy` approxEq (1 + pcDownhillSpeedBonus pc)
+
+        it "flat is neutral" $
+            slopeSpeedFactor pc 0 `shouldSatisfy` approxEq 1.0
+
+        it "partial grade scales proportionally" $
+            slopeSpeedFactor pc 0.5
+                `shouldSatisfy` approxEq (1 - 0.5 * pcUphillSpeedPenalty pc)
+
+        it "is floored at 0.1 even for an extreme (unclamped) penalty" $
+            slopeSpeedFactor pc { pcUphillSpeedPenalty = 5.0 } 1.0
+                `shouldSatisfy` approxEq 0.1

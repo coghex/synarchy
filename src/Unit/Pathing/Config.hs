@@ -50,6 +50,18 @@ data PathingConfig = PathingConfig
       --   only ever slow down, never reroute. A* still decides whether to
       --   actually detour; this only gates when we ask. Set very high to
       --   disable material-triggered detours.
+    , pcUphillSpeedPenalty ∷ !Float
+      -- ^ Fraction of move SPEED lost at full uphill grade (#375) —
+      --   heading straight up the fall line of a walkable ramp. 0.5 →
+      --   straight uphill at half speed; a diagonal traverse loses
+      --   proportionally less (the penalty scales with the heading's
+      --   uphill component). Routing costs are unaffected — this is the
+      --   traversal-speed twin of `pcRampFactor`, applied at the movement
+      --   call site like the #312 material factor.
+    , pcDownhillSpeedBonus ∷ !Float
+      -- ^ Fraction of move speed GAINED at full downhill grade (#375).
+      --   Deliberately mild (default 0.1 → at most 10% faster) — downhill
+      --   is neutral-to-slightly-faster, never a sprint multiplier.
     } deriving (Show, Eq)
 
 -- | The historical hard-coded values. Used as the fallback when no
@@ -66,6 +78,8 @@ defaultPathingConfig = PathingConfig
     , pcLakePenalty         = 12.0
     , pcReplanCostThreshold = 5.0
     , pcMaterialReplanMargin = 0.25
+    , pcUphillSpeedPenalty  = 0.5
+    , pcDownhillSpeedBonus  = 0.1
     }
 
 -- | Clamp a parsed config to runtime-safe ranges. Two invariants the
@@ -80,6 +94,12 @@ defaultPathingConfig = PathingConfig
 --       replan trigger) assume non-negative edge weights; a negative
 --       weight breaks the search's admissibility.
 --
+--     * the slope speed modifiers (#375) must keep the speed multiplier
+--       positive and sane: an uphill penalty ≥ 1 would stop (or reverse)
+--       a climbing unit dead, and an unbounded downhill bonus would turn
+--       every descent into a sprint. Penalty capped at 0.9 (never slower
+--       than 10% speed), bonus at 0.5.
+--
 --   Out-of-range values are clamped (not rejected) so a single bad knob
 --   degrades to a sane default instead of failing engine init.
 normalizePathingConfig ∷ PathingConfig → PathingConfig
@@ -92,6 +112,8 @@ normalizePathingConfig pc = pc
     , pcLakePenalty         = max 0 (pcLakePenalty pc)
     , pcReplanCostThreshold = max 0 (pcReplanCostThreshold pc)
     , pcMaterialReplanMargin = max 0 (pcMaterialReplanMargin pc)
+    , pcUphillSpeedPenalty  = min 0.9 (max 0 (pcUphillSpeedPenalty pc))
+    , pcDownhillSpeedBonus  = min 0.5 (max 0 (pcDownhillSpeedBonus pc))
     }
 
 -- | Per-key optional parse: any omitted key keeps its default. (Using
@@ -107,6 +129,8 @@ instance FromJSON PathingConfig where
         <*> o .:? "lake_penalty"          .!= pcLakePenalty         defaultPathingConfig
         <*> o .:? "replan_cost_threshold" .!= pcReplanCostThreshold defaultPathingConfig
         <*> o .:? "material_replan_margin" .!= pcMaterialReplanMargin defaultPathingConfig
+        <*> o .:? "uphill_speed_penalty"  .!= pcUphillSpeedPenalty  defaultPathingConfig
+        <*> o .:? "downhill_speed_bonus"  .!= pcDownhillSpeedBonus  defaultPathingConfig
 
 -- | Load pathing tunables from a YAML file. A missing file is normal
 --   (defaults). A malformed file warns and falls back to defaults

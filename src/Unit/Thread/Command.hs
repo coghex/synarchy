@@ -215,6 +215,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId) =
                     , usGetUpAt          = Nothing
                     , usPendingFallDrop = Nothing
                     , usJumpApex         = Nothing
+                    , usMoveGrade        = 0
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
