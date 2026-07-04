@@ -16,6 +16,15 @@
 -- instanceId nor sharpness, and repair only ever scans a unit's own
 -- held items or a technomule's — never a cargo building's storage —
 -- so flagging an item there would be silently inert).
+--
+-- Eligibility alone isn't enough to offer/show "priority", though: an
+-- item at, say, 80% condition structurally COULD be flagged, but the AI
+-- (unitAi.itemNeedsRepair, mirroring repairSeverity's thresholds) will
+-- never actually pick it up, so a "priority" flag on it would sit
+-- forever with no effect (#303 review). menuItem/suffix/hintLine all
+-- gate the priority branch on itemNeedsRepair; the "[Repairing]" claim
+-- branch doesn't need the same gate — a claimed item was already a
+-- real candidate when it got claimed.
 
 local repairStatus = {}
 
@@ -28,7 +37,9 @@ function repairStatus.suffix(it)
     if not repairStatus.isEligible(it) then return "" end
     local unitAi = require("scripts.unit_ai")
     if unitAi.getRepairClaimant(it.instanceId) then return " [Repairing]" end
-    if unitAi.isRepairPriority(it.instanceId) then return " [Priority]" end
+    if unitAi.isRepairPriority(it.instanceId) and unitAi.itemNeedsRepair(it) then
+        return " [Priority]"
+    end
     return ""
 end
 
@@ -43,25 +54,38 @@ function repairStatus.hintLine(it)
     if unitAi.getRepairClaimant(it.instanceId) then
         return "repair: in progress"
     end
-    if unitAi.isRepairPriority(it.instanceId) then
+    if unitAi.isRepairPriority(it.instanceId) and unitAi.itemNeedsRepair(it) then
         return "repair: queued (priority)"
     end
     return nil
 end
 
 -- A context-menu entry toggling the priority flag, or nil when the
--- item isn't repair-eligible or is already mid-job (can't reprioritize
--- while claimed — the claimant already committed to this instance).
+-- item isn't currently something the AI would act on (not degraded
+-- enough, or already mid-job — can't reprioritize while claimed, the
+-- claimant already committed to this instance).
 function repairStatus.menuItem(it)
     if not repairStatus.isEligible(it) then return nil end
     local unitAi = require("scripts.unit_ai")
     local iid = it.instanceId
     if unitAi.getRepairClaimant(iid) then return nil end
+    if not unitAi.itemNeedsRepair(it) then return nil end
     local pri = unitAi.isRepairPriority(iid)
     return {
         label    = pri and "Un-prioritize Repair" or "Prioritize Repair",
         callback = function() unitAi.setRepairPriority(iid, not pri) end,
     }
+end
+
+-- Fragment for panels that hash item state to decide when to rebuild
+-- (#303 review: a priority toggle or a claim starting/ending must
+-- invalidate those caches the same way a condition/sharpness change
+-- already does — computeInvKey/computeEquipKey in unit_info_v2.lua).
+function repairStatus.cacheKey(it)
+    if not repairStatus.isEligible(it) then return "" end
+    local unitAi = require("scripts.unit_ai")
+    return (unitAi.isRepairPriority(it.instanceId) and "P" or "-")
+        .. tostring(unitAi.getRepairClaimant(it.instanceId) or "-")
 end
 
 return repairStatus

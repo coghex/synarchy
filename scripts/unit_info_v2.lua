@@ -2257,9 +2257,13 @@ local function computeEquipKey(uid, clsName, loadout, accessories)
             -- (gambeson / gloves / boots) loses condition with no sharpness
             -- change, and the slot UI shows condition and a condition<=0
             -- broken overlay. Mirrors the accessory key below.
+            -- Repair priority/claim state (#303 review) so a player
+            -- toggle or the AI claiming/finishing the job invalidates
+            -- this key the same way a condition/sharpness change does.
             pairsT[#pairsT + 1] = slotId .. "=" .. (item.defName or "?")
                                   .. "@" .. tostring(item.condition or 0)
                                   .. "/" .. tostring(item.sharpness or 0)
+                                  .. "/" .. repairStatus.cacheKey(item)
         end
         table.sort(pairsT)
         parts[#parts + 1] = table.concat(pairsT, ";")
@@ -2270,6 +2274,7 @@ local function computeEquipKey(uid, clsName, loadout, accessories)
             accPart[#accPart + 1] = i .. ":" .. (it.defName or "?")
                                     .. "@" .. tostring(it.condition or 0)
                                     .. "/" .. tostring(it.sharpness or 0)
+                                    .. "/" .. repairStatus.cacheKey(it)
         end
         parts[#parts + 1] = table.concat(accPart, ";")
     end
@@ -2718,6 +2723,9 @@ local function computeInvKey(uid, activeTab, items)
             .. "/" .. tostring(it.weight or 0)
             .. "/" .. tostring(it.condition or 0)
             .. "/" .. tostring(it.contentsKey or "")
+            -- Repair priority/claim state (#303 review), same reasoning
+            -- as computeEquipKey above.
+            .. "/" .. repairStatus.cacheKey(it)
     end
     return table.concat(parts, "|")
 end
@@ -3096,6 +3104,23 @@ local function preferredEmptySlot(uid, slots)
     return slots[1] and slots[1].id or nil
 end
 
+-- Wrap a repairStatus.menuItem so clicking it also forces an immediate
+-- panel rebuild (#303 review): computeInvKey/computeEquipKey already
+-- fold in repair priority/claim state so the AI claiming or finishing a
+-- job is picked up on the next tick regardless, but a player's own
+-- click should redraw the SAME frame — every other mutating menu action
+-- below already does this inline.
+local function withInvalidate(menuItem)
+    if not menuItem then return nil end
+    local baseCallback = menuItem.callback
+    menuItem.callback = function()
+        baseCallback()
+        unitInfoV2.lastInvKey   = nil
+        unitInfoV2.lastEquipKey = nil
+    end
+    return menuItem
+end
+
 -- Right-click on an inventory row → context menu with Equip / Unequip.
 -- Routed via uiManager.onInventoryItemRightClick (set by the row's
 -- hit-zone in rebuildInventorySection).
@@ -3209,7 +3234,7 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
     -- autonomous repair job (#302) picks it ahead of the unit's other
     -- degraded gear. Absent entirely once a unit has already claimed
     -- the repair (repairStatus.menuItem returns nil).
-    local repairMenuItem = repairStatus.menuItem(item)
+    local repairMenuItem = withInvalidate(repairStatus.menuItem(item))
     if repairMenuItem then
         items[#items + 1] = repairMenuItem
     end
@@ -3309,7 +3334,7 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
 
     -- Repair queue (#303): the equipped item itself, if any.
     if rec.equippedItem then
-        local repairMenuItem = repairStatus.menuItem(rec.equippedItem)
+        local repairMenuItem = withInvalidate(repairStatus.menuItem(rec.equippedItem))
         if repairMenuItem then
             items[#items + 1] = repairMenuItem
         end
@@ -3354,7 +3379,7 @@ function unitInfoV2.handleAccessoryRowRightClick(elemHandle)
     end
 
     -- Repair queue (#303): the accessory item itself.
-    local repairMenuItem = repairStatus.menuItem(row.item)
+    local repairMenuItem = withInvalidate(repairStatus.menuItem(row.item))
     if repairMenuItem then
         items[#items + 1] = repairMenuItem
     end

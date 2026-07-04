@@ -4542,6 +4542,20 @@ local function repairSeverity(it, params)
     return nil, nil
 end
 
+-- Whether `it` is currently something the autonomous repair AI would
+-- pick up on its own — i.e. repairSeverity would return a candidate for
+-- it (#303 review: without this check, the UI could offer/show
+-- "priority" on an item above both thresholds, which the AI would then
+-- never actually act on). repair_job is only registered for acolytes
+-- today, so acolyte's thresholds are the only ones that matter; this
+-- reads them directly rather than requiring a callers to know which
+-- unit owns the item.
+function unitAi.itemNeedsRepair(it)
+    local params = config.acolyte
+    if not params or not it then return false end
+    return repairSeverity(it, params) ~= nil
+end
+
 -- Best repair candidate among ownerUid's inventory + equipped gear +
 -- accessories. Skips anything already claimed by another live unit.
 -- A player-prioritized item (unitAi.setRepairPriority) always beats a
