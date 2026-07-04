@@ -23,9 +23,13 @@
 --   Re-evaluated on every showPicker() and after a successful place.
 --
 -- Placement is a hybrid, keyed on the picked target's kind:
+--   * Power item building (#358)       → single click → power.placeNode
+--     against whichever selected unit carries a matching item, consuming
+--     it and registering a power node. A click with no carrying unit
+--     selected fails without leaving placement mode.
 --   * Starting building (the portal)   → single click → building.spawn
---     (instant; ghost preview via building.setGhost), then exits back
---     to the default tool.
+--     (instant; ghost preview via building.setGhost), then exits back to
+--     the default tool.
 --   * Non-starting building            → single click →
 --     construction.designate(..., "building", def) (one footprint;
 --     still previewed with building.setGhost). Stays armed so the
@@ -599,6 +603,42 @@ function buildTool.update(dt)
     buildTool.state.lastHoverTile = { igx, igy }
 end
 
+-- One selected unit carrying at least one instance of defName, or nil.
+-- Mirrors cargo_inventory_panel.lua's adjacentSelectedUnit pattern for
+-- sourcing a player-issued inventory action from the current selection
+-- — no adjacency requirement here (ghost placement is a top-down
+-- action like every other building.spawn placement, not a "walk over
+-- there" one).
+local function carryingSelectedUnit(defName)
+    local sel = unit.getSelected() or {}
+    for _, uid in ipairs(sel) do
+        for _, it in ipairs(unit.getInventory(uid) or {}) do
+            if it.defName == defName then return uid end
+        end
+    end
+    return nil
+end
+
+-- Commit a power-node placement at an already hit-tested tile. Power
+-- items (#358: solar_panel / high_voltage_battery) consume a matching
+-- item off a selected unit via power.placeNode. Non-power building
+-- targets are handled by the caller according to the normal build-tool
+-- rules (starting building spawn vs. construction designation).
+--
+-- Returns the placed building id, or nil + a reason on failure.
+function buildTool.commitPlacement(defName, gx, gy)
+    if not power.isPlaceable(defName) then
+        return nil, "not a placeable power item"
+    end
+    local uid = carryingSelectedUnit(defName)
+    if not uid then
+        return nil, "no selected unit carries " .. defName
+    end
+    local nodeId, buildingIdOrErr = power.placeNode(uid, defName, gx, gy)
+    if not nodeId then return nil, buildingIdOrErr end
+    return buildingIdOrErr
+end
+
 -----------------------------------------------------------
 -- Mouse hooks. Called from init.lua's onMouseDown.
 -- Return true if we consumed the click.
@@ -635,7 +675,23 @@ function buildTool.handleMouseDown(button, x, y)
         if target.kind == "building" then
             local valid = building.canPlaceAt(target.def, igx, igy)
             if valid then
-                if target.isStarting then
+                if power.isPlaceable(target.def) then
+                    local id, err = buildTool.commitPlacement(target.def, igx, igy)
+                    if id then
+                        engine.logInfo("BuildTool: placed " .. target.def ..
+                            " (id=" .. tostring(id) ..
+                            ") at " .. igx .. "," .. igy)
+                        buildTool.exitPlacement()
+                        if buildTool.hud and buildTool.hud.selectDefaultTool then
+                            buildTool.hud.selectDefaultTool()
+                        end
+                    else
+                        -- Stay in placement (same as an invalid-tile click)
+                        -- so the player can select a carrying unit and retry.
+                        engine.logInfo("BuildTool: could not place " ..
+                            target.def .. (err and (": " .. tostring(err)) or ""))
+                    end
+                elseif target.isStarting then
                     -- The portal: bootstrap building, still instant.
                     local id = building.spawn(target.def, igx, igy)
                     if id then
