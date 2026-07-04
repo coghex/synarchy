@@ -20,14 +20,18 @@
 -- convention). "Until" mode is computed client-side at Add time: it
 -- reads the CURRENT ground stock of the recipe's first output
 -- (item.listGround(), summed by defName — the same "dropped at the
--- station" pile the craft AI's fetch ladder sources from, #329), and
--- queues an ordinary fixed-count bill for max(0, target - current).
--- This is a snapshot, not a continuously-reappraised target — the
--- engine has no persisted "stock target" concept, and this needed no
--- new one to satisfy "make until I have N" for the common case of
--- topping up a pile once. Recipe rows also show a ground-stock
--- readiness dot using the same tally, with the same "ground only, not
--- the full carried/technomule/cargo fetch ladder" scope note.
+-- station" pile the craft AI's fetch ladder sources from, #329), takes
+-- the ITEM deficit (target - current), and converts it to CRAFT
+-- CYCLES via ceil(deficit / outputsPerCycle) — a bill's count is
+-- cycles, not items, and several recipes yield more than one of the
+-- output per cycle (e.g. smelting: 4 bars/cycle), so passing the raw
+-- item deficit as the count would over-produce. This is a snapshot,
+-- not a continuously-reappraised target — the engine has no persisted
+-- "stock target" concept, and this needed no new one to satisfy "make
+-- until I have N" for the common case of topping up a pile once.
+-- Recipe rows also show a ground-stock readiness dot using the same
+-- tally, with the same "ground only, not the full carried/technomule/
+-- cargo fetch ladder" scope note.
 --
 -- Pause and manual reorder are real backend features (Craft.Bills'
 -- cbPaused / cbSeq, save v73) — see craft.setBillPaused /
@@ -41,7 +45,8 @@
 -- Public API: setup(opts), show(bid), closeIfOpen(), isOpen(),
 --             handleKeyDown(key), recipesForStation(bid) [testable],
 --             formatRecipeSummary(def), parseCount(text),
---             groundStockTally(), recipeAvailability(def, tally).
+--             groundStockTally(), recipeAvailability(def, tally),
+--             untilNeeded(def, target, tally).
 -- Engine hooks: init, update(dt), shutdown.
 
 local craftingPanel = package.loaded["scripts.crafting_panel"] or {}
@@ -231,6 +236,25 @@ function craftingPanel.recipeAvailability(def, tally)
     end
     table.sort(missing)
     return { ready = (#missing == 0), missing = missing }
+end
+
+-- "Until" mode: craft CYCLES needed to bring `def`'s first output's
+-- ground stock up to `target` (an ITEM count), against a
+-- groundStockTally() snapshot. Divides the item deficit by the
+-- recipe's per-cycle output count (several recipes yield more than
+-- one item per craft, e.g. smelting: 4 bars/cycle — a bill's `count`
+-- is cycles, not items) and rounds up so the queued cycles cover at
+-- least the requested target. Returns (nil, currentStock) when the
+-- target is already met (no bill needed) — otherwise
+-- (cyclesNeeded, currentStock).
+function craftingPanel.untilNeeded(def, target, tally)
+    local outDef = def.outputs and def.outputs[1]
+    local have = outDef and (tally[outDef.item] or 0) or 0
+    local perCycle = (outDef and outDef.count and outDef.count > 0)
+        and outDef.count or 1
+    local deficit = math.floor(target) - have
+    if deficit <= 0 then return nil, have end
+    return math.ceil(deficit / perCycle), have
 end
 
 local function truncate(text, maxChars)
@@ -518,12 +542,9 @@ renderRecipes = function()
                         setStatus("Enter a target amount for 'until'", true)
                         return
                     end
-                    local outDef = def.outputs and def.outputs[1]
-                    local have = outDef
-                        and (craftingPanel.groundStockTally()[outDef.item] or 0)
-                        or 0
-                    local needed = math.floor(target) - have
-                    if needed <= 0 then
+                    local neededCycles, have = craftingPanel.untilNeeded(
+                        def, target, craftingPanel.groundStockTally())
+                    if not neededCycles then
                         s.recipeInputs[recipeId] = { count = "", until_ = false }
                         setStatus(string.format(
                             "Already have %d on the ground -- no bill added",
@@ -531,7 +552,7 @@ renderRecipes = function()
                         renderRecipes()
                         return
                     end
-                    count = needed
+                    count = neededCycles
                 else
                     count = craftingPanel.parseCount(text)
                 end
