@@ -491,6 +491,17 @@ function hud.createUI()
         menuFont  = hud.menuFont,
     })
 
+    -- Crafting station bills panel (#330): same page + assets as the
+    -- cargo/item popups above.
+    local craftingPanel = require("scripts.crafting_panel")
+    craftingPanel.setup({
+        page      = hud.world_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+    })
+
     ---------------------------------------------------------
     -- Info panel on its own dedicated page.
     -- This page is shown/hidden independently so we can
