@@ -35,19 +35,26 @@ import World.Types (WorldPageId, WorldState(..))
 --   full wire-tile scan.
 tickPowerNetworks ∷ EngineEnv → WorldPageId → WorldState → Float → IO ()
 tickPowerNetworks env pageId ws dtGame = do
-    nodes ← readIORef (wsPowerNodesRef ws)
-    when (not (HM.null (pnsNodes nodes))) $ do
-        wt  ← readIORef (wsTimeRef ws)
-        td  ← readIORef (wsTilesRef ws)
-        bm  ← readIORef (buildingManagerRef env)
+    nodes0 ← readIORef (wsPowerNodesRef ws)
+    when (not (HM.null (pnsNodes nodes0))) $ do
+        wt ← readIORef (wsTimeRef ws)
+        td ← readIORef (wsTilesRef ws)
+        bm ← readIORef (buildingManagerRef env)
         let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)
             wireTiles   = wireTilesOn td
-            positions   = positionsOf pageId bm nodes
             drainByNode = HM.empty
               -- ^ #361's real requires_power consumers aren't wired up
               --   yet; tickPowerNodes already accepts this map so the
               --   balance math (charge/hold/brownout) is fully covered
               --   by Test.Headless.Power.Network today.
-            nodes'      = tickPowerNodes sunAngle drainByNode dtGame
-                                          wireTiles positions nodes
-        atomicModifyIORef' (wsPowerNodesRef ws) (const (nodes', ()))
+        -- Snapshot-and-clobber would lose any node power.placeNode
+        -- registers between the read above and the write below (both
+        -- this tick and placeNode hit wsPowerNodesRef). Recompute
+        -- positions from and fold the tick into whatever the CURRENT
+        -- registry is inside the atomic update instead — same pattern
+        -- as Combat.Wounds.tickAllWounds / Unit.Thread.publishToRender.
+        atomicModifyIORef' (wsPowerNodesRef ws) $ \current →
+            let positions = positionsOf pageId bm current
+            in ( tickPowerNodes sunAngle drainByNode dtGame
+                                 wireTiles positions current
+               , () )

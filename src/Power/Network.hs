@@ -5,7 +5,11 @@
 --   scripts/wire.lua's autotile shape) plus whichever power nodes sit on
 --   or orthogonally beside it — two nodes that don't share a wire path
 --   are NOT on the same network even if their tiles happen to be
---   adjacent to each other directly.
+--   adjacent to each other directly. A node touching two otherwise-
+--   disconnected wire stubs bridges them into ONE merged network
+--   ('groupByComponent') rather than attaching to both independently —
+--   a proper connected-components partition can't put one node in two
+--   groups at once.
 --
 --   Connectivity and a network's generation/drain numbers are recomputed
 --   fresh every call — nothing about network MEMBERSHIP is persisted,
@@ -40,6 +44,7 @@ module Power.Network
     ) where
 
 import UPrelude
+import Data.List (nub)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Building.Types (BuildingInstance(..), BuildingManager(..))
@@ -95,26 +100,72 @@ wireComponents tiles = go (HS.toList tiles) HS.empty []
                          , not (HS.member n visited) ]
         in bfs (foldl' (flip HS.insert) visited fresh) (rest ++ fresh)
 
--- | A tile attaches to a wire component if it sits ON the wire (rare — a
---   building could share a tile with a wire overlay) or orthogonally
---   beside it.
-attachedTo ∷ (Int, Int) → HS.HashSet (Int, Int) → Bool
-attachedTo tile comp = HS.member tile comp ∨ any (`HS.member` comp) (neighborsOf tile)
+-- | Which wire components (by index into @comps@) a tile touches — the
+--   tile itself (rare — a building could share a tile with a wire
+--   overlay) or any of its 4 orthogonal neighbours. A tile that only
+--   ever touches wire is attached to at most one component (BFS already
+--   guarantees that); a NODE's tile can legitimately touch two or more
+--   otherwise-disconnected wire stubs at once (e.g. a panel sitting
+--   between two separate short runs) — that's the case 'mergedRoots'
+--   below resolves.
+touchedComponents ∷ HM.HashMap (Int, Int) Int → (Int, Int) → [Int]
+touchedComponents tileToIdx tile =
+    nub [ i | t ← tile : neighborsOf tile, Just i ← [HM.lookup t tileToIdx] ]
 
--- | Group a world's nodes by which wire component they attach to,
---   looking each one up in @nodes@ (the single source of truth for its
---   current role/wattage/capacity/charge) by id. Bare wire runs with no
---   attached node produce no group, and a position with no matching node
---   (or a node with no position) is silently skipped — both are
---   defensive, not expected in practice.
+-- | Bare-bones union-find over component indices @[0 .. n-1]@: 'ufFind'
+--   walks parent pointers to the representative; 'ufUnion' points one
+--   root at the other. No path compression / union-by-rank — @n@ is the
+--   wire-component count, expected small, so the naive walk is cheap.
+newtype UnionFind = UnionFind (HM.HashMap Int Int)
+
+ufNew ∷ Int → UnionFind
+ufNew n = UnionFind (HM.fromList [ (i, i) | i ← [0 .. n - 1] ])
+
+ufFind ∷ UnionFind → Int → Int
+ufFind uf@(UnionFind m) i = case HM.lookup i m of
+    Just p | p ≡ i     → i
+           | otherwise → ufFind uf p
+    Nothing            → i
+
+ufUnion ∷ UnionFind → Int → Int → UnionFind
+ufUnion uf@(UnionFind m) a b =
+    let ra = ufFind uf a
+        rb = ufFind uf b
+    in if ra ≡ rb then uf else UnionFind (HM.insert ra rb m)
+
+-- | Group a world's nodes by which (possibly node-merged) wire network
+--   they attach to, looking each one up in @nodes@ (the single source of
+--   truth for its current role/wattage/capacity/charge) by id. A node
+--   touching two or more otherwise-disconnected wire components BRIDGES
+--   them into one network via union-find, rather than being attached to
+--   several components at once (a proper connected-components partition
+--   can't put one vertex in two groups — a node bridging two stubs
+--   physically joins them, it doesn't pick one arbitrarily or generate
+--   into both). A node touching NO wire component at all — including two
+--   nodes directly adjacent to each other with no wire tile between them
+--   — attaches to nothing. Bare wire runs with no attached node produce
+--   no group; a position with no matching node is silently skipped
+--   (defensive, not expected in practice).
 groupByComponent ∷ [HS.HashSet (Int, Int)] → PowerNodes
                  → HM.HashMap PowerNodeId (Int, Int) → [[PowerNode]]
 groupByComponent comps nodes positions =
-    [ grp | comp ← comps
-          , let grp = [ n | (nid, tile) ← HM.toList positions
-                           , attachedTo tile comp
-                           , Just n ← [lookupPowerNode nid nodes] ]
-          , not (null grp) ]
+    let tileToIdx = HM.fromList [ (t, i) | (i, comp) ← zip [0 ..] comps
+                                          , t ← HS.toList comp ]
+        nodeList  = HM.toList positions
+        uf0       = ufNew (length comps)
+        -- Every node that touches 2+ components unions them together.
+        mergedUf  = foldl' (\uf (_, tile) → case touchedComponents tileToIdx tile of
+                        (i : is@(_ : _)) → foldl' (\u j → ufUnion u i j) uf is
+                        _                → uf
+                    ) uf0 nodeList
+        rootFor tile = case touchedComponents tileToIdx tile of
+            (i : _) → Just (ufFind mergedUf i)
+            []      → Nothing
+        byRoot = HM.fromListWith (++)
+                   [ (root, [nid]) | (nid, tile) ← nodeList, Just root ← [rootFor tile] ]
+    in [ grp | nids ← HM.elems byRoot
+             , let grp = [ n | nid ← nids, Just n ← [lookupPowerNode nid nodes] ]
+             , not (null grp) ]
 
 -- | Distribute a charge (non-negative Wh) across batteries proportional
 --   to each one's remaining headroom, so a fuller battery takes less.

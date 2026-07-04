@@ -89,6 +89,41 @@ spec = do
                 [net] → pnwNodeIds net `shouldBe` [srcId]
                 _     → expectationFailure ("expected exactly one network, got " <> show nets)
 
+        it "a node bridging two otherwise-disconnected wire stubs merges them into one network" $ do
+            -- Two 1-tile wire stubs, (4,5) and (6,5), NOT adjacent to each
+            -- other (2 apart in x) — wireComponents sees them as separate
+            -- components. A battery at (5,5) is orthogonally adjacent to
+            -- BOTH: it must bridge them into one network, not attach to
+            -- each independently.
+            let (n1, srcAId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, srcBId) = addPowerNode farPanel PowerSource 100 n1
+                (n3, batId)  = addPowerNode battery PowerStorage 5000 n2
+                positions = HM.fromList [ (srcAId, (4, 4))
+                                        , (batId,  (5, 5))
+                                        , (srcBId, (7, 5)) ]
+                wire = HS.fromList [(4, 5), (6, 5)]
+                nets = computeSnapshots noon HM.empty wire n3 positions
+            case nets of
+                [net] → HS.fromList (pnwNodeIds net)
+                            `shouldBe` HS.fromList [srcAId, batId, srcBId]
+                _     → expectationFailure
+                            ("expected exactly one merged network, got " <> show nets)
+
+        it "the bridged network's battery is charged by BOTH sources, not overwritten" $ do
+            let (n1, srcAId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, srcBId) = addPowerNode farPanel PowerSource 100 n1
+                (n3, batId)  = addPowerNode battery PowerStorage 5000 n2
+                positions = HM.fromList [ (srcAId, (4, 4))
+                                        , (batId,  (5, 5))
+                                        , (srcBId, (7, 5)) ]
+                wire = HS.fromList [(4, 5), (6, 5)]
+                -- noon (full intensity), 1 hour: 100W + 100W = 200 Wh into
+                -- the one shared battery. A regression here (the battery
+                -- ending up at 100, or split across two spurious networks)
+                -- would mean one source's contribution was silently lost.
+                ticked = tickPowerNodes noon HM.empty 3600 wire positions n3
+            pnStoredWh ⊚ lookupPowerNode batId ticked `shouldBe` Just 200
+
     describe "computeSnapshots — instantaneous status" $ do
         it "generation covering drain reads Powered even with no storage" $ do
             let (n1, srcId) = addPowerNode panel PowerSource 400 emptyPowerNodes
