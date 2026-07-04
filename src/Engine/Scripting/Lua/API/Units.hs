@@ -99,6 +99,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetVisibleTilesFn
     , unitGetFrameTextureFn
     , unitGetPortraitTextureFn
+    , unknownUnitTexture
+    , unknownUnitAnimFrame
     ) where
 
 import UPrelude
@@ -247,7 +249,7 @@ loadUnitYamlFn env backendState = do
                                 Just dir → do
                                     handles ← mapM (\(i, p) → do
                                         resolved ← resolveTexturePath env "Unit animation frame"
-                                                       (unknownUnitTexture dir) (T.unpack p)
+                                                       (unknownUnitAnimFrame animName dir i) (T.unpack p)
                                         loadAndRegister env backendState lteq
                                             ("unit_" <> name
                                              <> "_" <> animName
@@ -3945,23 +3947,53 @@ parseDirKey t = case T.toLower t of
     "south-east" → Just DirSE
     _            → Nothing
 
+-- | Folder-name spelling shared by every unknown-unit fallback asset
+--   (static rotations and, since #485, the animated frame sets).
+unknownUnitDirName ∷ Direction → String
+unknownUnitDirName DirS  = "south"
+unknownUnitDirName DirSW = "south-west"
+unknownUnitDirName DirW  = "west"
+unknownUnitDirName DirNW = "north-west"
+unknownUnitDirName DirN  = "north"
+unknownUnitDirName DirNE = "north-east"
+unknownUnitDirName DirE  = "east"
+unknownUnitDirName DirSE = "south-east"
+
 -- | Static per-direction placeholder for a unit whose declared
 --   sprite/portrait/animation-frame texture is missing on disk (#478) —
---   one flat pose per compass direction; every animation reuses its
---   direction's pose until #485 gives it real frames. Non-directional
---   slots (base sprite, portrait) default to the south-facing pose.
+--   one flat pose per compass direction. Used as-is for non-directional
+--   slots (base sprite, portrait, directional sprite) and as the final
+--   fallback for any animation `unknownUnitAnimFrame` doesn't cover.
 unknownUnitTexture ∷ Direction → FilePath
 unknownUnitTexture dir =
-    "assets/textures/units/unknown_unit/rotations/" <> dirName dir <> ".png"
+    "assets/textures/units/unknown_unit/rotations/"
+    <> unknownUnitDirName dir <> ".png"
+
+-- | Frame counts of the unknown-unit fallback's own authored animation
+--   clips (#485), keyed by the SAME animation names real units declare
+--   in their `animations:` block. Only covers the "core" clips the issue
+--   scoped in (idle, walk) — anything else (attacks, death, ...) still
+--   falls back to the single static pose via 'unknownUnitTexture'.
+unknownUnitAnimFrameCounts ∷ [(Text, Int)]
+unknownUnitAnimFrameCounts = [("idle", 4), ("walk", 6)]
+
+-- | Per-animation-frame placeholder for a unit's missing animation
+--   texture (#485): when the requesting animation is one of
+--   'unknownUnitAnimFrameCounts', cycle through the unknown-unit's own
+--   authored clip (index modulo its frame count) instead of freezing on
+--   one pose for every frame, so a placeholder unit reads as "alive"
+--   during headless/GUI iteration. Any other animation name — or a
+--   direction the fallback clip doesn't have — falls back to the
+--   static rotation.
+unknownUnitAnimFrame ∷ Text → Direction → Int → FilePath
+unknownUnitAnimFrame animName dir frameIdx =
+    case lookup animName unknownUnitAnimFrameCounts of
+        Just n  → "assets/textures/units/unknown_unit/animations/"
+                  <> T.unpack animName <> "/" <> unknownUnitDirName dir
+                  <> "/frame_" <> pad3 (frameIdx `mod` n) <> ".png"
+        Nothing → unknownUnitTexture dir
   where
-    dirName DirS  = "south"
-    dirName DirSW = "south-west"
-    dirName DirW  = "west"
-    dirName DirNW = "north-west"
-    dirName DirN  = "north"
-    dirName DirNE = "north-east"
-    dirName DirE  = "east"
-    dirName DirSE = "south-east"
+    pad3 k = let s = show k in replicate (3 - length s) '0' <> s
 
 -- | unit.getItemContents(uid, defName[, instanceId]) → array of { defName,
 --   displayName, count, fill, condition, weight, ... }, GROUPED by item type
