@@ -3224,6 +3224,8 @@ local function placeStructurePiece(job)
             engine.logWarn("construct: post at " .. job.x .. "," .. job.y
                 .. " lost its floor mid-job — skipping placement")
         end
+    elseif job.kind == "wire" then
+        require("scripts.wire").place(job.x, job.y)
     end
 end
 

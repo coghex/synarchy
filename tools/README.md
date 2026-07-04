@@ -167,6 +167,7 @@ docstring instead of reaching for `--help` when in doubt.
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
 | `thermo_altitude_probe.py` | #308 | worldgen (size 128) | Altitude-lapse thermal effect. |
+| `wire_probe.py` | #359 | arena | Wire structure piece: connection-aware autotile shape derivation (adjacency → isolated/end/straight/corner/tee/cross) and the `construct_job` AI placing a real wire tile from a designation. |
 
 Invocation is bare `python3 tools/<name>.py` for sane defaults; most accept
 `--port`/`--seed`/`--size` overrides and a handful have scenario-specific

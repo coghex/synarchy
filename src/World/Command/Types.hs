@@ -125,6 +125,10 @@ data WorldCommand
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
         -- ^ Ghost texture for committed construction designations, keyed
         --   by target category ("structure" | "building").
+    | WorldSetConstructLineMode WorldPageId Bool
+        -- ^ Wire path tool (#359): while true, the anchor→hover preview
+        --   snaps to a straight 1-wide line (the build tool's commit
+        --   snaps identically), instead of the default filled rectangle.
     | WorldSetChopAnchor WorldPageId Int Int
         -- ^ Chop tool (#97): first click anchors the designation
         --   rectangle at (gx, gy). The render pass previews anchor→hover.

@@ -215,6 +215,38 @@ local function structureEntries()
     return entries
 end
 
+-- Wire (#359): a second structure pack, offered alongside dungeon_1's
+-- pieces. Unlike the DF-style rectangle every other structure piece
+-- designates, wire is a PATH tool: the two-click commit snaps to a
+-- straight 1-wide line along whichever axis has the larger extent from
+-- the anchor (snapWirePath), and construction.setLineMode makes the
+-- live anchor→hover ghost preview the SAME line (World/Render/Quads.hs)
+-- instead of a filled rectangle — see isWirePath/enterPlacement/
+-- handleMouseDown below. The connection-aware render (scripts/wire.lua)
+-- then picks each tile's autotile variant from its neighbours, so the
+-- committed line reads as one connected run. The icon reuses the pack's
+-- "cross" connection art — the most recognizable single-glance "this is
+-- wire" shape.
+local function wireTex()
+    if buildTool.wireTex then return buildTool.wireTex end
+    buildTool.wireTex = engine.loadTexture(
+        "assets/textures/structures/wire/cross.png")
+    return buildTool.wireTex
+end
+
+local function wireEntry()
+    return {
+        kind        = "structure",
+        pack        = "wire",
+        piece       = "wire",
+        edge        = nil,
+        displayName = "Wire",
+        description = "Power-grid wire. Connects to adjacent wire tiles.",
+        category    = "Structures",
+        iconTex     = wireTex(),
+    }
+end
+
 -- Full picker entry list: buildings + (once a starting building has been
 -- placed) the structure pieces.
 local function visibleEntries()
@@ -223,6 +255,7 @@ local function visibleEntries()
         for _, e in ipairs(structureEntries()) do
             table.insert(entries, e)
         end
+        table.insert(entries, wireEntry())
     end
     return entries
 end
@@ -538,6 +571,26 @@ function buildTool.handleIconClick(elemHandle)
     return true
 end
 
+-- Wire (#359) is a structure target drawn as a straight PATH rather than
+-- a filled rectangle: see construction.setLineMode / snapWirePath below.
+local function isWirePath(target)
+    return target and target.kind == "structure" and target.pack == "wire"
+end
+
+-- Snap a path endpoint to whichever axis has the larger extent from the
+-- anchor, so a diagonal drag commits as a straight 1-wide line rather
+-- than the filled rectangle every other structure piece designates.
+-- MUST match the engine's line-mode preview exactly (the dx/dy compare
+-- in World/Render/Quads.hs constructPreviewQuads) so what previews is
+-- what commits. Exported (not local) so tools/wire_probe.py can verify
+-- the snap directly instead of only the lower-level construction.*
+-- calls it feeds.
+function buildTool.snapWirePath(ax, ay, x, y)
+    local dx, dy = x - ax, y - ay
+    if math.abs(dx) >= math.abs(dy) then return x, ay
+    else return ax, y end
+end
+
 -----------------------------------------------------------
 -- Placement mode
 -----------------------------------------------------------
@@ -550,14 +603,15 @@ function buildTool.enterPlacement(target)
     buildTool.state.target        = target
     buildTool.state.anchor        = nil
     buildTool.state.lastHoverTile = nil
+    local wid = buildTool.hud and buildTool.hud.worldId
+    if wid then construction.setLineMode(wid, isWirePath(target)) end
 end
 
 function buildTool.exitPlacement()
     building.clearGhost()
-    if buildTool.state.anchor then
-        local wid = buildTool.hud and buildTool.hud.worldId
-        if wid then construction.clearAnchor(wid) end
-    end
+    local wid = buildTool.hud and buildTool.hud.worldId
+    if buildTool.state.anchor and wid then construction.clearAnchor(wid) end
+    if wid then construction.setLineMode(wid, false) end
     buildTool.state.mode          = "off"
     buildTool.state.target        = nil
     buildTool.state.anchor        = nil
@@ -715,7 +769,8 @@ function buildTool.handleMouseDown(button, x, y)
                     end
                 end
             end
-        else -- "structure": DF-style two-click rectangle
+        else -- "structure": DF-style two-click rectangle (or, for wire, a
+             -- two-click straight PATH — see isWirePath/setLineMode above)
             local wid = buildTool.hud and buildTool.hud.worldId
             if wid then
                 if not buildTool.state.anchor then
@@ -723,7 +778,11 @@ function buildTool.handleMouseDown(button, x, y)
                     construction.setAnchor(wid, igx, igy)
                 else
                     local a = buildTool.state.anchor
-                    construction.designate(wid, a[1], a[2], igx, igy,
+                    local x2, y2 = igx, igy
+                    if isWirePath(target) then
+                        x2, y2 = buildTool.snapWirePath(a[1], a[2], igx, igy)
+                    end
+                    construction.designate(wid, a[1], a[2], x2, y2,
                         "structure", target.pack, target.piece, target.edge)
                     buildTool.state.anchor = nil
                 end

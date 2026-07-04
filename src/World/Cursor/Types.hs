@@ -47,6 +47,13 @@ data CursorState = CursorState
     --   reads differently for each. Set from Lua like the cursor textures.
     , constructStructTexture ∷ Maybe TextureHandle
     , constructBuildingTexture ∷ Maybe TextureHandle
+    -- | Wire path tool (#359): while true, the anchor→hover preview (and
+    --   the build tool's commit, which snaps the same way in Lua) is
+    --   constrained to a straight 1-wide LINE along whichever axis has
+    --   the larger extent from the anchor, instead of the filled
+    --   rectangle every other structure piece designates. Set from Lua
+    --   (construction.setLineMode) when entering/leaving wire placement.
+    , constructLineMode ∷ Bool
     -- | Chop-designation tool (#97): first-click anchor tile. Mirrors
     --   'mineAnchor' — the render pass previews the anchor→hover
     --   rectangle until the second click commits it.
@@ -82,6 +89,7 @@ emptyCursorState =
         , constructAnchor = Nothing
         , constructStructTexture = Nothing
         , constructBuildingTexture = Nothing
+        , constructLineMode = False
         , chopAnchor = Nothing
         , chopDesignTexture = Nothing
         , selectedGroundItem = Nothing

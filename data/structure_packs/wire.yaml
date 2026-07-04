@@ -1,0 +1,39 @@
+# Structure pack: wire (#359, power epic #357)
+#
+# Power-grid wire. Unlike dungeon_1's floor/wall/post pieces (one fixed
+# texture per piece), wire is a single piece KIND ("wire") whose rendered
+# texture is picked at placement time from 16 CONNECTION variants — an
+# autotile keyed by which of the tile's 4 cardinal neighbours also carry
+# wire (scripts/wire.lua `shapeFor`). Read directly by scripts/wire.lua
+# (not scripts/structures.lua, which only knows the pieces/walls schema).
+
+name: wire
+
+# Build-job cost (#96), read by the build AI (scripts/unit_ai.lua
+# construct_job) exactly like dungeon_1's `build:` block.
+build:
+  wire: { build_work: 1.5, materials: { wiring: 1 } }
+
+# Shared facemap for every connection variant — wire lies flat like a
+# floor, so it gets the same all-top sun-shading mask.
+facemap: assets/textures/facemap/floorface.png
+
+# Connection variant name -> texture path (tools/make_wire_textures.py
+# generates these; re-run it after changing the art).
+connections:
+  isolated:     assets/textures/structures/wire/isolated.png
+  end_n:        assets/textures/structures/wire/end_n.png
+  end_e:        assets/textures/structures/wire/end_e.png
+  end_s:        assets/textures/structures/wire/end_s.png
+  end_w:        assets/textures/structures/wire/end_w.png
+  straight_ns:  assets/textures/structures/wire/straight_ns.png
+  straight_ew:  assets/textures/structures/wire/straight_ew.png
+  corner_ne:    assets/textures/structures/wire/corner_ne.png
+  corner_nw:    assets/textures/structures/wire/corner_nw.png
+  corner_se:    assets/textures/structures/wire/corner_se.png
+  corner_sw:    assets/textures/structures/wire/corner_sw.png
+  tee_n:        assets/textures/structures/wire/tee_n.png
+  tee_e:        assets/textures/structures/wire/tee_e.png
+  tee_s:        assets/textures/structures/wire/tee_s.png
+  tee_w:        assets/textures/structures/wire/tee_w.png
+  cross:        assets/textures/structures/wire/cross.png
