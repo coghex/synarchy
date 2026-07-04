@@ -53,6 +53,7 @@ import qualified Test.Headless.River.Graph as RiverGraph
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
+import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
@@ -116,6 +117,7 @@ main = hspec $ do
     describe "World.Render.FrontWallLift" FrontWallLift.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
+    describe "World.Render.Zoom.zoomQuadWorldUVs" ZoomBakeUV.spec
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Scene.BatchMerge" BatchMerge.spec

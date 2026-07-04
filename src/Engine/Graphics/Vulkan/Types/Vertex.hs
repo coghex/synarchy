@@ -41,19 +41,27 @@ vertexTotalSize = 48
 renderFlagSelected ∷ Word32
 renderFlagSelected = 1
 
+-- | Pack already-computed cylinder coordinates (u = gx-gy, v = gx+gy)
+-- into the vertex's worldUV attribute: two Word16 halves, v in the high
+-- bits. 'fromIntegral' to 'Word16' truncates by wrapping
+-- (two's-complement), matching the GLSL decode's @(x & 0xFFFF)@
+-- sign-restore exactly — so this round-trips correctly for negative
+-- u/v, only wrapping (not clamping) once |u| or |v| exceeds 32767
+-- tiles (worldSize ≳ 2048, beyond any world this engine generates
+-- today). Split from 'packWorldUV' for callers that already have u,v
+-- in hand (e.g. the zoom map's per-corner bake, #483 review) rather
+-- than a (gx,gy) pair.
+packUV ∷ Int → Int → Word32
+packUV u v =
+    let u16 = fromIntegral (fromIntegral u ∷ Word16) ∷ Word32
+        v16 = fromIntegral (fromIntegral v ∷ Word16) ∷ Word32
+    in (v16 `shiftL` 16) ⌄ u16
+
 -- | Pack a tile's cylinder coordinates (u = gx-gy, v = gx+gy — see
 -- 'World.Plate.worldWidthTiles' / 'World.Time.Local.localSunAngle') into
--- the vertex's worldUV attribute: two Word16 halves, v in the high bits.
--- 'fromIntegral' to 'Word16' truncates by wrapping (two's-complement),
--- matching the GLSL decode's @(x & 0xFFFF)@ sign-restore exactly — so
--- this round-trips correctly for negative u/v, only wrapping (not
--- clamping) once |u| or |v| exceeds 32767 tiles (worldSize ≳ 2048,
--- beyond any world this engine generates today).
+-- the vertex's worldUV attribute. See 'packUV' for the encoding.
 packWorldUV ∷ Int → Int → Word32
-packWorldUV gx gy =
-    let u16 = fromIntegral (fromIntegral (gx - gy) ∷ Word16) ∷ Word32
-        v16 = fromIntegral (fromIntegral (gx + gy) ∷ Word16) ∷ Word32
-    in (v16 `shiftL` 16) ⌄ u16
+packWorldUV gx gy = packUV (gx - gy) (gx + gy)
 
 -- | Backward-compatible Vertex constructor: takes the original 5 fields
 -- and defaults renderFlags AND worldUV to 0. Use the full `Vertex`

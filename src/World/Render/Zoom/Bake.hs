@@ -6,6 +6,7 @@ module World.Render.Zoom.Bake
     , bakeEntriesAtlas
     , ensureBaked
     , ensureBakedAtlas
+    , zoomQuadWorldUVs
     ) where
 
 import UPrelude
@@ -14,9 +15,43 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV)
+                                           , packUV)
 import World.Types
-import World.Grid (gridToWorld)
+import World.Grid (gridToWorld, applyFacing, unapplyFacing)
+
+-- | Per-corner packed world (u,v) for a baked chunk quad's four
+--   RECTANGLE corners (drawX,drawY)/(drawX+w,drawY)/(drawX+w,drawY+h)/
+--   (drawX,drawY+h) — #483. The quad is a screen-space bounding box
+--   around an iso diamond, so its rectangle corners don't line up 1:1
+--   with the chunk's actual (gx,gy) corners once a facing rotates the
+--   view — but screenX/halfW,screenY/halfH IS exactly
+--   @applyFacing facing u v@ (the same rotation 'gridToWorld' applies
+--   to gx,gy; u=gx-gy/v=gx+gy is just a linear reparametrisation of
+--   the grid, so the two rotations commute — verified for all 4
+--   facings). So: rotate each corner's (u,v) the same way, take the
+--   screen-space min/max, then rotate BACK via 'unapplyFacing' to
+--   recover the true (u,v) at each rectangle corner. That makes the
+--   vertex shader's linear interpolation across the quad a genuinely
+--   smooth, facing-independent longitude gradient (not stepped per
+--   chunk), matching what the zoom map's #483 payoff calls for.
+zoomQuadWorldUVs ∷ CameraFacing → Int → Int → (Word32, Word32, Word32, Word32)
+zoomQuadWorldUVs facing baseGX baseGY =
+    let corner gx gy = (gx - gy, gx + gy)
+        corners = [ corner baseGX baseGY
+                  , corner (baseGX + chunkSize) baseGY
+                  , corner baseGX (baseGY + chunkSize)
+                  , corner (baseGX + chunkSize) (baseGY + chunkSize) ]
+        screens = map (uncurry (applyFacing facing)) corners
+        minUs = minimum (map fst screens)
+        maxUs = maximum (map fst screens)
+        minVs = minimum (map snd screens)
+        maxVs = maximum (map snd screens)
+        toPacked us vs = uncurry packUV (unapplyFacing facing us vs)
+    in ( toPacked minUs minVs   -- (drawX, drawY)
+       , toPacked maxUs minVs   -- (drawX + w, drawY)
+       , toPacked maxUs maxVs   -- (drawX + w, drawY + h)
+       , toPacked minUs maxVs   -- (drawX, drawY + h)
+       )
 
 bakeEntries ∷ CameraFacing → V.Vector ZoomChunkEntry
             → (Word8 → Int → TextureHandle)
@@ -40,16 +75,7 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             w = max x0 (max x1 (max x2 x3)) - drawX
             h = max y0 (max y1 (max y2 y3)) - drawY
             white = Vec4 1.0 1.0 1.0 1.0
-            -- One packed value for the whole baked chunk quad, at its
-            -- centre (#483). The quad is a screen-space bounding
-            -- RECTANGLE around an iso diamond (not a 1:1 map of world
-            -- corners to rasterized corners — see gridToWorld), so a
-            -- per-corner value wouldn't interpolate correctly under
-            -- camera rotation; a per-chunk value is seam-safe and
-            -- correct at world scale, just stepped at chunk (16-tile)
-            -- granularity instead of perfectly smooth within one chunk.
-            wuv = packWorldUV (baseGX + chunkSize `div` 2)
-                              (baseGY + chunkSize `div` 2)
+            (wuv0, wuv1, wuv2, wuv3) = zoomQuadWorldUVs facing baseGX baseGY
         in BakedZoomEntry
             { bzeChunkX  = zceChunkX entry
             , bzeChunkY  = zceChunkY entry
@@ -59,10 +85,10 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             , bzeHeight  = h
             , bzeSortKey = fromIntegral (zceChunkY entry)
                          + fromIntegral (zceChunkX entry) * 0.0001
-            , bzeV0      = mkVertexWorld wuv (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
-            , bzeV1      = mkVertexWorld wuv (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
-            , bzeV2      = mkVertexWorld wuv (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
-            , bzeV3      = mkVertexWorld wuv (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
+            , bzeV0      = mkVertexWorld wuv0 (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
+            , bzeV1      = mkVertexWorld wuv1 (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
+            , bzeV2      = mkVertexWorld wuv2 (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
+            , bzeV3      = mkVertexWorld wuv3 (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
             , bzeTexture = texHandle
             , bzeIsOcean = zceIsOcean entry
             , bzeHasLava = zceHasLava entry
@@ -105,10 +131,7 @@ bakeEntriesAtlas facing cache atlasInfo lookupSlot defFmSlot =
             v0  = fromIntegral row * cs / ah
             u1  = (fromIntegral col * cs + cs) / aw
             v1  = (fromIntegral row * cs + cs) / ah
-            -- One packed value per chunk quad, at its centre — see the
-            -- comment on the same line in 'bakeEntries' above (#483).
-            wuv = packWorldUV (baseGX + chunkSize `div` 2)
-                              (baseGY + chunkSize `div` 2)
+            (wuv0, wuv1, wuv2, wuv3) = zoomQuadWorldUVs facing baseGX baseGY
         in BakedZoomEntry
             { bzeChunkX  = zceChunkX entry
             , bzeChunkY  = zceChunkY entry
@@ -118,10 +141,10 @@ bakeEntriesAtlas facing cache atlasInfo lookupSlot defFmSlot =
             , bzeHeight  = h
             , bzeSortKey = fromIntegral (zceChunkY entry)
                          + fromIntegral (zceChunkX entry) * 0.0001
-            , bzeV0      = mkVertexWorld wuv (Vec2 drawX drawY)            (Vec2 u0 v0) white atlasSlot defFmSlot
-            , bzeV1      = mkVertexWorld wuv (Vec2 (drawX + w) drawY)       (Vec2 u1 v0) white atlasSlot defFmSlot
-            , bzeV2      = mkVertexWorld wuv (Vec2 (drawX + w) (drawY + h)) (Vec2 u1 v1) white atlasSlot defFmSlot
-            , bzeV3      = mkVertexWorld wuv (Vec2 drawX (drawY + h))       (Vec2 u0 v1) white atlasSlot defFmSlot
+            , bzeV0      = mkVertexWorld wuv0 (Vec2 drawX drawY)            (Vec2 u0 v0) white atlasSlot defFmSlot
+            , bzeV1      = mkVertexWorld wuv1 (Vec2 (drawX + w) drawY)       (Vec2 u1 v0) white atlasSlot defFmSlot
+            , bzeV2      = mkVertexWorld wuv2 (Vec2 (drawX + w) (drawY + h)) (Vec2 u1 v1) white atlasSlot defFmSlot
+            , bzeV3      = mkVertexWorld wuv3 (Vec2 drawX (drawY + h))       (Vec2 u0 v1) white atlasSlot defFmSlot
             , bzeTexture = atlasHandle
             , bzeIsOcean = zceIsOcean entry
             , bzeHasLava = zceHasLava entry
