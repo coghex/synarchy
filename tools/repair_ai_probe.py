@@ -23,7 +23,12 @@ it IS the machinery under test, unlike movement_probe which neutralises it):
      (before it reaches the mule); a second acolyte must pick the same
      item back up and finish the job — proving the repairClaims stale-claim
      self-heal (mirrors chopClaims/constructClaims).
-  5. role_weight : scripts/unit_roles.lua's weight() gives the "smith" role
+  5. abort_returns_item : the item is fetched off the mule, then its
+     station is destroyed mid-job — the abort must return the fetched
+     item to the mule (abortRepairJob), not leak it into the worker's
+     own inventory (regression for a review finding on the fetch_item ->
+     mid-job-failure path).
+  6. role_weight : scripts/unit_roles.lua's weight() gives the "smith" role
      (#265, previously dormant) its first real ON_ROLE boost on repair_job,
      and now correctly damps a smith's OTHER routine work — a pure Lua
      check, no world/units needed.
@@ -464,8 +469,61 @@ def phase_dead_claimant_release(port: int) -> None:
     destroy_unit(port, mule)
 
 
+def phase_abort_returns_item(port: int) -> None:
+    print("\n[phase 5] a job aborted AFTER fetch_item returns the fetched "
+          "item to the mule (regression: it used to leak into the "
+          "worker's own inventory)")
+    bid = build_station(port, "furnace", 35, 2, {"granite_chunk": 6, "steel_bar": 2})
+    mule = spawn_mule(port, 37.5, 3.5)
+    axe = force_item_state(port, mule, "axe_steel", cond=5.0, sharp=100.0)
+    send(port, f"unit.addItem({mule}, 'lignite_chunk'); return 'ok'")
+    uid = spawn_acolyte(port, 36.5, 3.5)
+    send(port, f"unit.setStat({uid}, 'strength', 3.0); return 'ok'")  # see phase 3's note
+
+    claimed = poll_until(port, 30, lambda: has_repair_job(port, uid))
+    check("acolyte claimed the mule-held item", claimed is not None)
+
+    fetched = poll_until(port, 30, lambda: count_item(port, uid, "axe_steel") == 1)
+    check("item fetched off the mule into the acolyte's own inventory",
+          fetched is not None)
+
+    # Wait for the "walking" phase to actually CACHE job.bid to this
+    # specific station before destroying it — earlier phases' furnaces
+    # (#1 etc.) persist in this shared arena, so destroying ours before
+    # job.bid is cached would just send the acolyte on a long walk to one
+    # of those instead of aborting (job.bid pins the abort to THIS
+    # building regardless of what else exists elsewhere).
+    bid_cached = poll_until(port, 30, lambda: jget(port,
+        f"local ai=require('scripts.unit_ai'); local st=ai.getState({uid}); "
+        f"return st and st.repairJob and st.repairJob.bid") == bid)
+    check("acolyte's job cached this station before it's destroyed",
+          bid_cached is not None)
+
+    # Destroy that cached station WHILE the item is sitting in the
+    # acolyte's inventory (mid-job, past fetch_item) — forces the
+    # "walking" phase's missing-building abort. Since the station is now
+    # genuinely gone, repairUtility's own reachability gate also stops the
+    # acolyte from re-claiming this axe once the job releases (there's no
+    # other repair_condition station within its scan of the mule/axe).
+    send(port, f"building.destroy({bid}); return 'ok'")
+
+    returned = poll_until(port, 30, lambda: count_item(port, mule, "axe_steel") == 1)
+    check("aborted job returns the fetched item to the mule (not leaked)",
+          returned is not None)
+    # Destroy the acolyte the INSTANT the return is observed: a farther
+    # repair_condition station (phase 1's furnace) still exists elsewhere
+    # in this shared arena, so the still-degraded axe would otherwise be
+    # a valid (if distant) candidate again on the very next thought tick —
+    # this check only cares that THIS abort didn't leak the item, not
+    # whether a later, unrelated claim eventually re-fetches it.
+    destroy_unit(port, uid)
+    check("acolyte no longer holds the item after the abort",
+          count_item(port, mule, "axe_steel") == 1)
+    destroy_unit(port, mule)
+
+
 def phase_role_weight(port: int) -> None:
-    print("\n[phase 5] role_weight: smith's (#265) first real ON_ROLE "
+    print("\n[phase 6] role_weight: smith's (#265) first real ON_ROLE "
           "effect on repair_job")
     family = jget(port,
         "return require('scripts.unit_roles').ACTION_FAMILY.repair_job")
@@ -493,6 +551,7 @@ PHASES = {
     "equipped_ground": phase_equipped_ground,
     "mule_spare_gear": phase_mule_spare_gear,
     "dead_claimant_release": phase_dead_claimant_release,
+    "abort_returns_item": phase_abort_returns_item,
     "role_weight": phase_role_weight,
 }
 

@@ -3995,6 +3995,25 @@ local function releaseRepairJob(s, uid)
     s.repairPhase = nil
 end
 
+-- Abort the current job. If the target item was already fetched off
+-- the mule (job.itemFetched, set once fetch_item's transfer lands), it
+-- is now sitting in THIS unit's own inventory — return it before
+-- releasing, or it silently disappears from the mule's stock into
+-- whichever acolyte was mid-job when something else failed later
+-- (missing consumable, a destroyed station, a last-second repair
+-- failure, ...). Every abort past fetch_item must go through this
+-- instead of a bare releaseRepairJob.
+local function abortRepairJob(uid, s, info)
+    local job = s.repairJob
+    if job and job.itemFetched and info then
+        local mule = findTechnomule(info.gridX, info.gridY)
+        if mule then
+            unit.transferItemToUnit(uid, mule.uid, job.defName)
+        end
+    end
+    releaseRepairJob(s, uid)
+end
+
 -- How urgent is repairing this one item, and which axis? Condition is
 -- checked before sharpness — a broken/low-condition item is
 -- combat-catastrophic (zero armor protection, or a crippled weapon)
@@ -4107,7 +4126,7 @@ end
 
 local function repairExecute(uid, s, params)
     local info = unit.getInfo(uid)
-    if not info then releaseRepairJob(s, uid); return end
+    if not info then abortRepairJob(uid, s, info); return end
     local now = engine.gameTime()
 
     -- Claim a fresh job from the scored candidate.
@@ -4151,21 +4170,25 @@ local function repairExecute(uid, s, params)
         end
         unit.stop(uid)
         if not unit.transferItemToUnit(mule.uid, uid, job.defName) then
-            releaseRepairJob(s, uid)   -- raced — someone else took it
+            releaseRepairJob(s, uid)   -- raced — someone else took it; never fetched
             return
         end
+        -- Something of this defName is now in our own inventory — any
+        -- abort from here on must return it (abortRepairJob).
+        job.itemFetched = true
         -- transferItemToUnit is defName-scoped, not instance-scoped:
         -- if the mule held more than one copy of this def, the wrong
         -- one may have come across (#302 known limitation — a true
         -- instance-targeted transfer needs an engine-side addition).
         -- Verify; on a mismatch, abandon rather than repair the wrong
-        -- copy under the flagged instance's claim.
+        -- copy under the flagged instance's claim (still returning the
+        -- (wrong) fetched item to the mule via abortRepairJob).
         local got = false
         for _, it in ipairs(unit.getInventory(uid) or {}) do
             if it.instanceId == job.instanceId then got = true end
         end
         if not got then
-            releaseRepairJob(s, uid)
+            abortRepairJob(uid, s, info)
             return
         end
         s.repairPhase = "fetch_consumable"
@@ -4206,7 +4229,7 @@ local function repairExecute(uid, s, params)
             -- re-evaluate next tick (camping the job gains nothing).
             reportFailure(uid, "No " .. job.consumable
                 .. " available to repair " .. job.defName)
-            releaseRepairJob(s, uid)
+            abortRepairJob(uid, s, info)
             return
         end
         s.repairPhase = "walking"
@@ -4217,10 +4240,10 @@ local function repairExecute(uid, s, params)
         if not job.bid then
             job.bid = building.findStation(job.recipeId, math.floor(info.gridX),
                                            math.floor(info.gridY))
-            if not job.bid then releaseRepairJob(s, uid); return end
+            if not job.bid then abortRepairJob(uid, s, info); return end
         end
         local binfo = building.getInfo(job.bid)
-        if not binfo then releaseRepairJob(s, uid); return end
+        if not binfo then abortRepairJob(uid, s, info); return end
         local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
         local tw, th = binfo.tileW or 1, binfo.tileH or 1
         local cheb = chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th)
@@ -4249,7 +4272,7 @@ local function repairExecute(uid, s, params)
             if not (err and err:find("already at full")) then
                 reportFailure(uid, "Repair failed: " .. tostring(err))
             end
-            releaseRepairJob(s, uid)
+            abortRepairJob(uid, s, info)
             return
         end
         grantWorkXP(uid, "smithing", params.repair_xp_per_repair or 0)
@@ -4257,13 +4280,9 @@ local function repairExecute(uid, s, params)
         -- instance of this defName is now equally "the good one"
         -- (full-restore-per-visit, #301), so the earlier defName-scoped
         -- fetch's instance ambiguity no longer matters post-repair.
-        if job.onMule then
-            local mule = findTechnomule(info.gridX, info.gridY)
-            if mule then
-                unit.transferItemToUnit(uid, mule.uid, job.defName)
-            end
-        end
-        releaseRepairJob(s, uid)
+        -- abortRepairJob's "return the fetched item" step (keyed on
+        -- job.itemFetched) handles this the same way a mid-job abort does.
+        abortRepairJob(uid, s, info)
     end
 end
 
