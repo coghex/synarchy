@@ -29,10 +29,10 @@ package.loaded["scripts.unit_roles"] = M
 -- Derivation order is the tie-break: earlier entries win an exact
 -- skill tie, so listing is deterministic (pairs() order is not).
 --
--- `family` groups the work actions a role prefers. smith has no work
--- actions yet — the craft AI is #329 — so its family ("craft") appears
--- in no ACTION_FAMILY entry and the role stays weight-neutral: a pure
--- label until crafting gives it work to favor.
+-- `family` groups the work actions a role prefers. smith's family
+-- ("craft") maps to the craft_job bill-work action (#329), which
+-- grants trade-skill XP (the recipe's skill tag, default smithing) —
+-- so working the forge is what makes a Smith.
 M.ROLES = {
     { name = "miner",      display = "Miner",      skill = "mining",       family = "mine"  },
     { name = "woodcutter", display = "Woodcutter", skill = "woodcutting",  family = "wood"  },
@@ -51,6 +51,7 @@ M.ACTION_FAMILY = {
     build_nearby          = "build",
     deliver_to_build_site = "build",
     store_materials       = "build",
+    craft_job             = "craft",
 }
 
 M.THRESHOLD     = 30.0   -- min skill to claim a specialist role
@@ -63,8 +64,7 @@ M.OFF_ROLE      = 0.7    -- entry-utility damp for other work families
 local byName = {}
 for _, r in ipairs(M.ROLES) do byName[r.name] = r end
 
--- Families that actually map to work actions (smith's "craft" won't
--- appear here until #329 lands crafting work actions).
+-- Families that actually map to work actions.
 local familyHasActions = {}
 for _, fam in pairs(M.ACTION_FAMILY) do familyHasActions[fam] = true end
 
