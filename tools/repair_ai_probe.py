@@ -38,6 +38,17 @@ it IS the machinery under test, unlike movement_probe which neutralises it):
      (#265, previously dormant) its first real ON_ROLE boost on repair_job,
      and now correctly damps a smith's OTHER routine work — a pure Lua
      check, no world/units needed.
+  8. player_priority : the #303 UI hook — unitAi.setRepairPriority flags a
+     LOWER-severity item (mildly degraded armor) ahead of a HIGHER-severity
+     one (a broken weapon) on the same acolyte, proving scanHeldItems'
+     priority-first comparison overrides its normal severity ordering (the
+     inverse of phase 1). Also checks isRepairPriority's before/after state
+     and that the flag self-clears once the prioritized item is actually
+     repaired.
+  9. priority_gating : #303 review — an item above BOTH thresholds can't be
+     offered/shown as "priority" even if flagged at the backend, since the
+     AI would never actually act on it. Pure Lua checks against synthetic
+     item tables (no world/units needed, mirrors phase 7).
 
 Test fixtures deliberately use condition/sharpness = 5 (not 20-40) for the
 "degraded but not broken" cases: repair_job's utility (base 1.2 * severity)
@@ -590,6 +601,90 @@ def phase_role_weight(port: int) -> None:
           weight("miner", "dig_designation") == 1.4)
 
 
+def phase_player_priority(port: int) -> None:
+    print("\n[phase 8] player-set repair priority (#303 UI) beats a "
+          "higher-severity, unflagged candidate")
+    build_station(port, "furnace", 3, -12, {"granite_chunk": 6, "steel_bar": 2})
+    uid = spawn_acolyte(port, 4.5, -11.5)
+    send(port, "item.spawnGround('lignite_chunk', 6.5, -12.5); "
+               "item.spawnGround('lignite_chunk', 6.5, -11.5); return 'ok'")
+    # Broken weapon (severity band, the higher of the two — see
+    # repairSeverity) vs. a mildly degraded armor piece (quadratic-ramp
+    # severity, lower) that the player flags as priority. Phase 1 proves
+    # the unflagged ordering picks the broken weapon first; this phase
+    # proves flagging the armor inverts that.
+    axe = force_item_state(port, uid, "axe_steel", cond=0.0, sharp=100.0)
+    gam = force_item_state(port, uid, "wool_gambeson", cond=5.0, sharp=100.0)
+
+    check("item starts unflagged", send(port,
+        f"local ai=require('scripts.unit_ai'); "
+        f"return ai.isRepairPriority({gam})") == "false")
+
+    flagged = send(port,
+        f"local ai=require('scripts.unit_ai'); "
+        f"ai.setRepairPriority({gam}, true); "
+        f"return ai.isRepairPriority({gam})") == "true"
+    check("unitAi.setRepairPriority flags the armor instance", flagged)
+
+    gam_done = poll_until(port, 120,
+        lambda: (item_state(port, uid, gam) or {}).get("cond") == 100)
+    check("player-prioritized armor (lower severity) repaired FIRST",
+          gam_done is not None)
+
+    axe_mid = item_state(port, uid, axe)
+    check("higher-severity weapon untouched while the priority job ran",
+          axe_mid is not None and axe_mid["cond"] == 0)
+
+    check("priority flag self-clears once the item is actually repaired",
+          send(port, f"local ai=require('scripts.unit_ai'); "
+                     f"return ai.isRepairPriority({gam})") == "false")
+
+    axe_done = poll_until(port, 120,
+        lambda: (item_state(port, uid, axe) or {}).get("cond") == 100)
+    check("un-prioritized weapon repaired afterward", axe_done is not None)
+    destroy_unit(port, uid)
+
+
+def phase_priority_gating(port: int) -> None:
+    print("\n[phase 9] priority menu/status is gated on the item actually "
+          "needing repair (#303 review: an above-threshold item flagged "
+          "'priority' would otherwise sit forever with no effect)")
+    # Pure Lua checks against synthetic item tables — no world/units
+    # needed (mirrors phase 7's role_weight). repairStatus reads only
+    # the fields it's handed (instanceId/condition/sharpness), so a
+    # fabricated table exercises the same code path a real item would.
+    healthy = "{instanceId=999901, condition=90, sharpness=100}"
+    degraded = "{instanceId=999902, condition=5, sharpness=100}"
+
+    check("itemNeedsRepair is false for a healthy item (90% > threshold)",
+          jget(port, f"local ai=require('scripts.unit_ai'); "
+                     f"return ai.itemNeedsRepair({healthy})") is False)
+    check("itemNeedsRepair is true for a degraded item (5% < threshold)",
+          jget(port, f"local ai=require('scripts.unit_ai'); "
+                     f"return ai.itemNeedsRepair({degraded})") is True)
+
+    # Flag the HEALTHY instance directly at the backend (simulating any
+    # path that could set the flag without going through the gated
+    # menu) and confirm the UI layer refuses to offer/show it anyway.
+    send(port, "local ai=require('scripts.unit_ai'); "
+               "ai.setRepairPriority(999901, true); return 'ok'")
+    check("menuItem offers nothing for a flagged-but-healthy item",
+          jget(port, f"local rs=require('scripts.ui.repair_status'); "
+                     f"return rs.menuItem({healthy}) ~= nil") is False)
+    check("suffix shows nothing for a flagged-but-healthy item",
+          jget(port, f"local rs=require('scripts.ui.repair_status'); "
+                     f"return rs.suffix({healthy})") == "")
+    check("hintLine shows nothing for a flagged-but-healthy item",
+          jget(port, f"local rs=require('scripts.ui.repair_status'); "
+                     f"return rs.hintLine({healthy})") is None)
+
+    # The degraded instance, still unflagged, DOES get offered.
+    check("menuItem offers 'Prioritize Repair' for a degraded item",
+          jget(port, f"local rs=require('scripts.ui.repair_status'); "
+                     f"local m = rs.menuItem({degraded}); "
+                     f"return m ~= nil and m.label") == "Prioritize Repair")
+
+
 PHASES = {
     "own_inventory": phase_own_inventory,
     "equipped_ground": phase_equipped_ground,
@@ -598,6 +693,8 @@ PHASES = {
     "abort_returns_item": phase_abort_returns_item,
     "own_item_collision": phase_own_item_collision,
     "role_weight": phase_role_weight,
+    "player_priority": phase_player_priority,
+    "priority_gating": phase_priority_gating,
 }
 
 
