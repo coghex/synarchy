@@ -26,10 +26,13 @@ module World.Generate.InitTerrain
     , computeChunkBorderedPipeline
     , BorderedTerrainCache
     , borderedToInterior
+    , PlateBaseCache
+    , buildPlateBaseCache
     ) where
 
 import UPrelude
 import Control.Monad.ST (runST)
+import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
@@ -43,7 +46,8 @@ import World.Geology.Coastal.Types (CoastalTable)
 import World.Geology.Timeline.Types (GeoTimeline)
 import World.Material (MaterialId, MaterialRegistry, matGlacier)
 import World.Plate
-    (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
+    (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU
+    , worldWidthTiles)
 import World.Scale (computeWorldScale)
 
 -- | Per-chunk cached output of the init-time bordered pipeline
@@ -57,26 +61,89 @@ import World.Scale (computeWorldScale)
 type BorderedTerrainCache =
     HM.HashMap ChunkCoord (VU.Vector Int, VU.Vector MaterialId)
 
+-- | Plate-base (elevation, material) for every WRAPPED global
+--   coordinate ('wrapGlobalU' output) a chunk border can query, held
+--   as a flat square indexed @(gx+halfW)*dim+(gy+halfW)@ (@dim = 2 *
+--   halfW + 1@, @halfW@ the stored 'Int'). #500: every chunk's 44×44
+--   bordered window ('computeChunkTimelinePipeline' below)
+--   independently recomputes 'elevationAtGlobal' for its border tiles,
+--   and adjacent chunks' 14-tile borders overlap heavily — each
+--   physical tile lands in ~3×3 neighbouring windows. Building this
+--   once and sharing it across 'buildTimelineStageCache' cuts that
+--   redundancy to zero without changing any output (same deterministic
+--   function, same wrapped-coordinate arguments, just memoized).
+--
+--   A flat array, not a 'HM.HashMap': a first cut keyed on a
+--   @HashMap (Int,Int)@ turned out to cost more in hashing/boxing over
+--   ~30M border-tile lookups than it saved by deduplicating
+--   'elevationAtGlobal' calls. O(1) array indexing has neither cost.
+type PlateBaseCache = (Int, VU.Vector (Int, MaterialId))
+
+-- | Build the plate-base cache by direct index computation rather
+--   than by replaying chunk-window loops: 'wrapGlobalU' always
+--   normalizes u (= gx − gy) into @[-halfW, halfW)@, and v (= gx + gy)
+--   is invariant under wrapping and excluded beyond the glacier
+--   (@isBeyondGlacier@ is a strict @>@, so @[-halfW, halfW]@ inclusive
+--   is kept) — so any (gx, gy) a chunk border can query, once wrapped,
+--   falls inside this @dim × dim@ square with both checks passing.
+--   Cells outside them (roughly half the square — u can range twice as
+--   wide as its canonical window once gx and gy vary independently)
+--   are unreachable by any real query, so they're filled with a cheap
+--   placeholder instead of paying for 'elevationAtGlobal'.
+buildPlateBaseCache ∷ Word64 → [TectonicPlate] → Int → PlateBaseCache
+buildPlateBaseCache seed plates worldSize =
+    let w     = worldWidthTiles worldSize
+        halfW = w `div` 2
+        dim   = 2 * halfW + 1
+        computeCell gx gy =
+            let u = gx - gy
+            in if u < negate halfW ∨ u ≥ halfW
+                  ∨ isBeyondGlacier worldSize gx gy
+               then (0, matGlacier)
+               else elevationAtGlobal seed plates worldSize gx gy
+        rows = [ VU.generate dim (\j → computeCell (i - halfW) (j - halfW))
+               | i ← [0 .. dim - 1]
+               ]
+                   `using` parListChunk 8 rdeepseq
+    in (halfW, VU.concat rows)
+
+-- | Look up a wrapped global coordinate in a 'PlateBaseCache'.
+lookupPlateBase ∷ PlateBaseCache → Int → Int → (Int, MaterialId)
+lookupPlateBase (halfW, vec) gx gy =
+    let dim = 2 * halfW + 1
+    in vec VU.! ((gx + halfW) * dim + (gy + halfW))
+
 -- | Stage 1: plate-base → 'applyTimelineChunk' for one chunk's
 --   bordered region. Per-tile output is window-position-independent
 --   (verified by the BorderProbe), so 'buildTimeline' can stitch
 --   these interiors into the unambiguous global pre-coastal terrain
 --   that 'identifyCoastalErosion' runs against.
+--
+--   @mBaseCache@, when supplied, is consulted instead of calling
+--   'elevationAtGlobal' directly — see 'PlateBaseCache'. One-shot
+--   callers with no shared cache (e.g. 'computeChunkBorderedPipeline')
+--   pass 'Nothing' and get the original per-call behaviour.
 computeChunkTimelinePipeline
     ∷ Word64
     → [TectonicPlate]
     → Int                  -- ^ worldSize
     → MaterialRegistry
     → GeoTimeline
+    → Maybe PlateBaseCache
     → ChunkCoord
     → (VU.Vector Int, VU.Vector MaterialId)
-computeChunkTimelinePipeline seed plates worldSize registry timeline coord =
+computeChunkTimelinePipeline seed plates worldSize registry timeline
+                             mBaseCache coord =
     let wsc        = computeWorldScale worldSize
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize
         fromIndex idx =
             let (by, bx) = idx `divMod` borderSize
             in (bx - chunkBorder, by - chunkBorder)
+
+        lookupBase gx' gy' = case mBaseCache of
+            Just cache → lookupPlateBase cache gx' gy'
+            Nothing    → elevationAtGlobal seed plates worldSize gx' gy'
 
         (baseElev, baseMat) = runST $ do
             elevM ← VUM.new borderArea
@@ -90,8 +157,7 @@ computeChunkTimelinePipeline seed plates worldSize registry timeline coord =
                         VUM.write elevM idx (seaLevel + 100)
                         VUM.write matM  idx matGlacier
                     else do
-                        let (elev, mat) =
-                                elevationAtGlobal seed plates worldSize gx' gy'
+                        let (elev, mat) = lookupBase gx' gy'
                         VUM.write elevM idx elev
                         VUM.write matM  idx mat
             elevF ← VU.unsafeFreeze elevM
@@ -133,7 +199,7 @@ computeChunkBorderedPipeline seed plates worldSize registry coastal
                              timeline coord =
     finishBorderedPipeline coastal coord
         (computeChunkTimelinePipeline seed plates worldSize registry
-                                      timeline coord)
+                                      timeline Nothing coord)
 
 -- | Slice a bordered elevation vector down to the @chunkSize^2@
 --   interior used by 'buildWorldTerrain' for the global priority
