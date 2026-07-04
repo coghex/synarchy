@@ -18,7 +18,7 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
-                                          , renderFlagSelected)
+                                          , renderFlagSelected, packWorldUV)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
@@ -255,6 +255,7 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             actualSlot = lookupSlot texHandle
             tint = Vec4 1.0 1.0 1.0 tileAlpha
             flags = if isSel then renderFlagSelected else 0
+            wuv = uncurry packWorldUV baseTile
 
             -- Horizontal flip: swap U coordinates between left and right
             -- vertices. The geometry stays the same; only the texture
@@ -265,13 +266,13 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
                                else (0, 1, 1, 0)
 
             v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 u0 0) tint (fromIntegral actualSlot) defFmSlot flags
+                         (Vec2 u0 0) tint (fromIntegral actualSlot) defFmSlot flags wuv
             v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 u1 0) tint (fromIntegral actualSlot) defFmSlot flags
+                         (Vec2 u1 0) tint (fromIntegral actualSlot) defFmSlot flags wuv
             v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 u2 1) tint (fromIntegral actualSlot) defFmSlot flags
+                         (Vec2 u2 1) tint (fromIntegral actualSlot) defFmSlot flags wuv
             v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 u3 1) tint (fromIntegral actualSlot) defFmSlot flags
+                         (Vec2 u3 1) tint (fromIntegral actualSlot) defFmSlot flags wuv
 
         in Just SortableQuad
             { sqSortKey = sortKey

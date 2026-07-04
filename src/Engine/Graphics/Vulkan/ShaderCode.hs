@@ -99,6 +99,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 3) in float inTexIndex;
     layout(location = 4) in float inFaceMapIndex;
     layout(location = 5) in uint inRenderFlags;
+    layout(location = 6) in uint inWorldUV;
 
     layout(set = 0, binding = 0) uniform UniformBufferObject {
         mat4 model;
@@ -114,6 +115,7 @@ bindlessVertexShaderCode = [vert|
         float ambientLight;
         float cameraFacing;
         float defaultFaceMapSlot;
+        float worldCircumferenceTiles;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -122,7 +124,6 @@ bindlessVertexShaderCode = [vert|
     layout(location = 3) out float fragBrightness;
     layout(location = 4) out flat int fragFaceMapIndex;
     layout(location = 5) out float fragSunAngle;
-    layout(location = 6) out float fragAmbientLight;
     layout(location = 7) out float fragCameraFacing;
     layout(location = 8) out flat uint fragRenderFlags;
     layout(location = 9) out flat int fragDefaultFaceMapSlot;
@@ -146,8 +147,28 @@ bindlessVertexShaderCode = [vert|
         fragTexIndex = int(inTexIndex);
         fragBrightness = ubo.brightness;
         fragFaceMapIndex = int(inFaceMapIndex);
-        fragSunAngle = ubo.sunAngle;
-        fragAmbientLight = ubo.ambientLight;
+
+        // Longitude-local day/night (#483): decode the tile's packed
+        // world u (low 16 bits, sign-restored) and offset the global
+        // sun angle by its fraction of a full trip around the world
+        // cylinder (u = gx - gy). Raw world coords, NOT screen-space —
+        // rotating the camera must not re-light the world.
+        //
+        // Deliberately NOT wrapped (no fract()) before interpolation:
+        // a quad whose corners straddle the wrap point (e.g. u values
+        // giving 0.99 and 0.01) would otherwise interpolate through
+        // 0.5 — a false noon band across what should read as smooth
+        // midnight. The unwrapped phase is smooth and continuous
+        // everywhere (no per-vertex discontinuity to interpolate
+        // across), and every consumer of fragSunAngle downstream
+        // (this fragment shader's sin/cos and computeAmbientLight) is
+        // built from sin()/cos(), which are exactly periodic for any
+        // real input — so no fract() is needed anywhere in the pipeline.
+        int rawU = int(inWorldUV & 0xFFFFu);
+        if (rawU >= 32768) rawU -= 65536;
+        float circumference = max(ubo.worldCircumferenceTiles, 1.0);
+        fragSunAngle = ubo.sunAngle + float(rawU) / circumference;
+
         fragCameraFacing = ubo.cameraFacing;
         fragRenderFlags = inRenderFlags;
         fragDefaultFaceMapSlot = int(ubo.defaultFaceMapSlot);
@@ -167,13 +188,33 @@ bindlessFragmentShaderCode = [frag|
     layout(location = 2) in flat int fragTexIndex;
     layout(location = 3) in float fragBrightness;
     layout(location = 4) in flat int fragFaceMapIndex;
+    // Longitude-local day/night (#483): UNWRAPPED phase (no fract() on
+    // the vertex side — see bindlessVertexShaderCode). Interpolated
+    // across the primitive, then wrapped/lit here per-fragment so a
+    // quad straddling the wrap point reads as smooth midnight instead
+    // of a false noon band.
     layout(location = 5) in float fragSunAngle;
-    layout(location = 6) in float fragAmbientLight;
     layout(location = 7) in float fragCameraFacing;
     layout(location = 8) in flat uint fragRenderFlags;
     layout(location = 9) in flat int fragDefaultFaceMapSlot;
 
     layout(set = 1, binding = 0) uniform sampler2D textures[16384];
+
+    // Ambient-light curve (#483) — GLSL port of Engine.Loop.Frame's
+    // computeAmbientLight. Evaluated here (fragment-side, per-pixel)
+    // from the per-fragment interpolated LOCAL sun angle, built
+    // entirely from sin() — exactly periodic for any real input, so
+    // it's correct whether or not fragSunAngle has been reduced to
+    // [0,1).
+    float computeAmbientLight(float sunAngle) {
+        float angle = sunAngle * 6.28318530718;
+        float sunHeight = sin(angle);
+        if (sunHeight >= 0.0) {
+            return 0.5 + 0.2 * sunHeight;
+        } else {
+            return 0.15 + 0.35 * (1.0 + sunHeight);
+        }
+    }
 
     // Handle→slot table (#286). Vertices carry a STABLE texture-handle id;
     // this maps it to the live bindless slot at draw time, so cached
@@ -252,7 +293,7 @@ bindlessFragmentShaderCode = [frag|
         float baseAngle = fragSunAngle * 6.28318530718;
         float sunHeight = sin(baseAngle);
         float sunDir = cos(baseAngle + facingOffset);
-        float ambient = fragAmbientLight;
+        float ambient = computeAmbientLight(fragSunAngle);
         float sunIntensity = max(0.0, sunHeight);
         
         float topBright = ambient + (1.0 - ambient) * sunIntensity;

@@ -9,7 +9,8 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
+                                           , packWorldUV)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
@@ -167,14 +168,15 @@ waterSideQuad lookupSlot lookupFmSlot textures facing ftype gx gy z isLeft
 
             -- No tinting — color comes from texture
             tint = Vec4 1.0 1.0 1.0 tileAlpha
+            wuv = packWorldUV gx gy
 
-            v0 = mkVertex (Vec2 drawX drawY)
+            v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                          (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)
+            v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)
                          (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-            v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+            v2 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) (drawY + tileHeight))
                          (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            v3 = mkVertex (Vec2 drawX (drawY + tileHeight))
+            v3 = mkVertexWorld wuv (Vec2 drawX (drawY + tileHeight))
                          (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
 
         in Just SortableQuad

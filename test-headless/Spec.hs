@@ -24,6 +24,7 @@ import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
+import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -41,6 +42,7 @@ import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
+import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
@@ -52,6 +54,7 @@ import qualified Test.Headless.River.Graph as RiverGraph
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
+import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
@@ -86,6 +89,7 @@ main = hspec $ do
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "Unit.NightPerception" NightPerception.spec
+    describe "World.TimeLocal" TimeLocal.spec
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec
@@ -103,6 +107,7 @@ main = hspec $ do
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
+    describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Craft.Execute" CraftExecute.spec
     describe "Craft.Bills" CraftBills.spec
@@ -114,6 +119,7 @@ main = hspec $ do
     describe "World.Render.FrontWallLift" FrontWallLift.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
+    describe "World.Render.Zoom.zoomQuadWorldUVs" ZoomBakeUV.spec
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Scene.BatchMerge" BatchMerge.spec

@@ -32,7 +32,8 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
+                                           , packWorldUV)
 import World.Grid (tileWidth
                    , tileHeight
                    , tileSideHeight
@@ -166,15 +167,16 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
             tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
+            wuv   = packWorldUV gx gy
 
             v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 0 0) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 0 0) tint (fromIntegral actualSlot) faceSlot flags wuv
             v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 1 0) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 1 0) tint (fromIntegral actualSlot) faceSlot flags wuv
             v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 1 1) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 1 1) tint (fromIntegral actualSlot) faceSlot flags wuv
             v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 0 1) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 0 1) tint (fromIntegral actualSlot) faceSlot flags wuv
 
         in Just SortableQuad
             { sqSortKey = sortKey
@@ -242,6 +244,7 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
             tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
+            wuv   = packWorldUV gx gy
 
             gxf = fromIntegral gx ∷ Float
             gyf = fromIntegral gy ∷ Float
@@ -267,13 +270,13 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
                             + fromIntegral relativeZ * 0.001
                             + tieBreak slot
                     v0 = Vertex (Vec2 xa drawY)
-                                 (Vec2 ua 0) tint (fromIntegral actualSlot) faceSlot flags
+                                 (Vec2 ua 0) tint (fromIntegral actualSlot) faceSlot flags wuv
                     v1 = Vertex (Vec2 xb drawY)
-                                 (Vec2 ub 0) tint (fromIntegral actualSlot) faceSlot flags
+                                 (Vec2 ub 0) tint (fromIntegral actualSlot) faceSlot flags wuv
                     v2 = Vertex (Vec2 xb (drawY + quadH))
-                                 (Vec2 ub 1) tint (fromIntegral actualSlot) faceSlot flags
+                                 (Vec2 ub 1) tint (fromIntegral actualSlot) faceSlot flags wuv
                     v3 = Vertex (Vec2 xa (drawY + quadH))
-                                 (Vec2 ua 1) tint (fromIntegral actualSlot) faceSlot flags
+                                 (Vec2 ua 1) tint (fromIntegral actualSlot) faceSlot flags wuv
                 in SortableQuad
                     { sqSortKey = sortKey
                     , sqV0 = v0, sqV1 = v1, sqV2 = v2, sqV3 = v3
@@ -356,14 +359,15 @@ postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot pie
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))  -- postface
             tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
+            wuv   = packWorldUV gx gy
             v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 0 0) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 0 0) tint (fromIntegral actualSlot) faceSlot flags wuv
             v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 1 0) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 1 0) tint (fromIntegral actualSlot) faceSlot flags wuv
             v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 1 1) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 1 1) tint (fromIntegral actualSlot) faceSlot flags wuv
             v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 0 1) tint (fromIntegral actualSlot) faceSlot flags
+                         (Vec2 0 1) tint (fromIntegral actualSlot) faceSlot flags wuv
         in Just SortableQuad
             { sqSortKey = sortKey
             , sqV0 = v0, sqV1 = v1, sqV2 = v2, sqV3 = v3

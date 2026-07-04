@@ -15,6 +15,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldPickPosFn
     , worldGetClimateAtFn
     , worldGetAmbientAtFn
+    , worldGetSunAngleAtFn
     , worldListPlacedLocationsFn
     , worldHasSpawnedLocationContentsFn
     , worldHasStampedLocationFn
@@ -34,6 +35,7 @@ import Location.Overlay.Types (overlayToList)
 import World.Generate.Coordinates (globalToChunk)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Weather.Ambient (ambientTempAt)
+import World.Time.Local (localSunAngle)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Render.HitTest (pickWorldTile)
 import World.Render.ViewBounds (computeViewBounds)
@@ -391,6 +393,31 @@ worldGetAmbientAtFn env = do
                                 (wgpClimateState p) (wgpWorldSize p)
                                 (fromIntegral gx) (fromIntegral gy)
                     Lua.pushnumber (Lua.Number (realToFrac t))
+                    return 1
+        _ → Lua.pushnil >> return 1
+
+-- | world.getSunAngleAt(gx, gy) → local sun angle (0..1) | nil. The
+--   longitude-local day/night phase (#483) at a tile: the global clock's
+--   angle offset by how far around the world cylinder (u = gx - gy) the
+--   tile sits, so colonists on opposite sides of a small planet read
+--   different times of day. nil if no world is active. Lets Lua (e.g. a
+--   future sleep/circadian need, #479) be longitude-aware without
+--   duplicating the wrap math.
+worldGetSunAngleAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSunAngleAtFn env = do
+    gxArg ← Lua.tointeger 1
+    gyArg ← Lua.tointeger 2
+    case (gxArg, gyArg) of
+        (Just gx, Just gy) → do
+            mParams ← Lua.liftIO (getWorldGenParams env)
+            case mParams of
+                Nothing → Lua.pushnil >> return 1
+                Just p → do
+                    sunAngle ← Lua.liftIO (readIORef (sunAngleRef env))
+                    let localAngle = localSunAngle (wgpWorldSize p)
+                                        (fromIntegral gx) (fromIntegral gy)
+                                        sunAngle
+                    Lua.pushnumber (Lua.Number (realToFrac localAngle))
                     return 1
         _ → Lua.pushnil >> return 1
 

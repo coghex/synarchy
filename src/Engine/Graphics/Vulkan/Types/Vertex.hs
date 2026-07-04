@@ -25,19 +25,58 @@ vertexFaceMapIdOffset = 36
 vertexRenderFlagsOffset ∷ Int
 vertexRenderFlagsOffset = 40
 
+-- | Packed world tile coordinates (#483 longitude-local day/night):
+-- two signed 16-bit halves, low = u = gx-gy, high = v = gx+gy. See
+-- 'packWorldUV'. Ignored by pipelines that don't declare the matching
+-- vertex input (UI/font) — same "extra trailing field, inert unless
+-- read" pattern as 'vertexRenderFlagsOffset'.
+vertexWorldUVOffset ∷ Int
+vertexWorldUVOffset = 44
+
 vertexTotalSize ∷ Int
-vertexTotalSize = 44
+vertexTotalSize = 48
 
 -- | Bit 0 of renderFlags: when set, the fragment shader emits a 1-pixel
 -- white outline around alpha-cutout sprite edges. Used by selected units.
 renderFlagSelected ∷ Word32
 renderFlagSelected = 1
 
+-- | Pack already-computed cylinder coordinates (u = gx-gy, v = gx+gy)
+-- into the vertex's worldUV attribute: two Word16 halves, v in the high
+-- bits. 'fromIntegral' to 'Word16' truncates by wrapping
+-- (two's-complement), matching the GLSL decode's @(x & 0xFFFF)@
+-- sign-restore exactly — so this round-trips correctly for negative
+-- u/v, only wrapping (not clamping) once |u| or |v| exceeds 32767
+-- tiles (worldSize ≳ 2048, beyond any world this engine generates
+-- today). Split from 'packWorldUV' for callers that already have u,v
+-- in hand (e.g. the zoom map's per-corner bake, #483 review) rather
+-- than a (gx,gy) pair.
+packUV ∷ Int → Int → Word32
+packUV u v =
+    let u16 = fromIntegral (fromIntegral u ∷ Word16) ∷ Word32
+        v16 = fromIntegral (fromIntegral v ∷ Word16) ∷ Word32
+    in (v16 `shiftL` 16) ⌄ u16
+
+-- | Pack a tile's cylinder coordinates (u = gx-gy, v = gx+gy — see
+-- 'World.Plate.worldWidthTiles' / 'World.Time.Local.localSunAngle') into
+-- the vertex's worldUV attribute. See 'packUV' for the encoding.
+packWorldUV ∷ Int → Int → Word32
+packWorldUV gx gy = packUV (gx - gy) (gx + gy)
+
 -- | Backward-compatible Vertex constructor: takes the original 5 fields
--- and defaults renderFlags to 0. Use the full `Vertex` constructor when
--- you need to set flags (e.g. Unit.Render for selected units).
+-- and defaults renderFlags AND worldUV to 0. Use the full `Vertex`
+-- constructor when you need to set flags (e.g. Unit.Render for selected
+-- units) or 'mkVertexWorld' when you need real world coordinates (e.g.
+-- tile/flora/structure quads, #483).
 mkVertex ∷ Vec2 → Vec2 → Vec4 → Float → Float → Vertex
-mkVertex p t c a f = Vertex p t c a f 0
+mkVertex p t c a f = Vertex p t c a f 0 0
+
+-- | Like 'mkVertex', but stamps the tile's packed world coordinates
+-- (pass the result of 'packWorldUV') instead of defaulting worldUV to
+-- 0. renderFlags still defaults to 0 — combine with a direct 'Vertex'
+-- construction if a caller ever needs both a non-zero worldUV AND flags.
+mkVertexWorld ∷ Word32 → Vec2 → Vec2 → Vec4 → Float → Float → Vertex
+mkVertexWorld wuv p t c a f = Vertex p t c a f 0 wuv
 
 -- | 2D vector for positions and texture coordinates
 data Vec2 = Vec2
@@ -98,6 +137,7 @@ data Vertex = Vertex
     , atlasId     ∷ !Float  -- ^ Atlas ID (layout = 3)
     , faceMapId   ∷ !Float  -- ^ Face map texture slot (layout = 4)
     , renderFlags ∷ !Word32 -- ^ Render-flag bitset, see renderFlag* (layout = 5)
+    , worldUV     ∷ !Word32 -- ^ Packed world (u,v), see packWorldUV (layout = 6)
     } deriving (Show, Eq)
 
 instance NFData Vertex where
@@ -113,11 +153,13 @@ instance Storable Vertex where
         a ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0
         f ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0
         rf ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0
-        return $! Vertex p t c a f rf
-    poke ptr (Vertex p t c a f rf) = do
+        wuv ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexWorldUVOffset) ∷ Ptr Word32) 0
+        return $! Vertex p t c a f rf wuv
+    poke ptr (Vertex p t c a f rf wuv) = do
         poke (ptr `plusPtr` vertexPositionOffset) p
         poke (ptr `plusPtr` vertexTexCoordOffset) t
         poke (ptr `plusPtr` vertexColorOffset) c
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0 a
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0 f
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0 rf
+        Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexWorldUVOffset) ∷ Ptr Word32) 0 wuv

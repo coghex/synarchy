@@ -89,8 +89,8 @@ emitQuadBg entry dx dy alpha layer _zSlice =
         -- look like deep ocean.
         (tintR, tintG, tintB) = (1.0, 1.0, 1.0)
 
-        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid flags) =
-            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 tintR tintG tintB alpha) aid fid flags
+        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid flags wuv) =
+            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 tintR tintG tintB alpha) aid fid flags wuv
         v0 = shiftV (bzeV0 entry)
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)

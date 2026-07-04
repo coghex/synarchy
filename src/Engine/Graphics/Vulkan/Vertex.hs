@@ -18,21 +18,21 @@ import Vulkan.Zero
 
 -- | Two side-by-side quads with different atlas IDs.
 -- faceMapId = 0 means use the default (undefined/top-lit) face map.
--- renderFlags = 0 means no outline.
+-- renderFlags = 0 means no outline. worldUV = 0 (unused demo geometry).
 quadVertices ∷ [Vertex]
 quadVertices =
-    [ Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0 0
-    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0 0 0
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0 0
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0 0
-    , Vertex (Vec2 (-1.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0 0 0
-    , Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0 0
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0 0
-    , Vertex (Vec2   1.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 1 0 0
-    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0 0
-    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0 0
-    , Vertex (Vec2   0.5    0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 1 0 0
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0 0
+    [ Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0 0 0
+    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0 0 0 0
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0 0 0
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0 0 0
+    , Vertex (Vec2 (-1.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0 0 0 0
+    , Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0 0 0
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0 0 0
+    , Vertex (Vec2   1.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 1 0 0 0
+    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0 0 0
+    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0 0 0
+    , Vertex (Vec2   0.5    0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 1 0 0 0
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0 0 0
     ]
 
 -- | Create vertex buffer from vertices
@@ -78,7 +78,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
 getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 44  -- 2+2+4+1+1 floats + 1 uint = 44 bytes
+    , stride = 48  -- 2+2+4+1+1 floats + 2 uints = 48 bytes
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
@@ -120,5 +120,13 @@ getVertexAttributeDescriptions = V.fromList
         , binding = 0
         , format = FORMAT_R32_UINT
         , offset = 40
+        }
+    , zero  -- ^ Packed world (u,v) — #483 longitude-local day/night.
+             -- Only the bindless world vertex shader declares/reads this;
+             -- other pipelines (UI, font) leave it unused, like renderFlags.
+        { location = 6
+        , binding = 0
+        , format = FORMAT_R32_UINT
+        , offset = 44
         }
     ]

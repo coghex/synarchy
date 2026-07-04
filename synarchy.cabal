@@ -181,17 +181,20 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
+                   Test.Headless.Graphics.AmbientLight
                    Test.Headless.Construct.Corners
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
+                   Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
                    Test.Headless.River.Graph
                    Test.Headless.World.Render.FrontWallLift
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.SlopeBit
+                   Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Scene.BatchMerge
@@ -627,6 +630,7 @@ library
                      World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
+                     World.Time.Local
                      World.Flora.Types
                      World.Flora.Growth
                      World.Flora.Placement
