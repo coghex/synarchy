@@ -156,6 +156,9 @@ loadItemYamlFn env backendState = do
                                               <$> iydQuality def
                             , idConditionSpec = (\r → (iyrsMin r, iyrsMax r))
                                               <$> iydCondition def
+                            , idQualityTiers = map
+                                (\t → QualityTier (iyqtMin t) (iyqtLabel t))
+                                (iydQualityTiers def)
                             , idContainer   = container
                             , idDefaultContents =
                                 [ (iycoItem c, iycoCount c, iycoFill c)
@@ -302,8 +305,10 @@ itemSpawnGroundFn env = do
         _ → Lua.pushnil >> return 1
 
 -- | item.listGround() → array of {id, defName, x, y, fill, quality,
---   condition, weight}. `weight` is the live total mass (itemTotalWeight:
---   empty weight + fill + nested contents), not the static def weight.
+--   qualityTier, condition, weight}. `weight` is the live total mass
+--   (itemTotalWeight: empty weight + fill + nested contents), not the
+--   static def weight. `qualityTier` (#345) is present only when the
+--   def declares a quality spec.
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
     mWs ← Lua.liftIO $ activeWorld env
@@ -330,6 +335,18 @@ itemListGroundFn env = do
                     Lua.pushnumber (Lua.Number (realToFrac
                         (iiQuality (giInst gi))))
                     Lua.setfield (Lua.nth 2) "quality"
+                    -- Tier label only when the def actually declares a
+                    -- quality spec (mirrors unit.getInventory / the
+                    -- equipment queries — #345).
+                    case lookupItemDef (iiDefName (giInst gi)) im of
+                        Just d | Just _ ← idQualitySpec d →
+                            case qualityTierLabel d
+                                     (iiQuality (giInst gi)) of
+                                Just tier → do
+                                    Lua.pushstring (TE.encodeUtf8 tier)
+                                    Lua.setfield (Lua.nth 2) "qualityTier"
+                                Nothing → pure ()
+                        _ → pure ()
                     Lua.pushnumber (Lua.Number (realToFrac
                         (iiCondition (giInst gi))))
                     Lua.setfield (Lua.nth 2) "condition"

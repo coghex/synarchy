@@ -155,7 +155,8 @@ import Item.Types (ItemDef(..)
                    , ItemBuff(..)
                    , ItemManager(..)
                    , lookupItemDef
-                   , itemTotalWeight)
+                   , itemTotalWeight
+                   , qualityTierLabel)
 import Item.Ground (spawnGroundItem)
 import Combat.Wounds (bleedRateFor, kindBleedFactor)
 import Combat.Types (pushInjuryEvent)
@@ -4673,12 +4674,19 @@ unitGetInventoryFn env = do
                         -- callers (e.g. inventory tooltip) would show
                         -- "100%" for items like canteens / rations that
                         -- conceptually don't have these qualities.
-                        case mDef >>= idQualitySpec of
-                            Just _ → do
+                        case mDef of
+                            Just d | Just _ ← idQualitySpec d → do
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (iiQuality inst)))
                                 Lua.setfield (-2) "quality"
-                            Nothing → pure ()
+                                -- Named tier (#345), e.g. "excellent" at
+                                -- 95% — the tooltip suffix / name reader.
+                                case qualityTierLabel d (iiQuality inst) of
+                                    Just tier → do
+                                        Lua.pushstring (TE.encodeUtf8 tier)
+                                        Lua.setfield (-2) "qualityTier"
+                                    Nothing → pure ()
+                            _ → pure ()
                         case mDef >>= idConditionSpec of
                             Just _ → do
                                 Lua.pushnumber

@@ -6,6 +6,7 @@ module Engine.Asset.YamlItems
     , ItemYamlContent(..)
     , ItemYamlFood(..)
     , ItemYamlRollSpec(..)
+    , ItemYamlQualityTier(..)
     , ItemYamlWeapon(..)
     , ItemYamlArmor(..)
     , ItemYamlBuff(..)
@@ -79,6 +80,19 @@ instance FromJSON ItemYamlRollSpec where
     parseJSON = withObject "ItemYamlRollSpec" $ \v → ItemYamlRollSpec
         ⊚ v .: "min"
         ⊛ v .: "max"
+
+-- | One override band in an item's `quality_tiers:` list (#345) — a
+--   (threshold, label) pair; see 'Item.Types.QualityTier'. Reads as
+--   `{ min: 90, label: excellent }` in YAML.
+data ItemYamlQualityTier = ItemYamlQualityTier
+    { iyqtMin   ∷ !Float
+    , iyqtLabel ∷ !Text
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlQualityTier where
+    parseJSON = withObject "ItemYamlQualityTier" $ \v → ItemYamlQualityTier
+        ⊚ v .: "min"
+        ⊛ v .: "label"
 
 -- | One stat-modifier conferred by equipping an item.
 --   YAML shape: `{ stat: perception, amount: 1, scales_with_condition: true }`.
@@ -169,6 +183,9 @@ data ItemYamlDef = ItemYamlDef
                                                    --   defaults to ""
     , iydQuality     ∷ !(Maybe ItemYamlRollSpec)   -- ^ quality roll range
     , iydCondition   ∷ !(Maybe ItemYamlRollSpec)   -- ^ condition roll range
+    , iydQualityTiers ∷ ![ItemYamlQualityTier]     -- ^ quality→label
+                                                   --   overrides (#345);
+                                                   --   [] ⇒ default set
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydContents    ∷ ![ItemYamlContent]            -- ^ item-container defaults
     , iydFood        ∷ !(Maybe ItemYamlFood)
@@ -193,6 +210,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "material"     .!= ""
         ⊛ v .:? "quality"
         ⊛ v .:? "condition"
+        ⊛ v .:? "quality_tiers" .!= []
         ⊛ v .:? "container"
         ⊛ v .:? "contents"     .!= []
         ⊛ v .:? "food"

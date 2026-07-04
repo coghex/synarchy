@@ -13,12 +13,15 @@ module Item.Types
     , ItemManager(..)
     , emptyItemManager
     , lookupItemDef
+    , QualityTier(..)
+    , defaultQualityTiers
+    , qualityTierLabel
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.List (sort)
+import Data.List (sort, sortBy, find)
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -176,6 +179,11 @@ data ItemDef = ItemDef
       --   as a normal distribution centered at (min+max)/2 with
       --   stddev (max-min)/6, clamped to [min, max]. Nothing ⇒ spawn
       --   at 100%.
+    , idQualityTiers  ∷ ![QualityTier]
+      -- ^ Data-driven quality→label thresholds (`quality_tiers:` in
+      --   YAML), e.g. 90→"excellent" so a 95%-quality coffee reads
+      --   "coffee (excellent)". Empty ⇒ fall back to
+      --   'defaultQualityTiers'.
     , idConditionSpec ∷ !(Maybe (Float, Float))
       -- ^ (min, max) % range for condition rolls at spawn. Same
       --   distribution shape as quality. Condition degrades with use;
@@ -328,6 +336,37 @@ itemTotalWeight im it =
     fillUnitWeight = case idContainer =<< lookupItemDef (iiDefName it) im of
         Just c  → icFillWeight c
         Nothing → 1.0   -- no container def in scope → assume litres (1 kg/L)
+
+-- | One band of a quality→label mapping (#345). `qtMin` is the
+--   inclusive lower bound (0..100) of the band; 'qualityTierLabel'
+--   resolves a quality value to the highest band whose bound it clears.
+data QualityTier = QualityTier
+    { qtMin   ∷ !Float
+    , qtLabel ∷ !Text
+    } deriving (Show, Eq)
+
+-- | Fallback quality tiers for any item def that doesn't declare its
+--   own `quality_tiers:` override. The 0-floor band guarantees a
+--   result for every non-negative quality value.
+defaultQualityTiers ∷ [QualityTier]
+defaultQualityTiers =
+    [ QualityTier 90 "excellent"
+    , QualityTier 75 "good"
+    , QualityTier 50 "average"
+    , QualityTier 25 "bad"
+    , QualityTier 0  "atrocious"
+    ]
+
+-- | Resolve a quality percentage to its named tier: the def's own
+--   table when it declares one (idQualityTiers), else
+--   'defaultQualityTiers'. Picks the highest-qtMin band the value
+--   clears.
+qualityTierLabel ∷ ItemDef → Float → Maybe Text
+qualityTierLabel def q = qtLabel ⊚ find (\t → q ≥ qtMin t) sorted
+  where
+    tiers  = if null (idQualityTiers def) then defaultQualityTiers
+                                           else idQualityTiers def
+    sorted = sortBy (\a b → compare (qtMin b) (qtMin a)) tiers
 
 -- | Engine-wide registry of all loaded item defs.
 newtype ItemManager = ItemManager
