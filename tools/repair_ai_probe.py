@@ -28,7 +28,13 @@ it IS the machinery under test, unlike movement_probe which neutralises it):
      item to the mule (abortRepairJob), not leak it into the worker's
      own inventory (regression for a review finding on the fetch_item ->
      mid-job-failure path).
-  6. role_weight : scripts/unit_roles.lua's weight() gives the "smith" role
+  6. own_item_collision : the acolyte ALSO carries its own healthy
+     axe_steel (acolyte.yaml's default loadout) while fetching a
+     DIFFERENT, degraded axe_steel off the mule — proving the fetch and
+     the return-to-mule both target the flagged instanceId, not just
+     defName (regression for a review finding: a defName-only transfer
+     could pop the worker's own item instead of the one actually fetched).
+  7. role_weight : scripts/unit_roles.lua's weight() gives the "smith" role
      (#265, previously dormant) its first real ON_ROLE boost on repair_job,
      and now correctly damps a smith's OTHER routine work — a pure Lua
      check, no world/units needed.
@@ -522,8 +528,46 @@ def phase_abort_returns_item(port: int) -> None:
     destroy_unit(port, mule)
 
 
+def phase_own_item_collision(port: int) -> None:
+    print("\n[phase 6] the worker's OWN same-defName item is never confused "
+          "with the flagged mule instance (instanceId-targeted transfer)")
+    build_station(port, "furnace", 42, 2, {"granite_chunk": 6, "steel_bar": 2})
+    mule = spawn_mule(port, 44.5, 3.5)
+    mule_axe = force_item_state(port, mule, "axe_steel", cond=5.0, sharp=100.0)
+    send(port, f"unit.addItem({mule}, 'lignite_chunk'); return 'ok'")
+
+    uid = spawn_acolyte(port, 43.5, 3.5)
+    send(port, f"unit.setStat({uid}, 'strength', 3.0); return 'ok'")  # see phase 3's note
+    # spawn_acolyte strips the default axe_steel; add a fresh, HEALTHY one
+    # back — the exact collision a real acolyte hits (acolyte.yaml starts
+    # with its own axe_steel). A defName-only transfer could pop THIS one
+    # instead of the flagged (degraded) mule instance.
+    own_axe = force_item_state(port, uid, "axe_steel", cond=100.0, sharp=100.0)
+
+    claimed = poll_until(port, 30, lambda: has_repair_job(port, uid))
+    check("acolyte claimed the mule-held (degraded) item, not its own",
+          claimed is not None)
+
+    done = poll_until(port, 180,
+        lambda: (find_state_anywhere(port, [uid, mule], mule_axe) or {}).get("cond") == 100)
+    check("the FLAGGED mule instance reaches full condition", done is not None)
+
+    poll_until(port, 30, lambda: count_item(port, mule, "axe_steel") == 1)
+    own_state = item_state(port, uid, own_axe)
+    check("acolyte's OWN axe is untouched (same instance, still healthy)",
+          own_state is not None and own_state["cond"] == 100)
+    mule_state = item_state(port, mule, mule_axe)
+    check("the repaired FLAGGED instance is the one back on the mule "
+          "(not the acolyte's own)",
+          mule_state is not None and mule_state["cond"] == 100)
+    check("acolyte carries exactly its own one axe_steel afterward",
+          count_item(port, uid, "axe_steel") == 1)
+    destroy_unit(port, uid)
+    destroy_unit(port, mule)
+
+
 def phase_role_weight(port: int) -> None:
-    print("\n[phase 6] role_weight: smith's (#265) first real ON_ROLE "
+    print("\n[phase 7] role_weight: smith's (#265) first real ON_ROLE "
           "effect on repair_job")
     family = jget(port,
         "return require('scripts.unit_roles').ACTION_FAMILY.repair_job")
@@ -552,6 +596,7 @@ PHASES = {
     "mule_spare_gear": phase_mule_spare_gear,
     "dead_claimant_release": phase_dead_claimant_release,
     "abort_returns_item": phase_abort_returns_item,
+    "own_item_collision": phase_own_item_collision,
     "role_weight": phase_role_weight,
 }
 

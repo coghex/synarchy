@@ -3969,7 +3969,8 @@ end
 --
 -- State on s:
 --   repairJob = { instanceId, defName, axis, recipeId, consumable,
---                 consumableCount, wants, onMule, bid }
+--                 consumableCount, groundWant, muleWant, groundDone,
+--                 onMule, itemFetched, bid }
 --   repairPhase = "fetch_item" | "fetch_consumable" | "walking"
 --               | "repairing"
 -----------------------------------------------------------
@@ -4008,7 +4009,12 @@ local function abortRepairJob(uid, s, info)
     if job and job.itemFetched and info then
         local mule = findTechnomule(info.gridX, info.gridY)
         if mule then
-            unit.transferItemToUnit(uid, mule.uid, job.defName)
+            -- Targeted by instanceId: without it, a defName-only
+            -- transfer could pop a DIFFERENT axe_steel this unit
+            -- happens to also be carrying (its own starting gear),
+            -- sending that back instead and leaving the actually-
+            -- fetched (possibly still-degraded) instance stranded here.
+            unit.transferItemToUnit(uid, mule.uid, job.defName, job.instanceId)
         end
     end
     releaseRepairJob(s, uid)
@@ -4169,28 +4175,19 @@ local function repairExecute(uid, s, params)
             return
         end
         unit.stop(uid)
-        if not unit.transferItemToUnit(mule.uid, uid, job.defName) then
+        -- Targeted by instanceId: the mule may carry more than one
+        -- axe_steel, and a defName-only transfer could grab the wrong
+        -- copy. transferItemToUnit only succeeds if this EXACT flagged
+        -- instance is still on the mule (a raced claimant taking the
+        -- specific instance first fails cleanly here, same as any other
+        -- instance no longer being found).
+        if not unit.transferItemToUnit(mule.uid, uid, job.defName, job.instanceId) then
             releaseRepairJob(s, uid)   -- raced — someone else took it; never fetched
             return
         end
-        -- Something of this defName is now in our own inventory — any
-        -- abort from here on must return it (abortRepairJob).
+        -- The flagged instance is now in our own inventory — any abort
+        -- from here on must return it (abortRepairJob).
         job.itemFetched = true
-        -- transferItemToUnit is defName-scoped, not instance-scoped:
-        -- if the mule held more than one copy of this def, the wrong
-        -- one may have come across (#302 known limitation — a true
-        -- instance-targeted transfer needs an engine-side addition).
-        -- Verify; on a mismatch, abandon rather than repair the wrong
-        -- copy under the flagged instance's claim (still returning the
-        -- (wrong) fetched item to the mule via abortRepairJob).
-        local got = false
-        for _, it in ipairs(unit.getInventory(uid) or {}) do
-            if it.instanceId == job.instanceId then got = true end
-        end
-        if not got then
-            abortRepairJob(uid, s, info)
-            return
-        end
         s.repairPhase = "fetch_consumable"
         return
     end
@@ -4276,12 +4273,10 @@ local function repairExecute(uid, s, params)
             return
         end
         grantWorkXP(uid, "smithing", params.repair_xp_per_repair or 0)
-        -- Spare gear fetched off the mule goes back once restored — any
-        -- instance of this defName is now equally "the good one"
-        -- (full-restore-per-visit, #301), so the earlier defName-scoped
-        -- fetch's instance ambiguity no longer matters post-repair.
+        -- Spare gear fetched off the mule goes back once restored.
         -- abortRepairJob's "return the fetched item" step (keyed on
-        -- job.itemFetched) handles this the same way a mid-job abort does.
+        -- job.itemFetched, targeted by instanceId) handles this the
+        -- same way a mid-job abort does.
         abortRepairJob(uid, s, info)
     end
 end
