@@ -160,6 +160,7 @@ docstring instead of reaching for `--help` when in doubt.
 | `physiology_probe.py` | homeostasis (general) | arena | Thermoregulation/circulation sanity across controlled environments (temperate/arctic/humid-heat). |
 | `repair_item_probe.py` | #300 | worldgen | `unit.repairItem` primitive. |
 | `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
+| `repair_ai_probe.py` | #302 | arena | `repair_job` AI end-to-end: claim, own/equipped/mule-held sourcing, station routing, dead-claimant release, `smith` role weighting. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
 | `thermo_altitude_probe.py` | #308 | worldgen (size 128) | Altitude-lapse thermal effect. |

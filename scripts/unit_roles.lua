@@ -29,10 +29,9 @@ package.loaded["scripts.unit_roles"] = M
 -- Derivation order is the tie-break: earlier entries win an exact
 -- skill tie, so listing is deterministic (pairs() order is not).
 --
--- `family` groups the work actions a role prefers. smith has no work
--- actions yet — the craft AI is #329 — so its family ("craft") appears
--- in no ACTION_FAMILY entry and the role stays weight-neutral: a pure
--- label until crafting gives it work to favor.
+-- `family` groups the work actions a role prefers. smith's family
+-- ("craft") maps to repair_job (#302) — its first real work action;
+-- the general craft AI is still #329.
 M.ROLES = {
     { name = "miner",      display = "Miner",      skill = "mining",       family = "mine"  },
     { name = "woodcutter", display = "Woodcutter", skill = "woodcutting",  family = "wood"  },
@@ -45,12 +44,13 @@ M.ROLES = {
 -- (forage, pickup_ground, follow_command, survival, combat) are
 -- deliberately absent: roles only steer ROUTINE work preference.
 M.ACTION_FAMILY = {
-    dig_designation       = "mine",
-    chop_designation      = "wood",
-    construct_job         = "build",
-    build_nearby          = "build",
-    deliver_to_build_site = "build",
-    store_materials       = "build",
+    dig_designation        = "mine",
+    chop_designation       = "wood",
+    construct_job          = "build",
+    build_nearby           = "build",
+    deliver_to_build_site  = "build",
+    store_materials        = "build",
+    repair_job             = "craft",
 }
 
 M.THRESHOLD     = 30.0   -- min skill to claim a specialist role
