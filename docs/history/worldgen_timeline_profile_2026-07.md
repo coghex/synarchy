@@ -53,7 +53,7 @@ path (idle threads, cooperative stop, no `killThread`):
 ```bash
 cabal build exe:synarchy --enable-profiling -f profile --builddir=dist-prof
 cabal run exe:synarchy --enable-profiling -f profile --builddir=dist-prof -- \
-    --headless --port 9448 +RTS -N1 -p -RTS &
+    --headless --port 9448 +RTS -N1 -p -RTS > /tmp/engine.log 2>&1 &
 until grep -q READY /tmp/engine.log; do sleep 1; done
 
 echo 'world.init("test", 42, 128, 3)' | nc -w 2 localhost 9448
