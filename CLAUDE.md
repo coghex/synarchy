@@ -378,9 +378,11 @@ surface (UI = #330), `claimBill(billId, uid, timeout)` /
 lifecycle. The queue lives per world page (`Craft.Bills`, engine-side
 atomic claims — no Lua claim registry) and persists in saves (v70).
 The `craft_job` acolyte action works bills end to end: source inputs +
-fuel (inventory → ground → technomule), stand beside the station, pour
-skill-scaled work in, `craft.executeAt`, drop outputs at the station
-(`unit.dropItemToGround`), grant trade-skill XP (recipe `skill` tag,
+fuel (inventory → ground → technomule → cargo storage), stand beside
+the station, pour skill-scaled work in, `craft.executeAt` (returns the
+fresh outputs' instance ids on success), drop exactly those instances
+at the station (`unit.dropItemById`; `unit.dropItemToGround` is the
+first-match-by-def sibling), grant trade-skill XP (recipe `skill` tag,
 default smithing — feeds the Smith role #265). Turnkey harness:
 **`python3 tools/craft_bill_probe.py`** — the #329 gate (backend verbs
 + the AI loop + the knowledge gate).

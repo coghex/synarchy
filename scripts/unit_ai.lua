@@ -3380,15 +3380,17 @@ end
 -- compare-and-swap with the stale-claim rules built in, so unlike
 -- construct/dig there is no module-local claim registry); this action
 -- is the worker loop: claim a bill, source the recipe's inputs + fuel
--- (inventory → ground → mule, the #96 ladder), walk beside the
--- station, pour work into the bill (craft.addBillProgress,
--- skill-scaled), and at 1.0 fire the craft itself (craft.executeAt —
--- knowledge gate + all-or-nothing consumption + production in one
--- atomic verb), lay the outputs down at the station
--- (unit.dropItemToGround: visible, and sourceable as the ground rung
--- of the fetch ladder — stockpile hauling is future work), grant XP,
--- and advance the bill (craft.completeBillCycle), rolling straight
--- into the next cycle when the bill has more.
+-- (inventory → ground → mule → cargo storage, the #96 ladder plus a
+-- stockpile rung), walk beside the station, pour work into the bill
+-- (craft.addBillProgress, skill-scaled), and at 1.0 fire the craft
+-- itself (craft.executeAt — knowledge gate + all-or-nothing
+-- consumption + production in one atomic verb), lay the NEW output
+-- instances down at the station (executeAt returns their instance
+-- ids; unit.dropItemById drops exactly those, never a same-def item
+-- the crafter already carried — visible, and sourceable as the ground
+-- rung of the fetch ladder), grant XP, and advance the bill
+-- (craft.completeBillCycle), rolling straight into the next cycle
+-- when the bill has more.
 --
 -- Skill: the recipe's `skill` tag when present, else "smithing" (the
 -- generic crafting trade). Scales the work rate the way construction
@@ -3431,9 +3433,114 @@ local function billClaimedByOther(bill, uid, now, timeout)
     return (now - (bill.claimedAt or 0)) <= timeout
 end
 
+-- Count of defName across BUILT storage buildings (cargo holds) on
+-- the active world — the stockpile rung of the craft sourcing ladder.
+-- No range limit, same rationale as the mule: stored materials are
+-- worth the walk.
+local function cargoCountOf(defName)
+    local total = 0
+    for _, bid in ipairs(building.getActiveIds() or {}) do
+        if bid and building.getActivity(bid) == "built" then
+            for _, it in ipairs(building.getStorage(bid) or {}) do
+                if it.defName == defName then total = total + 1 end
+            end
+        end
+    end
+    return total
+end
+
+-- Walk toward the nearest border tile of a building's footprint.
+-- Returns true while still walking (Chebyshev > 1 → moveTo issued),
+-- false once the unit stands on or beside the footprint. Shared by
+-- the craft walking phase and the cargo fetch (same approach as
+-- deliver / build_nearby).
+local function moveBesideBuilding(uid, info, binfo)
+    local tw, th = binfo.tileW or 1, binfo.tileH or 1
+    local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
+    if chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th) <= 1 then
+        return false
+    end
+    local bestX, bestY, bestD = nil, nil, math.huge
+    for dx = -1, tw do
+        for dy = -1, th do
+            if dx == -1 or dx == tw or dy == -1 or dy == th then
+                local nx = binfo.gridX + dx + 0.5
+                local ny = binfo.gridY + dy + 0.5
+                local d = distance(info.gridX, info.gridY, nx, ny)
+                if d < bestD then bestX, bestY, bestD = nx, ny, d end
+            end
+        end
+    end
+    if bestX then
+        unit.moveTo(uid, bestX, bestY, mv.comfort(uid))
+    end
+    return true
+end
+
+-- Fetch loop against cargo storage: walk beside the nearest BUILT
+-- store holding any wanted def and withdraw everything wanted from it
+-- in one visit (unit.withdrawFromCargo preserves the instances;
+-- adjacency is this walk, per the API contract). Entries clear even
+-- on shortfall, like the mule fetch — raced withdrawals and split
+-- stock resolve by the caller reconciling against inventory (a
+-- release + re-plan reaches the next store). Returns true while
+-- still busy (walking).
+local function fetchWantsFromCargo(uid, wants, info, params)
+    if not next(wants) then return false end
+    local best, bestD = nil, math.huge
+    for _, bid in ipairs(building.getActiveIds() or {}) do
+        if bid and building.getActivity(bid) == "built" then
+            local has = false
+            for _, it in ipairs(building.getStorage(bid) or {}) do
+                if wants[it.defName] then has = true; break end
+            end
+            if has then
+                local binfo = building.getInfo(bid)
+                if binfo then
+                    local d = distance(info.gridX, info.gridY,
+                        binfo.gridX + (binfo.tileW or 1) / 2,
+                        binfo.gridY + (binfo.tileH or 1) / 2)
+                    if d < bestD then
+                        binfo.bid = bid
+                        best, bestD = binfo, d
+                    end
+                end
+            end
+        end
+    end
+    if not best then
+        -- Nothing stored anywhere (someone else withdrew it).
+        for k in pairs(wants) do wants[k] = nil end
+        return false
+    end
+    if moveBesideBuilding(uid, info, best) then return true end
+    unit.stop(uid)
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    for defName, count in pairs(wants) do
+        for _ = 1, count do
+            local w = deliverItemWeight(defName)
+            if carried + w > maxW then
+                engine.logWarn("fetch: unit " .. tostring(uid)
+                    .. " at capacity (" .. string.format("%.1f", carried + w)
+                    .. " > " .. string.format("%.1f", maxW)
+                    .. " kg) — leaving rest of " .. defName .. " in cargo")
+                break
+            end
+            if not unit.withdrawFromCargo(uid, best.bid, defName) then
+                break    -- store ran out (raced another claimant)
+            end
+            carried = carried + w
+        end
+        wants[defName] = nil
+    end
+    return false
+end
+
 -- Can this unit source every demand right now (inventory + nearby
--- ground + mule stock)? Races lose gracefully at fetch time; this is
--- only the "worth claiming" filter, same as construction's.
+-- ground + mule stock + cargo storage)? Races lose gracefully at
+-- fetch time; this is only the "worth claiming" filter, same as
+-- construction's.
 local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
     for item, need in pairs(demands) do
         local have = inventoryCountOf(uid, item)
@@ -3444,7 +3551,11 @@ local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
                 local mule = findTechnomule(fromX, fromY)
                 local muleHave = mule
                     and inventoryCountOf(mule.uid, item) or 0
-                if have + ground + muleHave < need then return false end
+                if have + ground + muleHave < need
+                   and have + ground + muleHave + cargoCountOf(item) < need
+                then
+                    return false
+                end
             end
         end
     end
@@ -3553,8 +3664,9 @@ local function craftExecute(uid, s, params)
             return
         end
         -- Fetch shortfalls, planned once at claim time (inventory →
-        -- ground → mule). Reconciled against real inventory after.
-        local need, fromGround, fromMule = {}, {}, {}
+        -- ground → mule → cargo). Reconciled against real inventory
+        -- after the fetch phases run.
+        local need, fromGround, fromMule, fromCargo = {}, {}, {}, {}
         local mule = findTechnomule(info.gridX, info.gridY)
         for item, count in pairs(cand.demands) do
             need[item] = count
@@ -3565,8 +3677,14 @@ local function craftExecute(uid, s, params)
                     groundCountOf(info.gridX, info.gridY, item,
                                   params.craft_scan_range))
                 if ground > 0 then fromGround[item] = ground end
+                local muleTake = 0
                 if short - ground > 0 and mule then
-                    fromMule[item] = short - ground
+                    muleTake = math.min(short - ground,
+                                        inventoryCountOf(mule.uid, item))
+                    if muleTake > 0 then fromMule[item] = muleTake end
+                end
+                if short - ground - muleTake > 0 then
+                    fromCargo[item] = short - ground - muleTake
                 end
             end
         end
@@ -3576,10 +3694,10 @@ local function craftExecute(uid, s, params)
             recipeId = cand.recipe.id,
             work     = cand.recipe.work or 0,
             skill    = craftSkillOf(cand.recipe),
-            outputs  = cand.recipe.outputs or {},
             need     = need,
             fromGround = fromGround,
             fromMule   = fromMule,
+            fromCargo  = fromCargo,
             phase    = "fetch",
         }
         return
@@ -3600,13 +3718,17 @@ local function craftExecute(uid, s, params)
     -- Keep the claim fresh (claimBill by the holder is a refresh).
     craft.claimBill(job.billId, uid, params.craft_claim_timeout)
 
-    -- Phase 1: source inputs + fuel.
+    -- Phase 1: source inputs + fuel (inventory → ground → mule →
+    -- cargo storage).
     if job.phase == "fetch" then
         if fetchWantsFromGround(uid, job.fromGround, params,
                                 params.craft_scan_range) then
             return
         end
         if fetchWantsFromMule(uid, job.fromMule, info, params) then
+            return
+        end
+        if fetchWantsFromCargo(uid, job.fromCargo, info, params) then
             return
         end
         for item, count in pairs(job.need) do
@@ -3628,26 +3750,7 @@ local function craftExecute(uid, s, params)
             releaseCraftJob(s, uid, true)
             return
         end
-        local tw, th = binfo.tileW or 1, binfo.tileH or 1
-        local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
-        if chebToFootprint(utx, uty, binfo.gridX, binfo.gridY,
-                           tw, th) > 1 then
-            local bestX, bestY, bestD = nil, nil, math.huge
-            for dx = -1, tw do
-                for dy = -1, th do
-                    if dx == -1 or dx == tw or dy == -1 or dy == th then
-                        local nx = binfo.gridX + dx + 0.5
-                        local ny = binfo.gridY + dy + 0.5
-                        local d = distance(info.gridX, info.gridY, nx, ny)
-                        if d < bestD then bestX, bestY, bestD = nx, ny, d end
-                    end
-                end
-            end
-            if bestX then
-                unit.moveTo(uid, bestX, bestY, mv.comfort(uid))
-            end
-            return
-        end
+        if moveBesideBuilding(uid, info, binfo) then return end
         unit.stop(uid)
         job.phase = "working"
         s.lastCraftAt = now
@@ -3673,21 +3776,20 @@ local function craftExecute(uid, s, params)
         end
         if job.work <= 0 then progress = 1.0 end
         if progress >= 1.0 then
-            local ok, err = craft.executeAt(uid, job.recipeId, job.bid)
+            local ok, res = craft.executeAt(uid, job.recipeId, job.bid)
             if not ok then
                 -- Inventory raced away / station broke between ticks —
                 -- hand the bill back and let the next scan re-plan.
                 engine.logWarn("craft_job: executeAt failed for unit "
-                    .. tostring(uid) .. ": " .. tostring(err))
+                    .. tostring(uid) .. ": " .. tostring(res))
                 releaseCraftJob(s, uid, true)
                 return
             end
-            -- Outputs landed in inventory; lay them down at the
-            -- station so they're visible + sourceable.
-            for _, out in ipairs(job.outputs) do
-                for _ = 1, (out.count or 1) do
-                    unit.dropItemToGround(uid, out.item)
-                end
+            -- executeAt returns the FRESH outputs' instance ids; lay
+            -- exactly those down at the station (visible + sourceable)
+            -- — never a same-def item the crafter already carried.
+            for _, iid in ipairs(type(res) == "table" and res or {}) do
+                unit.dropItemById(uid, iid)
             end
             grantWorkXP(uid, job.skill, params.craft_xp_per_craft or 0)
             local remaining = craft.completeBillCycle(job.billId)

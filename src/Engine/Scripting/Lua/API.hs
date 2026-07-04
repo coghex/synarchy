@@ -362,6 +362,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getInsulation" (unitGetInsulationFn env)
   registerLuaFunction "dropEquipmentToGround" (unitDropEquipmentToGroundFn env)
   registerLuaFunction "dropItemToGround" (unitDropItemToGroundFn env)
+  registerLuaFunction "dropItemById"     (unitDropItemByIdFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)
   registerLuaFunction "getLastAttacker" (unitGetLastAttackerFn env)

@@ -84,6 +84,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetInsulationFn
     , unitDropEquipmentToGroundFn
     , unitDropItemToGroundFn
+    , unitDropItemByIdFn
     , unitGetBloodFn
     , unitGetPainFn
     , unitGetLastAttackerFn
@@ -2191,10 +2192,10 @@ unitDropEquipmentToGroundFn env = do
 --   ground at the unit's tile, PRESERVING the exact ItemInstance
 --   (condition / sharpness / quality / fill) — the inventory inverse
 --   of item.pickupGround, and the inventory sibling of
---   unit.dropEquipmentToGround. The craft AI (#329) deposits crafted
---   outputs at the station with it, so they're visible and sourceable
---   (ground items are a rung of the #96 fetch ladder). Returns false
---   if the unit is gone, carries no such item, or no world is active
+--   unit.dropEquipmentToGround. First-match-by-def semantics, same as
+--   unit.removeItem; when the EXACT instance matters (the craft AI's
+--   output deposit) use unit.dropItemById instead. Returns false if
+--   the unit is gone, carries no such item, or no world is active
 --   (the item stays in the inventory rather than vanishing).
 unitDropItemToGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDropItemToGroundFn env = do
@@ -2235,6 +2236,60 @@ unitDropItemToGroundFn env = do
                             Lua.pushboolean True
                             return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | unit.dropItemById(uid, instanceId) → bool. Like dropItemToGround
+--   but targets ONE exact ItemInstance by its instance id instead of
+--   first-match-by-def. The craft AI (#329) deposits the ids
+--   craft.executeAt returns with this, so a same-def item already in
+--   the crafter's inventory is never dropped in place of the fresh
+--   output (whose quality / condition / temp belong to THIS craft).
+unitDropItemByIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDropItemByIdFn env = do
+    uidArg ← Lua.tointeger 1
+    iidArg ← Lua.tointeger 2
+    case (uidArg, iidArg) of
+        (Just n, Just i) → do
+            let uid = UnitId (fromIntegral n)
+                iid = fromIntegral i ∷ Word64
+            -- Resolve the world FIRST so we never strip the item from
+            -- the unit when there's nowhere to drop it.
+            mWs ← Lua.liftIO $ activeWorldU env
+            case mWs of
+                Nothing → Lua.pushboolean False >> return 1
+                Just ws → do
+                    mDrop ← Lua.liftIO $
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, Nothing)
+                                Just inst →
+                                    case popFirstById iid
+                                             (uiInventory inst) of
+                                        Nothing → (um, Nothing)
+                                        Just (it, rest) →
+                                            let inst' = inst
+                                                  { uiInventory = rest }
+                                            in ( um { umInstances =
+                                                        HM.insert uid inst'
+                                                          (umInstances um) }
+                                               , Just (it, uiGridX inst,
+                                                           uiGridY inst) )
+                    case mDrop of
+                        Nothing → Lua.pushboolean False >> return 1
+                        Just (it, gx, gy) → do
+                            _ ← Lua.liftIO $
+                                atomicModifyIORef' (wsGroundItemsRef ws) $
+                                    spawnGroundItem it gx gy
+                            Lua.pushboolean True
+                            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | Pop the top-level inventory instance with the given instance id.
+popFirstById ∷ Word64 → [ItemInstance] → Maybe (ItemInstance, [ItemInstance])
+popFirstById _ [] = Nothing
+popFirstById iid (x:xs)
+    | iiInstanceId x ≡ iid = Just (x, xs)
+    | otherwise            = (\(it, rest) → (it, x : rest))
+                             <$> popFirstById iid xs
 
 -- | The active (shown) world, or the first one if none is explicitly
 --   shown. Mirrors the helper in API.Items.

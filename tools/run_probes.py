@@ -53,7 +53,7 @@ PROBES = [
     ("craft", "craft_probe.py", True,
      "craft.* API: catalogue, execute, stations, quality, smelting (#325/#326/#343/#327)"),
     ("craft_bill", "craft_bill_probe.py", True,
-     "craft-bill backend + craft_job AI: queue/claim/progress, source-work-produce loop (#329)"),
+     "craft-bill backend + craft_job AI: queue/claim/progress, source (ground+cargo) -> work -> produce loop (#329)"),
     ("disarm", "disarm_probe.py", False,
      "disabled-hand auto-drop must re-fire (#193)"),
     ("flora_growth", "flora_growth_probe.py", True,

@@ -166,11 +166,13 @@ craftGetNamesFn env = do
         Lua.rawseti (-2) i
     return 1
 
--- | craft.execute(uid, recipeId) → ok, err?. Runs one craft against the
---   unit's TOP-LEVEL inventory: knowledge gate, then all-or-nothing
---   consumption of inputs + fuel, then the outputs are appended — at
---   crafter-derived quality when the recipe is skill-tagged (#343). On
---   failure returns false plus a reason and the inventory is untouched.
+-- | craft.execute(uid, recipeId) → ok, idsOrErr. Runs one craft
+--   against the unit's TOP-LEVEL inventory: knowledge gate, then
+--   all-or-nothing consumption of inputs + fuel, then the outputs are
+--   appended — at crafter-derived quality when the recipe is
+--   skill-tagged (#343). Success returns true plus the array of the
+--   freshly created outputs' instance ids (see pushCraftResult);
+--   failure returns false plus a reason, inventory untouched.
 craftExecuteFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftExecuteFn env = do
     idArg  ← Lua.tointeger 1
@@ -180,14 +182,15 @@ craftExecuteFn env = do
             let uid = UnitId (fromIntegral n)
                 rid = TE.decodeUtf8 ridBS
             result ← Lua.liftIO $ executeCraft env uid rid
-            pushOkErr result
-        _ → pushOkErr (Left "craft.execute: expected (uid, recipeId)")
+            pushCraftResult result
+        _ → pushCraftResult (Left "craft.execute: expected (uid, recipeId)")
 
--- | craft.executeAt(uid, recipeId, bid) → ok, err?. The station-aware
---   craft (#326): identical consumption semantics to craft.execute,
---   but refused unless `bid` is a BUILT work station on the unit's
---   world page whose def offers the recipe's station kind, with the
---   unit standing on or adjacent to the footprint (Chebyshev ≤ 1).
+-- | craft.executeAt(uid, recipeId, bid) → ok, idsOrErr. The
+--   station-aware craft (#326): identical semantics to craft.execute
+--   (including the created-instance-ids success return), but refused
+--   unless `bid` is a BUILT work station on the unit's world page
+--   whose def offers the recipe's station kind, with the unit
+--   standing on or adjacent to the footprint (Chebyshev ≤ 1).
 --   craft.execute stays station-blind (tests / debug console); the
 --   craft AI (#329) routes through this.
 craftExecuteAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -205,8 +208,8 @@ craftExecuteAtFn env = do
                 case gate of
                     Left err → return (Left err)
                     Right () → executeCraft env uid rid
-            pushOkErr result
-        _ → pushOkErr
+            pushCraftResult result
+        _ → pushCraftResult
                 (Left "craft.executeAt: expected (uid, recipeId, buildingId)")
 
 -- | The station gate for craft.executeAt (#326). Read-only pre-checks
@@ -241,10 +244,22 @@ validateStation env uid rid bid = do
   where
     note e = maybe (Left e) Right
 
--- | Shared (ok) / (false, reason) return shape for the execute fns.
-pushOkErr ∷ Either Text () → Lua.LuaE Lua.Exception Lua.NumResults
-pushOkErr (Right ()) = Lua.pushboolean True >> return 1
-pushOkErr (Left err) = do
+-- | Shared return shape for the execute fns. Success is (true,
+--   [instanceId…]) — the FRESHLY CREATED outputs' ids, so a caller can
+--   target exactly the crafted instances (the craft AI deposits them
+--   at the station via unit.dropItemById; a same-def item already in
+--   the crafter's inventory is never confused for the new output).
+--   Failure is (false, reason).
+pushCraftResult ∷ Either Text [Word64]
+                → Lua.LuaE Lua.Exception Lua.NumResults
+pushCraftResult (Right ids) = do
+    Lua.pushboolean True
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] ids) $ \(i, iid) → do
+        Lua.pushinteger (fromIntegral iid)
+        Lua.rawseti (-2) (fromIntegral i)
+    return 2
+pushCraftResult (Left err) = do
     Lua.pushboolean False
     Lua.pushstring (TE.encodeUtf8 err)
     return 2
@@ -255,7 +270,8 @@ pushOkErr (Left err) = do
 --   same pattern as unit.addItem, so nothing can race between the
 --   inventory check and the swap. Rolled outputs are discarded when
 --   the craft fails (a few wasted instance ids, never a dupe).
-executeCraft ∷ EngineEnv → UnitId → Text → IO (Either Text ())
+--   Success carries the created outputs' instance ids.
+executeCraft ∷ EngineEnv → UnitId → Text → IO (Either Text [Word64])
 executeCraft env uid rid = do
     rm ← readIORef (recipeManagerRef env)
     case lookupRecipe rid rm of
@@ -282,7 +298,7 @@ executeCraft env uid rid = do
 --   the gated knowledge's level, read here inside the same atomic
 --   update, so quality can't race a concurrent skill change.
 applyCraft ∷ RecipeDef → [ItemInstance] → UnitId → UnitManager
-           → (UnitManager, Either Text ())
+           → (UnitManager, Either Text [Word64])
 applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
     Nothing → (um, Left "no such unit")
     Just u → case rdKnowledge recipe of
@@ -301,7 +317,7 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
                             in map (\o → o { iiQuality = q }) outs
                     u' = u { uiInventory = inv' ⧺ outs' }
                 in ( um { umInstances = HM.insert uid u' (umInstances um) }
-                   , Right () )
+                   , Right (map iiInstanceId outs') )
 
 -- Craft bills (#329) -----------------------------------------------
 --

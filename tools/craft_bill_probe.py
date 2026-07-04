@@ -20,13 +20,19 @@ machinery, then checks:
   2. Craft AI (unit_ai craft_job, AI live): with steel bars lying near
      the built furnace and a 2-count bill queued, an acolyte claims
      the bill (observable via getBill().claimant), sources the bars
-     from the ground, works the station, and produces — outputs are
-     laid down at the station as ground items, the bill is removed
-     when its count runs out, and the crafter earns trade-skill XP
-     ("smithing" for untagged recipes).
+     from the ground, works the station, and produces — the FRESH
+     output instances (ids returned by craft.executeAt) are laid down
+     at the station as ground items while a same-def item the crafter
+     already carried stays carried, the bill is removed when its count
+     runs out, and the crafter earns trade-skill XP ("smithing" for
+     untagged recipes).
   3. Knowledge gate: a knowledge-gated bill draws no worker while the
      acolyte doesn't know the theory, and is worked once
      unit.setKnowledge grants it.
+  4. Cargo rung: with the only steel bar deposited in a built cargo
+     hold (no loose/mule stock), the crafter withdraws it from storage
+     (the last rung of the sourcing ladder) and works the bill to
+     completion, emptying the store.
 
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
@@ -156,7 +162,7 @@ def spawn_acolyte(port, x, y):
     return uid
 
 
-def spawn_station(port, uid, def_name, gx, gy, materials):
+def spawn_station(port, uid, def_name, gx, gy, materials, progress=500):
     """building.spawn + deliver build materials through the real
     machinery, then addBuildProgress to Built."""
     raw = send(port, f"return building.spawn('{def_name}', {gx}, {gy})")
@@ -179,11 +185,24 @@ def spawn_station(port, uid, def_name, gx, gy, materials):
     if send(port, f"return building.areMaterialsSatisfied({bid}) "
                   f"and 'yes' or 'no'").strip('"') != "yes":
         sys.exit(f"{def_name} materials not satisfied after delivery")
-    send(port, f"building.addBuildProgress({bid}, 500); return 'ok'")
+    send(port, f"building.addBuildProgress({bid}, {progress}); return 'ok'")
     act = send(port, f"return building.getActivity({bid})").strip('"')
     if act != "built":
         sys.exit(f"{def_name} never reached built (activity={act})")
     return bid
+
+
+def inv_instance_ids(port, uid, name):
+    """Instance ids of all top-level inventory items with defName."""
+    raw = send(port,
+        f"local out={{}}; for _,it in ipairs(unit.getInventory({uid}) "
+        f"or {{}}) do if it.defName=='{name}' then "
+        f"out[#out+1]=it.instanceId end end; return out")
+    try:
+        ids = json.loads(raw)
+        return ids if isinstance(ids, list) else []
+    except json.JSONDecodeError:
+        return []
 
 
 def add_bill(port, bid, recipe, count=None):
@@ -346,6 +365,15 @@ def main():
         for i in range(3):
             send(port, f"item.spawnGround('steel_bar', {7.5 + 0.3*i}, 2.5); "
                        f"return 'ok'")
+        # Output-identity fixture: the crafter carries a granite_chunk
+        # of its own (same def as the bill's OUTPUT). The deposit must
+        # drop the freshly crafted instances (dropItemById on the ids
+        # executeAt returns), never this carried one.
+        send(port, f"unit.addItem({uid}, 'granite_chunk'); return 'ok'")
+        keep_ids = inv_instance_ids(port, uid, "granite_chunk")
+        passed = check(passed, len(keep_ids) == 1,
+                       "identity fixture: crafter carries one granite chunk",
+                       keep_ids)
         xp0 = float(send(port, f"return unit.getSkill({uid}, 'smithing') or 0"))
         bill3, msg = add_bill(port, bid_f, "bill_probe_smelt", 2)
         passed = check(passed, bill3 is not None, "AI bill queued", msg)
@@ -376,6 +404,10 @@ def main():
         passed = check(passed, outs >= 4,
                        "outputs laid down at the station (≥4 granite chunks)",
                        f"found={outs}")
+        kept = inv_instance_ids(port, uid, "granite_chunk")
+        passed = check(passed, kept == keep_ids,
+                       "carried same-def item kept; only fresh outputs dropped",
+                       f"kept={kept} expected={keep_ids}")
         xp1 = float(send(port, f"return unit.getSkill({uid}, 'smithing') or 0"))
         passed = check(passed, xp1 > xp0,
                        "crafter earned smithing XP", f"{xp0} → {xp1}")
@@ -394,6 +426,43 @@ def main():
             port, f"return craft.getBill({bill4}) and 'y' or 'n'"
             ).strip('"') == "n")
         passed = check(passed, done, "granted knowledge unlocks the bill")
+
+        # --- 4. Cargo rung of the sourcing ladder ---
+        # Every loose bar is consumed by now; stock the ONLY remaining
+        # steel_bar inside a built cargo hold. The crafter must source
+        # it from storage (inventory → ground → mule → cargo) to work
+        # the bill. AI off for the scripted build + stocking so the
+        # delivery AI doesn't race the fixture setup.
+        ai_off(port)
+        bid_c = spawn_station(port, uid, "cargo_hold_S", 2, 6,
+                              {"steel_plate": 10, "steel_bar": 24,
+                               "steel_hardware": 10, "electric_motor": 2,
+                               "processing_unit": 2}, progress=5000)
+        send(port, f"unit.addItem({uid}, 'steel_bar'); "
+                   f"unit.depositToCargo({uid}, {bid_c}, 'steel_bar'); "
+                   f"return 'ok'")
+        stored = int(float(send(port,
+            f"local n=0; for _,it in ipairs(building.getStorage({bid_c}) "
+            f"or {{}}) do if it.defName=='steel_bar' then n=n+1 end end; "
+            f"return n")))
+        loose = ground_count_near(port, "steel_bar", 5, 4, 40)
+        passed = check(passed, stored == 1 and loose == 0,
+                       "fixture: the only bar lives in cargo storage",
+                       f"stored={stored} loose={loose}")
+        bill5, msg = add_bill(port, bid_f, "bill_probe_smelt", 1)
+        passed = check(passed, bill5 is not None, "cargo-sourced bill queued",
+                       msg)
+        ai_on(port)
+        done = poll(port, 150, lambda: send(
+            port, f"return craft.getBill({bill5}) and 'y' or 'n'"
+            ).strip('"') == "n")
+        emptied = int(float(send(port,
+            f"local n=0; for _,it in ipairs(building.getStorage({bid_c}) "
+            f"or {{}}) do if it.defName=='steel_bar' then n=n+1 end end; "
+            f"return n")))
+        passed = check(passed, done and emptied == 0,
+                       "bill sourced from cargo storage worked to completion",
+                       f"done={done} left_in_store={emptied}")
 
         print("\n" + ("ALL CRAFT BILL CHECKS PASSED" if passed
                       else "SOME FAILED"))
