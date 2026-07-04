@@ -395,6 +395,34 @@ level when the recipe is knowledge-gated
 (`Craft.Execute.craftQuality`); untagged recipes keep the item-def
 quality roll. Applies to both `craft.execute` and `craft.executeAt`.
 
+### Testing power nodes headless (#358)
+
+The power epic's (#357) foundation: `solar_panel` / `high_voltage_battery`
+are ordinary 1x1 buildings (`build_work` left at its 0 default — instant,
+like the portal) placed through the SAME build-tool ghost-placement flow
+as everything else, but item-consuming: `scripts/build_tool.lua`'s
+`buildTool.commitPlacement(defName, gx, gy)` routes any def where
+`power.isPlaceable(defName)` is true through `power.placeNode(uid,
+defName, gx, gy)` — popping one matching item off whichever
+`unit.getSelected()` unit carries it (rolling the item back if placement
+is rejected) and registering a `Power.Types` node (role + peak watts /
+capacity Wh) — instead of the free `building.spawn` every other def
+still uses. `power.getNode(nodeId)` / `getNodeForBuilding(bid)` /
+`listNodes()` report each node's role + parameters; the registry
+persists per-world (`wpsPowerNodes`, v73) keyed by the `BuildingId` it
+rides on, reconnecting on load like `Craft.Bills`. Wire adjacency /
+network energy balance are #359/#360, not this.
+
+Turnkey harness: **`python3 tools/power_probe.py`** — the #358 gate.
+Boots headless on a flat arena, confirms the technomule's starting kit
+carries the new items, and drives `buildTool.commitPlacement` (not just
+the raw Lua verb) end to end: refusal with no unit selected (an ordinary
+building still places free), consumption + role/parameter reporting for
+a source and a storage node once a carrying unit is selected, no node
+leaking onto an ordinary building, refusal once the carrying unit's
+stock is exhausted, and a full save → quit → fresh-restart → load
+round-trip reconnecting every node to its building.
+
 ### Flora growth runtime (#332)
 
 Flora growth is **derived** state: the calendar date advances (midnight

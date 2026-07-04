@@ -37,6 +37,7 @@ import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import Craft.Bills (pruneToStations)
+import Power.Types (pruneToBuildings)
 import Building.Types (BuildingManager(..), unBuildingId, biPage)
 import Unit.Types (UnitManager(..), unUnitId, unitsOnPage, uiPage)
 import Unit.Sim.Types (UnitThreadState(..))
@@ -182,6 +183,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 floraHarvests ← readIORef (wsFloraHarvestsRef ws)
                                 chopDesigs ← readIORef (wsChopDesignationsRef ws)
                                 craftBills ← readIORef (wsCraftBillsRef ws)
+                                powerNodes ← readIORef (wsPowerNodesRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
                                 -- Camera: the VISIBLE page uses the live global
                                 -- Camera2D (authoritative position/zoom/facing
@@ -228,6 +230,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsFloraHarvests = floraHarvests
                                     , wpsChopDesignations = chopDesigs
                                     , wpsCraftBills  = craftBills
+                                    , wpsPowerNodes  = powerNodes
                                     }
                     -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
@@ -451,6 +454,11 @@ handleWorldLoadSaveCommand env logger pageId saveData
         writeIORef (wsCraftBillsRef worldState)
             (pruneToStations (HM.keysSet (bsnInstances (wpsBuildings wps)))
                              (wpsCraftBills wps))
+        -- Power nodes (#358): same reconnect-by-BuildingId + prune
+        -- pattern as craft bills above.
+        writeIORef (wsPowerNodesRef worldState)
+            (pruneToBuildings (HM.keysSet (bsnInstances (wpsBuildings wps)))
+                              (wpsPowerNodes wps))
 
         -- #365: an arena page (world.initArena) carries SYNTHETIC gen params
         -- (wgpSeed 0, empty timeline, no plates, worldSize 100000) that the

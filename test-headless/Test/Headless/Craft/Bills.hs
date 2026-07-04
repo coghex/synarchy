@@ -145,6 +145,85 @@ spec = do
             snd (completeBillCycle (BillId 4) emptyCraftBills)
                 `shouldBe` Nothing
 
+    describe "pause (#330)" $ do
+        it "setBillPaused sets and clears the flag" $ do
+            let (bills, bid) = oneBill
+                (b1, ok1) = setBillPaused bid True bills
+                (b2, ok2) = setBillPaused bid False b1
+            ok1 `shouldBe` True
+            cbPaused ⊚ lookupBill bid b1 `shouldBe` Just True
+            ok2 `shouldBe` True
+            cbPaused ⊚ lookupBill bid b2 `shouldBe` Just False
+
+        it "setBillPaused is False for an unknown bill" $ do
+            snd (setBillPaused (BillId 999) True emptyCraftBills)
+                `shouldBe` False
+
+        it "a paused, unclaimed bill can't be freshly claimed" $ do
+            let (bills, bid) = oneBill
+                (b1, _)   = setBillPaused bid True bills
+                (_, ok)   = claimBill 10 30 everyoneAlive bid worker1 b1
+            ok `shouldBe` False
+
+        it "pausing a claimed bill lets the holder keep refreshing" $ do
+            let (bills, bid) = oneBill
+                (b1, _)  = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _)  = setBillPaused bid True b1
+                (_, ok)  = claimBill 20 30 everyoneAlive bid worker1 b2
+            ok `shouldBe` True
+
+        it "pausing blocks a dead-claimant takeover by someone else" $ do
+            let (bills, bid) = oneBill
+                (b1, _)  = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _)  = setBillPaused bid True b1
+                (_, ok)  = claimBill 11 30 (≢ worker1) bid worker2 b2
+            ok `shouldBe` False
+
+        it "unpausing re-allows a fresh claim" $ do
+            let (bills, bid) = oneBill
+                (b1, _)  = setBillPaused bid True bills
+                (b2, _)  = setBillPaused bid False b1
+                (_, ok)  = claimBill 10 30 everyoneAlive bid worker1 b2
+            ok `shouldBe` True
+
+    describe "reorder (#330)" $ do
+        it "moving a bill up swaps cbSeq with its predecessor" $ do
+            let (b1, i1) = addBill station1 "a" 1 emptyCraftBills
+                (b2, i2) = addBill station1 "b" 1 b1
+                (b3, ok) = reorderBill MoveUp i2 b2
+            ok `shouldBe` True
+            map cbId (billsForStation station1 b3) `shouldBe` [i2, i1]
+
+        it "moving a bill down swaps cbSeq with its successor" $ do
+            let (b1, i1) = addBill station1 "a" 1 emptyCraftBills
+                (b2, i2) = addBill station1 "b" 1 b1
+                (b3, ok) = reorderBill MoveDown i1 b2
+            ok `shouldBe` True
+            map cbId (billsForStation station1 b3) `shouldBe` [i2, i1]
+
+        it "moving the first bill up fails and leaves order untouched" $ do
+            let (b1, i1) = addBill station1 "a" 1 emptyCraftBills
+                (b2, i2) = addBill station1 "b" 1 b1
+                (b3, ok) = reorderBill MoveUp i1 b2
+            ok `shouldBe` False
+            map cbId (billsForStation station1 b3) `shouldBe` [i1, i2]
+
+        it "moving the last bill down fails" $ do
+            let (b1, _)  = addBill station1 "a" 1 emptyCraftBills
+                (b2, i2) = addBill station1 "b" 1 b1
+                (_, ok)  = reorderBill MoveDown i2 b2
+            ok `shouldBe` False
+
+        it "reordering never crosses stations" $ do
+            let (b1, i1) = addBill station1 "a" 1 emptyCraftBills
+                (b2, _)  = addBill station2 "x" 1 b1
+                (_, ok)  = reorderBill MoveDown i1 b2
+            ok `shouldBe` False
+
+        it "reordering an unknown bill fails" $ do
+            snd (reorderBill MoveUp (BillId 999) emptyCraftBills)
+                `shouldBe` False
+
     describe "persistence" $ do
         it "roundtrips through the save encoding (claims included)" $ do
             let (b0, bid) = oneBill

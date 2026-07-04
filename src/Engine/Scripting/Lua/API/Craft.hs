@@ -22,6 +22,8 @@ module Engine.Scripting.Lua.API.Craft
     , craftReleaseBillFn
     , craftAddBillProgressFn
     , craftCompleteBillCycleFn
+    , craftSetBillPausedFn
+    , craftReorderBillFn
     , pushRecipe
     , validateStation
     ) where
@@ -400,6 +402,51 @@ craftReleaseBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftReleaseBillFn env = withBillId env $ \ws billId →
     atomicModifyIORef' (wsCraftBillsRef ws) (releaseBill billId)
 
+-- | craft.setBillPaused(billId, paused) → true | false. Pausing blocks
+--   fresh claims (Craft.Bills.claimAvailable) without touching a
+--   claimant already mid-cycle — the #330 panel's pause control.
+craftSetBillPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftSetBillPausedFn env = do
+    idArg     ← Lua.tointeger 1
+    pausedArg ← Lua.toboolean 2
+    ok ← case idArg of
+        Nothing → return False
+        Just n  → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return False
+                Just (_, ws) →
+                    atomicModifyIORef' (wsCraftBillsRef ws) $
+                        setBillPaused (BillId (fromIntegral n)) pausedArg
+    Lua.pushboolean ok
+    return 1
+
+-- | craft.reorderBill(billId, "up" | "down") → true | false. Swaps
+--   with the immediate neighbour at the same station in the current
+--   listing order (Craft.Bills.reorderBill) — the #330 panel's manual
+--   reorder control. False at either end of the queue, for an unknown
+--   bill, or for any direction string but "up"/"down".
+craftReorderBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftReorderBillFn env = do
+    idArg  ← Lua.tointeger 1
+    dirArg ← Lua.tostring 2
+    ok ← case (idArg, dirArg >>= toDirection) of
+        (Just n, Just dir) → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return False
+                Just (_, ws) →
+                    atomicModifyIORef' (wsCraftBillsRef ws) $
+                        reorderBill dir (BillId (fromIntegral n))
+        _ → return False
+    Lua.pushboolean ok
+    return 1
+  where
+    toDirection bs = case TE.decodeUtf8 bs of
+        "up"   → Just MoveUp
+        "down" → Just MoveDown
+        _      → Nothing
+
 -- | Shared decode + bool-return shape for the (billId) → bool verbs.
 withBillId ∷ EngineEnv → (WorldState → BillId → IO Bool)
            → Lua.LuaE Lua.Exception Lua.NumResults
@@ -525,7 +572,9 @@ craftGetBillsFn env = do
     return 1
 
 -- | Push one bill as a Lua table: { id, station, recipe, remaining,
---   progress, claimant?, claimedAt? }. remaining -1 = repeat forever.
+--   progress, seq, paused, claimant?, claimedAt? }. remaining -1 =
+--   repeat forever; seq is the manual-reorder sort key
+--   (billsForStation / #330's reorderBill).
 pushBill ∷ CraftBill → Lua.LuaE Lua.Exception ()
 pushBill bill = do
     Lua.newtable
@@ -539,6 +588,9 @@ pushBill bill = do
     Lua.pushinteger (fromIntegral (cbRemaining bill))
     Lua.setfield (-2) "remaining"
     putN "progress"  (cbProgress bill)
+    putI "seq"       (cbSeq bill)
+    Lua.pushboolean (cbPaused bill)
+    Lua.setfield (-2) "paused"
     forM_ (cbClaimant bill) $ \(UnitId u) → do
         putI "claimant" u
         putN "claimedAt" (cbClaimedAt bill)
