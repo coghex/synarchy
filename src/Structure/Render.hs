@@ -460,6 +460,8 @@ sortAnchor slot gx gy =
 tieBreak ∷ StructureSlot → Float
 tieBreak s = case s of
     SFloor   → 0.00020
+    SWire    → 0.00015   -- flat like a floor, but tie-loses to one if both
+                          -- ever occupy the same tile
     SWallNW  → 0.00030
     SWallNE  → 0.00040   -- NE overlaps NW at the back corner
     SWallSW  → 0.00050

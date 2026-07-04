@@ -31,6 +31,11 @@ data StructureSlot
     --   per-tile (inset toward the tile centre) so an underground wall pressed
     --   against terrain keeps its post inside the tile, not on the shared node.
     | SPostN | SPostE | SPostS | SPostW
+    | SWire
+    -- ^ Power-grid wire (#359) — occupies the tile top like a floor. Its
+    --   rendered sprite is one of the "wire" pack's 16 connection variants,
+    --   picked by the placer (scripts/wire.lua) from which cardinal
+    --   neighbours also carry wire; this slot itself carries no orientation.
     deriving (Show, Eq, Ord, Enum, Bounded)
 
 -- | Parse the Lua-facing slot name. Matches the texture suffixes.
@@ -46,6 +51,7 @@ slotFromText t = case T.toLower t of
     "post_e"  → Just SPostE
     "post_s"  → Just SPostS
     "post_w"  → Just SPostW
+    "wire"    → Just SWire
     _         → Nothing
 
 -- | A structure piece with RESOLVED runtime texture handles. Built by the

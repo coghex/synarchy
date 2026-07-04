@@ -215,6 +215,33 @@ local function structureEntries()
     return entries
 end
 
+-- Wire (#359): a second structure pack, offered alongside dungeon_1's
+-- pieces. Its own two-click rectangle designation paints a run of wire
+-- (construction.designate "structure"/"wire"/"wire"); the connection-aware
+-- render (scripts/wire.lua) picks each tile's autotile variant from its
+-- neighbours, so any shape the player drags reads as a connected line.
+-- The icon reuses the pack's "cross" connection art — the most
+-- recognizable single-glance "this is wire" shape.
+local function wireTex()
+    if buildTool.wireTex then return buildTool.wireTex end
+    buildTool.wireTex = engine.loadTexture(
+        "assets/textures/structures/wire/cross.png")
+    return buildTool.wireTex
+end
+
+local function wireEntry()
+    return {
+        kind        = "structure",
+        pack        = "wire",
+        piece       = "wire",
+        edge        = nil,
+        displayName = "Wire",
+        description = "Power-grid wire. Connects to adjacent wire tiles.",
+        category    = "Structures",
+        iconTex     = wireTex(),
+    }
+end
+
 -- Full picker entry list: buildings + (once a starting building has been
 -- placed) the structure pieces.
 local function visibleEntries()
@@ -223,6 +250,7 @@ local function visibleEntries()
         for _, e in ipairs(structureEntries()) do
             table.insert(entries, e)
         end
+        table.insert(entries, wireEntry())
     end
     return entries
 end
