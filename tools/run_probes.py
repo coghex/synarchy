@@ -52,6 +52,8 @@ PROBES = [
      "construct_job AI end-to-end: claim/source/progress/place/stake/release (#96)"),
     ("craft", "craft_probe.py", True,
      "craft.* API: catalogue, execute, stations, quality, smelting (#325/#326/#343/#327)"),
+    ("craft_bill", "craft_bill_probe.py", True,
+     "craft-bill backend + craft_job AI: queue/claim/progress, source (ground+cargo) -> work -> produce loop (#329)"),
     ("disarm", "disarm_probe.py", False,
      "disabled-hand auto-drop must re-fire (#193)"),
     ("flora_growth", "flora_growth_probe.py", True,

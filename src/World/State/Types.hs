@@ -29,6 +29,7 @@ import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Chop.Types (ChopDesignations)
+import Craft.Bills (CraftBills, emptyCraftBills)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import Item.Ground (GroundItems, emptyGroundItems)
@@ -119,6 +120,14 @@ data WorldState = WorldState
       --   thread (WorldDesignateChop / cancel commands), read by the
       --   render pass (marker) and the chop AI. Persisted in saves
       --   (wpsChopDesignations, v67).
+    , wsCraftBillsRef ∷ IORef CraftBills
+      -- ^ Craft-bill queue (#329): per-station standing craft orders
+      --   (see Craft.Bills). Unlike the designation layers this has no
+      --   world-thread side effects (no ghost render, no chunk edits),
+      --   so the craft.* bill verbs mutate it directly from the Lua
+      --   thread with atomicModifyIORef' — claims resolve atomically
+      --   without a queue round-trip. Persisted in saves
+      --   (wpsCraftBills, v70).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -153,6 +162,7 @@ emptyWorldState = do
     wsConstructDesignationsRef ← newIORef HM.empty
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsChopDesignationsRef ← newIORef HM.empty
+    wsCraftBillsRef ← newIORef emptyCraftBills
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -163,7 +173,7 @@ emptyWorldState = do
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
-                        wsChopDesignationsRef
+                        wsChopDesignationsRef wsCraftBillsRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

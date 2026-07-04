@@ -14,6 +14,14 @@ module Engine.Scripting.Lua.API.Craft
     , craftGetNamesFn
     , craftExecuteFn
     , craftExecuteAtFn
+    , craftAddBillFn
+    , craftCancelBillFn
+    , craftGetBillFn
+    , craftGetBillsFn
+    , craftClaimBillFn
+    , craftReleaseBillFn
+    , craftAddBillProgressFn
+    , craftCompleteBillCycleFn
     , pushRecipe
     , validateStation
     ) where
@@ -25,15 +33,19 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Data.List (sortOn)
+import Engine.Core.State (EngineEnv(..), freshItemInstanceId,
+                          activeWorldPage)
 import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Asset.YamlRecipes
 import Craft.Types
+import Craft.Bills
 import Craft.Execute (consumeIngredients, craftQuality)
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
                    lookupItemDef)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
+import World.State.Types (WorldState(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingActivity(..), BuildingManager(..),
                        currentActivity, footprintDist)
@@ -154,11 +166,13 @@ craftGetNamesFn env = do
         Lua.rawseti (-2) i
     return 1
 
--- | craft.execute(uid, recipeId) → ok, err?. Runs one craft against the
---   unit's TOP-LEVEL inventory: knowledge gate, then all-or-nothing
---   consumption of inputs + fuel, then the outputs are appended — at
---   crafter-derived quality when the recipe is skill-tagged (#343). On
---   failure returns false plus a reason and the inventory is untouched.
+-- | craft.execute(uid, recipeId) → ok, idsOrErr. Runs one craft
+--   against the unit's TOP-LEVEL inventory: knowledge gate, then
+--   all-or-nothing consumption of inputs + fuel, then the outputs are
+--   appended — at crafter-derived quality when the recipe is
+--   skill-tagged (#343). Success returns true plus the array of the
+--   freshly created outputs' instance ids (see pushCraftResult);
+--   failure returns false plus a reason, inventory untouched.
 craftExecuteFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftExecuteFn env = do
     idArg  ← Lua.tointeger 1
@@ -168,14 +182,15 @@ craftExecuteFn env = do
             let uid = UnitId (fromIntegral n)
                 rid = TE.decodeUtf8 ridBS
             result ← Lua.liftIO $ executeCraft env uid rid
-            pushOkErr result
-        _ → pushOkErr (Left "craft.execute: expected (uid, recipeId)")
+            pushCraftResult result
+        _ → pushCraftResult (Left "craft.execute: expected (uid, recipeId)")
 
--- | craft.executeAt(uid, recipeId, bid) → ok, err?. The station-aware
---   craft (#326): identical consumption semantics to craft.execute,
---   but refused unless `bid` is a BUILT work station on the unit's
---   world page whose def offers the recipe's station kind, with the
---   unit standing on or adjacent to the footprint (Chebyshev ≤ 1).
+-- | craft.executeAt(uid, recipeId, bid) → ok, idsOrErr. The
+--   station-aware craft (#326): identical semantics to craft.execute
+--   (including the created-instance-ids success return), but refused
+--   unless `bid` is a BUILT work station on the unit's world page
+--   whose def offers the recipe's station kind, with the unit
+--   standing on or adjacent to the footprint (Chebyshev ≤ 1).
 --   craft.execute stays station-blind (tests / debug console); the
 --   craft AI (#329) routes through this.
 craftExecuteAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -193,8 +208,8 @@ craftExecuteAtFn env = do
                 case gate of
                     Left err → return (Left err)
                     Right () → executeCraft env uid rid
-            pushOkErr result
-        _ → pushOkErr
+            pushCraftResult result
+        _ → pushCraftResult
                 (Left "craft.executeAt: expected (uid, recipeId, buildingId)")
 
 -- | The station gate for craft.executeAt (#326). Read-only pre-checks
@@ -229,10 +244,22 @@ validateStation env uid rid bid = do
   where
     note e = maybe (Left e) Right
 
--- | Shared (ok) / (false, reason) return shape for the execute fns.
-pushOkErr ∷ Either Text () → Lua.LuaE Lua.Exception Lua.NumResults
-pushOkErr (Right ()) = Lua.pushboolean True >> return 1
-pushOkErr (Left err) = do
+-- | Shared return shape for the execute fns. Success is (true,
+--   [instanceId…]) — the FRESHLY CREATED outputs' ids, so a caller can
+--   target exactly the crafted instances (the craft AI deposits them
+--   at the station via unit.dropItemById; a same-def item already in
+--   the crafter's inventory is never confused for the new output).
+--   Failure is (false, reason).
+pushCraftResult ∷ Either Text [Word64]
+                → Lua.LuaE Lua.Exception Lua.NumResults
+pushCraftResult (Right ids) = do
+    Lua.pushboolean True
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] ids) $ \(i, iid) → do
+        Lua.pushinteger (fromIntegral iid)
+        Lua.rawseti (-2) (fromIntegral i)
+    return 2
+pushCraftResult (Left err) = do
     Lua.pushboolean False
     Lua.pushstring (TE.encodeUtf8 err)
     return 2
@@ -243,7 +270,8 @@ pushOkErr (Left err) = do
 --   same pattern as unit.addItem, so nothing can race between the
 --   inventory check and the swap. Rolled outputs are discarded when
 --   the craft fails (a few wasted instance ids, never a dupe).
-executeCraft ∷ EngineEnv → UnitId → Text → IO (Either Text ())
+--   Success carries the created outputs' instance ids.
+executeCraft ∷ EngineEnv → UnitId → Text → IO (Either Text [Word64])
 executeCraft env uid rid = do
     rm ← readIORef (recipeManagerRef env)
     case lookupRecipe rid rm of
@@ -270,7 +298,7 @@ executeCraft env uid rid = do
 --   the gated knowledge's level, read here inside the same atomic
 --   update, so quality can't race a concurrent skill change.
 applyCraft ∷ RecipeDef → [ItemInstance] → UnitId → UnitManager
-           → (UnitManager, Either Text ())
+           → (UnitManager, Either Text [Word64])
 applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
     Nothing → (um, Left "no such unit")
     Just u → case rdKnowledge recipe of
@@ -289,7 +317,231 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
                             in map (\o → o { iiQuality = q }) outs
                     u' = u { uiInventory = inv' ⧺ outs' }
                 in ( um { umInstances = HM.insert uid u' (umInstances um) }
-                   , Right () )
+                   , Right (map iiInstanceId outs') )
+
+-- Craft bills (#329) -----------------------------------------------
+--
+-- The bill queue lives per world page (wsCraftBillsRef) and has no
+-- world-thread side effects, so every verb below is one synchronous
+-- atomicModifyIORef' — claims between two crafters resolve atomically
+-- and callers read results back immediately (no queue round-trip).
+-- The pure transitions live in Craft.Bills; this layer adds argument
+-- decoding, the add-time validation, and the Lua table shape.
+
+-- | craft.addBill(bid, recipeId [, count]) → billId | nil, err.
+--   Queue a standing order at a station: run @recipeId@ @count@ times
+--   (omitted or < 1 = repeat forever). Validated here so a malformed
+--   bill can never enter the queue: the recipe must exist and not be
+--   repair-tagged, the station must exist on the active page, and its
+--   def must offer the recipe's station operation. The station does
+--   NOT need to be Built yet — queueing bills on an under-construction
+--   station is fine; the craft AI only works Built ones.
+craftAddBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftAddBillFn env = do
+    bidArg   ← Lua.tointeger 1
+    ridArg   ← Lua.tostring 2
+    countArg ← Lua.tointeger 3
+    case (bidArg, ridArg) of
+        (Just b, Just ridBS) → do
+            let bid   = BuildingId (fromIntegral b)
+                rid   = TE.decodeUtf8 ridBS
+                count = maybe (-1) fromIntegral countArg
+            result ← Lua.liftIO $ do
+                mPage ← activeWorldPage env
+                rm    ← readIORef (recipeManagerRef env)
+                bm    ← readIORef (buildingManagerRef env)
+                let gate = do
+                        (pageId, ws) ← note "no active world" mPage
+                        recipe ← note ("unknown recipe " <> rid)
+                                      (lookupRecipe rid rm)
+                        when (rdRepairAxis recipe ≢ Nothing) $
+                            Left (rid <> " is a repair recipe — bills run \
+                                         \craft recipes only")
+                        inst ← note "no such building"
+                                    (HM.lookup bid (bmInstances bm))
+                        def  ← note ("unknown building def " <> biDefName inst)
+                                    (HM.lookup (biDefName inst) (bmDefs bm))
+                        unless (biPage inst ≡ pageId) $
+                            Left "station is on another world page"
+                        unless (rdStation recipe `elem` bdOperations def) $
+                            Left ("station " <> biDefName inst
+                                  <> " does not offer " <> rdStation recipe)
+                        Right ws
+                case gate of
+                    Left err → return (Left err)
+                    Right ws → do
+                        billId ← atomicModifyIORef' (wsCraftBillsRef ws) $
+                            addBill bid rid count
+                        return (Right billId)
+            case result of
+                Right (BillId n) → do
+                    Lua.pushinteger (fromIntegral n)
+                    return 1
+                Left err → do
+                    Lua.pushnil
+                    Lua.pushstring (TE.encodeUtf8 err)
+                    return 2
+        _ → do
+            Lua.pushnil
+            Lua.pushstring "craft.addBill: expected (buildingId, recipeId\
+                           \ [, count])"
+            return 2
+  where
+    note e = maybe (Left e) Right
+
+-- | craft.cancelBill(billId) → true | false.
+craftCancelBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftCancelBillFn env = withBillId env $ \ws billId →
+    atomicModifyIORef' (wsCraftBillsRef ws) (removeBill billId)
+
+-- | craft.releaseBill(billId) → true | false. Back to pending; cycle
+--   progress is kept (see Craft.Bills.releaseBill).
+craftReleaseBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftReleaseBillFn env = withBillId env $ \ws billId →
+    atomicModifyIORef' (wsCraftBillsRef ws) (releaseBill billId)
+
+-- | Shared decode + bool-return shape for the (billId) → bool verbs.
+withBillId ∷ EngineEnv → (WorldState → BillId → IO Bool)
+           → Lua.LuaE Lua.Exception Lua.NumResults
+withBillId env act = do
+    idArg ← Lua.tointeger 1
+    ok ← case idArg of
+        Nothing → return False
+        Just n  → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return False
+                Just (_, ws) → act ws (BillId (fromIntegral n))
+    Lua.pushboolean ok
+    return 1
+
+-- | craft.claimBill(billId, uid, timeout) → true | false. Atomic
+--   claim-or-refresh: succeeds when the bill is unclaimed, already
+--   ours, or the standing claim is stale (dead claimant, or no refresh
+--   within @timeout@ game-seconds — the AI passes its
+--   craft_claim_timeout param so the tunable stays Lua-side with the
+--   others). Exactly one of two simultaneous claimants wins.
+craftClaimBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftClaimBillFn env = do
+    idArg      ← Lua.tointeger 1
+    uidArg     ← Lua.tointeger 2
+    timeoutArg ← Lua.tonumber 3
+    ok ← case (idArg, uidArg, timeoutArg) of
+        (Just n, Just u, Just tmo) → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return False
+                Just (_, ws) → do
+                    now ← readIORef (gameTimeRef env)
+                    um  ← readIORef (unitManagerRef env)
+                    let alive c = HM.member c (umInstances um)
+                    atomicModifyIORef' (wsCraftBillsRef ws) $
+                        claimBill now (realToFrac tmo) alive
+                                  (BillId (fromIntegral n))
+                                  (UnitId (fromIntegral u))
+        _ → return False
+    Lua.pushboolean ok
+    return 1
+
+-- | craft.addBillProgress(billId, delta) → newProgress | nil. Pours
+--   work into the current cycle (clamped to [0, 1]) and returns the
+--   post-add progress synchronously — the AI acts on 1.0 by firing
+--   craft.executeAt + craft.completeBillCycle itself, so consumption
+--   and production stay in the executeAt verb (one authority).
+craftAddBillProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftAddBillProgressFn env = do
+    idArg    ← Lua.tointeger 1
+    deltaArg ← Lua.tonumber 2
+    result ← case (idArg, deltaArg) of
+        (Just n, Just delta) → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return Nothing
+                Just (_, ws) →
+                    atomicModifyIORef' (wsCraftBillsRef ws) $
+                        addBillProgress (BillId (fromIntegral n))
+                                        (realToFrac delta)
+        _ → return Nothing
+    case result of
+        Just p  → Lua.pushnumber (Lua.Number (realToFrac p)) >> return 1
+        Nothing → Lua.pushnil >> return 1
+
+-- | craft.completeBillCycle(billId) → remaining | nil. One craft
+--   cycle done: progress resets, finite counts tick down (the bill is
+--   removed at 0), repeat bills return -1 forever.
+craftCompleteBillCycleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftCompleteBillCycleFn env = do
+    idArg ← Lua.tointeger 1
+    result ← case idArg of
+        Nothing → return Nothing
+        Just n  → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return Nothing
+                Just (_, ws) →
+                    atomicModifyIORef' (wsCraftBillsRef ws) $
+                        completeBillCycle (BillId (fromIntegral n))
+    case result of
+        Just r  → Lua.pushinteger (fromIntegral r) >> return 1
+        Nothing → Lua.pushnil >> return 1
+
+-- | craft.getBill(billId) → table | nil.
+craftGetBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftGetBillFn env = do
+    idArg ← Lua.tointeger 1
+    mBill ← case idArg of
+        Nothing → return Nothing
+        Just n  → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return Nothing
+                Just (_, ws) → do
+                    bills ← readIORef (wsCraftBillsRef ws)
+                    return (lookupBill (BillId (fromIntegral n)) bills)
+    case mBill of
+        Just bill → pushBill bill >> return 1
+        Nothing   → Lua.pushnil >> return 1
+
+-- | craft.getBills([bid]) → array of bill tables on the active world,
+--   oldest first — every bill, or one station's queue when @bid@ is
+--   given (the #330 station panel's view).
+craftGetBillsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftGetBillsFn env = do
+    bidArg ← Lua.tointeger 1
+    billList ← Lua.liftIO $ do
+        mPage ← activeWorldPage env
+        case mPage of
+            Nothing      → return []
+            Just (_, ws) → do
+                bills ← readIORef (wsCraftBillsRef ws)
+                return $ case bidArg of
+                    Just b  → billsForStation (BuildingId (fromIntegral b))
+                                              bills
+                    Nothing → sortOn cbId (HM.elems (cbsBills bills))
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] billList) $ \(i, bill) → do
+        pushBill bill
+        Lua.rawseti (-2) (fromIntegral i)
+    return 1
+
+-- | Push one bill as a Lua table: { id, station, recipe, remaining,
+--   progress, claimant?, claimedAt? }. remaining -1 = repeat forever.
+pushBill ∷ CraftBill → Lua.LuaE Lua.Exception ()
+pushBill bill = do
+    Lua.newtable
+    let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
+        putN k v = Lua.pushnumber (Lua.Number (realToFrac v))
+                   >> Lua.setfield (-2) k
+    putI "id"        (unBillId (cbId bill))
+    putI "station"   (unBuildingId (cbStation bill))
+    Lua.pushstring (TE.encodeUtf8 (cbRecipe bill))
+    Lua.setfield (-2) "recipe"
+    Lua.pushinteger (fromIntegral (cbRemaining bill))
+    Lua.setfield (-2) "remaining"
+    putN "progress"  (cbProgress bill)
+    forM_ (cbClaimant bill) $ \(UnitId u) → do
+        putI "claimant" u
+        putN "claimedAt" (cbClaimedAt bill)
 
 -- | Roll one output line into fresh instances. A crafted item is
 --   factory-new: condition and sharpness start at 100 (per #325; loot
