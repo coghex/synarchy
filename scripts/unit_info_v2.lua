@@ -21,6 +21,7 @@ local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local scrollbar   = require("scripts.ui.scrollbar")
 local brokenOverlay = require("scripts.ui.broken_overlay")
+local qualityTier = require("scripts.ui.quality_tier")
 local stats       = require("scripts.unit_stats")
 local injuries    = require("scripts.injuries")
 local knowledge   = require("scripts.knowledge")
@@ -2173,6 +2174,7 @@ local function buildItemHint(it, equippedSlot)
     if it.quality then
         hintLines[#hintLines + 1] =
             string.format("quality: %d%%", math.floor(it.quality + 0.5))
+            .. qualityTier.suffix(it)
     end
     if it.condition then
         hintLines[#hintLines + 1] =
@@ -2391,7 +2393,8 @@ local function rebuildEquipmentSection()
                 -- condition / weapon stats / equipped slot) here as
                 -- they do in the inventory list.
                 UI.setTooltipRich(iconElemId, {
-                    text = eq.displayName or eq.defName or s.name,
+                    text = qualityTier.withSuffix(
+                        eq.displayName or eq.defName or s.name, eq),
                     hint = buildItemHint(eq, s.id),
                 })
                 UI.setClickable(iconElemId, true)
@@ -2463,7 +2466,8 @@ local function rebuildEquipmentSection()
                 UI.setClickable(iconId, true)
                 UI.setOnRightClick(iconId, "onAccessoryRowRightClick")
                 UI.setTooltipRich(iconId, {
-                    text = it.displayName or it.defName,
+                    text = qualityTier.withSuffix(
+                        it.displayName or it.defName, it),
                     hint = buildItemHint(it, "(worn)"),
                 })
                 table.insert(unitInfoV2.equipElements,
@@ -2514,6 +2518,7 @@ local function collectInventoryAndEquipment(uid)
             currentFill  = it.currentFill or 0,
             capacity     = it.capacity,
             quality      = it.quality,
+            qualityTier  = it.qualityTier,
             condition    = it.condition,
             weapon       = it.weapon,
             sharpness    = it.sharpness,
@@ -2550,6 +2555,7 @@ local function collectInventoryAndEquipment(uid)
                 currentFill   = it.currentFill or 0,
                 capacity      = it.capacity,
                 quality       = it.quality,
+                qualityTier   = it.qualityTier,
                 condition     = it.condition,
                 weapon        = it.weapon,
                 sharpness     = it.sharpness,
@@ -2576,6 +2582,7 @@ local function collectInventoryAndEquipment(uid)
             currentFill    = it.currentFill or 0,
             capacity       = it.capacity,
             quality        = it.quality,
+            qualityTier    = it.qualityTier,
             condition      = it.condition,
             weapon         = it.weapon,
             sharpness      = it.sharpness,
@@ -2914,7 +2921,7 @@ local function rebuildInventorySection()
         local nameX = listX + textPad + iconSz + textPad
         local nameMaxPx = (listX + listW - textPad - wW) - nameX
                         - math.floor(4 * uiscale)
-        local rawName = it.displayName
+        local rawName = qualityTier.withSuffix(it.displayName, it)
         if (it.stackCount or 1) > 1 then
             rawName = string.format("%s ×%d", rawName, it.stackCount)
         end
@@ -2956,7 +2963,7 @@ local function rebuildInventorySection()
         UI.setOnRightClick(hitId, "onInventoryItemRightClick")
 
         UI.setTooltipRich(hitId, {
-            text = it.displayName,
+            text = qualityTier.withSuffix(it.displayName, it),
             hint = buildItemHint(it, it.equipped and it.equippedSlot or nil),
         })
 

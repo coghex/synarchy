@@ -30,6 +30,7 @@ local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local brokenOverlay = require("scripts.ui.broken_overlay")
+local qualityTier = require("scripts.ui.quality_tier")
 
 -----------------------------------------------------------
 -- Layout constants. Mirrors unit_info_v2's inventory section so
@@ -443,7 +444,7 @@ local function buildRows(originX, originY, contentW, grouped)
 
         -- Display name (with stack suffix), truncated with ".." if it
         -- would otherwise overrun into the weight column.
-        local rawName = g.displayName or g.defName or "?"
+        local rawName = qualityTier.withSuffix(g.displayName or g.defName or "?", g)
         if (g.count or 1) > 1 then
             rawName = string.format("%s ×%d", rawName, g.count)
         end
