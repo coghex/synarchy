@@ -27,6 +27,14 @@ M.REGISTRY = {
             .. "How much an antibiotic dose cuts infection scales with this\n"
             .. "level and the unit's intelligence.",
     },
+    {
+        id   = "basic_cuisine",
+        name = "Basic Cuisine",
+        icon = "knowledge_basic_cuisine",
+        desc = "Gates the cooking recipe tier — brewing a pot of coffee and\n"
+            .. "future cuisine besides. Output quality scales with this\n"
+            .. "level and the cooking skill.",
+    },
 }
 
 -- Icon shown for a knowledge the unit hasn't learned.

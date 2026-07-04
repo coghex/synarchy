@@ -42,6 +42,7 @@ data RecipeYamlDef = RecipeYamlDef
     , ryKnowledge ∷ !(Maybe Text)
     , rySkill     ∷ !(Maybe Text)
     , ryRepairAxis ∷ !(Maybe Text)
+    , ryOutputTemp ∷ !(Maybe Float)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON RecipeYamlDef where
@@ -68,6 +69,7 @@ instance FromJSON RecipeYamlDef where
             ⊛ v .:? "knowledge"
             ⊛ v .:? "skill"
             ⊛ pure axis
+            ⊛ v .:? "output_temp"
 
 newtype RecipeYamlFile = RecipeYamlFile
     { ryfRecipes ∷ [RecipeYamlDef]
