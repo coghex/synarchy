@@ -30,9 +30,8 @@ package.loaded["scripts.unit_roles"] = M
 -- skill tie, so listing is deterministic (pairs() order is not).
 --
 -- `family` groups the work actions a role prefers. smith's family
--- ("craft") maps to the craft_job bill-work action (#329), which
--- grants trade-skill XP (the recipe's skill tag, default smithing) —
--- so working the forge is what makes a Smith.
+-- ("craft") maps to repair_job (#302) and craft_job bill work (#329);
+-- both are routine craft-family work and grant smithing/trade-skill XP.
 M.ROLES = {
     { name = "miner",      display = "Miner",      skill = "mining",       family = "mine"  },
     { name = "woodcutter", display = "Woodcutter", skill = "woodcutting",  family = "wood"  },
@@ -45,13 +44,14 @@ M.ROLES = {
 -- (forage, pickup_ground, follow_command, survival, combat) are
 -- deliberately absent: roles only steer ROUTINE work preference.
 M.ACTION_FAMILY = {
-    dig_designation       = "mine",
-    chop_designation      = "wood",
-    construct_job         = "build",
-    build_nearby          = "build",
-    deliver_to_build_site = "build",
-    store_materials       = "build",
-    craft_job             = "craft",
+    dig_designation        = "mine",
+    chop_designation       = "wood",
+    construct_job          = "build",
+    build_nearby           = "build",
+    deliver_to_build_site  = "build",
+    store_materials        = "build",
+    repair_job             = "craft",
+    craft_job              = "craft",
 }
 
 M.THRESHOLD     = 30.0   -- min skill to claim a specialist role

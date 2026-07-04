@@ -166,6 +166,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
+                   Test.Headless.Item.QualityTier
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize

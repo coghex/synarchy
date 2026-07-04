@@ -1,39 +1,48 @@
 -- Build Tool
 --
--- Owns the popup picker that lists available buildings and the
--- "placement mode" state machine that draws a ghost preview at the
+-- Owns the popup picker that lists available buildings + structure
+-- pieces (#403 — absorbs the former scripts/construct_tool.lua) and the
+-- "placement mode" state machine that drives what happens at the
 -- hovered tile until the player commits or cancels.
 --
 -- Picker layout:
---   * Tab strip at top: "All" + one tab per visible category. Clicking
---     a tab swaps the icon grid below it.
---   * Icon grid below: 4-wide row of building-sprite icons. Hover →
---     tooltip with display name and a hint containing description +
---     cost line. Click → enterPlacement(defName).
+--   * Tab strip at top: "All" + one tab per visible category (building
+--     categories, plus a "Structures" tab for the dungeon_1 pieces).
+--     Clicking a tab swaps the icon grid below it.
+--   * Icon grid below: 4-wide row of sprite icons. Hover → tooltip with
+--     display name and a hint containing description + cost line.
+--     Click → enterPlacement(target).
 --
--- Visibility filter:
+-- Visibility filter (buildings):
 --   * is_starting defs are visible until any building of that defName
 --     has been placed. (Portal: visible at game start, gone once
 --     placed.)
---   * Non-starting defs are visible only after at least one starting
---     building has been placed anywhere. (Cargo hidden until the
---     portal exists.)
+--   * Non-starting defs, and the Structures category, are visible only
+--     after at least one starting building has been placed anywhere.
+--     (Cargo / structure pieces hidden until the portal exists.)
 --   Re-evaluated on every showPicker() and after a successful place.
 --
--- Lifecycle:
---   * Selecting tool_build in the HUD toolbar → showPicker()
---   * Picking an icon → enterPlacement(defName)
---   * In placement mode, each tick we snap world.getHoverTile() to
---     int coords, ask building.canPlaceAt, and call building.setGhost.
---   * Left-click on a valid tile → commitPlacement + exitPlacement.
---     commitPlacement (#358) routes power.isPlaceable defs (solar_panel /
---     high_voltage_battery) through power.placeNode against whichever
---     currently-selected unit carries a matching item — consuming it and
---     registering a power node — and falls through to the free
---     building.spawn for everything else, same as before. A power-item
---     click with no carrying unit selected fails without leaving
---     placement mode (see commitPlacement).
---   * Right-click / Esc → exitPlacement (no spawn).
+-- Placement is a hybrid, keyed on the picked target's kind:
+--   * Power item building (#358)       → single click → power.placeNode
+--     against whichever selected unit carries a matching item, consuming
+--     it and registering a power node. A click with no carrying unit
+--     selected fails without leaving placement mode.
+--   * Starting building (the portal)   → single click → building.spawn
+--     (instant; ghost preview via building.setGhost), then exits back to
+--     the default tool.
+--   * Non-starting building            → single click →
+--     construction.designate(..., "building", def) (one footprint;
+--     still previewed with building.setGhost). Stays armed so the
+--     player can place more without reopening the picker.
+--   * Structure piece                  → DF-style two-click rectangle
+--     (construction.setAnchor / construction.designate "structure"),
+--     mirroring the old construct_tool. No building ghost — the engine
+--     renders the anchor→hover rectangle preview keyed off the same
+--     BuildTool ToolMode (World/Render/Quads.hs). Stays armed.
+-- Right-click cancels a pending structure rectangle, or (nothing
+-- pending) erases the designation under the cursor — except the
+-- starting-building path, where right-click just exits placement (no
+-- designation to erase there).
 --
 -- Singleton via package.loaded so init.lua's input hooks see the same
 -- state that the engine-ticked update() uses. Same pattern as
@@ -59,18 +68,21 @@ local scale = require("scripts.ui.scale")
 -- in a fresh engine.
 buildTool.state = buildTool.state or {
     mode             = "off",   -- "off" / "picker" / "placement"
-    selectedDef      = nil,     -- when in placement
+    target           = nil,     -- when in placement: the picked entry (see below)
+    anchor           = nil,     -- {gx, gy} first-click anchor for a structure rectangle
     panelId          = nil,
     activeCategory   = "All",
     tabIds           = {},      -- list of {boxId, labelId, category}
     tabsByHandle     = {},      -- box element handle → category name
     iconIds          = {},      -- list of icon element ids
-    iconsByHandle    = {},      -- icon element handle → defName
+    iconsByHandle    = {},      -- icon element handle → picker entry
     iconAreaRect     = nil,     -- {x, y, w, h} for rebuilding icons on tab change
     lastHoverTile    = nil,
 }
 
--- Render-config passed in from hud.lua at boot.
+-- hud.lua module reference, read live (worldId/pages mutate outside
+-- setup() — e.g. ui_manager.lua swaps hud.worldId on view changes
+-- without re-calling setup). Same pattern as mine_tool/construct_tool.
 buildTool.hud = nil
 
 local MOUSE_LEFT  = 1
@@ -99,8 +111,8 @@ local ICONS_PER_ROW    = 4
 -----------------------------------------------------------
 -- HUD hookup. Called once from hud.lua after the toolbar is built.
 -----------------------------------------------------------
-function buildTool.setup(opts)
-    buildTool.hud = opts
+function buildTool.setup(ctx)
+    buildTool.hud = ctx.hud
 end
 
 -----------------------------------------------------------
@@ -115,10 +127,10 @@ local function getAllBuildingIds()
     return building.getActiveIds() or {}
 end
 
--- Computes which defs the player should currently see in the build
--- menu. Implements the two-rule visibility filter described in the
--- file header.
-local function visibleDefs()
+-- Picker entries for buildings. Implements the two-rule visibility
+-- filter described in the file header, and returns whether any starting
+-- building has been placed (gates the Structures category below).
+local function visibleBuildingEntries()
     local defs = building.listDefs() or {}
 
     -- Lookup: defName → isStarting (for translating placed ids back
@@ -142,24 +154,87 @@ local function visibleDefs()
 
     local visible = {}
     for _, d in ipairs(defs) do
-        if d.isStarting then
-            if not placedDefNames[d.name] then
-                table.insert(visible, d)
-            end
-        else
-            if anyStartingPlaced then
-                table.insert(visible, d)
-            end
+        local show = d.isStarting
+            and not placedDefNames[d.name]
+            or (not d.isStarting and anyStartingPlaced)
+        if show then
+            table.insert(visible, {
+                kind        = "building",
+                def         = d.name,
+                isStarting  = d.isStarting,
+                displayName = d.displayName,
+                description = d.description,
+                category    = d.category or "Misc",
+                iconTex     = d.iconTex,
+            })
         end
     end
-    return visible
+    return visible, anyStartingPlaced
 end
 
--- Exposed so the construction designation tool (scripts/construct_tool.lua)
--- shows the SAME building set as the build tool — fresh worlds must not be
--- able to queue non-starting buildings (e.g. cargo before a portal exists)
--- through the designation picker (#95).
-buildTool.visibleDefs = visibleDefs
+-- The structure pack the picker offers (matches scripts/structures.lua);
+-- a multi-pack picker is a follow-up. Icons reuse the pack's own tile
+-- textures (#403 — no dedicated icon art).
+local STRUCTURE_PACK = "dungeon_1"
+local STRUCTURE_PIECES = {
+    { piece = "floor",   edge = nil,  label = "Floor"   },
+    { piece = "wall",    edge = "ne", label = "Wall NE"  },
+    { piece = "wall",    edge = "nw", label = "Wall NW"  },
+    { piece = "wall",    edge = "se", label = "Wall SE"  },
+    { piece = "wall",    edge = "sw", label = "Wall SW"  },
+    { piece = "ceiling", edge = nil,  label = "Ceiling" },
+    { piece = "post",    edge = nil,  label = "Post"    },
+}
+
+-- Lazily-loaded + cached structure-piece icon textures.
+local function structureTex(texName)
+    buildTool.structureTex = buildTool.structureTex or {}
+    if not buildTool.structureTex[texName] then
+        buildTool.structureTex[texName] = engine.loadTexture(
+            "assets/textures/buildings/" .. STRUCTURE_PACK .. "/"
+            .. texName .. ".png")
+    end
+    return buildTool.structureTex[texName]
+end
+
+local function structureEntries()
+    local entries = {}
+    for _, p in ipairs(STRUCTURE_PIECES) do
+        local texName = (p.piece == "wall") and ("wall_" .. p.edge) or p.piece
+        table.insert(entries, {
+            kind        = "structure",
+            pack        = STRUCTURE_PACK,
+            piece       = p.piece,
+            edge        = p.edge,
+            displayName = p.label,
+            description = "",
+            category    = "Structures",
+            iconTex     = structureTex(texName),
+        })
+    end
+    return entries
+end
+
+-- Full picker entry list: buildings + (once a starting building has been
+-- placed) the structure pieces.
+local function visibleEntries()
+    local entries, anyStartingPlaced = visibleBuildingEntries()
+    if anyStartingPlaced then
+        for _, e in ipairs(structureEntries()) do
+            table.insert(entries, e)
+        end
+    end
+    return entries
+end
+
+-- Stable per-entry identity for element naming / lookup (buildings key
+-- on defName; structure pieces have no defName of their own).
+local function entryId(d)
+    if d.kind == "structure" then
+        return "structure_" .. d.piece .. (d.edge and ("_" .. d.edge) or "")
+    end
+    return "building_" .. d.def
+end
 
 -- "All" + every distinct category present in visible defs, in the
 -- order they first appear.
@@ -243,13 +318,13 @@ local function rebuildIconGrid(visible)
         local iy  = rect.y + row * (iconSize + iconGap)
 
         local iconId = UI.newSprite(
-            "build_tool_icon_" .. d.name,
+            "build_tool_icon_" .. entryId(d),
             iconSize, iconSize,
             d.iconTex or whiteTex,
             1.0, 1.0, 1.0, 1.0,
-            h.page
+            h.world_page
         )
-        UI.addToPage(h.page, iconId, ix, iy)
+        UI.addToPage(h.world_page, iconId, ix, iy)
         UI.setZIndex(iconId, 122)
         UI.setClickable(iconId, true)
         UI.setOnClick(iconId, "onBuildMenuIconClick")
@@ -260,7 +335,7 @@ local function rebuildIconGrid(visible)
         })
 
         table.insert(buildTool.state.iconIds, iconId)
-        buildTool.state.iconsByHandle[iconId] = d.name
+        buildTool.state.iconsByHandle[iconId] = d
     end
 end
 
@@ -296,9 +371,9 @@ local function buildTabStrip(cats, stripX, stripY)
             tabW, tabH,
             whiteTex,
             bg[1], bg[2], bg[3], bg[4],
-            h.page
+            h.world_page
         )
-        UI.addToPage(h.page, boxId, cursorX, stripY)
+        UI.addToPage(h.world_page, boxId, cursorX, stripY)
         UI.setZIndex(boxId, 122)
         UI.setClickable(boxId, true)
         UI.setOnClick(boxId, "onBuildMenuTabClick")
@@ -309,7 +384,7 @@ local function buildTabStrip(cats, stripX, stripY)
             font     = h.menuFont,
             fontSize = TAB_FONT_SIZE,
             color    = fg,
-            page     = h.page,
+            page     = h.world_page,
             uiscale  = uiscale,
         })
         local labelHandle = label.getElementHandle(labelId)
@@ -317,7 +392,7 @@ local function buildTabStrip(cats, stripX, stripY)
         -- baseline → push down by ~0.7 of fontSize.
         local lblX = cursorX + math.floor((tabW - labelW) / 2)
         local lblY = stripY  + math.floor((tabH + fontPx) / 2) - math.floor(fontPx * 0.15)
-        UI.addToPage(h.page, labelHandle, lblX, lblY)
+        UI.addToPage(h.world_page, labelHandle, lblX, lblY)
         UI.setZIndex(labelHandle, 123)
 
         table.insert(buildTool.state.tabIds,
@@ -337,7 +412,7 @@ function buildTool.showPicker()
     destroyPicker()
 
     local h = buildTool.hud
-    if not h or not h.page then
+    if not h or not h.world_page then
         engine.logWarn("BuildTool: showPicker called before setup()")
         return
     end
@@ -350,7 +425,7 @@ function buildTool.showPicker()
             "assets/textures/utility/white.png")
     end
 
-    local visible = visibleDefs()
+    local visible = visibleEntries()
     if #visible == 0 then
         engine.logWarn("BuildTool: no buildings currently available")
         return
@@ -389,7 +464,8 @@ function buildTool.showPicker()
     -- Anchor to the build button (same geometry as before so the
     -- visual position doesn't shift from old to new picker).
     local margin       = math.floor(16 * uiscale)
-    local btnSize      = h.buttonSize and math.floor(h.buttonSize * uiscale) or 64
+    local buttonSize   = h.baseSizes and h.baseSizes.buttonSize
+    local btnSize      = buttonSize and math.floor(buttonSize * uiscale) or 64
     local stackGap     = math.floor(8 * uiscale)
     local pickerX      = margin + btnSize + stackGap
     local buildBtnTopY = h.fbH - margin - 2 * btnSize - stackGap
@@ -397,7 +473,7 @@ function buildTool.showPicker()
 
     buildTool.state.panelId = panel.new({
         name       = "build_tool_picker",
-        page       = h.page,
+        page       = h.world_page,
         x          = pickerX,
         y          = pickerY,
         width      = pickerW,
@@ -451,42 +527,55 @@ function buildTool.handleTabClick(elemHandle)
         UI.setColor(t.boxId, bg[1], bg[2], bg[3], bg[4])
         label.setColor(t.labelId, fg)
     end
-    rebuildIconGrid(visibleDefs())
+    rebuildIconGrid(visibleEntries())
     return true
 end
 
 function buildTool.handleIconClick(elemHandle)
-    local defName = buildTool.state.iconsByHandle[elemHandle]
-    if not defName then return false end
-    buildTool.enterPlacement(defName)
+    local target = buildTool.state.iconsByHandle[elemHandle]
+    if not target then return false end
+    buildTool.enterPlacement(target)
     return true
 end
 
 -----------------------------------------------------------
 -- Placement mode
 -----------------------------------------------------------
-function buildTool.enterPlacement(defName)
+function buildTool.enterPlacement(target)
     destroyPicker()
+    -- Drop any ghost left over from a previous building target — a
+    -- structure target drives no ghost of its own (update() below).
+    building.clearGhost()
     buildTool.state.mode          = "placement"
-    buildTool.state.selectedDef   = defName
+    buildTool.state.target        = target
+    buildTool.state.anchor        = nil
     buildTool.state.lastHoverTile = nil
 end
 
 function buildTool.exitPlacement()
     building.clearGhost()
+    if buildTool.state.anchor then
+        local wid = buildTool.hud and buildTool.hud.worldId
+        if wid then construction.clearAnchor(wid) end
+    end
     buildTool.state.mode          = "off"
-    buildTool.state.selectedDef   = nil
+    buildTool.state.target        = nil
+    buildTool.state.anchor        = nil
     buildTool.state.lastHoverTile = nil
 end
 
 -----------------------------------------------------------
--- Per-tick: drive the ghost preview while in placement mode
+-- Per-tick: drive the ghost preview while in placement mode. Only the
+-- building targets have a ghost — a structure rectangle previews via
+-- the engine's anchor→hover render (constructAnchor, keyed off this
+-- tool's ToolMode, see World/Render/Quads.hs), driven entirely by the
+-- setAnchor/designate calls in handleMouseDown below.
 -----------------------------------------------------------
 function buildTool.update(dt)
     if buildTool.state.mode ~= "placement" then return end
 
-    local defName = buildTool.state.selectedDef
-    if not defName then return end
+    local target = buildTool.state.target
+    if not target or target.kind ~= "building" then return end
 
     -- Drive the preview from the SAME synchronous hit-test the placement
     -- click uses (world.pickTile of the live cursor), not the async
@@ -509,8 +598,8 @@ function buildTool.update(dt)
     local igx = math.floor(gx)
     local igy = math.floor(gy)
 
-    local valid = building.canPlaceAt(defName, igx, igy)
-    building.setGhost(defName, igx, igy, valid)
+    local valid = building.canPlaceAt(target.def, igx, igy)
+    building.setGhost(target.def, igx, igy, valid)
     buildTool.state.lastHoverTile = { igx, igy }
 end
 
@@ -530,26 +619,24 @@ local function carryingSelectedUnit(defName)
     return nil
 end
 
--- Commit a placement at an already hit-tested tile. Power items
--- (#358: solar_panel / high_voltage_battery) consume a matching item
--- off a selected unit via power.placeNode; everything else places for
--- free via building.spawn, same as before. Extracted from
--- handleMouseDown (and exposed on buildTool) so it's exercisable
--- without simulating a real screen click / camera pick — see
--- tools/power_probe.py.
+-- Commit a power-node placement at an already hit-tested tile. Power
+-- items (#358: solar_panel / high_voltage_battery) consume a matching
+-- item off a selected unit via power.placeNode. Non-power building
+-- targets are handled by the caller according to the normal build-tool
+-- rules (starting building spawn vs. construction designation).
 --
 -- Returns the placed building id, or nil + a reason on failure.
 function buildTool.commitPlacement(defName, gx, gy)
-    if power.isPlaceable(defName) then
-        local uid = carryingSelectedUnit(defName)
-        if not uid then
-            return nil, "no selected unit carries " .. defName
-        end
-        local nodeId, buildingIdOrErr = power.placeNode(uid, defName, gx, gy)
-        if not nodeId then return nil, buildingIdOrErr end
-        return buildingIdOrErr
+    if not power.isPlaceable(defName) then
+        return nil, "not a placeable power item"
     end
-    return building.spawn(defName, gx, gy)
+    local uid = carryingSelectedUnit(defName)
+    if not uid then
+        return nil, "no selected unit carries " .. defName
+    end
+    local nodeId, buildingIdOrErr = power.placeNode(uid, defName, gx, gy)
+    if not nodeId then return nil, buildingIdOrErr end
+    return buildingIdOrErr
 end
 
 -----------------------------------------------------------
@@ -564,6 +651,9 @@ end
 -----------------------------------------------------------
 function buildTool.handleMouseDown(button, x, y)
     if buildTool.state.mode ~= "placement" then return false end
+
+    local target = buildTool.state.target
+    if not target then return false end
 
     if button == MOUSE_LEFT then
         -- Hit-test the ACTUAL click coordinates synchronously rather than
@@ -581,32 +671,85 @@ function buildTool.handleMouseDown(button, x, y)
         local igx = math.floor(gx)
         local igy = math.floor(gy)
         buildTool.state.lastHoverTile = { igx, igy }
-        local valid = building.canPlaceAt(buildTool.state.selectedDef,
-                                          igx, igy)
-        if valid then
-            local defName = buildTool.state.selectedDef
-            local id, err = buildTool.commitPlacement(defName, igx, igy)
-            if id then
-                engine.logInfo("BuildTool: placed " .. defName ..
-                    " (id=" .. tostring(id) ..
-                    ") at " .. igx .. "," .. igy)
-                buildTool.exitPlacement()
-                if buildTool.hud and buildTool.hud.selectDefaultTool then
-                    buildTool.hud.selectDefaultTool()
+
+        if target.kind == "building" then
+            local valid = building.canPlaceAt(target.def, igx, igy)
+            if valid then
+                if power.isPlaceable(target.def) then
+                    local id, err = buildTool.commitPlacement(target.def, igx, igy)
+                    if id then
+                        engine.logInfo("BuildTool: placed " .. target.def ..
+                            " (id=" .. tostring(id) ..
+                            ") at " .. igx .. "," .. igy)
+                        buildTool.exitPlacement()
+                        if buildTool.hud and buildTool.hud.selectDefaultTool then
+                            buildTool.hud.selectDefaultTool()
+                        end
+                    else
+                        -- Stay in placement (same as an invalid-tile click)
+                        -- so the player can select a carrying unit and retry.
+                        engine.logInfo("BuildTool: could not place " ..
+                            target.def .. (err and (": " .. tostring(err)) or ""))
+                    end
+                elseif target.isStarting then
+                    -- The portal: bootstrap building, still instant.
+                    local id = building.spawn(target.def, igx, igy)
+                    if id then
+                        engine.logInfo("BuildTool: placed " .. target.def ..
+                            " (id=" .. tostring(id) ..
+                            ") at " .. igx .. "," .. igy)
+                    end
+                    buildTool.exitPlacement()
+                    if buildTool.hud and buildTool.hud.selectDefaultTool then
+                        buildTool.hud.selectDefaultTool()
+                    end
+                else
+                    -- Everything else designates a job for the build AI
+                    -- (#96) rather than placing instantly. Stays armed so
+                    -- the player can place more without reopening the
+                    -- picker (matches the old construct_tool).
+                    local wid = buildTool.hud and buildTool.hud.worldId
+                    if wid then
+                        construction.designate(wid, igx, igy, igx, igy,
+                            "building", target.def)
+                    end
                 end
-            else
-                -- Stay in placement (same as an invalid-tile click) so
-                -- the player can select a carrying unit and retry,
-                -- rather than getting bounced out of the tool.
-                engine.logInfo("BuildTool: could not place " .. defName ..
-                    (err and (": " .. tostring(err)) or ""))
+            end
+        else -- "structure": DF-style two-click rectangle
+            local wid = buildTool.hud and buildTool.hud.worldId
+            if wid then
+                if not buildTool.state.anchor then
+                    buildTool.state.anchor = { igx, igy }
+                    construction.setAnchor(wid, igx, igy)
+                else
+                    local a = buildTool.state.anchor
+                    construction.designate(wid, a[1], a[2], igx, igy,
+                        "structure", target.pack, target.piece, target.edge)
+                    buildTool.state.anchor = nil
+                end
             end
         end
         return true
     elseif button == MOUSE_RIGHT then
-        buildTool.exitPlacement()
-        if buildTool.hud and buildTool.hud.selectDefaultTool then
-            buildTool.hud.selectDefaultTool()
+        if target.kind == "building" and target.isStarting then
+            -- No designation to erase on the instant path — right-click
+            -- just backs out of placement, same as before #403.
+            buildTool.exitPlacement()
+            if buildTool.hud and buildTool.hud.selectDefaultTool then
+                buildTool.hud.selectDefaultTool()
+            end
+        elseif buildTool.state.anchor then
+            -- First right-click cancels a pending structure rectangle.
+            buildTool.state.anchor = nil
+            local wid = buildTool.hud and buildTool.hud.worldId
+            if wid then construction.clearAnchor(wid) end
+        else
+            -- Otherwise erase the designation under the cursor (works for
+            -- both a non-starting building and a structure target).
+            local gx, gy = world.pickTile(x, y)
+            if gx and gy then
+                construction.cancelDesignation(math.floor(gx), math.floor(gy))
+            end
         end
         return true
     end

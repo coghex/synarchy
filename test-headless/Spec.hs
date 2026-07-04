@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
+import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
@@ -87,6 +88,7 @@ main = hspec $ do
     describe "Unit.NightPerception" NightPerception.spec
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
+    describe "Item.QualityTier" ItemQualityTier.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "World.CursorInfo" CursorInfo.spec

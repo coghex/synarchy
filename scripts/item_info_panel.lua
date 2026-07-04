@@ -12,6 +12,7 @@
 --     Same one-thing-at-a-time rule as units/buildings.
 
 local infoPanel = require("scripts.hud.info_panel")
+local qualityTier = require("scripts.ui.quality_tier")
 
 local itemInfoWatch = {}
 
@@ -47,7 +48,7 @@ local function pushItemInfo(gid)
     if not g then return false end
     local d = defEntry(g.defName)
     local lines = {}
-    local nm = (d and d.displayName) or g.defName
+    local nm = qualityTier.withSuffix((d and d.displayName) or g.defName, g)
     -- Condition 0 = broken (see Combat.Resolution weapon wear).
     if g.condition and g.condition <= 0 then nm = nm .. " (broken)" end
     table.insert(lines, nm)

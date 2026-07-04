@@ -7,13 +7,15 @@ just the raw Lua API.
 the ACTUAL player-facing placement path: scripts/build_tool.lua's
 buildTool.commitPlacement routes a solar_panel / high_voltage_battery
 placement through power.placeNode against the currently-selected unit
-(consuming the item), while every other building def keeps using the
-free building.spawn path unchanged. This probe exercises that routed
-path end-to-end, not just the underlying Haskell API, then proves the
-result through a save -> quit -> fresh-restart -> load round-trip (the
-gold-standard save check, mirroring multiworld_save_probe.py) since a
-power node is only "network-attachment-ready" if it actually reconnects
-to its building after a reload.
+(consuming the item). Ordinary non-power buildings are handled by the
+normal build-tool paths (starting-building spawn or construction
+designation), not by this power placement helper. This probe exercises
+the routed power path end-to-end, not just the underlying Haskell API,
+then proves the result through a save -> quit -> fresh-restart -> load
+round-trip (the gold-standard save check, mirroring
+multiworld_save_probe.py) since a power node is only
+"network-attachment-ready" if it actually reconnects to its building
+after a reload.
 
 What it does:
   1. Boots a headless engine, loads defs, builds a flat arena, spawns a
@@ -21,14 +23,11 @@ What it does:
   2. power.isPlaceable: true for the two power items, false for an
      ordinary building (furnace).
   3. buildTool.commitPlacement with NO unit selected refuses a power-item
-     placement (no building appears, inventory untouched) but still
-     places an ordinary building for free.
+     placement (no building appears, inventory untouched).
   4. With the technomule selected, commitPlacement places a solar panel
      and a battery — each consumes exactly one matching item and
      registers a node reporting the right role + parameters
-     (power.getNode / getNodeForBuilding). A furnace placed the same way
-     gets NO power node (the registry doesn't leak to ordinary
-     buildings).
+     (power.getNode / getNodeForBuilding).
   5. Exhausting the mule's remaining solar panels makes the next
      commitPlacement refuse (inventory unaffected).
   6. Save -> quit -> fresh restart -> reload defs -> load: every placed
@@ -235,14 +234,6 @@ def main() -> int:
         passed = check(passed,
             send(port, "return building.getInfo(1) and 'yes' or 'no'") == "no",
             "no building appeared at (7,5) after the refusal")
-        # An ordinary building still places for free with nothing selected.
-        fid = as_int(send(port,
-            "return require('scripts.build_tool').commitPlacement("
-            "'furnace', 20, 20)"))
-        passed = check(passed, fid is not None,
-                       "commitPlacement(furnace) still places for free "
-                       "with no unit selected", fid)
-
         # --- 4. Select the mule; place a source + a storage node ---
         send(port, f"unit.select({uid}); return 'ok'")
         panel_bid = as_int(send(port,
@@ -271,16 +262,6 @@ def main() -> int:
             isinstance(node, dict) and node.get("role") == "storage"
             and node.get("capacityWh") == 5000 and node.get("peakWatts") == 0,
             "battery node reports role=storage, 5000 Wh, 0 W", node)
-
-        # A furnace placed WITH the mule selected still doesn't register a
-        # power node — the registry must not leak to ordinary buildings.
-        furnace2_bid = as_int(send(port,
-            "return require('scripts.build_tool').commitPlacement("
-            "'furnace', 21, 21)"))
-        no_node = send(port,
-            f"return power.getNodeForBuilding({furnace2_bid}) == nil")
-        passed = check(passed, furnace2_bid is not None and no_node == "true",
-                       "furnace placed with a unit selected still gets no power node")
 
         # --- 5. Exhausting inventory refuses further placement ---
         second_panel_bid = as_int(send(port,
@@ -345,15 +326,6 @@ def main() -> int:
                 and node.get("capacityWh") == want_cap,
                 f"building #{bid}'s power node survived with role/params intact",
                 node)
-
-        furnace_info = jget(port, f"return building.getInfo({fid})")
-        passed = check(passed,
-            isinstance(furnace_info, dict) and furnace_info.get("defName") == "furnace",
-            "furnace building survived the reload too", furnace_info)
-        no_node_after_load = send(port,
-            f"return power.getNodeForBuilding({fid}) == nil")
-        passed = check(passed, no_node_after_load == "true",
-                       "furnace still has no power node after reload")
 
         node_count_after = as_int(send(port, "local ns=power.listNodes(); return #ns"))
         passed = check(passed, node_count_after == expected_nodes,
