@@ -36,6 +36,7 @@ import World.Save.Serialize (saveWorld)
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
+import Craft.Bills (pruneToStations)
 import Building.Types (BuildingManager(..), unBuildingId, biPage)
 import Unit.Types (UnitManager(..), unUnitId, unitsOnPage, uiPage)
 import Unit.Sim.Types (UnitThreadState(..))
@@ -180,6 +181,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 spoilPiles ← readIORef (wsSpoilRef ws)
                                 floraHarvests ← readIORef (wsFloraHarvestsRef ws)
                                 chopDesigs ← readIORef (wsChopDesignationsRef ws)
+                                craftBills ← readIORef (wsCraftBillsRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
                                 -- Camera: the VISIBLE page uses the live global
                                 -- Camera2D (authoritative position/zoom/facing
@@ -225,6 +227,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsUnitSimStates = simStates
                                     , wpsFloraHarvests = floraHarvests
                                     , wpsChopDesignations = chopDesigs
+                                    , wpsCraftBills  = craftBills
                                     }
                     -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
@@ -440,6 +443,14 @@ handleWorldLoadSaveCommand env logger pageId saveData
         writeIORef (wsFloraHarvestsRef worldState) (wpsFloraHarvests wps)
         -- Chop designations (#97): markers render from the stored z.
         writeIORef (wsChopDesignationsRef worldState) (wpsChopDesignations wps)
+        -- Craft bills (#329): stations restore under their saved
+        -- BuildingIds (see 1f), so bills reconnect verbatim; prune the
+        -- ones whose station isn't in this page's snapshot (a def
+        -- deregistered between sessions orphans the building, which is
+        -- dropped — its bills must go too).
+        writeIORef (wsCraftBillsRef worldState)
+            (pruneToStations (HM.keysSet (bsnInstances (wpsBuildings wps)))
+                             (wpsCraftBills wps))
 
         -- #365: an arena page (world.initArena) carries SYNTHETIC gen params
         -- (wgpSeed 0, empty timeline, no plates, worldSize 100000) that the

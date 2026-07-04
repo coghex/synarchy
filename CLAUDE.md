@@ -367,8 +367,25 @@ construction machinery (materials + build progress). Lua surface:
 (nearest BUILT station on the active page offering op), and
 `craft.executeAt(uid, recipeId, bid)` — craft.execute semantics gated
 on a Built station offering the recipe's station kind with the unit on
-or adjacent to the footprint (Chebyshev ≤ 1). The craft AI/bill layer
-is #329.
+or adjacent to the footprint (Chebyshev ≤ 1).
+
+Craft bills (#329) are per-station standing orders driving production:
+`craft.addBill(bid, recipeId[, count])` (count omitted/<1 = repeat
+forever) validates the station offers the recipe's operation and
+returns a bill id; `craft.getBill(s)`/`cancelBill` are the queue
+surface (UI = #330), `claimBill(billId, uid, timeout)` /
+`releaseBill` / `addBillProgress` / `completeBillCycle` the worker
+lifecycle. The queue lives per world page (`Craft.Bills`, engine-side
+atomic claims — no Lua claim registry) and persists in saves (v70).
+The `craft_job` acolyte action works bills end to end: source inputs +
+fuel (inventory → ground → technomule → cargo storage), stand beside
+the station, pour skill-scaled work in, `craft.executeAt` (returns the
+fresh outputs' instance ids on success), drop exactly those instances
+at the station (`unit.dropItemById`; `unit.dropItemToGround` is the
+first-match-by-def sibling), grant trade-skill XP (recipe `skill` tag,
+default smithing — feeds the Smith role #265). Turnkey harness:
+**`python3 tools/craft_bill_probe.py`** — the #329 gate (backend verbs
++ the AI loop + the knowledge gate).
 
 A `skill`-tagged recipe sets output `iiQuality` deterministically from
 the crafter (#343): the skill level, blended 70/30 with the knowledge

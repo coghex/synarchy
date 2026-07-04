@@ -3358,6 +3358,7 @@ local ACTION_DISPLAY = {
     deliver_to_build_site = "Delivering materials",
     store_materials       = "Storing materials",
     construct_job      = "Constructing",
+    craft_job          = "Crafting",
     dig_designation    = "Digging",
     chop_designation   = "Chopping",
     forage             = "Foraging",

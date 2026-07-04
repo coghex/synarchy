@@ -29,6 +29,7 @@ import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
+import Craft.Bills (CraftBills)
 import World.Chop.Types (ChopDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
@@ -119,7 +120,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 71  -- v71: UnitSimState gains usMoveGrade (uphill
+currentSaveVersion = 72  -- v72: WorldPageSave gains trailing
+                         --      'wpsCraftBills' (#329) — the per-world
+                         --      craft-bill queue (station orders +
+                         --      claim/progress state; Craft.Bills).
+                         -- v71: UnitSimState gains usMoveGrade (uphill
                          --      slope speed/stamina, #375) — positional
                          --      Generic Serialize, so the appended field
                          --      shifts the record layout.
@@ -298,6 +303,12 @@ data WorldPageSave = WorldPageSave
         --   designation layers, restored straight into
         --   wsChopDesignationsRef; markers re-render from the stored z.
         --   Appended for save v67.
+    , wpsCraftBills ∷ !CraftBills
+        -- ^ Craft-bill queue (#329): standing per-station craft orders
+        --   incl. claim + cycle progress. Station references are
+        --   BuildingIds, which restore verbatim (see wpsBuildings), so
+        --   bills reconnect to their stations; restore prunes bills
+        --   whose station was orphaned. Appended for save v72.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is
