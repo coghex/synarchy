@@ -542,13 +542,17 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- pops a solar_panel/high_voltage_battery item out of a unit's
   -- inventory and turns it into a persistent power node; getNode /
   -- getNodeForBuilding / listNodes are read-only queries reporting each
-  -- node's role + parameters. Network attachment (#359/#360) isn't here.
+  -- node's role + parameters. listNetworks / getNetworkForNode (#360)
+  -- report the live wire-connectivity view: which nodes share a network
+  -- and its current generation/drain/stored/capacity/powered status.
   Lua.newtable
   registerLuaFunction "isPlaceable"       (powerIsPlaceableFn env)
   registerLuaFunction "placeNode"         (powerPlaceNodeFn env)
   registerLuaFunction "getNode"           (powerGetNodeFn env)
   registerLuaFunction "getNodeForBuilding" (powerGetNodeForBuildingFn env)
   registerLuaFunction "listNodes"         (powerListNodesFn env)
+  registerLuaFunction "listNetworks"       (powerListNetworksFn env)
+  registerLuaFunction "getNetworkForNode"  (powerGetNetworkForNodeFn env)
   Lua.setglobal (Lua.Name "power")
 
   -- Repair global (#301) — the policy layer on top of unit.repairItem

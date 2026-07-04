@@ -8,11 +8,12 @@
 --   persisted as its own 'WorldPageSave' field, pruned to live buildings
 --   on load.
 --
---   Deliberately NOT here: wire adjacency / network membership (#359),
---   connected-components + energy balance (#360), and consumer drain
---   (#361) — this registry only needs to expose a stable id + building +
---   role + parameters for those to query later, per #358's "network-
---   attachment-ready without implementing attachment" scope.
+--   Wire adjacency / connected-components + energy balance live in
+--   'Power.Network' (#360); consumer drain (#361) is still deferred.
+--   This registry additionally carries each storage node's own charge
+--   ('pnStoredWh'), the one piece of #360 state that must survive save/
+--   load — connectivity and the tick's generation/drain numbers are all
+--   recomputed fresh from wire + node positions, never persisted.
 module Power.Types
     ( PowerRole(..)
     , PowerNodeId(..)
@@ -62,6 +63,10 @@ data PowerNode = PowerNode
       --   Meaningful for 'PowerSource'; 0 for storage nodes.
     , pnCapacityWh ∷ !Float
       -- ^ Meaningful for 'PowerStorage'; 0 for source nodes.
+    , pnStoredWh   ∷ !Float
+      -- ^ Current charge (#360). Meaningful for 'PowerStorage'; always 0
+      --   for source nodes (a panel has no charge of its own to report).
+      --   Appended field — save v75.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | The per-world node set. The id counter lives inside so it persists
@@ -84,7 +89,10 @@ powerNodeSpecFor "solar_panel"          = Just (PowerSource,  400)
 powerNodeSpecFor "high_voltage_battery" = Just (PowerStorage, 5000)
 powerNodeSpecFor _                      = Nothing
 
--- | Register a new node riding an already-placed building.
+-- | Register a new node riding an already-placed building. A freshly
+--   placed battery starts empty (pnStoredWh = 0) — it charges up from
+--   the network like any other newly-wired storage, rather than
+--   starting pre-filled.
 addPowerNode ∷ BuildingId → PowerRole → Float → PowerNodes
              → (PowerNodes, PowerNodeId)
 addPowerNode bid role param nodes =
@@ -95,6 +103,7 @@ addPowerNode bid role param nodes =
             , pnRole       = role
             , pnPeakWatts  = if role ≡ PowerSource  then param else 0
             , pnCapacityWh = if role ≡ PowerStorage then param else 0
+            , pnStoredWh   = 0
             }
     in ( nodes { pnsNodes  = HM.insert nid node (pnsNodes nodes)
                , pnsNextId = pnsNextId nodes + 1 }

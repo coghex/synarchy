@@ -9,6 +9,7 @@ import Engine.Core.State (EngineEnv(..))
 import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
 import World.Thread.ItemTemp (tickItemTemperatures)
+import World.Thread.Power (tickPowerNetworks)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
@@ -63,6 +64,11 @@ tickWorldTime env dt = do
                     -- game-second clock: tracked (hot/cold) items on
                     -- this page relax toward their tile's ambient.
                     tickItemTemperatures env pageId worldState dtGame
+                    -- Power networks (#360) follow it too: solar
+                    -- generation (scaled by this page's own sun angle)
+                    -- charges wired batteries over the same simulated
+                    -- day/night cycle.
+                    tickPowerNetworks env pageId worldState dtGame
 
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of

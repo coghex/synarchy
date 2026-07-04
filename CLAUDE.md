@@ -413,7 +413,7 @@ persists per-world (`wpsPowerNodes`, v73) keyed by the `BuildingId` it
 rides on, reconnecting on load like `Craft.Bills`. Wire adjacency /
 network energy balance are #359/#360, not this.
 
-Turnkey harness: **`python3 tools/power_probe.py`** — the #358 gate.
+Turnkey harness: **`python3 tools/power_probe.py`** — the #358/#360 gate.
 Boots headless on a flat arena, confirms the technomule's starting kit
 carries the new items, and drives `buildTool.commitPlacement` (not just
 the raw Lua verb) end to end: refusal with no unit selected (an ordinary
@@ -422,6 +422,47 @@ a source and a storage node once a carrying unit is selected, no node
 leaking onto an ordinary building, refusal once the carrying unit's
 stock is exhausted, and a full save → quit → fresh-restart → load
 round-trip reconnecting every node to its building.
+
+### Testing power network connectivity + balance headless (#360)
+
+`Power.Network` is the connected-components + energy-balance sim on top
+of #358's nodes and #359's wire (`Structure.Types.SWire`, placed via
+`scripts/wire.lua`'s `M.place(gx,gy)`). A "network" is a 4-dir-adjacent
+run of wire tiles plus whichever nodes sit on or beside it — connectivity
+and a network's generation/drain numbers are recomputed fresh on every
+tick/query (nothing about network membership is persisted); only a
+battery's own accumulated charge (`pnStoredWh`, save v75) survives a
+save. It ticks on the WORLD thread beside `tickWorldTime` (not the
+fluid-specific `Sim.Thread`, which mirrors per-chunk cell data for a much
+higher-throughput problem than power needs), in the same game-scaled
+`dtGame` clock flora/item-temperature already follow — so `world.
+setTimeScale` fast-forwards a network's charge exactly like it does a
+crop's growth. Solar generation scales by `World.Time.Types.
+worldTimeToSunAngle` through a cosine curve (`Power.Network.
+solarIntensity`: 1 at noon, 0 at dawn/dusk/midnight). `power.
+listNetworks()` / `power.getNetworkForNode(nodeId)` report each network's
+`nodeIds`/`generationW`/`drainW`/`storedWh`/`capacityWh`/`powered`;
+`power.getNode`/`getNodeForBuilding`/`listNodes` also gained a `storedWh`
+field on each node.
+
+Consumer drain (#361 — `requires_power` workshops) isn't wired up yet:
+the tick's drain-by-node map is always empty in production today. The
+balance math itself (charging, holding, brownout under a deficit) is
+proven with a synthetic drain in the pure hspec suite, not against a
+real consumer.
+
+Turnkey harnesses:
+- **`python3 tools/power_probe.py`** (extended for #360) — wires a
+  placed solar panel + battery together, confirms they land on one
+  network (and an unwired panel doesn't), fast-forwards the clock and
+  confirms the battery's `storedWh` actually rises, then confirms the
+  charge survives a save → quit → fresh-restart → load round-trip.
+- **`Test.Headless.Power.Network`** (hspec, no engine needed) — the
+  #360 gate for the algorithm itself: flood-fill connectivity (incl. the
+  4-dir-only / no-wire-no-network cases), instantaneous status
+  (Powered/Brownout independent of `dtHours`), charging + capacity
+  clamping, and discharge/brownout under a synthetic drain incl.
+  proportional multi-battery split.
 
 ### Flora growth runtime (#332)
 

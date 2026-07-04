@@ -121,7 +121,15 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 74  -- v74: CraftBill (nested in WorldPageSave's
+currentSaveVersion = 75  -- v75: PowerNode (nested in WorldPageSave's
+                         --      wpsPowerNodes) gains trailing
+                         --      'pnStoredWh' (#360) — a storage node's
+                         --      current charge, the one piece of the
+                         --      network energy balance that must
+                         --      survive save/load (connectivity +
+                         --      generation/drain are recomputed fresh
+                         --      from wire + node positions).
+                         -- v74: CraftBill (nested in WorldPageSave's
                          --      wpsCraftBills) gains trailing 'cbSeq'
                          --      and 'cbPaused' (#330's manual-reorder
                          --      + pause bill controls).
@@ -321,10 +329,12 @@ data WorldPageSave = WorldPageSave
         --   whose station was orphaned. Appended for save v72.
     , wpsPowerNodes ∷ !PowerNodes
         -- ^ Power-node registry (#358): placed solar-panel/battery
-        --   source + storage nodes (role + parameters). Like craft
-        --   bills, references a BuildingId that restores verbatim (see
-        --   wpsBuildings); restore prunes nodes whose building was
-        --   orphaned. Appended for save v73.
+        --   source + storage nodes (role + parameters), plus each
+        --   storage node's current charge (pnStoredWh, #360). Like
+        --   craft bills, references a BuildingId that restores
+        --   verbatim (see wpsBuildings); restore prunes nodes whose
+        --   building was orphaned. Appended for save v73, pnStoredWh
+        --   for v75.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

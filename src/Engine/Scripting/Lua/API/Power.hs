@@ -1,27 +1,34 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
--- | Lua surface for the power-node registry (#358). power.placeNode
---   pops a solar_panel/high_voltage_battery item out of a unit's
---   inventory and turns it into a placed, persistent power node —
---   mirroring the portal's instant-build path (building.spawn with
---   bdBuildWork = 0) but sourced from an item instead of being free.
---   The read-only queries (getNode / getNodeForBuilding / listNodes)
---   are the #358 "reports its role + parameters" surface. Network
---   attachment / energy balance are #359/#360, not here.
+-- | Lua surface for the power-node registry (#358) and its connectivity
+--   + energy balance (#360). power.placeNode pops a solar_panel/
+--   high_voltage_battery item out of a unit's inventory and turns it
+--   into a placed, persistent power node — mirroring the portal's
+--   instant-build path (building.spawn with bdBuildWork = 0) but sourced
+--   from an item instead of being free. getNode / getNodeForBuilding /
+--   listNodes report each node's own role + parameters (+ current charge
+--   for storage nodes); listNetworks / getNetworkForNode report the live
+--   connected-component view — which nodes share a wired network and
+--   that network's current generation/drain/stored/capacity/powered
+--   status (Power.Network).
 module Engine.Scripting.Lua.API.Power
     ( powerIsPlaceableFn
     , powerPlaceNodeFn
     , powerGetNodeFn
     , powerGetNodeForBuildingFn
     , powerListNodesFn
+    , powerListNetworksFn
+    , powerGetNetworkForNodeFn
     ) where
 
 import UPrelude
+import Data.List (find)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import World.Page.Types (WorldPageId(..))
+import World.Time.Types (worldTimeToSunAngle)
 import World.Types (WorldManager(..), WorldState(..))
 import World.Tile.Types (WorldTileData)
 import qualified Engine.Core.Queue as Q
@@ -32,6 +39,8 @@ import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
 import Unit.Pathing.Cost (lookupTerrainZ)
 import Item.Types (ItemInstance(..))
 import Power.Types
+import Power.Network (wireTilesOn, positionsOf, computeSnapshots)
+import qualified Power.Network as PN
 
 -- | power.isPlaceable(itemDefName) → bool. Lets a caller (the build
 --   tool's placement click) decide whether a def routes through
@@ -226,7 +235,8 @@ powerListNodesFn env = do
     return 1
 
 -- | Push one node as a Lua table: { id, building, role, peakWatts,
---   capacityWh }. role is "source" | "storage".
+--   capacityWh, storedWh }. role is "source" | "storage". storedWh
+--   (#360) is always 0 for a source node.
 pushNode ∷ PowerNode → Lua.LuaE Lua.Exception ()
 pushNode node = do
     Lua.newtable
@@ -239,6 +249,74 @@ pushNode node = do
     Lua.setfield (-2) "role"
     putN "peakWatts"  (pnPeakWatts node)
     putN "capacityWh" (pnCapacityWh node)
+    putN "storedWh"   (pnStoredWh node)
   where
     roleText PowerSource  = "source"
     roleText PowerStorage = "storage"
+
+-- | Gather the active world's current network snapshots (#360):
+--   connectivity + generation/drain/stored/capacity/status, recomputed
+--   live from this instant's sun angle. No consumers are wired up yet
+--   (#361), so every network's drainW is 0 today — the balance math
+--   itself (incl. brownout under a synthetic drain) is covered by
+--   Test.Headless.Power.Network, not this live path.
+activeNetworkSnapshots ∷ EngineEnv → IO [PN.PowerNetworkSnapshot]
+activeNetworkSnapshots env = do
+    mPage ← activeWorldPage env
+    case mPage of
+        Nothing → pure []
+        Just (pageId, ws) → do
+            nodes ← readIORef (wsPowerNodesRef ws)
+            wt    ← readIORef (wsTimeRef ws)
+            td    ← readIORef (wsTilesRef ws)
+            bm    ← readIORef (buildingManagerRef env)
+            let sunAngle   = worldTimeToSunAngle wt
+                wireTiles  = wireTilesOn td
+                positions  = positionsOf pageId bm nodes
+            pure (computeSnapshots sunAngle HM.empty wireTiles nodes positions)
+
+-- | power.listNetworks() → array of network tables on the active world.
+--   Order is incidental (component discovery order) — callers key off
+--   nodeIds/building ids, not array position.
+powerListNetworksFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+powerListNetworksFn env = do
+    nets ← Lua.liftIO $ activeNetworkSnapshots env
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] nets) $ \(i, net) → do
+        pushNetwork net
+        Lua.rawseti (-2) (fromIntegral i)
+    return 1
+
+-- | power.getNetworkForNode(nodeId) → table | nil — the network the
+--   given node currently attaches to (nil if it isn't wired into one:
+--   not adjacent to any wire tile).
+powerGetNetworkForNodeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+powerGetNetworkForNodeFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n  → do
+            let nid = PowerNodeId (fromIntegral n)
+            nets ← Lua.liftIO $ activeNetworkSnapshots env
+            case find (elem nid . PN.pnwNodeIds) nets of
+                Just net → pushNetwork net >> return 1
+                Nothing  → Lua.pushnil >> return 1
+
+-- | Push one network snapshot: { nodeIds = {...}, generationW, drainW,
+--   storedWh, capacityWh, powered }.
+pushNetwork ∷ PN.PowerNetworkSnapshot → Lua.LuaE Lua.Exception ()
+pushNetwork net = do
+    Lua.newtable
+    let putN k v = Lua.pushnumber (Lua.Number (realToFrac v))
+                   >> Lua.setfield (-2) k
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] (PN.pnwNodeIds net)) $ \(i, nid) → do
+        Lua.pushinteger (fromIntegral (unPowerNodeId nid))
+        Lua.rawseti (-2) (fromIntegral i)
+    Lua.setfield (-2) "nodeIds"
+    putN "generationW" (PN.pnwGenerationW net)
+    putN "drainW"      (PN.pnwDrainW net)
+    putN "storedWh"    (PN.pnwStoredWh net)
+    putN "capacityWh"  (PN.pnwCapacityWh net)
+    Lua.pushboolean (PN.pnwStatus net ≡ PN.Powered)
+    Lua.setfield (-2) "powered"
