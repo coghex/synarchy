@@ -148,8 +148,8 @@ emitQuad entry (Vec4 cr cg cb alpha) dx dy layer =
         !baseY = bzeDrawY entry
         !xShift = dx - baseX
         !yShift = dy - baseY
-        shiftV (Vertex (Vec2 px py) uv _ aid fid flags) =
-            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 cr cg cb alpha) aid fid flags
+        shiftV (Vertex (Vec2 px py) uv _ aid fid flags wuv) =
+            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 cr cg cb alpha) aid fid flags wuv
         v0 = shiftV (bzeV0 entry)
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)

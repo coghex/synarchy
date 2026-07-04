@@ -15,7 +15,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
+                                           , packWorldUV)
 import World.Types
 import World.Grid (gridToWorld, worldToGrid, zoomMapLayer)
 
@@ -136,12 +137,17 @@ emitCursorQuad facing baseGX baseGY tex lookupSlot defFmSlot alpha sortKey =
         h     = max y0 (max y1 (max y2 y3)) - drawY
         slot  = fromIntegral (lookupSlot tex)
         color = Vec4 1.0 1.0 1.0 alpha
+        -- One packed value at the chunk's origin (#483) — this is a
+        -- cursor highlight box, not lit terrain; a representative value
+        -- keeps its brightness roughly in step with the chunk beneath
+        -- it rather than defaulting to the meridian's time of day.
+        wuv   = packWorldUV baseGX baseGY
     in V.singleton $ SortableQuad
         { sqSortKey = sortKey
-        , sqV0 = mkVertex (Vec2 drawX drawY)             (Vec2 0 0) color slot defFmSlot
-        , sqV1 = mkVertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) color slot defFmSlot
-        , sqV2 = mkVertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) color slot defFmSlot
-        , sqV3 = mkVertex (Vec2 drawX (drawY + h))        (Vec2 0 1) color slot defFmSlot
+        , sqV0 = mkVertexWorld wuv (Vec2 drawX drawY)             (Vec2 0 0) color slot defFmSlot
+        , sqV1 = mkVertexWorld wuv (Vec2 (drawX + w) drawY)       (Vec2 1 0) color slot defFmSlot
+        , sqV2 = mkVertexWorld wuv (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) color slot defFmSlot
+        , sqV3 = mkVertexWorld wuv (Vec2 drawX (drawY + h))        (Vec2 0 1) color slot defFmSlot
         , sqTexture = tex
         , sqLayer   = zoomMapLayer
         }

@@ -4,6 +4,7 @@ module Engine.Loop.Frame
   , updateUniformBufferForFrame
   , submitFrame
   , computeAmbientLight
+  , activeWorldCircumferenceTiles
   ) where
 
 import UPrelude
@@ -38,6 +39,7 @@ import Engine.Scene.Render
 import Engine.Scene.Types
 import UI.Render (renderUIPages)
 import UI.Tooltip (updateTooltipState)
+import World.Types (chunkSize, WorldGenParams(..), WorldState(..))
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -50,6 +52,21 @@ computeAmbientLight sunAngle =
     in if sunHeight ≥ 0
        then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
        else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
+
+-- | The active world's u-axis (gx-gy) circumference in tiles, for the
+--   world vertex shader's per-vertex longitude-local day/night phase
+--   (#483). Falls back to a 128-chunk world (the same default
+--   'World.Render.Quads' uses when gen params aren't loaded yet) —
+--   there's always SOME UBO value even before a world finishes
+--   generating, since the shader divides by it.
+activeWorldCircumferenceTiles ∷ EngineEnv → IO Float
+activeWorldCircumferenceTiles env = do
+    mWs ← activeWorldState env
+    mParams ← case mWs of
+        Just ws → readIORef (wsGenParamsRef ws)
+        Nothing → pure Nothing
+    let worldSize = maybe 128 wgpWorldSize mParams
+    pure (fromIntegral (worldSize * chunkSize))
 
 -- | Draw a single frame
 drawFrame ∷ EngineM ε σ ()
@@ -227,6 +244,7 @@ updateUniformBufferForFrame win frameIdx camera = do
             pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
             sunAngle ← liftIO $ readIORef (sunAngleRef env)
             defFmSlot ← liftIO $ readIORef (defaultFaceMapSlotRef env)
+            worldCirc ← liftIO $ activeWorldCircumferenceTiles env
 
             let ambientLight = computeAmbientLight sunAngle
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
@@ -252,6 +270,7 @@ updateUniformBufferForFrame win frameIdx camera = do
                               ambientLight
                               facingFloat
                               (fromIntegral defFmSlot)
+                              worldCirc
 
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

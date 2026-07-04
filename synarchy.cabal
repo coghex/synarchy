@@ -187,6 +187,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Types
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
+                   Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
                    Test.Headless.River.Graph
                    Test.Headless.World.Render.FrontWallLift
@@ -627,6 +628,7 @@ library
                      World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
+                     World.Time.Local
                      World.Flora.Types
                      World.Flora.Growth
                      World.Flora.Placement

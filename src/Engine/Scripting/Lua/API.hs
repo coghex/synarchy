@@ -668,6 +668,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "pickPos"      (worldPickPosFn env)
   registerLuaFunction "getClimateAt" (worldGetClimateAtFn env)
   registerLuaFunction "getAmbientAt" (worldGetAmbientAtFn env)
+  registerLuaFunction "getSunAngleAt" (worldGetSunAngleAtFn env)
   registerLuaFunction "listPlacedLocations" (worldListPlacedLocationsFn env)
   registerLuaFunction "hasSpawnedLocationContents"
     (worldHasSpawnedLocationContentsFn env)

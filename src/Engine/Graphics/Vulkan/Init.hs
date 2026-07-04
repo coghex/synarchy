@@ -46,7 +46,7 @@ import Engine.Graphics.Vulkan.Texture.DefaultFaceMap (createDefaultFaceMap
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Vertex
-import Engine.Loop.Frame (computeAmbientLight)
+import Engine.Loop.Frame (computeAmbientLight, activeWorldCircumferenceTiles)
 import Engine.Scene.Manager (createScene, setActiveScene)
 import Vulkan.Core10
 import Vulkan.Zero
@@ -258,7 +258,8 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   brightnessInt ← liftIO $ readIORef bRef
   pixelSnap ← liftIO $ readIORef psRef
   sunAngle ← liftIO $ readIORef (sunAngleRef env)
-  
+  worldCirc ← liftIO $ activeWorldCircumferenceTiles env
+
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
       facing = case camFacing camera of
           FaceSouth → 0.0
@@ -284,9 +285,10 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           ambientLight
           facing
           0  -- default face-map slot; set per-frame (#286)
+          worldCirc
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
-  
+
   uniformBuffers ← V.generateM (fromIntegral numFrames) $ \_ → do
       (buffer, memory) ← createUniformBuffer device physicalDevice uboSize
       updateUniformBuffer device memory
@@ -294,7 +296,7 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
                (brightnessToMultiplier brightnessInt)
                (fromIntegral width) (fromIntegral height)
                (if pixelSnap then 1.0 else 0.0)
-               sunAngle ambientLight facing 0)
+               sunAngle ambientLight facing 0 worldCirc)
       pure (buffer, memory)
   
   modify $ \s → s { graphicsState = (graphicsState s) {

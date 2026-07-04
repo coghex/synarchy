@@ -99,6 +99,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 3) in float inTexIndex;
     layout(location = 4) in float inFaceMapIndex;
     layout(location = 5) in uint inRenderFlags;
+    layout(location = 6) in uint inWorldUV;
 
     layout(set = 0, binding = 0) uniform UniformBufferObject {
         mat4 model;
@@ -114,6 +115,7 @@ bindlessVertexShaderCode = [vert|
         float ambientLight;
         float cameraFacing;
         float defaultFaceMapSlot;
+        float worldCircumferenceTiles;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -126,6 +128,21 @@ bindlessVertexShaderCode = [vert|
     layout(location = 7) out float fragCameraFacing;
     layout(location = 8) out flat uint fragRenderFlags;
     layout(location = 9) out flat int fragDefaultFaceMapSlot;
+
+    // Ambient-light curve (#483) — GLSL port of Engine.Loop.Frame's
+    // computeAmbientLight, evaluated here per-vertex from the LOCAL
+    // (longitude-adjusted) sun angle rather than passed straight
+    // through from the UBO, so night still dims a tile even when its
+    // local time differs from the global clock's.
+    float computeAmbientLight(float sunAngle) {
+        float angle = sunAngle * 6.28318530718;
+        float sunHeight = sin(angle);
+        if (sunHeight >= 0.0) {
+            return 0.5 + 0.2 * sunHeight;
+        } else {
+            return 0.15 + 0.35 * (1.0 + sunHeight);
+        }
+    }
 
     void main() {
         vec4 worldPos = ubo.model * vec4(inPosition.xy, 0.0, 1.0);
@@ -146,8 +163,19 @@ bindlessVertexShaderCode = [vert|
         fragTexIndex = int(inTexIndex);
         fragBrightness = ubo.brightness;
         fragFaceMapIndex = int(inFaceMapIndex);
-        fragSunAngle = ubo.sunAngle;
-        fragAmbientLight = ubo.ambientLight;
+
+        // Longitude-local day/night (#483): decode the tile's packed
+        // world u (low 16 bits, sign-restored) and offset the global
+        // sun angle by its fraction of a full trip around the world
+        // cylinder (u = gx - gy). Raw world coords, NOT screen-space —
+        // rotating the camera must not re-light the world.
+        int rawU = int(inWorldUV & 0xFFFFu);
+        if (rawU >= 32768) rawU -= 65536;
+        float circumference = max(ubo.worldCircumferenceTiles, 1.0);
+        float localPhase = ubo.sunAngle + float(rawU) / circumference;
+        fragSunAngle = fract(localPhase);
+        fragAmbientLight = computeAmbientLight(fragSunAngle);
+
         fragCameraFacing = ubo.cameraFacing;
         fragRenderFlags = inRenderFlags;
         fragDefaultFaceMapSlot = int(ubo.defaultFaceMapSlot);

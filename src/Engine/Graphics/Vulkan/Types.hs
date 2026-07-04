@@ -70,7 +70,11 @@ data CleanupStatus = NotStarted | InProgress | Completed
 --   float defaultFaceMapSlot (offset 348) — bindless slot of the default
 --     face map; the world fragment shader uses it when a tile's own face
 --     map handle resolves to slot 0 (unregistered). #286. Was padding.
--- Total: 5*64 + 32 = 352 bytes
+--   float worldCircumferenceTiles (offset 352) — the active world's
+--     u-axis (gx-gy) circumference in tiles, i.e. worldWidthTiles. The
+--     world vertex shader divides a vertex's packed world u by this to
+--     get its longitude-local day/night phase offset (#483).
+-- Total: 5*64 + 36 = 356 bytes
 data UniformBufferObject = UBO
     { uboModel        ∷ M44 Float  -- model matrix
     , uboView         ∷ M44 Float  -- view matrix
@@ -85,11 +89,12 @@ data UniformBufferObject = UBO
     , uboAmbientLight ∷ Float      -- minimum ambient brightness
     , uboCameraFacing ∷ Float      -- 0.0 = south, 1.0 = west, 2.0 = north, 3.0 = east
     , uboDefaultFaceMapSlot ∷ Float -- default face-map bindless slot (#286)
+    , uboWorldCircumference ∷ Float -- world u-axis circumference in tiles (#483)
     } deriving (Show)
 
 instance Storable UniformBufferObject where
-    -- 5 matrices (64 bytes each) + 8 floats (32 bytes) = 352
-    sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float) + 32
+    -- 5 matrices (64 bytes each) + 9 floats (36 bytes) = 356
+    sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float) + 36
     alignment _ = 16  -- Vulkan requires 16-byte alignment for uniform buffers
     peek ptr = UBO
         ⊚ peek (castPtr ptr)
@@ -105,7 +110,8 @@ instance Storable UniformBufferObject where
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 20))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 24))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 28))
-    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap sunAngle ambientLight facing defFmSlot) = do
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 32))
+    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap sunAngle ambientLight facing defFmSlot worldCirc) = do
         poke (castPtr ptr) model
         poke (castPtr $ ptr `plusPtr` sizeOf model) view
         poke (castPtr $ ptr `plusPtr` (2 * sizeOf model)) proj
@@ -119,3 +125,4 @@ instance Storable UniformBufferObject where
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 20)) ambientLight
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 24)) facing
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 28)) defFmSlot
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 32)) worldCirc

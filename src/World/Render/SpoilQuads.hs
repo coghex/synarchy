@@ -27,7 +27,8 @@ import Data.Maybe (mapMaybe)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Asset.Handle (toInt)
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
+                                           , packWorldUV)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk)
@@ -146,14 +147,15 @@ renderSpoilQuads env worldState tileAlpha = do
                         slotF  = lookupSlot tex
                         fmF    = lookupFmSlot fmTex
                         tint   = Vec4 1.0 1.0 1.0 tileAlpha
-                        v0 = mkVertex (Vec2 drawX drawY)
+                        wuv    = packWorldUV tx ty
+                        v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                                  (Vec2 0 0) tint slotF fmF
-                        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)
+                        v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)
                                  (Vec2 1 0) tint slotF fmF
-                        v2 = mkVertex (Vec2 (drawX + tileWidth)
+                        v2 = mkVertexWorld wuv (Vec2 (drawX + tileWidth)
                                             (drawY + tileHeight))
                                  (Vec2 1 1) tint slotF fmF
-                        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))
+                        v3 = mkVertexWorld wuv (Vec2 drawX (drawY + tileHeight))
                                  (Vec2 0 1) tint slotF fmF
                     Just SortableQuad
                         { sqSortKey = sortKey

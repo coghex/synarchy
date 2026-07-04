@@ -24,6 +24,7 @@ import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
+import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -86,6 +87,7 @@ main = hspec $ do
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "Unit.NightPerception" NightPerception.spec
+    describe "World.TimeLocal" TimeLocal.spec
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
     describe "Item.QualityTier" ItemQualityTier.spec

@@ -20,10 +20,11 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Unit.Direction (Direction(..))
-import World.Types (WorldManager(..), WorldState(..))
+import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Tile.Types (lookupChunk, WorldTileData(..))
 import World.Generate.Coordinates (globalToChunk)
+import World.Time.Local (localSunAngle)
 
 -- | All tiles the unit can currently see. Empty list if the unit
 --   doesn't exist or no world is visible. Includes the unit's own
@@ -106,12 +107,29 @@ unitAwareness env defender attacker = do
         inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
     blocked ← losBlockedBetween env defender attacker
     sunAngle ← readIORef (sunAngleRef env)
-    pure $! nightPerceptionFactor sunAngle *
+    worldSize ← activeWorldSizeChunks env
+    let localAngle = localSunAngle worldSize (floor defX) (floor defY) sunAngle
+    pure $! nightPerceptionFactor localAngle *
             if dist > perceptionRange ∨ blocked
             then 0.0
             else if inFacingCone           then 1.0
             else if dist ≤ awareCloseRadius then awarePeripheral
             else 0.0
+
+-- | The active world's size (in chunks), for 'localSunAngle'. Falls back
+--   to 128 (the same default 'World.Render.Quads' uses when gen params
+--   aren't loaded yet) rather than failing — a defender's local time of
+--   day just degrades to the world-default circumference in that window.
+activeWorldSizeChunks ∷ EngineEnv → IO Int
+activeWorldSizeChunks env = do
+    wm ← readIORef (worldManagerRef env)
+    case wmVisible wm of
+        [] → pure 128
+        (pageId:_) → case lookup pageId (wmWorlds wm) of
+            Nothing → pure 128
+            Just ws → do
+                mParams ← readIORef (wsGenParamsRef ws)
+                pure (maybe 128 wgpWorldSize mParams)
 
 -- | Multiplier on awareness from time of day: 1.0 at noon, dipping to
 --   'nightPerceptionFloor' at midnight, ramping smoothly through

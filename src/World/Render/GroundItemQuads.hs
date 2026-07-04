@@ -29,7 +29,7 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import Engine.Graphics.Viewport (windowDegenerate)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
-                                           , renderFlagSelected)
+                                           , renderFlagSelected, packWorldUV)
 import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemManager(..), ItemDef(..), ItemInstance(..))
@@ -240,15 +240,16 @@ renderGroundItemQuads env worldState tileAlpha = do
                         flags = if selectedGid ≡ Just gid
                                 then renderFlagSelected else 0
                         slotF = fromIntegral (actualSlot ∷ Int)
+                        wuv = packWorldUV tx ty
                         v0 = Vertex (Vec2 drawX drawY)
-                                 (Vec2 0 0) tint slotF defFmSlot flags
+                                 (Vec2 0 0) tint slotF defFmSlot flags wuv
                         v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                                 (Vec2 1 0) tint slotF defFmSlot flags
+                                 (Vec2 1 0) tint slotF defFmSlot flags wuv
                         v2 = Vertex (Vec2 (drawX + quadW)
                                           (drawY + quadH))
-                                 (Vec2 1 1) tint slotF defFmSlot flags
+                                 (Vec2 1 1) tint slotF defFmSlot flags wuv
                         v3 = Vertex (Vec2 drawX (drawY + quadH))
-                                 (Vec2 0 1) tint slotF defFmSlot flags
+                                 (Vec2 0 1) tint slotF defFmSlot flags wuv
                     Just SortableQuad
                         { sqSortKey = sortKey
                         , sqV0 = v0, sqV1 = v1, sqV2 = v2, sqV3 = v3
