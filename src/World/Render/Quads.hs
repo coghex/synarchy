@@ -707,21 +707,33 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- tool): anchor→hover rectangle, mirroring the mine preview
     -- (per-z-level, unloaded chunks skipped). Drawn with the
     -- select-cursor texture so it reads as "about to be designated".
+    --
+    -- Wire path tool (#359): 'constructLineMode' constrains this to a
+    -- straight 1-wide LINE along whichever axis has the larger extent
+    -- from the anchor, instead of the filled rectangle — the build
+    -- tool's commit (scripts/build_tool.lua) snaps the SAME way before
+    -- calling construction.designate, so what previews is what commits.
     let constructPreviewQuads = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
                 let hx' = clampSide ax hx
                     hy' = clampSide ay hy
-                    xLo = min ax hx'
-                    xHi = max ax hx'
-                    yLo = min ay hy'
-                    yHi = max ay hy'
+                    dx = hx' - ax
+                    dy = hy' - ay
+                    tiles
+                        | constructLineMode cs' =
+                            if abs dx ≥ abs dy
+                            then [ (gx, ay) | gx ← [min ax hx' .. max ax hx'] ]
+                            else [ (ax, gy) | gy ← [min ay hy' .. max ay hy'] ]
+                        | otherwise =
+                            [ (gx, gy)
+                            | gx ← [min ax hx' .. max ax hx']
+                            , gy ← [min ay hy' .. max ay hy'] ]
                 in V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha xOff tex
-                    | gx ← [xLo .. xHi]
-                    , gy ← [yLo .. yHi]
+                    | (gx, gy) ← tiles
                     , Just z ← [surfaceZAt gx gy]
                     , z ≡ anchorZ
                     , let (chunkCoord, _) = globalToChunk gx gy

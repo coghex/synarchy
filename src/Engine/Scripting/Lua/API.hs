@@ -461,6 +461,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setJobStatus"       (constructSetJobStatusFn env)
   registerLuaFunction "addJobProgress"     (constructAddJobProgressFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
+  registerLuaFunction "setLineMode"        (constructSetLineModeFn env)
   Lua.setglobal (Lua.Name "construction")
 
   -- Chop designation tool (#97). Mirrors the construction-designation

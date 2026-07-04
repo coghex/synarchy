@@ -23,6 +23,7 @@ module World.Thread.Command.Cursor
     , handleWorldSetConstructStatusCommand
     , handleWorldAddConstructProgressCommand
     , handleWorldSetConstructDesignateTextureCommand
+    , handleWorldSetConstructLineModeCommand
     , handleWorldSetChopAnchorCommand
     , handleWorldClearChopAnchorCommand
     , handleWorldDesignateChopCommand
@@ -441,6 +442,18 @@ handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
                 case cat of
                     "building" → (cs { constructBuildingTexture = Just tid }, ())
                     _          → (cs { constructStructTexture = Just tid }, ())
+        Nothing → pure ()
+
+-- | Wire path tool (#359): toggle the anchor→hover preview between the
+--   default filled rectangle and a straight 1-wide line.
+handleWorldSetConstructLineModeCommand ∷ EngineEnv → LoggerState
+    → WorldPageId → Bool → IO ()
+handleWorldSetConstructLineModeCommand env _logger pageId enabled = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { constructLineMode = enabled }, ())
         Nothing → pure ()
 
 -- * Chop designation tool (#97)

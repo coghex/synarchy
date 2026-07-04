@@ -4,16 +4,25 @@
 Verifies the wire structure piece end-to-end on a flat arena world,
 WITHOUT a GPU or a human watching:
 
-  1. connections : scripts.wire's autotile shape derivation — placing a
-                    line + a plus of wire tiles picks the right
-                    connection variant (isolated/end/straight/corner/
-                    tee/cross) purely from 4-neighbour adjacency, and a
-                    later placement re-caps already-placed neighbours.
-  2. build_ai    : the construct_job AI end-to-end for kind "wire" —
-                    designate, an acolyte carrying `wiring` claims,
-                    builds, and places a real wire piece; the
-                    designation clears and the piece lands in the
-                    PERSISTED per-chunk overlay (structure.loadedCount).
+  1. connections   : scripts.wire's autotile shape derivation — placing a
+                      line + a plus of wire tiles picks the right
+                      connection variant (isolated/end/straight/corner/
+                      tee/cross) purely from 4-neighbour adjacency, and a
+                      later placement re-caps already-placed neighbours.
+  2. path_builder  : the build_tool.lua PATH placement UX itself (not
+                      just the lower-level construction.* calls it
+                      drives) — a real two-click drag through
+                      buildTool.handleMouseDown (pixel coords resolved
+                      via world.pickTile, same as a player click) snaps
+                      to a straight line via buildTool.snapWirePath and
+                      designates ONLY that line, not the drag's filled
+                      bounding rectangle; a pending anchor cancels on
+                      right-click without designating anything.
+  3. build_ai      : the construct_job AI end-to-end for kind "wire" —
+                      designate, an acolyte carrying `wiring` claims,
+                      builds, and places a real wire piece; the
+                      designation clears and the piece lands in the
+                      PERSISTED per-chunk overlay (structure.loadedCount).
 
 Usage:
   python3 tools/wire_probe.py [--port 9359] [--phase all]
@@ -138,6 +147,17 @@ def wire_shape(port: int, x: int, y: int) -> str | None:
     return path.rsplit("/", 1)[-1].removesuffix(".png")
 
 
+def pick_tile(port: int, sx: int, sy: int) -> tuple[int, int]:
+    """world.pickTile(screenX, screenY) -> (gx, gy) — the SAME hit test
+    buildTool.handleMouseDown runs on a real click. Returns whichever
+    tile is actually under that pixel rather than assuming a hand-derived
+    projection, so the path-builder phase stays correct even if camera/
+    projection constants ever change."""
+    raw = send(port, f"return world.pickTile({sx}, {sy})")
+    parts = raw.split()
+    return int(float(parts[0])), int(float(parts[1]))
+
+
 def spawn_acolyte(port: int, x: float, y: float) -> int:
     uid = send(port, f"return unit.spawn('acolyte', {x}, {y})")
     try:
@@ -237,9 +257,94 @@ def phase_connections(port: int) -> None:
     check("corner tile reads corner_se", wire_shape(port, 14, 14) == "corner_se")
 
 
+def phase_path_builder(port: int) -> None:
+    """Drive the REAL build_tool.lua two-click path placement through
+    buildTool.handleMouseDown — pixel clicks resolved via world.pickTile,
+    exactly like a player's mouse input — rather than only exercising the
+    lower-level construction.* Lua API. HUD/toolbar never initialise
+    headless (no GPU), so buildTool.hud (normally set by hud.lua after
+    building the toolbar) is stubbed with just the one field
+    handleMouseDown/enterPlacement actually read: worldId."""
+    print("\n[phase 2] build_tool.lua wire PATH placement (real click path)")
+    w = wid(port)
+    send(port, "camera.setPosition(0, 0); return 'ok'")
+    send(port, "local bt = require('scripts.build_tool'); "
+               f"bt.hud = {{ worldId = '{w}' }}; return 'ok'")
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.enterPlacement({kind='structure', pack='wire', "
+               "piece='wire', edge=nil, displayName='Wire'}); return 'ok'")
+
+    # Click 1: anchor. Discover the actual tile under the pixel via the
+    # SAME world.pickTile the click handler uses, rather than assuming a
+    # hand-derived screen->tile projection.
+    ax, ay = pick_tile(port, 960, 540)
+    clicked = send(port, "local bt = require('scripts.build_tool'); "
+                          "return bt.handleMouseDown(1, 960, 540)")
+    check("first click consumed and anchors the path", clicked == "true")
+    anchor = send_json(port, "local bt = require('scripts.build_tool'); "
+                              "return bt.state.anchor")
+    check("anchor matches the clicked tile", anchor == [ax, ay])
+
+    # Click 2: a DIAGONAL drag (not axis-aligned) — the path tool must
+    # snap this to a straight line, unlike the filled-rectangle commit
+    # every other structure piece uses.
+    hx, hy = pick_tile(port, 1056, 668)
+    committed = send(port, "local bt = require('scripts.build_tool'); "
+                            "return bt.handleMouseDown(1, 1056, 668)")
+    check("second click consumed and commits the path", committed == "true")
+    check("anchor cleared after commit",
+          send(port, "local bt = require('scripts.build_tool'); "
+                     "return bt.state.anchor == nil") == "true")
+
+    # snapWirePath returns two values (multi-return), which the console
+    # prints tab-separated like pickTile — not JSON.
+    snap_raw = send(port,
+        f"local bt = require('scripts.build_tool'); "
+        f"return bt.snapWirePath({ax}, {ay}, {hx}, {hy})")
+    ex, ey = (int(float(v)) for v in snap_raw.split())
+    on_line = set()
+    if ex == ax:   # vertical snap
+        on_line = {(ax, y) for y in range(min(ay, ey), max(ay, ey) + 1)}
+    else:          # horizontal snap
+        on_line = {(x, ay) for x in range(min(ax, ex), max(ax, ex) + 1)}
+
+    bbox = {(x, y)
+            for x in range(min(ax, hx), max(ax, hx) + 1)
+            for y in range(min(ay, hy), max(ay, hy) + 1)}
+    on_line_designated = all(
+        (designation_at(port, x, y) or {}).get("pack") == "wire"
+        for (x, y) in on_line)
+    off_line_clear = all(
+        designation_at(port, x, y) is None
+        for (x, y) in bbox - on_line)
+    check("every tile ON the snapped line got designated", on_line_designated)
+    check("the drag was a diagonal (line is a proper subset of its bbox)",
+          len(on_line) < len(bbox))
+    check("tiles OFF the line (inside the drag's bbox) were NOT designated",
+          off_line_clear)
+
+    # Clean up this phase's designations so they don't leak into others.
+    for (x, y) in on_line:
+        send(port, f"construction.cancelDesignation({x}, {y}); return 'ok'")
+
+    # Right-click with a pending anchor cancels it — no designation at all.
+    nx, ny = pick_tile(port, 1200, 700)
+    send(port, f"local bt = require('scripts.build_tool'); "
+               f"bt.handleMouseDown(1, 1200, 700); return 'ok'")
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.handleMouseDown(2, 1200, 700); return 'ok'")
+    check("right-click cancels a pending anchor without designating",
+          send(port, "local bt = require('scripts.build_tool'); "
+                     "return bt.state.anchor == nil") == "true"
+          and designation_at(port, nx, ny) is None)
+
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.exitPlacement(); return 'ok'")
+
+
 def phase_build_ai(port: int) -> None:
     """One wire designation, built by an acolyte carrying `wiring`."""
-    print("\n[phase 2] wire structure job via construct_job AI")
+    print("\n[phase 3] wire structure job via construct_job AI")
     w = wid(port)
     send(port, f"construction.designate('{w}', 8, 8, 8, 8, "
                "'structure', 'wire', 'wire'); return 'ok'")
@@ -272,6 +377,7 @@ def phase_build_ai(port: int) -> None:
 
 PHASES = {
     "connections": phase_connections,
+    "path_builder": phase_path_builder,
     "build_ai": phase_build_ai,
 }
 

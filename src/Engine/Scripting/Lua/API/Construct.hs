@@ -16,6 +16,7 @@ module Engine.Scripting.Lua.API.Construct
     , constructSetJobStatusFn
     , constructAddJobProgressFn
     , constructSetDesignateTextureFn
+    , constructSetLineModeFn
     ) where
 
 import UPrelude
@@ -279,6 +280,25 @@ constructSetDesignateTextureFn env = do
                 WorldSetConstructDesignateTexture pageId
                     (TE.decodeUtf8 catBS) texHandle
         _ → pure ()
+    return 0
+
+-- | construction.setLineMode(pageId, enabled) — wire path tool (#359):
+--   while enabled, the anchor→hover preview (World/Render/Quads.hs) snaps
+--   to a straight 1-wide line along whichever axis has the larger extent
+--   from the anchor, instead of the default filled rectangle. The build
+--   tool's commit (scripts/build_tool.lua) snaps the SAME way before
+--   calling designate, so the committed tiles always match what
+--   previewed.
+constructSetLineModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetLineModeFn env = do
+    pageIdArg ← Lua.tostring 1
+    enabledArg ← Lua.toboolean 2
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldSetConstructLineMode pageId enabledArg
+        Nothing → pure ()
     return 0
 
 -- | Push one designation as a Lua table onto the stack.
