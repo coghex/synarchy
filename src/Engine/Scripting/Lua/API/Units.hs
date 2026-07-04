@@ -83,6 +83,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetImmunitiesFn
     , unitGetInsulationFn
     , unitDropEquipmentToGroundFn
+    , unitDropItemToGroundFn
+    , unitDropItemByIdFn
     , unitGetBloodFn
     , unitGetPainFn
     , unitGetLastAttackerFn
@@ -153,7 +155,8 @@ import Item.Types (ItemDef(..)
                    , ItemBuff(..)
                    , ItemManager(..)
                    , lookupItemDef
-                   , itemTotalWeight)
+                   , itemTotalWeight
+                   , qualityTierLabel)
 import Item.Ground (spawnGroundItem)
 import Combat.Wounds (bleedRateFor, kindBleedFactor)
 import Combat.Types (pushInjuryEvent)
@@ -2176,6 +2179,110 @@ unitDropEquipmentToGroundFn env = do
                             return 1
         _ → Lua.pushboolean False >> return 1
 
+-- | unit.dropItemToGround(uid, defName) → bool. Removes the FIRST
+--   inventory instance with the matching defName and lays it on the
+--   ground at the unit's tile, PRESERVING the exact ItemInstance
+--   (condition / sharpness / quality / fill) — the inventory inverse
+--   of item.pickupGround, and the inventory sibling of
+--   unit.dropEquipmentToGround. First-match-by-def semantics, same as
+--   unit.removeItem; when the EXACT instance matters (the craft AI's
+--   output deposit) use unit.dropItemById instead. Returns false if
+--   the unit is gone, carries no such item, or no world is active
+--   (the item stays in the inventory rather than vanishing).
+unitDropItemToGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDropItemToGroundFn env = do
+    uidArg  ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (uidArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid     = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8Lenient nameBS
+            -- Resolve the world FIRST so we never strip the item from
+            -- the unit when there's nowhere to drop it.
+            mWs ← Lua.liftIO $ activeWorldU env
+            case mWs of
+                Nothing → Lua.pushboolean False >> return 1
+                Just ws → do
+                    mDrop ← Lua.liftIO $
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, Nothing)
+                                Just inst →
+                                    case popFirstByNameIx defName
+                                             (uiInventory inst) of
+                                        Nothing → (um, Nothing)
+                                        Just (it, _, rest) →
+                                            let inst' = inst
+                                                  { uiInventory = rest }
+                                            in ( um { umInstances =
+                                                        HM.insert uid inst'
+                                                          (umInstances um) }
+                                               , Just (it, uiGridX inst,
+                                                           uiGridY inst) )
+                    case mDrop of
+                        Nothing → Lua.pushboolean False >> return 1
+                        Just (it, gx, gy) → do
+                            _ ← Lua.liftIO $
+                                atomicModifyIORef' (wsGroundItemsRef ws) $
+                                    spawnGroundItem it gx gy
+                            Lua.pushboolean True
+                            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | unit.dropItemById(uid, instanceId) → bool. Like dropItemToGround
+--   but targets ONE exact ItemInstance by its instance id instead of
+--   first-match-by-def. The craft AI (#329) deposits the ids
+--   craft.executeAt returns with this, so a same-def item already in
+--   the crafter's inventory is never dropped in place of the fresh
+--   output (whose quality / condition / temp belong to THIS craft).
+unitDropItemByIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDropItemByIdFn env = do
+    uidArg ← Lua.tointeger 1
+    iidArg ← Lua.tointeger 2
+    case (uidArg, iidArg) of
+        (Just n, Just i) → do
+            let uid = UnitId (fromIntegral n)
+                iid = fromIntegral i ∷ Word64
+            -- Resolve the world FIRST so we never strip the item from
+            -- the unit when there's nowhere to drop it.
+            mWs ← Lua.liftIO $ activeWorldU env
+            case mWs of
+                Nothing → Lua.pushboolean False >> return 1
+                Just ws → do
+                    mDrop ← Lua.liftIO $
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, Nothing)
+                                Just inst →
+                                    case popFirstById iid
+                                             (uiInventory inst) of
+                                        Nothing → (um, Nothing)
+                                        Just (it, rest) →
+                                            let inst' = inst
+                                                  { uiInventory = rest }
+                                            in ( um { umInstances =
+                                                        HM.insert uid inst'
+                                                          (umInstances um) }
+                                               , Just (it, uiGridX inst,
+                                                           uiGridY inst) )
+                    case mDrop of
+                        Nothing → Lua.pushboolean False >> return 1
+                        Just (it, gx, gy) → do
+                            _ ← Lua.liftIO $
+                                atomicModifyIORef' (wsGroundItemsRef ws) $
+                                    spawnGroundItem it gx gy
+                            Lua.pushboolean True
+                            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | Pop the top-level inventory instance with the given instance id.
+popFirstById ∷ Word64 → [ItemInstance] → Maybe (ItemInstance, [ItemInstance])
+popFirstById _ [] = Nothing
+popFirstById iid (x:xs)
+    | iiInstanceId x ≡ iid = Just (x, xs)
+    | otherwise            = (\(it, rest) → (it, x : rest))
+                             <$> popFirstById iid xs
+
 -- | The active (shown) world, or the first one if none is explicitly
 --   shown. Mirrors the helper in API.Items.
 activeWorldU ∷ EngineEnv → IO (Maybe WorldState)
@@ -3046,6 +3153,14 @@ unitGetInfoFn env = do
                             Just ss | isLocomoting (usState ss) →
                                 maybe 0 mtSpeed (usTarget ss)
                             _ → 0
+                        -- Signed slope grade under the moving unit (#375):
+                        -- positive = heading uphill (1.0 = straight up a
+                        -- ramp), negative = downhill. Same locomotion gate
+                        -- as moveSpeed, so a stationary unit reads 0.
+                        moveGrade = case HM.lookup uid (utsSimStates uts) of
+                            Just ss | isLocomoting (usState ss) →
+                                usMoveGrade ss
+                            _ → 0
                         -- True while the unit is in a fall KNOCKDOWN (a
                         -- self-timed getup is pending). Lets the survival
                         -- revive logic leave knockdowns to the movement
@@ -3054,12 +3169,12 @@ unitGetInfoFn env = do
                         knockedDown = case HM.lookup uid (utsSimStates uts) of
                             Just ss → maybe False (const True) (usGetUpAt ss)
                             _       → False
-                    pure (inst, mDef, moveSpeed, knockedDown)
+                    pure (inst, mDef, moveSpeed, moveGrade, knockedDown)
             case mPair of
                 Nothing → do
                     Lua.pushnil
                     return 1
-                Just (inst, mDef, moveSpeed, knockedDown) → do
+                Just (inst, mDef, moveSpeed, moveGrade, knockedDown) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
                     Lua.setfield (-2) "defName"
@@ -3093,6 +3208,8 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "animStart"
                     Lua.pushnumber (Lua.Number (realToFrac moveSpeed))
                     Lua.setfield (-2) "moveSpeed"
+                    Lua.pushnumber (Lua.Number (realToFrac moveGrade))
+                    Lua.setfield (-2) "moveGrade"
                     Lua.pushboolean knockedDown
                     Lua.setfield (-2) "knockedDown"
                     -- equipmentClass is per-def, not per-instance. Only
@@ -4558,12 +4675,19 @@ unitGetInventoryFn env = do
                         -- callers (e.g. inventory tooltip) would show
                         -- "100%" for items like canteens / rations that
                         -- conceptually don't have these qualities.
-                        case mDef >>= idQualitySpec of
-                            Just _ → do
+                        case mDef of
+                            Just d | Just _ ← idQualitySpec d → do
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (iiQuality inst)))
                                 Lua.setfield (-2) "quality"
-                            Nothing → pure ()
+                                -- Named tier (#345), e.g. "excellent" at
+                                -- 95% — the tooltip suffix / name reader.
+                                case qualityTierLabel d (iiQuality inst) of
+                                    Just tier → do
+                                        Lua.pushstring (TE.encodeUtf8 tier)
+                                        Lua.setfield (-2) "qualityTier"
+                                    Nothing → pure ()
+                            _ → pure ()
                         case mDef >>= idConditionSpec of
                             Just _ → do
                                 Lua.pushnumber

@@ -110,6 +110,15 @@ def bootstrap(port: int, with_resources: bool = False) -> None:
         # its wander doesn't fight the commanded speeds.
         send(port, "engine.loadScript('scripts/unit_stats.lua', 0.1); return 'ok'")
         send(port, "engine.loadScript('scripts/unit_resources.lua', 0.2); return 'ok'")
+    else:
+        # Move mode exercises the movement ENGINE in isolation, same
+        # philosophy as the unit_ai neutralisation below. The auto-loaded
+        # resource tick would otherwise exhaust-collapse a unit on the
+        # sustained-uphill course (#375: comfort pace drains on a grade by
+        # design — that's the stamina mode's check, not move mode's).
+        send(port,
+             "pcall(function() require('scripts.unit_resources').update = "
+             "function() end end); return 'res-off'")
     # unit_ai is auto-loaded at engine boot and its update() tick wanders
     # every unit headless — which fights the moveTo command under test. We
     # want to exercise the movement ENGINE in isolation, so neutralise the
@@ -128,10 +137,13 @@ def sample(port: int, uid: int):
     lua = (
         f"local i=unit.getInfo({uid}); if not i then return 'DEAD' end; "
         f"return {{x=i.gridX,y=i.gridY,z=i.gridZ,anim=i.currentAnim,"
-        f"moveSpeed=i.moveSpeed,"
+        f"moveSpeed=i.moveSpeed,grade=i.moveGrade,"
         f"act=unit.getActivity({uid}),pose=unit.getPose({uid})}}"
     )
-    return send_json(port, lua)
+    s = send_json(port, lua)
+    if isinstance(s, dict):
+        s["t"] = time.time()
+    return s
 
 
 def wait_world_ready(port: int) -> bool:
@@ -193,6 +205,39 @@ def check_ramp(course, samples, reached, moved, poses, acts):
             ("WALKED up the ramp (no climb pose)", not climbed)]
 
 
+def check_ramp_climb(course, samples, reached, moved, poses, acts):
+    """#375: sustained uphill is slower than flat, and the engine reports
+    the grade. Per-segment horizontal speeds from consecutive samples
+    (timestamps ride on each sample), classified by the segment midpoint:
+    flat approach (x < 2.5) vs fully on the staircase (3.2 <= x <= 8.8)."""
+    climbed = "climbing" in poses
+    on_top = reached and samples[-1].get("z") == course["goalz"]
+    flat_v, up_v, up_grades = [], [], []
+    for a, b in zip(samples, samples[1:]):
+        dt = b.get("t", 0) - a.get("t", 0)
+        if dt <= 0:
+            continue
+        v = dist(a["x"], a["y"], b["x"], b["y"]) / dt
+        if v < 0.01:
+            continue  # stationary segment (settling / arrived), not gait
+        midx = (a["x"] + b["x"]) / 2
+        if midx < 2.5:
+            flat_v.append(v)
+        elif 3.2 <= midx <= 8.8:
+            up_v.append(v)
+            up_grades.append(a.get("grade") or 0)
+    avg = lambda xs: sum(xs) / len(xs) if xs else 0.0
+    print(f"segment speeds: flat={avg(flat_v):.3f} t/s ({len(flat_v)} seg), "
+          f"uphill={avg(up_v):.3f} t/s ({len(up_v)} seg)")
+    slower = bool(flat_v and up_v) and avg(up_v) < 0.75 * avg(flat_v)
+    graded = any(g > 0.5 for g in up_grades)
+    return [("reached the summit", on_top),
+            ("WALKED the whole staircase (no climb pose)", not climbed),
+            ("engine reports uphill grade on the ascent (moveGrade > 0.5)",
+             graded),
+            ("ascent meaningfully slower than the flat approach", slower)]
+
+
 VALIDATORS = {
     "flat": check_flat,
     "corner_trap": check_corner_trap,
@@ -202,10 +247,14 @@ VALIDATORS = {
     "ramp": check_ramp,
     "ramp_detour": check_ramp,
     "ramp_choice": check_ramp,
+    "ramp_climb": check_ramp_climb,
 }
 # Expected goal z per elevation course (arena base is 0).
 GOAL_Z = {"cliff": 3, "cliff1": 1, "fall_edge": 0, "ramp": 1, "ramp_detour": 1,
-          "ramp_choice": 1}
+          "ramp_choice": 1, "ramp_climb": 6}
+# Courses needing a longer sample window than the 14 s default (the
+# ramp_climb ascent is ~2x slower than flat by design, #375).
+COURSE_SECONDS = {"ramp_climb": 45.0}
 
 
 def speed_of(port: int, fn: str, uid: int) -> float:
@@ -239,15 +288,19 @@ def run_stamina_mode(port: int, args) -> int:
         print("FAIL: arena world never became queryable", file=sys.stderr)
         return 2
 
-    def phase(label: str, fn: str, spawn_xy, goal_xy):
+    def phase(label: str, fn: str, spawn_xy, goal_xy, secs: int = 6):
         uid = int(float(send(port,
             f"return unit.spawn('{args.unit}', {spawn_xy[0]}, {spawn_xy[1]})")))
+        # Pin the randomized speed stats so comfort (the stamina-neutral
+        # equilibrium every check hangs off) is the same every run.
+        send(port, f"unit.setStat({uid}, 'endurance', 1.0); return 'ok'")
+        send(port, f"unit.setStat({uid}, 'agility', 1.0); return 'ok'")
         time.sleep(1.5)
         v = speed_of(port, fn, uid)
         send(port, f"unit.moveTo({uid}, {goal_xy[0]}, {goal_xy[1]}, {v}); return 'go'")
         start = stamina_of(port, uid)
         trail = []
-        for _ in range(6):
+        for _ in range(secs):
             time.sleep(1.0)
             s = sample(port, uid)
             trail.append((stamina_of(port, uid),
@@ -269,12 +322,34 @@ def run_stamina_mode(port: int, args) -> int:
     sprint_drains = (s0 - s1) > 1.5
     sprint_running = any(act == "running" for _, _, act in strail)
 
+    # Sustained uphill (#375): the SAME comfort pace that held stamina
+    # steady on flat ground drains it on the ramp staircase (the engine
+    # reports the grade; the drain scales exertion by it). Built after
+    # the flat phases — the staircase (x=3..12, y=-3..3) doesn't overlap
+    # their lanes, but there's no point having units path past fresh
+    # terrain edits. The min over the trail is the check: a fully spent
+    # pool collapses the unit and regen kicks in, which would mask an
+    # end-only comparison.
+    ramp = send_json(port,
+        "return require('scripts.movement_arena').buildCourse('ramp_climb')")
+    uphill_ok = isinstance(ramp, dict)
+    if uphill_ok:
+        _, vu, u0, _, utrail = phase(
+            "UPHILL", "comfort",
+            (ramp["sx"] + 0.5, ramp["sy"] + 0.5),
+            (ramp["gx"] + 0.5, ramp["gy"] + 0.5), secs=25)
+        uphill_drains = (u0 - min(st for st, _, _ in utrail)) > 2.0
+    else:
+        uphill_drains = False
+
     print("\n--- checks ---")
     checks = [
         ("comfort cruise holds stamina ~steady", cruise_steady),
         ("unit actually moved at comfort", cruise_moving),
         ("sprint drains stamina", sprint_drains),
         ("sprint plays the running gait", sprint_running),
+        ("uphill course built", uphill_ok),
+        ("comfort pace UPHILL drains stamina (#375)", uphill_drains),
     ]
     all_ok = True
     for label, ok in checks:
@@ -293,12 +368,16 @@ def main() -> int:
     ap.add_argument("--speed", type=float, default=None,
                     help="override travel speed (default: the unit's "
                          "sustainable comfort speed)")
-    ap.add_argument("--seconds", type=float, default=14.0)
+    ap.add_argument("--seconds", type=float, default=None,
+                    help="sample window (default 14, or a per-course "
+                         "override for slow courses like ramp_climb)")
     ap.add_argument("--port", type=int, default=9134)
     ap.add_argument("--list", action="store_true",
                     help="list available courses and exit")
     args = ap.parse_args()
     args.speed_explicit = args.speed is not None
+    if args.seconds is None:
+        args.seconds = COURSE_SECONDS.get(args.course, 14.0)
 
     proc = boot(args.port)
     try:
@@ -340,6 +419,12 @@ def main() -> int:
         # the height-aware-climb / pullup checks.
         if args.course in ("cliff", "cliff1"):
             send(args.port, f"unit.setSkill({uid}, 'climbing', 100); return 'ok'")
+        # ramp_climb times the ascent against the flat approach — pin the
+        # randomized speed stats so comfort speed (and thus the course's
+        # total duration) is deterministic across runs.
+        if args.course == "ramp_climb":
+            send(args.port, f"unit.setStat({uid}, 'endurance', 1.0); return 'ok'")
+            send(args.port, f"unit.setStat({uid}, 'agility', 1.0); return 'ok'")
 
         time.sleep(1.5)  # settle onto the ground before moving
 

@@ -38,7 +38,8 @@ import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Pathing.Cost (stepCost, lookupTerrainZ, isCliffStep
-                         , materialFactor, materialDetour, PathingConfig(..))
+                         , materialFactor, materialDetour
+                         , slopeGrade, slopeSpeedFactor, PathingConfig(..))
 import Unit.Pathing.AStar (localAStar, defaultMaxRadius)
 import World.Material (MaterialRegistry)
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor, gravity, metresPerZ)
@@ -391,7 +392,13 @@ tickUnit pc reg now dt mWtd stats us =
         -- pin xy at the start position for the whole transition.
         -- handleTransitionExpiry handles the landing snaps + the
         -- post-fall outcome routing (walk / collapse / kill).
-        us2 = tickPullup now stats (tickFallZ now (tickClimbZ now stats us1))
+        us2' = tickPullup now stats (tickFallZ now (tickClimbZ now stats us1))
+        -- Clear last tick's slope grade (#375) so a unit that stops
+        -- stepping (arrived, climbing, drinking, ...) doesn't keep
+        -- reporting stale uphill exertion to the stamina drain. The
+        -- stepping path below stamps the fresh value. Conditional so
+        -- the common flat/idle case doesn't allocate a record update.
+        us2 = if usMoveGrade us2' ≡ 0 then us2' else us2' { usMoveGrade = 0 }
     in case usState us2 of
         -- Stationary anim states block movement.
         Drinking            → us2
@@ -871,10 +878,24 @@ stepTowardSubGoal pc reg now dt mWtd stats us mt (gx, gy) =
         matSlow = case mWtd of
             Just wtd → materialFactor reg wtd (floor (usRealX us)) (floor (usRealY us))
             Nothing  → 1.0
-        step = (effSpeed / matSlow) * realToFrac dt
+        -- Slope grade under the unit's feet (#375): walking up a ramp's
+        -- fall line scales speed down (steeper heading = slower),
+        -- downhill up slightly. Same call-site pattern as the material
+        -- factor above — routing already charges pcRampFactor for the
+        -- climb; this makes the traversal itself cost time. The grade is
+        -- stamped onto the sim state so the Lua stamina drain can tax
+        -- sustained uphill travel (getInfo's moveGrade).
+        grade = case mWtd of
+            Just wtd | dist > 1e-6 →
+                slopeGrade wtd (floor (usRealX us)) (floor (usRealY us))
+                           (usGridZ us) (dx / dist, dy / dist)
+            _ → 0
+        step = (effSpeed * slopeSpeedFactor pc grade / matSlow)
+             * realToFrac dt
     in if dist ≤ max step arrivalEpsilon
        then arriveAtSubGoal stats us mt (gx, gy) mWtd
-       else moveToward pc reg now stats us mt mWtd dx dy dist step
+       else moveToward pc reg now stats (us { usMoveGrade = grade })
+                       mt mWtd dx dy dist step
 
 -- | Top speed (tiles/sec) of a unit dragging itself along on a maimed
 --   body. Slow enough to read as a crawl; the injury speed-multiplier

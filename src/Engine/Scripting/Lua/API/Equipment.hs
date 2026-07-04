@@ -29,7 +29,7 @@ import Equipment.Types
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
                    ItemBuff(..), ItemContainer(..),
                    ItemManager(..), lookupItemDef, itemMatches,
-                   itemContentsSig, itemTotalWeight)
+                   itemContentsSig, itemTotalWeight, qualityTierLabel)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
                    UnitDef(..), StatModifier(..))
 import Unit.Stats (applyItemBuffs)
@@ -361,12 +361,18 @@ equipmentGetLoadoutFn env = do
                         -- canteens / rations don't show "100%" they
                         -- never had.
                         let mDef = lookupItemDef (iiDefName inst) itemMgr
-                        case mDef >>= idQualitySpec of
-                            Just _ → do
+                        case mDef of
+                            Just d | Just _ ← idQualitySpec d → do
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (iiQuality inst)))
                                 Lua.setfield (-2) "quality"
-                            Nothing → pure ()
+                                -- Named tier (#345), e.g. "excellent".
+                                case qualityTierLabel d (iiQuality inst) of
+                                    Just tier → do
+                                        Lua.pushstring (TE.encodeUtf8 tier)
+                                        Lua.setfield (-2) "qualityTier"
+                                    Nothing → pure ()
+                            _ → pure ()
                         case mDef >>= idConditionSpec of
                             Just _ → do
                                 Lua.pushnumber
@@ -462,11 +468,17 @@ pushItemInstance inst itemMgr = do
     -- items like canteens / rations don't have these qualities and
     -- shouldn't show "100%" in tooltips.
     let mDef = lookupItemDef (iiDefName inst) itemMgr
-    case mDef >>= idQualitySpec of
-        Just _ → do
+    case mDef of
+        Just d | Just _ ← idQualitySpec d → do
             Lua.pushnumber (Lua.Number (realToFrac (iiQuality inst)))
             Lua.setfield (-2) "quality"
-        Nothing → pure ()
+            -- Named tier (#345), e.g. "excellent" at 95%.
+            case qualityTierLabel d (iiQuality inst) of
+                Just tier → do
+                    Lua.pushstring (TE.encodeUtf8 tier)
+                    Lua.setfield (-2) "qualityTier"
+                Nothing → pure ()
+        _ → pure ()
     case mDef >>= idConditionSpec of
         Just _ → do
             Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))

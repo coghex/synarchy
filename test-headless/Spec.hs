@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
+import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
@@ -42,6 +43,7 @@ import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Craft.Execute as CraftExecute
+import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
@@ -85,6 +87,7 @@ main = hspec $ do
     describe "Unit.NightPerception" NightPerception.spec
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec
+    describe "Item.QualityTier" ItemQualityTier.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "World.CursorInfo" CursorInfo.spec
@@ -101,6 +104,7 @@ main = hspec $ do
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Craft.Execute" CraftExecute.spec
+    describe "Craft.Bills" CraftBills.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec

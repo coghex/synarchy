@@ -41,6 +41,8 @@ module Unit.Pathing.Cost
     , lookupSurfaceMaterial
     , materialFactor
     , materialDetour
+    , slopeGrade
+    , slopeSpeedFactor
     , isCliffStep
     -- * Tunables (loaded from config/pathing.yaml; see "Unit.Pathing.Config")
     , PathingConfig(..)
@@ -229,6 +231,52 @@ materialDetour
     → Bool
 materialDetour pc reg wtd (dgx, dgy) =
     materialFactor reg wtd dgx dgy ≥ 1 + pcMaterialReplanMargin pc
+
+-- | Signed grade of the ground under a moving unit's feet, given its
+--   normalized heading (#375). Positive = heading uphill, negative =
+--   heading downhill, 0 = flat ground / no slope data / heading across
+--   the slope. Magnitude is the heading's component along the slope's
+--   fall line, so a straight ascent reads 1.0 and a diagonal traverse
+--   proportionally less — "steeper = slower" falls out of the dot
+--   product (every walkable ramp is 1 z per tile by construction; the
+--   only thing that varies is how directly the unit takes it).
+--
+--   The slope bits mark which cardinal neighbours are 1 z BELOW the
+--   tile, so the downhill direction is the (normalized) sum of the set
+--   bits' vectors. Degenerate multi-bit tiles whose bit vectors cancel
+--   (e.g. a 1-tile crest ramping down both E and W) read as flat.
+slopeGrade
+    ∷ WorldTileData
+    → Int → Int → Int   -- tile under the unit's feet (gx, gy, z)
+    → (Float, Float)    -- normalized heading (tile-grid frame)
+    → Float
+slopeGrade wtd gx gy z (hx, hy) =
+    case lookupSlopeAt wtd gx gy z of
+        Nothing   → 0
+        Just bits →
+            let -- bit 0 = N, 1 = E, 2 = S, 3 = W (see lookupSlopeAt);
+                -- N is -y in the tile grid, matching isCliffStep.
+                dx = (if testBit bits 1 then 1 else 0)
+                   + (if testBit bits 3 then -1 else 0)
+                dy = (if testBit bits 2 then 1 else 0)
+                   + (if testBit bits 0 then -1 else 0)
+                len = sqrt (dx * dx + dy * dy) ∷ Float
+            in if len < 0.001
+               then 0
+               else negate ((hx * dx + hy * dy) / len)
+
+-- | Traversal-speed multiplier for a given signed grade (#375):
+--   uphill scales speed down by `pcUphillSpeedPenalty` × grade,
+--   downhill scales it up by `pcDownhillSpeedBonus` × grade. Floored
+--   at 0.1× so no tunable combination can stop a unit dead mid-slope
+--   (mirrors the `materialFactor` floor). This is the speed twin of
+--   the `pcRampFactor` ROUTING charge — the planner already prefers
+--   flatter routes; this makes actually walking the grade cost time.
+slopeSpeedFactor ∷ PathingConfig → Float → Float
+slopeSpeedFactor pc g
+    | g > 0     = max 0.1 (1 - pcUphillSpeedPenalty pc * g)
+    | g < 0     = 1 + pcDownhillSpeedBonus pc * negate g
+    | otherwise = 1
 
 -- | Is the step from src to dst a cliff that needs climbing (vs a
 --   walkable slope)?

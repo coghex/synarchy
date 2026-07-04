@@ -72,6 +72,8 @@ The `dev` flag enables Vulkan validation layers, address sanitizer on macOS, and
 
 The executable is built with `-rtsopts`, so RTS behavior can be inspected and tuned at run time without a rebuild — e.g. append `+RTS -s` to a `--dump` run for a GC/allocation summary on stderr, or experiment with `-N<n>` / `-A<size>`. The baked-in default remains `-N -A128M`.
 
+Cost-centre profiling uses the `profile` flag (`-fprof-late` on top of the prod `-O2`): `cabal build exe:synarchy --enable-profiling -f profile --builddir=dist-prof`, then run with `+RTS -p -RTS`. **Must add `-N1`** (`+RTS -N1 -p -RTS`) — the baked-in default `-N` (multi-capability) segfaults the GHC 9.12.2 profiled RTS when combined with this codebase's `parListChunk`-sparked worldgen parallelism (crash inside `pushCostCentre`, see `docs/history/worldgen_timeline_profile_2026-07.md`). `-N1` also loses the ~6.9× parallel speedup on top of profiling's own overhead, so a profiled generation run takes minutes, not seconds. **Don't drive it with `--dump`** — its `waitForInit` watchdog has a hardcoded budget sized for normal prod throughput and will fire mid-`buildTimeline`, at which point `runDump`'s timeout path force-kills every thread (`shutdownThread`'s fixed 10s grace, then `killThread`) and can truncate the profile without any obvious sign in the output. Use `--headless` instead: its main loop has no watchdog of its own, so `world.init` + `world.waitForInit(<seconds>)` over the debug-console TCP lets *you* pick the timeout (re-issue with a fresh budget if it elapses — the engine keeps working regardless), and `engine.quit()` once it reports done triggers a normal, non-killed shutdown that writes a trustworthy final `.prof`. Full recipe in `docs/history/worldgen_timeline_profile_2026-07.md`.
+
 ## Language & Conventions
 
 - **Haskell with GHC2024**, cabal 3.16
@@ -367,8 +369,25 @@ construction machinery (materials + build progress). Lua surface:
 (nearest BUILT station on the active page offering op), and
 `craft.executeAt(uid, recipeId, bid)` — craft.execute semantics gated
 on a Built station offering the recipe's station kind with the unit on
-or adjacent to the footprint (Chebyshev ≤ 1). The craft AI/bill layer
-is #329.
+or adjacent to the footprint (Chebyshev ≤ 1).
+
+Craft bills (#329) are per-station standing orders driving production:
+`craft.addBill(bid, recipeId[, count])` (count omitted/<1 = repeat
+forever) validates the station offers the recipe's operation and
+returns a bill id; `craft.getBill(s)`/`cancelBill` are the queue
+surface (UI = #330), `claimBill(billId, uid, timeout)` /
+`releaseBill` / `addBillProgress` / `completeBillCycle` the worker
+lifecycle. The queue lives per world page (`Craft.Bills`, engine-side
+atomic claims — no Lua claim registry) and persists in saves (v70).
+The `craft_job` acolyte action works bills end to end: source inputs +
+fuel (inventory → ground → technomule → cargo storage), stand beside
+the station, pour skill-scaled work in, `craft.executeAt` (returns the
+fresh outputs' instance ids on success), drop exactly those instances
+at the station (`unit.dropItemById`; `unit.dropItemToGround` is the
+first-match-by-def sibling), grant trade-skill XP (recipe `skill` tag,
+default smithing — feeds the Smith role #265). Turnkey harness:
+**`python3 tools/craft_bill_probe.py`** — the #329 gate (backend verbs
++ the AI loop + the knowledge gate).
 
 A `skill`-tagged recipe sets output `iiQuality` deterministically from
 the crafter (#343): the skill level, blended 70/30 with the knowledge

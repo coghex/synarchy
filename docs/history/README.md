@@ -21,6 +21,13 @@ the live code and the agent memory notes instead.
   independently. The "pure pipeline refactor" it scoped was deemed
   largely unnecessary.
 
+- **`worldgen_timeline_profile_2026-07.md`** — GHC cost-centre profile of the
+  worldgen setup/timeline phase (2026-07-03, issue #448). Not superseded —
+  the dominant cost centre (`applyTimelineChunk`'s per-chunk replay loop)
+  and the `-N1` profiling-crash workaround are still current; the
+  cross-chunk border-recomputation angle it identifies is tracked as its
+  own follow-up (#500).
+
 The active river design brief (partially realised in
 `src/World/River/Graph.hs`) was moved up to `docs/river_rework.md`, not
 here — it is design reference, not a superseded audit.

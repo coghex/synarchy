@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Crafting probe (#325 + #326 + #343 + #327) — catalogue, execute,
-stations, quality, smelting.
+"""Crafting probe (#325 + #326 + #343 + #327 + #328) — catalogue, execute,
+stations, quality, smelting, fabrication.
 
 Boots a headless engine on a flat arena, loads defs + data/recipes +
 data/buildings, spawns an acolyte, then checks the craft.* Lua API
@@ -34,6 +34,11 @@ end-to-end:
      built furnace (ore + coal consumed, 4 bars out), short-fuel
      refusal leaving the pantry untouched, and the bronze pair
      (copper + tin chunks → bronze bars).
+  8. Fabrication tier (#328): the shipped data/recipes/fabrication.yaml
+     set — all five recipes in the catalogue, shapes for a skill-tagged
+     tool recipe and an untagged stock recipe, each executed at the
+     built workbench (bars consumed, tool/stock produced), and the
+     skill-tagged tools carry crafter quality like the dagger (#343).
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
@@ -488,6 +493,60 @@ def main():
               and count_item(port, uid, "bituminous_coal_chunk") == 0)
         passed = check(passed, ok,
                        "furnace smelts bronze: copper+tin+coal -> 4 bars", msg)
+
+        # --- 8. Fabrication tier (#328) ---
+        names8 = jget(port, "return craft.getNames()")
+        fabs = {"forge_pick_steel", "forge_shovel_steel", "forge_axe_steel",
+                "forge_steel_plate", "forge_steel_hardware"}
+        ok = isinstance(names8, list) and fabs <= set(names8)
+        passed = check(passed, ok, "all five fabrication recipes in the catalogue",
+                       sorted(fabs - set(names8)) if isinstance(names8, list)
+                       else names8)
+        r = jget(port, "return craft.get('forge_axe_steel')")
+        ok = (isinstance(r, dict) and r.get("station") == "forge"
+              and r.get("skill") == "smithing"
+              and r.get("inputs") == [{"item": "steel_bar", "count": 2}]
+              and r.get("outputs") == [{"item": "axe_steel", "count": 1}])
+        passed = check(passed, ok, "axe shape (2 bars -> axe, smithing-tagged)", r)
+        r = jget(port, "return craft.get('forge_steel_plate')")
+        ok = (isinstance(r, dict) and r.get("station") == "forge"
+              and "skill" not in r
+              and r.get("inputs") == [{"item": "steel_bar", "count": 1}]
+              and r.get("outputs") == [{"item": "steel_plate", "count": 2}])
+        passed = check(passed, ok, "plate shape (1 bar -> 2 plate, untagged)", r)
+
+        def fab_at(recipe_id, item_name, bars_needed, out_count):
+            send(port, f"for i=1,{bars_needed} do unit.addItem({uid},'steel_bar') end; "
+                       f"return 'ok'")
+            bars_before = count_item(port, uid, "steel_bar")
+            out_before = count_item(port, uid, item_name)
+            ok_e, msg = execute_at(port, uid, recipe_id, bid_w)
+            ok = (ok_e and count_item(port, uid, "steel_bar") == bars_before - bars_needed
+                  and count_item(port, uid, item_name) == out_before + out_count)
+            return ok, msg
+
+        for recipe_id, item_name, bars_needed, out_count in [
+                ("forge_pick_steel", "pick_steel", 2, 1),
+                ("forge_shovel_steel", "shovel_steel", 2, 1),
+                ("forge_axe_steel", "axe_steel", 2, 1),
+                ("forge_steel_plate", "steel_plate", 1, 2),
+                ("forge_steel_hardware", "steel_hardware", 1, 4)]:
+            ok, msg = fab_at(recipe_id, item_name, bars_needed, out_count)
+            passed = check(passed, ok,
+                           f"workbench fabricates {item_name} ({bars_needed} bar(s) -> {out_count})",
+                           msg)
+
+        # Skill-tagged tools carry crafter quality like the dagger (#343);
+        # smithing is already set to 55 from phase 6.
+        before_ids = {d["id"] for d in instances_of(port, uid, "axe_steel")}
+        send(port, f"unit.addItem({uid},'steel_bar'); "
+                   f"unit.addItem({uid},'steel_bar'); return 'ok'")
+        ok_e, msg = execute_at(port, uid, "forge_axe_steel", bid_w)
+        fresh = [d for d in instances_of(port, uid, "axe_steel")
+                 if d["id"] not in before_ids]
+        ok = (ok_e and len(fresh) == 1 and abs(fresh[0]["qual"] - 55.0) < 0.01)
+        passed = check(passed, ok, "fabricated axe quality = smithing level 55",
+                       f"ok={ok_e} {msg} fresh={fresh}")
 
         print("\n" + ("ALL CRAFT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
