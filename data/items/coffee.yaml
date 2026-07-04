@@ -1,0 +1,33 @@
+items:
+  # First cooking content (#346): the coffee recipe's input and output.
+  - name: "coffee_grounds"
+    display_name: "Coffee Grounds"
+    sprite: "assets/textures/items/material/coffee_grounds.png"
+    weight: 0.06       # 60 g per unit — data/recipes/basic_food.yaml's dose
+    category: Materials
+
+  # Fluid item (#344) held in a container, like the canteen holds
+  # water. A pot rather than a mug — the recipe brews a full 1 L batch
+  # at once (the "deliberately open" container choice on #346).
+  # `default_fill` = `capacity` so a fresh-brewed pot arrives full,
+  # same convention as quinoa_sack.yaml. Always crafted anew rather
+  # than refilled — no recipe in this system refills an existing
+  # container instance (see forge_steel_dagger et al).
+  - name: "coffee_pot"
+    display_name: "Coffee Pot"
+    sprite: "assets/textures/items/supply/coffee_pot.png"
+    weight: 0.4        # empty ceramic pot; full mass = weight + 1 kg coffee
+    category: Supplies
+    container:
+      capacity: 1.0    # litres
+      holds: "coffee"
+      default_fill: 1.0
+    # Gates whether quality surfaces at all (Engine.Scripting.Lua.API.
+    # Units' pushItemInstance) so the brew's skill-derived quality (#343)
+    # and tier name (#345) actually reach the tooltip. The range itself
+    # is moot — brew_coffee is skill-tagged, so craftQuality always
+    # overwrites the roll (data/recipes/basic_food.yaml is the only spawn
+    # path for this item).
+    quality:
+      min: 30
+      max: 90

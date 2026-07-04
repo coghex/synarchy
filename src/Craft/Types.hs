@@ -83,6 +83,14 @@ data RecipeDef = RecipeDef
                                               --   craft.execute/executeAt
                                               --   refuse recipes with this
                                               --   set.
+    , rdOutputTemp ∷ !(Maybe Float)           -- ^ #344/#346: outputs spawn
+                                              --   tracked at this °C
+                                              --   instead of ambient (e.g.
+                                              --   100 for fresh-brewed
+                                              --   coffee, a hot bar off
+                                              --   the smelter). Nothing =
+                                              --   outputs spawn at ambient
+                                              --   (the historical default).
     } deriving (Show, Eq)
 
 -- | Everything a craft consumes: inputs plus the fuel line, if any.

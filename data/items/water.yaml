@@ -1,0 +1,14 @@
+items:
+  # Discrete recipe-input abstraction for fluid ingredients (#346): a
+  # nominal 1 L lump, consumed like any other raw-material item (ore
+  # chunks, coal chunks) rather than drained from a carried canteen's
+  # fill. Canteens/rivers as a direct recipe source is deliberately
+  # deferred (per the #346 issue's open question) — this is the
+  # minimal input shape that fits the existing all-or-nothing
+  # craft.execute consumption model without new fill-draining recipe
+  # machinery.
+  - name: "water"
+    display_name: "Water"
+    sprite: "assets/textures/items/material/water.png"
+    weight: 1.0        # 1 L at water density
+    category: Materials

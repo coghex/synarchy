@@ -1,0 +1,30 @@
+buildings:
+  - name: "kitchen"
+    display_name: "Kitchen"
+    category: "Production"
+    description: "A hearth and counter. Runs cooking recipes — brew a pot of coffee, and future cuisine besides."
+    sprite: "assets/textures/buildings/kitchen/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"
+
+    # Worker-seconds at the solo rate — a lighter build than the
+    # furnace/workbench (same n^2-up-to-3-workers scaling).
+    build_work: 100.0
+
+    # Stone hearth + counter on light framing; granite from any
+    # dig/mine designation, wood from chop designations (#97),
+    # hardware from the spawn loadout or the furnace's own smelts.
+    materials:
+      granite_chunk:  4
+      wood_log:       2
+      steel_hardware: 2
+
+    # Staging space for craft inputs/fuel and outputs (kg), same
+    # convention as furnace/workbench.
+    storage_capacity: 100.0
+
+    # Work-station operations (#326): "cooking" is the first cooking
+    # recipe category (#346) — data/recipes/basic_food.yaml.
+    operations:
+      - cooking

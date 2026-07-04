@@ -76,6 +76,11 @@ units:
       # placed (construct_xp_per_piece). Feeds the derived Builder
       # role (#265).
       construction: { base: 25.0, range: 30.0 }
+      # Cooking: sets crafted-output quality for the cooking recipe tier
+      # (craft.execute, #343/#346), the same convention as smithing.
+      # Acolytes arrive as novice cooks — the portal kit is rations and
+      # a canteen, not a culinary tradition.
+      cooking: { base: 20.0, range: 15.0 }
       # Leap/grapple: acolytes arrive untrained — a lunge is a rare,
       # costly move only a skilled fighter pulls off, so these grow with
       # XP from a low base rather than starting combat-ready.
@@ -93,6 +98,11 @@ units:
     knowledge:
       bleed_control: { base: 50.0, range: 40.0 }
       infection_control: { base: 45.0, range: 40.0 }
+      # basic_cuisine gates the cooking recipe tier (data/recipes/
+      # basic_food.yaml, #346) the same way bleed_control gates the
+      # medical treatment flows — spawns known, level feeds output
+      # quality alongside the cooking skill (#343).
+      basic_cuisine: { base: 50.0, range: 40.0 }
 
     # 12-part humanoid body. Heights are metres above the foot,
     # calibrated for a 1.8m default body — taller spawns naturally

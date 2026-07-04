@@ -50,6 +50,8 @@ PROBES = [
      "checkRevive concussion-band hysteresis (#304)"),
     ("construction", "construction_probe.py", True,
      "construct_job AI end-to-end: claim/source/progress/place/stake/release (#96)"),
+    ("cooking", "cooking_probe.py", True,
+     "kitchen workshop + cooking skill/basic_cuisine + basic_food/coffee content (#346)"),
     ("craft", "craft_probe.py", True,
      "craft.* API: catalogue, execute, stations, quality, smelting (#325/#326/#343/#327)"),
     ("craft_bill", "craft_bill_probe.py", True,

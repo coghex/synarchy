@@ -28,6 +28,10 @@
 #              existing item instance) rather than craft.execute/
 #              executeAt, which refuse repair-tagged recipes. See
 #              data/recipes/repair.yaml.
+#   output_temp: optional °C (#344/#346) — outputs spawn with this
+#              tracked temperature instead of ambient (e.g. 100 for
+#              fresh-brewed coffee). Omitted = ambient, the historical
+#              default.
 #
 # Outputs spawn factory-new: condition + sharpness 100.
 recipes:

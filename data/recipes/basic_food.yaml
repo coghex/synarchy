@@ -1,0 +1,18 @@
+# Cooking tier (#346) — the first cooking content, run at the kitchen
+# (station operation "cooking", data/buildings/kitchen.yaml). Gated on
+# the basic_cuisine knowledge (data/units/acolyte.yaml), like the
+# medical knowledge gates (bleed_control/infection_control); output
+# quality is skill-derived (#343) and the pot spawns hot (#344).
+recipes:
+  - id: brew_coffee
+    name: "Brew Coffee"
+    station: cooking
+    skill: cooking
+    knowledge: basic_cuisine
+    inputs:
+      - item: water
+      - item: coffee_grounds
+    work: 15
+    outputs:
+      - item: coffee_pot
+    output_temp: 100

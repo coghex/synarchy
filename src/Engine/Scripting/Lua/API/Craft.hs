@@ -74,6 +74,7 @@ loadRecipeYamlFn env = do
                             , rdKnowledge = ryKnowledge d
                             , rdSkill     = rySkill d
                             , rdRepairAxis = toRepairAxis ⊚ ryRepairAxis d
+                            , rdOutputTemp = ryOutputTemp d
                             }
                     atomicModifyIORef' (recipeManagerRef env) $ \m →
                         (RecipeManager
@@ -124,6 +125,7 @@ pushRecipe d = do
     forM_ (rdKnowledge d)  $ putS "knowledge"
     forM_ (rdSkill d)      $ putS "skill"
     forM_ (rdRepairAxis d) $ \axis → putS "repairAxis" (repairAxisName axis)
+    forM_ (rdOutputTemp d) $ putN "outputTemp"
     Lua.newtable
     forM_ (zip [1..] (rdInputs d)) $ \(i, ing) → do
         pushIngredient ing
@@ -283,7 +285,8 @@ executeCraft env uid rid = do
             case mapM (resolve im) (rdOutputs recipe) of
                 Left err → return (Left err)
                 Right outs → do
-                    instances ← concat ⊚ mapM (rollOutputs env) outs
+                    instances ← concat
+                        ⊚ mapM (rollOutputs env (rdOutputTemp recipe)) outs
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         applyCraft recipe instances uid um
   where
@@ -549,9 +552,13 @@ pushBill bill = do
 --   from the def's spec here as the fallback for skill-less recipes;
 --   skill-tagged recipes overwrite it in applyCraft with the crafter-
 --   derived craftQuality (#343). Containers spawn at their default
---   fill, same as unit.addItem.
-rollOutputs ∷ EngineEnv → (RecipeIngredient, ItemDef) → IO [ItemInstance]
-rollOutputs env (ing, def) = replicateM (max 0 (riCount ing)) $ do
+--   fill, same as unit.addItem. @outputTemp@ is the recipe's
+--   rdOutputTemp (#344/#346) — Just sets a tracked spawn temperature
+--   (hot bar off the smelter, 100 °C fresh-brewed coffee), Nothing
+--   spawns at ambient (the historical default).
+rollOutputs ∷ EngineEnv → Maybe Float → (RecipeIngredient, ItemDef)
+            → IO [ItemInstance]
+rollOutputs env outputTemp (ing, def) = replicateM (max 0 (riCount ing)) $ do
     qual ← rollItemSpec (idQualitySpec def) (statRNGRef env)
     wght ← rollItemWeight def (statRNGRef env)
     iid  ← freshItemInstanceId env
@@ -567,9 +574,5 @@ rollOutputs env (ing, def) = replicateM (max 0 (riCount ing)) $ do
         , iiSharpness   = 100.0
         , iiContents    = []
         , iiInstanceId  = iid
-        -- At ambient for now — a recipe-declared output temperature
-        -- (hot bar off the smelter, 100 °C coffee) is the cooking
-        -- tier's slice (#344 provides the field + setters, #346 the
-        -- recipe schema hook).
-        , iiTemp        = Nothing
+        , iiTemp        = outputTemp
         }
