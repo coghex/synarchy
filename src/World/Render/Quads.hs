@@ -703,8 +703,9 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     ]
             _ → V.empty
 
-    -- Construction tool: anchor→hover rectangle preview, mirroring the
-    -- mine preview (per-z-level, unloaded chunks skipped). Drawn with the
+    -- Structure-piece designation preview (#403 — folded into the build
+    -- tool): anchor→hover rectangle, mirroring the mine preview
+    -- (per-z-level, unloaded chunks skipped). Drawn with the
     -- select-cursor texture so it reads as "about to be designated".
     let constructPreviewQuads = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
@@ -758,11 +759,14 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- every tool mode. The mode only adds its own hover/preview on top.
     let markerQuads = designQuads <> constructDesignQuads <> chopDesignQuads
     return $ case toolMode of
-        InfoTool      → markerQuads <> hoverQuads <> selectQuads
-        MineTool      → markerQuads <> hoverQuads <> minePreviewQuads
-        ConstructTool → markerQuads <> hoverQuads <> constructPreviewQuads
-        ChopTool      → markerQuads <> hoverQuads <> chopPreviewQuads
-        _             → markerQuads
+        InfoTool  → markerQuads <> hoverQuads <> selectQuads
+        MineTool  → markerQuads <> hoverQuads <> minePreviewQuads
+        -- #403: the build tool now drives construction designation too
+        -- (structure-piece rectangles), so it gets the same preview the
+        -- standalone construct tool used to.
+        BuildTool → markerQuads <> hoverQuads <> constructPreviewQuads
+        ChopTool  → markerQuads <> hoverQuads <> chopPreviewQuads
+        _         → markerQuads
 
 -- | Find the topmost Z that has a non-zero material in a column.
 --   This is the actual rendered surface — no trusting surface maps.

@@ -123,8 +123,6 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/ui/hud/tool_mine_selected.png")
     hud.texToolBuild           = engine.loadTexture("assets/textures/ui/hud/tool_build.png")
     hud.texToolBuildSelected   = engine.loadTexture("assets/textures/ui/hud/tool_build_selected.png")
-    hud.texToolConstruct       = engine.loadTexture("assets/textures/ui/hud/tool_construct.png")
-    hud.texToolConstructSelected = engine.loadTexture("assets/textures/ui/hud/tool_construct_selected.png")
     hud.texToolChop            = engine.loadTexture("assets/textures/ui/hud/tool_chop.png")
     hud.texToolChopSelected    = engine.loadTexture("assets/textures/ui/hud/tool_chop_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/ui/hud/utility/zoom_select.png")
@@ -375,12 +373,6 @@ function hud.createUI()
                 tooltip     = "Build tool",
             },
             {
-                name        = "tool_construct",
-                texDefault  = hud.texToolConstruct,
-                texSelected = hud.texToolConstructSelected,
-                tooltip     = "Construction designation tool",
-            },
-            {
                 name        = "tool_chop",
                 texDefault  = hud.texToolChop,
                 texSelected = hud.texToolChopSelected,
@@ -399,7 +391,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 5,   -- tool_default (the last item)
+        selectedIndex = 4,   -- tool_default (the last item)
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -411,16 +403,14 @@ function hud.createUI()
         onChange = function(index, itemName)
             world.setToolMode(hud.worldId, itemName)
             engine.logDebug("Tool mode changed to: " .. tostring(itemName))
-            -- Route to the build tool so it can show/hide its picker.
+            -- Route to the build tool so it can show/hide its picker
+            -- (#403: also owns construction designation — buildings +
+            -- structure pieces — absorbed from the former construct tool).
             local buildTool = require("scripts.build_tool")
             buildTool.onToolMode(itemName)
             -- Route to the mine tool so a pending anchor cancels.
             local mineTool = require("scripts.mine_tool")
             mineTool.onToolMode(itemName)
-            -- Route to the construction tool so it pops its picker on
-            -- entry and cancels a pending anchor on exit.
-            local constructTool = require("scripts.construct_tool")
-            constructTool.onToolMode(itemName)
             -- Route to the chop tool so a pending anchor cancels.
             local chopTool = require("scripts.chop_tool")
             chopTool.onToolMode(itemName)
@@ -431,26 +421,15 @@ function hud.createUI()
         end,
     })
 
-    -- Pass HUD context to the build tool so its popup knows where to
-    -- anchor itself and how to switch back to the default tool.
+    -- Pass the hud module reference to the build tool (read live: page /
+    -- worldId / selectDefaultTool all mutate outside setup(), same as the
+    -- mine/chop tools below). Also owns construction designation (#403).
     local buildTool = require("scripts.build_tool")
-    buildTool.setup({
-        page       = hud.world_page,
-        fbW        = hud.fbW,
-        fbH        = hud.fbH,
-        boxTexSet  = hud.boxTexSet,
-        menuFont   = hud.menuFont,
-        buttonSize = hud.baseSizes.buttonSize,
-        selectDefaultTool = hud.selectDefaultTool,
-    })
+    buildTool.setup({ hud = hud })
 
     -- Mine tool: needs the hud reference for worldId / current view.
     local mineToolMod = require("scripts.mine_tool")
     mineToolMod.setup({ hud = hud })
-
-    -- Construction designation tool (#95): same hud reference.
-    local constructToolMod = require("scripts.construct_tool")
-    constructToolMod.setup({ hud = hud })
 
     -- Chop designation tool (#97): same hud reference.
     local chopToolMod = require("scripts.chop_tool")

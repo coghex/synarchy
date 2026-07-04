@@ -1,0 +1,13 @@
+items:
+  # Foundation of the power epic (#357): a placeable storage node
+  # (#358). Factory-made like electric_motor/processing_unit — only
+  # condition degrades, no quality roll.
+  - name: "high_voltage_battery"
+    display_name: "High-Voltage Battery"
+    sprite: "assets/textures/items/material/high_voltage_battery.png"
+    weight: 15.0
+    category: Materials
+    make: factory
+    condition:
+      min: 100
+      max: 100

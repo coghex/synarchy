@@ -34,7 +34,7 @@
 -- cargo fetch ladder" scope note.
 --
 -- Pause and manual reorder are real backend features (Craft.Bills'
--- cbPaused / cbSeq, save v73) — see craft.setBillPaused /
+-- cbPaused / cbSeq, save v74) — see craft.setBillPaused /
 -- craft.reorderBill.
 --
 -- Recipes and bills both paginate (Prev/Next) rather than hard-cap,

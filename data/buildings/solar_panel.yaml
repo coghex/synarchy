@@ -1,0 +1,14 @@
+buildings:
+  # Foundation of the power epic (#357): a placeable generation node
+  # (#358), placed instantly out of inventory via power.placeNode —
+  # like the acolyte_portal, build_work defaults to 0 (instant-built,
+  # no materials gate) since the item being placed IS the finished
+  # object, not raw construction stock.
+  - name: "solar_panel"
+    display_name: "Solar Panel"
+    category: "Power"
+    description: "Generates power from sunlight. Output peaks at noon and drops to nothing overnight."
+    sprite: "assets/textures/buildings/solar_panel/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"

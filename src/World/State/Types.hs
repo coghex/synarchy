@@ -30,6 +30,7 @@ import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Chop.Types (ChopDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
+import Power.Types (PowerNodes, emptyPowerNodes)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import Item.Ground (GroundItems, emptyGroundItems)
@@ -128,6 +129,13 @@ data WorldState = WorldState
       --   thread with atomicModifyIORef' — claims resolve atomically
       --   without a queue round-trip. Persisted in saves
       --   (wpsCraftBills, v70).
+    , wsPowerNodesRef ∷ IORef PowerNodes
+      -- ^ Power-node registry (#358): placed solar-panel/battery source
+      --   and storage nodes (role + peak watts / capacity Wh), keyed by
+      --   their own id and referencing the BuildingId they ride on. Like
+      --   craft bills, no world-thread side effects, so the power.*
+      --   verbs mutate it directly with atomicModifyIORef'. Persisted in
+      --   saves (wpsPowerNodes, v73).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -163,6 +171,7 @@ emptyWorldState = do
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsChopDesignationsRef ← newIORef HM.empty
     wsCraftBillsRef ← newIORef emptyCraftBills
+    wsPowerNodesRef ← newIORef emptyPowerNodes
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -174,6 +183,7 @@ emptyWorldState = do
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
                         wsChopDesignationsRef wsCraftBillsRef
+                        wsPowerNodesRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

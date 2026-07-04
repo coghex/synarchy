@@ -98,11 +98,6 @@ local registry = {
     { name = "mine_tool",
       zoomBand = function() require("scripts.mine_tool").cancel() end },
 
-    -- Construction designation anchor (#95): same idempotent teardown
-    -- as the mine anchor, so a pending rectangle can't survive off-view.
-    { name = "construct_tool",
-      zoomBand = function() require("scripts.construct_tool").cancel() end },
-
     -- Chop designation anchor (#97): same idempotent teardown.
     { name = "chop_tool",
       zoomBand = function() require("scripts.chop_tool").cancel() end },
@@ -120,7 +115,10 @@ local registry = {
     -- mode, its ghost preview and click handling keep running off the
     -- world cursor regardless of the HUD view, consuming clicks in
     -- zoomed-out / fade-zone. exitPlacement() is idempotent (clearGhost
-    -- no-ops with no ghost; mode resets to "off").
+    -- no-ops with no ghost; mode resets to "off") — and since #403 folded
+    -- construction designation into this tool, it also drops any pending
+    -- structure-rectangle anchor (construction.clearAnchor), covering what
+    -- used to be the separate construct_tool teardown entry.
     { name = "build_tool_placement",
       zoomBand = function() require("scripts.build_tool").exitPlacement() end },
 
