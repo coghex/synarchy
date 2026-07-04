@@ -517,7 +517,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- standing-order queue (Craft.Bills): addBill / cancelBill /
   -- getBill / getBills are the queue surface (UI #330);
   -- claimBill / releaseBill / addBillProgress / completeBillCycle
-  -- are the craft AI's job lifecycle.
+  -- are the craft AI's job lifecycle. setBillPaused / reorderBill are
+  -- the #330 station panel's pause + manual-reorder controls.
   Lua.newtable
   registerLuaFunction "get"      (craftGetFn env)
   registerLuaFunction "getNames" (craftGetNamesFn env)
@@ -531,6 +532,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "releaseBill"       (craftReleaseBillFn env)
   registerLuaFunction "addBillProgress"   (craftAddBillProgressFn env)
   registerLuaFunction "completeBillCycle" (craftCompleteBillCycleFn env)
+  registerLuaFunction "setBillPaused"     (craftSetBillPausedFn env)
+  registerLuaFunction "reorderBill"       (craftReorderBillFn env)
   Lua.setglobal (Lua.Name "craft")
 
   -- Repair global (#301) — the policy layer on top of unit.repairItem

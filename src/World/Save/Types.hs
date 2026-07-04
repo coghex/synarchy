@@ -120,7 +120,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 72  -- v72: WorldPageSave gains trailing
+currentSaveVersion = 73  -- v73: CraftBill (nested in WorldPageSave's
+                         --      wpsCraftBills) gains trailing 'cbSeq'
+                         --      and 'cbPaused' (#330's manual-reorder
+                         --      + pause bill controls).
+                         -- v72: WorldPageSave gains trailing
                          --      'wpsCraftBills' (#329) — the per-world
                          --      craft-bill queue (station orders +
                          --      claim/progress state; Craft.Bills).
