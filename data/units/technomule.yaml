@@ -75,6 +75,14 @@ units:
       # restock once the foraging/fetch AI covers food).
       - { item: "rations",         count: 20 }
       - { item: "quinoa_sack",     count: 2 }
+      # Cooking depot too (#346): brew_coffee's raw ingredients. Neither
+      # has a production loop yet — water isn't drawn from a canteen/
+      # river source and coffee_grounds isn't farmed — so like the food
+      # depot above, this is the real shipped source until those land;
+      # fetch-from-mule (the same #96 sourcing ladder construct_job and
+      # craft_job already use) is how a kitchen gets restocked.
+      - { item: "water",           count: 20 }
+      - { item: "coffee_grounds",  count: 20 }
 
     # 8-part quadruped anchored to ~1.5 m shoulder height
     # (canine layout, scaled up).

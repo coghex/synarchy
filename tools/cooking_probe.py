@@ -10,13 +10,18 @@ data/buildings, spawns an acolyte, then checks:
      station/inputs/outputs/skill/knowledge/outputTemp; the acolyte def
      spawns with the cooking skill and basic_cuisine knowledge; the
      kitchen building offers the "cooking" operation.
-  2. All-or-nothing: short of one input (water) with the other on hand
+  2. Real source: the technomule's shipped starting_inventory carries a
+     water/coffee_grounds depot stock (#346), and unit.transferItemToUnit
+     — the same mule-fetch primitive construct_job/craft_job's sourcing
+     ladder uses — moves both onto the crafter, so ordinary play (not a
+     debug unit.addItem) can actually stock a kitchen.
+  3. All-or-nothing: short of one input (water) with the other on hand
      (coffee_grounds) is refused, pantry untouched.
-  3. Brew: at a built kitchen, water + coffee_grounds are consumed and a
+  4. Brew: at a built kitchen, water + coffee_grounds are consumed and a
      factory-new coffee_pot appears, already full (currentFill 1.0).
-  4. Quality (#343): the pot's quality tracks 0.7*cooking + 0.3*
+  5. Quality (#343): the pot's quality tracks 0.7*cooking + 0.3*
      basic_cuisine, same formula as every other skill-tagged recipe.
-  5. Temperature (#344/#346): the fresh pot reads 100 °C via
+  6. Temperature (#344/#346): the fresh pot reads 100 °C via
      unit.getItemTemp — the recipe's output_temp hook.
 
 Usage: python3 tools/cooking_probe.py [--port 9346]
@@ -199,21 +204,40 @@ def main():
         passed = check(passed, int(float(hit)) == bid,
                        "findStation('cooking') -> kitchen", hit)
 
-        # --- 2. All-or-nothing: coffee_grounds alone is short of water ---
+        # --- 2. Real source: the technomule depot, not a debug addItem ---
+        mule = int(float(send(port, "return unit.spawn('technomule', 5, 2)")))
+        if mule < 0:
+            sys.exit("technomule spawn failed")
+        time.sleep(0.5)
+        water_stock = count_item(port, mule, "water")
+        grounds_stock = count_item(port, mule, "coffee_grounds")
+        passed = check(passed, water_stock > 0 and grounds_stock > 0,
+                       "technomule ships a water/coffee_grounds depot",
+                       f"water={water_stock} grounds={grounds_stock}")
+        moved_grounds = send(port,
+            f"return unit.transferItemToUnit({mule}, {uid}, 'coffee_grounds')"
+            ).strip('"') == "true"
+        passed = check(passed, moved_grounds and count_item(port, uid, "coffee_grounds") == 1,
+                       "coffee_grounds fetched from the mule (real supply path)")
+
+        # --- 3. All-or-nothing: coffee_grounds alone is short of water ---
         # (the knowledge gate itself — refused when a crafter doesn't KNOW
         # the recipe's knowledge — is the generic mechanic craft_probe.py
         # already exercises; acolytes spawn already knowing basic_cuisine,
         # so there's no way to un-know it through the public API to
         # re-probe that same gate against this content specifically.)
-        send(port, f"unit.addItem({uid},'coffee_grounds'); return 'ok'")
         ok_e, msg = execute_at(port, uid, "brew_coffee", bid)
         untouched = count_item(port, uid, "coffee_grounds") == 1
         passed = check(passed, not ok_e and "missing" in msg
                        and "water" in msg and untouched,
                        "short water refused, coffee_grounds untouched", msg)
 
-        # --- 3. Brew ---
-        send(port, f"unit.addItem({uid},'water'); return 'ok'")
+        # --- 4. Brew ---
+        moved_water = send(port,
+            f"return unit.transferItemToUnit({mule}, {uid}, 'water')"
+            ).strip('"') == "true"
+        passed = check(passed, moved_water and count_item(port, uid, "water") == 1,
+                       "water fetched from the mule (real supply path)")
         send(port, f"unit.setSkill({uid}, 'cooking', 80); "
                    f"unit.setKnowledge({uid}, 'basic_cuisine', 60); return 'ok'")
         before_ids = {p["id"] for p in instances_of(port, uid, "coffee_pot")}
@@ -227,7 +251,7 @@ def main():
                        "brew consumes water+grounds, pot spawns full",
                        f"ok={ok_e} {msg} fresh={fresh}")
 
-        # --- 4. Quality (#343): 0.7*80 + 0.3*60 = 74 ---
+        # --- 5. Quality (#343): 0.7*80 + 0.3*60 = 74 ---
         if fresh:
             q = fresh[0]["qual"]
             ok = abs(q - 74.0) < 0.01
@@ -235,7 +259,7 @@ def main():
                            "cooking 80 + basic_cuisine 60 -> quality 74",
                            f"qual={q}")
             iid = fresh[0]["id"]
-            # --- 5. Temperature (#344/#346) ---
+            # --- 6. Temperature (#344/#346) ---
             # A little cooling happens between craft and query (the
             # world tick advances between round-trips), so allow a small
             # margin rather than pinning exactly 100 — well within it
