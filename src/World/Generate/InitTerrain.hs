@@ -63,9 +63,9 @@ type BorderedTerrainCache =
 
 -- | Plate-base (elevation, material) for every WRAPPED global
 --   coordinate ('wrapGlobalU' output) a chunk border can query, held
---   as a flat square indexed @(gx+halfW)*dim+(gy+halfW)@ (@dim = 2 *
---   halfW + 1@, @halfW@ the stored 'Int'). #500: every chunk's 44×44
---   bordered window ('computeChunkTimelinePipeline' below)
+--   as a flat, fully-packed array (@halfW@ the stored 'Int' —
+--   see 'lookupPlateBase' for the index scheme). #500: every chunk's
+--   44×44 bordered window ('computeChunkTimelinePipeline' below)
 --   independently recomputes 'elevationAtGlobal' for its border tiles,
 --   and adjacent chunks' 14-tile borders overlap heavily — each
 --   physical tile lands in ~3×3 neighbouring windows. Building this
@@ -76,42 +76,61 @@ type BorderedTerrainCache =
 --   A flat array, not a 'HM.HashMap': a first cut keyed on a
 --   @HashMap (Int,Int)@ turned out to cost more in hashing/boxing over
 --   ~30M border-tile lookups than it saved by deduplicating
---   'elevationAtGlobal' calls. O(1) array indexing has neither cost.
+--   'elevationAtGlobal' calls. O(1) array indexing has neither cost —
+--   and packing every entry (below), rather than a dense square with
+--   a wasted-but-simpler ~50% dead cells, halves the size that has to
+--   scale with world size in the first place (~134M entries at the
+--   UI's largest worldSize=1024, not ~268M).
 type PlateBaseCache = (Int, VU.Vector (Int, MaterialId))
 
+-- | Row width: 'wrapGlobalU' normalizes u (= gx − gy) into
+--   @[-halfW, halfW)@, and for any fixed v (= gx + gy, invariant under
+--   wrapping) exactly half of that canonical range shares u's parity
+--   with v (u + v = 2·gx is always even for genuine integer gx, gy) —
+--   so every row holds exactly @halfW@ physical tiles, no more, no
+--   fewer.
+packedRowWidth ∷ Int → Int
+packedRowWidth halfW = halfW
+
+-- | The smallest canonical u sharing v's parity — the first column's
+--   u value for v's row (see 'packedRowWidth').
+rowU0 ∷ Int → Int → Int
+rowU0 halfW v
+    | even (v + halfW) = negate halfW
+    | otherwise         = negate halfW + 1
+
 -- | Build the plate-base cache by direct index computation rather
---   than by replaying chunk-window loops: 'wrapGlobalU' always
---   normalizes u (= gx − gy) into @[-halfW, halfW)@, and v (= gx + gy)
---   is invariant under wrapping and excluded beyond the glacier
---   (@isBeyondGlacier@ is a strict @>@, so @[-halfW, halfW]@ inclusive
---   is kept) — so any (gx, gy) a chunk border can query, once wrapped,
---   falls inside this @dim × dim@ square with both checks passing.
---   Cells outside them (roughly half the square — u can range twice as
---   wide as its canonical window once gx and gy vary independently)
---   are unreachable by any real query, so they're filled with a cheap
---   placeholder instead of paying for 'elevationAtGlobal'.
+--   than by replaying chunk-window loops: iterate v (= gx + gy) over
+--   the non-glacier extent (@isBeyondGlacier@ is a strict @>@, so
+--   @[-halfW, halfW]@ inclusive is kept — never beyond it, so every
+--   packed cell is a genuine query target and none are wasted on a
+--   placeholder) and, within each row, k over @[0, halfW)@ mapping to
+--   u = rowU0 halfW v + 2·k — exactly the canonical, parity-matched u
+--   values 'wrapGlobalU' can ever produce for that v.
 buildPlateBaseCache ∷ Word64 → [TectonicPlate] → Int → PlateBaseCache
 buildPlateBaseCache seed plates worldSize =
     let w     = worldWidthTiles worldSize
         halfW = w `div` 2
-        dim   = 2 * halfW + 1
-        computeCell gx gy =
-            let u = gx - gy
-            in if u < negate halfW ∨ u ≥ halfW
-                  ∨ isBeyondGlacier worldSize gx gy
-               then (0, matGlacier)
-               else elevationAtGlobal seed plates worldSize gx gy
-        rows = [ VU.generate dim (\j → computeCell (i - halfW) (j - halfW))
-               | i ← [0 .. dim - 1]
-               ]
+        rowWidth = packedRowWidth halfW
+        rowFor v =
+            let u0 = rowU0 halfW v
+            in VU.generate rowWidth (\k →
+                   let u  = u0 + 2 * k
+                       gx = (u + v) `div` 2
+                       gy = (v - u) `div` 2
+                   in elevationAtGlobal seed plates worldSize gx gy)
+        rows = [ rowFor v | v ← [negate halfW .. halfW] ]
                    `using` parListChunk 8 rdeepseq
     in (halfW, VU.concat rows)
 
 -- | Look up a wrapped global coordinate in a 'PlateBaseCache'.
 lookupPlateBase ∷ PlateBaseCache → Int → Int → (Int, MaterialId)
 lookupPlateBase (halfW, vec) gx gy =
-    let dim = 2 * halfW + 1
-    in vec VU.! ((gx + halfW) * dim + (gy + halfW))
+    let u        = gx - gy
+        v        = gx + gy
+        rowWidth = packedRowWidth halfW
+        k        = (u - rowU0 halfW v) `div` 2
+    in vec VU.! ((v + halfW) * rowWidth + k)
 
 -- | Stage 1: plate-base → 'applyTimelineChunk' for one chunk's
 --   bordered region. Per-tile output is window-position-independent
