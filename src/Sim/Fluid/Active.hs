@@ -66,7 +66,6 @@ deactivateInPlace scs =
     in scs { scsActive      = False
            , scsActiveFluid = V.replicate sz Nothing
            , scsFluid       = bakedFluid
-           , scsGenFluid    = bakedFluid
            , scsEquilTicks  = 0
            }
 
