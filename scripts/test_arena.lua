@@ -152,9 +152,10 @@ function testArena.sendTextures(worldId)
         lavaHandle = engine.loadTexture("assets/textures/world/lava/lava.png")
         world.setTexture(worldId, "mat_tile_100", lavaHandle)
     end
-    -- 17 types × 4 variants = IDs 1..68 (keep in sync with
-    -- world_view.sendTexturesToWorld / world_manager.sendVegTextures).
-    for vegId = 1, 68 do
+    -- 18 four-variant types + tilled_soil's single variant (#333) =
+    -- IDs 1..77 (keep in sync with world_view.sendTexturesToWorld /
+    -- world_manager.sendVegTextures).
+    for vegId = 1, 77 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then
             world.setTexture(worldId, "veg_tile_" .. vegId, h)

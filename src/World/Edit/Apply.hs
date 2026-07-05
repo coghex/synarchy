@@ -171,6 +171,17 @@ applyEdit (WeSetSlope gx gy z bits) lc
            else
                let col' = col { ctSlopes = ctSlopes col VU.// [(i, bits)] }
                in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
+applyEdit (WeSetVeg gx gy z vegId) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let idx = columnIdx gx gy
+            col = lcTiles lc V.! idx
+            i   = z - ctStartZ col
+        in if i < 0 ∨ i ≥ VU.length (ctVeg col)
+           then lc                              -- z outside the column; no-op
+           else
+               let col' = col { ctVeg = ctVeg col VU.// [(i, vegId)] }
+               in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
 applyEdit (WeSetCell gx gy z mat) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =

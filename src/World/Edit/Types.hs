@@ -64,6 +64,17 @@ data WorldEdit
                                            --   at render via the palette.
     | WeClearStructure !Int !Int !Word8    -- ^ Remove the structure piece at
                                            --   (gx,gy,slot-tag).
+    | WeSetVeg !Int !Int !Int !Word8       -- ^ Set the vegetation id of the tile
+                                           --   at (gx,gy,z) (world.setVegAt).
+                                           --   Mirrors WeSetSlope: no generator
+                                           --   path emits arbitrary ids here
+                                           --   (computeChunkVegetation owns
+                                           --   natural placement) — this exists
+                                           --   so the till AI (#333) can author
+                                           --   'World.Vegetation.vegTilledSoil'
+                                           --   and have it survive chunk
+                                           --   eviction + save/load like every
+                                           --   other edit.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

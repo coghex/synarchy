@@ -245,6 +245,14 @@ echo 'return world.getTerrainAt(gx, gy)' | nc -w 2 localhost 8008
 # dig + construction (#96) corner-progress displays write
 echo 'return world.getSlopeAt(gx, gy)' | nc -w 2 localhost 8008
 
+# Surface tile vegetation id — what the till AI (#333) writes via
+# world.setVegAt; vegTilledSoil = 77
+echo 'return world.getVegAt(gx, gy)' | nc -w 2 localhost 8008
+
+# Plantable contract (#333) — true iff the tile is tilled soil. Farming's
+# planting tool (#335) should call this rather than compare getVegAt to 77.
+echo 'return world.isPlantable(gx, gy)' | nc -w 2 localhost 8008
+
 # Single tile fluid — returns: type(string), surface(int)
 echo 'return world.getFluidAt(gx, gy)' | nc -w 2 localhost 8008
 
@@ -515,6 +523,71 @@ Turnkey harnesses:
   bridging node still lets a consumer on either stub it joins land on
   the merged network, and `tickPowerNodes` actually discharges a
   battery under real consumer drain.
+
+### Testing tilling headless (#333)
+
+The farming epic's (#331) first step, unblocked once #332 (flora growth
+runtime) landed. `till_tool.lua` is a DF-style two-click designation
+tool mirroring `chop_tool.lua` (#97) / `mine_tool.lua`: first click
+anchors, second commits via `till.designate(pageId, x1, y1, x2, y2)`,
+filtered to tillable tiles **at the anchor's surface z** (a farmed field
+is flat ground, unlike chop's slope-spanning forest sweep) — no fluid
+on top, no flora instance on the tile, not already tilled. `till.*`
+otherwise mirrors `chop.*` exactly: `getDesignationAt` /
+`getDesignationCount` / `nearestDesignation` / `cancelDesignation` /
+`setDesignateTexture`. Completion goes through a new **generic**
+primitive rather than a till-specific one:
+`world.setVegAt(pageId, gx, gy, z, vegId)` (mirrors `world.setSlope`,
+read back with `world.getVegAt(gx, gy)`) sets the tile's vegetation id
+via the `WeSetVeg` edit-log entry, so it survives chunk eviction and
+save/load like every other edit. The till AI (`unit_ai.lua`'s
+`till_designation` action, mirroring `chop_designation`'s claim/walk/
+equip/work structure) flips a tilled tile to
+`World.Vegetation.vegTilledSoil` (id 77) on completion — one texture
+regardless of soil type or climate (the epic left "tilled texture by
+soil type" open; simplest default, variants are a follow-up). No tool
+item is required to till (also left open by the epic; a tiller item is
+a future speed-up, not a gate), and no new work skill/role — that's
+farm AI's (#336) job, not this designation layer's.
+
+Tilled soil's "reads as plantable" acceptance is a formal contract, not
+just a raw id: `World.Vegetation.isTilledSoil` is the one classification
+predicate (mirrors `isBarrenMaterial`/`isWetlandSoil`), exposed to Lua as
+`world.isPlantable(gx, gy)`. Farming's planting tool (#335) and any
+future consumer should call this rather than compare `world.getVegAt`'s
+raw id to 77 — a soil-type-variant tilled texture (the still-open
+follow-up above) only needs `isTilledSoil` to grow to match.
+
+No dedicated push/tiller animation exists yet — `standing_to_holding_
+shovel` / `shoveling` are the closest hand-tool-on-ground visual (same
+reuse-until-real-art convention as chop's pickaxe-swing stand-in for
+felling). **The dedicated push animation + tiller prop art is tracked
+separately as #517** (issue #333's "done when" text calls for it by
+name, so this mechanism-only landing is a deliberate partial close —
+see #517 for the exact frame paths/spec and the one-line
+`till_equip_anim`/`till_work_anim` wiring once the art exists). The
+toolbar icon, designation marker, and tilled-soil ground texture are
+functional placeholders (correct size/alpha conventions, matching
+sibling assets) pending real pixel art too.
+
+`unit_ai.lua` sits at Lua's 200-local-per-chunk ceiling: a new work
+action's helpers ride as fields on the existing `unitAi` module table
+(`unitAi.till.*`, plain assignments) rather than one top-level `local`
+per helper (the dig/chop convention) — adding even a couple of new
+top-level locals broke script loading (`too many local variables`).
+Any future action added the old way should check `grep -c "^local "
+scripts/unit_ai.lua` stays at parity with what's on disk before adding
+more top-level locals.
+
+Turnkey harness: **`python3 tools/till_probe.py`** — the #333 gate.
+Boots headless on a real generated world (natural ground cover needs
+worldgen) and asserts: designate / query / cancel; a fluid-covered tile
+is excluded from designation; the designation survives save → quit →
+fresh-restart → load; an acolyte (real unit_ai stack, no tool required)
+autonomously claims, walks to, and tills the designated tile —
+`world.getVegAt` confirms the flip and the designation clears;
+`world.isPlantable` is false before and true after; and a re-sweep of
+the same rectangle skips the now-tilled tile (idempotent).
 
 ### Flora growth runtime (#332)
 

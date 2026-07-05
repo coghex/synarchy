@@ -242,6 +242,14 @@ function game.onMouseDown(button, x, y)
         if chopTool.handleMouseDown(button, x, y) then
             return
         end
+
+        -- Till designation tool claims clicks while active (anchor /
+        -- commit / cancel), same left=designate / right=cancel split
+        -- and #154 gate.
+        local tillTool = require("scripts.till_tool")
+        if tillTool.handleMouseDown(button, x, y) then
+            return
+        end
     end
 
     if button == MOUSE_LEFT then
@@ -1020,6 +1028,11 @@ function game.onKeyDown(key)
     -- Chop tool's Esc cancels a pending designation anchor.
     local chopTool = require("scripts.chop_tool")
     if chopTool.handleKeyDown(key) then
+        return
+    end
+    -- Till tool's Esc cancels a pending designation anchor.
+    local tillTool = require("scripts.till_tool")
+    if tillTool.handleKeyDown(key) then
         return
     end
     -- ESC clears any active gameplay selection / cursor.

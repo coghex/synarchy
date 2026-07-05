@@ -57,6 +57,7 @@ import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.Construct
 import Engine.Scripting.Lua.API.Chop
+import Engine.Scripting.Lua.API.Till
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
@@ -479,6 +480,21 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setDesignateTexture" (chopSetDesignateTextureFn env)
   Lua.setglobal (Lua.Name "chop")
 
+  -- Till designation tool (#333). Mirrors the chop-designation API:
+  -- the tool drives setAnchor/clearAnchor/designate, the till AI drives
+  -- nearestDesignation/getDesignationAt/cancelDesignation (claims are
+  -- Lua-side, like dig/chop jobs — no engine job status).
+  Lua.newtable
+  registerLuaFunction "setAnchor"           (tillSetAnchorFn env)
+  registerLuaFunction "clearAnchor"         (tillClearAnchorFn env)
+  registerLuaFunction "designate"           (tillDesignateFn env)
+  registerLuaFunction "cancelDesignation"   (tillCancelDesignationFn env)
+  registerLuaFunction "getDesignationAt"    (tillGetDesignationAtFn env)
+  registerLuaFunction "getDesignationCount" (tillGetDesignationCountFn env)
+  registerLuaFunction "nearestDesignation"  (tillNearestDesignationFn env)
+  registerLuaFunction "setDesignateTexture" (tillSetDesignateTextureFn env)
+  Lua.setglobal (Lua.Name "till")
+
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.
   -- Write: equip / unequip (with kind validation against slot's accepted kind).
@@ -657,10 +673,13 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "deleteTile" (worldDeleteTileFn env)
   registerLuaFunction "setFluidTile" (worldSetFluidTileFn env)
   registerLuaFunction "setSlope" (worldSetSlopeFn env)
+  registerLuaFunction "setVegAt" (worldSetVegFn env)
   registerLuaFunction "setCell" (worldSetCellFn env)
 
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
   registerLuaFunction "getSlopeAt"   (worldGetSlopeAtFn env)
+  registerLuaFunction "getVegAt"     (worldGetVegAtFn env)
+  registerLuaFunction "isPlantable"  (worldIsPlantableFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
   registerLuaFunction "getSurfaceAt" (worldGetSurfaceAtFn env)
   registerLuaFunction "getChunkInfo" (worldGetChunkInfoFn env)

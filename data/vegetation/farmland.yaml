@@ -1,0 +1,9 @@
+vegetation:
+  # Tilled soil (#333): player-authored via the till AI (world.setVegAt),
+  # never placed by natural generation. One texture regardless of soil
+  # type or climate — the epic left "tilled texture by soil type" open;
+  # this is the simplest default, variants are a follow-up.
+  - id_start: 77
+    name: tilled_soil
+    variants:
+      - "assets/textures/vegetation/tilled_soil/frame_000.png"

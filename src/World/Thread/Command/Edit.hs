@@ -4,6 +4,7 @@ module World.Thread.Command.Edit
     , handleWorldDeleteTileCommand
     , handleWorldSetFluidTileCommand
     , handleWorldSetSlopeCommand
+    , handleWorldSetVegCommand
     , handleWorldSetCellCommand
     , handleWorldSetStructureCommand
     , handleWorldClearStructureCommand
@@ -309,6 +310,51 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                             "Set slope at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy) <> " z=" <> T.pack (show z)
                               <> " bits=" <> T.pack (show bits)
+
+-- | Set the vegetation id of an existing tile at (gx,gy,z) via the
+--   WeSetVeg edit path. Mirrors handleWorldSetSlopeCommand exactly —
+--   the till AI's (#333) completion primitive: flips a tilled tile's
+--   ground cover to 'World.Vegetation.vegTilledSoil' so it survives
+--   chunk eviction + save/load like every other edit.
+handleWorldSetVegCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Int → Word8 → IO ()
+handleWorldSetVegCommand env logger pageId gx gy z vegId = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for set veg: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, (lx, ly)) = globalToChunk gx gy
+                idx  = columnIndex lx ly
+                edit = WeSetVeg gx gy z vegId
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing →
+                    logWarn logger CatWorld $
+                        "Chunk not loaded for set veg at "
+                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        i   = z - ctStartZ col
+                    if i < 0 ∨ i ≥ VU.length (ctVeg col)
+                      then logWarn logger CatWorld $
+                             "Set veg z out of column range at "
+                               <> T.pack (show gx) <> "," <> T.pack (show gy)
+                               <> " z=" <> T.pack (show z)
+                      else do
+                        let lc' = applyEdit edit lc
+                        atomicModifyIORef' (wsTilesRef ws) $ \w →
+                            (insertChunk lc' w, ())
+                        atomicModifyIORef' (wsEditsRef ws) $ \es →
+                            (appendEdit coord edit es, ())
+                        bumpQuadCacheGen ws
+                        writeIORef (wsZoomQuadCacheRef ws) Nothing
+                        writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        logDebug logger CatWorld $
+                            "Set veg at " <> T.pack (show gx) <> ","
+                              <> T.pack (show gy) <> " z=" <> T.pack (show z)
+                              <> " vegId=" <> T.pack (show vegId)
 
 -- | Set a single 3D cell at (gx, gy, z) to a material (id 0 = air) via
 --   the WeSetCell edit path — the locations primitive for carving

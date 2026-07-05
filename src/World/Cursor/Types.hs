@@ -61,6 +61,13 @@ data CursorState = CursorState
     -- | Texture for committed chop-designation markers (set from Lua
     --   like the cursor textures; rendered over designated trees).
     , chopDesignTexture ∷ Maybe TextureHandle
+    -- | Till-designation tool (#333): first-click anchor tile. Mirrors
+    --   'mineAnchor' — the render pass previews the anchor→hover
+    --   rectangle until the second click commits it.
+    , tillAnchor ∷ Maybe (Int, Int)
+    -- | Texture for committed till-designation markers (set from Lua
+    --   like the cursor textures; rendered over designated fields).
+    , tillDesignTexture ∷ Maybe TextureHandle
     -- | Ground item selected in the world view (white outline +
     --   info panel). Mutually exclusive with unit/building selection
     --   (enforced by the Lua click routing).
@@ -92,5 +99,7 @@ emptyCursorState =
         , constructLineMode = False
         , chopAnchor = Nothing
         , chopDesignTexture = Nothing
+        , tillAnchor = Nothing
+        , tillDesignTexture = Nothing
         , selectedGroundItem = Nothing
         }

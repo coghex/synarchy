@@ -465,6 +465,7 @@ library
                      Engine.Scripting.Lua.API.Structure
                      Engine.Scripting.Lua.API.Construct
                      Engine.Scripting.Lua.API.Chop
+                     Engine.Scripting.Lua.API.Till
                      Engine.Scripting.Lua.API.Yaml
                      Structure.Palette
                      Engine.Scripting.Lua.API.Combat
@@ -575,6 +576,7 @@ library
                      World.Construct.Types
                      World.Construct.Apply
                      World.Chop.Types
+                     World.Till.Types
                      World.Render.SpoilQuads
                      World.Gem
                      World.Spoil.Logic

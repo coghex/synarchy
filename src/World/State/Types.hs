@@ -29,6 +29,7 @@ import Structure.Types (ChunkStructures, emptyChunkStructures)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Chop.Types (ChopDesignations)
+import World.Till.Types (TillDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
 import Power.Types (PowerNodes, emptyPowerNodes)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
@@ -136,6 +137,12 @@ data WorldState = WorldState
       --   craft bills, no world-thread side effects, so the power.*
       --   verbs mutate it directly with atomicModifyIORef'. Persisted in
       --   saves (wpsPowerNodes, v73).
+    , wsTillDesignationsRef ∷ IORef TillDesignations
+      -- ^ Till-designation set (#333): tile (gx, gy) → designation
+      --   (surface z; see World.Till.Types). Written by the world
+      --   thread (WorldDesignateTill / cancel commands), read by the
+      --   render pass (marker) and the till AI. Persisted in saves
+      --   (wpsTillDesignations, v76).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -172,6 +179,7 @@ emptyWorldState = do
     wsChopDesignationsRef ← newIORef HM.empty
     wsCraftBillsRef ← newIORef emptyCraftBills
     wsPowerNodesRef ← newIORef emptyPowerNodes
+    wsTillDesignationsRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -183,7 +191,7 @@ emptyWorldState = do
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsFloraHarvestsRef
                         wsChopDesignationsRef wsCraftBillsRef
-                        wsPowerNodesRef
+                        wsPowerNodesRef wsTillDesignationsRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

@@ -26,6 +26,7 @@ module World.Vegetation
     , vegSnow
     , vegDesertSand
     , vegGravelTundra
+    , vegTilledSoil
     , vegVariants
       -- * Per-tile vegetation selection
     , selectVegetation
@@ -33,6 +34,7 @@ module World.Vegetation
       -- * Classification helpers
     , isBarrenMaterial
     , isWetlandSoil
+    , isTilledSoil
     ) where
 
 import UPrelude
@@ -104,6 +106,17 @@ vegDesertSand = 69
 
 vegGravelTundra ∷ Word8
 vegGravelTundra = 73
+
+-- | Tilled-soil surface state (#333): set by the till AI via
+--   @world.setVegAt@, never by natural placement ('selectVegetation'
+--   never emits it) — a farmed tile is a player-authored edit, not a
+--   biome outcome. One texture regardless of soil type or climate (the
+--   epic left "tilled texture by soil type" open; simplest default,
+--   variants are a follow-up). The formal "is this tile plantable"
+--   check is 'isTilledSoil', not a raw comparison to this id — see its
+--   docs.
+vegTilledSoil ∷ Word8
+vegTilledSoil = 77
 
 -- | Number of variants per vegetation type.
 vegVariants ∷ Word8
@@ -341,6 +354,15 @@ isWetlandSoil 62 = True  -- peat
 isWetlandSoil 63 = True  -- mucky peat
 isWetlandSoil 64 = True  -- muck
 isWetlandSoil _  = False
+
+-- | The formal "is this tile plantable" contract (#333): true for
+--   'vegTilledSoil' and nothing else today. Farming's planting tool
+--   (#335) and any other future consumer should call this rather than
+--   compare a raw vegetation id to 77 — when a soil-type-variant tilled
+--   texture (the epic's still-open follow-up) adds ids alongside 77,
+--   this is the one place that needs to grow to match.
+isTilledSoil ∷ Word8 → Bool
+isTilledSoil v = v ≡ vegTilledSoil
 
 -- * Climate Lookup
 

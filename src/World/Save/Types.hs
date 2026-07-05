@@ -32,6 +32,7 @@ import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations)
+import World.Till.Types (TillDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
 import Item.Ground (GroundItems)
@@ -121,7 +122,12 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 75  -- v75: PowerNode (nested in WorldPageSave's
+currentSaveVersion = 76  -- v76: WorldPageSave gains trailing
+                         --      'wpsTillDesignations' (#333) — till
+                         --      designations (tile → surface z), same
+                         --      shape as wpsChopDesignations. ToolMode
+                         --      also gains TillTool (appended, tag 6).
+                         -- v75: PowerNode (nested in WorldPageSave's
                          --      wpsPowerNodes) gains trailing
                          --      'pnStoredWh' (#360) — a storage node's
                          --      current charge, the one piece of the
@@ -335,6 +341,11 @@ data WorldPageSave = WorldPageSave
         --   verbatim (see wpsBuildings); restore prunes nodes whose
         --   building was orphaned. Appended for save v73, pnStoredWh
         --   for v75.
+    , wpsTillDesignations ∷ !TillDesignations
+        -- ^ Till designations (#333): tile → surface z. Like the other
+        --   designation layers, restored straight into
+        --   wsTillDesignationsRef; markers re-render from the stored z.
+        --   Appended for save v76.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is
