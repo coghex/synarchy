@@ -12,11 +12,12 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)
 import World.Flora.Types
+import World.Material (MaterialId(..), materialIdByName)
 
 -- * Registration
 
@@ -184,6 +185,35 @@ floraAddCycleOverrideFn env = do
 
 -- * World generation parameters
 
+-- | Read stack slot 18 as a Lua array of soil-material NAMES —
+--   best-effort (silently skips non-string entries/holes rather than
+--   rejecting the whole call) since this is an optional trailing arg
+--   on a Lua-table-of-strings, and (see floraRegisterForWorldGenFn's
+--   note) this whole binding currently has no callers to break.
+readSoilNames ∷ Lua.LuaE Lua.Exception [Text]
+readSoilNames = do
+    isT ← Lua.istable 18
+    if not isT then return [] else do
+        n ← Lua.rawlen 18
+        let go i acc
+              | i > fromIntegral n = return (reverse acc)
+              | otherwise = do
+                  _ ← Lua.rawgeti 18 i
+                  ms ← Lua.tostring (-1)
+                  Lua.pop 1
+                  go (i + 1) (maybe acc (\bs → TE.decodeUtf8 bs : acc) ms)
+        go (1 ∷ Lua.Integer) []
+
+-- | flora.registerForWorldGen(fid, category, minTemp, maxTemp,
+--   minPrecip, maxPrecip, maxSlope, density, footprint, idealTemp,
+--   idealPrecip, minAlt, maxAlt, idealAlt, minHumidity, maxHumidity,
+--   idealHumidity [, soils]) — a lower-level worldGen-registration
+--   primitive with no current callers (data/flora/*.yaml goes through
+--   engine.loadFloraYaml → registerFloraSpecies in
+--   Engine.Scripting.Lua.API.YamlTextures instead, which is where
+--   soils actually gets exercised end to end). The optional trailing
+--   `soils` arg (a Lua array of material names) is resolved the same
+--   way, for schema parity.
 floraRegisterForWorldGenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraRegisterForWorldGenFn env = do
     fidArg       ← Lua.tointeger 1
@@ -203,9 +233,11 @@ floraRegisterForWorldGenFn env = do
     minHumArg    ← Lua.tonumber 15
     maxHumArg    ← Lua.tonumber 16
     idealHumArg  ← Lua.tonumber 17
+    soilNames    ← readSoilNames
 
     case (fidArg, catArg) of
         (Just fidInt, Just catBS) → do
+            registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
             let fid = FloraId (fromIntegral fidInt)
                 category = TE.decodeUtf8 catBS
                 catRef = floraCatalogRef env
@@ -224,6 +256,8 @@ floraRegisterForWorldGenFn env = do
                 minHum   = luaNum minHumArg 0.0
                 maxHum   = luaNum maxHumArg 1.0
                 idealHum = luaNum idealHumArg ((minHum + maxHum) / 2.0)
+                soilIds  = [ unMaterialId mid
+                           | n ← soilNames, Just mid ← [materialIdByName registry n] ]
 
                 wg = FloraWorldGen
                     { fwCategory      = category
@@ -241,7 +275,7 @@ floraRegisterForWorldGenFn env = do
                     , fwIdealHumidity = idealHum
                     , fwMaxSlope      = maxSlope
                     , fwDensity       = density
-                    , fwSoils         = []
+                    , fwSoils         = soilIds
                     , fwFootprint     = footprint
                     }
 

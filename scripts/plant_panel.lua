@@ -1,12 +1,15 @@
 -- Planting screen (#335): the suitability-sorted crop catalogue the
--- plant tool (scripts/plant_tool.lua) opens on a tilled tile. Lists
--- every registered plantable-crop species (world.getPlantSuitability,
--- row_crop + groundcover_crop worldGen categories) best-first, with a
--- search box, a sort mode, and category filter checkboxes over the
--- list. Selecting a row commits plant.designate for THIS tile
--- immediately and closes the screen — the same click-to-act
--- convention scripts/save_browser.lua uses for its save list. The
--- actual planting (AI claim/walk/place) is #336; this screen only
+-- plant tool (scripts/plant_tool.lua) opens on a tilled tile. Two
+-- columns: left is a search box, a sort mode, category filter
+-- checkboxes, and a scrollable crop list (world.getPlantSuitability,
+-- row_crop + groundcover_crop worldGen categories); right is the
+-- per-factor suitability read-out for whichever crop is highlighted
+-- (temperature/precipitation/humidity/altitude/slope/soil — why it's
+-- good/bad HERE, not just a bare percentage) plus a "Plant here"
+-- button that commits. Clicking a list row only PREVIEWS it (updates
+-- the right column) — designating needs the explicit button, since
+-- the whole point of the read-out is to see it before committing.
+-- The actual planting (AI claim/walk/place) is #336; this screen only
 -- records the designation.
 --
 -- Mounted on hud.world_page, same lifecycle as crafting_panel.lua /
@@ -39,11 +42,24 @@ local scale    = require("scripts.ui.scale")
 -- untested widget path.
 local SORT_LABELS = { score = "Sort: Suitability", name = "Sort: Name" }
 
+-- world.getPlantSuitability's per-crop `factors` array order (see
+-- World.Flora.Placement.FitnessFactor / Engine.Scripting.Lua.API.Plant).
+local FACTOR_ORDER = { "temperature", "precipitation", "humidity",
+                       "altitude", "slope", "soil" }
+local FACTOR_LABELS = {
+    temperature = "Temperature", precipitation = "Precipitation",
+    humidity = "Humidity", altitude = "Altitude",
+}
+local FACTOR_FMT = {
+    temperature = "%.1f", precipitation = "%.2f",
+    humidity = "%.2f", altitude = "%.0f",
+}
+
 -----------------------------------------------------------
 -- Layout constants (base units; uiscale applied at draw time)
 -----------------------------------------------------------
-local PANEL_W_FRAC   = 0.5
-local PANEL_H_FRAC   = 0.65
+local PANEL_W_FRAC   = 0.72
+local PANEL_H_FRAC   = 0.7
 local PAD_X          = 24
 local PAD_TOP        = 20
 local PAD_BOT        = 20
@@ -52,16 +68,24 @@ local TITLE_H        = 26
 local CLOSE_BTN_SZ   = 30
 local CONTROL_H      = 28
 local CONTROL_GAP    = 10
-local SEARCH_TB_W    = 180
-local SORT_BTN_W     = 150
+local SEARCH_TB_W    = 150
+local SORT_BTN_W     = 140
 local CB_SIZE        = 20
 local CB_LABEL_FONT  = 13
 local STATUS_FONT    = 12
 local ITEM_H         = 32
 local LIST_FONT      = 14
+local COL_GAP        = 20
+local DETAIL_HEADER_FONT = 14
+local DETAIL_NAME_FONT   = 16
+local DETAIL_FONT       = 13
+local DETAIL_LINE_H     = 22
+local PLANT_BTN_W       = 140
+local PLANT_BTN_H       = 30
 
 local TITLE_COL   = { 1.0, 1.0, 1.0, 1.0 }
 local STATUS_COL  = { 0.75, 0.75, 0.75, 1.0 }
+local HEADER_COL  = { 0.8, 0.8, 0.8, 1.0 }
 
 -----------------------------------------------------------
 -- State
@@ -84,6 +108,10 @@ plantPanel.state = plantPanel.state or {
     groundCbId = nil,
     statusLblId = nil,
     lastSearch = nil,
+    detailNameLblId = nil,
+    detailFactorLblIds = {},
+    plantBtnId = nil,
+    selectedCrop = nil,
 }
 
 function plantPanel.setup(opts)
@@ -157,7 +185,51 @@ local function setStatus(count)
     elseif count == 0 then
         label.setText(s.statusLblId, "No crops match the current filters.")
     else
-        label.setText(s.statusLblId, "Select a crop to plant here.")
+        label.setText(s.statusLblId, "Click a crop to see why it fits, then Plant here.")
+    end
+end
+
+-- One line of the right-column suitability read-out for a single
+-- factor — the "why is this good/bad here" detail #335 calls for.
+-- Slope (max-only threshold) and soil (boolean match) aren't
+-- min/ideal/max-range-shaped, so they get their own formatting.
+local function formatFactorLine(f)
+    local pct = math.floor(f.fit * 100 + 0.5)
+    if f.factor == "soil" then
+        return string.format("Soil: %s -- %d%%",
+            f.fit >= 1.0 and "suitable" or "not suitable", pct)
+    elseif f.factor == "slope" then
+        return string.format("Slope: %d (max %d) -- %d%%",
+            math.floor(f.value + 0.5), math.floor(f.max + 0.5), pct)
+    else
+        local fmt = FACTOR_FMT[f.factor] or "%.2f"
+        local label_ = FACTOR_LABELS[f.factor] or f.factor
+        return string.format(
+            "%s: " .. fmt .. " (ideal " .. fmt .. ", range " .. fmt .. "-" .. fmt .. ") -- %d%%",
+            label_, f.value, f.ideal, f.min, f.max, pct)
+    end
+end
+
+-- Update the right-column detail read-out for a previewed row (nil =
+-- nothing selected yet: placeholder text, blank factor lines, Plant
+-- disabled).
+local function renderDetail(row)
+    local s = plantPanel.state
+    if not s.detailNameLblId then return end
+    if not row then
+        s.selectedCrop = nil
+        label.setText(s.detailNameLblId,
+            "Click a crop on the left to see details.")
+        for _, id in ipairs(s.detailFactorLblIds) do label.setText(id, "") end
+        return
+    end
+    s.selectedCrop = row.name
+    local pct = math.floor(row.score * 100 + 0.5)
+    label.setText(s.detailNameLblId, string.format("%s (%s) -- %d%%",
+        humanize(row.name), categoryLabel(row.category), pct))
+    for i, id in ipairs(s.detailFactorLblIds) do
+        local f = row.factors and row.factors[i]
+        label.setText(id, f and formatFactorLine(f) or "")
     end
 end
 
@@ -166,7 +238,10 @@ end
 -- creation time (list.lua's setItems only refreshes those pre-built
 -- slots, it never grows them) — safe here because filtering only ever
 -- NARROWS s.allRows, never exceeds it, so the list is always created
--- with the full unfiltered catalogue (see renderUI).
+-- with the full unfiltered catalogue (see renderUI). A crop previewed
+-- in the right column that gets filtered out of the visible list stays
+-- previewed (its data doesn't change), so this doesn't clear the
+-- selection.
 local function refreshList()
     local s = plantPanel.state
     if not s.listId then return end
@@ -196,7 +271,10 @@ local function destroyOwned()
         end
     end
     s.chrome = {}
-    s.searchTbId, s.sortBtnId, s.rowCbId, s.groundCbId, s.statusLblId = nil, nil, nil, nil, nil
+    s.searchTbId, s.sortBtnId, s.rowCbId, s.groundCbId, s.statusLblId
+        = nil, nil, nil, nil, nil
+    s.detailNameLblId, s.plantBtnId = nil, nil
+    s.detailFactorLblIds = {}
     if s.panelId then
         panel.destroy(s.panelId)
         s.panelId = nil
@@ -210,6 +288,7 @@ function plantPanel.closeIfOpen()
     s.open = false
     s.pageId, s.gx, s.gy = nil, nil, nil
     s.allRows = {}
+    s.selectedCrop = nil
 end
 
 function plantPanel.isOpen()
@@ -262,17 +341,27 @@ local function renderUI()
     })
     table.insert(s.chrome, { kind = "button", id = closeId })
 
-    local controlsY = cy + math.floor(TITLE_H * uiscale) + math.floor(6 * uiscale)
+    -- Two columns: left = search/sort/filters/list, right = the
+    -- suitability read-out for whichever crop is previewed + Plant.
+    local colGap = math.floor(COL_GAP * uiscale)
+    local leftW = math.floor((cw - colGap) * 0.55)
+    local rightW = cw - leftW - colGap
+    local leftX = cx
+    local rightX = cx + leftW + colGap
 
+    local controlsY = cy + math.floor(TITLE_H * uiscale) + math.floor(6 * uiscale)
+    local statusY = panelY + panelH - PAD_BOT - math.floor(4 * uiscale)
+
+    -- Left column: search + sort ------------------------------------
     s.searchTbId = textbox.new({
-        name = "plant_panel_search", x = cx, y = controlsY,
+        name = "plant_panel_search", x = leftX, y = controlsY,
         width = SEARCH_TB_W, height = CONTROL_H, fontSize = 13,
         page = h.page, font = h.menuFont, uiscale = uiscale,
         default = "", zIndex = 201,
     })
     table.insert(s.chrome, { kind = "textbox", id = s.searchTbId })
 
-    local sortX = cx + math.floor((SEARCH_TB_W + CONTROL_GAP) * uiscale)
+    local sortX = leftX + math.floor((SEARCH_TB_W + CONTROL_GAP) * uiscale)
     s.sortBtnId = button.new({
         name = "plant_panel_sort", text = SORT_LABELS[s.sortMode],
         x = sortX, y = controlsY, width = SORT_BTN_W, height = CONTROL_H,
@@ -289,11 +378,12 @@ local function renderUI()
     })
     table.insert(s.chrome, { kind = "button", id = s.sortBtnId })
 
+    -- Left column: category filters ----------------------------------
     local cbY = controlsY + math.floor((CONTROL_H + CONTROL_GAP) * uiscale)
     local cbSz = math.floor(CB_SIZE * uiscale)
 
     s.rowCbId = checkbox.new({
-        name = "plant_panel_row_cb", x = cx, y = cbY, size = CB_SIZE,
+        name = "plant_panel_row_cb", x = leftX, y = cbY, size = CB_SIZE,
         page = h.page, uiscale = uiscale, default = true, zIndex = 201,
         onChange = function() refreshList() end,
     })
@@ -302,13 +392,13 @@ local function renderUI()
         name = "plant_panel_row_lbl", text = "Row crops",
         font = h.menuFont, fontSize = CB_LABEL_FONT, color = STATUS_COL,
         page = h.page, uiscale = uiscale,
-        x = cx + cbSz + math.floor(6 * uiscale),
+        x = leftX + cbSz + math.floor(6 * uiscale),
         y = cbY + math.floor(cbSz * 0.75),
     })
     table.insert(s.chrome, { kind = "label", id = rowLblId })
     local rowLblW = select(1, label.getSize(rowLblId))
 
-    local groundX = cx + cbSz + math.floor(6 * uiscale) + rowLblW + math.floor(16 * uiscale)
+    local groundX = leftX + cbSz + math.floor(6 * uiscale) + rowLblW + math.floor(16 * uiscale)
     s.groundCbId = checkbox.new({
         name = "plant_panel_ground_cb", x = groundX, y = cbY, size = CB_SIZE,
         page = h.page, uiscale = uiscale, default = true, zIndex = 201,
@@ -324,15 +414,15 @@ local function renderUI()
     })
     table.insert(s.chrome, { kind = "label", id = groundLblId })
 
+    -- Left column: the crop list, and the status line under it -------
     local listY = cbY + math.floor((CB_SIZE + CONTROL_GAP + 4) * uiscale)
-    local statusY = panelY + panelH - PAD_BOT - math.floor(4 * uiscale)
     local listHeightPx = statusY - listY - math.floor(10 * uiscale)
     local maxVisible = math.max(1, math.floor(listHeightPx / (ITEM_H * uiscale)))
 
     s.statusLblId = label.new({
         name = "plant_panel_status", text = "",
         font = h.menuFont, fontSize = STATUS_FONT, color = STATUS_COL,
-        page = h.page, uiscale = uiscale, x = cx, y = statusY,
+        page = h.page, uiscale = uiscale, x = leftX, y = statusY,
     })
     table.insert(s.chrome, { kind = "label", id = s.statusLblId })
 
@@ -343,7 +433,7 @@ local function renderUI()
 
     s.listId = list.new({
         name = "plant_panel_list", page = h.page,
-        x = cx, y = listY, width = cw,
+        x = leftX, y = listY, width = leftW,
         font = h.menuFont, fontSize = LIST_FONT,
         itemHeight = ITEM_H, textPadding = 12,
         scrollButtonSize = 22, maxVisible = maxVisible,
@@ -356,12 +446,67 @@ local function renderUI()
         selectedTextColor = { 1.0, 1.0, 1.0, 1.0 },
         onSelect = function(value, text, index, listId, listName)
             local st = plantPanel.state
-            plant.designate(st.pageId, st.gx, st.gy, value)
-            plantPanel.closeIfOpen()
+            local found = nil
+            for _, r in ipairs(st.allRows) do
+                if r.name == value then found = r break end
+            end
+            renderDetail(found)
         end,
     })
     setStatus(#initialRows)
     s.lastSearch = ""
+
+    -- Right column: suitability read-out for the previewed crop -------
+    local detailHeaderId = label.new({
+        name = "plant_panel_detail_header", text = "Suitability",
+        font = h.menuFont, fontSize = DETAIL_HEADER_FONT, color = HEADER_COL,
+        page = h.page, uiscale = uiscale,
+        x = rightX, y = controlsY + math.floor(DETAIL_HEADER_FONT * uiscale),
+    })
+    table.insert(s.chrome, { kind = "label", id = detailHeaderId })
+
+    local detailNameY = controlsY + math.floor(DETAIL_LINE_H * uiscale)
+    s.detailNameLblId = label.new({
+        name = "plant_panel_detail_name", text = "",
+        font = h.menuFont, fontSize = DETAIL_NAME_FONT, color = TITLE_COL,
+        page = h.page, uiscale = uiscale,
+        x = rightX, y = detailNameY + math.floor(DETAIL_NAME_FONT * uiscale),
+    })
+    table.insert(s.chrome, { kind = "label", id = s.detailNameLblId })
+
+    s.detailFactorLblIds = {}
+    local factorStartY = detailNameY + math.floor(DETAIL_LINE_H * 1.6 * uiscale)
+    for i = 1, #FACTOR_ORDER do
+        local fy = factorStartY + math.floor((i - 1) * DETAIL_LINE_H * uiscale)
+        local id = label.new({
+            name = "plant_panel_factor_" .. i, text = "",
+            font = h.menuFont, fontSize = DETAIL_FONT, color = STATUS_COL,
+            page = h.page, uiscale = uiscale,
+            x = rightX, y = fy + math.floor(DETAIL_FONT * uiscale),
+        })
+        table.insert(s.chrome, { kind = "label", id = id })
+        table.insert(s.detailFactorLblIds, id)
+    end
+
+    s.plantBtnId = button.new({
+        name = "plant_panel_plant_btn", text = "Plant here",
+        x = rightX, y = statusY - math.floor(PLANT_BTN_H * uiscale) + math.floor(4 * uiscale),
+        width = PLANT_BTN_W, height = PLANT_BTN_H,
+        fontSize = 14, uiscale = uiscale, page = h.page, font = h.menuFont,
+        textureSet = h.boxTexSet,
+        bgColor = { 1.0, 1.0, 1.0, 1.0 }, textColor = { 1.0, 1.0, 1.0, 1.0 },
+        zIndex = 201,
+        onClick = function()
+            local st = plantPanel.state
+            if st.selectedCrop then
+                plant.designate(st.pageId, st.gx, st.gy, st.selectedCrop)
+                plantPanel.closeIfOpen()
+            end
+        end,
+    })
+    table.insert(s.chrome, { kind = "button", id = s.plantBtnId })
+
+    renderDetail(nil)
 end
 
 -----------------------------------------------------------
@@ -380,6 +525,7 @@ function plantPanel.show(pageId, gx, gy)
     s.pageId, s.gx, s.gy = pageId, gx, gy
     s.open = true
     s.sortMode = "score"
+    s.selectedCrop = nil
     s.allRows = world.getPlantSuitability(gx, gy) or {}
     renderUI()
 end

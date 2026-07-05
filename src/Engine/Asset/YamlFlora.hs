@@ -118,6 +118,13 @@ data FloraYamlWorldGen = FloraYamlWorldGen
     , fywMaxSlope     ∷ Maybe Int
     , fywDensity      ∷ Maybe Float
     , fywFootprint    ∷ Maybe Float
+    , fywSoils        ∷ [Text]
+      -- ^ Preferred soil material NAMES (data/materials/*.yaml's
+      --   @name@ field, e.g. "loam"), resolved to raw material ids at
+      --   registration time (World.Material.materialIdByName) — kept
+      --   as Text here since this is a pure Aeson parse, no registry
+      --   access. Empty = no soil gating (speciesFitness's existing
+      --   convention: @null soils@ passes unconditionally).
     } deriving (Show, Eq, Generic)
 
 instance FromJSON FloraYamlWorldGen where
@@ -138,6 +145,7 @@ instance FromJSON FloraYamlWorldGen where
         ⊛ v .:? "maxSlope"
         ⊛ v .:? "density"
         ⊛ v .:? "footprint"
+        ⊛ v .:? "soils" .!= []
 
 -- * Top-level species definition
 

@@ -31,7 +31,7 @@ import Engine.Core.State (EngineEnv(..), activeWorldPage, activeWorldState)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types hiding (activeWorldPage)
 import World.Plant.Types
-import World.Flora.Placement (speciesFitness)
+import World.Flora.Placement (speciesFitnessDetail, FitnessFactor(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Generate.Coordinates (globalToChunk)
 
@@ -176,19 +176,23 @@ plantSetDesignateTextureFn env = do
     return 0
 
 -- | world.getPlantSuitability(gx, gy) → array of {id, name, category,
---   score} sorted best-first, | nil (chunk unloaded / no active world).
---   Scores every registered plantable-crop species (row_crop /
---   groundcover_crop worldGen category) against the tile's climate +
---   slope + altitude via World.Flora.Placement.speciesFitness — the
---   SAME fitness function that gates natural worldgen placement (#332's
---   fiHealth). This is the suitability read-out #335's planting screen
---   sorts/filters/searches over; no separate crop-listing primitive is
---   needed since this query already enumerates the full catalogue.
+--   score, factors} sorted best-first, | nil (chunk unloaded / no
+--   active world). Scores every registered plantable-crop species
+--   (row_crop / groundcover_crop worldGen category) against the tile's
+--   climate + slope + altitude + soil via
+--   World.Flora.Placement.speciesFitnessDetail — the SAME fitness
+--   function that gates natural worldgen placement (#332's fiHealth),
+--   just also returning the per-factor breakdown. This is the
+--   suitability read-out #335's planting screen sorts/filters/searches
+--   over and shows per-crop (why it's good/bad here); no separate
+--   crop-listing primitive is needed since this query already
+--   enumerates the full catalogue.
 --
---   Soil (ctMats) is read and passed through, but every shipped
---   species' fwSoils is currently [] (see data/flora/crops.yaml), so it
---   has no effect on the score yet — a future soils: YAML key would
---   activate it with no change needed here.
+--   `factors` is an array of {factor, fit, value, min, ideal, max} —
+--   one entry each for "temperature", "precipitation", "humidity",
+--   "altitude", "slope", "soil" (in that order). min/ideal/max are
+--   filler (0/0/max or 0/1/1) for the "slope" and "soil" entries,
+--   which aren't range-shaped — see World.Flora.Placement.FitnessFactor.
 worldGetPlantSuitabilityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetPlantSuitabilityFn env = do
     mGx ← Lua.tointeger 1
@@ -220,23 +224,23 @@ worldGetPlantSuitabilityFn env = do
                                                   (wgpClimateState params)
                                                   (wgpWorldSize params) gx gy
                                     scored =
-                                        [ (fid, sp, fwCategory wg, score)
+                                        [ (fid, sp, fwCategory wg, score, factors)
                                         | (fid, wg) ← worldGenSpecies cat
                                         , isPlantableCropCategory (fwCategory wg)
                                         , Just sp ← [lookupSpecies fid cat]
-                                        , let score = speciesFitness wg matId
-                                                  slopeId (lcTemp climate)
+                                        , let (score, factors) = speciesFitnessDetail
+                                                  wg matId slopeId (lcTemp climate)
                                                   (lcPrecip climate)
                                                   (lcHumidity climate) z
                                         ]
-                                pure (Just (sortOn (\(_,_,_,s) → negate s) scored))
+                                pure (Just (sortOn (\(_,_,_,s,_) → negate s) scored))
                             _ → pure Nothing
             case mResult of
                 Nothing → Lua.pushnil >> return 1
                 Just rows → do
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] rows) $
-                        \(ix, (fid, sp, cat, score)) → do
+                        \(ix, (fid, sp, cat, score, factors)) → do
                             Lua.newtable
                             Lua.pushinteger (fromIntegral (unFloraId fid))
                             Lua.setfield (-2) "id"
@@ -246,6 +250,24 @@ worldGetPlantSuitabilityFn env = do
                             Lua.setfield (-2) "category"
                             Lua.pushnumber (Lua.Number (realToFrac score))
                             Lua.setfield (-2) "score"
+                            Lua.newtable
+                            forM_ (zip [1 ∷ Int ..] factors) $
+                                \(fix, f) → do
+                                    Lua.newtable
+                                    Lua.pushstring (TE.encodeUtf8 (ffFactor f))
+                                    Lua.setfield (-2) "factor"
+                                    Lua.pushnumber (Lua.Number (realToFrac (ffFit f)))
+                                    Lua.setfield (-2) "fit"
+                                    Lua.pushnumber (Lua.Number (realToFrac (ffValue f)))
+                                    Lua.setfield (-2) "value"
+                                    Lua.pushnumber (Lua.Number (realToFrac (ffMin f)))
+                                    Lua.setfield (-2) "min"
+                                    Lua.pushnumber (Lua.Number (realToFrac (ffIdeal f)))
+                                    Lua.setfield (-2) "ideal"
+                                    Lua.pushnumber (Lua.Number (realToFrac (ffMax f)))
+                                    Lua.setfield (-2) "max"
+                                    Lua.rawseti (-2) (fromIntegral fix)
+                            Lua.setfield (-2) "factors"
                             Lua.rawseti (-2) (fromIntegral ix)
                     return 1
         _ → Lua.pushnil >> return 1

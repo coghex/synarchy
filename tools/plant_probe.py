@@ -8,23 +8,33 @@ checks:
   1. Suitability: world.getPlantSuitability(gx,gy) returns every
      registered plantable-crop species (row_crop `tomato_plant` +
      groundcover_crop `wheat`), sorted best-first, each with
-     id/name/category/score.
-  2. Designation refusal: plant.designate on an UNTILLED tile is
+     id/name/category/score/factors — and each `factors` entry has the
+     6 expected labels (temperature/precipitation/humidity/altitude/
+     slope/soil) with a fit in [0,1], the per-factor breakdown #335's
+     planting screen shows as the "why is this good/bad here" read-out.
+  2. Soil actually gates suitability: forcing the tile's surface
+     material to a species-preferred soil (loam) vs a non-preferred one
+     (granite) via world.setCell flips the "soil" factor's fit between
+     1.0 and 0.0 and the overall score between nonzero and exactly 0.0
+     — proving data/flora/crops.yaml's new `soils:` list + the
+     name->id resolution in registerFloraSpecies actually take effect,
+     not just parse.
+  3. Designation refusal: plant.designate on an UNTILLED tile is
      refused (plant.getDesignationAt stays nil) — mirrors till's
      untillable-exclusion check.
-  3. Designation refusal: an unregistered crop name is refused even on
+  4. Designation refusal: an unregistered crop name is refused even on
      a tilled tile.
-  4. Designation success: plant.designate on a TILLED tile for a
+  5. Designation success: plant.designate on a TILLED tile for a
      registered crop (both row_crop and groundcover_crop names accepted
      symmetrically — designating doesn't execute planting, so it isn't
      gated on which primitive #336 will later use to place it) records
      {x,y,z,crop}; plant.cancelDesignation clears it;
      plant.getDesignationCount / nearestDesignation agree.
-  5. Replace semantics: designating a second crop on an
+  6. Replace semantics: designating a second crop on an
      already-designated tile overwrites the first (HashMap insert, not
      a re-sweep skip like till's rectangle sweep — there's no
      "idempotent" concept for a single explicit designate call).
-  6. Save/load: a designation (with its crop) survives
+  7. Save/load: a designation (with its crop) survives
      save -> loadSave (WorldPageSave wpsPlantDesignations).
 
 The farm AI that actually claims/walks/plants a designation is #336,
@@ -39,6 +49,18 @@ Usage: python3 tools/plant_probe.py [--port 9179] [--seed 42]
 import argparse, glob, json, socket, subprocess, sys, time
 
 SPROOT = "/tmp"
+
+# data/materials/soils_mineral.yaml `loam` (in both crops.yaml `soils:`
+# lists) and data/materials/igneous_intrusive.yaml `granite` (in
+# neither) — used to prove soil actually gates suitability, not just
+# parses. world.setCell resolves either a material NAME or numeric id
+# (World.Material.materialIdByName) — names are used here so this
+# probe doesn't need to track raw ids.
+LOAM_NAME = "loam"
+GRANITE_NAME = "granite"
+
+FACTOR_NAMES = {"temperature", "precipitation", "humidity", "altitude",
+                "slope", "soil"}
 
 
 def send(port, lua, timeout=10.0):
@@ -118,6 +140,37 @@ def till_and_wait(port, page, gx, gy, z):
     sys.exit(f"setVegAt({gx},{gy}) never landed")
 
 
+def suitability_row(port, page, gx, gy, species):
+    """world.getPlantSuitability(gx,gy) → the row for `species`, or None."""
+    rows = jget(port, f"return world.getPlantSuitability({gx},{gy})")
+    if not isinstance(rows, list):
+        return None
+    return next((r for r in rows if r.get("name") == species), None)
+
+
+def soil_fit(port, page, gx, gy, species):
+    row = suitability_row(port, page, gx, gy, species)
+    if not row:
+        return None
+    f = next((f for f in row["factors"] if f["factor"] == "soil"), None)
+    return f["fit"] if f else None
+
+
+def set_material_and_wait(port, page, gx, gy, z, mat_name, species, expect_fit):
+    """world.setCell is a queued world command — send, then poll
+    getPlantSuitability's "soil" factor for `species` until it actually
+    REACHES expect_fit (no world.getMaterialAt primitive exists to poll
+    the raw cell directly, and a bare presence check would return
+    immediately on the stale pre-edit value)."""
+    send(port, f"world.setCell('{page}', {gx}, {gy}, {z}, '{mat_name}'); "
+               f"return 'ok'")
+    for _ in range(30):
+        if soil_fit(port, page, gx, gy, species) == expect_fit:
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9179)
@@ -151,7 +204,18 @@ def main():
         z = jget(port, f"local sz=world.getSurfaceAt({tx},{ty}); return sz")
         print(f"  candidate tile at ({tx},{ty}), surfaceZ={z}")
 
-        # --- 1. Suitability query lists every registered crop ---
+        # Force a known, species-preferred soil BEFORE any suitability
+        # assertions, so they're deterministic regardless of whatever
+        # material this seed's worldgen happened to put here (loam is
+        # in both tomato_plant's and wheat's crops.yaml `soils:` list).
+        okL = set_material_and_wait(port, "probe", tx, ty, z,
+                                     LOAM_NAME, "wheat", 1.0)
+        passed &= okL
+        print(f"  [{'PASS' if okL else 'FAIL'}] forcing loam soil: soil "
+              f"fit={soil_fit(port, 'probe', tx, ty, 'wheat')}")
+
+        # --- 1. Suitability query lists every registered crop, with a
+        #     6-factor breakdown per crop ---
         rows = jget(port, f"return world.getPlantSuitability({tx},{ty})")
         by_name = {r["name"]: r for r in rows} if isinstance(rows, list) else {}
         ok1 = ("tomato_plant" in by_name and "wheat" in by_name
@@ -163,7 +227,35 @@ def main():
         print(f"  [{'PASS' if ok1 else 'FAIL'}] getPlantSuitability lists "
               f"both shipped crops, sorted best-first: {rows}")
 
-        # --- 2. Designation refused on an untilled tile ---
+        ok1b = all(
+            isinstance(r.get("factors"), list)
+            and {f["factor"] for f in r["factors"]} == FACTOR_NAMES
+            and all(0.0 <= f["fit"] <= 1.0 for f in r["factors"])
+            for r in rows
+        ) if isinstance(rows, list) else False
+        passed &= ok1b
+        print(f"  [{'PASS' if ok1b else 'FAIL'}] each row's factors cover "
+              f"all 6 labels with fit in [0,1]")
+
+        # --- 2. Soil actually gates suitability (not just parses) ---
+        okG = set_material_and_wait(port, "probe", tx, ty, z,
+                                     GRANITE_NAME, "wheat", 0.0)
+        row_bad_wheat = suitability_row(port, "probe", tx, ty, "wheat")
+        row_bad_tomato = suitability_row(port, "probe", tx, ty, "tomato_plant")
+        ok2 = (okG
+               and row_bad_wheat is not None and row_bad_wheat["score"] == 0.0
+               and row_bad_tomato is not None and row_bad_tomato["score"] == 0.0)
+        passed &= ok2
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] granite (non-preferred soil) "
+              f"zeroes both crops' scores: wheat={row_bad_wheat}, "
+              f"tomato={row_bad_tomato}")
+
+        # Restore loam so the rest of this probe (designation checks
+        # below) runs against a species-preferred soil, matching the
+        # deterministic setup at the top.
+        set_material_and_wait(port, "probe", tx, ty, z, LOAM_NAME, "wheat", 1.0)
+
+        # --- 3. Designation refused on an untilled tile ---
         pre = jget(port, f"return world.isPlantable({tx},{ty})")
         ok2a = pre is False
         passed &= ok2a
@@ -181,7 +273,7 @@ def main():
 
         till_and_wait(port, "probe", tx, ty, z)
 
-        # --- 3. Designation refused for an unregistered crop name ---
+        # --- 4. Designation refused for an unregistered crop name ---
         send(port, f"plant.designate('probe',{tx},{ty},'not_a_real_crop'); "
                    f"return 'ok'")
         time.sleep(0.5)
@@ -191,7 +283,7 @@ def main():
         print(f"  [{'PASS' if ok3 else 'FAIL'}] designate refused for an "
               f"unregistered crop name: {d1}")
 
-        # --- 4. Designation succeeds on a tilled tile ---
+        # --- 5. Designation succeeds on a tilled tile ---
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
                    f"return 'ok'")
         time.sleep(0.5)
@@ -227,7 +319,7 @@ def main():
         print(f"  [{'PASS' if ok4c else 'FAIL'}] cancelDesignation clears "
               f"it: {d3}")
 
-        # --- 5. Designating a row_crop works too (designation is
+        # --- 6. Designating a row_crop works too (designation is
         #     category-symmetric; only execution is #336's asymmetry) ---
         send(port, f"plant.designate('probe',{tx},{ty},'tomato_plant'); "
                    f"return 'ok'")
@@ -238,7 +330,7 @@ def main():
         print(f"  [{'PASS' if ok5 else 'FAIL'}] designate accepts a "
               f"row_crop name too: {d4}")
 
-        # --- 6. Replace semantics: designating again overwrites ---
+        # --- 7. Replace semantics: designating again overwrites ---
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
                    f"return 'ok'")
         time.sleep(0.5)
@@ -248,7 +340,7 @@ def main():
         print(f"  [{'PASS' if ok6 else 'FAIL'}] re-designating the same "
               f"tile replaces the crop: {d5}")
 
-        # --- 7. Save/load round-trip ---
+        # --- 8. Save/load round-trip ---
         send(port, "engine.saveWorld('probe', 'plant_v78_check'); "
                    "return 'ok'")
         time.sleep(3.0)

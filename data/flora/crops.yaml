@@ -91,6 +91,11 @@ flora:
       maxSlope: 2
       density: 0.0
       footprint: 6
+      # Rich, well-drained, moisture-retentive soil — the general loam
+      # family (data/materials/soils_mineral.yaml + soils_special.yaml
+      # `name` fields), excluding pure sand/clay extremes and wetland
+      # soils (peat/mucky_peat/muck) or salt_flat.
+      soils: [loam, sandy_loam, silt_loam, clay_loam]
 
   # Groundcover crop: NOT placed as a FloraInstance at all — it's
   # planted via world.plantCropAt into a World.Flora.CropPlot record
@@ -167,3 +172,6 @@ flora:
       maxSlope: 3
       density: 0.0
       footprint: 0
+      # Hardier, tolerates a slightly broader mineral-soil range than
+      # tomato_plant (historically grown on drier loams).
+      soils: [loam, silt_loam, sandy_loam, clay_loam, sandy_clay_loam]

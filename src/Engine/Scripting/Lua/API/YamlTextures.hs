@@ -25,7 +25,8 @@ import Engine.Asset.YamlTextures
 import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
-import World.Material (MaterialProps(..), registerMaterial)
+import World.Material (MaterialProps(..), MaterialId(..), registerMaterial,
+                       materialIdByName)
 
 -- | If a yaml-declared texture path doesn't exist on disk, substitute the
 --   given subset fallback so 'loadAndRegister' has something to queue,
@@ -338,9 +339,32 @@ registerFloraSpecies env backendState lteq catRef def = do
     atomicModifyIORef' catRef $ \cat →
         (insertSpecies fid species cat, ())
 
-    -- Build and insert FloraWorldGen
+    -- Resolve soil preference NAMES (data/materials/*.yaml's `name`
+    -- field) to raw material ids via the already-loaded material
+    -- registry (data/materials loads before data/flora, see
+    -- scripts/startup_loader.lua) — same "Text in YAML, resolved once
+    -- at content-load time" idiom, just eager instead of
+    -- mpDigSpoil/mpDigChunk's lazy-at-use-time resolution (this feeds
+    -- FloraWorldGen, queried every world-gen fitness check, so
+    -- resolving once here avoids a registry lookup per tile).
+    registry ← readIORef (materialRegistryRef env)
+    logger ← readIORef (loggerRef env)
     let wg = fydWorldGen def
-        minAlt   = maybe (-100) id (fywMinAlt wg)
+        soilIds =
+            [ unMaterialId mid
+            | soilName ← fywSoils wg
+            , Just mid ← [materialIdByName registry soilName]
+            ]
+        unresolvedSoils =
+            [ soilName | soilName ← fywSoils wg
+            , materialIdByName registry soilName ≡ Nothing ]
+    mapM_ (\soilName → logWarn logger CatAsset $
+              "Flora '" <> name <> "' soils entry '" <> soilName
+              <> "' does not match any registered material name")
+          unresolvedSoils
+
+    -- Build and insert FloraWorldGen
+    let minAlt   = maybe (-100) id (fywMinAlt wg)
         maxAlt   = maybe 800    id (fywMaxAlt wg)
         idealAlt = maybe ((minAlt + maxAlt) `div` 2) id (fywIdealAlt wg)
         minHum   = maybe 0.0 id (fywMinHumidity wg)
@@ -362,7 +386,7 @@ registerFloraSpecies env backendState lteq catRef def = do
             , fwIdealHumidity = idealHum
             , fwMaxSlope      = maybe 15 fromIntegral (fywMaxSlope wg)
             , fwDensity       = maybe 0.1 id (fywDensity wg)
-            , fwSoils         = []
+            , fwSoils         = soilIds
             , fwFootprint     = maybe 0.0 id (fywFootprint wg)
             }
 
