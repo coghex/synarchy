@@ -460,42 +460,53 @@ Turnkey harnesses:
 
 ### Testing powered workshops headless (#361)
 
-The first real power consumer. A workshop/building def gains
-`requires_power` (bool) + `power_drain` (watts) — data-driven YAML
-fields, not a `Power.Types` node/role: a `requires_power` building
-never gets a registry entry of its own. `Power.Network.consumersOn`
-derives every Built requires_power building's tile + drain fresh from
-`BuildingManager` on each tick/query (mirroring how `positionsOf`
-derives a node's tile from the building it rides on), and its drain
-joins the SAME connected-components pass as nodes — touching/adjacent
-to wire like a node, but never BRIDGING two otherwise-disconnected wire
-runs the way a node can (a workshop is a passive tap on the grid, not
-infrastructure). `power.isBuildingPowered(bid)` is the gating query
-(true immediately for a building that doesn't require power); it's
-false whenever the building isn't wired to a network at all, same as a
-Brownout one. `Engine.Scripting.Lua.API.Craft.validateStation` refuses
-`craft.executeAt`/`repair.repairAt` (both share the gate, see
-`Repair.hs`) on an unpowered station with a `"has no power"` reason; the
-`craft_job` AI's `"working"` phase pours no bill progress while
-browned out — idle, not failed, not released — and resumes on its own
-once the network has generation/charge again. Drain is flat whenever
-Built (not scaled by whether a crafter is actively working the
-station — the issue's "standby vs active" question resolved simple).
-`workbench.yaml` is the shipped example (`power_drain: 150`); `furnace`
-stays the fuel-burning smelter (`data/recipes/smelting.yaml`'s coal
-`fuel:` blocks) — one example of each consumer kind.
+The first real power consumer. A workshop/building def gains a
+`power_drain` (watts) field — data-driven YAML, not a `Power.Types`
+node/role. A building is a consumer iff `power_drain > 0` — there's no
+separate `requires_power` flag that could fall out of sync with it,
+and a power-consuming building never gets a registry entry of its own.
+`Power.Network.consumersOn` derives every Built power-draining
+building's tile + drain fresh from `BuildingManager` on each tick/query
+(mirroring how `positionsOf` derives a node's tile from the building it
+rides on), and its drain joins the SAME connected-components pass as
+nodes — touching/adjacent to wire like a node, but never BRIDGING two
+otherwise-disconnected wire runs the way a node can (a workshop is a
+passive tap on the grid, not infrastructure). `power.
+isBuildingPowered(bid)` is the gating query (true immediately for a
+building with no power_drain); it's false whenever the building isn't
+wired to a network at all, same as a Brownout one. `Engine.Scripting.
+Lua.API.Craft.validateStation` refuses `craft.executeAt`/
+`repair.repairAt` (both share the gate, see `Repair.hs`) on an
+unpowered station with a `"has no power"` reason; the `craft_job` AI's
+`"working"` phase pours no bill progress while browned out — idle, not
+failed, not released — and resumes on its own once the network has
+generation/charge again. Drain is flat whenever Built (not scaled by
+whether a crafter is actively working the station — the issue's
+"standby vs active" question resolved simple).
+
+No shipped building sets a `power_drain` today — `workbench` and
+`furnace` are both power-free (`furnace` stays the fuel-burning smelter
+via `data/recipes/smelting.yaml`'s coal `fuel:` blocks). Assigning
+`power_drain` to real content is a deliberate follow-up (it wants its
+own new art, not a hijacked existing building/texture), not part of
+this mechanism landing.
 
 Turnkey harnesses:
-- **`python3 tools/power_workshop_probe.py`** — the #361 gate. Boots
-  headless on a flat arena, builds a real `requires_power` workbench,
-  and asserts: unwired refusal (`craft.executeAt` "no power"), wired-
-  but-uncharged still refuses (midnight, 0 generation/stored),
-  flipping to noon powers it (panel's peak alone covers the drain) and
-  `craft.executeAt` succeeds, the `craft_job` AI claims a bill but
-  pours zero progress while browned out then completes once powered,
-  and a real fast-forward shows the battery's `storedWh` both rise
-  (daylight, generation > drain) and fall (night, drain with no
-  generation) with the consumer's drain folded into the balance.
+- **`python3 tools/power_workshop_probe.py`** — the #361 gate. Registers
+  its OWN throwaway `power_drain`-set building + recipe defs (mirroring
+  how `craft_bill_probe.py` injects a temp recipe YAML) rather than
+  flipping a shipped building, so it exercises the mechanism fully
+  isolated from every other probe's fixtures — no shipped-building
+  probe (`craft_probe.py`, `repair_probe.py`, `repair_ai_probe.py`) is
+  affected. Boots headless on a flat arena and asserts: unwired refusal
+  (`craft.executeAt` "no power"), wired-but-uncharged still refuses
+  (midnight, 0 generation/stored), flipping to noon powers it (panel's
+  peak alone covers the drain) and `craft.executeAt` succeeds, the
+  `craft_job` AI claims a bill but pours zero progress while browned
+  out then completes once powered, and a real fast-forward shows the
+  battery's `storedWh` both rise (daylight, generation > drain) and
+  fall (night, drain with no generation) with the consumer's drain
+  folded into the balance.
 - **`Test.Headless.Power.Network`** (hspec) — the pure `consumersOn`/
   `groupByComponent` folding: drain sums into `drainW`, a consumer not
   adjacent to any wire is dropped (silently unpowered, not an error), a
