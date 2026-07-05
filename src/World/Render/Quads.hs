@@ -17,6 +17,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
 import World.Types
 import World.Flora.Render (resolveFloraTexture)
+import World.Flora.CropPlot (cropPlotElapsedDays, cropPlotInstance)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileSideHeight, applyFacing)
@@ -34,7 +35,7 @@ import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.TileQuads
     ( tileToQuad, blankTileToQuad, oceanTileToQuad, iceTileToQuad
     , lavaTileToQuad, freshwaterTileToQuad, worldCursorToQuad
-    , worldCursorBgToQuad, vegToQuad
+    , worldCursorBgToQuad, vegToQuad, vegQuadWithTexture
     )
 
 -- * Water Slope Helpers
@@ -109,6 +110,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     worldDate ← readIORef (wsDateRef worldState)
     texSizes ← readIORef (textureSizeRef env)
     harvests ← readIORef (wsFloraHarvestsRef worldState)
+    cropPlots ← readIORef (wsCropPlotsRef worldState)
 
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
@@ -228,11 +230,24 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                             -- surface is above the fluid level
                                             vegQ = if z ≡ surfZ ∧ maybe True (\fc → surfZ > fcSurface fc) mFluid
                                                    then let i = z - ctStartZ col
-                                                            vegId = ctVeg col VU.! i
                                                             slopeId = ctSlopes col VU.! i
-                                                        in vegToQuad lookupSlot lookupFmSlot textures facing
-                                                               gx gy z vegId slopeId zSlice effectiveDepth
-                                                               zoomAlpha xOffset
+                                                        in case HM.lookup (gx, gy) cropPlots of
+                                                            -- Planted crop tile (#334): the tile-fill
+                                                            -- texture is DERIVED from the #332 growth
+                                                            -- runtime instead of the static ctVeg id.
+                                                            Just cp →
+                                                                let elapsed = cropPlotElapsedDays absDay cp
+                                                                    tex = resolveFloraTexture floraCat
+                                                                              daysPerYear elapsed
+                                                                              (cropPlotInstance cp)
+                                                                in vegQuadWithTexture lookupSlot lookupFmSlot
+                                                                       textures facing gx gy z tex slopeId
+                                                                       zSlice effectiveDepth zoomAlpha xOffset
+                                                            Nothing →
+                                                                let vegId = ctVeg col VU.! i
+                                                                in vegToQuad lookupSlot lookupFmSlot textures facing
+                                                                       gx gy z vegId slopeId zSlice effectiveDepth
+                                                                       zoomAlpha xOffset
                                                    else Nothing
 
                                         in case vegQ of

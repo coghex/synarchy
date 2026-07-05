@@ -708,6 +708,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "harvestFlora" (worldHarvestFloraFn env)
   registerLuaFunction "findHarvestableFlora"
     (worldFindHarvestableFloraFn env)
+  registerLuaFunction "plantCropAt" (worldPlantCropAtFn env)
+  registerLuaFunction "getCropPlotAt" (worldGetCropPlotAtFn env)
 
   Lua.setglobal (Lua.Name "world")
 

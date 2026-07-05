@@ -183,6 +183,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 floraHarvests ← readIORef (wsFloraHarvestsRef ws)
                                 chopDesigs ← readIORef (wsChopDesignationsRef ws)
                                 tillDesigs ← readIORef (wsTillDesignationsRef ws)
+                                cropPlots ← readIORef (wsCropPlotsRef ws)
                                 craftBills ← readIORef (wsCraftBillsRef ws)
                                 powerNodes ← readIORef (wsPowerNodesRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
@@ -233,6 +234,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsCraftBills  = craftBills
                                     , wpsPowerNodes  = powerNodes
                                     , wpsTillDesignations = tillDesigs
+                                    , wpsCropPlots   = cropPlots
                                     }
                     -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
@@ -451,6 +453,9 @@ handleWorldLoadSaveCommand env logger pageId saveData
         -- Till designations (#333): same shape, markers render from the
         -- stored z.
         writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
+        -- Planted crop plots (#334): same shape, growth/texture derive
+        -- from the stored species + planted day with no chunk loading.
+        writeIORef (wsCropPlotsRef worldState) (wpsCropPlots wps)
         -- Craft bills (#329): stations restore under their saved
         -- BuildingIds (see 1f), so bills reconnect verbatim; prune the
         -- ones whose station isn't in this page's snapshot (a def

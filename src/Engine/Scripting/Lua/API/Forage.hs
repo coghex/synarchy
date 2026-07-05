@@ -14,20 +14,27 @@ module Engine.Scripting.Lua.API.Forage
     , worldHarvestFloraFn
     , worldFindHarvestableFloraFn
     , itemGetFoodFn
+    , worldPlantCropAtFn
+    , worldGetCropPlotAtFn
     ) where
 
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, atomicModifyIORef')
 import System.Random (randomR)
 import Engine.Core.State (EngineEnv(..), activeWorldState,
                           freshItemInstanceId)
 import World.Types
+import World.Vegetation (isTilledSoil)
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
                            growthPhaseTag, activeStageTag,
                            lifePhaseText, annualStageText)
+import World.Flora.CropPlot (CropPlot(..), newCropPlot,
+                             cropPlotElapsedDays, cropPlotInstance)
 import World.Generate.Coordinates (globalToChunk, chunkToGlobal)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemContainer(..),
                    ItemFood(..), lookupItemDef)
@@ -237,31 +244,65 @@ worldHarvestFloraFn env = do
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
-                        insts ← floraAt env ws gx gy
-                        harvests ← readIORef (wsFloraHarvestsRef ws)
+                        -- Planted crop plot (#334): a BARE call only —
+                        -- like chop's tagged flow, a plot isn't a
+                        -- designation target, so a tag skips it
+                        -- straight to the wild-flora path below. A
+                        -- plot never coexists with wild FloraInstances
+                        -- on the same tile (tilled soil excludes
+                        -- natural flora placement), so no precedence
+                        -- question between the two arises.
+                        mPlot ← if isJust tagFilter then pure Nothing
+                                else HM.lookup (gx, gy) ⊚
+                                         readIORef (wsCropPlotsRef ws)
+                        cat ← readIORef (floraCatalogRef env)
                         (doy, absDay) ← growthClock ws
-                        let live = HM.lookupDefault 0 (gx, gy) harvests
-                            -- #332: only the BARE (forage) call checks
-                            -- the growth window; a tagged call is a
-                            -- designation flow (chop "wood") and takes
-                            -- the plant in any growth state.
-                            windowOk i sp = case tagFilter of
-                                Just _  → True
-                                Nothing → harvestOpen sp doy
-                                              (floraGrowth sp absDay i)
-                            mFh = listToMaybe
-                                [ fh | (i, sp) ← insts
-                                     , Just fh ← [fsHarvest sp]
-                                     , maybe True (`elem` fhTags fh) tagFilter
-                                     , windowOk i sp ]
-                        case mFh of
-                            Just fh | live ≤ 0 → do
+                        let mPlotHarvest = do
+                                cp ← mPlot
+                                sp ← lookupSpecies (cpSpecies cp) cat
+                                fh ← fsHarvest sp
+                                let elapsed = cropPlotElapsedDays absDay cp
+                                    g = floraGrowth sp elapsed (cropPlotInstance cp)
+                                if harvestOpen sp elapsed g
+                                    then Just fh else Nothing
+                        case mPlotHarvest of
+                            Just fh → do
                                 spawned ← spawnYields env ws gx gy (fhYield fh)
-                                atomicModifyIORef' (wsFloraHarvestsRef ws) $
-                                    \hs → (HM.insert (gx, gy) (fhRegrowth fh) hs, ())
+                                -- Annual, one-shot: harvesting clears
+                                -- the plot instead of starting a
+                                -- regrowth timer — the tile reverts to
+                                -- bare tilled soil until replanted.
+                                atomicModifyIORef' (wsCropPlotsRef ws) $
+                                    \ps → (HM.delete (gx, gy) ps, ())
                                 bumpQuadCacheGen ws
                                 pure (Just spawned)
-                            _ → pure Nothing
+                            Nothing | isJust mPlot → pure Nothing
+                            Nothing → do
+                              insts ← floraAt env ws gx gy
+                              harvests ← readIORef (wsFloraHarvestsRef ws)
+                              let live = HM.lookupDefault 0 (gx, gy) harvests
+                                  -- #332: only the BARE (forage) call
+                                  -- checks the growth window; a tagged
+                                  -- call is a designation flow (chop
+                                  -- "wood") and takes the plant in any
+                                  -- growth state.
+                                  windowOk i sp = case tagFilter of
+                                      Just _  → True
+                                      Nothing → harvestOpen sp doy
+                                                    (floraGrowth sp absDay i)
+                                  mFh = listToMaybe
+                                      [ fh2 | (i, sp) ← insts
+                                           , Just fh2 ← [fsHarvest sp]
+                                           , maybe True (`elem` fhTags fh2) tagFilter
+                                           , windowOk i sp ]
+                              case mFh of
+                                  Just fh | live ≤ 0 → do
+                                      spawned ← spawnYields env ws gx gy (fhYield fh)
+                                      atomicModifyIORef' (wsFloraHarvestsRef ws) $
+                                          \hs → (HM.insert (gx, gy) (fhRegrowth fh) hs, ())
+                                      bumpQuadCacheGen ws
+                                      pure (Just spawned)
+                                  _ → pure Nothing
             case mSpawned of
                 Nothing → Lua.pushnil
                 Just spawned → do
@@ -435,3 +476,136 @@ itemGetFoodFn env = do
                     Lua.pushnumber (Lua.Number (realToFrac (ifCaloriesPerKg f)))
                     Lua.setfield (-2) "caloriesPerKg"
             return 1
+
+-- | Find a registered flora species by its YAML @name@. Catalogs are
+--   small (tens of species), so a linear scan needs no index.
+findSpeciesByName ∷ Text → FloraCatalog → Maybe (FloraId, FloraSpecies)
+findSpeciesByName name cat =
+    listToMaybe [ (FloraId k, sp)
+                | (k, sp) ← HM.toList (fcSpecies cat), fsName sp ≡ name ]
+
+-- | world.plantCropAt(gx, gy, speciesName) → true | nil
+--
+--   Foundation-level planting primitive (#334): plants a groundcover
+--   crop plot at (gx, gy) at full health, dated to the CURRENT world
+--   day (the #332 runtime's age-0 baseline for this plot — see
+--   World.Flora.CropPlot). Refuses (nil) unless the tile is plantable
+--   (tilled soil, #333 — same gate as world.isPlantable), speciesName
+--   names a registered flora species, and the tile's chunk is loaded.
+--
+--   This is a low-level verb with no player-facing tool/AI/UI yet —
+--   #335 (planting tool + suitability) and #336 (farm AI) build the
+--   real planting flow on top of it, the same foundation-first shape
+--   as #300's unit.repairItem preceding the repair AI/UI. A planted
+--   plot renders as the tile's veg-fill (World.Render.Quads), NOT a
+--   floating sprite.
+worldPlantCropAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldPlantCropAtFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    mName ← Lua.tostring 3
+    case (mGx, mGy, mName) of
+        (Just gx', Just gy', Just nameBS) → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+                name = TE.decodeUtf8 nameBS
+            ok ← Lua.liftIO $ do
+                mWs ← activeWorldState env
+                case mWs of
+                    Nothing → pure False
+                    Just ws → do
+                        tileData ← readIORef (wsTilesRef ws)
+                        let (coord, (lx, ly)) = globalToChunk gx gy
+                            idx = ly * chunkSize + lx
+                        case lookupChunk coord tileData of
+                            Nothing → pure False
+                            Just lc → do
+                                let col = lcTiles lc V.! idx
+                                    z    = lcSurfaceMap lc VU.! idx
+                                    i    = z - ctStartZ col
+                                    vg   = if i ≥ 0 ∧ i < VU.length (ctVeg col)
+                                           then ctVeg col VU.! i else 0
+                                if not (isTilledSoil vg) then pure False
+                                else do
+                                    cat ← readIORef (floraCatalogRef env)
+                                    case findSpeciesByName name cat of
+                                        Nothing → pure False
+                                        Just (fid, _) → do
+                                            (_, absDay) ← growthClock ws
+                                            let plot = newCropPlot fid absDay 1.0
+                                            atomicModifyIORef' (wsCropPlotsRef ws) $
+                                                \ps → (HM.insert (gx, gy) plot ps, ())
+                                            bumpQuadCacheGen ws
+                                            pure True
+            Lua.pushboolean ok
+            return 1
+        _ → Lua.pushnil >> return 1
+
+-- | world.getCropPlotAt(gx, gy) → {id, age, health, phase, stage,
+--   generation, dead, harvestable} | nil
+--
+--   The #332 growth-state inspection window for a planted groundcover
+--   crop plot (#334) — mirrors world.getFloraGrowthAt's shape for wild/
+--   row flora, but for a single tile-keyed plot rather than an array of
+--   instances, and with age measured in days ELAPSED SINCE PLANTING
+--   (World.Flora.CropPlot) rather than an absolute placement baseline.
+--   nil when the tile has no planted crop or names an unregistered
+--   species.
+worldGetCropPlotAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetCropPlotAtFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+            mResult ← Lua.liftIO $ do
+                mWs ← activeWorldState env
+                case mWs of
+                    Nothing → pure Nothing
+                    Just ws → do
+                        plots ← readIORef (wsCropPlotsRef ws)
+                        case HM.lookup (gx, gy) plots of
+                            Nothing → pure Nothing
+                            Just cp → do
+                                cat ← readIORef (floraCatalogRef env)
+                                (_, absDay) ← growthClock ws
+                                pure $ do
+                                    sp ← lookupSpecies (cpSpecies cp) cat
+                                    let elapsed = cropPlotElapsedDays absDay cp
+                                        g = floraGrowth sp elapsed
+                                                (cropPlotInstance cp)
+                                    Just ( fsName sp, g, cpHealth cp
+                                         , lifePhaseText ⊚ growthPhaseTag sp g
+                                         , annualStageText ⊚
+                                               activeStageTag sp elapsed
+                                         , isJust (fsHarvest sp)
+                                             ∧ harvestOpen sp elapsed g )
+            case mResult of
+                Nothing → Lua.pushnil
+                Just (name, g, health, mPhase, mStage, harvestable) → do
+                    Lua.newtable
+                    Lua.pushstring (TE.encodeUtf8 name)
+                    Lua.setfield (-2) "id"
+                    Lua.pushnumber (Lua.Number (realToFrac (fgAge g)))
+                    Lua.setfield (-2) "age"
+                    Lua.pushnumber (Lua.Number (realToFrac health))
+                    Lua.setfield (-2) "health"
+                    case mPhase of
+                        Just t → do
+                            Lua.pushstring (TE.encodeUtf8 t)
+                            Lua.setfield (-2) "phase"
+                        Nothing → pure ()
+                    case mStage of
+                        Just t → do
+                            Lua.pushstring (TE.encodeUtf8 t)
+                            Lua.setfield (-2) "stage"
+                        Nothing → pure ()
+                    Lua.pushinteger (fromIntegral (fgGeneration g))
+                    Lua.setfield (-2) "generation"
+                    Lua.pushboolean (fgDead g)
+                    Lua.setfield (-2) "dead"
+                    Lua.pushboolean harvestable
+                    Lua.setfield (-2) "harvestable"
+            return 1
+        _ → Lua.pushnil >> return 1

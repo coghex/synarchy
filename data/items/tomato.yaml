@@ -1,0 +1,13 @@
+items:
+  # Row-crop harvest yield (#334) — data/flora/crops.yaml's tomato_plant.
+  # DISCRETE food, same shape as the #94 foraged yields (foraged_food.yaml).
+  - name: "tomato"
+    display_name: "Tomato"
+    sprite: "assets/textures/items/supply/wild_berries.png"  # placeholder — reused, no dedicated art yet
+    weight: 0.12
+    category: Supplies
+    food:
+      nutrition:
+        # A single tomato — light next to a ration (250), on par with
+        # a handful of wild berries.
+        calories: 35

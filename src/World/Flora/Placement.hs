@@ -110,8 +110,8 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId
                     baseW = fwFootprint wg
                     count = instanceCount cat h
                     maxAge = speciesMaxAge fid catalog
-                in [ mkInstance fid lx ly surfZ seed gx gy
-                         (i * 10 + j) count baseW maxAge fitness
+                in [ mkInstance cat fid lx ly surfZ seed gx gy
+                         (i * 10 + j) j count baseW maxAge fitness
                    | j ← [0 .. count - 1]
                    ]
            else []
@@ -156,18 +156,25 @@ instanceCount cat h
     | cat ≡ "shrub"     = 1
     | cat ≡ "bush"      = 1 + fromIntegral ((h `shiftR` 16) .&. 0x01)
     | cat ≡ "cactus"    = 1
+    | cat ≡ "row_crop"  = 3
     | otherwise          = 2 + fromIntegral ((h `shiftR` 16) .&. 0x01)
 
--- | Build one FloraInstance with deterministic sub-tile offset.
---   ALL instances get a random offset (including trees with count=1).
---   The offset is clamped by the footprint so the base stays on the tile.
+-- | Build one FloraInstance with a deterministic sub-tile offset.
+--   ALL instances get an offset (including trees with count=1). The
+--   offset is clamped by the footprint so the base stays on the tile.
 --   Health is the tile's habitat fitness (#332): the same 0–1
 --   'speciesFitness' that gated placement, so a plant in marginal
 --   habitat starts (and stays — climate is static) less healthy, which
 --   slows its derived growth (World.Flora.Growth).
-mkInstance ∷ FloraId → Int → Int → Int → Word64 → Int → Int
-           → Int → Int → Float → Float → Float → FloraInstance
-mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge health =
+--
+--   Every category jitters its offset randomly EXCEPT "row_crop"
+--   (#334): instead of scattering, its instances lay out along a single
+--   evenly-spaced line across the tile ("laid at intervals / in rows"),
+--   using the same offU/offV sub-tile fields every other category
+--   jitters — @j@ is this instance's 0-based position among @count@.
+mkInstance ∷ Text → FloraId → Int → Int → Int → Word64 → Int → Int
+           → Int → Int → Int → Float → Float → Float → FloraInstance
+mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health =
     let h = floraHash seed gx gy (fromIntegral i + 1)
         rawU = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
         rawV = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
@@ -176,8 +183,11 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge health =
                    then (baseWidth / 2.0) / 96.0
                    else 0.0
         maxOff = max 0.0 (0.5 - halfBase)
-        offU = clamp (negate maxOff) maxOff (rawU * 0.7)
-        offV = clamp (negate maxOff) maxOff (rawV * 0.7)
+
+        (offU, offV)
+            | cat ≡ "row_crop" = (rowOffset j count maxOff, 0.0)
+            | otherwise        = ( clamp (negate maxOff) maxOff (rawU * 0.7)
+                                  , clamp (negate maxOff) maxOff (rawV * 0.7) )
 
         variant = fromIntegral ((h `shiftR` 16) .&. 0x03)
 
@@ -197,6 +207,17 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge health =
         , fiVariant   = variant
         , fiBaseWidth = baseWidth
         }
+
+-- | Evenly space @count@ row-crop instances along the U axis, spanning
+--   as much of the tile as @maxOff@ (the footprint clamp) allows. A
+--   single instance sits at tile center, like every other category.
+rowOffset ∷ Int → Int → Float → Float
+rowOffset j count maxOff
+    | count ≤ 1 = 0.0
+    | otherwise =
+        let usable = min maxOff 0.35
+            step = (2.0 * usable) / fromIntegral (count - 1)
+        in negate usable + fromIntegral j * step
 
 -- * Hash
 

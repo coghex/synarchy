@@ -641,6 +641,7 @@ library
                      World.Flora.Placement
                      World.Flora.Render
                      World.Flora.Harvest
+                     World.Flora.CropPlot
                      World.Fluids
                      World.Fluid.Types
                      World.Fluid.Internal
