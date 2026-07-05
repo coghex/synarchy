@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Power-node placement probe (#358) — the build-tool-driven path, not
-just the raw Lua API.
+"""Power-node placement + network probe (#358/#360) — the build-tool-
+driven path, not just the raw Lua API.
 
 #358 ships the power-node registry (Power.Types), the power.* Lua verbs
 (isPlaceable / placeNode / getNode / getNodeForBuilding / listNodes), and
@@ -9,13 +9,23 @@ buildTool.commitPlacement routes a solar_panel / high_voltage_battery
 placement through power.placeNode against the currently-selected unit
 (consuming the item). Ordinary non-power buildings are handled by the
 normal build-tool paths (starting-building spawn or construction
-designation), not by this power placement helper. This probe exercises
-the routed power path end-to-end, not just the underlying Haskell API,
-then proves the result through a save -> quit -> fresh-restart -> load
-round-trip (the gold-standard save check, mirroring
-multiworld_save_probe.py) since a power node is only
-"network-attachment-ready" if it actually reconnects to its building
-after a reload.
+designation), not by this power placement helper. #360 adds wire
+connectivity + the energy balance tick (Power.Network): this probe wires
+the placed nodes together with scripts/wire.lua's M.place (the same verb
+the chop/construct-style wire designation job calls), confirms
+power.listNetworks/getNetworkForNode report the connected component, and
+fast-forwards the world clock to show a wired battery's storedWh actually
+rise under real daylight generation. It then proves everything (nodes AND
+their charge) through a save -> quit -> fresh-restart -> load round-trip
+(the gold-standard save check, mirroring multiworld_save_probe.py) since a
+power node is only "network-attachment-ready" if it actually reconnects to
+its building after a reload.
+
+Brownout-under-load isn't probed here: #361 (the generic requires_power
+consumer) doesn't exist yet, so there's no real drain to attach to a
+network. That side of the balance math (charge, hold, brownout under a
+synthetic drain) is covered by the pure hspec suite
+(Test.Headless.Power.Network), which needs no real consumer to exercise it.
 
 What it does:
   1. Boots a headless engine, loads defs, builds a flat arena, spawns a
@@ -30,8 +40,14 @@ What it does:
      (power.getNode / getNodeForBuilding).
   5. Exhausting the mule's remaining solar panels makes the next
      commitPlacement refuse (inventory unaffected).
-  6. Save -> quit -> fresh restart -> reload defs -> load: every placed
-     building AND its power node survive, reconnected by BuildingId.
+  6. Wire connects the panel + battery: power.listNetworks/
+     getNetworkForNode report them on ONE network; the unwired second
+     panel reports no network at all.
+  7. Fast-forwarding the world clock (world.setTimeScale) over real
+     daylight hours shows the wired battery's storedWh actually rise.
+  8. Save -> quit -> fresh restart -> reload defs -> load: every placed
+     building, its power node, AND the battery's charged storedWh survive,
+     reconnected by BuildingId.
 
 Usage: python3 tools/power_probe.py [--port 9358]
 Exit 0 = every check passed.
@@ -283,7 +299,48 @@ def main() -> int:
         passed = check(passed, node_count == expected_nodes,
                        f"listNodes reports {expected_nodes} nodes", node_count)
 
-        # --- 6. Save -> quit -> fresh restart -> load ---
+        # --- 6. Wire connectivity (#360): join the panel (7,5) and the
+        # battery (8,5) with a two-tile wire run just south of them, and
+        # confirm both land on ONE network. M.place is the same verb the
+        # wire designation job calls (scripts/unit_ai.lua) — calling it
+        # directly here skips the job/AI machinery, matching how other
+        # probes call a tool module's placement function directly.
+        for gx, gy in [(7, 6), (8, 6)]:
+            send(port, f"require('scripts.wire').place({gx}, {gy}); return 'ok'")
+
+        panel_node = jget(port, f"return power.getNodeForBuilding({panel_bid})")
+        batt_node = jget(port, f"return power.getNodeForBuilding({batt_bid})")
+        panel_net = jget(port, f"return power.getNetworkForNode({panel_node['id']})")
+        batt_net = jget(port, f"return power.getNetworkForNode({batt_node['id']})")
+        passed = check(passed,
+            isinstance(panel_net, dict) and isinstance(batt_net, dict)
+            and sorted(panel_net.get("nodeIds", [])) == sorted(batt_net.get("nodeIds", []))
+            and len(panel_net.get("nodeIds", [])) == 2,
+            "solar panel + battery share one network after wiring",
+            {"panel_net": panel_net, "battery_net": batt_net})
+
+        second_panel_node = jget(port,
+            f"return power.getNodeForBuilding({second_panel_bid})")
+        lone_net = jget(port,
+            f"return power.getNetworkForNode({second_panel_node['id']})")
+        passed = check(passed, lone_net is None,
+                       "the unwired second solar panel has no network", lone_net)
+
+        # --- 7. Charging over a simulated few hours of daylight ---
+        stored_before = jget(port,
+            f"return power.getNodeForBuilding({batt_bid}).storedWh")
+        send(port, "world.setTimeScale('power_probe', 120); return 'ok'")
+        time.sleep(2.5)
+        send(port, "world.setTimeScale('power_probe', 0); return 'ok'")
+        stored_after = jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh")
+        passed = check(passed,
+            isinstance(stored_before, (int, float))
+            and isinstance(stored_after, (int, float))
+            and stored_after > stored_before,
+            "battery storedWh rose over simulated daylight "
+            f"({stored_before} -> {stored_after})")
+
+        # --- 8. Save -> quit -> fresh restart -> load ---
         saved = send(port, f"return engine.saveWorld('power_probe', '{save_name}')")
         passed = check(passed, saved.strip() == "true",
                        "engine.saveWorld returned true", saved)
@@ -326,6 +383,13 @@ def main() -> int:
                 and node.get("capacityWh") == want_cap,
                 f"building #{bid}'s power node survived with role/params intact",
                 node)
+            if bid == batt_bid:
+                stored_reloaded = node.get("storedWh") if isinstance(node, dict) else None
+                passed = check(passed,
+                    isinstance(stored_reloaded, (int, float))
+                    and abs(stored_reloaded - stored_after) < 1e-3,
+                    "battery's charged storedWh survived the reload "
+                    f"({stored_after} -> {stored_reloaded})")
 
         node_count_after = as_int(send(port, "local ns=power.listNodes(); return #ns"))
         passed = check(passed, node_count_after == expected_nodes,
