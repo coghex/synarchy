@@ -27,13 +27,13 @@
 --   caller-constructed node copies that could drift out of sync with the
 --   registry.
 --
---   Consumer drain (#361 — "requires_power" workshops): a consumer is
+--   Consumer drain (#361 — power-consuming workshops): a consumer is
 --   deliberately NOT a 'PowerNode' (see Power.Types) — it's an ordinary
---   'Building.Types.BuildingDef' with @bdRequiresPower@/@bdPowerDrain@
---   set, so a workshop needs no registry entry of its own.
---   'consumersOn' derives every Built requires_power building's tile +
---   drain fresh from 'BuildingManager' each call, exactly like
---   'positionsOf' derives a node's tile from the building it rides on.
+--   'Building.Types.BuildingDef' with @bdPowerDrain > 0@, so a workshop
+--   needs no registry entry of its own. 'consumersOn' derives every
+--   Built consuming building's tile + drain fresh from
+--   'BuildingManager' each call, exactly like 'positionsOf' derives a
+--   node's tile from the building it rides on.
 --   A consumer's tile joins the SAME connected-components pass as
 --   nodes (touching/adjacent-to-wire, same as a node), but a consumer
 --   never BRIDGES two otherwise-disconnected wire runs the way a node
@@ -330,8 +330,10 @@ positionsOf pageId bm nodes = HM.fromList
     , biPage bi ≡ pageId
     ]
 
--- | Every requires_power building's tile + drain on a page (#361) —
---   the consumer-side counterpart to 'positionsOf'. Unlike nodes, a
+-- | Every power-consuming building's tile + drain on a page (#361) —
+--   the consumer-side counterpart to 'positionsOf'. A building is a
+--   consumer iff its def's @bdPowerDrain > 0@ (no separate
+--   requires_power flag to fall out of sync with it). Unlike nodes, a
 --   consumer is derived fresh from 'BuildingManager' + its def every
 --   call rather than kept in a registry (see the module haddock), so
 --   there's nothing to prune on save/load and a def's power_drain edit
@@ -345,6 +347,6 @@ consumersOn pageId now bm = HM.fromList
     | (bid, bi) ← HM.toList (bmInstances bm)
     , biPage bi ≡ pageId
     , Just def ← [HM.lookup (biDefName bi) (bmDefs bm)]
-    , bdRequiresPower def
+    , bdPowerDrain def > 0
     , currentActivity now bi def ≡ Built
     ]

@@ -148,7 +148,6 @@ loadBuildingYamlFn env backendState = do
                             , bdOperations      = bydOperations def
                             , bdAnimations      = animMap
                             , bdStateAnims      = stateAnims
-                            , bdRequiresPower   = bydRequiresPower def
                             , bdPowerDrain      = bydPowerDrain def
                             }
                     atomicModifyIORef' (buildingManagerRef env) $ \bm →

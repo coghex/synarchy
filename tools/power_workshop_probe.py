@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
-"""Powered-workshop consumer probe (#361) — the generic requires_power
+"""Powered-workshop consumer probe (#361) — the generic power-drain
 consumer on top of #358 (nodes) / #359 (wire) / #360 (network balance).
 
-#361 gives power a purpose: a workshop building def can set
-`requires_power` + `power_drain` (data-driven, see workbench.yaml) and
-becomes a CONSUMER — not a Power.Types node (Power.Network derives its
-tile + drain fresh from BuildingManager every call, see
-Power.Network.consumersOn) — whose drain folds into whatever network its
-tile is wired to. `power.isBuildingPowered(bid)` answers the gating
-question; `Engine.Scripting.Lua.API.Craft.validateStation` refuses
-craft.executeAt on an unpowered station, and the craft_job AI's "working"
-phase pours no progress while browned out (idle, not failed) — resuming
-automatically once the network has generation/charge again.
+#361 gives power a purpose: a workshop building def can set a
+`power_drain` (watts) and becomes a CONSUMER — not a Power.Types node
+(Power.Network derives its tile + drain fresh from BuildingManager every
+call, see Power.Network.consumersOn) — whose drain folds into whatever
+network its tile is wired to. A building is a consumer iff its
+power_drain is > 0; no shipped building sets one today (workbench/furnace
+stay power-free — assigning power_drain to real content, incl. any new
+art it wants, is a follow-up, not this probe's job). `power.
+isBuildingPowered(bid)` answers the gating question; `Engine.Scripting.
+Lua.API.Craft.validateStation` refuses craft.executeAt on an unpowered
+station, and the craft_job AI's "working" phase pours no progress while
+browned out (idle, not failed) — resuming automatically once the network
+has generation/charge again.
 
-What it does (all against a single flat arena, workbench requires_power
-per data/buildings/workbench.yaml):
-  1. Boots headless, loads defs + a tiny probe recipe (station "forge"),
-     builds a real workbench through the normal materials + build-progress
-     machinery.
+This probe registers its OWN throwaway building + recipe defs (mirroring
+how tools/craft_bill_probe.py injects a temp recipe YAML) rather than
+flipping a shipped building's power_drain — so it exercises the #361
+mechanism in complete isolation from every other probe's fixtures.
+
+What it does (all against a single flat arena):
+  1. Boots headless, loads real defs + a synthetic power_drain=150W
+     "forge" workshop + a tiny probe recipe for it, builds the workshop
+     through the normal materials + build-progress machinery.
   2. Unwired: power.isBuildingPowered is false; craft.executeAt refuses
      with a "no power" reason.
-  3. Wires a solar panel + battery to the workbench (2 wire tiles, the
+  3. Wires a solar panel + battery to the workshop (2 wire tiles, the
      panel bridges them exactly like the #360 connectivity tests) at
      midnight: still unpowered (0 generation, 0 stored) — wiring alone
-     isn't enough. power.listNetworks() reports drainW == the workbench's
+     isn't enough. power.listNetworks() reports drainW == the workshop's
      power_drain and consumerIds includes it.
   4. Flips to noon (panel's peak output alone covers the drain): now
      powered, and craft.executeAt succeeds.
@@ -51,8 +58,11 @@ import sys
 import time
 
 SPROOT = "/tmp"
-TEST_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
+TEST_RECIPE_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
+TEST_BUILDING_YAML = f"{SPROOT}/power_workshop_probe_buildings.yaml"
 PROBE_RECIPE = "power_workshop_probe_forge"
+PROBE_BUILDING = "power_workshop_probe_bench"
+PROBE_DRAIN_W = 150.0
 
 TEST_RECIPES = f"""\
 recipes:
@@ -64,6 +74,27 @@ recipes:
     outputs:
       - item: steel_hardware
         count: 1
+"""
+
+# A throwaway workshop def: no materials to deliver (build_work alone
+# gates it Built), one "forge" operation, and the power_drain (#361)
+# under test — reusing an existing texture path since art isn't the
+# point here (see the probe's docstring: assigning power_drain to real
+# content is a follow-up, not this fixture).
+TEST_BUILDINGS = f"""\
+buildings:
+  - name: "{PROBE_BUILDING}"
+    display_name: "Probe Bench"
+    category: "Production"
+    description: "Throwaway #361 test fixture — not shipped content."
+    sprite: "assets/textures/buildings/workbench/default.png"
+    tile_size: {{ x: 1, y: 1 }}
+    placement: "flat_ground"
+    race: "acolyte_cult"
+    build_work: 60.0
+    operations:
+      - forge
+    power_drain: {PROBE_DRAIN_W}
 """
 
 PAGE = "power_workshop_probe"
@@ -297,10 +328,14 @@ def main() -> int:
     proc = boot(port, log)
     try:
         bootstrap_defs(port)
-        with open(TEST_YAML, "w") as f:
+        with open(TEST_RECIPE_YAML, "w") as f:
             f.write(TEST_RECIPES)
-        n = as_int(send(port, f"return engine.loadRecipeYaml('{TEST_YAML}')"))
+        n = as_int(send(port, f"return engine.loadRecipeYaml('{TEST_RECIPE_YAML}')"))
         passed = check(passed, n == 1, "probe recipe loaded", f"count={n}")
+        with open(TEST_BUILDING_YAML, "w") as f:
+            f.write(TEST_BUILDINGS)
+        n = as_int(send(port, f"return engine.loadBuildingYaml('{TEST_BUILDING_YAML}')"))
+        passed = check(passed, n == 1, "probe building loaded", f"count={n}")
 
         send(port, f"world.initArena('{PAGE}'); return 'ok'")
         send(port, f"world.show('{PAGE}'); return 'ok'")
@@ -315,13 +350,12 @@ def main() -> int:
 
         ai_off(port)
         uid = spawn_acolyte(port, 6, 3)
-        bid_w = spawn_station(port, uid, "workbench", 6, 2,
-                              {"wood_log": 4, "steel_hardware": 4, "steel_bar": 2})
+        bid_w = spawn_station(port, uid, PROBE_BUILDING, 6, 2, {})
 
         # --- 1. Never wired: unpowered, executeAt refuses ---
         powered = send(port, f"return power.isBuildingPowered({bid_w})").strip('"')
         passed = check(passed, powered == "false",
-                       "requires_power workbench starts unpowered (never wired)",
+                       "power_drain workshop starts unpowered (never wired)",
                        powered)
 
         send(port, f"unit.addItem({uid}, 'steel_bar'); return 'ok'")
@@ -333,7 +367,7 @@ def main() -> int:
             and "no power" in str(r.get("err", "")),
             "craft.executeAt refuses with a no-power reason (unwired)", r)
 
-        # --- 2. Wire a panel + battery to the workbench, still midnight ---
+        # --- 2. Wire a panel + battery to the workshop, still midnight ---
         send(port, f"unit.addItem({uid}, 'solar_panel'); "
                    f"unit.addItem({uid}, 'high_voltage_battery'); return 'ok'")
         panel_bid = as_int(send(port,
@@ -355,20 +389,28 @@ def main() -> int:
             "battery node role=storage, 5000Wh", batt_node)
 
         # Two wire stubs; the panel at (8,2) is orthogonally adjacent to
-        # BOTH (7,2) and (9,2), bridging them (+ the workbench at (6,2)
+        # BOTH (7,2) and (9,2), bridging them (+ the workshop at (6,2)
         # and the battery at (10,2)) into one network — same bridging
         # mechanic as the #360 connectivity tests, just with a consumer
         # building riding along instead of only nodes.
         send(port, "require('scripts.wire').place(7, 2); return 'ok'")
         send(port, "require('scripts.wire').place(9, 2); return 'ok'")
 
+        # wire.place queues a world command the world thread applies on
+        # its own next iteration — poll rather than querying the very
+        # instant after both sends (the same class of async landing as
+        # world.setTime below).
+        poll(port, 5,
+             lambda: len((network_for(port, bid_w) or {}).get("nodeIds", [])) == 2,
+             interval=0.2)
         net = network_for(port, bid_w)
         passed = check(passed,
             isinstance(net, dict)
             and sorted(net.get("nodeIds", [])) == sorted(
                 [panel_node["id"], batt_node["id"]])
-            and net.get("drainW") == 150 and net.get("generationW") == 0,
-            "wired at midnight: one network, drainW=150W, generationW=0", net)
+            and net.get("drainW") == PROBE_DRAIN_W and net.get("generationW") == 0,
+            f"wired at midnight: one network, drainW={PROBE_DRAIN_W}W, generationW=0",
+            net)
 
         powered = send(port, f"return power.isBuildingPowered({bid_w})").strip('"')
         passed = check(passed, powered == "false",

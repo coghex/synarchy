@@ -9,7 +9,8 @@
 --   on load.
 --
 --   Wire adjacency / connected-components + energy balance live in
---   'Power.Network' (#360); consumer drain (#361) is still deferred.
+--   'Power.Network' (#360), including consumer drain (#361 — an
+--   ordinary building with @bdPowerDrain > 0@, not a node here).
 --   This registry additionally carries each storage node's own charge
 --   ('pnStoredWh'), the one piece of #360 state that must survive save/
 --   load — connectivity and the tick's generation/drain numbers are all
@@ -40,8 +41,8 @@ import Building.Types (BuildingId(..))
 
 -- | What a placed power node does on its future network. Sources
 --   generate (scaled by time-of-day, #360); storage banks charge and
---   discharge. Consumers (#361) aren't a node role — they hang
---   requires_power/power_drain off ordinary building defs instead.
+--   discharge. Consumers (#361) aren't a node role — they hang a
+--   power_drain off ordinary building defs instead.
 data PowerRole = PowerSource | PowerStorage
     deriving (Show, Eq, Generic, Serialize)
 

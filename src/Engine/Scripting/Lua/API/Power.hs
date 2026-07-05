@@ -281,7 +281,7 @@ activeNetworkSnapshots env = do
                                     positions consumers)
 
 -- | Whether a building's power requirement (#361), if any, is currently
---   met. A building whose def doesn't set requires_power is trivially
+--   met. A building whose def has no power_drain (≤ 0) is trivially
 --   always powered — this is only meaningful to ask about a consumer.
 --   Otherwise: false if the building doesn't exist, isn't Built, or its
 --   network (if it has one at all) is in Brownout; true once wired to a
@@ -298,7 +298,7 @@ isBuildingPowered env bid = do
         Just inst → case HM.lookup (biDefName inst) (bmDefs bm) of
             Nothing  → pure False
             Just def
-                | not (bdRequiresPower def) → pure True
+                | bdPowerDrain def ≤ 0 → pure True
                 | otherwise → do
                     wm ← readIORef (worldManagerRef env)
                     case lookup (biPage inst) (wmWorlds wm) of
