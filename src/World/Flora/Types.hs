@@ -28,9 +28,11 @@ module World.Flora.Types
     , emptyFloraCatalog
     , insertSpecies
     , lookupSpecies
+    , findSpeciesByName
     , nextFloraId
     , insertWorldGen
     , worldGenSpecies
+    , isPlantableCropCategory
     ) where
 
 import UPrelude
@@ -264,6 +266,15 @@ insertSpecies (FloraId fid) species cat =
 lookupSpecies ∷ FloraId → FloraCatalog → Maybe FloraSpecies
 lookupSpecies (FloraId fid) cat = HM.lookup fid (fcSpecies cat)
 
+-- | Find a registered flora species by its YAML @name@. Catalogs are
+--   small (tens of species), so a linear scan needs no index. Shared by
+--   any caller that only has a player/script-facing crop name (#334's
+--   world.plantCropAt, #335's plant designation + suitability query).
+findSpeciesByName ∷ Text → FloraCatalog → Maybe (FloraId, FloraSpecies)
+findSpeciesByName name cat =
+    listToMaybe [ (FloraId k, sp)
+                | (k, sp) ← HM.toList (fcSpecies cat), fsName sp ≡ name ]
+
 insertWorldGen ∷ FloraId → FloraWorldGen → FloraCatalog → FloraCatalog
 insertWorldGen (FloraId fid) wg cat =
     cat { fcWorldGen = HM.insert fid wg (fcWorldGen cat) }
@@ -271,3 +282,12 @@ insertWorldGen (FloraId fid) wg cat =
 worldGenSpecies ∷ FloraCatalog → [(FloraId, FloraWorldGen)]
 worldGenSpecies cat =
     map (\(k, v) → (FloraId k, v)) $ HM.toList (fcWorldGen cat)
+
+-- | The two worldGen category tags (World.Flora.Placement) that mark a
+--   species as a plantable crop — a row_crop 'FloraInstance' (#334) or a
+--   groundcover 'World.Flora.CropPlot' tile-fill (#334). The planting
+--   designation tool (#335) and its suitability query accept both forms
+--   symmetrically (recording intent only); execution asymmetry between
+--   the two forms is #336's concern, not this predicate's.
+isPlantableCropCategory ∷ Text → Bool
+isPlantableCropCategory cat = cat ≡ "row_crop" ∨ cat ≡ "groundcover_crop"

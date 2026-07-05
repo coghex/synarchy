@@ -68,6 +68,10 @@ data CursorState = CursorState
     -- | Texture for committed till-designation markers (set from Lua
     --   like the cursor textures; rendered over designated fields).
     , tillDesignTexture ∷ Maybe TextureHandle
+    -- | Texture for committed plant-designation markers (#335). No
+    --   anchor field — the plant tool is single-tile, no pending
+    --   rectangle to preview.
+    , plantDesignTexture ∷ Maybe TextureHandle
     -- | Ground item selected in the world view (white outline +
     --   info panel). Mutually exclusive with unit/building selection
     --   (enforced by the Lua click routing).
@@ -101,5 +105,6 @@ emptyCursorState =
         , chopDesignTexture = Nothing
         , tillAnchor = Nothing
         , tillDesignTexture = Nothing
+        , plantDesignTexture = Nothing
         , selectedGroundItem = Nothing
         }

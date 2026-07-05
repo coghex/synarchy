@@ -1289,6 +1289,14 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
             return
         end
     end
+    -- Planting screen (#335) crop-list scrollbar.
+    local plantPanel = package.loaded["scripts.plant_panel"]
+    if plantPanel and plantPanel.isOpen and plantPanel.isOpen()
+       and plantPanel.onScroll then
+        if plantPanel.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
     -- Unit info v2 stats-panel scrollbar.
     local uimod = package.loaded["scripts.unit_info_v2"]
     if uimod and uimod.onScroll then

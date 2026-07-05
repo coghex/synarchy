@@ -127,6 +127,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texToolChopSelected    = engine.loadTexture("assets/textures/ui/hud/tool_chop_selected.png")
     hud.texToolTill            = engine.loadTexture("assets/textures/ui/hud/tool_till.png")
     hud.texToolTillSelected    = engine.loadTexture("assets/textures/ui/hud/tool_till_selected.png")
+    hud.texToolPlant           = engine.loadTexture("assets/textures/ui/hud/tool_plant.png")
+    hud.texToolPlantSelected   = engine.loadTexture("assets/textures/ui/hud/tool_plant_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/ui/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/ui/hud/utility/zoom_hover.png")
     hud.texWorldSelect         = engine.loadTexture("assets/textures/ui/hud/utility/world_select.png")
@@ -146,6 +148,9 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- Till-designation marker (#333): brown so a field marked for
     -- tilling reads differently from every other designation layer.
     hud.texTillDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/till_designate.png")
+    -- Plant-designation marker (#335): gold so a tile marked for
+    -- planting reads differently from every other designation layer.
+    hud.texPlantDesignate      = engine.loadTexture("assets/textures/ui/hud/utility/plant_designate.png")
 
     -- Event-log toggle (top-left). Two states: default and selected
     -- (drawn while the event log panel is open). The combat-log
@@ -295,6 +300,9 @@ function hud.createUI()
     if hud.texTillDesignate then
         till.setDesignateTexture(hud.worldId, hud.texTillDesignate)
     end
+    if hud.texPlantDesignate then
+        plant.setDesignateTexture(hud.worldId, hud.texPlantDesignate)
+    end
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -393,6 +401,12 @@ function hud.createUI()
                 tooltip     = "Till soil",
             },
             {
+                name        = "tool_plant",
+                texDefault  = hud.texToolPlant,
+                texSelected = hud.texToolPlantSelected,
+                tooltip     = "Plant crop",
+            },
+            {
                 name        = "tool_default",
                 texDefault  = hud.texToolDefault,
                 texSelected = hud.texToolDefaultSelected,
@@ -405,7 +419,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 5,   -- tool_default (the last item)
+        selectedIndex = 6,   -- tool_default (the last item)
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -431,6 +445,10 @@ function hud.createUI()
             -- Route to the till tool so a pending anchor cancels.
             local tillTool = require("scripts.till_tool")
             tillTool.onToolMode(itemName)
+            -- Route to the plant tool so its planting screen closes on
+            -- a tool switch (#335).
+            local plantTool = require("scripts.plant_tool")
+            plantTool.onToolMode(itemName)
             -- Route to the tile editor so its popup can hide on
             -- non-info tools.
             local tileEditor = require("scripts.tile_editor")
@@ -455,6 +473,10 @@ function hud.createUI()
     -- Till designation tool (#333): same hud reference.
     local tillToolMod = require("scripts.till_tool")
     tillToolMod.setup({ hud = hud })
+
+    -- Plant designation tool (#335): same hud reference.
+    local plantToolMod = require("scripts.plant_tool")
+    plantToolMod.setup({ hud = hud })
 
     -- Tile editor lives on the same world_page as the build tool.
     -- It uses the same box texture set + menu font; worldId is used
@@ -495,6 +517,16 @@ function hud.createUI()
     -- cargo/item popups above.
     local craftingPanel = require("scripts.crafting_panel")
     craftingPanel.setup({
+        page      = hud.world_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+    })
+
+    -- Planting screen (#335): same page + assets as the panels above.
+    local plantPanel = require("scripts.plant_panel")
+    plantPanel.setup({
         page      = hud.world_page,
         fbW       = hud.fbW,
         fbH       = hud.fbH,
@@ -632,6 +664,9 @@ function hud.show()
     end
     if hud.texTillDesignate then
         till.setDesignateTexture(hud.worldId, hud.texTillDesignate)
+    end
+    if hud.texPlantDesignate then
+        plant.setDesignateTexture(hud.worldId, hud.texPlantDesignate)
     end
 
     hud.visible = true

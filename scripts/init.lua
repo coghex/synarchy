@@ -21,6 +21,7 @@ local itemInfoPanelScriptId = nil
 local cargoInventoryPanelScriptId = nil
 local itemContentsPanelScriptId = nil
 local craftingPanelScriptId = nil
+local plantPanelScriptId = nil
 local popupScriptId = nil
 local eventLogScriptId = nil
 local combatLogScriptId = nil
@@ -130,6 +131,12 @@ function game.init(scriptId)
     -- own queue-progress refresh to ~1s internally.
     craftingPanelScriptId = engine.loadScript(
         "scripts/crafting_panel.lua", 0.2)
+
+    -- Planting screen (#335): the suitability-sorted crop catalogue the
+    -- plant tool opens on a tilled tile. Same 0.2s tick as the other
+    -- HUD popups (only its search-box polling needs it).
+    plantPanelScriptId = engine.loadScript(
+        "scripts/plant_panel.lua", 0.2)
 
     -- Popup: receives engine.emitEvent broadcasts (onShowPopup) and
     -- renders OK-dismissable popups. Slow tick (1.0s) — render work
@@ -248,6 +255,14 @@ function game.onMouseDown(button, x, y)
         -- and #154 gate.
         local tillTool = require("scripts.till_tool")
         if tillTool.handleMouseDown(button, x, y) then
+            return
+        end
+
+        -- Plant designation tool claims clicks while active (opens the
+        -- planting screen on a tilled tile / closes it), same
+        -- left=act / right=cancel split and #154 gate.
+        local plantTool = require("scripts.plant_tool")
+        if plantTool.handleMouseDown(button, x, y) then
             return
         end
     end
@@ -1035,6 +1050,11 @@ function game.onKeyDown(key)
     if tillTool.handleKeyDown(key) then
         return
     end
+    -- Plant tool's Esc closes the planting screen if it's open.
+    local plantTool = require("scripts.plant_tool")
+    if plantTool.handleKeyDown(key) then
+        return
+    end
     -- ESC clears any active gameplay selection / cursor.
     -- Doesn't conflict with shell/UI focus: those modes consume ESC
     -- earlier in the input thread (LuaFocusLost / LuaUIEscape) and
@@ -1113,6 +1133,9 @@ function game.shutdown()
     end
     if craftingPanelScriptId then
         engine.killScript(craftingPanelScriptId)
+    end
+    if plantPanelScriptId then
+        engine.killScript(plantPanelScriptId)
     end
     if shellScriptId then
         engine.killScript(shellScriptId)
