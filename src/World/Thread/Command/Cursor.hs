@@ -56,7 +56,7 @@ import World.Construct.Apply ( applyConstructSlopeToChunk
                              , clearConstructSlope )
 import World.Chop.Types (newChopDesignation)
 import World.Till.Types (newTillDesignation)
-import World.Vegetation (vegTilledSoil)
+import World.Vegetation (isTilledSoil)
 import World.Thread.Helpers (unWorldPageId)
 
 handleWorldSetZoomCursorHoverCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -618,7 +618,7 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
                         col = lcTiles lc V.! idx
                         i   = z - ctStartZ col
                         alreadyTilled = i ≥ 0 ∧ i < VU.length (ctVeg col)
-                                      ∧ ctVeg col VU.! i ≡ vegTilledSoil
+                                      ∧ isTilledSoil (ctVeg col VU.! i)
                     if isNothing fluid ∧ not hasFlora ∧ not alreadyTilled
                         then Just z
                         else Nothing

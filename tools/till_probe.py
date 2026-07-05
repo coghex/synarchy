@@ -16,7 +16,10 @@ checks:
      claims the designated tile, walks over, tills it, the tile's
      vegetation id flips to the tilled-soil id (world.getVegAt) and the
      designation clears.
-  5. Idempotent re-sweep: designating the same rectangle again after
+  5. Plantable contract: world.isPlantable is false on the untilled
+     tile beforehand and true afterward — the formal "can a crop go
+     here" predicate future farming code (#335) should call.
+  6. Idempotent re-sweep: designating the same rectangle again after
      tilling does not re-mark the now-tilled tile.
 
 Usage: python3 tools/till_probe.py [--port 9178] [--seed 42]
@@ -133,6 +136,12 @@ def main():
         tx, ty = found
         print(f"  tillable tile at ({tx},{ty})")
 
+        pre = jget(port, f"return world.isPlantable({tx},{ty})")
+        ok0 = pre is False
+        passed &= ok0
+        print(f"  [{'PASS' if ok0 else 'FAIL'}] isPlantable is false before "
+              f"tilling: {pre}")
+
         send(port, f"till.designate('probe',{tx},{ty},{tx},{ty}); "
                    f"return 'ok'")
         time.sleep(0.5)
@@ -243,7 +252,14 @@ def main():
             print("\nSOME FAILED")
             return 1
 
-        # --- 5. Idempotent re-sweep: already-tilled tile skipped ---
+        # --- 5. Plantable contract holds post-till ---
+        post = jget(port, f"return world.isPlantable({tx},{ty})")
+        ok4b = post is True
+        passed &= ok4b
+        print(f"  [{'PASS' if ok4b else 'FAIL'}] isPlantable is true after "
+              f"tilling: {post}")
+
+        # --- 6. Idempotent re-sweep: already-tilled tile skipped ---
         send(port, f"till.designate('main_world',{tx},{ty},{tx},{ty}); "
                    f"return 'ok'")
         time.sleep(0.5)

@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     ( worldGetTerrainAtFn
     , worldGetSlopeAtFn
     , worldGetVegAtFn
+    , worldIsPlantableFn
     , worldGetFluidAtFn
     , worldGetSurfaceAtFn
     , worldGetChunkInfoFn
@@ -32,6 +33,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.State (EngineEnv(..), activeWorldState)
 import World.Types
+import World.Vegetation (isTilledSoil)
 import Location.Overlay.Types (overlayToList)
 import World.Generate.Coordinates (globalToChunk)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
@@ -164,6 +166,41 @@ worldGetVegAtFn env = do
                               then ctVeg col VU.! i
                               else 0
                     Lua.pushinteger (fromIntegral vg)
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.isPlantable(gx, gy) → bool | nil (chunk unloaded). The
+--   formal "can a crop go here" contract (#333): true iff the
+--   SURFACE tile's vegetation id is tilled soil ('isTilledSoil').
+--   Farming's planting tool (#335) and any other future consumer
+--   should call this rather than compare world.getVegAt's raw id to
+--   77 — if a soil-type-variant tilled texture ever adds ids
+--   alongside vegTilledSoil, only isTilledSoil needs to grow to match.
+worldIsPlantableFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldIsPlantableFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+                (coord, (lx, ly)) = globalToChunk gx gy
+                idx = ly * chunkSize + lx
+            mTd ← Lua.liftIO $ getWorldTileData env
+            case mTd >>= lookupChunk coord of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        z   = lcSurfaceMap lc VU.! idx
+                        i   = z - ctStartZ col
+                        vg  = if i ≥ 0 ∧ i < VU.length (ctVeg col)
+                              then ctVeg col VU.! i
+                              else 0
+                    Lua.pushboolean (isTilledSoil vg)
                     return 1
         _ → do
             Lua.pushnil
