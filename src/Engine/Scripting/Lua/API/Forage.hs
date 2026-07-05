@@ -484,6 +484,15 @@ findSpeciesByName name cat =
     listToMaybe [ (FloraId k, sp)
                 | (k, sp) ← HM.toList (fcSpecies cat), fsName sp ≡ name ]
 
+-- | The one YAML worldGen category tag (World.Flora.Placement) that
+--   marks a species as the ctVeg-tile-fill groundcover form (#334) —
+--   the only form world.plantCropAt (a CropPlot) is valid for. A
+--   row_crop species is an ordinary FloraInstance placed by the
+--   worldgen pipeline; planting one as a CropPlot would render it as a
+--   tile-fill (World.Render.Quads), the WRONG form for its species.
+groundcoverCropCategory ∷ Text
+groundcoverCropCategory = "groundcover_crop"
+
 -- | world.plantCropAt(gx, gy, speciesName) → true | nil
 --
 --   Foundation-level planting primitive (#334): plants a groundcover
@@ -491,7 +500,10 @@ findSpeciesByName name cat =
 --   day (the #332 runtime's age-0 baseline for this plot — see
 --   World.Flora.CropPlot). Refuses (nil) unless the tile is plantable
 --   (tilled soil, #333 — same gate as world.isPlantable), speciesName
---   names a registered flora species, and the tile's chunk is loaded.
+--   names a REGISTERED GROUNDCOVER species (worldGen category
+--   "groundcover_crop" — a row_crop species, e.g. tomato_plant, is
+--   refused: it's an ordinary FloraInstance, not a CropPlot, see
+--   groundcoverCropCategory), and the tile's chunk is loaded.
 --
 --   This is a low-level verb with no player-facing tool/AI/UI yet —
 --   #335 (planting tool + suitability) and #336 (farm AI) build the
@@ -530,13 +542,19 @@ worldPlantCropAtFn env = do
                                     cat ← readIORef (floraCatalogRef env)
                                     case findSpeciesByName name cat of
                                         Nothing → pure False
-                                        Just (fid, _) → do
-                                            (_, absDay) ← growthClock ws
-                                            let plot = newCropPlot fid absDay 1.0
-                                            atomicModifyIORef' (wsCropPlotsRef ws) $
-                                                \ps → (HM.insert (gx, gy) plot ps, ())
-                                            bumpQuadCacheGen ws
-                                            pure True
+                                        Just (fid, _) →
+                                            case HM.lookup (unFloraId fid)
+                                                     (fcWorldGen cat) of
+                                                Just wg
+                                                    | fwCategory wg
+                                                        ≡ groundcoverCropCategory → do
+                                                    (_, absDay) ← growthClock ws
+                                                    let plot = newCropPlot fid absDay 1.0
+                                                    atomicModifyIORef' (wsCropPlotsRef ws) $
+                                                        \ps → (HM.insert (gx, gy) plot ps, ())
+                                                    bumpQuadCacheGen ws
+                                                    pure True
+                                                _ → pure False
             Lua.pushboolean ok
             return 1
         _ → Lua.pushnil >> return 1
