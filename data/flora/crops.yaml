@@ -1,0 +1,169 @@
+flora:
+  # Cultivated crops (#334) — the two growth forms the farming epic
+  # (#331) calls for, both riding the #332 growth runtime like wild
+  # flora. density: 0.0 on BOTH species: farmed crops shouldn't sprout
+  # in the wild before farming's planting flow (#335/#336) exists to
+  # put them there deliberately. Placeholder art — both reuse an
+  # existing wild-species texture set pending dedicated crop art (same
+  # convention as tools/flora_growth_probe.py's probe_berry fixture).
+
+  # Row crop: a discrete FloraInstance laid at intervals within the
+  # tile (World.Flora.Placement's "row_crop" category — see
+  # rowOffset), same placement/growth/render pipeline as any wild
+  # flora. Fruiting-gated harvest window (like red_raspberry, whose
+  # texture set this reuses).
+  - name: tomato_plant
+    type: row_crop
+    texDir: "assets/textures/flora/red_raspberry"
+    lifecycle: annual
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 60
+      - tag: dead
+        texture: "dead.png"
+        age: 360
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured_dormant.png"
+      - tag: budding
+        startDay: 30
+        texture: "matured_budding.png"
+      - tag: flowering
+        startDay: 60
+        texture: "matured_flowering.png"
+      - tag: fruiting
+        startDay: 90
+        texture: "matured_fruiting.png"
+      - tag: senescing
+        startDay: 240
+        texture: "matured_senescing.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout_dormant.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout_senescing.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: fruiting
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    harvestable:
+      tags: [fruit]
+      yield:
+        - id: tomato
+          count: [2, 4]
+      regrowth_time: 43200
+      harvested_texture: "matured_senescing.png"
+    worldGen:
+      category: row_crop
+      minTemp: 10
+      maxTemp: 32
+      idealTemp: 22
+      minPrecip: 0.3
+      maxPrecip: 0.9
+      idealPrecip: 0.6
+      minAlt: -50
+      maxAlt: 400
+      idealAlt: 100
+      minHumidity: 0.3
+      maxHumidity: 0.9
+      idealHumidity: 0.6
+      maxSlope: 2
+      density: 0.0
+      footprint: 6
+
+  # Groundcover crop: NOT placed as a FloraInstance at all — it's
+  # planted via world.plantCropAt into a World.Flora.CropPlot record
+  # and rendered as the tile's ctVeg fill (World.Render.Quads), with
+  # its texture DERIVED from this species' phases/cycle exactly like a
+  # row crop. worldGen exists only for schema completeness (every
+  # loaded species needs one); density 0.0 keeps it out of natural
+  # FloraInstance placement, which would otherwise render it as a
+  # floating sprite like any other registered species. No annual
+  # fruiting stage — once past its sprout phase it's harvestable
+  # year-round like the reference white_clover forage, whose texture
+  # set this reuses.
+  - name: wheat
+    type: groundcover_crop
+    texDir: "assets/textures/flora/white_clover"
+    lifecycle: annual
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: vegetating
+        texture: "budding.png"
+        age: 30
+      - tag: dead
+        texture: "dead.png"
+        age: 360
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "dormant.png"
+      - tag: budding
+        startDay: 40
+        texture: "budding.png"
+      - tag: flowering
+        startDay: 90
+        texture: "flowering.png"
+      - tag: senescing
+        startDay: 200
+        texture: "senescing.png"
+    cycleOverrides:
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    harvestable:
+      tags: [grain]
+      yield:
+        - id: wheat_grain
+          count: [1, 2]
+      regrowth_time: 43200
+      harvested_texture: "dead.png"
+    worldGen:
+      category: groundcover_crop
+      minTemp: 5
+      maxTemp: 28
+      idealTemp: 17
+      minPrecip: 0.3
+      maxPrecip: 0.8
+      idealPrecip: 0.55
+      minAlt: -30
+      maxAlt: 600
+      idealAlt: 100
+      minHumidity: 0.3
+      maxHumidity: 0.85
+      idealHumidity: 0.55
+      maxSlope: 3
+      density: 0.0
+      footprint: 0

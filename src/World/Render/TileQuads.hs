@@ -9,6 +9,7 @@ module World.Render.TileQuads
     , worldCursorToQuad
     , worldCursorBgToQuad
     , vegToQuad
+    , vegQuadWithTexture
     ) where
 
 import UPrelude
@@ -427,9 +428,29 @@ vegToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
           → Float               -- ^ tileAlpha
           → Float               -- ^ xOffset
           → Maybe SortableQuad
-vegToQuad _ _ _ _ _ _ _ 0 _ _ _ _ _ = Nothing
 vegToQuad lookupSlot lookupFmSlot textures facing
           worldX worldY worldZ vegId slopeId zSlice effDepth tileAlpha xOffset =
+    vegQuadWithTexture lookupSlot lookupFmSlot textures facing
+        worldX worldY worldZ (getVegTexture textures vegId) slopeId
+        zSlice effDepth tileAlpha xOffset
+
+-- | Same tile-fill quad as 'vegToQuad', but taking an already-resolved
+--   texture handle directly instead of a vegId → texture lookup. Used
+--   for a planted crop tile (#334): its current texture is DERIVED
+--   from the #332 growth runtime (World.Flora.CropPlot), not looked up
+--   from a fixed vegetation id. Returns Nothing for handle 0.
+vegQuadWithTexture ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                   → WorldTextures → CameraFacing
+                   → Int → Int → Int     -- ^ worldX, worldY, worldZ
+                   → TextureHandle       -- ^ resolved texture
+                   → Word8               -- ^ slopeId (from the terrain tile)
+                   → Int → Int           -- ^ zSlice, effectiveDepth
+                   → Float               -- ^ tileAlpha
+                   → Float               -- ^ xOffset
+                   → Maybe SortableQuad
+vegQuadWithTexture _ _ _ _ _ _ _ (TextureHandle 0) _ _ _ _ _ = Nothing
+vegQuadWithTexture lookupSlot lookupFmSlot textures facing
+          worldX worldY worldZ texHandle slopeId zSlice effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
@@ -441,7 +462,6 @@ vegToQuad lookupSlot lookupFmSlot textures facing
                 + fromIntegral relativeZ * 0.001
                 + 0.0002
 
-        texHandle = getVegTexture textures vegId
         actualSlot = lookupSlot texHandle
 
         fmHandle = getVegFaceMapTexture textures slopeId

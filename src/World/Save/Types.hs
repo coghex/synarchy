@@ -35,6 +35,7 @@ import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests)
+import World.Flora.CropPlot (CropPlots)
 import Item.Ground (GroundItems)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -122,7 +123,15 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 76  -- v76: WorldPageSave gains trailing
+currentSaveVersion = 77  -- v77: WorldPageSave gains trailing
+                         --      'wpsCropPlots' (#334) — planted
+                         --      groundcover-crop tiles (species +
+                         --      planted day + health). Like the
+                         --      designation layers, restored straight
+                         --      into wsCropPlotsRef; the render pass
+                         --      derives the current growth texture
+                         --      from it with no chunk loading needed.
+                         -- v76: WorldPageSave gains trailing
                          --      'wpsTillDesignations' (#333) — till
                          --      designations (tile → surface z), same
                          --      shape as wpsChopDesignations. ToolMode
@@ -346,6 +355,11 @@ data WorldPageSave = WorldPageSave
         --   designation layers, restored straight into
         --   wsTillDesignationsRef; markers re-render from the stored z.
         --   Appended for save v76.
+    , wpsCropPlots ∷ !CropPlots
+        -- ^ Planted groundcover-crop tiles (#334): tile → (species,
+        --   planted day, health). Restored straight into
+        --   wsCropPlotsRef; render/harvest derive growth state from it
+        --   with no chunk loading needed. Appended for save v77.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

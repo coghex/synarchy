@@ -1,0 +1,13 @@
+items:
+  # Groundcover-crop harvest yield (#334) — data/flora/crops.yaml's
+  # wheat. DISCRETE food, same shape as the #94 foraged yields
+  # (foraged_food.yaml) — a bulk sack (like quinoa_sack.yaml) is a
+  # later step once there's a milling/storage use for loose grain.
+  - name: "wheat_grain"
+    display_name: "Wheat Grain"
+    sprite: "assets/textures/items/supply/quinoa_sack.png"  # placeholder — reused, no dedicated art yet
+    weight: 0.3
+    category: Supplies
+    food:
+      nutrition:
+        calories: 80
