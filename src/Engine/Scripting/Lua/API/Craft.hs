@@ -51,6 +51,7 @@ import World.State.Types (WorldState(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingActivity(..), BuildingManager(..),
                        currentActivity, footprintDist)
+import Engine.Scripting.Lua.API.Power (isBuildingPowered)
 
 -- | engine.loadRecipeYaml(path) — parse a YAML file of recipe defs,
 --   register each into the RecipeManager, return the count.
@@ -225,10 +226,11 @@ craftExecuteAtFn env = do
 validateStation ∷ EngineEnv → UnitId → Text → BuildingId
                 → IO (Either Text ())
 validateStation env uid rid bid = do
-    rm  ← readIORef (recipeManagerRef env)
-    bm  ← readIORef (buildingManagerRef env)
-    um  ← readIORef (unitManagerRef env)
-    now ← readIORef (gameTimeRef env)
+    rm      ← readIORef (recipeManagerRef env)
+    bm      ← readIORef (buildingManagerRef env)
+    um      ← readIORef (unitManagerRef env)
+    now     ← readIORef (gameTimeRef env)
+    powered ← isBuildingPowered env bid
     return $ do
         recipe ← note ("unknown recipe " <> rid) (lookupRecipe rid rm)
         inst   ← note "no such building" (HM.lookup bid (bmInstances bm))
@@ -242,6 +244,14 @@ validateStation env uid rid bid = do
                   <> rdStation recipe)
         unless (currentActivity now inst def ≡ Built) $
             Left "station not built yet"
+        -- #361: a requires_power station that isn't wired to a
+        -- charged network can't run its recipes. Checked here even
+        -- though the craft_job AI already gates its own progress-pour
+        -- loop on the same query (unit_ai.lua), so craft.executeAt
+        -- stays correct for any other caller (debug console, tests,
+        -- a future station type) too.
+        unless powered $
+            Left ("station " <> biDefName inst <> " has no power")
         let utile = (floor (uiGridX u), floor (uiGridY u))
         unless (footprintDist inst utile ≤ 1) $
             Left "unit not adjacent to station"

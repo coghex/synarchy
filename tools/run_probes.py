@@ -88,6 +88,8 @@ PROBES = [
      "multi-world save -> quit -> restart -> load; cross-page survival (#214, #219)"),
     ("physiology", "physiology_probe.py", True,
      "thermoregulation/circulation sanity across controlled environments"),
+    ("power_workshop", "power_workshop_probe.py", True,
+     "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
     ("repair_item", "repair_item_probe.py", True,
      "unit.repairItem primitive (#300)"),
     ("repair", "repair_probe.py", True,

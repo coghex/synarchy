@@ -27,11 +27,18 @@
 --   caller-constructed node copies that could drift out of sync with the
 --   registry.
 --
---   Consumer drain (#361 — "requires_power" workshops) isn't wired up
---   yet: 'tickPowerNodes' takes a @drain-by-node@ map as a parameter so
---   the balance math (charge, hold, brownout-under-load) is fully
---   exercised and tested now; the production call site passes an empty
---   map until #361 has real consumers to populate it from.
+--   Consumer drain (#361 — "requires_power" workshops): a consumer is
+--   deliberately NOT a 'PowerNode' (see Power.Types) — it's an ordinary
+--   'Building.Types.BuildingDef' with @bdRequiresPower@/@bdPowerDrain@
+--   set, so a workshop needs no registry entry of its own.
+--   'consumersOn' derives every Built requires_power building's tile +
+--   drain fresh from 'BuildingManager' each call, exactly like
+--   'positionsOf' derives a node's tile from the building it rides on.
+--   A consumer's tile joins the SAME connected-components pass as
+--   nodes (touching/adjacent-to-wire, same as a node), but a consumer
+--   never BRIDGES two otherwise-disconnected wire runs the way a node
+--   can — only registry nodes drive the union-find merge — since a
+--   workshop is a passive tap on the grid, not infrastructure.
 module Power.Network
     ( PowerNetworkStatus(..)
     , PowerNetworkSnapshot(..)
@@ -41,13 +48,16 @@ module Power.Network
     , tickPowerNodes
     , wireTilesOn
     , positionsOf
+    , consumersOn
     ) where
 
 import UPrelude
 import Data.List (nub)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Building.Types (BuildingInstance(..), BuildingManager(..))
+import Building.Types (BuildingId, BuildingDef(..), BuildingInstance(..),
+                        BuildingManager(..), BuildingActivity(Built),
+                        currentActivity)
 import Structure.Types (StructureSlot(..))
 import World.Chunk.Types (LoadedChunk(..))
 import World.Page.Types (WorldPageId)
@@ -68,6 +78,9 @@ data PowerNetworkSnapshot = PowerNetworkSnapshot
     , pnwStoredWh    ∷ !Float          -- ^ Σ storage node charge
     , pnwCapacityWh  ∷ !Float          -- ^ Σ storage node capacity
     , pnwStatus      ∷ !PowerNetworkStatus
+    , pnwConsumerIds ∷ ![BuildingId]
+      -- ^ #361: every requires_power building attached to this
+      --   network (its drain is already folded into pnwDrainW).
     } deriving (Show, Eq)
 
 -- | Solar output as a fraction of peak, from a raw sun angle
@@ -133,8 +146,9 @@ ufUnion uf@(UnionFind m) a b =
         rb = ufFind uf b
     in if ra ≡ rb then uf else UnionFind (HM.insert ra rb m)
 
--- | Group a world's nodes by which (possibly node-merged) wire network
---   they attach to, looking each one up in @nodes@ (the single source of
+-- | Group a world's nodes (plus #361's requires_power consumer
+--   buildings) by which (possibly node-merged) wire network they
+--   attach to, looking each node up in @nodes@ (the single source of
 --   truth for its current role/wattage/capacity/charge) by id. A node
 --   touching two or more otherwise-disconnected wire components BRIDGES
 --   them into one network via union-find, rather than being attached to
@@ -146,9 +160,19 @@ ufUnion uf@(UnionFind m) a b =
 --   — attaches to nothing. Bare wire runs with no attached node produce
 --   no group; a position with no matching node is silently skipped
 --   (defensive, not expected in practice).
+--
+--   Consumers are looked up against the SAME merged union-find (so one
+--   sitting between two node-bridged wire stubs still joins the single
+--   resulting network) but never drive a merge themselves — see the
+--   module haddock. A consumer whose tile touches no network at all is
+--   dropped from the result entirely (silently unpowered — the correct
+--   answer, since 'isBuildingPowered' treats "not attached to any
+--   network" the same as Brownout).
 groupByComponent ∷ [HS.HashSet (Int, Int)] → PowerNodes
-                 → HM.HashMap PowerNodeId (Int, Int) → [[PowerNode]]
-groupByComponent comps nodes positions =
+                 → HM.HashMap PowerNodeId (Int, Int)
+                 → HM.HashMap BuildingId ((Int, Int), Float)
+                 → [([PowerNode], [(BuildingId, Float)])]
+groupByComponent comps nodes positions consumers =
     let tileToIdx = HM.fromList [ (t, i) | (i, comp) ← zip [0 ..] comps
                                           , t ← HS.toList comp ]
         nodeList  = HM.toList positions
@@ -163,9 +187,14 @@ groupByComponent comps nodes positions =
             []      → Nothing
         byRoot = HM.fromListWith (++)
                    [ (root, [nid]) | (nid, tile) ← nodeList, Just root ← [rootFor tile] ]
-    in [ grp | nids ← HM.elems byRoot
-             , let grp = [ n | nid ← nids, Just n ← [lookupPowerNode nid nodes] ]
-             , not (null grp) ]
+        consumersByRoot = HM.fromListWith (++)
+                   [ (root, [(bid, drainW)])
+                   | (bid, (tile, drainW)) ← HM.toList consumers
+                   , Just root ← [rootFor tile] ]
+    in [ (grp, HM.lookupDefault [] root consumersByRoot)
+       | (root, nids) ← HM.toList byRoot
+       , let grp = [ n | nid ← nids, Just n ← [lookupPowerNode nid nodes] ]
+       , not (null grp) ]
 
 -- | Distribute a charge (non-negative Wh) across batteries proportional
 --   to each one's remaining headroom, so a fuller battery takes less.
@@ -198,15 +227,21 @@ dischargeBatteries wh batteries =
             | (b, s) ← zip batteries stores ]
 
 -- | One network's aggregate numbers plus its batteries' updated charge
---   after @dtHours@ of the given solar intensity vs. registered drain.
---   @dtHours = 0@ is a pure read — no mutation, current numbers only
---   (what 'computeSnapshots' uses for a live query between ticks).
+--   after @dtHours@ of the given solar intensity vs. registered drain
+--   (both node-synthetic 'drainByNode' AND #361's real consumer
+--   buildings — the two sum together into one drainW; a caller with no
+--   consumers on this network just passes @[]@). @dtHours = 0@ is a
+--   pure read — no mutation, current numbers only (what
+--   'computeSnapshots' uses for a live query between ticks).
 tickGroup ∷ Float → HM.HashMap PowerNodeId Float → Float
-          → [PowerNode] → ([PowerNode], PowerNetworkSnapshot)
-tickGroup intensity drainByNode dtHours nodes =
+          → [PowerNode] → [(BuildingId, Float)]
+          → ([PowerNode], PowerNetworkSnapshot)
+tickGroup intensity drainByNode dtHours nodes consumers =
     let generationW      = sum [ pnPeakWatts n * intensity
                                 | n ← nodes, pnRole n ≡ PowerSource ]
-        drainW           = sum [ HM.lookupDefault 0 (pnId n) drainByNode | n ← nodes ]
+        nodeDrainW       = sum [ HM.lookupDefault 0 (pnId n) drainByNode | n ← nodes ]
+        consumerDrainW   = sum (map snd consumers)
+        drainW           = nodeDrainW + consumerDrainW
         batteries        = [ n | n ← nodes, pnRole n ≡ PowerStorage ]
         totalCap         = sum (map pnCapacityWh batteries)
         deltaWh          = (generationW - drainW) * dtHours
@@ -226,31 +261,42 @@ tickGroup intensity drainByNode dtHours nodes =
                             then Powered else Brownout
     in ( updated
        , PowerNetworkSnapshot (map pnId nodes) generationW drainW
-                              totalStoredAfter totalCap status )
+                              totalStoredAfter totalCap status
+                              (map fst consumers) )
 
 -- | Every connected network's current numbers, read-only (no charge
 --   mutation) — what a Lua query reports at any instant between ticks.
+--   @consumers@ is #361's requires_power buildings (position + drain),
+--   gathered by the caller (see 'consumersOn'); pass 'HM.empty' when
+--   there are none to consider.
 computeSnapshots ∷ Float → HM.HashMap PowerNodeId Float → HS.HashSet (Int, Int)
                  → PowerNodes → HM.HashMap PowerNodeId (Int, Int)
+                 → HM.HashMap BuildingId ((Int, Int), Float)
                  → [PowerNetworkSnapshot]
-computeSnapshots sunAngle drainByNode wireTiles nodes positions =
-    [ snd (tickGroup (solarIntensity sunAngle) drainByNode 0 grp)
-    | grp ← groupByComponent (wireComponents wireTiles) nodes positions ]
+computeSnapshots sunAngle drainByNode wireTiles nodes positions consumers =
+    [ snd (tickGroup (solarIntensity sunAngle) drainByNode 0 grp cons)
+    | (grp, cons) ← groupByComponent (wireComponents wireTiles) nodes
+                                      positions consumers ]
 
 -- | Advance every network on a page by @dtGameSeconds@ of generation vs.
---   registered drain, folding each network's updated battery charge back
---   into the node registry. Nodes not attached to any wire network are
+--   registered drain (node-synthetic AND #361's real consumer
+--   buildings), folding each network's updated battery charge back into
+--   the node registry. Nodes not attached to any wire network are
 --   untouched. A no-op for @dtGameSeconds ≤ 0@ (paused / no time passed).
 tickPowerNodes ∷ Float → HM.HashMap PowerNodeId Float → Float
               → HS.HashSet (Int, Int) → HM.HashMap PowerNodeId (Int, Int)
+              → HM.HashMap BuildingId ((Int, Int), Float)
               → PowerNodes → PowerNodes
-tickPowerNodes sunAngle drainByNode dtGameSeconds wireTiles positions nodes
+tickPowerNodes sunAngle drainByNode dtGameSeconds wireTiles positions consumers nodes
     | dtGameSeconds ≤ 0 = nodes
     | otherwise =
         let intensity = solarIntensity sunAngle
             dtHours   = dtGameSeconds / 3600
-            groups    = groupByComponent (wireComponents wireTiles) nodes positions
-            updates   = concatMap (fst . tickGroup intensity drainByNode dtHours) groups
+            groups    = groupByComponent (wireComponents wireTiles) nodes
+                                          positions consumers
+            updates   = concatMap (\(grp, cons) →
+                            fst (tickGroup intensity drainByNode dtHours grp cons))
+                                   groups
         in nodes { pnsNodes = foldl' (\m n → HM.insert (pnId n) n m)
                                      (pnsNodes nodes) updates }
 
@@ -282,4 +328,23 @@ positionsOf pageId bm nodes = HM.fromList
     | n ← allNodes nodes
     , Just bi ← [HM.lookup (pnBuilding n) (bmInstances bm)]
     , biPage bi ≡ pageId
+    ]
+
+-- | Every requires_power building's tile + drain on a page (#361) —
+--   the consumer-side counterpart to 'positionsOf'. Unlike nodes, a
+--   consumer is derived fresh from 'BuildingManager' + its def every
+--   call rather than kept in a registry (see the module haddock), so
+--   there's nothing to prune on save/load and a def's power_drain edit
+--   takes effect immediately. Only Built buildings draw — a ghost
+--   under construction doesn't (matches 'craft.executeAt' gating
+--   recipes on the same Built check).
+consumersOn ∷ WorldPageId → Double → BuildingManager
+           → HM.HashMap BuildingId ((Int, Int), Float)
+consumersOn pageId now bm = HM.fromList
+    [ (bid, ((biAnchorX bi, biAnchorY bi), bdPowerDrain def))
+    | (bid, bi) ← HM.toList (bmInstances bm)
+    , biPage bi ≡ pageId
+    , Just def ← [HM.lookup (biDefName bi) (bmDefs bm)]
+    , bdRequiresPower def
+    , currentActivity now bi def ≡ Built
     ]

@@ -3803,6 +3803,15 @@ local function craftExecute(uid, s, params)
     -- and the verbs are synchronous, so the returned value is
     -- authoritative — no local copy needed.
     if job.phase == "working" then
+        -- #361: a requires_power station that's unwired or browned
+        -- out pours no progress this tick — idle, not failed. Reset
+        -- lastCraftAt so the elapsed-time accumulator doesn't credit
+        -- the unpowered gap once power returns (same guard the phase
+        -- transitions above already use).
+        if not power.isBuildingPowered(job.bid) then
+            s.lastCraftAt = now
+            return
+        end
         local elapsed = now - (s.lastCraftAt or now)
         s.lastCraftAt = now
         local progress = bill.progress or 0
