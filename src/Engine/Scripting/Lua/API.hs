@@ -553,6 +553,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "listNodes"         (powerListNodesFn env)
   registerLuaFunction "listNetworks"       (powerListNetworksFn env)
   registerLuaFunction "getNetworkForNode"  (powerGetNetworkForNodeFn env)
+  registerLuaFunction "isBuildingPowered"  (powerIsBuildingPoweredFn env)
   Lua.setglobal (Lua.Name "power")
 
   -- Repair global (#301) — the policy layer on top of unit.repairItem

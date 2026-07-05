@@ -96,6 +96,19 @@ data BuildingDef = BuildingDef
     , bdAnimations  ∷ !(HM.HashMap Text Animation)
     , bdStateAnims  ∷ !(HM.HashMap Text Text)
       -- ^ "appearing" / "built" → animation name in bdAnimations.
+    , bdPowerDrain    ∷ !Float
+      -- ^ Watts drawn whenever this building is Built (#361) — flat,
+      --   not scaled by whether a crafter is actively working it (the
+      --   issue's "standby vs active" question resolved simple:
+      --   constant draw, mirroring a real appliance). 0 (default) = an
+      --   ordinary building, unaffected by the power grid — a building
+      --   is a power CONSUMER iff this is > 0; there's no separate
+      --   requires_power flag to fall out of sync with it. Deliberately
+      --   not a Power.Types PowerRole/PowerNode — a consumer never
+      --   gets a registry entry; Power.Network derives its tile +
+      --   drain fresh from BuildingManager + this field every call
+      --   (see Power.Network.consumersOn), the same way its position
+      --   is already derived rather than duplicated.
     } deriving (Show, Eq)
 
 -- | A placed building. anchor = bottom-left corner of the footprint.

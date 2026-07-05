@@ -25,28 +25,31 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Power.Types (PowerNodes(..))
-import Power.Network (tickPowerNodes, wireTilesOn, positionsOf)
+import Power.Network (tickPowerNodes, wireTilesOn, positionsOf, consumersOn)
 import World.Time.Types (WorldTime, worldTimeToSunAngle)
 import World.Types (WorldPageId, WorldState(..))
 
 -- | Advance one page's power networks by @dtGame@ game-seconds. No-op
 --   when the page has no power nodes at all (the common case while the
 --   power epic is unused) — cheap enough to check every tick without a
---   full wire-tile scan.
+--   full wire-tile scan. Consumers (#361) alone with no source/storage
+--   node anywhere on the page still short-circuit here: with nothing
+--   to charge or discharge, the tick has nothing to do — a consumer's
+--   live "is it powered" read is a separate, always-fresh query
+--   (Engine.Scripting.Lua.API.Power.isBuildingPowered) that doesn't
+--   depend on this tick having run.
 tickPowerNetworks ∷ EngineEnv → WorldPageId → WorldState → Float → IO ()
 tickPowerNetworks env pageId ws dtGame = do
     nodes0 ← readIORef (wsPowerNodesRef ws)
     when (not (HM.null (pnsNodes nodes0))) $ do
-        wt ← readIORef (wsTimeRef ws)
-        td ← readIORef (wsTilesRef ws)
-        bm ← readIORef (buildingManagerRef env)
+        wt  ← readIORef (wsTimeRef ws)
+        td  ← readIORef (wsTilesRef ws)
+        bm  ← readIORef (buildingManagerRef env)
+        now ← readIORef (gameTimeRef env)
         let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)
             wireTiles   = wireTilesOn td
             drainByNode = HM.empty
-              -- ^ #361's real requires_power consumers aren't wired up
-              --   yet; tickPowerNodes already accepts this map so the
-              --   balance math (charge/hold/brownout) is fully covered
-              --   by Test.Headless.Power.Network today.
+            consumers   = consumersOn pageId now bm
         -- Snapshot-and-clobber would lose any node power.placeNode
         -- registers between the read above and the write below (both
         -- this tick and placeNode hit wsPowerNodesRef). Recompute
@@ -56,5 +59,5 @@ tickPowerNetworks env pageId ws dtGame = do
         atomicModifyIORef' (wsPowerNodesRef ws) $ \current →
             let positions = positionsOf pageId bm current
             in ( tickPowerNodes sunAngle drainByNode dtGame
-                                 wireTiles positions current
+                                 wireTiles positions consumers current
                , () )

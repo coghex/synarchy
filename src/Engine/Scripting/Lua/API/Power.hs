@@ -9,7 +9,9 @@
 --   for storage nodes); listNetworks / getNetworkForNode report the live
 --   connected-component view — which nodes share a wired network and
 --   that network's current generation/drain/stored/capacity/powered
---   status (Power.Network).
+--   status (Power.Network). isBuildingPowered (#361) answers the
+--   gating question a requires_power workshop cares about: is this
+--   BUILDING (not a registry node) currently allowed to run.
 module Engine.Scripting.Lua.API.Power
     ( powerIsPlaceableFn
     , powerPlaceNodeFn
@@ -18,6 +20,8 @@ module Engine.Scripting.Lua.API.Power
     , powerListNodesFn
     , powerListNetworksFn
     , powerGetNetworkForNodeFn
+    , powerIsBuildingPoweredFn
+    , isBuildingPowered
     ) where
 
 import UPrelude
@@ -39,7 +43,7 @@ import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
 import Unit.Pathing.Cost (lookupTerrainZ)
 import Item.Types (ItemInstance(..))
 import Power.Types
-import Power.Network (wireTilesOn, positionsOf, computeSnapshots)
+import Power.Network (wireTilesOn, positionsOf, computeSnapshots, consumersOn)
 import qualified Power.Network as PN
 
 -- | power.isPlaceable(itemDefName) → bool. Lets a caller (the build
@@ -256,10 +260,8 @@ pushNode node = do
 
 -- | Gather the active world's current network snapshots (#360):
 --   connectivity + generation/drain/stored/capacity/status, recomputed
---   live from this instant's sun angle. No consumers are wired up yet
---   (#361), so every network's drainW is 0 today — the balance math
---   itself (incl. brownout under a synthetic drain) is covered by
---   Test.Headless.Power.Network, not this live path.
+--   live from this instant's sun angle, folding in every requires_power
+--   building's drain (#361) via 'consumersOn'.
 activeNetworkSnapshots ∷ EngineEnv → IO [PN.PowerNetworkSnapshot]
 activeNetworkSnapshots env = do
     mPage ← activeWorldPage env
@@ -270,10 +272,61 @@ activeNetworkSnapshots env = do
             wt    ← readIORef (wsTimeRef ws)
             td    ← readIORef (wsTilesRef ws)
             bm    ← readIORef (buildingManagerRef env)
+            now   ← readIORef (gameTimeRef env)
             let sunAngle   = worldTimeToSunAngle wt
                 wireTiles  = wireTilesOn td
                 positions  = positionsOf pageId bm nodes
-            pure (computeSnapshots sunAngle HM.empty wireTiles nodes positions)
+                consumers  = consumersOn pageId now bm
+            pure (computeSnapshots sunAngle HM.empty wireTiles nodes
+                                    positions consumers)
+
+-- | Whether a building's power requirement (#361), if any, is currently
+--   met. A building whose def has no power_drain (≤ 0) is trivially
+--   always powered — this is only meaningful to ask about a consumer.
+--   Otherwise: false if the building doesn't exist, isn't Built, or its
+--   network (if it has one at all) is in Brownout; true once wired to a
+--   network whose generation/storage currently covers the demand.
+--   Shared by the craft_job AI's per-tick gate (power.isBuildingPowered)
+--   and Engine.Scripting.Lua.API.Craft's validateStation — the same
+--   reuse pattern as that module already applies to validateStation
+--   itself (see Repair.hs).
+isBuildingPowered ∷ EngineEnv → BuildingId → IO Bool
+isBuildingPowered env bid = do
+    bm ← readIORef (buildingManagerRef env)
+    case HM.lookup bid (bmInstances bm) of
+        Nothing → pure False
+        Just inst → case HM.lookup (biDefName inst) (bmDefs bm) of
+            Nothing  → pure False
+            Just def
+                | bdPowerDrain def ≤ 0 → pure True
+                | otherwise → do
+                    wm ← readIORef (worldManagerRef env)
+                    case lookup (biPage inst) (wmWorlds wm) of
+                        Nothing → pure False
+                        Just ws → do
+                            nodes ← readIORef (wsPowerNodesRef ws)
+                            wt    ← readIORef (wsTimeRef ws)
+                            td    ← readIORef (wsTilesRef ws)
+                            now   ← readIORef (gameTimeRef env)
+                            let sunAngle   = worldTimeToSunAngle wt
+                                wireTiles  = wireTilesOn td
+                                positions  = positionsOf (biPage inst) bm nodes
+                                consumers  = consumersOn (biPage inst) now bm
+                                nets = computeSnapshots sunAngle HM.empty
+                                            wireTiles nodes positions consumers
+                            pure $ case find (elem bid . PN.pnwConsumerIds) nets of
+                                Just net → PN.pnwStatus net ≡ PN.Powered
+                                Nothing  → False
+
+-- | power.isBuildingPowered(bid) → bool (#361).
+powerIsBuildingPoweredFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+powerIsBuildingPoweredFn env = do
+    idArg ← Lua.tointeger 1
+    ok ← case idArg of
+        Nothing → return False
+        Just n  → Lua.liftIO $ isBuildingPowered env (BuildingId (fromIntegral n))
+    Lua.pushboolean ok
+    return 1
 
 -- | power.listNetworks() → array of network tables on the active world.
 --   Order is incidental (component discovery order) — callers key off
@@ -302,8 +355,10 @@ powerGetNetworkForNodeFn env = do
                 Just net → pushNetwork net >> return 1
                 Nothing  → Lua.pushnil >> return 1
 
--- | Push one network snapshot: { nodeIds = {...}, generationW, drainW,
---   storedWh, capacityWh, powered }.
+-- | Push one network snapshot: { nodeIds = {...}, consumerIds = {...},
+--   generationW, drainW, storedWh, capacityWh, powered }. consumerIds
+--   (#361) are the requires_power buildings attached to this network —
+--   their drain is already folded into drainW.
 pushNetwork ∷ PN.PowerNetworkSnapshot → Lua.LuaE Lua.Exception ()
 pushNetwork net = do
     Lua.newtable
@@ -314,6 +369,11 @@ pushNetwork net = do
         Lua.pushinteger (fromIntegral (unPowerNodeId nid))
         Lua.rawseti (-2) (fromIntegral i)
     Lua.setfield (-2) "nodeIds"
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] (PN.pnwConsumerIds net)) $ \(i, bid) → do
+        Lua.pushinteger (fromIntegral (unBuildingId bid))
+        Lua.rawseti (-2) (fromIntegral i)
+    Lua.setfield (-2) "consumerIds"
     putN "generationW" (PN.pnwGenerationW net)
     putN "drainW"      (PN.pnwDrainW net)
     putN "storedWh"    (PN.pnwStoredWh net)

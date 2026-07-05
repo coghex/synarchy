@@ -59,6 +59,9 @@ data BuildingYamlDef = BuildingYamlDef
       --   not a station
     , bydStateAnims      ∷ !(Map.Map Text Text)
     , bydAnimations      ∷ !(Map.Map Text BuildingYamlAnim)
+    , bydPowerDrain      ∷ !Float
+      -- ^ Watts drawn while Built (#361); 0 (default) = not a power
+      --   consumer. See Building.Types.bdPowerDrain.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON BuildingYamlDef where
@@ -79,6 +82,7 @@ instance FromJSON BuildingYamlDef where
         ⊛ v .:? "operations"       .!= []
         ⊛ v .:? "state_animations" .!= Map.empty
         ⊛ v .:? "animations"       .!= Map.empty
+        ⊛ v .:? "power_drain"      .!= 0.0
 
 newtype BuildingYamlFile = BuildingYamlFile
     { byfBuildings ∷ [BuildingYamlDef]
