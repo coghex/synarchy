@@ -30,6 +30,7 @@ import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Chop.Types (ChopDesignations)
 import World.Till.Types (TillDesignations)
+import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
 import Power.Types (PowerNodes, emptyPowerNodes)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
@@ -151,6 +152,12 @@ data WorldState = WorldState
       --   eviction can't wipe it; written by world.plantCropAt, read
       --   by the render pass (tile-fill texture) and world.harvestFlora
       --   / world.getCropPlotAt. Persisted in saves (wpsCropPlots, v77).
+    , wsPlantDesignationsRef ∷ IORef PlantDesignations
+      -- ^ Plant-designation set (#335): tile (gx, gy) → designation
+      --   (surface z + chosen crop; see World.Plant.Types). Written by
+      --   the world thread (WorldDesignatePlant / cancel commands),
+      --   read by the render pass (marker) and the farm AI (#336).
+      --   Persisted in saves (wpsPlantDesignations).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -189,6 +196,7 @@ emptyWorldState = do
     wsPowerNodesRef ← newIORef emptyPowerNodes
     wsTillDesignationsRef ← newIORef HM.empty
     wsCropPlotsRef ← newIORef emptyCropPlots
+    wsPlantDesignationsRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -201,7 +209,7 @@ emptyWorldState = do
                         wsConstructDesignationsRef wsFloraHarvestsRef
                         wsChopDesignationsRef wsCraftBillsRef
                         wsPowerNodesRef wsTillDesignationsRef
-                        wsCropPlotsRef
+                        wsCropPlotsRef wsPlantDesignationsRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

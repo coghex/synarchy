@@ -52,7 +52,10 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldClearTillAnchorCommand
                                    , handleWorldDesignateTillCommand
                                    , handleWorldCancelTillCommand
-                                   , handleWorldSetTillDesignateTextureCommand)
+                                   , handleWorldSetTillDesignateTextureCommand
+                                   , handleWorldDesignatePlantCommand
+                                   , handleWorldCancelPlantCommand
+                                   , handleWorldSetPlantDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
@@ -167,6 +170,12 @@ handleWorldCommand env logger (WorldCancelTill pageId gx gy)
   = handleWorldCancelTillCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetTillDesignateTexture pageId texHandle)
   = handleWorldSetTillDesignateTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldDesignatePlant pageId gx gy cropName)
+  = handleWorldDesignatePlantCommand env logger pageId gx gy cropName
+handleWorldCommand env logger (WorldCancelPlant pageId gx gy)
+  = handleWorldCancelPlantCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldSetPlantDesignateTexture pageId texHandle)
+  = handleWorldSetPlantDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetVeg pageId gx gy z vegId)
   = handleWorldSetVegCommand env logger pageId gx gy z vegId
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)

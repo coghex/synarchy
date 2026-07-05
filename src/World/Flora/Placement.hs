@@ -2,6 +2,8 @@
 module World.Flora.Placement
     ( computeChunkFlora
     , speciesFitness
+    , speciesFitnessDetail
+    , FitnessFactor(..)
     ) where
 
 import UPrelude
@@ -238,33 +240,40 @@ floraHash seed gx gy salt =
 --   Uses a weighted geometric mean so that one weak factor
 --   doesn't completely eliminate placement.
 --   Returns 0.0 (impossible) to 1.0 (ideal habitat).
+--
+--   Thin wrapper over 'speciesFitnessDetail' — see it for the
+--   scoring logic itself (single source of truth so the two can't
+--   drift apart).
 speciesFitness ∷ FloraWorldGen → Word8 → Word8
                → Float → Float → Float → Int
                → Float
-speciesFitness wg matId slopeId temp precip humidity altitude
-    | slopeId > fwMaxSlope wg = 0.0
-    | not soilOk              = 0.0
-    -- Hard kills: if any factor is truly zero (completely outside
-    -- range), the species cannot grow here at all.
-    | tempFit ≡ 0.0 ∨ precipFit ≡ 0.0
-      ∨ humidityFit ≡ 0.0 ∨ altFit ≡ 0.0 = 0.0
-    | otherwise =
-        -- Weighted geometric mean: raise each factor to its weight,
-        -- then multiply. This is equivalent to:
-        --   exp(w1*ln(f1) + w2*ln(f2) + ...) / (w1+w2+...)
-        -- but simpler to compute with power functions.
-        --
-        -- Higher weight = more influence on final score.
-        -- Temperature and precipitation are primary drivers.
-        -- Altitude and humidity are secondary modifiers.
-        let weighted =
-                (tempFit     ** wTemp)
-              * (precipFit   ** wPrecip)
-              * (humidityFit ** wHumidity)
-              * (altFit      ** wAlt)
-              * slopeFit
-            totalW = wTemp + wPrecip + wHumidity + wAlt
-        in weighted ** (1.0 / totalW)
+speciesFitness wg matId slopeId temp precip humidity altitude =
+    fst (speciesFitnessDetail wg matId slopeId temp precip humidity altitude)
+
+-- | One scored factor of a 'speciesFitnessDetail' breakdown — the
+--   "why is this good/bad here" read-out #335's planting screen shows.
+--   'ffMin'/'ffIdeal'/'ffMax' are meaningless for the "slope" (a
+--   max-only threshold) and "soil" (a boolean match) factors; callers
+--   should special-case those two by 'ffFactor' rather than reading
+--   the range fields.
+data FitnessFactor = FitnessFactor
+    { ffFactor ∷ !Text     -- ^ "temperature" | "precipitation" |
+                           --   "humidity" | "altitude" | "slope" | "soil"
+    , ffFit    ∷ !Float    -- ^ 0.0 (fails) .. 1.0 (ideal) for this factor alone
+    , ffValue  ∷ !Float    -- ^ the local/current value
+    , ffMin    ∷ !Float
+    , ffIdeal  ∷ !Float
+    , ffMax    ∷ !Float
+    } deriving (Show, Eq)
+
+-- | Same scoring as 'speciesFitness', but also returns the per-factor
+--   breakdown (temperature, precipitation, humidity, altitude, slope,
+--   soil) that produced it.
+speciesFitnessDetail ∷ FloraWorldGen → Word8 → Word8
+                     → Float → Float → Float → Int
+                     → (Float, [FitnessFactor])
+speciesFitnessDetail wg matId slopeId temp precip humidity altitude =
+    (score, factors)
   where
     soils  = fwSoils wg
     soilOk = null soils ∨ matId `elem` soils
@@ -293,6 +302,48 @@ speciesFitness wg matId slopeId temp precip humidity altitude
 
     slopeFit = 1.0 - (fromIntegral slopeId
                       / fromIntegral (max 1 (fwMaxSlope wg))) * 0.3
+
+    score
+        | slopeId > fwMaxSlope wg = 0.0
+        | not soilOk              = 0.0
+        -- Hard kills: if any factor is truly zero (completely outside
+        -- range), the species cannot grow here at all.
+        | tempFit ≡ 0.0 ∨ precipFit ≡ 0.0
+          ∨ humidityFit ≡ 0.0 ∨ altFit ≡ 0.0 = 0.0
+        | otherwise =
+            -- Weighted geometric mean: raise each factor to its
+            -- weight, then multiply. This is equivalent to:
+            --   exp(w1*ln(f1) + w2*ln(f2) + ...) / (w1+w2+...)
+            -- but simpler to compute with power functions.
+            --
+            -- Higher weight = more influence on final score.
+            -- Temperature and precipitation are primary drivers.
+            -- Altitude and humidity are secondary modifiers.
+            let weighted =
+                    (tempFit     ** wTemp)
+                  * (precipFit   ** wPrecip)
+                  * (humidityFit ** wHumidity)
+                  * (altFit      ** wAlt)
+                  * slopeFit
+                totalW = wTemp + wPrecip + wHumidity + wAlt
+            in weighted ** (1.0 / totalW)
+
+    factors =
+        [ FitnessFactor "temperature" tempFit temp
+              (fwMinTemp wg) (fwIdealTemp wg) (fwMaxTemp wg)
+        , FitnessFactor "precipitation" precipFit precip
+              (fwMinPrecip wg) (fwIdealPrecip wg) (fwMaxPrecip wg)
+        , FitnessFactor "humidity" humidityFit humidity
+              (fwMinHumidity wg) (fwIdealHumidity wg) (fwMaxHumidity wg)
+        , FitnessFactor "altitude" altFit (fromIntegral altitude)
+              (fromIntegral (fwMinAlt wg)) (fromIntegral (fwIdealAlt wg))
+              (fromIntegral (fwMaxAlt wg))
+        , FitnessFactor "slope"
+              (if slopeId > fwMaxSlope wg then 0.0 else slopeFit)
+              (fromIntegral slopeId) 0.0 0.0 (fromIntegral (fwMaxSlope wg))
+        , FitnessFactor "soil" (if soilOk then 1.0 else 0.0)
+              (if soilOk then 1.0 else 0.0) 0.0 1.0 1.0
+        ]
 
 asymBell ∷ Float → Float → Float → Float → Float
 asymBell lo ideal hi x

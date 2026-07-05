@@ -58,6 +58,7 @@ import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.Construct
 import Engine.Scripting.Lua.API.Chop
 import Engine.Scripting.Lua.API.Till
+import Engine.Scripting.Lua.API.Plant
 import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
@@ -495,6 +496,19 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setDesignateTexture" (tillSetDesignateTextureFn env)
   Lua.setglobal (Lua.Name "till")
 
+  -- Plant designation tool (#335). Single-tile, no anchor: the tool
+  -- drives designate, the farm AI (#336) drives nearestDesignation/
+  -- getDesignationAt/cancelDesignation (claims are Lua-side, like dig/
+  -- chop/till jobs — no engine job status).
+  Lua.newtable
+  registerLuaFunction "designate"           (plantDesignateFn env)
+  registerLuaFunction "cancelDesignation"   (plantCancelDesignationFn env)
+  registerLuaFunction "getDesignationAt"    (plantGetDesignationAtFn env)
+  registerLuaFunction "getDesignationCount" (plantGetDesignationCountFn env)
+  registerLuaFunction "nearestDesignation"  (plantNearestDesignationFn env)
+  registerLuaFunction "setDesignateTexture" (plantSetDesignateTextureFn env)
+  Lua.setglobal (Lua.Name "plant")
+
   -- Equipment global.
   -- Read: getClass / getClassNames / getLoadout.
   -- Write: equip / unequip (with kind validation against slot's accepted kind).
@@ -710,6 +724,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldFindHarvestableFloraFn env)
   registerLuaFunction "plantCropAt" (worldPlantCropAtFn env)
   registerLuaFunction "getCropPlotAt" (worldGetCropPlotAtFn env)
+  registerLuaFunction "getPlantSuitability" (worldGetPlantSuitabilityFn env)
 
   Lua.setglobal (Lua.Name "world")
 

@@ -26,6 +26,7 @@ import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Chop.Types (ChopDesignation(..))
 import World.Till.Types (TillDesignation(..))
+import World.Plant.Types (PlantDesignation(..))
 import World.Render.ViewBounds (computeViewBounds, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
@@ -633,6 +634,24 @@ renderWorldCursorQuads env worldState tileAlpha = do
                                        vb camX chunkCoord]
                     ]
 
+    -- Plant-designation markers (#335): world annotations like the
+    -- till markers, visible in every tool mode. Rendered from the
+    -- surface z stored at designation time.
+    plantDesigns ← readIORef (wsPlantDesignationsRef worldState)
+    let plantDesignQuads = case plantDesignTexture cs' of
+            Nothing → V.empty
+            Just tex
+                | HM.null plantDesigns → V.empty
+                | otherwise → V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing dgx dgy (ptZ pd) zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | ((dgx, dgy), pd) ← HM.toList plantDesigns
+                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+
     -- Construction-designation ghosts (#95): world annotations like the
     -- mine markers, visible in every tool mode. Each renders with the
     -- ghost texture for its target category (structure vs building).
@@ -831,7 +850,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- shown in every tool mode. The mode only adds its own hover/preview
     -- on top.
     let markerQuads = designQuads <> constructDesignQuads <> chopDesignQuads
-                    <> tillDesignQuads
+                    <> tillDesignQuads <> plantDesignQuads
     return $ case toolMode of
         InfoTool  → markerQuads <> hoverQuads <> selectQuads
         MineTool  → markerQuads <> hoverQuads <> minePreviewQuads
@@ -841,6 +860,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
         BuildTool → markerQuads <> hoverQuads <> constructPreviewQuads
         ChopTool  → markerQuads <> hoverQuads <> chopPreviewQuads
         TillTool  → markerQuads <> hoverQuads <> tillPreviewQuads
+        PlantTool → markerQuads <> hoverQuads
         _         → markerQuads
 
 -- | Find the topmost Z that has a non-zero material in a column.

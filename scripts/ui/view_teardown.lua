@@ -70,6 +70,13 @@ local registry = {
       zoomBand = function() require("scripts.crafting_panel").closeIfOpen() end,
       hudHide  = function() require("scripts.crafting_panel").closeIfOpen() end },
 
+    -- Planting screen (#335): same story — mounted on hud.world_page,
+    -- own module-level "open" state, opened by the plant tool.
+    -- closeIfOpen() is idempotent.
+    { name = "plant_panel",
+      zoomBand = function() require("scripts.plant_panel").closeIfOpen() end,
+      hudHide  = function() require("scripts.plant_panel").closeIfOpen() end },
+
     -- Right-click context menu (#139/#86): lives on its own modal page,
     -- anchored to the tile/unit/item under the click. Page swaps never
     -- touch it, so it could survive over the wrong view or leak into the

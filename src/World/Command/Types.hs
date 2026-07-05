@@ -164,6 +164,18 @@ data WorldCommand
         --   AI's completion, or a player cancel).
     | WorldSetTillDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed till-designation markers.
+    | WorldDesignatePlant WorldPageId Int Int Text
+        -- ^ Plant tool (#335): single-tile designation (no anchor — the
+        --   planting screen already scopes the player to one tile
+        --   before a crop is chosen). gx gy cropName. Refused unless
+        --   the tile is tilled soil (world.isPlantable) and cropName
+        --   names a registered plantable-crop species (row_crop or
+        --   groundcover_crop worldGen category).
+    | WorldCancelPlant WorldPageId Int Int
+        -- ^ Remove the plant designation at (gx, gy), if any (the farm
+        --   AI's completion, or a player cancel).
+    | WorldSetPlantDesignateTexture WorldPageId TextureHandle
+        -- ^ Texture for committed plant-designation markers.
     | WorldSetVeg WorldPageId Int Int Int Word8
         -- ^ Set the vegetation id of the tile at (gx,gy,z) via the
         --   WeSetVeg edit path (world.setVegAt) — the till AI's

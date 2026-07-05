@@ -34,6 +34,9 @@ module World.Thread.Command.Cursor
     , handleWorldDesignateTillCommand
     , handleWorldCancelTillCommand
     , handleWorldSetTillDesignateTextureCommand
+    , handleWorldDesignatePlantCommand
+    , handleWorldCancelPlantCommand
+    , handleWorldSetPlantDesignateTextureCommand
     ) where
 
 import UPrelude
@@ -56,6 +59,7 @@ import World.Construct.Apply ( applyConstructSlopeToChunk
                              , clearConstructSlope )
 import World.Chop.Types (newChopDesignation)
 import World.Till.Types (newTillDesignation)
+import World.Plant.Types (newPlantDesignation)
 import World.Vegetation (isTilledSoil)
 import World.Thread.Helpers (unWorldPageId)
 
@@ -663,6 +667,77 @@ handleWorldSetTillDesignateTextureCommand env _logger pageId tid = do
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { tillDesignTexture = Just tid }, ())
+        Nothing → pure ()
+
+-- * Plant designation tool (#335)
+--
+--   Single-tile, no anchor: the planting screen already scopes the
+--   player to one tile before a crop is chosen, so there is no pending
+--   rectangle to preview (unlike mine/construct/chop/till). The commit
+--   validates both halves of "can this be planted here" — the tile is
+--   tilled soil (the same 'isTilledSoil' check world.isPlantable uses)
+--   and the given crop name resolves to a REGISTERED plantable-crop
+--   species (row_crop or groundcover_crop worldGen category) — before
+--   recording the designation. The farm AI (scripts/unit_ai.lua, #336)
+--   is the eventual consumer.
+
+-- | Commit a plant designation at (gx, gy) for the named crop. Refused
+--   (silently — the caller polls plant.getDesignationAt to confirm) if
+--   the chunk isn't loaded, the tile isn't tilled soil, or cropName
+--   doesn't name a registered plantable-crop species.
+handleWorldDesignatePlantCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → Text → IO ()
+handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing → pure ()
+        Just worldState → do
+            tileData ← readIORef (wsTilesRef worldState)
+            cat ← readIORef (floraCatalogRef env)
+            let (coord, (lx, ly)) = globalToChunk gx gy
+                idx = columnIndex lx ly
+                resolvedCrop = case findSpeciesByName cropName cat of
+                    Just (fid, _sp)
+                        | Just wg ← HM.lookup (unFloraId fid) (fcWorldGen cat)
+                        , isPlantableCropCategory (fwCategory wg) → Just fid
+                    _ → Nothing
+                tileZ = do
+                    lc ← lookupChunk coord tileData
+                    let z   = lcSurfaceMap lc VU.! idx
+                        col = lcTiles lc V.! idx
+                        i   = z - ctStartZ col
+                        vg  = if i ≥ 0 ∧ i < VU.length (ctVeg col)
+                              then ctVeg col VU.! i else 0
+                    if isTilledSoil vg then Just z else Nothing
+            case (tileZ, resolvedCrop) of
+                (Just z, Just fid) → do
+                    atomicModifyIORef' (wsPlantDesignationsRef worldState) $
+                        \m → (HM.insert (gx, gy) (newPlantDesignation z fid) m, ())
+                    logDebug logger CatWorld $
+                        "Plant designation: (" <> T.pack (show gx) <> ","
+                        <> T.pack (show gy) <> ") crop=" <> cropName
+                _ → logDebug logger CatWorld $
+                        "Plant designation refused at (" <> T.pack (show gx)
+                        <> "," <> T.pack (show gy) <> ") crop=" <> cropName
+
+handleWorldCancelPlantCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → IO ()
+handleWorldCancelPlantCommand env _logger pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsPlantDesignationsRef worldState) $ \m →
+                (HM.delete (gx, gy) m, ())
+        Nothing → pure ()
+
+handleWorldSetPlantDesignateTextureCommand ∷ EngineEnv → LoggerState
+    → WorldPageId → TextureHandle → IO ()
+handleWorldSetPlantDesignateTextureCommand env _logger pageId tid = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { plantDesignTexture = Just tid }, ())
         Nothing → pure ()
 
 -- | Directly select the column at (gx, gy) on the given world. The

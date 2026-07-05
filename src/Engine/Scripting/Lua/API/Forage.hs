@@ -477,13 +477,6 @@ itemGetFoodFn env = do
                     Lua.setfield (-2) "caloriesPerKg"
             return 1
 
--- | Find a registered flora species by its YAML @name@. Catalogs are
---   small (tens of species), so a linear scan needs no index.
-findSpeciesByName ∷ Text → FloraCatalog → Maybe (FloraId, FloraSpecies)
-findSpeciesByName name cat =
-    listToMaybe [ (FloraId k, sp)
-                | (k, sp) ← HM.toList (fcSpecies cat), fsName sp ≡ name ]
-
 -- | The one YAML worldGen category tag (World.Flora.Placement) that
 --   marks a species as the ctVeg-tile-fill groundcover form (#334) —
 --   the only form world.plantCropAt (a CropPlot) is valid for. A

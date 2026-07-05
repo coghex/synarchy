@@ -1266,6 +1266,7 @@ worldGetToolModeFn env = do
                     ConstructTool → "construct"
                     ChopTool      → "chop"
                     TillTool      → "till"
+                    PlantTool     → "plant"
             Lua.pushstring s
             return 1
         Nothing → do
