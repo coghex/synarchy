@@ -26,6 +26,7 @@ module World.Vegetation
     , vegSnow
     , vegDesertSand
     , vegGravelTundra
+    , vegTilledSoil
     , vegVariants
       -- * Per-tile vegetation selection
     , selectVegetation
@@ -104,6 +105,15 @@ vegDesertSand = 69
 
 vegGravelTundra ∷ Word8
 vegGravelTundra = 73
+
+-- | Tilled-soil surface state (#333): set by the till AI via
+--   @world.setVegAt@, never by natural placement ('selectVegetation'
+--   never emits it) — a farmed tile is a player-authored edit, not a
+--   biome outcome. One texture regardless of soil type or climate (the
+--   epic left "tilled texture by soil type" open; simplest default,
+--   variants are a follow-up).
+vegTilledSoil ∷ Word8
+vegTilledSoil = 77
 
 -- | Number of variants per vegetation type.
 vegVariants ∷ Word8

@@ -88,8 +88,9 @@ local function sendMaterialTextures(worldId)
 end
 
 local function sendVegTextures(worldId)
-    -- Vegetation IDs: 17 types × 4 variants = IDs 1..68
-    for vegId = 1, 68 do
+    -- Vegetation IDs: 18 four-variant types + tilled_soil's single
+    -- variant (#333) = IDs 1..77
+    for vegId = 1, 77 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then
             world.setTexture(worldId, "veg_tile_" .. vegId, h)

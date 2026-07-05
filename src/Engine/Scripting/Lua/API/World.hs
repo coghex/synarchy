@@ -54,6 +54,7 @@ module Engine.Scripting.Lua.API.World
     , worldDeleteTileFn
     , worldSetFluidTileFn
     , worldSetSlopeFn
+    , worldSetVegFn
     , worldSetCellFn
     , worldMarkLocationContentsSpawnedFn
     , worldMarkLocationStampedFn
@@ -1247,7 +1248,7 @@ worldSetToolModeFn env = do
     return 0
 
 -- | world.getToolMode() → "info" | "default" | "mine" | "build"
---   | "construct" | "chop" | nil
+--   | "construct" | "chop" | "till" | nil
 --   Returns the current tool mode for the first visible world, or nil
 --   if no world is active. Reads `wsToolModeRef` directly so callers
 --   see the world thread's view of the tool state.
@@ -1264,6 +1265,7 @@ worldGetToolModeFn env = do
                     BuildTool     → "build"
                     ConstructTool → "construct"
                     ChopTool      → "chop"
+                    TillTool      → "till"
             Lua.pushstring s
             return 1
         Nothing → do
@@ -1479,6 +1481,35 @@ worldSetSlopeFn env = do
                         (fromIntegral gx) (fromIntegral gy)
                         (fromIntegral z)
                         (fromIntegral bits)  -- → Word8 truncates to low 8 bits
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | world.setVegAt(pageId, gx, gy, z, vegId) → bool
+--   Set the vegetation id of the tile at (gx,gy,z). Mirrors
+--   world.setSlope's shape and edit-log routing — the till AI's (#333)
+--   completion primitive: flips a tilled tile's ground cover to
+--   'World.Vegetation.vegTilledSoil' so it survives chunk eviction +
+--   save/load like every other edit. No generator path emits arbitrary
+--   ids here (computeChunkVegetation owns natural placement).
+worldSetVegFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetVegFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tointeger 2
+    gyArg     ← Lua.tointeger 3
+    zArg      ← Lua.tointeger 4
+    vegIdArg  ← Lua.tointeger 5
+    case (pageIdArg, gxArg, gyArg, zArg, vegIdArg) of
+        (Just pageIdBS, Just gx, Just gy, Just z, Just vegId) → do
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                Q.writeQueue (worldQueue env) $
+                    WorldSetVeg pageId
+                        (fromIntegral gx) (fromIntegral gy)
+                        (fromIntegral z)
+                        (fromIntegral vegId)  -- → Word8 truncates to low 8 bits
             Lua.pushboolean True
             return 1
         _ → do

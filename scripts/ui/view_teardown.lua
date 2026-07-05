@@ -102,6 +102,10 @@ local registry = {
     { name = "chop_tool",
       zoomBand = function() require("scripts.chop_tool").cancel() end },
 
+    -- Till designation anchor (#333): same idempotent teardown.
+    { name = "till_tool",
+      zoomBand = function() require("scripts.till_tool").cancel() end },
+
     -- Build picker (#143): the picker panel lives on hud.world_page and
     -- its "picker" mode persists across band changes, so a picker opened
     -- in zoomed_in stays logically alive and reappears stale when the

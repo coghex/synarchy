@@ -335,6 +335,25 @@ local config = {
         -- is the closest two-handed-tool visual.
         chop_equip_anim = "standing_to_holding_pickaxe",
         chop_work_anim  = "using_pickaxe",
+        -- Tilling (till_designation, #333). Utility shape mirrors dig,
+        -- but bare-handed only — #333 left "does tilling need a tool
+        -- item" open; a tiller item is a future speed-up, not a gate
+        -- (no tool table at all here, unlike dig/chop). Lock-in while
+        -- tilling is finite (dire needs still preempt; never
+        -- math.huge). Claims mirror chopClaims (module-local, expire on
+        -- till_claim_timeout or claimant death).
+        till_scan_range    = 30.0,
+        till_base_utility  = 2.0,
+        till_lock_utility  = 6.0,
+        till_rate          = 0.2,   -- tilling progress/sec at strength 1.0
+                                    -- (a tile is 1.0 total — 5s bare-handed)
+        till_equip_seconds = 1.0,
+        till_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
+        -- No dedicated push/tiller animation exists yet — the shovel
+        -- work set is the closest hand-tool-on-ground visual (same
+        -- reuse-until-real-art convention as chop_equip_anim above).
+        till_equip_anim = "standing_to_holding_shovel",
+        till_work_anim  = "shoveling",
         -- Equipment repair (repair_job, #302). AI-autonomous kit
         -- maintenance: an acolyte notices its own or the technomule's
         -- gear has degraded past a threshold and carries it to the
@@ -4427,6 +4446,196 @@ local function chopOnExit(uid, s, params)
 end
 
 -----------------------------------------------------------
+-- Action: till_designation (#333)
+--
+-- Player-directed tilling: claim the nearest till-designated tile,
+-- walk to it, and work until done — world.setVegAt then flips the
+-- tile's ground cover to the tilled-soil id and the designation is
+-- removed. Structure mirrors chop_designation: module-local claims
+-- keyed by tile so two acolytes never till the same tile, expiring on
+-- timeout or claimant death; finite lock-in so dire needs still
+-- preempt; walking → equipping → tilling phases with the same
+-- anim-override discipline. Till progress lives HERE (s.tillProgress),
+-- not in the designation — an interrupted till restarts, there is no
+-- mid-till visual to persist.
+--
+-- Grouped under unitAi.till (rather than one top-level local per
+-- helper, the dig/chop convention) — the file sits at Lua's
+-- 200-main-chunk-local ceiling, so a new action's helpers ride as
+-- fields on the ALREADY-EXISTING unitAi module table (plain field
+-- assignments, not `local` declarations) instead of adding a slot each.
+-----------------------------------------------------------
+unitAi.till = { claims = {} }   -- claims: "x,y" → { uid = ..., at = gameTime }
+-- Tilled-soil vegetation id — must match World.Vegetation's
+-- vegTilledSoil. No Lua-side veg-id registry exists yet, so this is a
+-- plain mirrored constant.
+unitAi.till.VEG_ID = 77
+
+function unitAi.till.key(x, y) return x .. "," .. y end
+
+function unitAi.till.claimedByOther(key, uid, now, timeout)
+    local c = unitAi.till.claims[key]
+    if not c or c.uid == uid then return false end
+    if now - c.at > timeout or not unit.exists(c.uid) then
+        unitAi.till.claims[key] = nil
+        return false
+    end
+    return true
+end
+
+function unitAi.till.releaseJob(s, uid)
+    if s.tillJob then
+        local key = unitAi.till.key(s.tillJob.x, s.tillJob.y)
+        local c = unitAi.till.claims[key]
+        if c and c.uid == uid then unitAi.till.claims[key] = nil end
+    end
+    s.tillJob = nil
+    s.tillPhase = nil
+    s.tillProgress = nil
+end
+
+-- The designation vanished (tile tilled — possibly by us — or player
+-- cancel). BOTH the utility check and the execute loop can be first
+-- to notice, so completion lives in one helper.
+function unitAi.till.complete(uid, s)
+    unit.clearAnimOverride(uid)
+    unitAi.till.releaseJob(s, uid)
+end
+
+function unitAi.till.utility(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return -math.huge end
+
+    -- Active job: finite lock-in, released the moment the designation
+    -- disappears (this check runs BEFORE execute each tick).
+    if s.tillJob then
+        local d = till.getDesignationAt(wid, s.tillJob.x, s.tillJob.y)
+        if d then return params.till_lock_utility end
+        unitAi.till.complete(uid, s)
+    end
+
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+    local gx, gy, dist =
+        till.nearestDesignation(wid, info.gridX, info.gridY)
+    if not gx then return -math.huge end
+    if dist > params.till_scan_range then return -math.huge end
+
+    local now = engine.gameTime()
+    if unitAi.till.claimedByOther(unitAi.till.key(gx, gy), uid, now,
+                                  params.till_claim_timeout) then
+        return -math.huge
+    end
+
+    -- Stash the scored candidate so execute doesn't re-scan.
+    s.tillCandidate = { x = gx, y = gy }
+
+    local distFactor = math.max(0, 1 - dist / params.till_scan_range)
+    return params.till_base_utility * distFactor
+         * roles.weight(s, "till_designation")
+end
+
+function unitAi.till.execute(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local now = engine.gameTime()
+
+    -- Claim a fresh job and head for the tile.
+    if not s.tillJob then
+        local cand = s.tillCandidate
+        if not cand then return end
+        local key = unitAi.till.key(cand.x, cand.y)
+        if unitAi.till.claimedByOther(key, uid, now, params.till_claim_timeout) then
+            return
+        end
+        local d = till.getDesignationAt(wid, cand.x, cand.y)
+        if not d then return end
+        unitAi.till.claims[key] = { uid = uid, at = now }
+        s.tillCandidate = nil
+        s.tillJob = { x = cand.x, y = cand.y, z = d.z }
+        s.tillProgress = 0
+        s.tillEquipped = false
+        s.tillPhase = "walking"
+        unit.moveTo(uid, cand.x + 0.5, cand.y + 0.5, mv.comfort(uid))
+        return
+    end
+
+    local job = s.tillJob
+    -- Keep the claim fresh while we hold the job.
+    unitAi.till.claims[unitAi.till.key(job.x, job.y)] = { uid = uid, at = now }
+
+    if s.tillPhase == "walking" then
+        local utx = math.floor(info.gridX)
+        local uty = math.floor(info.gridY)
+        local cheb = math.max(math.abs(utx - job.x), math.abs(uty - job.y))
+        if cheb <= 1 then
+            unit.stop(uid)
+            if not s.tillEquipped then
+                -- setAnimOverride wins over the engine's state-driven
+                -- anim resolution (same as dig/chop).
+                unit.setAnimOverride(uid, params.till_equip_anim)
+                s.tillPhase = "equipping"
+                s.tillEquipUntil = now + params.till_equip_seconds
+            else
+                unit.setAnimOverride(uid, params.till_work_anim)
+                s.tillPhase = "tilling"
+                s.lastTillAt = now
+            end
+        else
+            -- Execute only fires when idle, so this re-issue means
+            -- the previous walk arrived short or failed.
+            unit.moveTo(uid, job.x + 0.5, job.y + 0.5, mv.comfort(uid))
+        end
+        return
+    end
+
+    if s.tillPhase == "equipping" then
+        if now >= (s.tillEquipUntil or 0) then
+            s.tillEquipped = true
+            unit.setAnimOverride(uid, params.till_work_anim)
+            s.tillPhase = "tilling"
+            s.lastTillAt = now
+        end
+        return
+    end
+
+    if s.tillPhase == "tilling" then
+        if not till.getDesignationAt(wid, job.x, job.y) then
+            -- Player cancelled (or raced) out from under us.
+            unitAi.till.complete(uid, s)
+            return
+        end
+        -- Idempotent: re-asserts the work anim after preemption.
+        unit.setAnimOverride(uid, params.till_work_anim)
+        local dt = math.min(now - (s.lastTillAt or now), 2.0)
+        s.lastTillAt = now
+        local strength = unit.getStat(uid, "strength") or 1.0
+        s.tillProgress = (s.tillProgress or 0) + params.till_rate * strength * dt
+        if s.tillProgress >= 1.0 then
+            -- Tilled: flip the tile's ground cover, then drop the
+            -- designation (mirrors chop's harvestFlora → cancelDesignation
+            -- order — the world edit lands before the marker clears).
+            world.setVegAt(wid, job.x, job.y, job.z, unitAi.till.VEG_ID)
+            till.cancelDesignation(job.x, job.y)
+            unitAi.till.complete(uid, s)
+        end
+        return
+    end
+end
+
+-- Preemption (thirst, combat, player order): drop the tool VISUAL
+-- only — claim, job, and progress survive so the till resumes
+-- afterwards, re-entered through the walking phase.
+function unitAi.till.onExit(uid, s, params)
+    unit.clearAnimOverride(uid)
+    if s.tillPhase == "tilling" or s.tillPhase == "equipping" then
+        s.tillPhase = "walking"
+    end
+end
+
+-----------------------------------------------------------
 -- Action: repair_job  (#302 — repair AI: utility + go-to-station-and-repair)
 --
 -- AI-autonomous equipment maintenance: an acolyte notices its own (or
@@ -5348,6 +5557,8 @@ unitAi.registerActions("acolyte", {
       execute = digExecute, onExit = digOnExit },
     { name = "chop_designation", utility = chopUtility,
       execute = chopExecute, onExit = chopOnExit },
+    { name = "till_designation", utility = unitAi.till.utility,
+      execute = unitAi.till.execute, onExit = unitAi.till.onExit },
     { name = "repair_job", utility = repairUtility,
       execute = repairExecute, onExit = repairOnExit },
     { name = "pickup_ground", utility = pickupUtility,

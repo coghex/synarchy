@@ -47,7 +47,12 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldClearChopAnchorCommand
                                    , handleWorldDesignateChopCommand
                                    , handleWorldCancelChopCommand
-                                   , handleWorldSetChopDesignateTextureCommand)
+                                   , handleWorldSetChopDesignateTextureCommand
+                                   , handleWorldSetTillAnchorCommand
+                                   , handleWorldClearTillAnchorCommand
+                                   , handleWorldDesignateTillCommand
+                                   , handleWorldCancelTillCommand
+                                   , handleWorldSetTillDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
@@ -60,6 +65,7 @@ import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
 import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldSetFluidTileCommand
                                  , handleWorldSetSlopeCommand
+                                 , handleWorldSetVegCommand
                                  , handleWorldSetCellCommand
                                  , handleWorldSetStructureCommand
                                  , handleWorldClearStructureCommand
@@ -151,6 +157,18 @@ handleWorldCommand env logger (WorldCancelChop pageId gx gy)
   = handleWorldCancelChopCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetChopDesignateTexture pageId texHandle)
   = handleWorldSetChopDesignateTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetTillAnchor pageId gx gy)
+  = handleWorldSetTillAnchorCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldClearTillAnchor pageId)
+  = handleWorldClearTillAnchorCommand env logger pageId
+handleWorldCommand env logger (WorldDesignateTill pageId gx1 gy1 gx2 gy2)
+  = handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2
+handleWorldCommand env logger (WorldCancelTill pageId gx gy)
+  = handleWorldCancelTillCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldSetTillDesignateTexture pageId texHandle)
+  = handleWorldSetTillDesignateTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetVeg pageId gx gy z vegId)
+  = handleWorldSetVegCommand env logger pageId gx gy z vegId
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
   = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)

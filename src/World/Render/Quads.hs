@@ -24,6 +24,7 @@ import Structure.Types (StructureSlot(..), ChunkStructures, spdGridZ)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Chop.Types (ChopDesignation(..))
+import World.Till.Types (TillDesignation(..))
 import World.Render.ViewBounds (computeViewBounds, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
@@ -599,6 +600,24 @@ renderWorldCursorQuads env worldState tileAlpha = do
                                        vb camX chunkCoord]
                     ]
 
+    -- Till-designation markers (#333): world annotations like the chop
+    -- markers, visible in every tool mode. Rendered from the surface z
+    -- stored at designation time.
+    tillDesigns ← readIORef (wsTillDesignationsRef worldState)
+    let tillDesignQuads = case tillDesignTexture cs' of
+            Nothing → V.empty
+            Just tex
+                | HM.null tillDesigns → V.empty
+                | otherwise → V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing dgx dgy (tlZ td) zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | ((dgx, dgy), td) ← HM.toList tillDesigns
+                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+
     -- Construction-designation ghosts (#95): world annotations like the
     -- mine markers, visible in every tool mode. Each renders with the
     -- ghost texture for its target category (structure vs building).
@@ -767,9 +786,37 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     ]
             _ → V.empty
 
-    -- Mine + construction + chop markers are world annotations: shown in
-    -- every tool mode. The mode only adds its own hover/preview on top.
+    -- Till tool: anchor→hover rectangle preview. Per-z-level like mine/
+    -- construct — a farmed field is flat ground, unlike chop's
+    -- slope-spanning forest sweep.
+    let tillPreviewQuads = case (tillAnchor cs', hoverResult, worldCursorTexture cs') of
+            (Just (ax, ay), Just (hx, hy, _, _, _), Just tex)
+                | Just anchorZ ← surfaceZAt ax ay →
+                let hx' = clampSide ax hx
+                    hy' = clampSide ay hy
+                    xLo = min ax hx'
+                    xHi = max ax hx'
+                    yLo = min ay hy'
+                    yHi = max ay hy'
+                in V.fromList
+                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                          facing gx gy z zSlice effectiveDepth
+                          tileAlpha xOff tex
+                    | gx ← [xLo .. xHi]
+                    , gy ← [yLo .. yHi]
+                    , Just z ← [surfaceZAt gx gy]
+                    , z ≡ anchorZ
+                    , let (chunkCoord, _) = globalToChunk gx gy
+                    , Just xOff ← [isChunkVisibleWrapped facing worldSize
+                                       vb camX chunkCoord]
+                    ]
+            _ → V.empty
+
+    -- Mine + construction + chop + till markers are world annotations:
+    -- shown in every tool mode. The mode only adds its own hover/preview
+    -- on top.
     let markerQuads = designQuads <> constructDesignQuads <> chopDesignQuads
+                    <> tillDesignQuads
     return $ case toolMode of
         InfoTool  → markerQuads <> hoverQuads <> selectQuads
         MineTool  → markerQuads <> hoverQuads <> minePreviewQuads
@@ -778,6 +825,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
         -- standalone construct tool used to.
         BuildTool → markerQuads <> hoverQuads <> constructPreviewQuads
         ChopTool  → markerQuads <> hoverQuads <> chopPreviewQuads
+        TillTool  → markerQuads <> hoverQuads <> tillPreviewQuads
         _         → markerQuads
 
 -- | Find the topmost Z that has a non-zero material in a column.

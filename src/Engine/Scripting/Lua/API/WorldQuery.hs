@@ -2,6 +2,7 @@
 module Engine.Scripting.Lua.API.WorldQuery
     ( worldGetTerrainAtFn
     , worldGetSlopeAtFn
+    , worldGetVegAtFn
     , worldGetFluidAtFn
     , worldGetSurfaceAtFn
     , worldGetChunkInfoFn
@@ -131,6 +132,38 @@ worldGetSlopeAtFn env = do
                               then ctSlopes col VU.! i
                               else 0
                     Lua.pushinteger (fromIntegral s)
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.getVegAt(gx, gy) → vegetation id | nil (chunk unloaded).
+--   The SURFACE tile's vegetation id on the active world — the value
+--   the till AI (#333) writes via world.setVegAt. Read-only sibling of
+--   world.setVegAt, mirroring world.getSlopeAt.
+worldGetVegAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetVegAtFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+                (coord, (lx, ly)) = globalToChunk gx gy
+                idx = ly * chunkSize + lx
+            mTd ← Lua.liftIO $ getWorldTileData env
+            case mTd >>= lookupChunk coord of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        z   = lcSurfaceMap lc VU.! idx
+                        i   = z - ctStartZ col
+                        vg  = if i ≥ 0 ∧ i < VU.length (ctVeg col)
+                              then ctVeg col VU.! i
+                              else 0
+                    Lua.pushinteger (fromIntegral vg)
                     return 1
         _ → do
             Lua.pushnil

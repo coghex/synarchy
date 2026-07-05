@@ -147,6 +147,27 @@ data WorldCommand
         --   AI's completion, or a player cancel).
     | WorldSetChopDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed chop-designation markers.
+    | WorldSetTillAnchor WorldPageId Int Int
+        -- ^ Till tool (#333): first click anchors the designation
+        --   rectangle at (gx, gy). The render pass previews anchor→hover.
+    | WorldClearTillAnchor WorldPageId
+        -- ^ Till tool: cancel the pending rectangle (right-click /
+        --   Escape / tool switch).
+    | WorldDesignateTill WorldPageId Int Int Int Int
+        -- ^ Till tool: second click commits the rectangle
+        --   (gx1,gy1)–(gx2,gy2). Only tiles in loaded chunks at the
+        --   ANCHOR's surface z, with no fluid on top, no flora instance,
+        --   and not already tilled, are designated — a farmed field is
+        --   flat ground, like a construction footprint.
+    | WorldCancelTill WorldPageId Int Int
+        -- ^ Remove the till designation at (gx, gy), if any (the till
+        --   AI's completion, or a player cancel).
+    | WorldSetTillDesignateTexture WorldPageId TextureHandle
+        -- ^ Texture for committed till-designation markers.
+    | WorldSetVeg WorldPageId Int Int Int Word8
+        -- ^ Set the vegetation id of the tile at (gx,gy,z) via the
+        --   WeSetVeg edit path (world.setVegAt) — the till AI's
+        --   completion primitive (#333), same shape as world.setSlope.
     | WorldDigTile WorldPageId Int Int Float Float Float Float Float
         -- ^ Apply dig progress to the designated tile at (gx, gy):
         --   pageId gx gy uxPos uyPos amount minerSkill perception.

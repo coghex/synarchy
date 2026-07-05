@@ -125,6 +125,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texToolBuildSelected   = engine.loadTexture("assets/textures/ui/hud/tool_build_selected.png")
     hud.texToolChop            = engine.loadTexture("assets/textures/ui/hud/tool_chop.png")
     hud.texToolChopSelected    = engine.loadTexture("assets/textures/ui/hud/tool_chop_selected.png")
+    hud.texToolTill            = engine.loadTexture("assets/textures/ui/hud/tool_till.png")
+    hud.texToolTillSelected    = engine.loadTexture("assets/textures/ui/hud/tool_till_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/ui/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/ui/hud/utility/zoom_hover.png")
     hud.texWorldSelect         = engine.loadTexture("assets/textures/ui/hud/utility/world_select.png")
@@ -141,6 +143,9 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- Chop-designation marker (#97): green so a tree marked for felling
     -- reads differently from a dig / build designation.
     hud.texChopDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/chop_designate.png")
+    -- Till-designation marker (#333): brown so a field marked for
+    -- tilling reads differently from every other designation layer.
+    hud.texTillDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/till_designate.png")
 
     -- Event-log toggle (top-left). Two states: default and selected
     -- (drawn while the event log panel is open). The combat-log
@@ -287,6 +292,9 @@ function hud.createUI()
     if hud.texChopDesignate then
         chop.setDesignateTexture(hud.worldId, hud.texChopDesignate)
     end
+    if hud.texTillDesignate then
+        till.setDesignateTexture(hud.worldId, hud.texTillDesignate)
+    end
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -379,6 +387,12 @@ function hud.createUI()
                 tooltip     = "Chop trees",
             },
             {
+                name        = "tool_till",
+                texDefault  = hud.texToolTill,
+                texSelected = hud.texToolTillSelected,
+                tooltip     = "Till soil",
+            },
+            {
                 name        = "tool_default",
                 texDefault  = hud.texToolDefault,
                 texSelected = hud.texToolDefaultSelected,
@@ -391,7 +405,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 4,   -- tool_default (the last item)
+        selectedIndex = 5,   -- tool_default (the last item)
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -414,6 +428,9 @@ function hud.createUI()
             -- Route to the chop tool so a pending anchor cancels.
             local chopTool = require("scripts.chop_tool")
             chopTool.onToolMode(itemName)
+            -- Route to the till tool so a pending anchor cancels.
+            local tillTool = require("scripts.till_tool")
+            tillTool.onToolMode(itemName)
             -- Route to the tile editor so its popup can hide on
             -- non-info tools.
             local tileEditor = require("scripts.tile_editor")
@@ -434,6 +451,10 @@ function hud.createUI()
     -- Chop designation tool (#97): same hud reference.
     local chopToolMod = require("scripts.chop_tool")
     chopToolMod.setup({ hud = hud })
+
+    -- Till designation tool (#333): same hud reference.
+    local tillToolMod = require("scripts.till_tool")
+    tillToolMod.setup({ hud = hud })
 
     -- Tile editor lives on the same world_page as the build tool.
     -- It uses the same box texture set + menu font; worldId is used
@@ -608,6 +629,9 @@ function hud.show()
     end
     if hud.texChopDesignate then
         chop.setDesignateTexture(hud.worldId, hud.texChopDesignate)
+    end
+    if hud.texTillDesignate then
+        till.setDesignateTexture(hud.worldId, hud.texTillDesignate)
     end
 
     hud.visible = true
