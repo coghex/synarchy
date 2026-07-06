@@ -42,7 +42,6 @@ data SimWorldState = SimWorldState
 data SimChunkState = SimChunkState
     { scsFluid       ∷ !FluidMap          -- ^ Live fluid state
     , scsTerrain     ∷ !(VU.Vector Int)   -- ^ Terrain surface (read-only until modified)
-    , scsGenFluid    ∷ !FluidMap          -- ^ Original generated fluid (for diff on save)
     , scsSettleTicks ∷ !Int               -- ^ Remaining fast settle ticks (0 = settled)
     , scsActive      ∷ !Bool              -- ^ True when volume sim is running
     , scsActiveFluid ∷ !(V.Vector (Maybe ActiveFluidCell))  -- ^ Volume-tracked fluid (active only)

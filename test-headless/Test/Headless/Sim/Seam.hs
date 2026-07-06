@@ -30,7 +30,6 @@ mkChunk ∷ V.Vector (Maybe ActiveFluidCell) → SimChunkState
 mkChunk active = SimChunkState
     { scsFluid       = V.replicate n Nothing
     , scsTerrain     = VU.replicate n 0
-    , scsGenFluid    = V.replicate n Nothing
     , scsSettleTicks = 0
     , scsActive      = True
     , scsActiveFluid = active

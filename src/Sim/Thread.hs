@@ -184,7 +184,6 @@ handleSimCommand env logger simStateRef cmd = do
                 scs = SimChunkState
                     { scsFluid       = fluidMap
                     , scsTerrain     = terrainMap
-                    , scsGenFluid    = fluidMap
                     , scsSettleTicks = newChunkSettleTicks
                     , scsActive      = False
                     , scsActiveFluid = V.replicate sz Nothing
@@ -209,13 +208,11 @@ handleSimCommand env logger simStateRef cmd = do
                 base = case HM.lookup coord (swsChunks sws) of
                     Just scs → scs { scsFluid       = fluidMap
                                    , scsTerrain     = terrainMap
-                                   , scsGenFluid    = fluidMap
                                    , scsSettleTicks = reactivateSettleTicks
                                    }
                     Nothing  → SimChunkState
                         { scsFluid       = fluidMap
                         , scsTerrain     = terrainMap
-                        , scsGenFluid    = fluidMap
                         , scsSettleTicks = reactivateSettleTicks
                         , scsActive      = False
                         , scsActiveFluid = V.replicate sz Nothing
