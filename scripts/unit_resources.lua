@@ -155,6 +155,12 @@ local config = {
             -- regardless of activity or pose. The unit ends via the
             -- kill_on_zero rule above ~16-20 real-sec later.
             organ_failure_check    = true,
+            -- Caffeine fatigue-offset (#347): at a fully-dosed caffeine
+            -- meter (brain.lua), +0.3 stamina/sec on top of the normal
+            -- pose/activity regen — comparable to regen_factor_idle
+            -- (0.5) at endurance 1.0, i.e. a real but not
+            -- stamina-trivializing pick-me-up.
+            caffeine_regen_bonus   = 0.3,
         },
         hydration = {
             max_from        = "max_hydration",
@@ -685,6 +691,15 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
         drainActivity = supply * ratio * ratio
     else
         drainActivity = (activity == "walking" and params.drain_walking) or 0
+    end
+
+    -- Caffeine fatigue-offset (#347): an opt-in stimulant regen bonus,
+    -- additive on top of whatever pose/activity/speed regen this
+    -- resource already resolved to above. Skipped during organ failure
+    -- — the body has nothing left for a stimulant to help with.
+    if params.caffeine_regen_bonus and not inOrganFailure then
+        local caffeine = unit.getStat(uid, "caffeine") or 0
+        regen = regen + caffeine * params.caffeine_regen_bonus
     end
 
     local drain = drainActivity + drainConstant + drainMetabolic + drainOrganFailure
