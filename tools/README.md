@@ -4,6 +4,15 @@ Python scripts for auditing/regression-testing world generation, and for
 driving/verifying engine and game-logic behavior against a real headless
 engine instance.
 
+## Pre-push gate: `ci-local.sh`
+
+`make ci` (repo root) runs `tools/ci-local.sh`, which mirrors the CI gate
+(`.github/workflows/ci.yml`) locally: a warning-clean (`-Werror`) build of
+the library/exe + both test suites, the headless hspec suite,
+`test_audit.py`, and `world_check.py --quick`. A green `make ci` predicts a
+green CI run. It applies `-Werror` the same scoped way CI does and restores
+any pre-existing `cabal.project.local` on exit.
+
 ## World generation tools
 
 Scripts for auditing, checking determinism, and regression-testing the
