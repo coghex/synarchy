@@ -24,7 +24,8 @@ part pid parent vital hLow layers = BodyPart
     , bpAreaWeight = 0.1, bpTacticalValue = 0.5
     , bpBleedFactor = 1.0, bpHeightLow = hLow, bpHeightHigh = hLow + 0.5
     , bpLayers = [ (m, m, t) | (m, t) ← layers ]   -- name defaults to material
-    , bpTargetable = True, bpDepth = 0.0 }
+    , bpTargetable = True, bpDepth = 0.0
+    , bpAffectsLocomotion = False, bpAffectsBalance = False }
 
 humanoid ∷ UnitDef
 humanoid = UnitDef

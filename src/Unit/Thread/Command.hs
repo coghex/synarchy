@@ -2,6 +2,7 @@
 module Unit.Thread.Command
     ( processAllUnitCommands
     , recomputeBodyDerivedStats
+    , injurySpeedMult
     ) where
 
 import UPrelude
@@ -336,10 +337,10 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
     let (effSpeed, isRunning) = case HM.lookup uid (umInstances um) of
             Nothing   → (speed, False)
             Just inst →
-                let sp     = speed * injurySpeedMult inst
-                    (maxSp, runFrac) = case HM.lookup (uiDefName inst) (umDefs um) of
-                        Just d  → (udMaxSpeed d, udRunThreshold d)
-                        Nothing → (3.0, 0.6)
+                let (bodyParts, maxSp, runFrac) = case HM.lookup (uiDefName inst) (umDefs um) of
+                        Just d  → (udBodyParts d, udMaxSpeed d, udRunThreshold d)
+                        Nothing → ([], 3.0, 0.6)
+                    sp     = speed * injurySpeedMult bodyParts inst
                     runCut = maxSp * runFrac   -- per-unit run-anim threshold
                 in (sp, sp > runCut)
     atomicModifyIORef' utsRef $ \uts →
@@ -744,29 +745,32 @@ bloodSeedFromStats s = case HM.lookup "body_mass" s of
 -- | Movement-speed multiplier derived from the unit's wounds + blood.
 --
 --   Three terms compose multiplicatively:
---     * leg/foot wound severity × 0.6 — wounds on legs/feet hit
---       harder because that's literally what walks.
---     * torso wound severity × 0.3 — concussive / vital-area damage
---       slows the unit too but less than a leg.
+--     * leg/foot wound severity × 1.2 — wounds on parts flagged
+--       'bpAffectsLocomotion' hit harder because that's literally
+--       what walks.
+--     * torso wound severity × 0.3 — parts flagged 'bpAffectsBalance'
+--       (concussive / vital-area damage) slow the unit too but less
+--       than a leg.
 --     * blood fraction → 0.5 + 0.5 × frac — at full blood we're 1.0,
 --       at 0 blood we're 0.5 (matches "unconscious bleeding out is
 --       still capable of some movement before collapse").
 --   Result clamped to [0.1, 1.0] so a unit never literally stops.
 --   Applied to UnitMoveTo's speed parameter so all movement gets
---   scaled the same way.
-injurySpeedMult ∷ UnitInstance → Float
-injurySpeedMult inst =
-    let isLegPart p = p == "l_leg" || p == "r_leg"
-                   || p == "l_foot" || p == "r_foot"
-                   || p == "l_fore_leg" || p == "r_fore_leg"
-                   || p == "l_hind_leg" || p == "r_hind_leg"
+--   scaled the same way. Which parts count as leg/torso is
+--   DATA-DRIVEN via the unit's own body-part list rather than
+--   hardcoded ids, so differently-named skeletons (a robot's
+--   "hindquarter", say) work as long as their YAML sets the flags.
+injurySpeedMult ∷ [BodyPart] → UnitInstance → Float
+injurySpeedMult bodyParts inst =
+    let partIdx = HM.fromList [ (bpId p, p) | p ← bodyParts ]
+        hasFlag f pid = maybe False f (HM.lookup pid partIdx)
         -- EFFECTIVE severity (heal eases it, necrosis floors it) so a
         -- limping unit regains speed as its leg wound mends, in step
         -- with the bleed/pain/anim consumers that share the same helper.
         legSev = sum [ woundEffSeverity w
-                     | w ← uiWounds inst, isLegPart (woundPart w) ]
+                     | w ← uiWounds inst, hasFlag bpAffectsLocomotion (woundPart w) ]
         torsoSev = sum [ woundEffSeverity w
-                       | w ← uiWounds inst, woundPart w == "torso" ]
+                       | w ← uiWounds inst, hasFlag bpAffectsBalance (woundPart w) ]
         bodyMass = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
         maxBlood = bodyMass * bloodMassRatio
         bloodFrac = if maxBlood > 0
