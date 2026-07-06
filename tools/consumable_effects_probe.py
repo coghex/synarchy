@@ -241,19 +241,29 @@ def main():
                        "mood delta unaffected by temperature (quality-only)",
                        {"hot_mood": hot_hi["mood"], "cold_mood": cold_hi["mood"]})
 
-        # Fully drain this pot now, while it's the ONLY coffee_pot in the
-        # inventory — modifyItemFill/findFirstWithFill both key off "first
-        # match", so a not-yet-empty older pot would otherwise shadow the
-        # fresher one brewed in step 3 below.
+        # Fully drain this pot now (leaving it in inventory, EMPTY, ahead
+        # of the fresh pot brewed in step 3) so that step 3's checks below
+        # exercise the exact "earlier empty same-def pot precedes a full
+        # one" shape unit.modifyItemFillById exists to get right.
         send(port, f"return unit.modifyItemFill({uid}, 'coffee_pot', -10)")
         r = drink(port, uid)
         passed = check(passed, r is None,
                         "pot emptied by modifyItemFill -> drink() finds nothing", r)
 
-        # --- 3. Fresh, LOW quality cup (now the only pot with fill): ---
-        #        negative mood, weaker hydration/caffeine than the excellent cup.
+        # --- 3. Fresh, LOW quality cup, brewed while an earlier, now-EMPTY
+        #        coffee_pot (hot_hi_id) still sits in inventory ahead of it:
+        #        negative mood, weaker hydration/caffeine than the
+        #        excellent cup, AND the fill drop must land on the fresh
+        #        pot itself, not get silently clamped against the empty
+        #        one that precedes it (the free-refill bug: findFirstWithFill
+        #        correctly picks the full pot for quality/temp, but a naive
+        #        modifyItemFill-by-defName drain would hit the empty one
+        #        first and clamp at zero, leaving the full pot undrained
+        #        and endlessly re-sippable). ---
         hot_lo_id = brew(port, uid, mule, bid, skill=10, knowledge=10)
+        before_pots = {p["id"]: p["fill"] for p in instances_of(port, uid, "coffee_pot")}
         hot_lo = drink(port, uid)
+        after_pots = {p["id"]: p["fill"] for p in instances_of(port, uid, "coffee_pot")}
         ok = (hot_lo is not None and hot_lo["quality"] < 50
               and hot_lo["mood"] < 0
               and hot_lo["hydration"] < hot_hi["hydration"]
@@ -261,6 +271,29 @@ def main():
         passed = check(passed, ok,
                        "hot atrocious cup: negative mood, less hydration+caffeine than excellent",
                        hot_lo)
+
+        ok = (hot_lo is not None
+              and abs(after_pots.get(hot_lo_id, -1)
+                       - (before_pots[hot_lo_id] - hot_lo["sip"])) < 0.001
+              and after_pots.get(hot_hi_id, -1) == 0)
+        passed = check(passed, ok,
+                       "fill drop lands on the sipped instance, not the earlier empty pot",
+                       {"before": before_pots, "after": after_pots,
+                        "hot_hi_id": hot_hi_id, "hot_lo_id": hot_lo_id})
+
+        # Repeated drinks must keep draining THIS SAME pot (no free
+        # infinite sips from it re-reading as "full" every time) until it
+        # is genuinely exhausted.
+        for _ in range(3):   # 0.75 L left / 0.25 L per sip
+            drink(port, uid)
+        final_pots = {p["id"]: p["fill"] for p in instances_of(port, uid, "coffee_pot")}
+        ok = final_pots.get(hot_lo_id, 1) <= 0.001
+        passed = check(passed, ok,
+                       "repeated drinks actually exhaust the pot (no free infinite sips)",
+                       final_pots)
+        r = drink(port, uid)
+        passed = check(passed, r is None,
+                       "exhausted pot -> drink() finds nothing (no more free sips)", r)
 
         # --- 4. Caffeine meter + concentration + decay (brain.lua) ---
         caf = fget(port, f"return unit.getStat({uid}, 'caffeine')")

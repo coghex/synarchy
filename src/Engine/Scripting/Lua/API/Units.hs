@@ -90,6 +90,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetLastAttackerFn
     , unitGetWeaponClassFn
     , unitModifyItemFillFn
+    , unitModifyItemFillByIdFn
     , unitRepairItemFn
     , applyRepairToUnit
     , findHeldItemById
@@ -1709,6 +1710,46 @@ unitModifyItemFillFn env = do
             Lua.pushnumber 0
             return 1
 
+-- | unit.modifyItemFillById(uid, instanceId, delta) → actual applied
+--   delta (after clamp to [0, capacity]), or nil if the unit doesn't
+--   exist or holds no inventory instance with that id. Same clamp
+--   semantics as unit.modifyItemFill, but targets a SPECIFIC instance
+--   rather than the first item matching a defName — needed once a unit
+--   can hold more than one instance of the same container def (e.g. an
+--   already-empty and a freshly-brewed coffee_pot at once, #347):
+--   modifyItemFill's first-match semantics would silently drain the
+--   WRONG instance in that case.
+unitModifyItemFillByIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitModifyItemFillByIdFn env = do
+    idArg    ← Lua.tointeger 1
+    instArg  ← Lua.tointeger 2
+    deltaArg ← Lua.tonumber 3
+    case (idArg, instArg, deltaArg) of
+        (Just n, Just iidI, Just (Lua.Number d)) → do
+            let uid   = UnitId (fromIntegral n)
+                iid   = fromIntegral iidI ∷ Word64
+                delta = realToFrac d ∷ Float
+            mApplied ← Lua.liftIO $ do
+                itemMgr ← readIORef (itemManagerRef env)
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, Nothing)
+                        Just inst →
+                            case adjustFillById itemMgr iid delta
+                                     (uiInventory inst) of
+                                Nothing → (um, Nothing)
+                                Just (inv', applied) →
+                                    let inst' = inst { uiInventory = inv' }
+                                    in ( um { umInstances = HM.insert uid inst'
+                                                            (umInstances um) }
+                                       , Just applied )
+            case mApplied of
+                Just applied → do
+                    Lua.pushnumber (Lua.Number (realToFrac applied))
+                    return 1
+                Nothing → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
 -- | unit.repairItem(uid, instanceId, conditionDelta[, sharpnessDelta])
 --   → table | nil. The low-level repair primitive (#300): the single
 --   verb that ADJUSTS an item instance's two wear axes —
@@ -2671,6 +2712,28 @@ adjustFirstFill itemMgr defName delta = go
       | otherwise =
           let (xs', applied) = go xs
           in (x : xs', applied)
+
+-- | Rewrite the fill of the instance with this id in a list, clamped to
+--   [0, capacity] via the ItemManager. Nothing if no element matches.
+--   Preserves order (in-place slot); mirrors adjustFirstFill but keyed
+--   by instance id instead of defName.
+adjustFillById
+    ∷ ItemManager → Word64 → Float → [ItemInstance]
+    → Maybe ([ItemInstance], Float)
+adjustFillById _ _ _ [] = Nothing
+adjustFillById itemMgr iid delta (x : xs)
+    | iiInstanceId x ≡ iid =
+        let cap = case lookupItemDef (iiDefName x) itemMgr of
+                Just d  → case idContainer d of
+                    Just c  → icCapacity c
+                    Nothing → iiCurrentFill x   -- no container → no headroom
+                Nothing → iiCurrentFill x
+            newFill = max 0 (min cap (iiCurrentFill x + delta))
+            applied = newFill - iiCurrentFill x
+        in Just (x { iiCurrentFill = newFill } : xs, applied)
+    | otherwise = do
+        (xs', applied) ← adjustFillById itemMgr iid delta xs
+        pure (x : xs', applied)
 
 unitGetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPosFn env = do

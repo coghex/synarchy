@@ -107,7 +107,13 @@ function consumable.drink(uid, defName)
     if mood == nil then mood = 1.0 end
     unit.setStat(uid, "mood", clamp(mood + moodDelta, 0, 1))
 
-    unit.modifyItemFill(uid, defName, -sip)
+    -- Drain the EXACT instance the effects above were computed from —
+    -- unit.modifyItemFill drains the first item matching defName, which
+    -- is the wrong instance whenever an earlier, already-empty same-def
+    -- container precedes the one findFirstWithFill picked (it would
+    -- clamp at zero on the empty one, leaving the sipped pot untouched
+    -- and re-drinkable for free).
+    unit.modifyItemFillById(uid, it.instanceId, -sip)
     unit.drink(uid)
 
     return {
