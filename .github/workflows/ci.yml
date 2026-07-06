@@ -66,15 +66,18 @@ jobs:
             libgl1-mesa-dev pkg-config
 
       # Cache the ghcup-installed toolchain so "Set up GHC" reuses GHC
-      # 9.12.2 + cabal (a ~2.5 min re-download otherwise) on a hit. Static
-      # key — only a compiler/cabal version bump invalidates it. Restored
-      # before setup so the action detects the existing install; saved at
-      # post-job with whatever setup populated into ~/.ghcup.
+      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min). On
+      # these runners haskell-actions/setup installs ghcup under
+      # /usr/local/.ghcup (NOT ~/.ghcup — caching that path saved 0 bytes),
+      # and the runner user owns it, so it restores without sudo. Restored
+      # before setup so the action finds the existing install; saved at
+      # post-job. Static key — only a compiler/cabal version bump
+      # invalidates it.
       - name: Cache GHC toolchain
         uses: actions/cache@v4
         with:
-          path: ~/.ghcup
-          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0
+          path: /usr/local/.ghcup
+          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v2
 
       - name: Set up GHC
         id: setup
