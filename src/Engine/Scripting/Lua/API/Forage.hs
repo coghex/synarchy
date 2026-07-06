@@ -575,7 +575,23 @@ worldPlantCropAtFn env = do
                                     i    = z - ctStartZ col
                                     vg   = if i ≥ 0 ∧ i < VU.length (ctVeg col)
                                            then ctVeg col VU.! i else 0
-                                if not (isTilledSoil vg) then pure False
+                                    -- A tile already carrying a flora
+                                    -- instance (e.g. a row crop planted
+                                    -- via world.plantRowCropAt) must
+                                    -- refuse — otherwise a groundcover
+                                    -- plot lands underneath/on top of it
+                                    -- (world.isPlantable is tilled-soil
+                                    -- only, so it stays "plantable" after
+                                    -- either form is already planted).
+                                    hasExistingFlora = any
+                                        (\fi → fromIntegral (fiTileX fi) ≡ lx
+                                             ∧ fromIntegral (fiTileY fi) ≡ ly)
+                                        (fcdInstances (lcFlora lc))
+                                plots ← readIORef (wsCropPlotsRef ws)
+                                let hasExistingPlot = HM.member (gx, gy) plots
+                                if not (isTilledSoil vg)
+                                   ∨ hasExistingFlora ∨ hasExistingPlot
+                                then pure False
                                 else do
                                     cat ← readIORef (floraCatalogRef env)
                                     case findSpeciesByName name cat of

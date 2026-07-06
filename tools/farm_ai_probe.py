@@ -21,7 +21,9 @@ Checks:
   3. plantRowCropAt places a real row-crop instance (tomato_plant) on
      tilled soil, at full health, age ~0. A tile already carrying an
      instance then refuses a second planting (no duplicate/overlapping
-     instances stacking from a re-plant).
+     instances stacking from a re-plant), and the reciprocal cross-form
+     guard holds too: plantCropAt (groundcover) refuses a tile already
+     carrying a row-crop instance.
   4. Rot: a freshly-planted row crop (its own tile) becomes harvestable
      in its fruiting window and NOT harvestable once the calendar rolls
      into senescing without being picked — the #332 mechanic, exercised
@@ -327,6 +329,19 @@ def main():
         passed &= ok3b
         print(f"  [{'PASS' if ok3b else 'FAIL'}] plantRowCropAt refuses an "
               f"already-planted tile (no duplicate instance): {es_dup}")
+
+        # --- 3c. The reciprocal cross-form guard: plantCropAt (the
+        #     groundcover primitive) refuses a tile that already has a
+        #     row-crop FloraInstance on it (tile C, above) — otherwise a
+        #     CropPlot lands underneath the existing plant since
+        #     isPlantable is tilled-soil-only and stays true either way. ---
+        cross_plant = jget(port, f"return world.plantCropAt({cx},{cy},'wheat')")
+        cross_plot = jget(port, f"return world.getCropPlotAt({cx},{cy})")
+        ok3c = cross_plant in (None, False) and cross_plot is None
+        passed &= ok3c
+        print(f"  [{'PASS' if ok3c else 'FAIL'}] plantCropAt refuses a tile "
+              f"already carrying a row-crop instance: planted={cross_plant} "
+              f"plot={cross_plot}")
 
         # --- 5. plant.getDesignationAt's category field ---
         send(port, f"plant.designate('probe',{cx},{cy},'tomato_plant'); "
