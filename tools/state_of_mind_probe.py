@@ -21,6 +21,17 @@ model — to confirm:
      (physiological collapse itself is separately covered end-to-end by
      tools/collapse_crawl_probe.py and tools/concussion_revive_probe.py,
      which this change must also keep passing.)
+  5. The awareness/perception input (#350's "read from existing systems"
+     list): brain.awareness(uid) reads the 'perception' stat instantly
+     (no drift — same normalization Unit.LineOfSight uses), and an
+     otherwise-healthy unit with suppressed perception alone (no pain,
+     no hunger/stamina deficit) still sees its mood target dragged down
+     by the awareness term over a few ticks. Uses bear_brown (no
+     equipment) rather than the acolyte: acolytes spawn wearing
+     technogoggles (+perception buff, data/items/technogoggles.yaml),
+     and unit.setStat only overwrites the BASE stat — getStat still
+     returns base + active modifiers — so an equipped unit's effective
+     perception wouldn't land at the raw value this test writes.
 
 Usage: python3 tools/state_of_mind_probe.py [--port 9350]
 Exit 0 = pass.
@@ -210,6 +221,39 @@ def main():
         else:
             ok = False
             print(f"  [FAIL] psychological layer leaked into physiological gating: gate={gate}")
+
+        # ---- 5. Awareness/perception input, isolated from every other
+        # driver: a fresh, gear-free unit (no pain, full hunger/stamina)
+        # with its perception stat suppressed. bear_brown carries no
+        # equipment (no perception-buffing accessory to confound the
+        # read), so setStat's base overwrite lands exactly on getStat's
+        # effective value. brain.awareness() should reflect the drop
+        # immediately (no tick needed — it's a live read), and mood should
+        # drift down over a few ticks purely from the awareness term.
+        aware_uid = int(float(send(P, "local u=unit.spawn('bear_brown',9,0); return u")))
+        send(P, f"unit.setStat({aware_uid},'perception',0.2); return 'ok'")
+        aware_now = float(send(P,
+            f"return require('scripts.brain').awareness({aware_uid})"))
+        print(f"  awareness uid={aware_uid}: perception=0.2 -> brain.awareness()={aware_now:.3f}")
+        if close(aware_now, 0.2, tol=0.02):
+            print("  [pass] brain.awareness() reflects suppressed perception instantly")
+        else:
+            ok = False
+            print(f"  [FAIL] brain.awareness() {aware_now:.3f} != expected ~0.2")
+
+        aware_samples = []
+        for _ in range(8):
+            time.sleep(0.5)
+            aware_samples.append(summary(P, aware_uid))
+        aware_mood_trend = [s.get("mood", 1) for s in aware_samples]
+        print(f"  low-awareness mood trend: {[round(x,3) for x in aware_mood_trend]}")
+        # Expected asymptote: 1 - MOOD_W_AWARENESS*(1-0.2) = 1 - 0.15*0.8 = 0.88.
+        if aware_mood_trend[-1] < aware_mood_trend[0] - 0.002:
+            print(f"  [pass] mood drifts down from suppressed perception ALONE "
+                  f"({aware_mood_trend[0]:.4f} → {aware_mood_trend[-1]:.4f}, no pain/hunger/exhaustion)")
+        else:
+            ok = False
+            print(f"  [FAIL] mood didn't respond to the awareness input: {aware_mood_trend}")
 
         print(f"\n{'PASS' if ok else 'FAIL'} — unified state-of-mind model (#350)")
         return 0 if ok else 1

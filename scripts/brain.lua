@@ -19,7 +19,9 @@
 --   drift rather than snap, so a single bad moment doesn't instantly
 --   sour a unit's whole outlook):
 --     mood            — 0..1 (1 = content), drifts toward a target set by
---                        current pain / hunger / exhaustion / consciousness.
+--                        current pain / hunger / exhaustion / consciousness
+--                        / awareness (a unit that can barely perceive its
+--                        surroundings feels less secure).
 --     emotional_pain  — 0..1 (0 = none), rises quickly with physical pain
 --                        but decays slowly — the ache that outlasts the
 --                        wound.
@@ -68,6 +70,20 @@ local MOOD_W_PAIN      = 0.45
 local MOOD_W_HUNGER    = 0.20
 local MOOD_W_EXHAUSTION = 0.20
 local MOOD_W_CONSCIOUS = 0.35
+local MOOD_W_AWARENESS = 0.15
+
+-- ---- Awareness ----
+-- Read from the same 'perception' stat unitAwareness (Unit.LineOfSight)
+-- and vision (unitVisibleTiles) key off — the base sensory keenness that
+-- both combat dodge-gating and FOV scale by. 1.0 is the reference every
+-- species defaults to when perception is unset (see LineOfSight.hs); a
+-- unit AT OR ABOVE that baseline reads as fully aware (no mood penalty —
+-- keen senses don't inflate mood past content), only a below-baseline
+-- unit (poor perception, or anything that suppresses it) reads as less
+-- secure. unitAwareness's own bilateral (defender-vs-attacker) LOS/facing/
+-- night-time terms are a per-encounter combat quantity, not a per-unit
+-- background state, so they're deliberately NOT folded in here.
+local AWARENESS_BASELINE = 1.0
 
 -- ---- Emotional pain ----
 -- Asymmetric drift, same "fill fast / recover slow" shape the failure
@@ -103,6 +119,14 @@ local function painFrac(uid)
     return clamp((unit.getPain(uid) or 0) / PAIN_CEILING, 0, 1)
 end
 
+-- 0..1, 1 = fully aware (perception at or above the species baseline),
+-- 0 = perception has dropped to nothing. Deliberately a floor-only
+-- read (no bonus above 1.0) — see the ---- Awareness ---- block above.
+local function awareness(uid)
+    local perception = unit.getStat(uid, "perception") or AWARENESS_BASELINE
+    return clamp(perception / AWARENESS_BASELINE, 0, 1)
+end
+
 -- Instantaneous consciousness from the physiological drivers (no
 -- integration — the underlying stats already drift). min() = your worst
 -- problem knocks you out. UNCHANGED from the original brain.lua.
@@ -127,11 +151,13 @@ local function computeConsciousness(uid)
     return math.min(tf, of, sf)
 end
 
-local function driftMood(uid, dt, consciousness, pain, hungerFrac, staminaFrac)
+local function driftMood(uid, dt, consciousness, pain, hungerFrac, staminaFrac,
+                          awarenessFrac)
     local target = clamp(1.0 - (MOOD_W_PAIN * pain
                                + MOOD_W_HUNGER * (1.0 - hungerFrac)
                                + MOOD_W_EXHAUSTION * (1.0 - staminaFrac)
-                               + MOOD_W_CONSCIOUS * (1.0 - consciousness)),
+                               + MOOD_W_CONSCIOUS * (1.0 - consciousness)
+                               + MOOD_W_AWARENESS * (1.0 - awarenessFrac)),
                           0, 1)
     local prev = unit.getStat(uid, "mood")
     if prev == nil then return target end   -- first tick: seed at target, no fake drift-in
@@ -171,8 +197,10 @@ function brain.tick(uid, dt)
     local pain        = painFrac(uid)
     local hungerFrac   = fracOf(uid, "hunger", "max_hunger")
     local staminaFrac  = fracOf(uid, "stamina", "max_stamina")
+    local awarenessFrac = awareness(uid)
 
-    local mood = driftMood(uid, dt, consciousness, pain, hungerFrac, staminaFrac)
+    local mood = driftMood(uid, dt, consciousness, pain, hungerFrac, staminaFrac,
+                            awarenessFrac)
     unit.setStat(uid, "mood", mood)
 
     local emotionalPain = driftEmotionalPain(uid, dt, pain)
@@ -193,6 +221,10 @@ function brain.mood(uid)           return unit.getStat(uid, "mood") or 1.0 end
 function brain.emotionalPain(uid)  return unit.getStat(uid, "emotional_pain") or 0.0 end
 function brain.concentration(uid)  return unit.getStat(uid, "concentration") or 1.0 end
 function brain.stateOfMind(uid)    return unit.getStat(uid, "state_of_mind") or 1.0 end
+
+-- Live read (not persisted — perception is already a stat, this is just
+-- the same 0..1 normalization brain.tick feeds into the mood target).
+function brain.awareness(uid)      return awareness(uid) end
 
 -- Consciousness-gated behaviour — UNCHANGED semantics, still keyed on
 -- consciousness alone (not the blended state_of_mind): the locomotor
@@ -225,6 +257,7 @@ function brain.summary(uid)
         mood          = brain.mood(uid),
         emotionalPain = brain.emotionalPain(uid),
         concentration = brain.concentration(uid),
+        awareness     = brain.awareness(uid),
         stateOfMind   = brain.stateOfMind(uid),
         state         = brain.state(uid),
     }
