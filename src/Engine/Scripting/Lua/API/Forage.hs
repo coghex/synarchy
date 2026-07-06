@@ -263,7 +263,15 @@ worldHarvestFloraFn env = do
                                 fh ← fsHarvest sp
                                 let elapsed = cropPlotElapsedDays absDay cp
                                     g = floraGrowth sp elapsed (cropPlotInstance cp)
-                                if harvestOpen sp elapsed g
+                                -- elapsed is the plot's own age clock; the
+                                -- fruiting-window gate reads the real
+                                -- calendar day (doy), matching
+                                -- world.findHarvestableFlora's crop-plot
+                                -- scan and world.getCropPlotAt below — a
+                                -- future fruiting-stage groundcover species
+                                -- must agree across all three query/action
+                                -- entry points.
+                                if harvestOpen sp doy g
                                     then Just fh else Nothing
                         case mPlotHarvest of
                             Just fh → do
@@ -455,7 +463,17 @@ worldFindHarvestableFloraFn env = do
                                     , let elapsed = cropPlotElapsedDays absDay cp
                                           g = floraGrowth sp elapsed
                                                   (cropPlotInstance cp)
-                                    , harvestOpen sp elapsed g
+                                    -- elapsed (days since planting) is the
+                                    -- plot's own AGE clock (#334 — a plot's
+                                    -- growth/phase timeline starts fresh at
+                                    -- planting, not at the calendar epoch),
+                                    -- but the fruiting-window annual-cycle
+                                    -- gate must read the REAL calendar day
+                                    -- (doy) — a future fruiting-stage
+                                    -- groundcover species must ripen in
+                                    -- season, not on an elapsed-day clock
+                                    -- that drifts away from the calendar.
+                                    , harvestOpen sp doy g
                                     , let d2 = (tgx - gx) * (tgx - gx)
                                              + (tgy - gy) * (tgy - gy)
                                     , d2 ≤ r2
@@ -607,18 +625,24 @@ worldGetCropPlotAtFn env = do
                             Nothing → pure Nothing
                             Just cp → do
                                 cat ← readIORef (floraCatalogRef env)
-                                (_, absDay) ← growthClock ws
+                                (doy, absDay) ← growthClock ws
                                 pure $ do
                                     sp ← lookupSpecies (cpSpecies cp) cat
                                     let elapsed = cropPlotElapsedDays absDay cp
                                         g = floraGrowth sp elapsed
                                                 (cropPlotInstance cp)
+                                    -- elapsed is the plot's own age clock
+                                    -- (fine for fgAge/phase); the annual
+                                    -- cycle stage and fruiting-window gate
+                                    -- read the real calendar day (doy), to
+                                    -- agree with world.harvestFlora /
+                                    -- findHarvestableFlora above.
                                     Just ( fsName sp, g, cpHealth cp
                                          , lifePhaseText ⊚ growthPhaseTag sp g
                                          , annualStageText ⊚
-                                               activeStageTag sp elapsed
+                                               activeStageTag sp doy
                                          , isJust (fsHarvest sp)
-                                             ∧ harvestOpen sp elapsed g )
+                                             ∧ harvestOpen sp doy g )
             case mResult of
                 Nothing → Lua.pushnil
                 Just (name, g, health, mPhase, mStage, harvestable) → do

@@ -19,10 +19,12 @@ Checks:
   2. plantRowCropAt refused for a groundcover_crop name (wheat) — mirrors
      plantCropAt's reciprocal refusal of a row_crop name.
   3. plantRowCropAt places a real row-crop instance (tomato_plant) on
-     tilled soil, at full health, age ~0.
-  4. Rot: the freshly-planted row crop becomes harvestable in its
-     fruiting window and NOT harvestable once the calendar rolls into
-     senescing without being picked — the #332 mechanic, exercised
+     tilled soil, at full health, age ~0. A tile already carrying an
+     instance then refuses a second planting (no duplicate/overlapping
+     instances stacking from a re-plant).
+  4. Rot: a freshly-planted row crop (its own tile) becomes harvestable
+     in its fruiting window and NOT harvestable once the calendar rolls
+     into senescing without being picked — the #332 mechanic, exercised
      through THIS issue's own planting primitive.
   5. plant.getDesignationAt's new "category" field reports row_crop /
      groundcover_crop correctly (the farm AI's dispatch key).
@@ -39,7 +41,10 @@ Checks:
      autonomously finds and harvests it — NOT hunger-gated, reuses
      #94's yield path — clearing the plot and dropping wheat_grain on
      the ground, growing farming XP further.
- 10. Save/load: the row-crop instance (WePlaceFlora, save v79) survives
+ 10. Re-designating a tile the AI has already claimed with a DIFFERENT
+     crop makes it plant the NEW crop, not the stale one it originally
+     walked over for (plant.designate replaces in place, HM.insert).
+ 11. Save/load: the row-crop instance (WePlaceFlora, save v79) survives
      save → loadSave.
 
 Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
@@ -216,12 +221,14 @@ def main():
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
 
-        # Three distinct tiles: A (groundcover, full till+plant+harvest
-        # AI loop) and B (row crop, AI-planted) near the origin; C (row
-        # crop, direct-primitive refusal + rot checks) far enough away
-        # (>24 tiles, past harvest_scan_range) that the acolyte working
-        # A/B can never stumble onto it and confound the "ignored crop
-        # rots" check.
+        # Four distinct tiles: A (groundcover, full till+plant+harvest AI
+        # loop) and B (row crop, AI-planted) near the origin; C and D
+        # (direct-primitive checks: refusal + a single real plant, and
+        # the rot timeline, respectively — a planted tile now refuses a
+        # second planting, so the rot check needs its OWN fresh tile
+        # rather than replanting C) far enough away (>24 tiles, past
+        # harvest_scan_range) that the acolyte working A/B can never
+        # stumble onto them and confound the "ignored crop rots" check.
         used = set()
         tA = find_tillable(port)
         if not tA:
@@ -237,10 +244,17 @@ def main():
         if not tC:
             print("  [FAIL] no tillable tile found for site C (try another seed)")
             return 1
+        used.add(tC)
+        tD = find_tillable(port, cx=-60, cy=-60, exclude=used)
+        if not tD:
+            print("  [FAIL] no tillable tile found for site D (try another seed)")
+            return 1
         ax, ay = tA
         bx, by = tB
         cx, cy = tC
-        print(f"  site A={tA} (groundcover) B={tB} (row, AI) C={tC} (row, direct)")
+        dx, dy = tD
+        print(f"  site A={tA} (groundcover) B={tB} (row, AI) C={tC} (row, direct) "
+              f"D={tD} (row, rot)")
 
         # --- 1/2/3. Direct-primitive plantRowCropAt checks (tile C) ---
         refused0 = growth_entries(port, cx, cy, "tomato_plant")
@@ -280,23 +294,39 @@ def main():
         #     window to auto-harvest it first. Recipe: land the SECOND
         #     setDate ~197 days after whatever moment this was planted
         #     at (mirrors crop_probe.py's proven day5->day202 jump for
-        #     tomato_plant's real annualCycle: fruiting@90..240). ---
+        #     tomato_plant's real annualCycle: fruiting@90..240). Its OWN
+        #     tile (D) — a planted tile now refuses a second planting
+        #     (see check 3b below), so this can't reuse C. ---
+        dz = jget(port, f"local sz=world.getSurfaceAt({dx},{dy}); return sz")
+        till_and_wait(port, "probe", dx, dy, dz)
         set_date(port, "probe", 2, 1, 5)
-        send(port, f"world.plantRowCropAt('probe',{cx},{cy},'tomato_plant'); "
+        send(port, f"world.plantRowCropAt('probe',{dx},{dy},'tomato_plant'); "
                    f"return 'ok'")
         set_date(port, "probe", 2, 7, 21)
-        ripe = growth_entries(port, cx, cy, "tomato_plant")
+        ripe = growth_entries(port, dx, dy, "tomato_plant")
         ok4a = any(e.get("stage") == "fruiting" and e.get("harvestable")
                    for e in ripe)
         passed &= ok4a
         print(f"  [{'PASS' if ok4a else 'FAIL'}] planted row crop reaches "
               f"its fruiting window: {ripe}")
         set_date(port, "probe", 2, 9, 15)
-        rotten = growth_entries(port, cx, cy, "tomato_plant")
+        rotten = growth_entries(port, dx, dy, "tomato_plant")
         ok4b = ok4a and not any(e.get("harvestable") for e in rotten)
         passed &= ok4b
         print(f"  [{'PASS' if ok4b else 'FAIL'}] ignored ripe crop rots past "
               f"senescing: {rotten}")
+
+        # --- 3b. A tile that's already been planted refuses a second
+        #     planting (guards against overlapping/duplicate instances
+        #     stacking from a re-designate or a repeated direct call). ---
+        send(port, f"world.plantRowCropAt('probe',{cx},{cy},'tomato_plant'); "
+                   f"return 'ok'")
+        time.sleep(0.5)
+        es_dup = growth_entries(port, cx, cy, "tomato_plant")
+        ok3b = len(es_dup) == 1
+        passed &= ok3b
+        print(f"  [{'PASS' if ok3b else 'FAIL'}] plantRowCropAt refuses an "
+              f"already-planted tile (no duplicate instance): {es_dup}")
 
         # --- 5. plant.getDesignationAt's category field ---
         send(port, f"plant.designate('probe',{cx},{cy},'tomato_plant'); "
@@ -457,7 +487,57 @@ def main():
               f"from auto-harvest: {farming_after_plant} -> "
               f"{farming_after_harvest}")
 
-        # --- 10. Save/load: the AI-planted row crop (WePlaceFlora, v79)
+        # --- 10. Re-designating a claimed tile with a DIFFERENT crop
+        #     must not plant the stale crop the unit originally claimed.
+        #     plant.designate replaces in place (HM.insert), so a player
+        #     can swap the crop mid-job; the AI must notice and plant
+        #     whatever's there NOW, not what it walked over for. ---
+        tE = find_tillable(port, exclude=used)
+        if not tE:
+            print("  [FAIL] no tillable tile found for site E (try another seed)")
+            return 1
+        used.add(tE)
+        ex, ey = tE
+        ez = jget(port, f"local sz=world.getSurfaceAt({ex},{ey}); return sz")
+        till_and_wait(port, "probe", ex, ey, ez)
+        send(port, f"plant.designate('probe',{ex},{ey},'wheat'); return 'ok'")
+
+        deadline = time.time() + 30.0
+        claimed = False
+        while time.time() < deadline:
+            time.sleep(0.5)
+            job = send(port,
+                       f"local ai=require('scripts.unit_ai'); "
+                       f"local s=ai.getState({uid}); "
+                       f"if s and s.plantJob then return s.plantJob.x..','.."
+                       f"s.plantJob.y else return 'none' end").strip('"')
+            if job == f"{ex},{ey}":
+                claimed = True
+                break
+        if not claimed:
+            print("  [FAIL] acolyte never claimed the re-designation test job")
+            return 1
+        send(port, f"plant.designate('probe',{ex},{ey},'tomato_plant'); "
+                   f"return 'ok'")
+
+        deadline = time.time() + 90.0
+        redesignated_done = False
+        while time.time() < deadline:
+            time.sleep(2.0)
+            de = jget(port, f"return plant.getDesignationAt('probe',{ex},{ey})")
+            if not isinstance(de, dict):
+                redesignated_done = True
+                break
+        planted_new = growth_entries(port, ex, ey, "tomato_plant")
+        planted_stale = jget(port, f"return world.getCropPlotAt({ex},{ey})")
+        ok10 = (redesignated_done and len(planted_new) >= 1
+                and planted_stale is None)
+        passed &= ok10
+        print(f"  [{'PASS' if ok10 else 'FAIL'}] re-designating a claimed tile "
+              f"plants the NEW crop, not the stale one: "
+              f"new={planted_new} stale_plot={planted_stale}")
+
+        # --- 11. Save/load: the AI-planted row crop (WePlaceFlora, v79)
         #     survives save -> loadSave. ---
         send(port, "engine.saveWorld('probe', 'farm_ai_v79_check'); "
                    "return 'ok'")

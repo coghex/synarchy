@@ -394,6 +394,19 @@ handleWorldPlantRowCropAtCommand env logger pageId gx gy cropName = do
                         i   = z - ctStartZ col
                         vg  = if i ≥ 0 ∧ i < VU.length (ctVeg col)
                               then ctVeg col VU.! i else 0
+                        -- A tile already carrying a flora instance
+                        -- (a prior plantRowCropAt, or in principle any
+                        -- other rooted flora) must refuse a second
+                        -- planting — otherwise repeated calls (a
+                        -- re-designate + re-plant, or the primitive
+                        -- called twice) stack overlapping FloraInstances
+                        -- that all persist via the edit log.
+                        hasExistingFlora = any
+                            (\fi → fromIntegral (fiTileX fi) ≡ lx
+                                 ∧ fromIntegral (fiTileY fi) ≡ ly)
+                            (fcdInstances (lcFlora lc))
+                    plots ← readIORef (wsCropPlotsRef ws)
+                    let hasExistingPlot = HM.member (gx, gy) plots
                     case resolved of
                         Nothing →
                             logWarn logger CatWorld $
@@ -404,6 +417,11 @@ handleWorldPlantRowCropAtCommand env logger pageId gx gy cropName = do
                             logWarn logger CatWorld $
                                 "Plant row crop refused (not tilled soil) at "
                                   <> T.pack (show gx) <> "," <> T.pack (show gy)
+                        Just _ | hasExistingFlora ∨ hasExistingPlot →
+                            logWarn logger CatWorld $
+                                "Plant row crop refused (tile already "
+                                  <> "planted) at " <> T.pack (show gx) <> ","
+                                  <> T.pack (show gy)
                         Just (fid, baseWidth) → do
                             paramsM ← readIORef (wsGenParamsRef ws)
                             date ← readIORef (wsDateRef ws)

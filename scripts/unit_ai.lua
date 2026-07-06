@@ -4731,10 +4731,15 @@ function unitAi.plant.utility(uid, s, params)
     if not wid then return -math.huge end
 
     -- Active job: finite lock-in, released the moment the designation
-    -- disappears (this check runs BEFORE execute each tick).
+    -- disappears OR changes crop (this check runs BEFORE execute each
+    -- tick). plant.designate replaces in place (HM.insert) rather than
+    -- refusing a re-designate, so a player can swap the crop on this
+    -- tile while we're mid-job; matching only on d's existence would
+    -- plant the STALE crop we originally claimed and then cancel the
+    -- player's newer designation out from under them.
     if s.plantJob then
         local d = plant.getDesignationAt(wid, s.plantJob.x, s.plantJob.y)
-        if d then return params.plant_lock_utility end
+        if d and d.crop == s.plantJob.crop then return params.plant_lock_utility end
         unitAi.plant.complete(uid, s)
     end
 
@@ -4827,8 +4832,11 @@ function unitAi.plant.execute(uid, s, params)
     end
 
     if s.plantPhase == "planting" then
-        if not plant.getDesignationAt(wid, job.x, job.y) then
-            -- Player cancelled (or raced) out from under us.
+        local d = plant.getDesignationAt(wid, job.x, job.y)
+        if not d or d.crop ~= job.crop then
+            -- Player cancelled, or re-designated this tile with a
+            -- different crop, out from under us — drop the stale job
+            -- rather than plant it and cancel the newer designation.
             unitAi.plant.complete(uid, s)
             return
         end
