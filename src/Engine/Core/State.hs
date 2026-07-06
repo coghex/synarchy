@@ -176,6 +176,14 @@ data EngineEnv = EngineEnv
     --   Producers: Unit.Fall, unit.injure, and `injury.emit` from Lua;
     --   drained via `injury.drainEvents` into the injury-log UI.
     --   Runtime only, not persisted.
+  , thoughtEventsRef    ∷ IORef (Seq Combat.Types.CombatEvent)
+    -- ^ Per-unit thought stream (#351) → Lua. Purely Lua-produced —
+    --   scripts/thoughts.lua decides when/what via its data-driven
+    --   catalogue + trigger predicates and pushes via `thought.emit`
+    --   (target = the thinking unit); drained via `thought.drainEvents`
+    --   into scripts/thought_log.lua, which unit_log.lua's Thought tab
+    --   reads. Reuses the CombatEvent shape, same as injuryEventsRef.
+    --   Runtime only, not persisted.
   , buildingGhostRef    ∷ IORef (Maybe BuildingGhost)
     -- ^ Single-slot ghost preview during placement mode. Lua sets and
     --   clears via the build_tool module; the render path picks it up

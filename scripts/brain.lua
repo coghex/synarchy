@@ -248,6 +248,14 @@ function brain.concentration(uid)  return unit.getStat(uid, "concentration") or 
 function brain.stateOfMind(uid)    return unit.getStat(uid, "state_of_mind") or 1.0 end
 function brain.caffeine(uid)       return unit.getStat(uid, "caffeine") or 0.0 end
 
+-- Live reads of the same normalized inputs the mood target is built
+-- from (0 = none/empty .. 1 = full/none, see painFrac/fracOf above) —
+-- exposed so #351's thought triggers read the identical numbers mood
+-- drifts toward, rather than re-deriving PAIN_CEILING etc. themselves.
+function brain.painFrac(uid)       return painFrac(uid) end
+function brain.hungerFrac(uid)     return fracOf(uid, "hunger", "max_hunger") end
+function brain.staminaFrac(uid)    return fracOf(uid, "stamina", "max_stamina") end
+
 -- Live read (not persisted — perception is already a stat, this is just
 -- the same 0..1 normalization brain.tick feeds into the mood target).
 function brain.awareness(uid)      return awareness(uid) end

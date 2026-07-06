@@ -14,6 +14,27 @@
 #
 # -Werror is applied to the synarchy package only (not dependencies),
 # so the warning-clean state from #435 is enforced, not just observed.
+#
+# Build caching (#526): three caches persist across runs so a typical PR
+# recompiles only the modules it changed rather than all 360+ —
+#   1. the cabal dependency store (unchanged from the original gate),
+#   2. the GHC/cabal toolchain (~/.ghcup), so "Set up GHC" reuses the
+#      compiler instead of re-downloading it, and
+#   3. the project build products (dist-newstyle), so GHC's recompilation
+#      avoidance rebuilds only dirty modules + their reverse-deps.
+# The dist-newstyle key includes the GHC and Cabal versions and the
+# dependency plan hash (so a compiler/Cabal bump or a dependency change
+# invalidates it) plus a per-commit suffix so every run saves a fresh
+# snapshot; restore-keys let the next run restore the most recent
+# snapshot for partial reuse.
+# GitHub's 10 GB LRU cache eviction bounds the accumulation.
+#
+# Trade-off accepted at #526: there is NO separate from-scratch clean
+# -Werror backstop job. A warning that only surfaces on a full rebuild of
+# the whole module graph (cross-module interactions in files that don't
+# get recompiled) can therefore slip past -Werror; cached modules are
+# assumed to have been warning-free when built. A warning in any
+# CHANGED / recompiled module still fails the build (-Werror stays on).
 name: CI
 
 on:
@@ -45,6 +66,20 @@ jobs:
             libxinerama-dev libxcursor-dev libxxf86vm-dev \
             libgl1-mesa-dev pkg-config
 
+      # Cache the ghcup-installed toolchain so "Set up GHC" reuses GHC
+      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min). On
+      # these runners haskell-actions/setup installs ghcup under
+      # /usr/local/.ghcup (NOT ~/.ghcup — caching that path saved 0 bytes),
+      # and the runner user owns it, so it restores without sudo. Restored
+      # before setup so the action finds the existing install; saved at
+      # post-job. Static key — only a compiler/cabal version bump
+      # invalidates it.
+      - name: Cache GHC toolchain
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/.ghcup
+          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v2
+
       - name: Set up GHC
         id: setup
         uses: haskell-actions/setup@v2
@@ -71,6 +106,22 @@ jobs:
           path: ${{ steps.setup.outputs.cabal-store }}
           key: deps-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
           restore-keys: deps-${{ runner.os }}-ghc9.12.2-
+
+      # Cache the project build products so GHC recompiles only dirty
+      # modules. plan.json (from the --dry-run above) exists now, so its
+      # hash keys the cache alongside the GHC version; the per-commit
+      # suffix makes every run save a fresh snapshot, and restore-keys
+      # fall back to the most recent snapshot (same plan first, then any
+      # snapshot for this GHC) for partial reuse. Combined cache action:
+      # restores here, saves dist-newstyle at post-job.
+      - name: Cache project build (dist-newstyle)
+        uses: actions/cache@v4
+        with:
+          path: dist-newstyle
+          key: dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ github.sha }}
+          restore-keys: |
+            dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
+            dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
 
       - name: Build dependencies
         run: cabal build all --only-dependencies

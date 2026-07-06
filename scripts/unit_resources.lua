@@ -26,6 +26,7 @@ local thermo   = require("scripts.thermo")
 local salts    = require("scripts.salts")
 local cardio   = require("scripts.cardio")
 local brain    = require("scripts.brain")
+local thoughts = require("scripts.thoughts")
 
 -- Self-register in package.loaded so engine.loadScript (which uses
 -- dofile and creates a fresh chunk) and require return the same
@@ -1118,6 +1119,11 @@ function unitResources.update(dt)
                 -- values (mood / emotional_pain / concentration / the
                 -- unified state_of_mind) — dt-driven, unlike consciousness.
                 brain.tick(uid, dt)
+                -- Thoughts read this tick's freshly-computed mood/pain and
+                -- may nudge mood back (#351) — after brain.tick so next
+                -- tick's drift treats any nudge as "prev", fading it
+                -- naturally toward the physiological target.
+                thoughts.tick(uid, info, dt)
                 -- Injuries first: a lethal injury kills the unit (skip the
                 -- rest of its tick); a disabling one collapses it.
                 if not tickInjuries(uid, info, pose0)

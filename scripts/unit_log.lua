@@ -1,11 +1,13 @@
 -- Per-Unit Log Panel
 --
--- Opened by the "Log" button in the unit-info panel. Collates the three
--- logs — Event, Combat, Injury — for ONE unit into a single window, with
--- fixed tabs (All / Event / Combat / Injury). It owns no event stream of
--- its own: it READS the already-populated stores of the sibling logs
+-- Opened by the "Log" button in the unit-info panel. Collates the four
+-- logs — Event, Combat, Injury, Thought — for ONE unit into a single
+-- window, with fixed tabs (All / Event / Combat / Injury / Thought). It
+-- owns no event stream of its own: it READS the already-populated stores
+-- of the sibling logs
 --   * combat_log.unitEntries(uid)        (attacker or target == uid)
 --   * injury_log_panel.unitEntries(uid)  (victim == uid)
+--   * thought_log.unitEntries(uid)       (the thinking unit == uid, #351)
 --   * engine.getEventLog() filtered by ev.uid == uid (events tagged via
 --     engine.emitEventForUnit)
 -- and merges them by timestamp for the All tab. Entries keep their source
@@ -58,10 +60,11 @@ local UNIT_LOG_TAB_CALLBACK = "onUnitLogTabClick"
 
 -- Fixed tab set, in display order.
 local TABS = {
-    { key = "all",    name = "All"    },
-    { key = "event",  name = "Event"  },
-    { key = "combat", name = "Combat" },
-    { key = "injury", name = "Injury" },
+    { key = "all",     name = "All"     },
+    { key = "event",   name = "Event"   },
+    { key = "combat",  name = "Combat"  },
+    { key = "injury",  name = "Injury"  },
+    { key = "thought", name = "Thought" },
 }
 
 unitLog.baseSizes = {
@@ -194,16 +197,24 @@ local function injuryEntries(uid)
     return {}
 end
 
+local function thoughtEntries(uid)
+    local m = package.loaded["scripts.thought_log"]
+    if m and m.unitEntries then return m.unitEntries(uid) end
+    return {}
+end
+
 -- Entries for the active tab, NEWEST-FIRST.
 local function entriesFor(uid, tabKey)
-    if tabKey == "event"  then return eventEntries(uid)  end
-    if tabKey == "combat" then return combatEntries(uid) end
-    if tabKey == "injury" then return injuryEntries(uid) end
-    -- "all": merge the three and sort newest-first by ts.
+    if tabKey == "event"   then return eventEntries(uid)   end
+    if tabKey == "combat"  then return combatEntries(uid)  end
+    if tabKey == "injury"  then return injuryEntries(uid)  end
+    if tabKey == "thought" then return thoughtEntries(uid) end
+    -- "all": merge the four and sort newest-first by ts.
     local all = {}
-    for _, e in ipairs(eventEntries(uid))  do all[#all + 1] = e end
-    for _, e in ipairs(combatEntries(uid)) do all[#all + 1] = e end
-    for _, e in ipairs(injuryEntries(uid)) do all[#all + 1] = e end
+    for _, e in ipairs(eventEntries(uid))   do all[#all + 1] = e end
+    for _, e in ipairs(combatEntries(uid))  do all[#all + 1] = e end
+    for _, e in ipairs(injuryEntries(uid))  do all[#all + 1] = e end
+    for _, e in ipairs(thoughtEntries(uid)) do all[#all + 1] = e end
     table.sort(all, function(a, b) return (a.ts or 0) > (b.ts or 0) end)
     return all
 end

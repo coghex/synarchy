@@ -13,12 +13,19 @@
 -- The drain pattern (read-then-clear in a single `atomicModifyIORef'`)
 -- prevents the combat thread and Lua from racing: events that fire
 -- during a drain stay in the buffer until next call.
+--
+-- Also home to the injury and thought streams — non-combat event feeds
+-- that reuse the same CombatEvent shape and drain pattern rather than
+-- each re-spelling it (`injury.emit`/`drainEvents`, `thought.emit`/
+-- `drainEvents`).
 module Engine.Scripting.Lua.API.Combat
     ( combatAttackFn
     , combatDrainEventsFn
     , combatEmitDeathFn
     , injuryEmitFn
     , injuryDrainEventsFn
+    , thoughtEmitFn
+    , thoughtDrainEventsFn
     ) where
 
 import UPrelude
@@ -191,3 +198,40 @@ injuryEmitFn env = do
             Lua.pushboolean True
             return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | thought.emit(uid, text [, category]) → bool
+--
+--   Push one thought-log line for #351's per-unit thought stream. Purely
+--   a Lua entry point (mirrors injury.emit's role): scripts/thoughts.lua
+--   decides WHEN a unit thinks and WHAT it thinks (data-driven catalogue +
+--   trigger predicates, reading the mood/pain substrate #350 built), and
+--   applies any mood delta itself — this call is just the display sink
+--   that feeds scripts/thought_log.lua. `category` is the catalogue
+--   source ("state" | "environmental" | "random"), used only to tag/tint
+--   the log line; defaults to "random".
+thoughtEmitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+thoughtEmitFn env = do
+    uArg    ← Lua.tointeger 1
+    textArg ← Lua.tostring 2
+    catArg  ← Lua.tostring 3
+    case (uArg, textArg) of
+        (Just u, Just textBS) → do
+            gt ← Lua.liftIO $ readIORef (gameTimeRef env)
+            let category = maybe "random" TE.decodeUtf8 catArg
+                ev = CombatEvent
+                    { ceTs       = gt
+                    , ceKind     = category
+                    , ceAttacker = Nothing
+                    , ceTarget   = Just (fromIntegral u)
+                    , cePayload  = HM.singleton "text" (TE.decodeUtf8 textBS)
+                    }
+            Lua.liftIO $ atomicModifyIORef' (thoughtEventsRef env) $ \buf →
+                (buf Seq.|> ev, ())
+            Lua.pushboolean True
+            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | thought.drainEvents() → array of event tables (same shape as
+--   combat.drainEvents / injury.drainEvents). Drives thought_log.lua.
+thoughtDrainEventsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+thoughtDrainEventsFn env = drainEventStream (thoughtEventsRef env)
