@@ -683,8 +683,15 @@ handleWorldSetTillDesignateTextureCommand env _logger pageId tid = do
 
 -- | Commit a plant designation at (gx, gy) for the named crop. Refused
 --   (silently — the caller polls plant.getDesignationAt to confirm) if
---   the chunk isn't loaded, the tile isn't tilled soil, or cropName
---   doesn't name a registered plantable-crop species.
+--   the chunk isn't loaded, the tile isn't tilled soil, the tile is
+--   already occupied (an existing flora instance or crop plot — #336's
+--   plantCropAt/plantRowCropAt both refuse to plant over one, and
+--   world.isPlantable is tilled-soil-only so it can't tell the
+--   difference on its own; excluding an occupied tile HERE, same as
+--   till's own designation excludes flora-carrying tiles, keeps a farm
+--   AI from spending a full walk-and-work cycle on a designation that
+--   was always going to fail), or cropName doesn't name a registered
+--   plantable-crop species.
 handleWorldDesignatePlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Text → IO ()
 handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
@@ -694,8 +701,10 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (floraCatalogRef env)
+            plots ← readIORef (wsCropPlotsRef worldState)
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx = columnIndex lx ly
+                hasExistingPlot = HM.member (gx, gy) plots
                 resolvedCrop = case findSpeciesByName cropName cat of
                     Just (fid, _sp)
                         | Just wg ← HM.lookup (unFloraId fid) (fcWorldGen cat)
@@ -708,7 +717,13 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                         i   = z - ctStartZ col
                         vg  = if i ≥ 0 ∧ i < VU.length (ctVeg col)
                               then ctVeg col VU.! i else 0
-                    if isTilledSoil vg then Just z else Nothing
+                        hasExistingFlora = any
+                            (\fi → fromIntegral (fiTileX fi) ≡ lx
+                                 ∧ fromIntegral (fiTileY fi) ≡ ly)
+                            (fcdInstances (lcFlora lc))
+                    if isTilledSoil vg ∧ not hasExistingFlora
+                       ∧ not hasExistingPlot
+                    then Just z else Nothing
             case (tileZ, resolvedCrop) of
                 (Just z, Just fid) → do
                     atomicModifyIORef' (wsPlantDesignationsRef worldState) $

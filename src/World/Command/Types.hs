@@ -180,6 +180,14 @@ data WorldCommand
         -- ^ Set the vegetation id of the tile at (gx,gy,z) via the
         --   WeSetVeg edit path (world.setVegAt) — the till AI's
         --   completion primitive (#333), same shape as world.setSlope.
+    | WorldPlantRowCropAt WorldPageId Int Int Text
+        -- ^ worldId, gx, gy, cropName. Plant a single row-crop
+        --   FloraInstance at (gx,gy) via the WePlaceFlora edit path
+        --   (world.plantRowCropAt) — the farm AI's (#336) row-crop
+        --   planting completion, the FloraInstance counterpart to
+        --   world.plantCropAt's CropPlot for groundcover crops. Refused
+        --   world-thread-side unless the tile is tilled soil and
+        --   cropName names a registered row_crop species.
     | WorldDigTile WorldPageId Int Int Float Float Float Float Float
         -- ^ Apply dig progress to the designated tile at (gx, gy):
         --   pageId gx gy uxPos uyPos amount minerSkill perception.

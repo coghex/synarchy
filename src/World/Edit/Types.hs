@@ -21,6 +21,7 @@ import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..))
 import World.Fluid.Types (FluidType(..))
+import World.Flora.Types (FloraId)
 import World.Material.Id (MaterialId(..))
 
 -- | One tile-scale edit, keyed by global (gx, gy). Replay order
@@ -75,6 +76,24 @@ data WorldEdit
                                            --   and have it survive chunk
                                            --   eviction + save/load like every
                                            --   other edit.
+    | WePlaceFlora !Int !Int !FloraId !Int !Float
+                                           -- ^ Plant a single new row-crop
+                                           --   'World.Flora.Types.FloraInstance'
+                                           --   at (gx,gy): species id, the
+                                           --   absolute world day it was
+                                           --   planted (the age-0 baseline —
+                                           --   mirrors 'World.Flora.CropPlot's
+                                           --   cpPlantedDay), and the species'
+                                           --   worldgen footprint (baked in so
+                                           --   replay never needs a catalog
+                                           --   lookup). No generator path emits
+                                           --   this — 'World.Flora.Placement'
+                                           --   only places row crops once, at
+                                           --   worldgen time; this exists so
+                                           --   the farm AI's (#336)
+                                           --   world.plantRowCropAt survives
+                                           --   chunk eviction + save/load like
+                                           --   every other edit.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

@@ -161,16 +161,22 @@ def find_species_tile(port, species, harvestable=None, lo=-64, hi=64):
 
 
 def find_dry_tile(port, cx, cy, radius=12):
-    """Nearest tile to (cx, cy) with a real surface and no fluid on it —
-    world.getSurfaceAt returns MULTIPLE Lua values (surfaceZ, terrainZ,
-    fluidType, fluidSurface), not a table, so wrap it into one value
-    per call. Returns (gx, gy, surfaceZ) or None."""
+    """Nearest tile to (cx, cy) with a real surface, no fluid, and no
+    existing flora on it — world.getSurfaceAt returns MULTIPLE Lua
+    values (surfaceZ, terrainZ, fluidType, fluidSurface), not a table,
+    so wrap it into one value per call. The flora exclusion matters
+    since #336: world.plantCropAt now refuses a tile that already
+    carries a flora instance (no planting underneath/on top of an
+    existing plant), so a wild bush here would make the subsequent
+    plantCropAt call spuriously refuse. Returns (gx, gy, surfaceZ) or
+    None."""
     r = send(
         port,
         f"for r=0,{radius} do for dx=-r,r do for dy=-r,r do "
         f"local gx,gy={cx}+dx,{cy}+dy; "
         f"local sz,tz,ft=world.getSurfaceAt(gx,gy); "
-        f"if sz and not ft then return gx..','..gy..','..sz end "
+        f"if sz and not ft and not world.getFloraAt(gx,gy) then "
+        f"return gx..','..gy..','..sz end "
         f"end end end return 'none'",
         timeout=30.0)
     r = r.strip('"')

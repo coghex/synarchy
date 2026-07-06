@@ -341,7 +341,9 @@ local config = {
         -- (no tool table at all here, unlike dig/chop). Lock-in while
         -- tilling is finite (dire needs still preempt; never
         -- math.huge). Claims mirror chopClaims (module-local, expire on
-        -- till_claim_timeout or claimant death).
+        -- till_claim_timeout or claimant death). Rate scaling + XP grant
+        -- by the farming skill (#265) landed with #336, alongside the
+        -- rest of the farm loop.
         till_scan_range    = 30.0,
         till_base_utility  = 2.0,
         till_lock_utility  = 6.0,
@@ -349,11 +351,42 @@ local config = {
                                     -- (a tile is 1.0 total — 5s bare-handed)
         till_equip_seconds = 1.0,
         till_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
+        till_xp_per_till   = 1.0,   -- farming XP (#265/#336) per tilled tile
         -- No dedicated push/tiller animation exists yet — the shovel
         -- work set is the closest hand-tool-on-ground visual (same
         -- reuse-until-real-art convention as chop_equip_anim above).
         till_equip_anim = "standing_to_holding_shovel",
         till_work_anim  = "shoveling",
+        -- Planting (plant_designation, #336). Structure mirrors till
+        -- exactly (claim/walk/equip/work-progress), skill-scaled by the
+        -- new farming skill (#265) like chop/mining. Completion
+        -- dispatches to world.plantCropAt (groundcover) or
+        -- world.plantRowCropAt (row_crop) by the designation's category.
+        plant_scan_range    = 30.0,
+        plant_base_utility  = 2.0,
+        plant_lock_utility  = 6.0,
+        plant_rate          = 0.2,   -- planting progress/sec at strength
+                                     -- 1.0 and farming 50 (a tile is 1.0
+                                     -- total — mirrors till_rate)
+        plant_equip_seconds = 1.0,
+        plant_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
+        plant_xp_per_plant  = 1.0,   -- farming XP (#265) per planted tile
+        -- No dedicated planting animation exists yet — the shovel work
+        -- set is the closest hand-tool-on-ground visual (same
+        -- reuse-until-real-art convention as till_equip_anim above).
+        plant_equip_anim = "standing_to_holding_shovel",
+        plant_work_anim  = "shoveling",
+        -- Auto-harvest (auto_harvest, #336). Instant harvest — mirrors
+        -- forage's shape (#94), not till/chop's progress accumulator,
+        -- since picking ripe fruit is quick. NOT hunger-gated like
+        -- forage: this is routine farm-tending work, weighted by the
+        -- farming skill/role (#265) instead of scaled by need. Reuses
+        -- world.findHarvestableFlora/world.harvestFlora, which cover
+        -- planted crops AND wild flora alike (a diligent farmer keeps
+        -- the whole area picked, not just the tilled fields).
+        harvest_scan_range     = 24.0,
+        harvest_base_utility   = 2.0,
+        harvest_xp_per_harvest = 1.0,  -- farming XP (#265) per harvest
         -- Equipment repair (repair_job, #302). AI-autonomous kit
         -- maintenance: an acolyte notices its own or the technomule's
         -- gear has degraded past a threshold and carries it to the
@@ -4611,14 +4644,21 @@ function unitAi.till.execute(uid, s, params)
         unit.setAnimOverride(uid, params.till_work_anim)
         local dt = math.min(now - (s.lastTillAt or now), 2.0)
         s.lastTillAt = now
+        -- Farming skill (#265/#336) rides along like mining/woodcutting
+        -- do for dig/chop: level 50 ≈ baseline, level 0 half rate.
+        -- Legacy-save units without the key till at the yaml novice base.
         local strength = unit.getStat(uid, "strength") or 1.0
-        s.tillProgress = (s.tillProgress or 0) + params.till_rate * strength * dt
+        local fSkill = unit.getSkill(uid, "farming") or 25.0
+        s.tillProgress = (s.tillProgress or 0)
+                       + params.till_rate * strength
+                       * (0.5 + fSkill / 100.0) * dt
         if s.tillProgress >= 1.0 then
             -- Tilled: flip the tile's ground cover, then drop the
             -- designation (mirrors chop's harvestFlora → cancelDesignation
             -- order — the world edit lands before the marker clears).
             world.setVegAt(wid, job.x, job.y, job.z, unitAi.till.VEG_ID)
             till.cancelDesignation(job.x, job.y)
+            grantWorkXP(uid, "farming", params.till_xp_per_till or 0)
             unitAi.till.complete(uid, s)
         end
         return
@@ -4633,6 +4673,286 @@ function unitAi.till.onExit(uid, s, params)
     if s.tillPhase == "tilling" or s.tillPhase == "equipping" then
         s.tillPhase = "walking"
     end
+end
+
+-----------------------------------------------------------
+-- Action: plant_designation (#336)
+--
+-- Player-directed planting: claim the nearest plant-designated tile
+-- (#335), walk to it, and work until done — dispatches to
+-- world.plantCropAt (groundcover crops, a CropPlot) or
+-- world.plantRowCropAt (row crops, a FloraInstance) by the
+-- designation's category, then the designation is removed. Structure
+-- mirrors unitAi.till exactly: module-local claims keyed by tile,
+-- finite lock-in, walking → equipping → planting phases with the same
+-- anim-override discipline. Planting progress lives HERE
+-- (s.plantProgress), not in the designation — an interrupted plant
+-- restarts, there is no mid-plant visual to persist.
+--
+-- Grouped under unitAi.plant (the unitAi.till convention, #333's
+-- 200-local-ceiling workaround) — plain field assignments, no new
+-- top-level locals.
+-----------------------------------------------------------
+unitAi.plant = { claims = {} }   -- claims: "x,y" → { uid = ..., at = gameTime }
+
+function unitAi.plant.key(x, y) return x .. "," .. y end
+
+function unitAi.plant.claimedByOther(key, uid, now, timeout)
+    local c = unitAi.plant.claims[key]
+    if not c or c.uid == uid then return false end
+    if now - c.at > timeout or not unit.exists(c.uid) then
+        unitAi.plant.claims[key] = nil
+        return false
+    end
+    return true
+end
+
+function unitAi.plant.releaseJob(s, uid)
+    if s.plantJob then
+        local key = unitAi.plant.key(s.plantJob.x, s.plantJob.y)
+        local c = unitAi.plant.claims[key]
+        if c and c.uid == uid then unitAi.plant.claims[key] = nil end
+    end
+    s.plantJob = nil
+    s.plantPhase = nil
+    s.plantProgress = nil
+end
+
+-- The designation vanished (tile planted — possibly by us — or player
+-- cancel). BOTH the utility check and the execute loop can be first
+-- to notice, so completion lives in one helper.
+function unitAi.plant.complete(uid, s)
+    unit.clearAnimOverride(uid)
+    unitAi.plant.releaseJob(s, uid)
+end
+
+function unitAi.plant.utility(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return -math.huge end
+
+    -- Active job: finite lock-in, released the moment the designation
+    -- disappears OR changes crop (this check runs BEFORE execute each
+    -- tick). plant.designate replaces in place (HM.insert) rather than
+    -- refusing a re-designate, so a player can swap the crop on this
+    -- tile while we're mid-job; matching only on d's existence would
+    -- plant the STALE crop we originally claimed and then cancel the
+    -- player's newer designation out from under them.
+    if s.plantJob then
+        local d = plant.getDesignationAt(wid, s.plantJob.x, s.plantJob.y)
+        if d and d.crop == s.plantJob.crop then return params.plant_lock_utility end
+        unitAi.plant.complete(uid, s)
+    end
+
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+    local gx, gy, dist =
+        plant.nearestDesignation(wid, info.gridX, info.gridY)
+    if not gx then return -math.huge end
+    if dist > params.plant_scan_range then return -math.huge end
+
+    local now = engine.gameTime()
+    if unitAi.plant.claimedByOther(unitAi.plant.key(gx, gy), uid, now,
+                                   params.plant_claim_timeout) then
+        return -math.huge
+    end
+
+    -- Stash the scored candidate so execute doesn't re-scan.
+    s.plantCandidate = { x = gx, y = gy }
+
+    local distFactor = math.max(0, 1 - dist / params.plant_scan_range)
+    return params.plant_base_utility * distFactor
+         * roles.weight(s, "plant_designation")
+end
+
+function unitAi.plant.execute(uid, s, params)
+    local wid = world.getActiveWorldId()
+    if not wid then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local now = engine.gameTime()
+
+    -- Claim a fresh job and head for the tile.
+    if not s.plantJob then
+        local cand = s.plantCandidate
+        if not cand then return end
+        local key = unitAi.plant.key(cand.x, cand.y)
+        if unitAi.plant.claimedByOther(key, uid, now, params.plant_claim_timeout) then
+            return
+        end
+        local d = plant.getDesignationAt(wid, cand.x, cand.y)
+        if not d then return end
+        unitAi.plant.claims[key] = { uid = uid, at = now }
+        s.plantCandidate = nil
+        s.plantJob = { x = cand.x, y = cand.y, z = d.z,
+                       crop = d.crop, category = d.category }
+        s.plantProgress = 0
+        s.plantEquipped = false
+        s.plantPhase = "walking"
+        unit.moveTo(uid, cand.x + 0.5, cand.y + 0.5, mv.comfort(uid))
+        return
+    end
+
+    local job = s.plantJob
+    -- Keep the claim fresh while we hold the job.
+    unitAi.plant.claims[unitAi.plant.key(job.x, job.y)] = { uid = uid, at = now }
+
+    if s.plantPhase == "walking" then
+        local utx = math.floor(info.gridX)
+        local uty = math.floor(info.gridY)
+        local cheb = math.max(math.abs(utx - job.x), math.abs(uty - job.y))
+        if cheb <= 1 then
+            unit.stop(uid)
+            if not s.plantEquipped then
+                -- setAnimOverride wins over the engine's state-driven
+                -- anim resolution (same as dig/chop/till).
+                unit.setAnimOverride(uid, params.plant_equip_anim)
+                s.plantPhase = "equipping"
+                s.plantEquipUntil = now + params.plant_equip_seconds
+            else
+                unit.setAnimOverride(uid, params.plant_work_anim)
+                s.plantPhase = "planting"
+                s.lastPlantAt = now
+            end
+        else
+            -- Execute only fires when idle, so this re-issue means
+            -- the previous walk arrived short or failed.
+            unit.moveTo(uid, job.x + 0.5, job.y + 0.5, mv.comfort(uid))
+        end
+        return
+    end
+
+    if s.plantPhase == "equipping" then
+        if now >= (s.plantEquipUntil or 0) then
+            s.plantEquipped = true
+            unit.setAnimOverride(uid, params.plant_work_anim)
+            s.plantPhase = "planting"
+            s.lastPlantAt = now
+        end
+        return
+    end
+
+    if s.plantPhase == "planting" then
+        local d = plant.getDesignationAt(wid, job.x, job.y)
+        if not d or d.crop ~= job.crop then
+            -- Player cancelled, or re-designated this tile with a
+            -- different crop, out from under us — drop the stale job
+            -- rather than plant it and cancel the newer designation.
+            unitAi.plant.complete(uid, s)
+            return
+        end
+        -- Idempotent: re-asserts the work anim after preemption.
+        unit.setAnimOverride(uid, params.plant_work_anim)
+        local dt = math.min(now - (s.lastPlantAt or now), 2.0)
+        s.lastPlantAt = now
+        -- Farming skill (#265) rides along like mining/woodcutting do
+        -- for dig/chop: level 50 ≈ baseline, level 0 half rate.
+        local strength = unit.getStat(uid, "strength") or 1.0
+        local fSkill = unit.getSkill(uid, "farming") or 25.0
+        s.plantProgress = (s.plantProgress or 0)
+                        + params.plant_rate * strength
+                        * (0.5 + fSkill / 100.0) * dt
+        if s.plantProgress >= 1.0 then
+            -- Planted: dispatch by category (row crops are a
+            -- FloraInstance, groundcover crops a CropPlot), then drop
+            -- the designation (mirrors till's world-edit-before-marker-
+            -- clears order).
+            if job.category == "groundcover_crop" then
+                world.plantCropAt(job.x, job.y, job.crop)
+            else
+                world.plantRowCropAt(wid, job.x, job.y, job.crop)
+            end
+            plant.cancelDesignation(job.x, job.y)
+            grantWorkXP(uid, "farming", params.plant_xp_per_plant or 0)
+            unitAi.plant.complete(uid, s)
+        end
+        return
+    end
+end
+
+-- Preemption (thirst, combat, player order): drop the tool VISUAL
+-- only — claim, job, and progress survive so the plant resumes
+-- afterwards, re-entered through the walking phase.
+function unitAi.plant.onExit(uid, s, params)
+    unit.clearAnimOverride(uid)
+    if s.plantPhase == "planting" or s.plantPhase == "equipping" then
+        s.plantPhase = "walking"
+    end
+end
+
+-----------------------------------------------------------
+-- Action: auto_harvest (#336)
+--
+-- Skill-gated colony farm-tending: pick up any ripe harvestable flora
+-- in range — planted crops AND wild flora alike (world.
+-- findHarvestableFlora / world.harvestFlora, #94, don't distinguish the
+-- two; #334's crop species carry worldGen.density 0.0, so any crop
+-- instance found here was deliberately planted, never a wild spawn).
+-- Instant harvest, mirroring forage's shape rather than till/plant's
+-- progress accumulator — picking ripe fruit is quick. NOT hunger-gated
+-- like forage: this is routine farm-tending work, weighted by the
+-- farming skill/role (#265) instead of scaled by need.
+--
+-- Grouped under unitAi.harvest (the unitAi.till convention, #333's
+-- 200-local-ceiling workaround) — plain field assignments, no new
+-- top-level locals.
+-----------------------------------------------------------
+unitAi.harvest = {}
+
+function unitAi.harvest.utility(uid, s, params)
+    if not world.findHarvestableFlora then return -math.huge end
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+    local ux = math.floor(info.gridX)
+    local uy = math.floor(info.gridY)
+    local spot = world.findHarvestableFlora(ux, uy, params.harvest_scan_range)
+    if not spot then
+        s.harvestTarget = nil
+        return -math.huge
+    end
+    s.harvestTarget = { x = spot.gx, y = spot.gy }
+    local distFactor = math.max(0, 1 - spot.dist / params.harvest_scan_range)
+    return params.harvest_base_utility * distFactor
+         * roles.weight(s, "auto_harvest")
+end
+
+function unitAi.harvest.execute(uid, s, params)
+    -- Collecting: pull the harvested yield off the ground, one item
+    -- per tick (mirrors forageExecute's collecting phase).
+    if s.harvestPhase == "collecting" then
+        local loot = s.harvestLoot or {}
+        local nextGid = table.remove(loot)
+        if not nextGid or not item.pickupGround(uid, nextGid) then
+            s.harvestPhase = nil
+            s.harvestLoot  = nil
+        end
+        return
+    end
+
+    local tgt = s.harvestTarget
+    if not tgt then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local utx = math.floor(info.gridX)
+    local uty = math.floor(info.gridY)
+    local cheb = math.max(math.abs(utx - tgt.x), math.abs(uty - tgt.y))
+
+    if cheb <= 1 then
+        local yields = world.harvestFlora(tgt.x, tgt.y)
+        if yields and #yields > 0 then
+            unit.pickup(uid)   -- bend-down anim over the plant
+            local gids = {}
+            for _, yi in ipairs(yields) do gids[#gids + 1] = yi.gid end
+            s.harvestLoot  = gids
+            s.harvestPhase = "collecting"
+            grantWorkXP(uid, "farming", params.harvest_xp_per_harvest or 0)
+        end
+        -- Raced / regrowing after all, or a completed harvest either
+        -- way: forget the target; the next decision re-finds.
+        s.harvestTarget = nil
+        return
+    end
+
+    unit.moveTo(uid, tgt.x + 0.5, tgt.y + 0.5, mv.comfort(uid))
 end
 
 -----------------------------------------------------------
@@ -5559,6 +5879,10 @@ unitAi.registerActions("acolyte", {
       execute = chopExecute, onExit = chopOnExit },
     { name = "till_designation", utility = unitAi.till.utility,
       execute = unitAi.till.execute, onExit = unitAi.till.onExit },
+    { name = "plant_designation", utility = unitAi.plant.utility,
+      execute = unitAi.plant.execute, onExit = unitAi.plant.onExit },
+    { name = "auto_harvest", utility = unitAi.harvest.utility,
+      execute = unitAi.harvest.execute },
     { name = "repair_job", utility = repairUtility,
       execute = repairExecute, onExit = repairOnExit },
     { name = "pickup_ground", utility = pickupUtility,

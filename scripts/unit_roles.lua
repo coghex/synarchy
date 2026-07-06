@@ -37,12 +37,18 @@ M.ROLES = {
     { name = "woodcutter", display = "Woodcutter", skill = "woodcutting",  family = "wood"  },
     { name = "builder",    display = "Builder",    skill = "construction", family = "build" },
     { name = "smith",      display = "Smith",      skill = "smithing",     family = "craft" },
+    { name = "farmer",     display = "Farmer",     skill = "farming",      family = "farm"  },
 }
 
 -- Work action → family. deliver/store/build_nearby serve build sites,
 -- so they ride with the Builder. Need- and order-driven actions
 -- (forage, pickup_ground, follow_command, survival, combat) are
 -- deliberately absent: roles only steer ROUTINE work preference.
+--
+-- till/plant/auto_harvest (#336) all ride the "farm" family together —
+-- a Farmer tends the whole till→plant→harvest loop, not just one leg
+-- of it (till_designation shipped with #333 unmapped; #336 is the farm
+-- AI + skill/role landing this issue's own text deferred that decision to).
 M.ACTION_FAMILY = {
     dig_designation        = "mine",
     chop_designation       = "wood",
@@ -52,6 +58,9 @@ M.ACTION_FAMILY = {
     store_materials        = "build",
     repair_job             = "craft",
     craft_job              = "craft",
+    till_designation       = "farm",
+    plant_designation      = "farm",
+    auto_harvest           = "farm",
 }
 
 M.THRESHOLD     = 30.0   -- min skill to claim a specialist role

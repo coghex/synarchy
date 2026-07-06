@@ -182,6 +182,31 @@ applyEdit (WeSetVeg gx gy z vegId) lc
            else
                let col' = col { ctVeg = ctVeg col VU.// [(i, vegId)] }
                in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
+applyEdit (WePlaceFlora gx gy fid plantedDay baseWidth) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let (_, (lx, ly)) = globalToChunk gx gy
+            idx = columnIndex lx ly
+            z   = lcSurfaceMap lc VU.! idx
+            -- age(day) = fiAge + day · growthRate(fiHealth) (World.Flora.
+            -- Growth). Full health (rate 1.0) + a negative fiAge baseline
+            -- of -plantedDay makes the instance read as age 0 on its own
+            -- planted day and grow from there, exactly like a CropPlot's
+            -- cpPlantedDay does for groundcover crops.
+            inst = FloraInstance
+                { fiSpecies   = fid
+                , fiTileX     = fromIntegral lx
+                , fiTileY     = fromIntegral ly
+                , fiOffU      = 0.0
+                , fiOffV      = 0.0
+                , fiZ         = z
+                , fiAge       = negate (fromIntegral plantedDay)
+                , fiHealth    = 1.0
+                , fiVariant   = 0
+                , fiBaseWidth = baseWidth
+                }
+        in lc { lcFlora = FloraChunkData
+                    (inst : fcdInstances (lcFlora lc)) }
 applyEdit (WeSetCell gx gy z mat) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =

@@ -74,7 +74,12 @@ plantCancelDesignationFn env = do
         _ → pure ()
     return 0
 
--- | plant.getDesignationAt(pageId, gx, gy) → {x, y, z, crop} | nil.
+-- | plant.getDesignationAt(pageId, gx, gy) → {x, y, z, crop, category} | nil.
+--   @category@ is the crop's worldGen category ("row_crop" |
+--   "groundcover_crop") — the farm AI (#336) needs it to pick which
+--   planting primitive to call (world.plantRowCropAt vs
+--   world.plantCropAt) without a second round-trip through
+--   world.getPlantSuitability.
 plantGetDesignationAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 plantGetDesignationAtFn env = do
     pageIdArg ← Lua.tostring 1
@@ -95,6 +100,9 @@ plantGetDesignationAtFn env = do
                             cat ← Lua.liftIO $ readIORef (floraCatalogRef env)
                             let cropName =
                                     maybe "" fsName (lookupSpecies (ptCrop pd) cat)
+                                category = maybe "" fwCategory
+                                    (HM.lookup (unFloraId (ptCrop pd))
+                                               (fcWorldGen cat))
                             Lua.newtable
                             Lua.pushinteger (fromIntegral gx)
                             Lua.setfield (Lua.nth 2) "x"
@@ -104,6 +112,8 @@ plantGetDesignationAtFn env = do
                             Lua.setfield (Lua.nth 2) "z"
                             Lua.pushstring (TE.encodeUtf8 cropName)
                             Lua.setfield (Lua.nth 2) "crop"
+                            Lua.pushstring (TE.encodeUtf8 category)
+                            Lua.setfield (Lua.nth 2) "category"
                             return 1
                         Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1

@@ -263,7 +263,15 @@ worldHarvestFloraFn env = do
                                 fh ← fsHarvest sp
                                 let elapsed = cropPlotElapsedDays absDay cp
                                     g = floraGrowth sp elapsed (cropPlotInstance cp)
-                                if harvestOpen sp elapsed g
+                                -- elapsed is the plot's own age clock; the
+                                -- fruiting-window gate reads the real
+                                -- calendar day (doy), matching
+                                -- world.findHarvestableFlora's crop-plot
+                                -- scan and world.getCropPlotAt below — a
+                                -- future fruiting-stage groundcover species
+                                -- must agree across all three query/action
+                                -- entry points.
+                                if harvestOpen sp doy g
                                     then Just fh else Nothing
                         case mPlotHarvest of
                             Just fh → do
@@ -396,6 +404,7 @@ worldFindHarvestableFloraFn env = do
                         tileData ← readIORef (wsTilesRef ws)
                         cat ← readIORef (floraCatalogRef env)
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        cropPlots ← readIORef (wsCropPlotsRef ws)
                         (doy, absDay) ← growthClock ws
                         itemMgr ← readIORef (itemManagerRef env)
                         let (cLo, _) = globalToChunk (gx - radius) (gy - radius)
@@ -433,7 +442,43 @@ worldFindHarvestableFloraFn env = do
                                 , d2 ≤ r2
                                 , not (HM.member (tgx, tgy) harvests)
                                 ]
-                        pure $ case candidates of
+                            -- Planted groundcover crop plots (#334) are a
+                            -- world-level flat map, not chunk-embedded
+                            -- FloraInstances, so they need their own scan
+                            -- (never covered by the fcdInstances sweep
+                            -- above). Mirrors worldHarvestFloraFn's plot
+                            -- branch: BARE calls only (a tag is a
+                            -- designation flow — chop's "wood" — and a
+                            -- plot is never a designation target), no
+                            -- regrowth-timer check (harvesting a plot
+                            -- clears it outright instead of starting one).
+                            cropCandidates = case tagFilter of
+                                Just _  → []
+                                Nothing →
+                                    [ (d2, tgx, tgy, fsName sp)
+                                    | ((tgx, tgy), cp) ← HM.toList cropPlots
+                                    , Just sp ← [lookupSpecies (cpSpecies cp) cat]
+                                    , Just fh ← [fsHarvest sp]
+                                    , wanted fh
+                                    , let elapsed = cropPlotElapsedDays absDay cp
+                                          g = floraGrowth sp elapsed
+                                                  (cropPlotInstance cp)
+                                    -- elapsed (days since planting) is the
+                                    -- plot's own AGE clock (#334 — a plot's
+                                    -- growth/phase timeline starts fresh at
+                                    -- planting, not at the calendar epoch),
+                                    -- but the fruiting-window annual-cycle
+                                    -- gate must read the REAL calendar day
+                                    -- (doy) — a future fruiting-stage
+                                    -- groundcover species must ripen in
+                                    -- season, not on an elapsed-day clock
+                                    -- that drifts away from the calendar.
+                                    , harvestOpen sp doy g
+                                    , let d2 = (tgx - gx) * (tgx - gx)
+                                             + (tgy - gy) * (tgy - gy)
+                                    , d2 ≤ r2
+                                    ]
+                        pure $ case candidates ⧺ cropCandidates of
                             [] → Nothing
                             cs → Just (minimum cs)
             case mBest of
@@ -530,7 +575,23 @@ worldPlantCropAtFn env = do
                                     i    = z - ctStartZ col
                                     vg   = if i ≥ 0 ∧ i < VU.length (ctVeg col)
                                            then ctVeg col VU.! i else 0
-                                if not (isTilledSoil vg) then pure False
+                                    -- A tile already carrying a flora
+                                    -- instance (e.g. a row crop planted
+                                    -- via world.plantRowCropAt) must
+                                    -- refuse — otherwise a groundcover
+                                    -- plot lands underneath/on top of it
+                                    -- (world.isPlantable is tilled-soil
+                                    -- only, so it stays "plantable" after
+                                    -- either form is already planted).
+                                    hasExistingFlora = any
+                                        (\fi → fromIntegral (fiTileX fi) ≡ lx
+                                             ∧ fromIntegral (fiTileY fi) ≡ ly)
+                                        (fcdInstances (lcFlora lc))
+                                plots ← readIORef (wsCropPlotsRef ws)
+                                let hasExistingPlot = HM.member (gx, gy) plots
+                                if not (isTilledSoil vg)
+                                   ∨ hasExistingFlora ∨ hasExistingPlot
+                                then pure False
                                 else do
                                     cat ← readIORef (floraCatalogRef env)
                                     case findSpeciesByName name cat of
@@ -580,18 +641,24 @@ worldGetCropPlotAtFn env = do
                             Nothing → pure Nothing
                             Just cp → do
                                 cat ← readIORef (floraCatalogRef env)
-                                (_, absDay) ← growthClock ws
+                                (doy, absDay) ← growthClock ws
                                 pure $ do
                                     sp ← lookupSpecies (cpSpecies cp) cat
                                     let elapsed = cropPlotElapsedDays absDay cp
                                         g = floraGrowth sp elapsed
                                                 (cropPlotInstance cp)
+                                    -- elapsed is the plot's own age clock
+                                    -- (fine for fgAge/phase); the annual
+                                    -- cycle stage and fruiting-window gate
+                                    -- read the real calendar day (doy), to
+                                    -- agree with world.harvestFlora /
+                                    -- findHarvestableFlora above.
                                     Just ( fsName sp, g, cpHealth cp
                                          , lifePhaseText ⊚ growthPhaseTag sp g
                                          , annualStageText ⊚
-                                               activeStageTag sp elapsed
+                                               activeStageTag sp doy
                                          , isJust (fsHarvest sp)
-                                             ∧ harvestOpen sp elapsed g )
+                                             ∧ harvestOpen sp doy g )
             case mResult of
                 Nothing → Lua.pushnil
                 Just (name, g, health, mPhase, mStage, harvestable) → do
