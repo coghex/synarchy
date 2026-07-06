@@ -262,6 +262,17 @@ data BodyPart = BodyPart
       --   to them, and they carry the real tissue + injury detail. The
       --   whole tree is fully data-driven (humanoid → robot → fish): the
       --   engine reads targetable/parent/depth generically.
+    , bpAffectsLocomotion ∷ !Bool
+      -- ^ True for the direct mobility apparatus (legs, feet — the
+      --   quadruped equivalents too). A wound here is what
+      --   'Unit.Thread.Command.injurySpeedMult' weights heaviest when
+      --   scaling movement speed. Species with different leg-part
+      --   naming (a robot's "hindquarter", say) just set this flag
+      --   instead of the engine matching a fixed id list.
+    , bpAffectsBalance  ∷ !Bool
+      -- ^ True for core/balance-relevant parts (torso). A wound here
+      --   gets the lesser locomotion penalty 'injurySpeedMult' applies
+      --   — dizzying, not disabling.
     , bpDepth            ∷ !Float
       -- ^ 0 = at the surface, 1 = deepest. Drives the slash-swath: a cut
       --   that penetrates to depth D injures every sibling subpart with

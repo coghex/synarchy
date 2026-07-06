@@ -190,6 +190,8 @@ data UnitYamlBodyPart = UnitYamlBodyPart
     , uybpLayers          ∷ ![UnitYamlLayer]   -- outer→inner; [] ⇒ default
     , uybpTargetable      ∷ !Bool              -- macro-part (aimed at) vs subpart
     , uybpDepth           ∷ !Float             -- subpart depth 0..1 (slash swath)
+    , uybpAffectsLocomotion ∷ !Bool            -- leg/foot-type part (injurySpeedMult)
+    , uybpAffectsBalance    ∷ !Bool            -- torso-type part (injurySpeedMult)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlBodyPart where
@@ -216,6 +218,8 @@ instance FromJSON UnitYamlBodyPart where
         ⊛ v .:? "layers"              .!= []
         ⊛ v .:? "targetable"          .!= True
         ⊛ v .:? "depth"               .!= 0.0
+        ⊛ v .:? "affects_locomotion"  .!= False
+        ⊛ v .:? "affects_balance"     .!= False
 
 -- | Natural (innate) weapon block — claws/fangs/fists. Optional on
 --   the unit YAML. When present, Combat.Resolution falls back to

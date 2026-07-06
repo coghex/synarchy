@@ -95,7 +95,7 @@ units:
                     { name: fat,    material: fat,    thickness: 4 },
                     { name: muscle, material: muscle, thickness: 22 },
                     { name: throat, material: organ,  thickness: 10 } ] }
-      - { id: torso,        name: "torso", parent: null,  vital: true,
+      - { id: torso,        name: "torso", parent: null,  vital: true, affects_balance: true,
           area_weight: 0.40, tactical_value: 0.8,
           bleed_factor: 2.0,
           height_low: 0.50, height_high: 1.40,
@@ -104,7 +104,7 @@ units:
                     { name: muscle, material: muscle, thickness: 25 },
                     { name: ribs,   material: bone,   thickness: 10 },
                     { name: vitals, material: organ,  thickness: 120 } ] }
-      - { id: l_fore_leg,   name: "left foreleg", parent: torso,
+      - { id: l_fore_leg,   name: "left foreleg", parent: torso, affects_locomotion: true,
           area_weight: 0.10, tactical_value: 0.3,
           bleed_factor: 1.0,
           height_low: 0.00, height_high: 0.95,
@@ -112,7 +112,7 @@ units:
                     { name: fat,    material: fat,    thickness: 5 },
                     { name: muscle, material: muscle, thickness: 22 },
                     { name: bone,   material: bone,   thickness: 14 } ] }
-      - { id: r_fore_leg,   name: "right foreleg", parent: torso,
+      - { id: r_fore_leg,   name: "right foreleg", parent: torso, affects_locomotion: true,
           area_weight: 0.10, tactical_value: 0.3,
           bleed_factor: 1.0,
           height_low: 0.00, height_high: 0.95,
@@ -120,7 +120,7 @@ units:
                     { name: fat,    material: fat,    thickness: 5 },
                     { name: muscle, material: muscle, thickness: 22 },
                     { name: bone,   material: bone,   thickness: 14 } ] }
-      - { id: l_hind_leg,   name: "left hind leg", parent: torso,
+      - { id: l_hind_leg,   name: "left hind leg", parent: torso, affects_locomotion: true,
           area_weight: 0.10, tactical_value: 0.3,
           bleed_factor: 1.0,
           height_low: 0.00, height_high: 0.95,
@@ -128,7 +128,7 @@ units:
                     { name: fat,    material: fat,    thickness: 5 },
                     { name: muscle, material: muscle, thickness: 25 },
                     { name: bone,   material: bone,   thickness: 16 } ] }
-      - { id: r_hind_leg,   name: "right hind leg", parent: torso,
+      - { id: r_hind_leg,   name: "right hind leg", parent: torso, affects_locomotion: true,
           area_weight: 0.10, tactical_value: 0.3,
           bleed_factor: 1.0,
           height_low: 0.00, height_high: 0.95,

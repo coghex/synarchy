@@ -166,6 +166,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Render.PickFrame
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Injury
+                   Test.Headless.Unit.InjurySpeed
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.Stats
                    Test.Headless.Unit.NightPerception

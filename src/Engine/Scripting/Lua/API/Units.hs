@@ -326,6 +326,8 @@ loadUnitYamlFn env backendState = do
                                     | l ← uybpLayers p ]
                                 , bpTargetable      = uybpTargetable p
                                 , bpDepth           = uybpDepth p
+                                , bpAffectsLocomotion = uybpAffectsLocomotion p
+                                , bpAffectsBalance     = uybpAffectsBalance p
                                 }
                             | p ← uydBodyParts def
                             ]

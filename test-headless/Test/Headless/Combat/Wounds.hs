@@ -49,7 +49,8 @@ def = UnitDef
             { bpId = "l_thigh", bpName = "l_thigh", bpParent = Nothing
             , bpVital = False, bpAreaWeight = 0.1, bpTacticalValue = 0.5
             , bpBleedFactor = 1.0, bpHeightLow = 0, bpHeightHigh = 1
-            , bpLayers = [], bpTargetable = True, bpDepth = 0.0 } ]
+            , bpLayers = [], bpTargetable = True, bpDepth = 0.0
+            , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = [] }
 

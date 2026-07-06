@@ -38,7 +38,8 @@ def = UnitDef
         { bpId = pid, bpName = pid, bpParent = par, bpVital = False
         , bpAreaWeight = 0.1, bpTacticalValue = 0.5
         , bpBleedFactor = 1.0, bpHeightLow = 0, bpHeightHigh = 1, bpLayers = []
-        , bpTargetable = True, bpDepth = 0.0 }
+        , bpTargetable = True, bpDepth = 0.0
+        , bpAffectsLocomotion = False, bpAffectsBalance = False }
 
 inst ∷ [Wound] → UnitInstance
 inst ws = UnitInstance
@@ -83,7 +84,8 @@ decapDef = def
         , bpAreaWeight = 0.1, bpTacticalValue = 0.5
         , bpBleedFactor = 1.0, bpHeightLow = 0, bpHeightHigh = 1, bpLayers = []
         , bpTargetable = (pid ≡ "head" ∨ pid ≡ "neck" ∨ pid ≡ "torso")
-        , bpDepth = 0.0 }
+        , bpDepth = 0.0
+        , bpAffectsLocomotion = False, bpAffectsBalance = False }
 
 spec ∷ Spec
 spec = do
