@@ -33,50 +33,11 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send
 
 LOG = "/tmp/item_instance_engine.log"
 WEAPON = "pick_steel"   # kind: weapon — matches the humanoid right_hand slot
 SLOT = "right_hand"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 180
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap_defs(port: int) -> None:
@@ -175,7 +136,7 @@ def main() -> int:
     ap.add_argument("--no-save", action="store_true")
     args = ap.parse_args()
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         bootstrap_defs(args.port)
         send(args.port, f"world.init('arena', {args.seed}, {args.size}, 3); return 'ok'")

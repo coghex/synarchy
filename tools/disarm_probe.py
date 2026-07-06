@@ -8,48 +8,10 @@ dropped again. This probe verifies BOTH the first drop and the re-drop.
 """
 from __future__ import annotations
 import glob, socket, subprocess, sys, time
+from probelib import boot, send
 
 PORT = 9193
 LOG = "/tmp/disarm_probe_engine.log"
-
-
-def send(lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", PORT), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def boot() -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--", "--headless", "--port", str(PORT)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap():
@@ -62,9 +24,9 @@ def bootstrap():
     ]
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):
-            send(f"{fn}('{path}'); return 'ok'")
+            send(PORT, f"{fn}('{path}'); return 'ok'")
     for script, dt in [("unit_stats", 0.1), ("unit_resources", 0.2), ("unit_ai", 0.1)]:
-        send(f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
+        send(PORT, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
 
 
 def find_flat():
@@ -74,7 +36,7 @@ def find_flat():
         "if z and not fl then return gx..','..gy..','..z end end end return 'none' end return f()"
     )
     for _ in range(8):
-        res = send(lua).strip('"')
+        res = send(PORT, lua).strip('"')
         if res and res != "none" and res.count(",") == 2:
             return tuple(int(v) for v in res.split(","))
         time.sleep(0.75)
@@ -82,35 +44,35 @@ def find_flat():
 
 
 def held_right(uid: int) -> str:
-    r = send(f"local lo=equipment.getLoadout({uid}); local h=lo and lo['right_hand']; "
+    r = send(PORT, f"local lo=equipment.getLoadout({uid}); local h=lo and lo['right_hand']; "
              f"return h and (h.defName or 'yes') or 'EMPTY'")
     return r.strip('"')
 
 
 def main() -> int:
-    proc = boot()
+    proc = boot(PORT, log=LOG)
     try:
         bootstrap()
-        send("world.init('arena', 42, 64, 3); return 'ok'")
-        send("return world.waitForInit(180)", timeout=190)
-        send("world.show('arena'); return 'ok'")
-        send("return world.loadChunksInRegion(-1,-1,1,1)")
-        send("return world.waitForChunks(120)", timeout=125)
+        send(PORT, "world.init('arena', 42, 64, 3); return 'ok'")
+        send(PORT, "return world.waitForInit(180)", timeout=190)
+        send(PORT, "world.show('arena'); return 'ok'")
+        send(PORT, "return world.loadChunksInRegion(-1,-1,1,1)")
+        send(PORT, "return world.waitForChunks(120)", timeout=125)
 
         flat = find_flat()
         if not flat:
             print("FAIL: no flat dry ground", file=sys.stderr); return 2
         gx, gy, z = flat
-        uid = int(float(send(f"return unit.spawn('acolyte', {gx}, {gy})")))
+        uid = int(float(send(PORT, f"return unit.spawn('acolyte', {gx}, {gy})")))
         print(f"spawned acolyte #{uid} at ({gx},{gy}) z={z}")
         time.sleep(1.0)
 
         def arm():
-            send(f"unit.addItem({uid}, 'steel_dagger'); return 'ok'")
-            return send(f"return equipment.equip({uid}, 'right_hand', 'steel_dagger')").strip()
+            send(PORT, f"unit.addItem({uid}, 'steel_dagger'); return 'ok'")
+            return send(PORT, f"return equipment.equip({uid}, 'right_hand', 'steel_dagger')").strip()
 
         def ground_daggers():
-            r = send("local n=0; for _,it in ipairs(item.listGround() or {}) do "
+            r = send(PORT, "local n=0; for _,it in ipairs(item.listGround() or {}) do "
                      "if (it.defName or '')=='steel_dagger' then n=n+1 end end; return n")
             try:
                 return int(float(r))
@@ -132,7 +94,7 @@ def main() -> int:
         # Phase 1: equip a dagger, sever the hand, expect the first drop.
         eq1 = arm()
         print(f"phase1: equip()={eq1}, right_hand = {held_right(uid)}")
-        send(f"return unit.injure({uid}, 'r_hand', 'severed', 1.0)")
+        send(PORT, f"return unit.injure({uid}, 'r_hand', 'severed', 1.0)")
         print("phase1: severed r_hand")
         p1 = wait_empty()
         g1 = ground_daggers()
@@ -162,7 +124,7 @@ def main() -> int:
         return 0 if (p1 and p2) else 1
     finally:
         try:
-            send("engine.quit()", timeout=2)
+            send(PORT, "engine.quit()", timeout=2)
         except OSError:
             pass
         time.sleep(1)

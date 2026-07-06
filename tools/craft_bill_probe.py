@@ -37,6 +37,7 @@ machinery, then checks:
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
 import argparse, glob, json, socket, subprocess, sys, time
+from probelib import boot, send
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/craft_bill_probe_recipes.yaml"
@@ -65,41 +66,12 @@ recipes:
 """
 
 
-def send(port, lua, timeout=10.0):
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        f = s.makefile("rw")
-        f.readline()              # banner
-        f.write(lua + "\n")
-        f.flush()
-        return f.readline().strip().lstrip("> ").strip()
-
-
 def jget(port, lua, timeout=10.0):
     raw = send(port, lua, timeout)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw.strip('"')
-
-
-def boot(port, log_path):
-    log = open(log_path, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(300):
-        time.sleep(0.2)
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {log_path}")
-        try:
-            if "READY" in open(log_path).read():
-                return proc
-        except FileNotFoundError:
-            pass
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port):

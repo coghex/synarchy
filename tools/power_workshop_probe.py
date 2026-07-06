@@ -56,6 +56,7 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send
 
 SPROOT = "/tmp"
 TEST_RECIPE_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
@@ -100,32 +101,6 @@ buildings:
 PAGE = "power_workshop_probe"
 
 
-def _results(raw: bytes) -> list[str]:
-    out = raw.decode(errors="replace")
-    return [ln[2:].strip() for ln in out.splitlines()
-            if ln.startswith("> ") and ln[2:].strip()]
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one Lua line over the debug console and return its result."""
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(timeout)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-                if _results(b"".join(chunks)):
-                    break
-        except socket.timeout:
-            pass
-    vals = _results(b"".join(chunks))
-    return (vals[-1] if vals else "").strip('"')
-
-
 def jget(port: int, lua: str, timeout: float = 10.0):
     raw = send(port, lua, timeout)
     try:
@@ -146,27 +121,6 @@ def as_float(s) -> float | None:
         return float(s)
     except (TypeError, ValueError):
         return None
-
-
-def boot(port: int, logpath: str) -> subprocess.Popen:
-    log = open(logpath, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 180
-    while time.time() < deadline:
-        try:
-            if "READY" in open(logpath).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {logpath}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit(f"engine never printed READY; see {logpath}")
 
 
 def shutdown(proc: subprocess.Popen, port: int) -> None:

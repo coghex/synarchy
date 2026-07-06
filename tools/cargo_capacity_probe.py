@@ -13,57 +13,18 @@ FAIL  = final stored weight  > capacity (bug overfilled the cargo).
 """
 from __future__ import annotations
 import glob, json, socket, subprocess, sys, time
+from probelib import boot, send
 
 PORT = 9009
 LOG = "/tmp/cargo_capacity_probe_engine.log"
 
 
-def send(lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", PORT), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks, = ([],)
-        s.settimeout(0.4)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    res = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    res = [r for r in res if r]
-    return res[-1] if res else out.strip()
-
-
 def num(lua: str):
-    r = send(lua)
+    r = send(PORT, lua)
     try:
         return float(r)
     except (TypeError, ValueError):
         return None
-
-
-def boot() -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(PORT)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap():
@@ -77,22 +38,22 @@ def bootstrap():
     ]
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):
-            send(f"{fn}('{path}'); return 'ok'")
-    send("pcall(function() require('scripts.unit_ai').update=function() end end); "
+            send(PORT, f"{fn}('{path}'); return 'ok'")
+    send(PORT, "pcall(function() require('scripts.unit_ai').update=function() end end); "
          "return 'ai-off'")
-    send("require('scripts.movement_arena'); return 'ok'")
+    send(PORT, "require('scripts.movement_arena'); return 'ok'")
 
 
 def main() -> int:
-    proc = boot()
+    proc = boot(PORT, log=LOG)
     try:
         bootstrap()
-        course = json.loads(send(
+        course = json.loads(send(PORT, 
             "return require('scripts.movement_arena').buildCourse('flat')"))
         sx, sy = int(course["sx"]), int(course["sy"])
         # wait for the arena centre chunk to load
         for _ in range(40):
-            r = send("return world.getChunkInfo(0,0)")
+            r = send(PORT, "return world.getChunkInfo(0,0)")
             try:
                 if json.loads(r).get("loaded"):
                     break
@@ -120,13 +81,13 @@ def main() -> int:
         DEF = "canteen_steel_2l"
         accepted = 0
         for _ in range(200):
-            send(f"unit.addItem({uid}, '{DEF}', 2); return 'ok'")  # full 2 L
-            ok = send(f"return unit.depositToCargo({uid}, {bid}, '{DEF}')")
+            send(PORT, f"unit.addItem({uid}, '{DEF}', 2); return 'ok'")  # full 2 L
+            ok = send(PORT, f"return unit.depositToCargo({uid}, {bid}, '{DEF}')")
             if ok.lower() == "true":
                 accepted += 1
             else:
                 # remove the rejected canteen so it can't accumulate weight
-                send(f"unit.removeItem({uid}, '{DEF}'); return 'ok'")
+                send(PORT, f"unit.removeItem({uid}, '{DEF}'); return 'ok'")
                 break
 
         stored = num(f"return building.getStorageWeight({bid})")
@@ -144,7 +105,7 @@ def main() -> int:
         return 0
     finally:
         try:
-            send("engine.quit(); return 'bye'", timeout=3)
+            send(PORT, "engine.quit(); return 'bye'", timeout=3)
         except Exception:
             pass
         time.sleep(1)

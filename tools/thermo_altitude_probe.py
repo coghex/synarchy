@@ -29,27 +29,9 @@ Exit 0 = all checks passed.
 """
 from __future__ import annotations
 import argparse, json, socket, subprocess, sys, time
+from probelib import boot, send
 
 LOG = "/tmp/thermo_altitude_probe_engine.log"
-
-
-def send(port, lua, idle=2.0, timeout=120):
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        s.settimeout(idle)
-        chunks = []
-        try:
-            while True:
-                b = s.recv(65536)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    res = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    res = [r for r in res if r]
-    return (res[-1] if res else out.strip())
 
 
 def fnum(port, lua):
@@ -57,26 +39,6 @@ def fnum(port, lua):
         return float(send(port, lua))
     except (ValueError, TypeError):
         return None
-
-
-def boot(port):
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT)
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def main():
@@ -87,7 +49,7 @@ def main():
     args = ap.parse_args()
     port = args.port
 
-    proc = boot(port)
+    proc = boot(port, log=LOG)
     fails = []
     try:
         send(port, f'world.init("t308",{args.seed},{args.size},5); return "ok"')

@@ -67,18 +67,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send
 
 LOG = "/tmp/repair_ai_probe_engine.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        f = s.makefile("rw")
-        f.readline()              # banner
-        f.write(lua + "\n")
-        f.flush()
-        return f.readline().strip().lstrip("> ").strip()
 
 
 def jget(port: int, lua: str, timeout: float = 10.0):
@@ -87,26 +78,6 @@ def jget(port: int, lua: str, timeout: float = 10.0):
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw.strip('"')
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT)
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port: int) -> None:
@@ -705,7 +676,7 @@ def main() -> int:
     ap.add_argument("--phase", default="all", choices=["all"] + list(PHASES))
     args = ap.parse_args()
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         bootstrap(args.port)
         if not wid(args.port):

@@ -40,49 +40,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send
 
 LOG = "/tmp/location_content_engine.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one line of Lua in the debug console, return the result text."""
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def shutdown(port: int, proc: subprocess.Popen) -> None:
@@ -276,7 +236,7 @@ def main() -> int:
     geoms1: dict = {}
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         load_defs(args.port)
         gen_world(args.port, "wa", args.seed, args.size)
@@ -373,7 +333,7 @@ def main() -> int:
     #      NOT respawn (one-time flag persisted, independent of the
     #      structure.hasAt geometry check). ----
     if ruins and not failures:
-        proc = boot(args.port)
+        proc = boot(args.port, log=LOG)
         try:
             load_defs(args.port)
             send(args.port, "engine.loadSave('loc_content_probe'); return 'queued'")
@@ -444,7 +404,7 @@ def main() -> int:
             "  - id: item_that_does_not_exist\n"
             "    weight: 1\n"
         )
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         load_defs(args.port)
         send(args.port, f"engine.loadLocationYaml('{bogus_yaml}'); return 'ok'")
@@ -503,7 +463,7 @@ def main() -> int:
             "      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }\n"
             "      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }\n"
         )
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         # Registries only — NOT ruin_small.yaml, which would contend with
         # dense_ruin for chunk (0,0) and make the placement non-deterministic

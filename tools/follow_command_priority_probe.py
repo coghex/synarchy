@@ -38,59 +38,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send, send_json
 
 LOG = "/tmp/follow_command_priority_probe.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def send_json(port: int, lua: str):
-    raw = send(port, lua)
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    # SYNARCHY_BIN lets a Lua-only change reuse an already-built binary
-    # (run with CWD = this worktree so scripts/ resolve here) instead of
-    # paying a full cabal rebuild in a fresh worktree.
-    import os
-    binp = os.environ.get("SYNARCHY_BIN")
-    cmd = ([binp] if binp else ["cabal", "run", "-v0", "exe:synarchy", "--"]) + \
-        ["--headless", "--port", str(port)]
-    proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port: int) -> None:
@@ -166,7 +116,7 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=8.0)
     args = ap.parse_args()
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         bootstrap(args.port)
         course = send_json(

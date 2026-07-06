@@ -39,51 +39,11 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send
 
 LOG = "/tmp/location_stamp_idempotent_engine.log"
 LOCATION_YAML = "/tmp/location_stamp_idempotent_probe_loc.yaml"
 LOCATION_ID = "stamp_probe_room"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one line of Lua in the debug console, return the result text."""
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def shutdown(port: int, proc: subprocess.Popen) -> None:
@@ -222,7 +182,7 @@ def main() -> int:
     #      floor, save, and quit. ----
     gx = gy = cx = cy = None
     geom_before = (-1, -1, -1)
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         load_defs(args.port)
         gen_world(args.port, "sa", args.seed, args.size)
@@ -265,7 +225,7 @@ def main() -> int:
     #      builder: the anchor floor must stay absent and the rest of the
     #      room's geometry must be unchanged. ----
     if gx is not None and not failures:
-        proc = boot(args.port)
+        proc = boot(args.port, log=LOG)
         try:
             load_defs(args.port)
             send(args.port, "engine.loadSave('stamp_idempotent_probe'); return 'queued'")
@@ -307,7 +267,7 @@ def main() -> int:
     # ---- Phase 3: a location placed but never visited before the save
     #      (its geometry-stamp flag was never set) still stamps correctly
     #      on its first-ever chunk load, post save/restart/load. ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     gx2 = gy2 = cx2 = cy2 = None
     try:
         load_defs(args.port)
@@ -332,7 +292,7 @@ def main() -> int:
         shutdown(args.port, proc)
 
     if gx2 is not None and not failures:
-        proc = boot(args.port)
+        proc = boot(args.port, log=LOG)
         try:
             load_defs(args.port)
             send(args.port, "engine.loadSave('stamp_idempotent_probe_fresh'); return 'queued'")

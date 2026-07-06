@@ -21,18 +21,9 @@ Usage: python3 tools/foraging_probe.py [--port 9173] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
+from probelib import boot, send
 
 SPROOT = "/tmp"
-
-
-def send(port, lua, timeout=10.0):
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        f = s.makefile("rw")
-        f.readline()              # banner
-        f.write(lua + "\n")
-        f.flush()
-        return f.readline().strip().lstrip("> ").strip()
 
 
 def jget(port, lua, timeout=10.0):
@@ -41,22 +32,6 @@ def jget(port, lua, timeout=10.0):
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw.strip('"')
-
-
-def boot(port, log_path):
-    log = open(log_path, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(300):
-        time.sleep(0.2)
-        try:
-            if "READY" in open(log_path).read():
-                return proc
-        except FileNotFoundError:
-            pass
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port):

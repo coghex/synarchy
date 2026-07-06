@@ -36,58 +36,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send, send_json
 
 LOG = "/tmp/movement_probe_engine.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one line of Lua in the debug console, return the result text."""
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def send_json(port: int, lua: str):
-    """Run Lua that returns a table; parse the JSON reply (None on failure)."""
-    raw = send(port, lua)
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port: int, with_resources: bool = False) -> None:
@@ -379,7 +330,7 @@ def main() -> int:
     if args.seconds is None:
         args.seconds = COURSE_SECONDS.get(args.course, 14.0)
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         if args.mode == "stamina":
             return run_stamina_mode(args.port, args)

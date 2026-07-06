@@ -51,49 +51,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import boot, send
 
 LOG = "/tmp/location_overlay_engine.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one line of Lua in the debug console, return the result text."""
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def shutdown(port: int, proc: subprocess.Popen) -> None:
@@ -263,7 +223,7 @@ def main() -> int:
     #      world with its locations still UN-STAMPED (saved right after gen,
     #      before any far ruin chunk has loaded) so phase 2 can prove they
     #      are not lost. ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
         # The stamper is auto-loaded at boot by scripts/init.lua (as in the
@@ -329,7 +289,7 @@ def main() -> int:
     #      materializes them after a fresh restart + load (the reviewer's
     #      option 2: chunk-load after a save consults the persisted overlay
     #      and stamps any not-yet-materialized entry). ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         send(args.port, "engine.loadSave('loc_overlay_probe'); return 'queued'")
         time.sleep(6.0)
@@ -373,7 +333,7 @@ def main() -> int:
 
     # ---- Phase 3: the SYNCHRONOUS centre chunk (0,0) stamps on fresh gen
     #      (Init hook). ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
         gen_world(args.port, "wc", args.seed, args.size)
@@ -392,7 +352,7 @@ def main() -> int:
     #      WITHOUT force-loading (0,0) — Save regenerates that chunk
     #      synchronously and excludes it from the queue, so its presence
     #      exercises the Save centre hook. ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     saved_centre = False
     try:
         send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
@@ -409,7 +369,7 @@ def main() -> int:
         shutdown(args.port, proc)
 
     if saved_centre:
-        proc = boot(args.port)
+        proc = boot(args.port, log=LOG)
         try:
             send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
             send(args.port, "engine.loadSave('loc_centre_probe'); return 'queued'")
@@ -431,7 +391,7 @@ def main() -> int:
     #      let the arena's floor suppress the hidden page's stamp, and the
     #      write must land on the hidden page at ITS terrain z, not the
     #      arena's. ----
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         send(args.port, f"engine.loadLocationYaml('{DENSE_YAML}'); return 'ok'")
         send(args.port, "world.initArena('arena'); world.initArenaDone('arena'); world.show('arena'); return 'ok'")

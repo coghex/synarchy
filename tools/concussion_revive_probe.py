@@ -32,7 +32,8 @@ from __future__ import annotations
 import argparse, json, socket, sys, time
 
 sys.path.insert(0, "tools")
-from collapse_crawl_probe import boot, bootstrap, send
+from probelib import boot, send
+from collapse_crawl_probe import bootstrap
 
 RISE_AT = 0.40
 
