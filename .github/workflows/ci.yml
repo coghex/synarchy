@@ -22,10 +22,11 @@
 #      compiler instead of re-downloading it, and
 #   3. the project build products (dist-newstyle), so GHC's recompilation
 #      avoidance rebuilds only dirty modules + their reverse-deps.
-# The dist-newstyle key includes the GHC version and the dependency plan
-# hash (so a compiler bump or a dependency change invalidates it) plus a
-# per-commit suffix so every run saves a fresh snapshot; restore-keys let
-# the next run restore the most recent snapshot for partial reuse.
+# The dist-newstyle key includes the GHC and Cabal versions and the
+# dependency plan hash (so a compiler/Cabal bump or a dependency change
+# invalidates it) plus a per-commit suffix so every run saves a fresh
+# snapshot; restore-keys let the next run restore the most recent
+# snapshot for partial reuse.
 # GitHub's 10 GB LRU cache eviction bounds the accumulation.
 #
 # Trade-off accepted at #526: there is NO separate from-scratch clean
@@ -117,10 +118,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dist-newstyle
-          key: dist-${{ runner.os }}-ghc-9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ github.sha }}
+          key: dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ github.sha }}
           restore-keys: |
-            dist-${{ runner.os }}-ghc-9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
-            dist-${{ runner.os }}-ghc-9.12.2-
+            dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
+            dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
 
       - name: Build dependencies
         run: cabal build all --only-dependencies
