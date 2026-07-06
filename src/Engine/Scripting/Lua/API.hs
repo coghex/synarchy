@@ -371,6 +371,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getLastAttacker" (unitGetLastAttackerFn env)
   registerLuaFunction "getWeaponClass"  (unitGetWeaponClassFn env)
   registerLuaFunction "modifyItemFill" (unitModifyItemFillFn env)
+  registerLuaFunction "modifyItemFillById" (unitModifyItemFillByIdFn env)
   registerLuaFunction "repairItem"     (unitRepairItemFn env)
   registerLuaFunction "addItem"        (unitAddItemFn env)
   registerLuaFunction "getItemTemp"    (unitGetItemTempFn env)

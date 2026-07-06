@@ -28,7 +28,14 @@
 --     concentration   — 0..1, instantaneous (no integration, same
 --                        philosophy as consciousness): how well the unit
 --                        can focus right now, gated by consciousness and
---                        eroded by pain/exhaustion.
+--                        eroded by pain/exhaustion, boosted by caffeine.
+--     caffeine        — 0..1 (0 = none), a stimulant meter (#347):
+--                        spiked by drinking a caffeinated consumable
+--                        (scripts/consumable.lua), otherwise only
+--                        decaying — there's no natural regen source.
+--                        Feeds concentration ("alertness"); deliberately
+--                        NOT folded into consciousness (its bands are
+--                        load-bearing for collapse/delirious/confused).
 --
 --   state_of_mind — the UNIFIED aggregate: min(consciousness, wellbeing),
 --   the same "your worst problem wins" philosophy the original
@@ -98,6 +105,13 @@ local EMOTIONAL_PAIN_DECAY = 0.02   -- per second, absent fresh pain
 -- erode it but never zero it out on their own.
 local CONCENTRATION_PAIN_WEIGHT  = 0.6
 local CONCENTRATION_STAMINA_FLOOR = 0.4  -- factor at zero stamina
+local CAFFEINE_CONCENTRATION_BONUS = 0.15  -- added on top, at caffeine = 1.0
+
+-- ---- Caffeine ----
+-- Simple decay, no target/drift — coffee (scripts/consumable.lua) is
+-- the only source, there's nothing to drift toward. ~1800s (30 real
+-- minutes at the default time scale) to clear a fully-dosed meter.
+local CAFFEINE_DECAY = 1.0 / 1800
 
 local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
 
@@ -173,11 +187,18 @@ local function driftEmotionalPain(uid, dt, pain)
     end
 end
 
-local function computeConcentration(consciousness, pain, staminaFrac)
+local function computeConcentration(consciousness, pain, staminaFrac, caffeine)
     local staminaFactor = CONCENTRATION_STAMINA_FLOOR
                         + (1.0 - CONCENTRATION_STAMINA_FLOOR) * staminaFrac
-    return clamp(consciousness * (1.0 - CONCENTRATION_PAIN_WEIGHT * pain)
-                               * staminaFactor, 0, 1)
+    local base = consciousness * (1.0 - CONCENTRATION_PAIN_WEIGHT * pain)
+                               * staminaFactor
+    return clamp(base + CAFFEINE_CONCENTRATION_BONUS * caffeine, 0, 1)
+end
+
+-- 0..1, only decaying — set by consumable.drink on a caffeinated sip.
+local function driftCaffeine(uid, dt)
+    local prev = unit.getStat(uid, "caffeine") or 0.0
+    return math.max(0.0, prev - CAFFEINE_DECAY * dt)
 end
 
 -- Unified aggregate: the worst of the physiological floor (consciousness)
@@ -206,7 +227,11 @@ function brain.tick(uid, dt)
     local emotionalPain = driftEmotionalPain(uid, dt, pain)
     unit.setStat(uid, "emotional_pain", emotionalPain)
 
-    local concentration = computeConcentration(consciousness, pain, staminaFrac)
+    local caffeine = driftCaffeine(uid, dt)
+    unit.setStat(uid, "caffeine", caffeine)
+
+    local concentration = computeConcentration(consciousness, pain, staminaFrac,
+                                                caffeine)
     unit.setStat(uid, "concentration", concentration)
 
     unit.setStat(uid, "state_of_mind",
@@ -221,6 +246,7 @@ function brain.mood(uid)           return unit.getStat(uid, "mood") or 1.0 end
 function brain.emotionalPain(uid)  return unit.getStat(uid, "emotional_pain") or 0.0 end
 function brain.concentration(uid)  return unit.getStat(uid, "concentration") or 1.0 end
 function brain.stateOfMind(uid)    return unit.getStat(uid, "state_of_mind") or 1.0 end
+function brain.caffeine(uid)       return unit.getStat(uid, "caffeine") or 0.0 end
 
 -- Live reads of the same normalized inputs the mood target is built
 -- from (0 = none/empty .. 1 = full/none, see painFrac/fracOf above) —
@@ -268,6 +294,7 @@ function brain.summary(uid)
         awareness     = brain.awareness(uid),
         stateOfMind   = brain.stateOfMind(uid),
         state         = brain.state(uid),
+        caffeine      = brain.caffeine(uid),
     }
 end
 
