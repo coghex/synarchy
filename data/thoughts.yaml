@@ -1,0 +1,122 @@
+# Thought catalogue (#351) — flavour text + tuning for scripts/thoughts.lua's
+# periodic per-unit thought system. Loaded once via engine.loadYaml (a plain
+# data file, not a per-entry Haskell loader — see Engine.Scripting.Lua.API.Yaml).
+#
+# Fields:
+#   id          — unique snake_case identifier (for debugging/probes).
+#   category    — "state" | "environmental" | "random". Purely a display tag
+#                 forwarded to thought.emit's log line; selection eligibility
+#                 is driven by `trigger`, not `category`.
+#   trigger     — name of a predicate in scripts/thoughts.lua's TRIGGERS table.
+#                 Omitted (or absent) = always eligible (every "random" entry
+#                 here has no trigger).
+#   valence     — "positive" | "negative" | "neutral". Biases pick weight by
+#                 the unit's current mood: a low-mood unit is more likely to
+#                 draw a "negative" entry, a high-mood unit a "positive" one.
+#   weight      — base pick weight among currently-eligible entries.
+#   mood_delta  — applied to the unit's "mood" stat the instant this thought
+#                 fires (clamped 0..1). Small and signed; brain.lua's own
+#                 per-tick drift toward the physiological target does the
+#                 "fades over time" work, so this needs no separate decay.
+#   text        — the log line.
+
+thoughts:
+  # ---- state: physiology-driven (brain.painFrac/hungerFrac/staminaFrac) ----
+  - id: pain_ache
+    category: state
+    trigger: pain_high
+    valence: negative
+    weight: 3
+    mood_delta: -0.05
+    text: "Everything aches."
+  - id: pain_distracting
+    category: state
+    trigger: pain_high
+    valence: negative
+    weight: 2
+    mood_delta: -0.03
+    text: "The pain makes it hard to think of anything else."
+  - id: hungry_gnawing
+    category: state
+    trigger: hungry
+    valence: negative
+    weight: 3
+    mood_delta: -0.04
+    text: "Hunger gnaws, insistent."
+  - id: exhausted_heavy
+    category: state
+    trigger: exhausted
+    valence: negative
+    weight: 3
+    mood_delta: -0.04
+    text: "Every limb feels leaden with fatigue."
+  - id: content_quiet
+    category: state
+    trigger: content
+    valence: positive
+    weight: 3
+    mood_delta: 0.04
+    text: "A rare moment of quiet contentment."
+  - id: content_steady
+    category: state
+    trigger: content
+    valence: positive
+    weight: 2
+    mood_delta: 0.03
+    text: "Fed, rested, unhurt — small things, but enough."
+
+  # ---- environmental: world.getAmbientAt / world.getSunAngleAt ----
+  - id: cold_bite
+    category: environmental
+    trigger: cold
+    valence: negative
+    weight: 2
+    mood_delta: -0.03
+    text: "The cold bites at any exposed skin."
+  - id: hot_swelter
+    category: environmental
+    trigger: hot
+    valence: negative
+    weight: 2
+    mood_delta: -0.03
+    text: "The heat is stifling out here."
+  - id: night_quiet
+    category: environmental
+    trigger: night
+    valence: neutral
+    weight: 1
+    mood_delta: 0.0
+    text: "The night is quiet, but for the wind."
+  - id: day_easier
+    category: environmental
+    trigger: day
+    valence: neutral
+    weight: 1
+    mood_delta: 0.0
+    text: "Daylight makes the work easier to bear."
+
+  # ---- random: always eligible, weighted only by mood via valence ----
+  - id: ambient_stray
+    category: random
+    valence: neutral
+    weight: 2
+    mood_delta: 0.0
+    text: "A stray thought passes, gone before it settles."
+  - id: ambient_dark
+    category: random
+    valence: negative
+    weight: 1
+    mood_delta: -0.01
+    text: "What is even the point of all this?"
+  - id: ambient_light
+    category: random
+    valence: positive
+    weight: 1
+    mood_delta: 0.01
+    text: "Things could be worse."
+  - id: ambient_home
+    category: random
+    valence: neutral
+    weight: 1
+    mood_delta: 0.0
+    text: "A flicker of memory — somewhere else, once."

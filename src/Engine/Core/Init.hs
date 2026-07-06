@@ -134,6 +134,7 @@ initializeEngineWith logBackend = do
   combatQueue ← Q.newQueue
   combatEventsRef ← newIORef Combat.Types.emptyEventQueue
   injuryEventsRef ← newIORef Combat.Types.emptyEventQueue
+  thoughtEventsRef ← newIORef Combat.Types.emptyEventQueue
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
   pathingConfig ← loadPathingConfig logger "config/pathing.yaml"
@@ -218,6 +219,7 @@ initializeEngineWith logBackend = do
         , combatQueue        = combatQueue
         , combatEventsRef    = combatEventsRef
         , injuryEventsRef    = injuryEventsRef
+        , thoughtEventsRef   = thoughtEventsRef
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , pathingConfigRef   = pathingConfigRef
