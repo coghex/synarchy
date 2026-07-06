@@ -1098,8 +1098,11 @@ function unitResources.update(dt)
                 salts.tick(uid, dt)
                 -- Brain consciousness reads the above (core_temp, blood_oxygen,
                 -- salt_conc), so it ticks last. Low consciousness → collapse
-                -- (in tickInjuries); checkRevive keeps the unit down until lucid.
-                brain.tick(uid)
+                -- (in tickInjuries); checkRevive keeps the unit down until
+                -- lucid. Same call also drifts the psychological mental
+                -- values (mood / emotional_pain / concentration / the
+                -- unified state_of_mind) — dt-driven, unlike consciousness.
+                brain.tick(uid, dt)
                 -- Injuries first: a lethal injury kills the unit (skip the
                 -- rest of its tick); a disabling one collapses it.
                 if not tickInjuries(uid, info, pose0)
