@@ -29,7 +29,7 @@ Exit 0 = all checks passed.
 """
 from __future__ import annotations
 import argparse, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/thermo_altitude_probe_engine.log"
 
@@ -152,13 +152,7 @@ def main():
         else:
             fails.append(f"5 arena safety: getAmbientAt={a_arena} (expected regional mean {c_arena}, non-nil, no crash)")
     finally:
-        try:
-            send(port, 'engine.quit(); return "bye"', idle=1.0, timeout=5)
-        except Exception:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(port, proc)
 
     print()
     if fails:
