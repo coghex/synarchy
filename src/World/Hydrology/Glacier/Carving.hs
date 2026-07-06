@@ -160,20 +160,14 @@ applyGlacierMoraine mp worldSize gx gy baseElev =
 
 -- * Glacier Evolution Application (pure GeoModification)
 --
--- NOTE: Advance and Branch need no terrain effect here — active glaciers
--- are re-carved each age with updated dimensions (see activeGlacierRecarve
--- in Timeline.hs), so dimension changes propagate automatically.
---
--- Retreat/melt terrain is emitted as 'GlacierMoraineEvent', which carries
--- the pre-change glacier geometry needed to place a former-terminus ridge.
-
+-- No glacier evolution event carves or deposits terrain here — Advance
+-- and Branch need none (active glaciers are re-carved each age with
+-- updated dimensions, see activeGlacierRecarve in Timeline.hs, so
+-- dimension changes propagate automatically), and Retreat/Melt's terrain
+-- effect is a sibling 'GlacierMoraineEvent' (applied via
+-- 'applyGlacierMoraine'), which carries the pre-change glacier geometry
+-- needed to place a former-terminus ridge. This function is therefore an
+-- unconditional no-op; it exists only so applyHydroEvolution's dispatch
+-- stays uniform with river evolution.
 applyGlacierEvolution ∷ HydroEvolution → Int → Int → Int → Int → GeoModification
-applyGlacierEvolution (GlacierAdvance _advLen _advWid) _ws _gx _gy _e =
-    noModification
-applyGlacierEvolution (GlacierRetreat _retreatLen _moraineDep) _ws _gx _gy _e =
-    noModification  -- TODO: deposit moraine in retreat zone
-applyGlacierEvolution (GlacierMelt _moraineDep) _ws _gx _gy _e =
-    noModification  -- TODO: deposit final moraine at terminus
-applyGlacierEvolution (GlacierBranch _branchPt _angle _len _childId) _ws _gx _gy _e =
-    noModification
 applyGlacierEvolution _ _ws _gx _gy _e = noModification
