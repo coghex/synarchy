@@ -39,7 +39,7 @@ Exit 0 = pass.
 """
 from __future__ import annotations
 import argparse, glob, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/thought_probe_engine.log"
 
@@ -185,13 +185,7 @@ def main():
         print(f"\n{'PASS' if passed else 'FAIL'} — thought system (#351)")
         return 0 if passed else 1
     finally:
-        try:
-            send(P, "engine.quit()", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(P, proc)
 
 
 if __name__ == "__main__":

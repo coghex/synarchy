@@ -63,30 +63,9 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
-
-
-def shutdown(proc: subprocess.Popen, port: int) -> None:
-    """Quit the engine, then make sure the process is gone and the port
-    is free (so the next boot on the same port can bind)."""
-    try:
-        send(port, "engine.quit()", timeout=2)
-    except OSError:
-        pass
-    for _ in range(50):  # up to ~5 s
-        if proc.poll() is not None:
-            break
-        time.sleep(0.1)
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=5)
-    for _ in range(50):  # wait for the listener socket to release the port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("localhost", port)) != 0:
-                return
-        time.sleep(0.1)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -322,7 +301,7 @@ def main() -> int:
             return 2
         print(f"saved -> {save_file} ({os.path.getsize(save_file)} bytes)")
 
-        shutdown(procA, args.port)
+        quit_engine(args.port, procA)
         procA = None
 
         # ── Engine B: fresh process, load, assert survival ─────────────
@@ -388,9 +367,9 @@ def main() -> int:
 
     finally:
         if procA is not None:
-            shutdown(procA, args.port)
+            quit_engine(args.port, procA)
         if procB is not None:
-            shutdown(procB, args.port)
+            quit_engine(args.port, procB)
         # Scoped cleanup: only ever remove a dir this probe created.
         if os.path.basename(save_dir).startswith(SAVE_PREFIX) and os.path.isdir(save_dir):
             shutil.rmtree(save_dir, ignore_errors=True)

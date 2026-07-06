@@ -40,20 +40,9 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/location_content_engine.log"
-
-
-def shutdown(port: int, proc: subprocess.Popen) -> None:
-    try:
-        send(port, "engine.quit(); return 'bye'", timeout=3.0)
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
 
 
 def load_yaml_dir(port: int, directory: str, loader: str) -> None:
@@ -327,7 +316,7 @@ def main() -> int:
             send(args.port, "engine.saveWorld('wa', 'loc_content_probe'); return 'saved'")
             time.sleep(1.0)
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     # ---- Phase 2: save -> quit -> fresh restart -> load -> revisit does
     #      NOT respawn (one-time flag persisted, independent of the
@@ -374,7 +363,7 @@ def main() -> int:
                 failures.append(
                     f"ruin floor texture lost the damaged variant on reload: {tex}")
         finally:
-            shutdown(args.port, proc)
+            quit_engine(args.port, proc)
     elif not ruins:
         failures.append("phase 2 skipped: no ruins from phase 1")
 
@@ -434,7 +423,7 @@ def main() -> int:
                 "expected warnings for unknown unit id, unknown content "
                 f"kind, AND unknown loot roll not all found in {LOG}")
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     # ---- Phase 4: a building AND a unit content entry spawn correctly
     #      on a HIDDEN,
@@ -530,7 +519,7 @@ def main() -> int:
                                 "phase 4: no acolyte unit spawned from dense_ruin "
                                 "unit content on hidden page 'sw2'")
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     print("-" * 56)
     if failures:

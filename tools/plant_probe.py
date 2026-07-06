@@ -47,7 +47,7 @@ Usage: python3 tools/plant_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 SPROOT = "/tmp"
 
@@ -335,12 +335,7 @@ def main():
         print("\n" + ("ALL PLANT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        try:
-            send(port, "engine.quit()")
-        except Exception:
-            pass
-        time.sleep(1.0)
-        proc.kill()
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

@@ -39,22 +39,11 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/location_stamp_idempotent_engine.log"
 LOCATION_YAML = "/tmp/location_stamp_idempotent_probe_loc.yaml"
 LOCATION_ID = "stamp_probe_room"
-
-
-def shutdown(port: int, proc: subprocess.Popen) -> None:
-    try:
-        send(port, "engine.quit(); return 'bye'", timeout=3.0)
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
 
 
 def load_yaml_dir(port: int, directory: str, loader: str) -> None:
@@ -218,7 +207,7 @@ def main() -> int:
                 send(args.port, "engine.saveWorld('sa', 'stamp_idempotent_probe'); return 'saved'")
                 time.sleep(1.0)
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     # ---- Phase 2: restart -> load -> reload the same chunk. A real
     #      chunk LOAD (fresh process, nothing cached) must NOT re-run the
@@ -260,7 +249,7 @@ def main() -> int:
             else:
                 print("PASS: geometry-stamp flag survived save/load")
         finally:
-            shutdown(args.port, proc)
+            quit_engine(args.port, proc)
     elif gx is None:
         failures.append("phase 2 skipped: no room from phase 1")
 
@@ -289,7 +278,7 @@ def main() -> int:
                 send(args.port, "engine.saveWorld('sb', 'stamp_idempotent_probe_fresh'); return 'saved'")
                 time.sleep(1.0)
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     if gx2 is not None and not failures:
         proc = boot(args.port, log=LOG)
@@ -309,7 +298,7 @@ def main() -> int:
                     f"a location saved before first materialization did NOT stamp "
                     f"on its first post-load chunk load ({gx2},{gy2})")
         finally:
-            shutdown(args.port, proc)
+            quit_engine(args.port, proc)
 
     print("-" * 56)
     if failures:

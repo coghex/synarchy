@@ -26,7 +26,7 @@ known qualities, same formula cooking_probe.py already gates), then checks:
 Usage: python3 tools/consumable_effects_probe.py [--port 9347]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 SPROOT = "/tmp"
 
@@ -313,12 +313,7 @@ def main():
         print("\n" + ("ALL CONSUMABLE-EFFECTS CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        try:
-            send(port, "engine.quit()")
-        except Exception:
-            pass
-        time.sleep(1.0)
-        proc.kill()
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

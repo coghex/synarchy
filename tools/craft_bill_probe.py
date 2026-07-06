@@ -37,7 +37,7 @@ machinery, then checks:
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import clear_find_water, quit_engine, boot, send
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/craft_bill_probe_recipes.yaml"
@@ -127,10 +127,7 @@ def spawn_acolyte(port, x, y):
     time.sleep(0.5)
     # Retire the spawn-seeded find_water goal: the arena has no water,
     # and a scouting acolyte walks off-course instead of crafting.
-    send(port,
-         f"local ai = require('scripts.unit_ai'); "
-         f"local s = ai.getState({uid}); "
-         f"ai.markGoalAccomplished(s, 'find_water'); return 'ok'")
+    clear_find_water(port, uid)
     return uid
 
 
@@ -355,10 +352,7 @@ def main():
         # retirement issued while the AI was off — and the water-scout
         # goal floor (~3.0) outranks the craft entry utility.
         time.sleep(1.5)
-        send(port,
-             f"local ai = require('scripts.unit_ai'); "
-             f"local s = ai.getState({uid}); "
-             f"ai.markGoalAccomplished(s, 'find_water'); return 'ok'")
+        clear_find_water(port, uid)
 
         claimed = poll(port, 30, lambda: jget(
             port, f"return craft.getBill({bill3})") in ("nil", "", None, "null")
@@ -440,12 +434,7 @@ def main():
                       else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        try:
-            send(port, "engine.quit()")
-        except Exception:
-            pass
-        time.sleep(1.0)
-        proc.kill()
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

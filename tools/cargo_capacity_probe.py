@@ -13,7 +13,7 @@ FAIL  = final stored weight  > capacity (bug overfilled the cargo).
 """
 from __future__ import annotations
 import glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 PORT = 9009
 LOG = "/tmp/cargo_capacity_probe_engine.log"
@@ -104,13 +104,7 @@ def main() -> int:
               "(instance weight respected)")
         return 0
     finally:
-        try:
-            send(PORT, "engine.quit(); return 'bye'", timeout=3)
-        except Exception:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(PORT, proc)
 
 
 if __name__ == "__main__":

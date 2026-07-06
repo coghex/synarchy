@@ -150,29 +150,38 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
 
 
 def quit_engine(port: int, proc: subprocess.Popen | None = None,
-                timeout: float = 15.0) -> None:
-    """Ask the engine to quit, then ensure the process is gone.
+                timeout: float = 15.0, wait_port: bool = True) -> None:
+    """Ask the engine to quit, then ensure the process is gone and (by
+    default) the listener port is released so the next boot on it can bind.
 
-    Safe to call in a ``finally``: swallows a dead-socket error on the quit
-    send, waits up to ``timeout`` for a clean exit, and hard-kills if the
-    process is still alive.
+    Safe to call in a ``finally``: ``engine.quit()`` is a fire-and-forget
+    command (``expect_result=False`` so it doesn't sit out the timeout), a
+    dead-socket error on the send is swallowed, it waits up to ``timeout``
+    for a clean exit and hard-kills if needed, then waits briefly for the
+    port to free (which is what restart probes need between boots).
     """
     try:
-        send(port, "engine.quit()", timeout=3.0)
+        send(port, "engine.quit()", timeout=3.0, expect_result=False)
     except OSError:
         pass
-    if proc is None:
-        return
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            return
-        time.sleep(0.2)
-    proc.kill()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
+    if proc is not None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+    if wait_port:
+        for _ in range(50):  # up to ~5 s for the listener socket to release
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(("localhost", port)) != 0:
+                    return
+            time.sleep(0.1)
 
 
 # --------------------------------------------------------------------------
@@ -239,16 +248,16 @@ def spawn_acolyte(port: int, x: float, y: float, unit: str = "acolyte",
 def init_world(port: int, name: str = "probe", seed: int = 42, size: int = 64,
                plates: int = 3, show: bool = True, timeout: float = 190.0) -> None:
     """``world.init`` + block on ``world.waitForInit`` (+ ``world.show``)."""
-    send(port, f"world.init('{name}', {seed}, {size}, {plates})")
+    send(port, f"world.init('{name}', {seed}, {size}, {plates})", expect_result=False)
     send(port, f"return world.waitForInit({int(timeout)})", timeout=timeout + 10)
     if show:
-        send(port, f"world.show('{name}')")
+        send(port, f"world.show('{name}')", expect_result=False)
 
 
 def init_arena(port: int, name: str = "arena", show: bool = True,
                timeout: float = 60.0) -> None:
     """``world.initArena`` + block on ``world.waitForInit`` (+ ``world.show``)."""
-    send(port, f"world.initArena('{name}')")
+    send(port, f"world.initArena('{name}')", expect_result=False)
     send(port, f"return world.waitForInit({int(timeout)})", timeout=timeout + 10)
     if show:
-        send(port, f"world.show('{name}')")
+        send(port, f"world.show('{name}')", expect_result=False)

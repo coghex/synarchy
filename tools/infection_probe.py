@@ -21,7 +21,7 @@ Usage: python3 tools/infection_probe.py [--port 9147]
 """
 from __future__ import annotations
 import argparse, glob, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/infection_probe_engine.log"
 
@@ -165,13 +165,7 @@ def main():
 
         print("\n" + ("ALL PASS" if passed else "SOME FAILED"))
     finally:
-        try:
-            send(port, "engine.quit()", timeout=3)
-        except Exception:
-            pass
-        time.sleep(1.0)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(port, proc)
     return 0 if passed else 1
 
 

@@ -36,7 +36,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send, send_json
+from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 LOG = "/tmp/construction_probe_engine.log"
 
@@ -101,13 +101,7 @@ def spawn_acolyte(port: int, x: float, y: float) -> int:
     # so the goal never completes and its search utility (3.0) can edge
     # out a construct job a few tiles away — an artifact of the
     # waterless test world, not the arbitration under test.
-    ok = poll_until(port, 10, lambda: send(
-        port,
-        f"local ai = require('scripts.unit_ai'); "
-        f"local s = ai.getState({n}); "
-        f"if not s then return false end; "
-        f"ai.markGoalAccomplished(s, 'find_water'); return true") == "true")
-    if not ok:
+    if not clear_find_water(port, n):
         sys.exit(f"unit {n} never got AI state")
     return n
 
@@ -301,10 +295,7 @@ def main() -> int:
         for phase in todo:
             phase(args.port)
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=3.0)
-        except OSError:
-            pass
+        quit_engine(args.port, proc)
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:

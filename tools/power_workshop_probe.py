@@ -56,7 +56,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import clear_find_water, quit_engine, boot, send
 
 SPROOT = "/tmp"
 TEST_RECIPE_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
@@ -123,20 +123,6 @@ def as_float(s) -> float | None:
         return None
 
 
-def shutdown(proc: subprocess.Popen, port: int) -> None:
-    try:
-        send(port, "engine.quit()", timeout=2)
-    except OSError:
-        pass
-    for _ in range(50):
-        if proc.poll() is not None:
-            break
-        time.sleep(0.1)
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=5)
-
-
 def bootstrap_defs(port: int) -> None:
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -185,10 +171,7 @@ def spawn_acolyte(port: int, x: float, y: float) -> int:
     time.sleep(0.5)
     # Retire the spawn-seeded find_water goal: the arena has no water,
     # and a scouting acolyte walks off-course instead of crafting.
-    send(port,
-         f"local ai = require('scripts.unit_ai'); "
-         f"local s = ai.getState({uid}); "
-         f"ai.markGoalAccomplished(s, 'find_water'); return 'ok'")
+    clear_find_water(port, uid)
     return uid
 
 
@@ -407,10 +390,7 @@ def main() -> int:
         # Re-retire find_water: the first live AI tick reseeds spawn
         # goals, overwriting the earlier retirement.
         time.sleep(1.0)
-        send(port,
-             f"local ai = require('scripts.unit_ai'); "
-             f"local s = ai.getState({uid}); "
-             f"ai.markGoalAccomplished(s, 'find_water'); return 'ok'")
+        clear_find_water(port, uid)
 
         claimed = poll(port, 20, lambda: jget(
             port, f"local b = craft.getBill({bill_id}); "
@@ -462,7 +442,7 @@ def main() -> int:
         print("\n" + ("ALL POWER WORKSHOP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        shutdown(proc, port)
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ Exit 0 = pass.
 """
 from __future__ import annotations
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/collapse_crawl_probe_engine.log"
 RISE_AT = 0.40            # brain.lua RISE_AT — collapsed→up gate
@@ -214,10 +214,7 @@ def main():
         print(f"\n{'PASS' if ok else 'FAIL'} — collapse↔crawl hysteresis (#304)")
         return 0 if ok else 1
     finally:
-        send(P, "engine.quit(); return 'bye'")
-        time.sleep(0.5)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(P, proc)
 
 
 if __name__ == "__main__":

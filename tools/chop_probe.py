@@ -32,7 +32,7 @@ Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import clear_find_water, quit_engine, boot, send
 
 SPROOT = "/tmp"
 
@@ -229,14 +229,10 @@ def main():
         # scouts off cliffs on unlucky seeds. The probe tests CHOPPING,
         # not hydration scouting, so mark the goal accomplished through
         # the canonical goal API before the spiral leads it anywhere.
-        quiet = send(port,
-                     f"local ai=require('scripts.unit_ai'); "
-                     f"local s=ai.getState({uid}); "
-                     f"if s then ai.markGoalAccomplished(s,'find_water'); "
-                     f"unit.stop({uid}); return 'ok' "
-                     f"else return 'nostate' end").strip('"')
-        if quiet != "ok":
-            print(f"  [FAIL] could not quiet find_water goal: {quiet}")
+        if clear_find_water(port, uid):
+            send(port, f"unit.stop({uid})", expect_result=False)
+        else:
+            print("  [FAIL] could not quiet find_water goal")
             passed = False
 
         deadline = time.time() + 90.0
@@ -328,12 +324,7 @@ def main():
         print("\n" + ("ALL CHOP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        try:
-            send(port, "engine.quit()")
-        except Exception:
-            pass
-        time.sleep(1.0)
-        proc.kill()
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

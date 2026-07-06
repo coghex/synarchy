@@ -27,7 +27,7 @@ Exit 0 = all scenarios passed.
 """
 from __future__ import annotations
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/physiology_probe_engine.log"
 
@@ -507,13 +507,7 @@ def main():
         passed &= small_creature_section(port, args.seconds)
         print("\n" + ("ALL SCENARIOS PASSED" if passed else "SOME FAILED"))
     finally:
-        try:
-            send(port, "engine.quit()", timeout=3)
-        except Exception:
-            pass
-        time.sleep(1.0)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(port, proc)
     return 0 if passed else 1
 
 

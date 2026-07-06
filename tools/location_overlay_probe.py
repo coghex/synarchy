@@ -51,20 +51,9 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/location_overlay_engine.log"
-
-
-def shutdown(port: int, proc: subprocess.Popen) -> None:
-    try:
-        send(port, "engine.quit(); return 'bye'", timeout=3.0)
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.kill()
 
 
 def placed(port: int) -> list[dict]:
@@ -283,7 +272,7 @@ def main() -> int:
         else:
             failures.append(f"overlay not deterministic: A={key(la)} B={key(lb)}")
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     # ---- Phase 2: a world saved with UN-STAMPED locations still
     #      materializes them after a fresh restart + load (the reviewer's
@@ -320,7 +309,7 @@ def main() -> int:
         else:
             failures.append(f"only {m}/{len(ruins_after)} ruin(s) materialized after load")
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     # A dense def places a location on EVERY land chunk, so the centre
     # chunk (0,0) — land for our seed, and the only chunk that is ever
@@ -344,7 +333,7 @@ def main() -> int:
         else:
             failures.append("centre chunk (0,0) NOT stamped on first gen (Init hook)")
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     # ---- Phase 4: a location on the SAVED CAMERA CHUNK is present on the
     #      FIRST load. The default camera sits on (0,0); save a world whose
@@ -366,7 +355,7 @@ def main() -> int:
             time.sleep(1.0)
             saved_centre = True
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     if saved_centre:
         proc = boot(args.port, log=LOG)
@@ -381,7 +370,7 @@ def main() -> int:
             else:
                 failures.append("saved-camera centre chunk (0,0) NOT present on first load (Save hook)")
         finally:
-            shutdown(args.port, proc)
+            quit_engine(args.port, proc)
 
     # ---- Phase 5: a location on a HIDDEN, non-active page still stamps,
     #      EVEN when the active page already has a floor at the same tile
@@ -441,7 +430,7 @@ def main() -> int:
                 else:
                     failures.append("hidden page suppressed by active-world geometry at same tile (multiworld)")
     finally:
-        shutdown(args.port, proc)
+        quit_engine(args.port, proc)
 
     print("-" * 56)
     if failures:

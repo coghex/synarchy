@@ -64,7 +64,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
 
@@ -82,25 +82,6 @@ def as_int(s) -> int | None:
         return int(float(s))
     except (TypeError, ValueError):
         return None
-
-
-def shutdown(proc: subprocess.Popen, port: int) -> None:
-    try:
-        send(port, "engine.quit()", timeout=2)
-    except OSError:
-        pass
-    for _ in range(50):
-        if proc.poll() is not None:
-            break
-        time.sleep(0.1)
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=5)
-    for _ in range(50):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("localhost", port)) != 0:
-                return
-        time.sleep(0.1)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -304,7 +285,7 @@ def main() -> int:
         passed = check(passed, os.path.exists(save_file),
                        f"save file appeared at {save_file}")
 
-        shutdown(procA, port)
+        quit_engine(port, procA)
         procA = None
 
         procB = boot(port, log=logB, label="engine B")
@@ -352,9 +333,9 @@ def main() -> int:
         return 0 if passed else 1
     finally:
         if procA is not None:
-            shutdown(procA, port)
+            quit_engine(port, procA)
         if procB is not None:
-            shutdown(procB, port)
+            quit_engine(port, procB)
         if os.path.exists(save_dir):
             shutil.rmtree(save_dir, ignore_errors=True)
 

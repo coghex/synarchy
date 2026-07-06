@@ -58,7 +58,7 @@ Usage: python3 tools/farm_ai_probe.py [--port 9336] [--seed 42]
        [--size 64] [--plates 3]
 """
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import clear_find_water, quit_engine, boot, send
 
 SPROOT = "/tmp"
 
@@ -147,14 +147,9 @@ def spawn_worker(port, x, y):
     except ValueError:
         return -1
     time.sleep(2.0)
-    quiet = send(port,
-                 f"local ai=require('scripts.unit_ai'); "
-                 f"local s=ai.getState({uid}); "
-                 f"if s then ai.markGoalAccomplished(s,'find_water'); "
-                 f"unit.stop({uid}); return 'ok' "
-                 f"else return 'nostate' end").strip('"')
-    if quiet != "ok":
+    if not clear_find_water(port, uid):
         return -1
+    send(port, f"unit.stop({uid})", expect_result=False)
     return uid
 
 
@@ -575,12 +570,7 @@ def main():
         print("\n" + ("ALL FARM AI CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        try:
-            send(port, "engine.quit()")
-        except Exception:
-            pass
-        time.sleep(1.0)
-        proc.kill()
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

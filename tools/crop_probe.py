@@ -34,7 +34,7 @@ Usage: python3 tools/crop_probe.py [--port 9195] [--seed 42]
 """
 import argparse, copy, glob, json, socket, subprocess, sys, time
 import yaml
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 SPROOT = "/tmp"
 
@@ -351,12 +351,7 @@ def main():
         print("\n" + ("ALL CROP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
-        try:
-            send(port, "engine.quit()")
-        except Exception:
-            pass
-        time.sleep(1.0)
-        proc.kill()
+        quit_engine(port, proc)
 
 
 if __name__ == "__main__":

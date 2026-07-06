@@ -38,7 +38,7 @@ Exit 0 = pass.
 """
 from __future__ import annotations
 import argparse, glob, json, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/state_of_mind_probe_engine.log"
 PAIN_CEILING = 5.0  # brain.lua PAIN_CEILING — keep in lockstep
@@ -220,10 +220,7 @@ def main():
         print(f"\n{'PASS' if ok else 'FAIL'} — unified state-of-mind model (#350)")
         return 0 if ok else 1
     finally:
-        send(P, "engine.quit(); return 'bye'")
-        time.sleep(0.5)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(P, proc)
 
 
 if __name__ == "__main__":

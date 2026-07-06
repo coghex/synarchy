@@ -39,7 +39,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/repair_item_engine.log"
 WEAPON = "pick_steel"   # kind: weapon — matches the humanoid right_hand slot
@@ -351,13 +351,7 @@ def main() -> int:
 
         return summarize()
     finally:
-        try:
-            send(args.port, "engine.quit(); return 'bye'", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(args.port, proc)
 
 
 def summarize() -> int:

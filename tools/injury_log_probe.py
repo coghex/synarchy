@@ -27,7 +27,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/injury_log_probe_engine.log"
 
@@ -144,13 +144,7 @@ def main() -> int:
               + ("" if passed else " — see failures above"))
         return 0 if passed else 1
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(args.port, proc)
 
 
 if __name__ == "__main__":

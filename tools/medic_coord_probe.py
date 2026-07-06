@@ -37,7 +37,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/medic_coord_engine.log"
 
@@ -203,13 +203,7 @@ def main() -> int:
               f"{'two medics treated in parallel' if ok else 'coordination broken'}")
         return 0 if ok else 1
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(args.port, proc)
 
 
 if __name__ == "__main__":

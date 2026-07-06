@@ -35,7 +35,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/orphan_prune_engine.log"
 # Unique per run, deleted on exit. A fixed name could clobber a real save
@@ -306,10 +306,7 @@ def main() -> int:
             else:
                 print("PASS: off-page pre-load state preserved, stale blob id dropped")
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=3, expect_result=False)
-        except OSError:
-            pass
+        quit_engine(args.port, proc)
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:

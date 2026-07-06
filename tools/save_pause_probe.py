@@ -42,7 +42,7 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/save_pause_probe_engine.log"
 # Unique per run. Saves overwrite in place (World.Save.Serialize), and this
@@ -184,10 +184,7 @@ def main() -> int:
                 f"after load: a stray setTimeScale un-froze a paused world "
                 f"(isPaused={rp} timeScale={rt})")
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=3, expect_result=False)
-        except OSError:
-            pass
+        quit_engine(args.port, proc)
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:

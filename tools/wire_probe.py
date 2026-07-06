@@ -38,7 +38,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import boot, send, send_json
+from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 LOG = "/tmp/wire_probe_engine.log"
 
@@ -119,13 +119,7 @@ def spawn_acolyte(port: int, x: float, y: float) -> int:
     for it in ("pick_steel", "shovel_steel", "axe_steel",
                "rations", "rations"):
         send(port, f"unit.removeItem({n}, '{it}'); return 'ok'")
-    ok = poll_until(port, 10, lambda: send(
-        port,
-        f"local ai = require('scripts.unit_ai'); "
-        f"local s = ai.getState({n}); "
-        f"if not s then return false end; "
-        f"ai.markGoalAccomplished(s, 'find_water'); return true") == "true")
-    if not ok:
+    if not clear_find_water(port, n):
         sys.exit(f"unit {n} never got AI state")
     return n
 
@@ -350,10 +344,7 @@ def main() -> int:
         for phase in todo:
             phase(args.port)
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=3.0)
-        except OSError:
-            pass
+        quit_engine(args.port, proc)
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:

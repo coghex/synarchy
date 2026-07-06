@@ -8,7 +8,7 @@ dropped again. This probe verifies BOTH the first drop and the re-drop.
 """
 from __future__ import annotations
 import glob, socket, subprocess, sys, time
-from probelib import boot, send
+from probelib import quit_engine, boot, send
 
 PORT = 9193
 LOG = "/tmp/disarm_probe_engine.log"
@@ -123,13 +123,7 @@ def main() -> int:
         print(f"  re-drop    : {'PASS' if p2 else 'FAIL'}  (issue #193)")
         return 0 if (p1 and p2) else 1
     finally:
-        try:
-            send(PORT, "engine.quit()", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(PORT, proc)
 
 
 if __name__ == "__main__":
