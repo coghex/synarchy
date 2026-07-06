@@ -777,3 +777,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "emit"        (injuryEmitFn env)
   registerLuaFunction "drainEvents" (injuryDrainEventsFn env)
   Lua.setglobal (Lua.Name "injury")
+
+  -- Thought: per-unit thought stream (#351) for the unit-log UI's
+  -- Thought tab. Purely Lua-produced (scripts/thoughts.lua) — mirrors
+  -- the injury event stream's shape and drain pattern.
+  Lua.newtable
+  registerLuaFunction "emit"        (thoughtEmitFn env)
+  registerLuaFunction "drainEvents" (thoughtDrainEventsFn env)
+  Lua.setglobal (Lua.Name "thought")

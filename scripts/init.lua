@@ -26,6 +26,7 @@ local popupScriptId = nil
 local eventLogScriptId = nil
 local combatLogScriptId = nil
 local injuryLogScriptId = nil
+local thoughtLogScriptId = nil
 local unitLogScriptId = nil
 
 function game.init(scriptId)
@@ -165,6 +166,12 @@ function game.init(scriptId)
     -- run even when hidden so the engine injury stream is drained and
     -- doesn't grow unbounded.
     injuryLogScriptId = engine.loadScript("scripts/injury_log_panel.lua", 0.1)
+
+    -- Thought log store: sibling data source for unit_log.lua's Thought
+    -- tab (#351) — no standalone panel of its own. update() drains
+    -- thought.drainEvents every tick into per-unit rings; MUST run even
+    -- when no unit-log panel is open, same reason as injury above.
+    thoughtLogScriptId = engine.loadScript("scripts/thought_log.lua", 0.1)
 
     -- Per-unit log panel: opened from the unit-info "Log" button. It owns
     -- no stream (reads the other logs' stores); the tick just re-renders
@@ -1178,6 +1185,9 @@ function game.shutdown()
     end
     if injuryLogScriptId then
         engine.killScript(injuryLogScriptId)
+    end
+    if thoughtLogScriptId then
+        engine.killScript(thoughtLogScriptId)
     end
     if unitLogScriptId then
         engine.killScript(unitLogScriptId)
