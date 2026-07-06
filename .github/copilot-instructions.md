@@ -2,14 +2,16 @@
 
 ## Build and test commands
 
-- Build the production executable with `cabal build synarchy`.
-- Build with development-only validation and debug settings with `cabal build -f dev all`.
-- Run the app with `cabal run synarchy`.
-- Run the full test suite with `cabal test -f dev` or `cabal run synarchy-test`.
-- Run a single Hspec group or example with `cabal run synarchy-test -- --match 'Engine.Core.Monad'` or another `describe` / `it` name from `test/Spec.hs`.
-- Use `ENGINE_DEBUG=Vulkan,Graphics,etc... cabal run synarchy` to enable category-based engine debug logging.
-
-`test/Spec.hs` initializes GLFW and creates a real window before running `hspec`, so graphics-capable local environments are the expected way to run tests.
+- Build with `cabal build all` (this does NOT build test suites — build `synarchy-test-headless` explicitly when you need it).
+- Run the app with `cabal run synarchy`. **Never run it without `--dump` or `--headless`** — the plain form opens a graphical window that steals focus.
+- The day-to-day test suite is `synarchy-test-headless` (`cabal test synarchy-test-headless`), not `synarchy-test`/`synarchy-test-graphical` — that other suite boots a real GLFW window and Vulkan device, so it only runs in a graphics-capable local environment, not in most agent/CI contexts. Prefer the cheapest applicable tier:
+  1. Iteration: `cabal test synarchy-test-headless --test-options='--match "<describe name>"'`, or `python3 tools/world_check.py --quick` for worldgen-output sanity.
+  2. Before reporting done: `cabal test synarchy-test-headless` + `python3 tools/world_check.py` + `python3 tools/test_audit.py`.
+  3. Worldgen-OUTPUT changes only: `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless`, then re-capture baselines with `python3 tools/world_baseline.py` and re-run `world_check.py`.
+  4. `tools/*_probe.py` — opt-in headless behavior probes (combat anim, movement, construction, saves, physiology, ...); run only the ones relevant to what you touched.
+  See `CLAUDE.md` for the full tier rationale and `tools/README.md` for the probe list.
+- Use `ENGINE_DEBUG=Vulkan,Graphics,etc... cabal run synarchy -- --headless` to enable category-based engine debug logging without opening a window.
+- Don't build with `-f dev` for routine work — it forces a full rebuild (~1.5 min) and is only for chasing a graphics/memory bug; use its own build dir (`--builddir=dist-dev`) if you do.
 
 ## High-level architecture
 
@@ -31,5 +33,5 @@
 - Follow the repository's `Base.hs` / `Types.hs` split. `Base.hs` modules are intended to stay free of project-local imports; `Types.hs` and higher-level modules can depend on other local modules. This split is part of how the codebase avoids circular dependencies.
 - When adding new shared queues, refs, or other global runtime state, wire them through both `Engine.Core.State.EngineEnv` and `Engine.Core.Init.initializeEngine`; one without the other is usually an incomplete change.
 - The executable and the test suite both inherit language defaults from `synarchy.cabal` (`GHC2024`, `NoImplicitPrelude`, `UnicodeSyntax`, plus the repo warning/profile flags). Match those defaults instead of adding per-file workarounds unless the file already does so.
-- The test harness is centralized in `test/Spec.hs`. Adding a new test module is not enough by itself: it also needs to be listed in `synarchy.cabal` and imported/attached to the `hspec` tree in `test/Spec.hs`, or it will never run.
+- The headless test harness is centralized in `test-headless/Spec.hs` (the graphics-only `synarchy-test-graphical` suite has its own `test/Spec.hs`). Adding a new test module is not enough by itself: it also needs to be listed in `synarchy.cabal` and imported/attached to the `hspec` tree in the relevant `Spec.hs`, or it will never run. Worldgen specs should reuse the canonical shared world (`Test.Headless.Harness.sharedWorld`) rather than booting their own.
 - Use `scripts/` as the source of truth for runtime Lua modules. Changes to shell/UI/world behavior often require matching updates in `Engine.Scripting.Lua.API.*` on the Haskell side and the corresponding Lua modules under `scripts/`.
