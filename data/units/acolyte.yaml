@@ -76,6 +76,11 @@ units:
       # placed (construct_xp_per_piece). Feeds the derived Builder
       # role (#265).
       construction: { base: 25.0, range: 30.0 }
+      # Farming: scales the plant AI's planting rate and the harvest AI's
+      # auto-harvest rate the same way — factor = 0.5 + farming/100. Gains
+      # XP per completed plant/harvest action. Feeds the derived Farmer
+      # role (#265/#336). Same novice spread as mining/woodcutting.
+      farming: { base: 25.0, range: 30.0 }
       # Cooking: sets crafted-output quality for the cooking recipe tier
       # (craft.execute, #343/#346), the same convention as smithing.
       # Acolytes arrive as novice cooks — the portal kit is rations and

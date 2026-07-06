@@ -74,7 +74,8 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldClearStructureCommand
                                  , handleWorldClearAllStructuresCommand
                                  , handleWorldDigTileCommand
-                                 , handleWorldAddTileCommand)
+                                 , handleWorldAddTileCommand
+                                 , handleWorldPlantRowCropAtCommand)
 import World.Thread.Command.Location
     (handleWorldMarkLocationContentsSpawnedCommand
     ,handleWorldMarkLocationStampedCommand)
@@ -178,6 +179,8 @@ handleWorldCommand env logger (WorldSetPlantDesignateTexture pageId texHandle)
   = handleWorldSetPlantDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetVeg pageId gx gy z vegId)
   = handleWorldSetVegCommand env logger pageId gx gy z vegId
+handleWorldCommand env logger (WorldPlantRowCropAt pageId gx gy cropName)
+  = handleWorldPlantRowCropAtCommand env logger pageId gx gy cropName
 handleWorldCommand env logger (WorldDigTile pageId gx gy ux uy amount skill percep)
   = handleWorldDigTileCommand env logger pageId gx gy ux uy amount skill percep
 handleWorldCommand env logger (WorldAddTile pageId gx gy mat)

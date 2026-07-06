@@ -124,7 +124,14 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 78  -- v78: WorldPageSave gains trailing
+currentSaveVersion = 79  -- v79: WorldEdit gains a new trailing
+                         --      'WePlaceFlora' constructor (#336) — the
+                         --      farm AI's row-crop planting completion
+                         --      (world.plantRowCropAt). Order-preserving
+                         --      (appended at the end), but per this
+                         --      module's own policy any new WorldEdit
+                         --      variant bumps the version.
+                         -- v78: WorldPageSave gains trailing
                          --      'wpsPlantDesignations' (#335) — plant
                          --      designations (tile → surface z + chosen
                          --      crop species). Like the other

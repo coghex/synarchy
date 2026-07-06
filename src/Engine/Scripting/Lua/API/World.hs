@@ -55,6 +55,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetFluidTileFn
     , worldSetSlopeFn
     , worldSetVegFn
+    , worldPlantRowCropAtFn
     , worldSetCellFn
     , worldMarkLocationContentsSpawnedFn
     , worldMarkLocationStampedFn
@@ -1482,6 +1483,34 @@ worldSetSlopeFn env = do
                         (fromIntegral gx) (fromIntegral gy)
                         (fromIntegral z)
                         (fromIntegral bits)  -- → Word8 truncates to low 8 bits
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | world.plantRowCropAt(pageId, gx, gy, cropName) → bool
+--   Plant a single row-crop FloraInstance at (gx,gy) via the WePlaceFlora
+--   edit path (queued, same fire-and-forget shape as world.setVegAt) —
+--   the farm AI's (#336) row-crop planting completion, the FloraInstance
+--   counterpart to world.plantCropAt's CropPlot for groundcover crops.
+--   Refused world-thread-side unless the tile is tilled soil and
+--   cropName names a registered row_crop species; poll
+--   world.getFloraGrowthAt afterward to confirm it landed.
+worldPlantRowCropAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldPlantRowCropAtFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tointeger 2
+    gyArg     ← Lua.tointeger 3
+    cropArg   ← Lua.tostring 4
+    case (pageIdArg, gxArg, gyArg, cropArg) of
+        (Just pageIdBS, Just gx, Just gy, Just cropBS) → do
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                Q.writeQueue (worldQueue env) $
+                    WorldPlantRowCropAt pageId
+                        (fromIntegral gx) (fromIntegral gy)
+                        (TE.decodeUtf8 cropBS)
             Lua.pushboolean True
             return 1
         _ → do

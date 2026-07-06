@@ -396,6 +396,7 @@ worldFindHarvestableFloraFn env = do
                         tileData ← readIORef (wsTilesRef ws)
                         cat ← readIORef (floraCatalogRef env)
                         harvests ← readIORef (wsFloraHarvestsRef ws)
+                        cropPlots ← readIORef (wsCropPlotsRef ws)
                         (doy, absDay) ← growthClock ws
                         itemMgr ← readIORef (itemManagerRef env)
                         let (cLo, _) = globalToChunk (gx - radius) (gy - radius)
@@ -433,7 +434,33 @@ worldFindHarvestableFloraFn env = do
                                 , d2 ≤ r2
                                 , not (HM.member (tgx, tgy) harvests)
                                 ]
-                        pure $ case candidates of
+                            -- Planted groundcover crop plots (#334) are a
+                            -- world-level flat map, not chunk-embedded
+                            -- FloraInstances, so they need their own scan
+                            -- (never covered by the fcdInstances sweep
+                            -- above). Mirrors worldHarvestFloraFn's plot
+                            -- branch: BARE calls only (a tag is a
+                            -- designation flow — chop's "wood" — and a
+                            -- plot is never a designation target), no
+                            -- regrowth-timer check (harvesting a plot
+                            -- clears it outright instead of starting one).
+                            cropCandidates = case tagFilter of
+                                Just _  → []
+                                Nothing →
+                                    [ (d2, tgx, tgy, fsName sp)
+                                    | ((tgx, tgy), cp) ← HM.toList cropPlots
+                                    , Just sp ← [lookupSpecies (cpSpecies cp) cat]
+                                    , Just fh ← [fsHarvest sp]
+                                    , wanted fh
+                                    , let elapsed = cropPlotElapsedDays absDay cp
+                                          g = floraGrowth sp elapsed
+                                                  (cropPlotInstance cp)
+                                    , harvestOpen sp elapsed g
+                                    , let d2 = (tgx - gx) * (tgx - gx)
+                                             + (tgy - gy) * (tgy - gy)
+                                    , d2 ≤ r2
+                                    ]
+                        pure $ case candidates ⧺ cropCandidates of
                             [] → Nothing
                             cs → Just (minimum cs)
             case mBest of
