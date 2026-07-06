@@ -27,7 +27,12 @@ Checks:
   4. Rot: a freshly-planted row crop (its own tile) becomes harvestable
      in its fruiting window and NOT harvestable once the calendar rolls
      into senescing without being picked — the #332 mechanic, exercised
-     through THIS issue's own planting primitive.
+     through THIS issue's own planting primitive. The rotten-but-still-
+     standing plant then makes plant.designate itself refuse that tile
+     (the designation path is the occupancy gate, not just the two
+     planting primitives — a farm AI should never walk a full
+     claim-and-work cycle toward a designation that was always going to
+     fail the primitive's own occupancy guard).
   5. plant.getDesignationAt's new "category" field reports row_crop /
      groundcover_crop correctly (the farm AI's dispatch key).
   6. Full loop, tile A (groundcover): till.designate → AI tills
@@ -251,12 +256,18 @@ def main():
         if not tD:
             print("  [FAIL] no tillable tile found for site D (try another seed)")
             return 1
+        used.add(tD)
+        tF = find_tillable(port, cx=-60, cy=-60, exclude=used)
+        if not tF:
+            print("  [FAIL] no tillable tile found for site F (try another seed)")
+            return 1
         ax, ay = tA
         bx, by = tB
         cx, cy = tC
         dx, dy = tD
+        fx, fy = tF
         print(f"  site A={tA} (groundcover) B={tB} (row, AI) C={tC} (row, direct) "
-              f"D={tD} (row, rot)")
+              f"D={tD} (row, rot) F={tF} (category field)")
 
         # --- 1/2/3. Direct-primitive plantRowCropAt checks (tile C) ---
         refused0 = growth_entries(port, cx, cy, "tomato_plant")
@@ -318,6 +329,19 @@ def main():
         print(f"  [{'PASS' if ok4b else 'FAIL'}] ignored ripe crop rots past "
               f"senescing: {rotten}")
 
+        # --- 4b. plant.designate itself refuses an occupied tile (the
+        #     rotten-but-still-standing tomato at D) — the designation
+        #     path is the actual gate now, not just the two planting
+        #     primitives, so a farm AI never spends a full walk-and-work
+        #     cycle on a designation that was always going to fail. ---
+        send(port, f"plant.designate('probe',{dx},{dy},'wheat'); return 'ok'")
+        time.sleep(0.5)
+        d4c = jget(port, f"return plant.getDesignationAt('probe',{dx},{dy})")
+        ok4c = not isinstance(d4c, dict)
+        passed &= ok4c
+        print(f"  [{'PASS' if ok4c else 'FAIL'}] plant.designate refuses an "
+              f"already-occupied tile: {d4c}")
+
         # --- 3b. A tile that's already been planted refuses a second
         #     planting (guards against overlapping/duplicate instances
         #     stacking from a re-designate or a repeated direct call). ---
@@ -343,21 +367,25 @@ def main():
               f"already carrying a row-crop instance: planted={cross_plant} "
               f"plot={cross_plot}")
 
-        # --- 5. plant.getDesignationAt's category field ---
-        send(port, f"plant.designate('probe',{cx},{cy},'tomato_plant'); "
+        # --- 5. plant.getDesignationAt's category field (its own fresh,
+        #     unoccupied tile F — C is already planted by this point,
+        #     and an occupied tile now refuses designation, check 4b). ---
+        fz = jget(port, f"local sz=world.getSurfaceAt({fx},{fy}); return sz")
+        till_and_wait(port, "probe", fx, fy, fz)
+        send(port, f"plant.designate('probe',{fx},{fy},'tomato_plant'); "
                    f"return 'ok'")
         time.sleep(0.5)
-        dcat_row = jget(port, f"return plant.getDesignationAt('probe',{cx},{cy})")
-        send(port, f"plant.designate('probe',{cx},{cy},'wheat'); return 'ok'")
+        dcat_row = jget(port, f"return plant.getDesignationAt('probe',{fx},{fy})")
+        send(port, f"plant.designate('probe',{fx},{fy},'wheat'); return 'ok'")
         time.sleep(0.5)
-        dcat_ground = jget(port, f"return plant.getDesignationAt('probe',{cx},{cy})")
+        dcat_ground = jget(port, f"return plant.getDesignationAt('probe',{fx},{fy})")
         ok5 = (isinstance(dcat_row, dict) and dcat_row.get("category") == "row_crop"
                and isinstance(dcat_ground, dict)
                and dcat_ground.get("category") == "groundcover_crop")
         passed &= ok5
         print(f"  [{'PASS' if ok5 else 'FAIL'}] getDesignationAt reports "
               f"category: row={dcat_row} ground={dcat_ground}")
-        send(port, f"plant.cancelDesignation({cx},{cy}); return 'ok'")
+        send(port, f"plant.cancelDesignation({fx},{fy}); return 'ok'")
 
         # --- 6/7/8. Full AI loop: till (A) -> plant (A, wheat) ->
         #     plant (B, tomato_plant, pre-tilled) ---
