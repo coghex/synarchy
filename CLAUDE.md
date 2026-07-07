@@ -67,19 +67,25 @@ changed files, the full curated set for a core/unclassified change
 `run_probes.py --only ... --retries 1` (a failed probe re-runs SOLO once
 before failing the PR, to absorb the sequential-engine contention flakes
 a back-to-back run shows). Only a **curated CI-eligible subset** is
-gated — fast + deterministic probes (see `CI_ELIGIBLE` in
-`tools/ci_probes.py`). Deliberately NOT gated, and left to the manual
-`run_probes.py` full run: the flaky ones (craft_bill, role, chop,
-foraging, medic_coord, disarm — the last two are AI-reaction/
-arbitration timing the slower, variable Linux CI runner destabilizes
-run-to-run, which within-run retry can't fix), the slow/worldgen ones (flora_growth, till, multiworld_save,
-location_*, farm_ai), and the ones that fail on master for content
-reasons (construction, combat_anim, follow_command_priority,
-location_content, repair_ai #489, physiology, lua_orphan_prune). Growing
-the eligible set is a follow-up: prove a probe deterministic across
-repeated runs, then add its key to `CI_ELIGIBLE`. The path→probe map
-lives in `tools/ci_probes.py`; a change there re-runs its `--self-test`
-(a blocking CI step of its own).
+gated — fast + deterministic probes. Deliberately NOT gated, and left to
+the manual `run_probes.py` full run: flaky probes (AI-reaction/
+arbitration timing the slower, variable-speed Linux CI runner
+destabilizes run-to-run, which within-run retry can't fix), slow/
+worldgen-heavy ones, probes that fail on master today for content
+reasons, and probes gated on a non-default build config. Run
+`python3 tools/ci_probes.py --status` (#540) for the authoritative,
+always-current list of every registered probe's CI eligibility — CI-
+eligible, or manual-only with its reason category (`flaky`,
+`base-failing`, `slow/worldgen-heavy`, `build-config-gated`, or
+`unclassified` for a probe simply not yet reviewed for promotion — never
+trust a comment enumerating probe names, they drift). Growing the
+eligible set is a follow-up: prove a probe deterministic across repeated
+runs, then move its key from `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` in
+`tools/ci_probes.py`. The path→probe map lives in `tools/ci_probes.py`;
+a change there re-runs its `--self-test` (a blocking CI step of its
+own, which also enforces that every registered probe is classified as
+either CI-eligible or manual-only-with-a-reason — no probe can go
+unclassified silently).
 
 Conventions that keep this fast — don't undo them:
 - hspec worldgen specs **share generated worlds** via
