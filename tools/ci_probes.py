@@ -48,6 +48,7 @@ CI_ELIGIBLE = {
     "concussion_revive",
     "cooking",
     "craft",
+    "disarm",
     "injury_log",
     "item_instance",
     "item_temp",
@@ -70,14 +71,13 @@ UNCLASSIFIED = "unclassified"
 # a newly-registered probe can't silently land in neither bucket.
 MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
-    # Linux CI runner destabilizes run-to-run (medic_coord PR #535 run 1,
-    # disarm run 2); within-run retry can't fix run-to-run flakiness. ---
+    # Linux CI runner destabilizes run-to-run (medic_coord PR #535 run 1);
+    # within-run retry can't fix run-to-run flakiness. ---
     "craft_bill": (FLAKY, "craft_job AI claim/work timing flakes run-to-run on CI"),
     "role": (FLAKY, "role-hysteresis timing flakes run-to-run on CI"),
     "chop": (FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),
     "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
     "medic_coord": (FLAKY, "medic-selection timing flaked on the Linux runner (PR #535 run 1)"),
-    "disarm": (FLAKY, "disabled-hand re-fire timing flaked on the Linux runner (PR #535 run 2)"),
     # --- base-failing: fails today on master for content reasons unrelated
     # to CI infrastructure; gating it would redden every PR. ---
     "construction": (BASE_FAILING, "fails on master for content reasons"),
@@ -133,7 +133,7 @@ CORE_GLOBS = [
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua", "src/Infection/*", "data/infections/*"],
-     {"collapse_crawl", "concussion_revive", "injury_log"}),
+     {"collapse_crawl", "concussion_revive", "disarm", "injury_log"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
      {"craft", "cooking"}),
