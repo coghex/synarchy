@@ -63,92 +63,9 @@ import subprocess
 import sys
 import time
 import uuid
+from probelib import quit_engine, boot, send
 
 SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
-
-
-def _results(raw: bytes) -> list[str]:
-    """Non-empty "> value" lines from the console stream. The console emits a
-    "synarchy debug console\\n> " banner on connect and a trailing "> "
-    prompt; both yield EMPTY "> " lines, so filter those out."""
-    out = raw.decode(errors="replace")
-    return [ln[2:].strip() for ln in out.splitlines()
-            if ln.startswith("> ") and ln[2:].strip()]
-
-
-def send(port: int, lua: str, timeout: float = 10.0,
-         expect_result: bool = True) -> str:
-    """Run one Lua line over the debug console and return its result.
-
-    With expect_result (a `return ...` command) we read until a non-empty
-    "> value" line appears, waiting up to `timeout`. This is what makes the
-    BLOCKING builtins work: world.waitForInit / world.waitForChunks emit
-    nothing until they unblock, so the read must wait the full timeout for
-    the result rather than idling out early (a fixed short idle timeout
-    would return before generation/chunk-loading finished and race partially
-    initialized terrain). Fire-and-forget commands (no return) pass
-    expect_result=False and just drain briefly. (Mirrors save_pause_probe.py.)
-    """
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(timeout)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-                if expect_result and _results(b"".join(chunks)):
-                    break               # got the real result past the banner
-                if not expect_result:
-                    s.settimeout(0.3)   # drain remainder then idle out
-        except socket.timeout:
-            pass
-    vals = _results(b"".join(chunks))
-    return (vals[-1] if vals else "").strip('"')
-
-
-def boot(port: int, logpath: str, tag: str) -> subprocess.Popen:
-    log = open(logpath, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 180
-    while time.time() < deadline:
-        try:
-            if "READY" in open(logpath).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"{tag}: engine exited before READY; see {logpath}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit(f"{tag}: engine never printed READY; see {logpath}")
-
-
-def shutdown(proc: subprocess.Popen, port: int) -> None:
-    """Quit the engine, then make sure the process is gone and the port
-    is free (so the next boot on the same port can bind)."""
-    try:
-        send(port, "engine.quit()", timeout=2)
-    except OSError:
-        pass
-    for _ in range(50):  # up to ~5 s
-        if proc.poll() is not None:
-            break
-        time.sleep(0.1)
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=5)
-    for _ in range(50):  # wait for the listener socket to release the port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("localhost", port)) != 0:
-                return
-        time.sleep(0.1)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -344,7 +261,7 @@ def main() -> int:
 
     try:
         # ── Engine A: build the two pages, populate them, save ──────────
-        procA = boot(args.port, logA, "engine A")
+        procA = boot(args.port, log=logA, label="engine A")
         bootstrap_defs(args.port)
 
         u_mw, b_mw = populate_world(args.port, "main_world",
@@ -384,11 +301,11 @@ def main() -> int:
             return 2
         print(f"saved -> {save_file} ({os.path.getsize(save_file)} bytes)")
 
-        shutdown(procA, args.port)
+        quit_engine(args.port, procA)
         procA = None
 
         # ── Engine B: fresh process, load, assert survival ─────────────
-        procB = boot(args.port, logB, "engine B")
+        procB = boot(args.port, log=logB, label="engine B")
         bootstrap_defs(args.port)
         # A truly fresh engine: prove there are zero pre-load worlds, so
         # anything we see after the load provably came from disk.
@@ -450,9 +367,9 @@ def main() -> int:
 
     finally:
         if procA is not None:
-            shutdown(procA, args.port)
+            quit_engine(args.port, procA)
         if procB is not None:
-            shutdown(procB, args.port)
+            quit_engine(args.port, procB)
         # Scoped cleanup: only ever remove a dir this probe created.
         if os.path.basename(save_dir).startswith(SAVE_PREFIX) and os.path.isdir(save_dir):
             shutil.rmtree(save_dir, ignore_errors=True)

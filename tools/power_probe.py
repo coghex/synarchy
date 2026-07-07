@@ -64,36 +64,9 @@ import subprocess
 import sys
 import time
 import uuid
+from probelib import quit_engine, boot, send
 
 SAVE_PREFIX = "power_probe_"  # save dirs this probe owns (cleanup scoped to it)
-
-
-def _results(raw: bytes) -> list[str]:
-    out = raw.decode(errors="replace")
-    return [ln[2:].strip() for ln in out.splitlines()
-            if ln.startswith("> ") and ln[2:].strip()]
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one Lua line over the debug console and return its result
-    (mirrors multiworld_save_probe.py's send — waits the full timeout so
-    blocking builtins like world.waitForChunks/waitForInit work)."""
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(timeout)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-                if _results(b"".join(chunks)):
-                    break
-        except socket.timeout:
-            pass
-    vals = _results(b"".join(chunks))
-    return (vals[-1] if vals else "").strip('"')
 
 
 def jget(port: int, lua: str, timeout: float = 10.0):
@@ -109,46 +82,6 @@ def as_int(s) -> int | None:
         return int(float(s))
     except (TypeError, ValueError):
         return None
-
-
-def boot(port: int, logpath: str, tag: str) -> subprocess.Popen:
-    log = open(logpath, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 180
-    while time.time() < deadline:
-        try:
-            if "READY" in open(logpath).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"{tag}: engine exited before READY; see {logpath}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit(f"{tag}: engine never printed READY; see {logpath}")
-
-
-def shutdown(proc: subprocess.Popen, port: int) -> None:
-    try:
-        send(port, "engine.quit()", timeout=2)
-    except OSError:
-        pass
-    for _ in range(50):
-        if proc.poll() is not None:
-            break
-        time.sleep(0.1)
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=5)
-    for _ in range(50):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("localhost", port)) != 0:
-                return
-        time.sleep(0.1)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -205,7 +138,7 @@ def main() -> int:
     procA = procB = None
     try:
         # ── Engine A: place nodes through the build tool, save ──────────
-        procA = boot(port, logA, "engine A")
+        procA = boot(port, log=logA, label="engine A")
         bootstrap_defs(port)
         send(port, "world.initArena('power_probe'); return 'ok'")
         send(port, "world.show('power_probe'); return 'ok'")
@@ -352,10 +285,10 @@ def main() -> int:
         passed = check(passed, os.path.exists(save_file),
                        f"save file appeared at {save_file}")
 
-        shutdown(procA, port)
+        quit_engine(port, procA)
         procA = None
 
-        procB = boot(port, logB, "engine B")
+        procB = boot(port, log=logB, label="engine B")
         bootstrap_defs(port)
         pre = send(port, "return world.getActiveWorldId()")
         loaded = send(port, f"return engine.loadSave('{save_name}')")
@@ -400,9 +333,9 @@ def main() -> int:
         return 0 if passed else 1
     finally:
         if procA is not None:
-            shutdown(procA, port)
+            quit_engine(port, procA)
         if procB is not None:
-            shutdown(procB, port)
+            quit_engine(port, procB)
         if os.path.exists(save_dir):
             shutil.rmtree(save_dir, ignore_errors=True)
 

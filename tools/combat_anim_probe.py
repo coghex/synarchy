@@ -35,60 +35,7 @@ import socket
 import subprocess
 import sys
 import time
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    """Run one line of Lua in the debug console, return the result text.
-
-    The console keeps the connection open after replying, so we can't
-    read to EOF. We read with a short idle timeout and stop as soon as a
-    result line has arrived past the banner — each call costs a fraction
-    of a second, not the full connection timeout.
-    """
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        # The reply arrives in one burst; read until a short idle gap
-        # (the server then waits for more input). Bounds each call to
-        # ~0.3s rather than the full connection timeout.
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    # Console echoes a banner, then "> <result>", then a trailing "> "
-    # prompt. Take the last NON-EMPTY result line (the trailing prompt
-    # is empty).
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return results[-1] if results else out.strip()
-
-
-def boot(port: int, seed: int, size: int) -> subprocess.Popen:
-    log = open("/tmp/combat_anim_engine.log", "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    # Wait for READY.
-    deadline = time.time() + 180
-    while time.time() < deadline:
-        try:
-            if "READY" in open("/tmp/combat_anim_engine.log").read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit("engine exited before READY; see /tmp/combat_anim_engine.log")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
+from probelib import quit_engine, boot, send
 
 
 def bootstrap_defs(port: int) -> None:
@@ -147,7 +94,7 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=12.0)
     args = ap.parse_args()
 
-    proc = boot(args.port, args.seed, args.size)
+    proc = boot(args.port)
     try:
         bootstrap_defs(args.port)
         send(args.port, f"world.init('arena', {args.seed}, {args.size}, 3); return 'ok'")
@@ -203,13 +150,7 @@ def main() -> int:
                 print(f"  {tag} settled on a death animation: {last}")
         return 0 if ok else 1
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(args.port, proc)
 
 
 if __name__ == "__main__":

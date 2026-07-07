@@ -35,72 +35,13 @@ import subprocess
 import sys
 import time
 import uuid
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/orphan_prune_engine.log"
 # Unique per run, deleted on exit. A fixed name could clobber a real save
 # and a stale dir from an interrupted run could make a later run falsely
 # pass by loading old data; main() also refuses to run if the dir exists.
 SAVE_NAME = "probe_orphan_" + uuid.uuid4().hex[:12]
-
-
-def _results(raw: bytes) -> list[str]:
-    # The console emits a "synarchy debug console\n> " banner on connect and
-    # a trailing "> " prompt; both yield EMPTY "> " lines. The real answer is
-    # the non-empty "> <value>" line, so filter the empties out.
-    out = raw.decode(errors="replace")
-    return [ln[2:].strip() for ln in out.splitlines()
-            if ln.startswith("> ") and ln[2:].strip()]
-
-
-def send(port: int, lua: str, timeout: float = 10.0,
-         expect_result: bool = True) -> str:
-    """Run one Lua line over the debug console and return its result.
-
-    With expect_result (a `return ...` command) we read until a non-empty
-    "> value" line appears, waiting up to `timeout` — this skips the banner
-    and survives server-side BLOCKING calls like world.waitForInit /
-    waitForChunks, which emit nothing until they unblock. Fire-and-forget
-    commands (no return) pass expect_result=False and just drain briefly.
-    """
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(timeout)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-                if expect_result and _results(b"".join(chunks)):
-                    break               # got the real result past the banner
-                if not expect_result:
-                    s.settimeout(0.3)   # drain remainder then idle out
-        except socket.timeout:
-            pass
-    vals = _results(b"".join(chunks))
-    return (vals[-1] if vals else "").strip('"')
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap_defs(port: int) -> None:
@@ -173,7 +114,7 @@ def main() -> int:
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     ok = True
     try:
         bootstrap_defs(args.port)
@@ -365,10 +306,7 @@ def main() -> int:
             else:
                 print("PASS: off-page pre-load state preserved, stale blob id dropped")
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=3, expect_result=False)
-        except OSError:
-            pass
+        quit_engine(args.port, proc)
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:

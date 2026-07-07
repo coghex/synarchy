@@ -67,18 +67,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import clear_find_water, quit_engine, boot, send
 
 LOG = "/tmp/repair_ai_probe_engine.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        f = s.makefile("rw")
-        f.readline()              # banner
-        f.write(lua + "\n")
-        f.flush()
-        return f.readline().strip().lstrip("> ").strip()
 
 
 def jget(port: int, lua: str, timeout: float = 10.0):
@@ -87,26 +78,6 @@ def jget(port: int, lua: str, timeout: float = 10.0):
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw.strip('"')
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT)
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port: int) -> None:
@@ -198,13 +169,7 @@ def spawn_acolyte(port: int, x: float, y: float) -> int:
     # Retire the spawn-seeded find_water goal — the arena has no water, so
     # the goal never completes and its search utility can edge out a
     # repair job a few tiles away (same fix construction_probe applies).
-    ok = poll_until(port, 20, lambda: send(
-        port,
-        f"local ai = require('scripts.unit_ai'); "
-        f"local s = ai.getState({n}); "
-        f"if not s then return false end; "
-        f"ai.markGoalAccomplished(s, 'find_water'); return true") == "true")
-    if not ok:
+    if not clear_find_water(port, n, seconds=20):
         sys.exit(f"unit {n} never got AI state")
     return n
 
@@ -705,7 +670,7 @@ def main() -> int:
     ap.add_argument("--phase", default="all", choices=["all"] + list(PHASES))
     args = ap.parse_args()
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     try:
         bootstrap(args.port)
         if not wid(args.port):
@@ -721,10 +686,7 @@ def main() -> int:
             send(args.port, "engine.setPaused(false); return 'ok'")
             phase(args.port)
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=3.0)
-        except OSError:
-            pass
+        quit_engine(args.port, proc)
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:

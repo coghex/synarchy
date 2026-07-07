@@ -27,48 +27,9 @@ import socket
 import subprocess
 import sys
 import time
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/injury_log_probe_engine.log"
-
-
-def send(port: int, lua: str, timeout: float = 10.0) -> str:
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks: list[bytes] = []
-        s.settimeout(0.3)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    results = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    results = [r for r in results if r]
-    return (results[-1] if results else out.strip()).strip('"')
-
-
-def boot(port: int) -> subprocess.Popen:
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + 240
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port: int, with_movement: bool) -> None:
@@ -107,7 +68,7 @@ def main() -> int:
                     help="skip the movement-driven fall test")
     args = ap.parse_args()
 
-    proc = boot(args.port)
+    proc = boot(args.port, log=LOG)
     passed = True
     try:
         bootstrap(args.port, with_movement=not args.no_fall)
@@ -183,13 +144,7 @@ def main() -> int:
               + ("" if passed else " — see failures above"))
         return 0 if passed else 1
     finally:
-        try:
-            send(args.port, "engine.quit()", timeout=2)
-        except OSError:
-            pass
-        time.sleep(1)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(args.port, proc)
 
 
 if __name__ == "__main__":

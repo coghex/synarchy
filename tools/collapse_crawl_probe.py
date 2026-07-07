@@ -37,49 +37,11 @@ Exit 0 = pass.
 """
 from __future__ import annotations
 import argparse, glob, json, socket, subprocess, sys, time
+from probelib import quit_engine, boot, send
 
 LOG = "/tmp/collapse_crawl_probe_engine.log"
 RISE_AT = 0.40            # brain.lua RISE_AT — collapsed→up gate
 UNCONSCIOUS_BELOW = 0.15  # brain.lua collapse trigger
-
-
-def send(port, lua, timeout=10.0, idle=0.3):
-    with socket.create_connection(("localhost", port), timeout=timeout) as s:
-        s.sendall((lua + "\n").encode())
-        chunks = []
-        s.settimeout(idle)
-        try:
-            while True:
-                b = s.recv(4096)
-                if not b:
-                    break
-                chunks.append(b)
-        except socket.timeout:
-            pass
-    out = b"".join(chunks).decode(errors="replace")
-    res = [ln[2:].strip() for ln in out.splitlines() if ln.startswith("> ")]
-    res = [r for r in res if r]
-    return res[-1] if res else out.strip()
-
-
-def boot(port):
-    log = open(LOG, "w")
-    proc = subprocess.Popen(
-        ["cabal", "run", "-v0", "exe:synarchy", "--",
-         "--headless", "--port", str(port)],
-        stdout=log, stderr=subprocess.STDOUT)
-    deadline = time.time() + 300
-    while time.time() < deadline:
-        try:
-            if "READY" in open(LOG).read():
-                return proc
-        except FileNotFoundError:
-            pass
-        if proc.poll() is not None:
-            sys.exit(f"engine exited before READY; see {LOG}")
-        time.sleep(0.4)
-    proc.kill()
-    sys.exit("engine never printed READY")
 
 
 def bootstrap(port):
@@ -124,7 +86,7 @@ def main():
     args = ap.parse_args()
     P = args.port
 
-    proc = boot(P)
+    proc = boot(P, log=LOG)
     try:
         bootstrap(P)
         uid = send(P, "local u=unit.spawn('acolyte',1,0); _U=u; return u")
@@ -252,10 +214,7 @@ def main():
         print(f"\n{'PASS' if ok else 'FAIL'} — collapse↔crawl hysteresis (#304)")
         return 0 if ok else 1
     finally:
-        send(P, "engine.quit(); return 'bye'")
-        time.sleep(0.5)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(P, proc)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,8 @@ from __future__ import annotations
 import argparse, json, socket, sys, time
 
 sys.path.insert(0, "tools")
-from collapse_crawl_probe import boot, bootstrap, send
+from probelib import quit_engine, boot, send
+from collapse_crawl_probe import bootstrap
 
 RISE_AT = 0.40
 
@@ -117,10 +118,7 @@ def main():
         print(f"\n{'PASS' if ok else 'FAIL'} — concussion rise-band hysteresis (#304)")
         return 0 if ok else 1
     finally:
-        send(P, "engine.quit(); return 'bye'")
-        time.sleep(0.5)
-        if proc.poll() is None:
-            proc.kill()
+        quit_engine(P, proc)
 
 
 if __name__ == "__main__":
