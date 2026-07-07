@@ -65,8 +65,9 @@ a back-to-back run shows). Only a **curated CI-eligible subset** is
 gated — fast + deterministic probes (see `CI_ELIGIBLE` in
 `tools/ci_probes.py`). Deliberately NOT gated, and left to the manual
 `run_probes.py` full run: the flaky ones (craft_bill, role, chop,
-foraging, medic_coord — the last fails on the slower Linux CI
-runner even with retry), the slow/worldgen ones (flora_growth, till, multiworld_save,
+foraging, medic_coord, disarm — the last two are AI-reaction/
+arbitration timing the slower, variable Linux CI runner destabilizes
+run-to-run, which within-run retry can't fix), the slow/worldgen ones (flora_growth, till, multiworld_save,
 location_*, farm_ai), and the ones that fail on master for content
 reasons (construction, combat_anim, follow_command_priority,
 location_content, repair_ai #489, physiology, lua_orphan_prune). Growing

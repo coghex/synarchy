@@ -38,9 +38,11 @@ ALL_KEYS = {p[0] for p in PROBES}
 # --------------------------------------------------------------------------
 # Curated CI-eligible set — fast + DETERMINISTIC probes only (verified by
 # repeated runs, #529/#530). Everything else stays manual-only:
-#   - flaky:        craft_bill, role, chop, foraging, medic_coord
-#                   (AI-timing sensitive; medic_coord fails on the slower
-#                   Linux CI runner even with retry, PR #535 run 1)
+#   - flaky:        craft_bill, role, chop, foraging, medic_coord,
+#                   disarm — AI-reaction/arbitration timing that the slower,
+#                   variable-speed Linux CI runner destabilizes run-to-run
+#                   (medic_coord PR #535 run 1, disarm run 2); within-run
+#                   retry can't fix run-to-run flakiness.
 #   - base-failing: construction, combat_anim, follow_command_priority,
 #                   location_content, repair_ai (#489), lua_orphan_prune,
 #                   physiology
@@ -53,7 +55,6 @@ CI_ELIGIBLE = {
     "collapse_crawl",
     "concussion_revive",
     "craft",
-    "disarm",
     "injury_log",
     "item_instance",
     "item_temp",
@@ -90,7 +91,7 @@ CORE_GLOBS = [
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua", "src/Infection/*", "data/infections/*"],
-     {"collapse_crawl", "concussion_revive", "disarm", "injury_log"}),
+     {"collapse_crawl", "concussion_revive", "injury_log"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua"],
      {"craft"}),
