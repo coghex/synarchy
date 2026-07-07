@@ -22,6 +22,7 @@ Usage:
   python3 tools/ci_probes.py --changed src/Power/Network.hs data/items/x.yaml
   git diff --name-only origin/master...HEAD | python3 tools/ci_probes.py --stdin
   python3 tools/ci_probes.py --self-test    # validate the mapping, no engine
+  python3 tools/ci_probes.py --status       # list every probe's CI eligibility (#540)
 """
 from __future__ import annotations
 
@@ -37,18 +38,9 @@ ALL_KEYS = {p[0] for p in PROBES}
 
 # --------------------------------------------------------------------------
 # Curated CI-eligible set — fast + DETERMINISTIC probes only (verified by
-# repeated runs, #529/#530). Everything else stays manual-only:
-#   - flaky:        craft_bill, role, chop, foraging, medic_coord,
-#                   disarm — AI-reaction/arbitration timing that the slower,
-#                   variable-speed Linux CI runner destabilizes run-to-run
-#                   (medic_coord PR #535 run 1, disarm run 2); within-run
-#                   retry can't fix run-to-run flakiness.
-#   - base-failing: construction, combat_anim, follow_command_priority,
-#                   location_content, repair_ai (#489), lua_orphan_prune,
-#                   physiology
-#   - slow/worldgen: flora_growth, till, multiworld_save, location_overlay,
-#                    location_stamp_idempotent, farm_ai
-# Growing this set is a follow-up: prove a probe deterministic, then add it.
+# repeated runs, #529/#530). Growing this set is a follow-up: prove a probe
+# deterministic, then move its key here (and drop it from
+# MANUAL_ONLY_REASONS below).
 # --------------------------------------------------------------------------
 CI_ELIGIBLE = {
     "cargo_capacity",
@@ -62,6 +54,55 @@ CI_ELIGIBLE = {
     "power_workshop",
     "repair_item",
     "save_pause",
+}
+
+# Manual-only reason categories (#540). Kept short + greppable; `--status`
+# and `_self_test` below both read this dict, so it is the single source of
+# truth for "why isn't X in CI_ELIGIBLE" — no more digging through comments.
+FLAKY = "flaky"
+BASE_FAILING = "base-failing"
+SLOW_WORLDGEN = "slow/worldgen-heavy"
+BUILD_GATED = "build-config-gated"
+UNCLASSIFIED = "unclassified"
+
+# Every registered probe (ALL_KEYS) NOT in CI_ELIGIBLE must have an entry
+# here: (category, one-line reason). `_self_test` enforces full coverage so
+# a newly-registered probe can't silently land in neither bucket.
+MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
+    # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
+    # Linux CI runner destabilizes run-to-run (medic_coord PR #535 run 1,
+    # disarm run 2); within-run retry can't fix run-to-run flakiness. ---
+    "craft_bill": (FLAKY, "craft_job AI claim/work timing flakes run-to-run on CI"),
+    "role": (FLAKY, "role-hysteresis timing flakes run-to-run on CI"),
+    "chop": (FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),
+    "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
+    "medic_coord": (FLAKY, "medic-selection timing flaked on the Linux runner (PR #535 run 1)"),
+    "disarm": (FLAKY, "disabled-hand re-fire timing flaked on the Linux runner (PR #535 run 2)"),
+    # --- base-failing: fails today on master for content reasons unrelated
+    # to CI infrastructure; gating it would redden every PR. ---
+    "construction": (BASE_FAILING, "fails on master for content reasons"),
+    "combat_anim": (BASE_FAILING, "fails on master for content reasons"),
+    "follow_command_priority": (BASE_FAILING, "fails on master for content reasons"),
+    "location_content": (BASE_FAILING, "fails on master for content reasons"),
+    "repair_ai": (BASE_FAILING, "fails on master for content reasons (#489)"),
+    "lua_orphan_prune": (BASE_FAILING, "fails on master for content reasons"),
+    "physiology": (BASE_FAILING, "fails on master for content reasons"),
+    # --- slow/worldgen-heavy: needs a real generated world, not the flat
+    # arena — too slow for a blocking per-PR gate. ---
+    "flora_growth": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),
+    "multiworld_save": (SLOW_WORLDGEN, "generates two real world pages"),
+    "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
+    "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
+    "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
+    # --- build-config-gated: only exercises real assertions against a
+    # non-default build; self-skips under the standard prod build CI uses. ---
+    "infection": (BUILD_GATED, "meaningful growth assertions need a non-default infectionBaseRate build; self-skips under the prod rate"),
+    # --- unclassified: arena-based (fast), no known flakiness/base-failure
+    # on file -- just never reviewed for CI promotion yet. Not meant to be a
+    # permanent home: promote (with evidence) or assign a real category.
+    "movement": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
+    "repair": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
+    "consumable_effects": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
 }
 
 # Sentinels (distinct objects so `is` comparisons are unambiguous).
@@ -138,6 +179,9 @@ def select(changed_files: list[str]) -> tuple[list[str], str]:
     return sorted(keys), "feature-scoped selection"
 
 
+KNOWN_REASON_CATEGORIES = {FLAKY, BASE_FAILING, SLOW_WORLDGEN, BUILD_GATED, UNCLASSIFIED}
+
+
 def _self_test() -> int:
     """Validate the mapping wiring — no engine needed."""
     problems = []
@@ -150,6 +194,24 @@ def _self_test() -> int:
         for k in keys:
             if k not in CI_ELIGIBLE:
                 problems.append(f"FEATURE_RULES references non-eligible probe: {k} ({globs[0]})")
+    # every registered probe is classified exactly once (#540): CI-eligible
+    # XOR manual-only-with-a-reason. This is what keeps --status from ever
+    # silently drifting behind a newly-registered probe.
+    overlap = CI_ELIGIBLE & MANUAL_ONLY_REASONS.keys()
+    if overlap:
+        problems.append(f"keys in both CI_ELIGIBLE and MANUAL_ONLY_REASONS: {sorted(overlap)}")
+    stale = MANUAL_ONLY_REASONS.keys() - ALL_KEYS
+    if stale:
+        problems.append(f"MANUAL_ONLY_REASONS references keys not in PROBES registry: {sorted(stale)}")
+    uncovered = ALL_KEYS - CI_ELIGIBLE - MANUAL_ONLY_REASONS.keys()
+    if uncovered:
+        problems.append(f"probes with no CI status at all (add to CI_ELIGIBLE or "
+                         f"MANUAL_ONLY_REASONS): {sorted(uncovered)}")
+    for k, (category, reason) in MANUAL_ONLY_REASONS.items():
+        if category not in KNOWN_REASON_CATEGORIES:
+            problems.append(f"MANUAL_ONLY_REASONS[{k!r}] has unknown category {category!r}")
+        if not reason.strip():
+            problems.append(f"MANUAL_ONLY_REASONS[{k!r}] has an empty reason")
     # behavioural expectations
     cases = [
         (["README.md"], [], "docs only"),
@@ -172,6 +234,26 @@ def _self_test() -> int:
     return 0
 
 
+def _status() -> int:
+    """Print every registered probe's CI eligibility (#540).
+
+    Reads the same CI_ELIGIBLE / MANUAL_ONLY_REASONS dicts `select()` and
+    `_self_test()` use — nothing here can drift from actual CI selection
+    without `--self-test` catching it first.
+    """
+    width = max(len(k) for k in ALL_KEYS)
+    print(f"{len(CI_ELIGIBLE)} CI-eligible, {len(MANUAL_ONLY_REASONS)} manual-only, "
+          f"{len(ALL_KEYS)} total registered probes\n")
+    print("-- CI-eligible --")
+    for k in sorted(CI_ELIGIBLE):
+        print(f"  {k:<{width}}  CI-eligible")
+    print("\n-- manual-only --")
+    for k in sorted(MANUAL_ONLY_REASONS):
+        category, reason = MANUAL_ONLY_REASONS[k]
+        print(f"  {k:<{width}}  manual-only  [{category}]  {reason}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -181,10 +263,15 @@ def main() -> int:
                     help="read changed file paths from stdin, one per line")
     ap.add_argument("--self-test", action="store_true",
                     help="validate the mapping and exit (no engine)")
+    ap.add_argument("--status", action="store_true",
+                    help="list every registered probe's CI eligibility "
+                         "(CI-eligible, or manual-only with a reason category) and exit")
     args = ap.parse_args()
 
     if args.self_test:
         return _self_test()
+    if args.status:
+        return _status()
 
     files = list(args.changed or [])
     if args.stdin:

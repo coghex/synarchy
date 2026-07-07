@@ -208,6 +208,30 @@ python3 tools/run_probes.py --list
 python3 tools/run_probes.py --port 9500
 ```
 
+`--list` shows the full probe registry but not CI status. For that, see
+`tools/ci_probes.py --status` below.
+
+### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
+
+Computes which probes CI should run for a given set of changed files (see
+`.github/workflows/ci.yml` and the CLAUDE.md "Testing Tiers" section for
+the gate this feeds). It also owns `CI_ELIGIBLE` — the curated,
+fast/deterministic subset of the full registry that's actually allowed to
+run in the blocking CI gate.
+
+```bash
+# What would CI run for these changed files?
+python3 tools/ci_probes.py --changed src/Power/Network.hs
+
+# Validate the mapping (no engine) — also a blocking CI step
+python3 tools/ci_probes.py --self-test
+
+# Every registered probe's CI status: CI-eligible, or manual-only with a
+# reason category (flaky / base-failing / slow-worldgen-heavy /
+# build-config-gated / unclassified)
+python3 tools/ci_probes.py --status
+```
+
 It shells out to each probe as its own subprocess and runs them
 **sequentially, one engine at a time** — it does not attempt to make probes
 share a single running engine (they're independent scripts with their own
