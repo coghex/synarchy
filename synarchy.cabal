@@ -495,6 +495,9 @@ library
                      Craft.Bills
                      Engine.Asset.YamlRecipes
                      Engine.Scripting.Lua.API.Craft
+                     Engine.Scripting.Lua.API.Craft.Recipe
+                     Engine.Scripting.Lua.API.Craft.Execute
+                     Engine.Scripting.Lua.API.Craft.Bill
                      Power.Types
                      Power.Network
                      Engine.Scripting.Lua.API.Power
