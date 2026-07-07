@@ -124,7 +124,16 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 79  -- v79: WorldEdit gains a new trailing
+currentSaveVersion = 80  -- v80: CraftBill (Craft.Bills) gains a new
+                         --      trailing 'cbWorking' field (#590) — is
+                         --      the claimant CURRENTLY pouring work
+                         --      into this cycle (vs. still fetching/
+                         --      walking), which Power.Network.
+                         --      activeCraftConsumersOn now keys its
+                         --      live demand off instead of "claimed and
+                         --      not paused". Appended at the end, per
+                         --      this record's own append-only policy.
+                         -- v79: WorldEdit gains a new trailing
                          --      'WePlaceFlora' constructor (#336) — the
                          --      farm AI's row-crop planting completion
                          --      (world.plantRowCropAt). Order-preserving

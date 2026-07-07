@@ -7,11 +7,15 @@ flat `power_drain` (watts) and draw it constantly whenever Built,
 regardless of whether anyone was actually working it. #590 replaces that
 for craft/repair stations with a JOB-dependent load: the recipe itself
 carries an optional `power_draw` (watts, default 0 — most recipes are
-unaffected). A recipe with power_draw > 0 only demands power WHILE its
-craft bill is actively claimed (Craft.Bills — Power.Network.
-activeCraftConsumersOn folds every claimed, unpaused, power-drawing bill
-into the network's live drain); an idle Built station with no claimed
-bill draws nothing, even at full generation. `power.
+unaffected). A recipe with power_draw > 0 only demands power while its
+craft bill is CLAIMED AND ACTIVELY BEING WORKED (Craft.Bills.cbWorking —
+Power.Network.activeCraftConsumersOn folds every such bill's draw into
+the network's live drain); merely claiming a bill (still fetching
+materials or walking to the station) draws nothing yet, an idle Built
+station with no bill draws nothing at all even at full generation, and —
+the flip side — a bill PAUSED mid-cycle keeps drawing for as long as its
+existing holder keeps working it (Craft.Bills.claimAvailable lets that
+holder finish the cycle; only fresh claims are blocked). `power.
 isStationPoweredForRecipe(bid, recipeId)` is the job-aware gating query
 (a zero-power recipe is always true, any station, wired or not);
 `Engine.Scripting.Lua.API.Craft.validateStation` refuses craft.executeAt/
@@ -49,20 +53,24 @@ What it does (all against a single flat arena):
      drainW == 0, because no bill is claimed: full generation, idle
      station, zero demand (the #590 "not merely because it exists"
      requirement).
-  5. Manually claims a bill (bypassing the AI) to isolate the claim
-     transition: drainW jumps to 150W the instant it's claimed, and
-     drops back to 0 the instant it's released — proving drain tracks
-     the ACTIVE job, not the station or the queued bill.
-  6. AI end-to-end at midnight: craft_job claims + fetches + walks up to
-     the built station (drainW reads 150W while claimed) but pours NO
-     bill progress while browned out (idle, not failed, not released);
-     flipping to noon lets it complete, after which drainW returns to 0
-     (the bill is done and gone).
-  7. A short real fast-forward with a bill held claimed (deterministic,
-     AI off) shows the battery's storedWh actually RISE at noon
-     (generation 400W > drain 150W) and FALL at midnight (drain with no
-     generation) — the day/night balance the issue's "Done when" calls
-     for, driven by a real ACTIVE job's draw, not a synthetic map entry.
+  5. Manually drives a bill through claim -> working -> pause -> release
+     (bypassing the AI) to isolate each transition: drainW stays 0 on
+     claim alone, jumps to 150W once marked working, STAYS 150W while
+     paused (an existing holder keeps working through a pause), and
+     drops to 0 once un-marked working or released — proving drain
+     tracks cbWorking specifically, not the claim or pause flags.
+  6. AI end-to-end at midnight: craft_job claims, fetches, and walks up
+     to the built station (drainW stays 0 through fetch/walking), then
+     marks itself working (drainW reads 150W) but pours NO bill progress
+     while browned out (idle, not failed, not released); flipping to
+     noon lets it complete, after which drainW returns to 0 (the bill is
+     done and gone).
+  7. A short real fast-forward with a bill held claimed AND marked
+     working (deterministic, AI off) shows the battery's storedWh
+     actually RISE at noon (generation 400W > drain 150W) and FALL at
+     midnight (drain with no generation) — the day/night balance the
+     issue's "Done when" calls for, driven by a real ACTIVE job's draw,
+     not a synthetic map entry.
 
 Usage: python3 tools/power_workshop_probe.py [--port 9361]
 Exit 0 = every check passed.
@@ -439,24 +447,55 @@ def main() -> int:
         passed = check(passed, isinstance(r, dict) and r.get("ok") is True,
                        "craft.executeAt succeeds once powered", r)
 
-        # --- 4. Manually claim/release a bill (no AI): drain must track
-        # the claim transition exactly ---
+        # --- 4. Manually drive a bill through claim -> working -> pause
+        # -> release (no AI): drain must track cbWorking exactly, NOT
+        # the claim or pause flags on their own (#590 fix) ---
         bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE, 1)
         passed = check(passed, bill_id is not None, "manual bill queued", msg)
         claimed = send(port,
             f"return craft.claimBill({bill_id}, {uid}, 60)").strip('"')
         passed = check(passed, claimed == "true", "manual claim succeeds", claimed)
         passed = check(passed,
+            drain_of(port) == 0,
+            "drainW stays 0 on claim alone (not yet marked working — "
+            "mirrors the AI's fetch/walking phases)", drain_of(port))
+
+        send(port, f"craft.setBillWorking({bill_id}, true); return 'ok'")
+        passed = check(passed,
             drain_of(port) == PROBE_DRAIN_W,
-            "drainW == 150W the instant the bill is claimed", drain_of(port))
+            "drainW == 150W once the bill is marked working", drain_of(port))
+
+        # Pausing a bill an existing holder is mid-cycle on must NOT cut
+        # its power: Craft.Bills.claimAvailable lets that holder keep
+        # working to the end of the cycle, so activeCraftConsumersOn
+        # must keep drawing for it too (only cbWorking gates the drain,
+        # never cbPaused).
+        send(port, f"craft.setBillPaused({bill_id}, true); return 'ok'")
+        passed = check(passed,
+            drain_of(port) == PROBE_DRAIN_W,
+            "drainW stays 150W while paused — existing holder keeps "
+            "working through the pause", drain_of(port))
+        send(port, f"craft.setBillPaused({bill_id}, false); return 'ok'")
+
+        send(port, f"craft.setBillWorking({bill_id}, false); return 'ok'")
+        passed = check(passed,
+            drain_of(port) == 0,
+            "drainW back to 0 once un-marked working", drain_of(port))
+
+        # releaseBill clears cbWorking on its own too, independent of an
+        # explicit setBillWorking(false) — re-mark working then release
+        # to prove the engine-side reset, not just the Lua-side one.
+        send(port, f"craft.setBillWorking({bill_id}, true); return 'ok'")
         send(port, f"craft.releaseBill({bill_id}); return 'ok'")
         passed = check(passed,
             drain_of(port) == 0,
-            "drainW back to 0 the instant the bill is released", drain_of(port))
+            "drainW back to 0 the instant a working bill is released "
+            "(releaseBill itself clears cbWorking)", drain_of(port))
         send(port, f"craft.cancelBill({bill_id}); return 'ok'")
 
-        # --- 5. AI end-to-end: claim shows drain, stall at midnight,
-        # resume at noon, drain returns to 0 once the bill is gone ---
+        # --- 5. AI end-to-end: fetch/walking draws nothing, working
+        # shows drain, stall at midnight, resume at noon, drain returns
+        # to 0 once the bill is gone ---
         send(port, f"world.setTime('{PAGE}', 0, 0); return 'ok'")
         send(port, f"unit.addItem({uid}, 'steel_bar'); return 'ok'")
         bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE, 1)
@@ -471,9 +510,19 @@ def main() -> int:
             port, f"local b = craft.getBill({bill_id}); "
                   f"return b and b.claimant or -1") == uid)
         passed = check(passed, claimed, "AI claims the bill")
+
+        # The station is a couple of tiles away, so fetch/walking is
+        # brief but real — poll for the AI to actually reach "working"
+        # (marked via craft.setBillWorking) rather than asserting drain
+        # the instant it claims, which would still be mid-walk.
+        working = poll(port, 20, lambda: jget(
+            port, f"local b = craft.getBill({bill_id}); "
+                  f"return b and b.working or false") is True)
+        passed = check(passed, working, "AI reaches the working phase")
         passed = check(passed,
             drain_of(port) == PROBE_DRAIN_W,
-            "drainW == 150W while the AI holds the claim", drain_of(port))
+            "drainW == 150W once the AI is actively working the bill",
+            drain_of(port))
 
         # Give the AI a few seconds standing at the (browned-out) station
         # — progress must NOT move.
@@ -498,13 +547,15 @@ def main() -> int:
             "drainW back to 0 once the bill is done and gone", drain_of(port))
 
         # --- 6. Day/night balance under a real ACTIVE job's drain ---
-        # (deterministic: AI off, bill held claimed by hand for the
-        # whole fast-forward so the drain is continuous, not dependent
-        # on the AI actually finishing crafts inside the window).
+        # (deterministic: AI off, bill held claimed AND marked working
+        # by hand for the whole fast-forward so the drain is continuous,
+        # not dependent on the AI actually finishing crafts inside the
+        # window).
         ai_off(port)
         bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE)  # repeat forever
         passed = check(passed, bill_id is not None, "day/night bill queued", msg)
-        send(port, f"craft.claimBill({bill_id}, {uid}, 3600); return 'ok'")
+        send(port, f"craft.claimBill({bill_id}, {uid}, 3600); "
+                   f"craft.setBillWorking({bill_id}, true); return 'ok'")
 
         stored0 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         send(port, f"world.setTime('{PAGE}', 12, 0); return 'ok'")

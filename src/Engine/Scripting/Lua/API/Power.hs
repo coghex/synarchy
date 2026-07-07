@@ -344,15 +344,21 @@ isBuildingPowered env bid = do
 --   recipe with @drawW ≤ 0@ (the default — most recipes) is always
 --   satisfied, at any station, wired or not (requirement #3). A
 --   positive-drawing recipe needs its station's tile on a network whose
---   generation/storage covers the FULL live demand — the existing
---   demand from every other always-on/active-job consumer PLUS this
---   call's own @drawW@ (folded in synthetically so a bare, not-yet-
---   claimed 'craft.executeAt'/'repair.repairAt' call is judged
---   correctly, and a bill that already registers this exact station+
---   load via 'activeCraftConsumersOn' just gets overwritten with the
---   same number). False if the station doesn't exist, isn't on any
---   power network at all (no source/storage reachable), or the network
---   is in Brownout.
+--   generation/storage covers the FULL live demand: whatever
+--   'liveConsumersOn' already reports for @bid@ (every other always-on
+--   device or ALREADY-ACTIVE craft bill at that station — most calls
+--   here are the craft_job AI checking the very bill that's already
+--   registered its own @drawW@ there) PLUS, only when @bid@ isn't
+--   registered as a consumer at all yet, this call's own @drawW@
+--   folded in synthetically (so a bare, not-yet-claimed
+--   'craft.executeAt'/'repair.repairAt' call — no bill involved — is
+--   still judged correctly). Never overwrites an existing entry: doing
+--   so would silently drop a SECOND simultaneous consumer at the same
+--   station (two crafters on two different bills, or an always-on
+--   device sharing the building) and could report Powered when
+--   'power.listNetworks' would correctly show Brownout. False if the
+--   station doesn't exist, isn't on any power network at all (no
+--   source/storage reachable), or the network is in Brownout.
 isRecipePoweredAt ∷ EngineEnv → BuildingId → Float → IO Bool
 isRecipePoweredAt env bid drawW
     | drawW ≤ 0 = pure True
@@ -374,7 +380,8 @@ isRecipePoweredAt env bid drawW
                             wireTiles = wireTilesOn td
                             positions = positionsOf (biPage inst) bm nodes
                             tile      = (biAnchorX inst, biAnchorY inst)
-                            consumers = HM.insert bid (tile, drawW) base
+                            consumers = HM.insertWith (\_new existing → existing)
+                                            bid (tile, drawW) base
                             nets = computeSnapshots sunAngle HM.empty
                                         wireTiles nodes positions consumers
                         pure $ case find (elem bid . PN.pnwConsumerIds) nets of
@@ -393,11 +400,14 @@ powerIsBuildingPoweredFn env = do
 
 -- | power.isStationPoweredForRecipe(bid, recipeId) → bool (#590). The
 --   job-dependent counterpart to isBuildingPowered: looks the recipe up
---   itself (an unknown recipe id is trivially "unpowered" — false, same
---   as validateStation's own "unknown recipe" refusal reaching it via a
---   different error) and delegates to isRecipePoweredAt with its
---   rdPowerDraw. Unlike isBuildingPowered, this is meaningful for ANY
---   station regardless of the building def's own bdPowerDrain.
+--   itself and delegates to isRecipePoweredAt with its rdPowerDraw. An
+--   unknown recipe id resolves to 0 draw here, so this is trivially
+--   true for it (same as any other zero-power recipe) — callers that
+--   need "unknown recipe" to be a hard refusal should go through
+--   validateStation instead, which checks recipe existence separately
+--   and returns that as its own distinct error. Unlike
+--   isBuildingPowered, this is meaningful for ANY station regardless of
+--   the building def's own bdPowerDrain.
 powerIsStationPoweredForRecipeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 powerIsStationPoweredForRecipeFn env = do
     bidArg ← Lua.tointeger 1

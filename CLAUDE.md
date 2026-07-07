@@ -551,24 +551,50 @@ building. A recipe gains an optional `power_draw` (watts, default 0 —
 every recipe predating #590) in `data/recipes/*.yaml`
 (`Craft.Types.rdPowerDraw`), exposed on `craft.get`/`repair.get`
 alongside the other fields (`powerDraw`, always present unlike the
-`?`-suffixed optionals). `Power.Network.activeCraftConsumersOn` derives
-a station's tile + drain fresh from its currently CLAIMED, unpaused
-craft bills whose recipe demands power — an unclaimed or paused bill,
-or a zero-power recipe, contributes nothing; two simultaneously claimed
-power-drawing bills at the same station sum their loads. Every network
-tick/query (`World.Thread.Power`, `power.listNetworks`,
+`?`-suffixed optionals).
+
+Claiming a bill is NOT the same as drawing power for it: `CraftBill`
+gains `cbWorking` (`Craft.Bills`, save v80), a flag distinct from
+`cbClaimant` that's True only while the claimant is actually standing
+at the station pouring progress. The craft_job AI flips it via
+`craft.setBillWorking(billId, true)` at the walking→working phase
+transition (`scripts/unit_ai.lua`) — fetching materials and walking
+over draw nothing — and back to `false` in `craftOnExit` (preempted
+mid-work); `Craft.Bills.releaseBill`/`completeBillCycle` also clear it
+on their own so a released or finished bill never lingers "working".
+`claimBill` preserves `cbWorking` across a SAME-holder refresh (called
+every AI tick, including throughout "working" — it must not flicker
+the flag off) but resets it to False on any takeover by a different
+claimant, so a new holder never inherits a stale "working" state from
+whoever it replaced. Pausing (`cbPaused`, #330) is orthogonal: per
+`claimAvailable`'s existing rule that a paused bill's existing holder
+keeps working to the end of the cycle, pausing never touches
+`cbWorking` either — a paused-but-still-held bill keeps drawing.
+`Power.Network.activeCraftConsumersOn` derives a station's tile + drain
+fresh from every bill that is BOTH claimed AND `cbWorking`, whose
+recipe demands power — an unclaimed bill, a claimed-but-not-yet-working
+one, or a zero-power recipe, all contribute nothing; two simultaneously
+worked power-drawing bills at the same station sum their loads. Every
+network tick/query (`World.Thread.Power`, `power.listNetworks`,
 `isRecipePoweredAt`) unions this with the old `consumersOn` via
 `Power.Network.combineConsumers`, so a future always-on device and an
 active craft job on the same network both count toward Brownout.
 
 `power.isStationPoweredForRecipe(bid, recipeId)` is the job-aware
 gating query: looks the recipe up itself, is trivially true for a
-zero-power recipe at ANY station (wired or not), and for a positive-
-power recipe checks the station's network status with THIS call's own
-draw folded in synthetically (so a bare `craft.executeAt`/
-`repair.repairAt` with no bill claimed yet is judged correctly, and an
-already-claimed bill's own registered demand is simply confirmed).
-`Engine.Scripting.Lua.API.Craft.validateStation` (shared by
+zero-power recipe at ANY station (wired or not — an unknown recipe id
+also resolves to 0 draw here, so it's trivially true too; callers that
+need "unknown recipe" to be a hard refusal go through `validateStation`
+instead), and for a positive-power recipe checks the station's network
+status against its FULL current demand: whatever's already registered
+for that station (an already-`cbWorking` bill's own draw, any other
+simultaneous consumer) is kept as-is, and only synthesizes this call's
+own `drawW` when the station isn't registered as a consumer at all yet
+(so a bare `craft.executeAt`/`repair.repairAt` with no bill involved is
+still judged correctly) — it never OVERWRITES an existing entry, which
+would silently drop a second simultaneous consumer at the same station
+and could report Powered when `power.listNetworks` would correctly show
+Brownout. `Engine.Scripting.Lua.API.Craft.validateStation` (shared by
 `craft.executeAt` and `repair.repairAt`, see `Repair.hs`) uses it in
 place of the old `isBuildingPowered`; the `craft_job` AI's `"working"`
 phase gates its progress-pour loop the same way
@@ -590,15 +616,21 @@ refusal (`craft.executeAt` "no power"); wired-but-idle (no bill
 claimed) reports `drainW == 0` even at midnight; flipping to noon makes
 `isStationPoweredForRecipe` true and `craft.executeAt` succeed, but
 `drainW` STAYS 0 with no bill claimed — full generation, idle station,
-zero demand; a manually claimed/released bill (bypassing the AI) shows
-`drainW` jump to 150W on claim and drop back to 0 on release; the
-`craft_job` AI end-to-end shows `drainW == 150W` while it holds the
-claim, zero progress while browned out at midnight, completion once
-flipped to noon, and `drainW` back to 0 once the bill is done and gone;
-and a real fast-forward with a bill held claimed by hand (deterministic
-— AI off) shows the battery's `storedWh` both rise (daylight,
-generation > active drain) and fall (night, active drain with no
-generation).
+zero demand; a manually driven bill (bypassing the AI) shows `drainW`
+stays 0 on claim alone, jumps to 150W only once marked working, STAYS
+150W while paused (an existing holder keeps working through a pause),
+and drops to 0 once un-marked working or released; the `craft_job` AI
+end-to-end shows `drainW` stays 0 through fetch/walking and only reads
+150W once the AI reaches "working", zero progress while browned out at
+midnight, completion once flipped to noon, and `drainW` back to 0 once
+the bill is done and gone; and a real fast-forward with a bill held
+claimed AND marked working by hand (deterministic — AI off) shows the
+battery's `storedWh` both rise (daylight, generation > active drain)
+and fall (night, active drain with no generation). `Test.Headless.
+Craft.Bills`'s "working (#590)" block covers `cbWorking`'s pure
+transitions directly: default-False, `setBillWorking`, preserved across
+a same-holder refresh, reset on a different-claimant takeover, cleared
+by `releaseBill`/`completeBillCycle`, and untouched by `setBillPaused`.
 
 ### Testing tilling headless (#333)
 

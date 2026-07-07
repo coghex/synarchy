@@ -17,6 +17,7 @@ module Engine.Scripting.Lua.API.Craft.Bill
     , craftAddBillProgressFn
     , craftCompleteBillCycleFn
     , craftSetBillPausedFn
+    , craftSetBillWorkingFn
     , craftReorderBillFn
     ) where
 
@@ -122,6 +123,29 @@ craftSetBillPausedFn env = do
                 Just (_, ws) →
                     atomicModifyIORef' (wsCraftBillsRef ws) $
                         setBillPaused (BillId (fromIntegral n)) pausedArg
+    Lua.pushboolean ok
+    return 1
+
+-- | craft.setBillWorking(billId, working) → true | false (#590). The
+--   craft_job AI's marker for "I am standing at the station actively
+--   pouring work into this bill right now" — Power.Network.
+--   activeCraftConsumersOn keys a station's live power demand off this,
+--   not off the claim alone (see Craft.Bills.cbWorking). Set True on
+--   entering the working phase, False on leaving it early; completion
+--   and release already clear it on their own.
+craftSetBillWorkingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftSetBillWorkingFn env = do
+    idArg      ← Lua.tointeger 1
+    workingArg ← Lua.toboolean 2
+    ok ← case idArg of
+        Nothing → return False
+        Just n  → Lua.liftIO $ do
+            mPage ← activeWorldPage env
+            case mPage of
+                Nothing      → return False
+                Just (_, ws) →
+                    atomicModifyIORef' (wsCraftBillsRef ws) $
+                        setBillWorking (BillId (fromIntegral n)) workingArg
     Lua.pushboolean ok
     return 1
 
@@ -276,9 +300,11 @@ craftGetBillsFn env = do
     return 1
 
 -- | Push one bill as a Lua table: { id, station, recipe, remaining,
---   progress, seq, paused, claimant?, claimedAt? }. remaining -1 =
---   repeat forever; seq is the manual-reorder sort key
---   (billsForStation / #330's reorderBill).
+--   progress, seq, paused, working, claimant?, claimedAt? }. remaining
+--   -1 = repeat forever; seq is the manual-reorder sort key
+--   (billsForStation / #330's reorderBill); working (#590) is true only
+--   while the claimant is actively pouring work, not merely holding the
+--   claim (Craft.Bills.cbWorking).
 pushBill ∷ CraftBill → Lua.LuaE Lua.Exception ()
 pushBill bill = do
     Lua.newtable
@@ -295,6 +321,8 @@ pushBill bill = do
     putI "seq"       (cbSeq bill)
     Lua.pushboolean (cbPaused bill)
     Lua.setfield (-2) "paused"
+    Lua.pushboolean (cbWorking bill)
+    Lua.setfield (-2) "working"
     forM_ (cbClaimant bill) $ \(UnitId u) → do
         putI "claimant" u
         putN "claimedAt" (cbClaimedAt bill)

@@ -566,6 +566,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "addBillProgress"   (craftAddBillProgressFn env)
   registerLuaFunction "completeBillCycle" (craftCompleteBillCycleFn env)
   registerLuaFunction "setBillPaused"     (craftSetBillPausedFn env)
+  registerLuaFunction "setBillWorking"    (craftSetBillWorkingFn env)
   registerLuaFunction "reorderBill"       (craftReorderBillFn env)
   Lua.setglobal (Lua.Name "craft")
 

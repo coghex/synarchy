@@ -3847,6 +3847,11 @@ local function craftExecute(uid, s, params)
         unit.stop(uid)
         job.phase = "working"
         s.lastCraftAt = now
+        -- #590: mark the bill as ACTIVELY worked only now — fetching
+        -- and walking (above) never drew power; standing at the
+        -- station about to pour progress does. craftOnExit/completion/
+        -- release all clear this back off.
+        craft.setBillWorking(job.billId, true)
         return
     end
 
@@ -3908,11 +3913,14 @@ end
 
 -- Preempted mid-work (thirst, combat, player order): re-enter through
 -- the walking phase so the elapsed-time accumulator restarts — same
--- guard as construction's onExit.
+-- guard as construction's onExit. Also clears #590's working flag: a
+-- crafter walked away from the station mid-cycle is no longer drawing
+-- power for it.
 local function craftOnExit(uid, s, params)
     local job = s.craftJob
     if job and job.phase == "working" then
         job.phase = "walking"
+        craft.setBillWorking(job.billId, false)
     end
 end
 
