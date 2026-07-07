@@ -37,7 +37,12 @@ stays in seconds and the expensive gates run once, at the end.
    real world) and aren't run as part of tiers 1–3. Run the ones
    relevant to what you touched, or `python3 tools/run_probes.py
    --only <substrings>` (bare `run_probes.py` runs all of them — low
-   tens of minutes, only for a deliberate full sweep).
+   tens of minutes, only for a deliberate full sweep). Add `--jobs N`
+   (#531) to run up to N probes CONCURRENTLY — each its own engine on a
+   unique port — cutting a full sweep's wall-time to ~total/N (bounded
+   by the slowest single probe); failures are re-run SOLO afterward
+   since parallel contention is what a retry needs to escape. Keep
+   `--jobs 1` (the default) for the CI gate path.
 
 Baselines (`tools/baselines/`) are **tracked in git** (#421): a fresh
 clone/worktree can run world_check directly, and a tier-3 re-capture
