@@ -12,7 +12,7 @@ Scenario (flat arena, no kits → makeshift-tourniquet treat path):
     cluster A:  M1 (best medic, bleed_control 90) next to P1
     cluster B:  M2 (lesser medic, bleed_control 30) next to P2
   with a wide gap between the clusters. P1/P2 have bleed_control 0 so they
-  are NOT medics. Both patients are given a fresh bleeding wound.
+  are NOT medics. P1 gets THREE separate wounds, P2 gets one (see below).
 
 Expected with the FIX:
   * M1 claims P1; M2 claims P2 (M1 is committed elsewhere, so M2 — the only
@@ -21,6 +21,26 @@ Expected with the FIX:
   * M2 moves from its spawn and engages (the crisp tell: under the bug M2
     defers entirely and never moves; P2 only gets treated much later, by M1
     walking the whole gap).
+
+Determinism notes (#589 — stabilized for the blocking CI gate):
+  * Fresh acolytes carry a standing find_water goal that can walk them off
+    their mark before the wounds even land, adding run-to-run position/
+    timing noise; every spawned unit gets it quieted (+ any resulting walk
+    cancelled) up front.
+  * P1's single wound let M1 dress it (and release its patient claim) in
+    ONE think-tick — M1 is adjacent to P1, and the no-kit tourniquet path
+    always succeeds on the first attempt. That's too short a window: once
+    M1 is free again, bestMedicFor ranks the far-but-far-more-capable M1
+    over the near M2 for ANY patient (the capability gap swamps the
+    gentle distance discount), so a slow M2 think-tick could lose P2 back
+    to M1 — reproducing the exact bug this probe exists to catch. THREE
+    separate wounds force M1 through several sequential treatBleeding
+    calls (one per think-tick) before it's free, giving M2 a comfortable
+    multi-second margin to lock its own claim on P2 first.
+  * A stray `unit_warning` (e.g. an unrelated stuck-walk watchdog) auto-
+    pauses the whole sim per `config/notifications.yaml`; the poll loop
+    defensively un-pauses every iteration so a passing hiccup can't freeze
+    the scenario for the rest of the run.
 
 Usage:
   python3 tools/medic_coord_probe.py
@@ -37,7 +57,7 @@ import socket
 import subprocess
 import sys
 import time
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, clear_find_water
 
 LOG = "/tmp/medic_coord_engine.log"
 
@@ -102,6 +122,19 @@ def dist(a, b) -> float:
     return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
+def spawn_settled(port: int, x: float, y: float, label: str) -> int:
+    """Spawn an acolyte and quiet its find_water default goal (+ cancel any
+    walk it already started), so the four scenario units hold their spawn
+    marks instead of scouting for water before the wounds land."""
+    uid = int(num(send(port, f"return unit.spawn('acolyte', {x}, {y})")))
+    if uid <= 0:
+        sys.exit(f"unit.spawn failed for {label}: {uid}")
+    if not clear_find_water(port, uid):
+        sys.exit(f"could not quiet find_water for {label} (uid {uid})")
+    send(port, f"unit.stop({uid})", expect_result=False)
+    return uid
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9131)
@@ -118,13 +151,10 @@ def main() -> int:
 
         g = args.gap
         # cluster A near origin, cluster B `gap` tiles east.
-        m1 = int(num(send(args.port, f"return unit.spawn('acolyte', 0, 0)")))
-        p1 = int(num(send(args.port, f"return unit.spawn('acolyte', 1, 0)")))
-        m2 = int(num(send(args.port, f"return unit.spawn('acolyte', {g}, 0)")))
-        p2 = int(num(send(args.port, f"return unit.spawn('acolyte', {g+1}, 0)")))
-        if min(m1, p1, m2, p2) <= 0:
-            print("FAIL: could not spawn acolytes", file=sys.stderr)
-            return 2
+        m1 = spawn_settled(args.port, 0, 0, "M1")
+        p1 = spawn_settled(args.port, 1, 0, "P1")
+        m2 = spawn_settled(args.port, g, 0, "M2")
+        p2 = spawn_settled(args.port, g + 1, 0, "P2")
         print(f"spawned  M1=#{m1}@(0,0)  P1=#{p1}@(1,0)  "
               f"M2=#{m2}@({g},0)  P2=#{p2}@({g+1},0)")
 
@@ -136,11 +166,15 @@ def main() -> int:
         send(args.port, f"unit.setKnowledge({p2},'bleed_control',0);  return 'ok'")
         time.sleep(1.0)  # let units settle onto the ground
 
-        # Wound both patients: a modest external bleeder (stab, sev 0.25 on a
-        # thigh) — bleeds enough to need treatment, slow enough to survive.
+        # Wound P1 with THREE separate bleeders (distinct body parts) so M1
+        # needs several sequential treatBleeding calls — one per think-tick
+        # — before its patient claim releases (see the determinism note in
+        # the module docstring). P2 gets a single wound as before.
         send(args.port, f"return unit.injure({p1},'l_thigh','stab',0.25,1.0)")
+        send(args.port, f"return unit.injure({p1},'r_thigh','stab',0.25,1.0)")
+        send(args.port, f"return unit.injure({p1},'l_shin','stab',0.25,1.0)")
         send(args.port, f"return unit.injure({p2},'l_thigh','stab',0.25,1.0)")
-        print("injured P1 and P2 (l_thigh stab sev 0.25)")
+        print("injured P1 (3 wounds) and P2 (1 wound), stab sev 0.25")
 
         p2_spawn = pos(args.port, p2) or (float(g + 1), 0.0)
 
@@ -153,9 +187,13 @@ def main() -> int:
         m1_dist_when_p2_treated = None
         timeline = []
         t0 = time.time()
-        steps = int(args.seconds / 0.5)
-        for _ in range(steps):
+        while time.time() - t0 < args.seconds:
             t = time.time() - t0
+            # A stray unit_warning (e.g. an unrelated stuck-walk watchdog)
+            # auto-pauses the whole sim per config/notifications.yaml —
+            # defensively keep unpausing so a passing hiccup elsewhere
+            # can't freeze this scenario for the rest of the run.
+            send(args.port, "engine.setPaused(false)", expect_result=False)
             pm1 = pos(args.port, m1)
             pm2 = pos(args.port, m2)
             d1 = worst_dressing(args.port, p1)
