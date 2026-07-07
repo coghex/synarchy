@@ -48,6 +48,7 @@ CI_ELIGIBLE = {
     "concussion_revive",
     "cooking",
     "craft",
+    "infection",
     "injury_log",
     "item_instance",
     "item_temp",
@@ -62,7 +63,6 @@ CI_ELIGIBLE = {
 FLAKY = "flaky"
 BASE_FAILING = "base-failing"
 SLOW_WORLDGEN = "slow/worldgen-heavy"
-BUILD_GATED = "build-config-gated"
 UNCLASSIFIED = "unclassified"
 
 # Every registered probe (ALL_KEYS) NOT in CI_ELIGIBLE must have an entry
@@ -94,9 +94,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
     "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
-    # --- build-config-gated: only exercises real assertions against a
-    # non-default build; self-skips under the standard prod build CI uses. ---
-    "infection": (BUILD_GATED, "meaningful growth assertions need a non-default infectionBaseRate build; self-skips under the prod rate"),
     # --- unclassified: arena-based (fast), no known flakiness/base-failure
     # on file -- just never reviewed for CI promotion yet. Not meant to be a
     # permanent home: promote (with evidence) or assign a real category.
@@ -133,7 +130,7 @@ CORE_GLOBS = [
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua", "src/Infection/*", "data/infections/*"],
-     {"collapse_crawl", "concussion_revive", "injury_log"}),
+     {"collapse_crawl", "concussion_revive", "injury_log", "infection"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
      {"craft", "cooking"}),
@@ -179,7 +176,7 @@ def select(changed_files: list[str]) -> tuple[list[str], str]:
     return sorted(keys), "feature-scoped selection"
 
 
-KNOWN_REASON_CATEGORIES = {FLAKY, BASE_FAILING, SLOW_WORLDGEN, BUILD_GATED, UNCLASSIFIED}
+KNOWN_REASON_CATEGORIES = {FLAKY, BASE_FAILING, SLOW_WORLDGEN, UNCLASSIFIED}
 
 
 def _self_test() -> int:
@@ -218,6 +215,9 @@ def _self_test() -> int:
         (["docs/foo.md", "assets/x.png"], [], "docs+assets"),
         (["data/recipes/smelting.yaml"], sorted({"craft", "cooking"}), "recipes -> craft+cooking"),
         (["src/Power/Network.hs"], sorted({"power_workshop"}), "power"),
+        (["data/infections/staph.yaml"],
+         sorted({"collapse_crawl", "concussion_revive", "injury_log", "infection"}),
+         "infection data -> combat probes (#593)"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
         (["src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE), "unclassified -> full"),
         (["README.md", "src/Power/Network.hs"], sorted({"power_workshop"}), "docs ignored, power kept"),

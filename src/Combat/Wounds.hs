@@ -42,6 +42,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import qualified Data.List as L
 import Data.IORef (readIORef, atomicModifyIORef')
+import System.Environment (lookupEnv)
 import Combat.Types (CombatEvent(..))
 import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -192,6 +193,21 @@ infectionBaseRate = 0.0016
 
 infectionGraceSec ∷ Double
 infectionGraceSec = 60   -- a fresh wound isn't infected for the first minute
+
+-- | Test-only acceleration (#593): with the production rate above, a
+--   probe would need to wait real minutes to observe growth. Gated on
+--   @SYNARCHY_INFECTION_TEST_MODE@, which nothing but
+--   'tools/infection_probe.py' ever sets (for its own dedicated engine
+--   subprocess) — unset, `tickAllWounds` passes 'False' and every unit
+--   ticks at the production rate/grace above, unchanged.
+testInfectionBaseRate ∷ Float
+testInfectionBaseRate = 0.05
+
+testInfectionGraceSec ∷ Double
+testInfectionGraceSec = 5
+
+infectionTestModeVar ∷ String
+infectionTestModeVar = "SYNARCHY_INFECTION_TEST_MODE"
 
 infectionWorsenThreshold ∷ Float
 infectionWorsenThreshold = 0.6   -- above this, healing reverses (festers)
@@ -418,6 +434,7 @@ tickAllWounds ∷ EngineEnv → Float → IO ()
 tickAllWounds env dt = do
     gt ← readIORef (gameTimeRef env)
     infMgr ← readIORef (infectionManagerRef env)
+    testMode ← isJust ⊚ lookupEnv infectionTestModeVar
     -- Active world's climate, for per-unit infection selection + onset speed.
     -- Nothing before a world exists (menu / pre-gen) → infection stays untyped.
     mClim ← do
@@ -449,7 +466,7 @@ tickAllWounds env dt = do
                                             (floor (uiGridX inst))
                                             (floor (uiGridY inst))) mClim
                                     (inst', outcome, gen') =
-                                        tickOneUnit gt def dt infMgr unitClim gen inst
+                                        tickOneUnit gt def dt infMgr unitClim gen inst testMode
                                 in case outcome of
                                     NoChange →
                                         (HM.insert uid inst' acc, xs, gen')
@@ -494,9 +511,9 @@ tickAllWounds env dt = do
 --   UnitCollapse / UnitKill command.
 tickOneUnit
     ∷ Double → UnitDef → Float → InfectionManager → Maybe LocalClimate
-    → Random.StdGen → UnitInstance
+    → Random.StdGen → UnitInstance → Bool
     → (UnitInstance, WoundTickOutcome, Random.StdGen)
-tickOneUnit gt def dt infMgr mClim gen0 inst
+tickOneUnit gt def dt infMgr mClim gen0 inst testMode
     | uiPose inst == "dead" = (inst, NoChange, gen0)
     | null (uiWounds inst)  =
         -- No wounds → no infection, but the immune response must still wind
@@ -519,6 +536,9 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
             healCon  = max 0.3 (min 3.0 con)
             -- Climate scales how fast infection sets in (warm+wet faster).
             climateFactor = climateOnsetFactor mClim
+            -- #593: test-mode acceleration (see testInfectionBaseRate).
+            effBaseRate  = if testMode then testInfectionBaseRate else infectionBaseRate
+            effGraceSec  = if testMode then testInfectionGraceSec else infectionGraceSec
             -- Fever suppression: a high core body temperature (the fever the
             -- thermo system raises in response to infection) slows infection
             -- growth — the body cooking the pathogens. core_temp is the stat
@@ -574,7 +594,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
                         infAge     = gt - woundAt w
                         kindInfF   = kindInfectFactor (woundKind w)
                         eligible   = not (woundClean w)
-                                   ∧ infAge ≥ infectionGraceSec
+                                   ∧ infAge ≥ effGraceSec
                                    ∧ kindInfF > 0
                         -- Pick the infection TYPE the first tick it festers
                         -- (weighted-random by site + climate). Needs a world
@@ -597,7 +617,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst
                         -- prior immunity. Only while eligible (dirty, past grace).
                         selfAccel  = 1 + selfAccelGain * woundInfection w
                         infGrow    = if eligible
-                                     then infectionBaseRate * kindInfF
+                                     then effBaseRate * kindInfF
                                           * (0.3 + curEff) * climateFactor
                                           * aggr * infectab * selfAccel
                                           * (1 - immResist) * feverSuppress

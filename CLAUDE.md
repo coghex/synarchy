@@ -71,14 +71,13 @@ gated — fast + deterministic probes. Deliberately NOT gated, and left to
 the manual `run_probes.py` full run: flaky probes (AI-reaction/
 arbitration timing the slower, variable-speed Linux CI runner
 destabilizes run-to-run, which within-run retry can't fix), slow/
-worldgen-heavy ones, probes that fail on master today for content
-reasons, and probes gated on a non-default build config. Run
-`python3 tools/ci_probes.py --status` (#540) for the authoritative,
-always-current list of every registered probe's CI eligibility — CI-
-eligible, or manual-only with its reason category (`flaky`,
-`base-failing`, `slow/worldgen-heavy`, `build-config-gated`, or
-`unclassified` for a probe simply not yet reviewed for promotion — never
-trust a comment enumerating probe names, they drift). Growing the
+worldgen-heavy ones, and probes that fail on master today for content
+reasons. Run `python3 tools/ci_probes.py --status` (#540) for the
+authoritative, always-current list of every registered probe's CI
+eligibility — CI-eligible, or manual-only with its reason category
+(`flaky`, `base-failing`, `slow/worldgen-heavy`, or `unclassified` for a
+probe simply not yet reviewed for promotion — never trust a comment
+enumerating probe names, they drift). Growing the
 eligible set is a follow-up: prove a probe deterministic across repeated
 runs, then move its key from `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` in
 `tools/ci_probes.py`. The path→probe map lives in `tools/ci_probes.py`;
