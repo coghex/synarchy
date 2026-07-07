@@ -255,8 +255,10 @@ it by hand.
 Computes which probes CI should run for a given set of changed files (see
 `.github/workflows/ci.yml` and the CLAUDE.md "Testing Tiers" section for
 the gate this feeds). It also owns `CI_ELIGIBLE` — the curated,
-fast/deterministic subset of the full registry that's actually allowed to
-run in the blocking CI gate.
+small smoke subset of the full registry that's actually allowed to run in
+the blocking CI gate. Deterministic probes can still be manual-only when
+they are too narrow or too expensive for every matching PR, and paths
+covered only by manual-only probes select no behavior probe by default.
 
 ```bash
 # What would CI run for these changed files?
@@ -266,7 +268,8 @@ python3 tools/ci_probes.py --changed src/Power/Network.hs
 python3 tools/ci_probes.py --self-test
 
 # Every registered probe's CI status: CI-eligible, or manual-only with a
-# reason category (flaky / base-failing / slow/worldgen-heavy / unclassified)
+# reason category (flaky / base-failing / slow/worldgen-heavy /
+# scenario-heavy / targeted / unclassified)
 python3 tools/ci_probes.py --status
 ```
 
