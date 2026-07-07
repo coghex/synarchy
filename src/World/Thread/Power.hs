@@ -53,7 +53,7 @@ tickPowerNetworks env pageId ws dtGame = do
             wireTiles   = wireTilesOn td
             drainByNode = HM.empty
             consumers   = combineConsumers (consumersOn pageId now bm)
-                            (activeCraftConsumersOn pageId now bm rm bills)
+                            (activeCraftConsumersOn Nothing pageId now bm rm bills)
         -- Snapshot-and-clobber would lose any node power.placeNode
         -- registers between the read above and the write below (both
         -- this tick and placeNode hit wsPowerNodesRef). Recompute

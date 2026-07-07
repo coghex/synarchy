@@ -16,23 +16,33 @@ station with no bill draws nothing at all even at full generation, and —
 the flip side — a bill PAUSED mid-cycle keeps drawing for as long as its
 existing holder keeps working it (Craft.Bills.claimAvailable lets that
 holder finish the cycle; only fresh claims are blocked). `power.
-isStationPoweredForRecipe(bid, recipeId)` is the job-aware gating query
-(a zero-power recipe is always true, any station, wired or not);
-`Engine.Scripting.Lua.API.Craft.validateStation` refuses craft.executeAt/
-repair.repairAt on a station that can't satisfy a positive-power
-recipe's demand, and the craft_job AI's "working" phase pours no
-progress while browned out (idle, not failed) — resuming automatically
-once the network can cover it. `power.isBuildingPowered(bid)` (the old
-#361 query) still exists for a hypothetical future ALWAYS-ON non-crafting
-device via bdPowerDrain — no shipped or crafting building sets that
-field any more, so it's trivially true for every craft station.
+isStationPoweredForRecipe(bid, recipeId[, billId])` is the job-aware
+gating query (a zero-power recipe is always true, any station, wired or
+not); `Engine.Scripting.Lua.API.Craft.validateStation` refuses
+craft.executeAt/repair.repairAt on a station that can't satisfy a
+positive-power recipe's demand, and the craft_job AI's "working" phase
+pours no progress while browned out (idle, not failed) — resuming
+automatically once the network can cover it. The optional `billId` is
+the bill a check is FOR (the craft_job AI passes its own `job.billId`);
+`isRecipePoweredAt` excludes exactly that bill's own already-registered
+draw from the station's other demand before adding the queried recipe's
+draw back in ONCE — so an active bill's own gate/completion check never
+double-counts itself, and a bare call (no bill, e.g. debug console)
+still correctly SUMS with whatever else is already drawing at that
+station rather than displacing it. `power.isBuildingPowered(bid)` (the
+old #361 query) still exists for a hypothetical future ALWAYS-ON
+non-crafting device via bdPowerDrain — no shipped or crafting building
+sets that field any more, so it's trivially true for every craft
+station.
 
-This probe registers its OWN throwaway building + recipe defs (mirroring
-how tools/craft_bill_probe.py injects a temp recipe YAML) rather than
-flipping a shipped building/recipe — so it exercises the #590 mechanism
-in complete isolation from every other probe's fixtures. The workshop
-def carries NO power_drain (per #590, a craft station's load lives on
-the recipe); the probe recipe carries `power_draw: 150`.
+This probe registers its OWN throwaway building + two recipe defs
+(mirroring how tools/craft_bill_probe.py injects a temp recipe YAML)
+rather than flipping a shipped building/recipe — so it exercises the
+#590 mechanism in complete isolation from every other probe's fixtures.
+The workshop def carries NO power_drain (per #590, a craft station's
+load lives on the recipe); the two probe recipes carry `power_draw: 150`
+and `power_draw: 300` respectively (the second exists solely to prove
+demand from two DIFFERENT recipes at the same station sums correctly).
 
 What it does (all against a single flat arena):
   1. Boots headless, loads real defs + a synthetic "forge" workshop (no
@@ -58,7 +68,12 @@ What it does (all against a single flat arena):
      claim alone, jumps to 150W once marked working, STAYS 150W while
      paused (an existing holder keeps working through a pause), and
      drops to 0 once un-marked working or released — proving drain
-     tracks cbWorking specifically, not the claim or pause flags.
+     tracks cbWorking specifically, not the claim or pause flags. While
+     that bill is working, a BARE isStationPoweredForRecipe check (no
+     bill of its own) for a SECOND, 300W recipe at the SAME station
+     must see the full 150+300=450W combined demand against the 400W
+     panel (0Wh stored) and refuse — proving the query correctly SUMS
+     with an already-active consumer instead of displacing it.
   6. AI end-to-end at midnight: craft_job claims, fetches, and walks up
      to the built station (drainW stays 0 through fetch/walking), then
      marks itself working (drainW reads 150W) but pours NO bill progress
@@ -91,8 +106,10 @@ SPROOT = "/tmp"
 TEST_RECIPE_YAML = f"{SPROOT}/power_workshop_probe_recipes.yaml"
 TEST_BUILDING_YAML = f"{SPROOT}/power_workshop_probe_buildings.yaml"
 PROBE_RECIPE = "power_workshop_probe_forge"
+PROBE_RECIPE2 = "power_workshop_probe_forge2"
 PROBE_BUILDING = "power_workshop_probe_bench"
 PROBE_DRAIN_W = 150.0
+PROBE_DRAIN2_W = 300.0
 
 TEST_RECIPES = f"""\
 recipes:
@@ -105,6 +122,15 @@ recipes:
       - item: steel_hardware
         count: 1
     power_draw: {PROBE_DRAIN_W}
+  - id: {PROBE_RECIPE2}
+    station: forge
+    inputs:
+      - item: steel_bar
+    work: 1
+    outputs:
+      - item: steel_hardware
+        count: 1
+    power_draw: {PROBE_DRAIN2_W}
 """
 
 # A throwaway workshop def: no materials to deliver (build_work alone
@@ -310,7 +336,7 @@ def main() -> int:
         with open(TEST_RECIPE_YAML, "w") as f:
             f.write(TEST_RECIPES)
         n = as_int(send(port, f"return engine.loadRecipeYaml('{TEST_RECIPE_YAML}')"))
-        passed = check(passed, n == 1, "probe recipe loaded", f"count={n}")
+        passed = check(passed, n == 2, "probe recipes loaded", f"count={n}")
         recipe = jget(port, f"return craft.get('{PROBE_RECIPE}')")
         passed = check(passed,
             isinstance(recipe, dict) and recipe.get("powerDraw") == PROBE_DRAIN_W,
@@ -464,6 +490,21 @@ def main() -> int:
         passed = check(passed,
             drain_of(port) == PROBE_DRAIN_W,
             "drainW == 150W once the bill is marked working", drain_of(port))
+
+        # A BARE check (no bill of its own) for a SECOND, different
+        # recipe at the SAME station must see the total demand — this
+        # recipe's own 300W ADDED to the other bill's already-active
+        # 150W, not just one or the other. 150+300=450W exceeds the
+        # 400W panel peak with the battery still at 0Wh (no reserve to
+        # fall back on), so it must refuse even though 400W alone would
+        # cover either job individually — the exact undercount an
+        # earlier version of isRecipePoweredAt was vulnerable to
+        # (dropping every OTHER consumer instead of summing with it).
+        powered2 = powered_for_recipe(port, bid_w, PROBE_RECIPE2)
+        passed = check(passed, powered2 == "false",
+            "bare check for a second recipe sums the OTHER active "
+            "bill's draw (150+300=450W > 400W generation, 0Wh stored) "
+            "rather than dropping it", powered2)
 
         # Pausing a bill an existing holder is mid-cycle on must NOT cut
         # its power: Craft.Bills.claimAvailable lets that holder keep

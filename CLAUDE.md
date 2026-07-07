@@ -580,53 +580,72 @@ network tick/query (`World.Thread.Power`, `power.listNetworks`,
 `Power.Network.combineConsumers`, so a future always-on device and an
 active craft job on the same network both count toward Brownout.
 
-`power.isStationPoweredForRecipe(bid, recipeId)` is the job-aware
-gating query: looks the recipe up itself, is trivially true for a
-zero-power recipe at ANY station (wired or not — an unknown recipe id
-also resolves to 0 draw here, so it's trivially true too; callers that
-need "unknown recipe" to be a hard refusal go through `validateStation`
-instead), and for a positive-power recipe checks the station's network
-status against its FULL current demand: whatever's already registered
-for that station (an already-`cbWorking` bill's own draw, any other
-simultaneous consumer) is kept as-is, and only synthesizes this call's
-own `drawW` when the station isn't registered as a consumer at all yet
-(so a bare `craft.executeAt`/`repair.repairAt` with no bill involved is
-still judged correctly) — it never OVERWRITES an existing entry, which
-would silently drop a second simultaneous consumer at the same station
-and could report Powered when `power.listNetworks` would correctly show
-Brownout. `Engine.Scripting.Lua.API.Craft.validateStation` (shared by
-`craft.executeAt` and `repair.repairAt`, see `Repair.hs`) uses it in
-place of the old `isBuildingPowered`; the `craft_job` AI's `"working"`
-phase gates its progress-pour loop the same way
-(`power.isStationPoweredForRecipe(job.bid, job.recipeId)`), resetting
-its elapsed-time accumulator on every stall so outage time is never
-credited once power returns — pours no progress while browned out
-(idle, not failed, not released), and resumes on its own once the
-network can cover it.
+`power.isStationPoweredForRecipe(bid, recipeId[, billId])` is the
+job-aware gating query: looks the recipe up itself, is trivially true
+for a zero-power recipe at ANY station (wired or not — an unknown
+recipe id also resolves to 0 draw here, so it's trivially true too;
+callers that need "unknown recipe" to be a hard refusal go through
+`validateStation` instead), and for a positive-power recipe checks the
+station's network status against its FULL current demand: the optional
+`billId` — the bill THIS check is for, if any — is EXCLUDED from
+`activeCraftConsumersOn`'s fold (a new `Maybe BillId` parameter) before
+this call's own `drawW` is added back in exactly once, via
+`HM.insertWith` summing (never overwriting). This matters both ways: a
+plain overwrite would silently DROP any other simultaneous consumer at
+the same station (a second active bill, or an always-on device) and
+report Powered when `power.listNetworks` would correctly show Brownout;
+a plain unconditional add (no exclusion) would DOUBLE-COUNT the common
+case where the check is for a bill that's already registered its own
+draw (the craft_job AI checking or completing its own job). Passing the
+right `billId` is what makes both directions correct at once — the
+craft AI passes its own `job.billId` (both from its per-tick working-
+phase gate and its cycle-completion `craft.executeAt`/`repair.repairAt`
+call, which also gained an optional trailing `billId` argument for this
+— `craft.executeAt(uid, recipeId, bid[, billId])`); a bare/ad-hoc call
+with no bill in play (debug console, tests, `repair.repairAt` — repairs
+aren't bill-driven at all) passes `Nothing`, in which case the query
+just sums with whatever's genuinely already active anywhere else on
+that station. `Engine.Scripting.Lua.API.Craft.validateStation` (shared
+by `craft.executeAt` and `repair.repairAt`, see `Repair.hs`) threads the
+same `Maybe BillId` through in place of the old `isBuildingPowered`; the
+`craft_job` AI's `"working"` phase gates its progress-pour loop the same
+way, resetting its elapsed-time accumulator on every stall so outage
+time is never credited once power returns — pours no progress while
+browned out (idle, not failed, not released), and resumes on its own
+once the network can cover it.
 
 Turnkey harness: **`python3 tools/power_workshop_probe.py`** — the
 #590 gate (rewritten from its original #361 form). Registers its OWN
-throwaway "forge" workshop (no `power_drain`) + a `power_draw: 150`
-probe recipe (mirroring how `craft_bill_probe.py` injects a temp recipe
-YAML) rather than flipping a shipped building/recipe, so it exercises
-the mechanism fully isolated from every other probe's fixtures. Boots
-headless on a flat arena and asserts: `isBuildingPowered` stays
+throwaway "forge" workshop (no `power_drain`) + TWO probe recipes
+(`power_draw: 150` and `power_draw: 300`, mirroring how
+`craft_bill_probe.py` injects a temp recipe YAML) rather than flipping
+a shipped building/recipe, so it exercises the mechanism fully isolated
+from every other probe's fixtures — the second recipe exists solely to
+prove two DIFFERENT recipes' demand at the same station sums correctly.
+Boots headless on a flat arena and asserts: `isBuildingPowered` stays
 trivially true throughout (no `power_drain` on the station); unwired
 refusal (`craft.executeAt` "no power"); wired-but-idle (no bill
 claimed) reports `drainW == 0` even at midnight; flipping to noon makes
 `isStationPoweredForRecipe` true and `craft.executeAt` succeed, but
 `drainW` STAYS 0 with no bill claimed — full generation, idle station,
 zero demand; a manually driven bill (bypassing the AI) shows `drainW`
-stays 0 on claim alone, jumps to 150W only once marked working, STAYS
-150W while paused (an existing holder keeps working through a pause),
-and drops to 0 once un-marked working or released; the `craft_job` AI
-end-to-end shows `drainW` stays 0 through fetch/walking and only reads
-150W once the AI reaches "working", zero progress while browned out at
-midnight, completion once flipped to noon, and `drainW` back to 0 once
-the bill is done and gone; and a real fast-forward with a bill held
-claimed AND marked working by hand (deterministic — AI off) shows the
-battery's `storedWh` both rise (daylight, generation > active drain)
-and fall (night, active drain with no generation). `Test.Headless.
+stays 0 on claim alone, jumps to 150W only once marked working, and —
+while that 150W bill is still working — a BARE `isStationPoweredForRecipe`
+check (no billId) for the second, 300W recipe at the SAME station
+correctly sees the combined 450W demand against the 400W panel (0Wh
+stored) and refuses, proving the exclude-and-add-back logic sums with
+an already-active consumer instead of displacing it; `drainW` then
+STAYS 150W while the first bill is paused (an existing holder keeps
+working through a pause), and drops to 0 once un-marked working or
+released; the `craft_job` AI end-to-end shows `drainW` stays 0 through
+fetch/walking and only reads 150W once the AI reaches "working" (its
+`craft.executeAt` call passing its own `job.billId`), zero progress
+while browned out at midnight, completion once flipped to noon, and
+`drainW` back to 0 once the bill is done and gone; and a real
+fast-forward with a bill held claimed AND marked working by hand
+(deterministic — AI off) shows the battery's `storedWh` both rise
+(daylight, generation > active drain) and fall (night, active drain
+with no generation). `Test.Headless.
 Craft.Bills`'s "working (#590)" block covers `cbWorking`'s pure
 transitions directly: default-False, `setBillWorking`, preserved across
 a same-holder refresh, reset on a different-claimant takeover, cleared

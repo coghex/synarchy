@@ -3863,10 +3863,14 @@ local function craftExecute(uid, s, params)
         -- #590: a power-drawing recipe (job.recipeId's power_draw > 0)
         -- pours no progress this tick while its station can't be
         -- satisfied — idle, not failed. A zero-power recipe always
-        -- passes, wired or not. Reset lastCraftAt so the elapsed-time
-        -- accumulator doesn't credit the unpowered gap once power
-        -- returns (same guard the phase transitions above already use).
-        if not power.isStationPoweredForRecipe(job.bid, job.recipeId) then
+        -- passes, wired or not. job.billId is passed so the engine
+        -- excludes THIS bill's own already-registered draw before
+        -- re-adding it, rather than double-counting it (or dropping
+        -- some other simultaneous consumer at the same station).
+        -- Reset lastCraftAt so the elapsed-time accumulator doesn't
+        -- credit the unpowered gap once power returns (same guard the
+        -- phase transitions above already use).
+        if not power.isStationPoweredForRecipe(job.bid, job.recipeId, job.billId) then
             s.lastCraftAt = now
             return
         end
@@ -3884,7 +3888,7 @@ local function craftExecute(uid, s, params)
         end
         if job.work <= 0 then progress = 1.0 end
         if progress >= 1.0 then
-            local ok, res = craft.executeAt(uid, job.recipeId, job.bid)
+            local ok, res = craft.executeAt(uid, job.recipeId, job.bid, job.billId)
             if not ok then
                 -- Inventory raced away / station broke between ticks —
                 -- hand the bill back and let the next scan re-plan.

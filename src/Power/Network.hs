@@ -73,7 +73,7 @@ import qualified Data.HashSet as HS
 import Building.Types (BuildingId, BuildingDef(..), BuildingInstance(..),
                         BuildingManager(..), BuildingActivity(Built),
                         currentActivity)
-import Craft.Bills (CraftBill(..), CraftBills(..))
+import Craft.Bills (BillId, CraftBill(..), CraftBills(..))
 import Craft.Types (RecipeManager, RecipeDef(..), lookupRecipe)
 import Structure.Types (StructureSlot(..))
 import World.Chunk.Types (LoadedChunk(..))
@@ -387,12 +387,21 @@ consumersOn pageId now bm = HM.fromList
 --   'rdPowerDraw' = 0 (the default) never contribute, regardless of
 --   work state — requirement #3's "always runnable" recipes are simply
 --   invisible to the power grid.
-activeCraftConsumersOn ∷ WorldPageId → Double → BuildingManager
-                       → RecipeManager → CraftBills
+--
+--   @exclude@ drops one specific bill (by id) from the fold before
+--   summing — the hook 'Engine.Scripting.Lua.API.Power.isRecipePoweredAt'
+--   uses to ask "what does this station ALREADY draw from every OTHER
+--   source" so it can add the query's own recipe draw back in exactly
+--   once, whether or not that recipe happens to already be running here
+--   as an active bill. Pass 'Nothing' for a plain "what's actually
+--   drawing right now" read (network ticks/queries).
+activeCraftConsumersOn ∷ Maybe BillId → WorldPageId → Double
+                       → BuildingManager → RecipeManager → CraftBills
                        → HM.HashMap BuildingId ((Int, Int), Float)
-activeCraftConsumersOn pageId now bm rm bills = HM.fromListWith addDrain
+activeCraftConsumersOn exclude pageId now bm rm bills = HM.fromListWith addDrain
     [ (cbStation bill, ((biAnchorX bi, biAnchorY bi), watts))
     | bill ← HM.elems (cbsBills bills)
+    , maybe True (≢ cbId bill) exclude
     , cbClaimant bill ≢ Nothing
     , cbWorking bill
     , Just recipe ← [lookupRecipe (cbRecipe bill) rm]

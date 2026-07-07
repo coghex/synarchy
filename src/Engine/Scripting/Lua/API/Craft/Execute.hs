@@ -17,6 +17,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Craft.Bills (BillId(..))
 import Craft.Types
 import Craft.Execute (consumeIngredients, craftQuality)
 import Item.Roll (rollItemSpec, rollItemWeight)
@@ -47,32 +48,37 @@ craftExecuteFn env = do
             pushCraftResult result
         _ → pushCraftResult (Left "craft.execute: expected (uid, recipeId)")
 
--- | craft.executeAt(uid, recipeId, bid) → ok, idsOrErr. The
+-- | craft.executeAt(uid, recipeId, bid[, billId]) → ok, idsOrErr. The
 --   station-aware craft (#326): identical semantics to craft.execute
 --   (including the created-instance-ids success return), but refused
 --   unless `bid` is a BUILT work station on the unit's world page
 --   whose def offers the recipe's station kind, with the unit
 --   standing on or adjacent to the footprint (Chebyshev ≤ 1).
 --   craft.execute stays station-blind (tests / debug console); the
---   craft AI (#329) routes through this.
+--   craft AI (#329) routes through this. The optional `billId` (#590)
+--   is the bill this craft completes, if any — see validateStation's
+--   haddock for why passing it matters to the power gate.
 craftExecuteAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftExecuteAtFn env = do
-    idArg  ← Lua.tointeger 1
-    ridArg ← Lua.tostring 2
-    bidArg ← Lua.tointeger 3
+    idArg   ← Lua.tointeger 1
+    ridArg  ← Lua.tostring 2
+    bidArg  ← Lua.tointeger 3
+    billArg ← Lua.tointeger 4
     case (idArg, ridArg, bidArg) of
         (Just n, Just ridBS, Just b) → do
-            let uid = UnitId (fromIntegral n)
-                rid = TE.decodeUtf8 ridBS
-                bid = BuildingId (fromIntegral b)
+            let uid     = UnitId (fromIntegral n)
+                rid     = TE.decodeUtf8 ridBS
+                bid     = BuildingId (fromIntegral b)
+                mBillId = BillId . fromIntegral ⊚ billArg
             result ← Lua.liftIO $ do
-                gate ← validateStation env uid rid bid
+                gate ← validateStation env mBillId uid rid bid
                 case gate of
                     Left err → return (Left err)
                     Right () → executeCraft env uid rid
             pushCraftResult result
         _ → pushCraftResult
-                (Left "craft.executeAt: expected (uid, recipeId, buildingId)")
+                (Left "craft.executeAt: expected (uid, recipeId, buildingId\
+                      \ [, billId])")
 
 -- | The station gate for craft.executeAt (#326). Read-only pre-checks
 --   — consumption re-verifies the inventory atomically inside
@@ -80,9 +86,17 @@ craftExecuteAtFn env = do
 --   gate and swap, which at worst completes a craft it was adjacent
 --   for one tick earlier (same benign window as the construct AI's
 --   building queries).
-validateStation ∷ EngineEnv → UnitId → Text → BuildingId
+--
+--   @mBillId@ (#590) is the bill this specific call is FOR, if any —
+--   threaded straight to 'isRecipePoweredAt', which needs to know
+--   whether THIS call's own recipe draw is already sitting in the
+--   station's registered demand (an active bill's cycle-completion
+--   executeAt call) or not (a bare/ad-hoc call, no bill involved) to
+--   count it exactly once rather than twice or not at all. Callers with
+--   no bill in play (debug console, tests) pass 'Nothing'.
+validateStation ∷ EngineEnv → Maybe BillId → UnitId → Text → BuildingId
                 → IO (Either Text ())
-validateStation env uid rid bid = do
+validateStation env mBillId uid rid bid = do
     rm      ← readIORef (recipeManagerRef env)
     bm      ← readIORef (buildingManagerRef env)
     um      ← readIORef (unitManagerRef env)
@@ -93,7 +107,7 @@ validateStation env uid rid bid = do
     -- "powered"); the Either block below still refuses it on its own
     -- "unknown recipe" check, so the outcome is unaffected either way.
     let drawW = maybe 0 rdPowerDraw (lookupRecipe rid rm)
-    powered ← isRecipePoweredAt env bid drawW
+    powered ← isRecipePoweredAt env mBillId bid drawW
     return $ do
         recipe ← note ("unknown recipe " <> rid) (lookupRecipe rid rm)
         inst   ← note "no such building" (HM.lookup bid (bmInstances bm))
