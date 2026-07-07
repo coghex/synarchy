@@ -3,19 +3,22 @@
 
 Given the files a change touched, decide which behavior probes CI should
 run — only the ones relevant to the change, with a full-set catch-all for
-core/unclassified changes and a zero-probe fast path for docs/assets.
+core/unclassified changes and zero probes for docs/assets or subsystems
+whose behavior probes are intentionally manual-only.
 This is what makes a green CI mean "the features still work" without
 paying a ~60s engine boot per probe on every PR.
 
 The selection is deliberately FAIL-SAFE: anything this mapping can't
 classify falls through to the full CI-eligible set (over-test rather than
-silently skip). Docs/assets are the only things that run zero probes.
+silently skip). Feature areas may explicitly map to an empty set when their
+available behavior probes are too narrow or too expensive for the blocking
+gate.
 
-Curated set + coverage/non-coverage is documented in CLAUDE.md. Only
-fast + DETERMINISTIC probes are CI-eligible; flaky/slow/worldgen-heavy or
-base-failing probes stay manual-only (run_probes.py). A retry-on-flake in
-run_probes.py absorbs residual sequential-engine contention so the
-blocking gate doesn't redden good PRs.
+Curated set + coverage/non-coverage is documented in CLAUDE.md. Only broad,
+cheap, deterministic smoke probes are CI-eligible; flaky, scenario-heavy,
+targeted, slow/worldgen-heavy, or base-failing probes stay manual-only
+(run_probes.py). A retry-on-flake in run_probes.py absorbs residual
+sequential-engine contention so the blocking gate doesn't redden good PRs.
 
 Usage:
   # print the selected probe keys (one per line) + a reason on stderr
@@ -37,24 +40,15 @@ from run_probes import PROBES  # noqa: E402
 ALL_KEYS = {p[0] for p in PROBES}
 
 # --------------------------------------------------------------------------
-# Curated CI-eligible set — fast + DETERMINISTIC probes only (verified by
-# repeated runs, #529/#530). Growing this set is a follow-up: prove a probe
-# deterministic, then move its key here (and drop it from
-# MANUAL_ONLY_REASONS below).
+# Curated CI-eligible set — intentionally SMALL smoke coverage only. A probe
+# can be deterministic and still be too narrow or too expensive for every
+# matching PR; keep those manual-only and run them deliberately when touching
+# their subsystem.
 # --------------------------------------------------------------------------
 CI_ELIGIBLE = {
     "cargo_capacity",
-    "collapse_crawl",
-    "concussion_revive",
-    "cooking",
     "craft",
-    "infection",
-    "injury_log",
-    "item_instance",
-    "item_temp",
-    "power_workshop",
     "repair_item",
-    "save_pause",
 }
 
 # Manual-only reason categories (#540). Kept short + greppable; `--status`
@@ -63,6 +57,8 @@ CI_ELIGIBLE = {
 FLAKY = "flaky"
 BASE_FAILING = "base-failing"
 SLOW_WORLDGEN = "slow/worldgen-heavy"
+SCENARIO_HEAVY = "scenario-heavy"
+TARGETED = "targeted"
 UNCLASSIFIED = "unclassified"
 
 # Every registered probe (ALL_KEYS) NOT in CI_ELIGIBLE must have an entry
@@ -78,6 +74,20 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
     "medic_coord": (FLAKY, "medic-selection timing flaked on the Linux runner (PR #535 run 1)"),
     "disarm": (FLAKY, "disabled-hand re-fire timing flaked on the Linux runner (PR #535 run 2)"),
+    # --- scenario-heavy: deterministic enough to run manually, but either
+    # long-running or broad end-to-end scenarios that make the blocking PR
+    # gate too expensive. ---
+    "infection": (SCENARIO_HEAVY, "timed infection/sepsis scenario with deliberate sleeps"),
+    "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
+    "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
+    "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),
+    "save_pause": (SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),
+    # --- targeted: useful regression probes, but too narrow for the default
+    # PR gate. Run them when touching the named feature. ---
+    "collapse_crawl": (TARGETED, "narrow #304 collapse/crawl hysteresis regression"),
+    "concussion_revive": (TARGETED, "narrow #304 concussion revive hysteresis regression"),
+    "cooking": (TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),
+    "injury_log": (TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),
     # --- base-failing: fails today on master for content reasons unrelated
     # to CI infrastructure; gating it would redden every PR. ---
     "construction": (BASE_FAILING, "fails on master for content reasons"),
@@ -127,20 +137,22 @@ CORE_GLOBS = [
 
 # Feature-area rules: path glob(s) -> the CI-eligible probes covering it.
 # First matching rule wins per file. Keys here must be in CI_ELIGIBLE.
+# Empty sets are intentional for subsystems whose behavior probes are now
+# manual-only because they are scenario-heavy or too narrowly targeted.
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua", "src/Infection/*", "data/infections/*"],
-     {"collapse_crawl", "concussion_revive", "injury_log", "infection"}),
+     set()),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
-     {"craft", "cooking"}),
+     {"craft"}),
     (["src/Power/*", "scripts/wire.lua", "scripts/power*.lua",
       "data/structure_packs/*"],
-     {"power_workshop"}),
+     set()),
     (["src/Item/*", "data/items/*", "src/Equipment/*", "data/equipment/*"],
-     {"item_instance", "item_temp", "cargo_capacity", "repair_item"}),
+     {"cargo_capacity", "repair_item"}),
     (["src/Building/*", "data/buildings/*"],
-     {"power_workshop", "craft", "cooking"}),
+     {"craft"}),
 ]
 
 
@@ -166,17 +178,26 @@ def select(changed_files: list[str]) -> tuple[list[str], str]:
     if any(c is ALL for _, c in contributions):
         trigger = next(f for f, c in contributions if c is ALL)
         return sorted(CI_ELIGIBLE), f"core/unclassified change ({trigger}) -> full CI-eligible set"
+    if all(c is NONE for _, c in contributions):
+        return [], "docs/assets only -> no probes"
     keys: set[str] = set()
     for _, c in contributions:
         if c is not NONE:
             keys |= c
     keys &= CI_ELIGIBLE
     if not keys:
-        return [], "docs/assets only -> no probes"
+        return [], "no CI-eligible probes for changed paths"
     return sorted(keys), "feature-scoped selection"
 
 
-KNOWN_REASON_CATEGORIES = {FLAKY, BASE_FAILING, SLOW_WORLDGEN, UNCLASSIFIED}
+KNOWN_REASON_CATEGORIES = {
+    FLAKY,
+    BASE_FAILING,
+    SLOW_WORLDGEN,
+    SCENARIO_HEAVY,
+    TARGETED,
+    UNCLASSIFIED,
+}
 
 
 def _self_test() -> int:
@@ -213,14 +234,15 @@ def _self_test() -> int:
     cases = [
         (["README.md"], [], "docs only"),
         (["docs/foo.md", "assets/x.png"], [], "docs+assets"),
-        (["data/recipes/smelting.yaml"], sorted({"craft", "cooking"}), "recipes -> craft+cooking"),
-        (["src/Power/Network.hs"], sorted({"power_workshop"}), "power"),
+        (["data/recipes/smelting.yaml"], sorted({"craft"}), "recipes -> craft"),
+        (["data/buildings/furnace.yaml"], sorted({"craft"}), "buildings -> craft"),
+        (["src/Power/Network.hs"], [], "power probes are manual-only"),
         (["data/infections/staph.yaml"],
-         sorted({"collapse_crawl", "concussion_revive", "injury_log", "infection"}),
-         "infection data -> combat probes (#593)"),
+         [],
+         "infection probes are manual-only (#593)"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
         (["src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE), "unclassified -> full"),
-        (["README.md", "src/Power/Network.hs"], sorted({"power_workshop"}), "docs ignored, power kept"),
+        (["README.md", "src/Power/Network.hs"], [], "docs ignored, power manual-only"),
     ]
     for files, expect, name in cases:
         got, reason = select(files)

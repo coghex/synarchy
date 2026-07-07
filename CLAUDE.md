@@ -63,24 +63,28 @@ gate** (#530): `tools/ci_probes.py` diffs the PR against its base and
 picks which behavior probes to run — only the ones relevant to the
 changed files, the full curated set for a core/unclassified change
 (fail-safe: anything the mapping can't classify runs everything), and
-**zero** probes for a docs/assets-only change. Selected probes run via
+**zero** probes for docs/assets-only changes or paths whose probes are
+manual-only. Selected probes run via
 `run_probes.py --only ... --retries 1` (a failed probe re-runs SOLO once
 before failing the PR, to absorb the sequential-engine contention flakes
-a back-to-back run shows). Only a **curated CI-eligible subset** is
-gated — fast + deterministic probes. Deliberately NOT gated, and left to
-the manual `run_probes.py` full run: flaky probes (AI-reaction/
+a back-to-back run shows). Only a **curated CI-eligible smoke subset** is
+gated — deterministic probes that are broad and cheap enough for a default
+PR gate. Deliberately NOT gated, and left to the manual `run_probes.py`
+full run: flaky probes (AI-reaction/
 arbitration timing the slower, variable-speed Linux CI runner
 destabilizes run-to-run, which within-run retry can't fix), slow/
-worldgen-heavy ones, and probes that fail on master today for content
-reasons. Run `python3 tools/ci_probes.py --status` (#540) for the
+worldgen-heavy or scenario-heavy ones, narrowly targeted regression
+probes, and probes that fail on master today for content reasons. Run
+`python3 tools/ci_probes.py --status` (#540) for the
 authoritative, always-current list of every registered probe's CI
 eligibility — CI-eligible, or manual-only with its reason category
-(`flaky`, `base-failing`, `slow/worldgen-heavy`, or `unclassified` for a
-probe simply not yet reviewed for promotion — never trust a comment
-enumerating probe names, they drift). Growing the
-eligible set is a follow-up: prove a probe deterministic across repeated
-runs, then move its key from `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` in
-`tools/ci_probes.py`. The path→probe map lives in `tools/ci_probes.py`;
+(`flaky`, `base-failing`, `slow/worldgen-heavy`, `scenario-heavy`,
+`targeted`, or `unclassified` for a probe simply not yet reviewed for
+promotion — never trust a comment enumerating probe names, they drift).
+Growing the eligible set is a follow-up: prove a probe is deterministic,
+broad enough, and cheap enough for the blocking gate, then move its key
+from `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` in `tools/ci_probes.py`.
+The path→probe map lives in `tools/ci_probes.py`;
 a change there re-runs its `--self-test` (a blocking CI step of its
 own, which also enforces that every registered probe is classified as
 either CI-eligible or manual-only-with-a-reason — no probe can go
