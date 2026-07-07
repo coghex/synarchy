@@ -129,14 +129,14 @@ default test tiers; run the ones relevant to what you changed.
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
 plus `sys.exit(0 or 1)`. Most take `--port` to avoid colliding with another
-running instance; two (`cargo_capacity_probe.py`, `disarm_probe.py`) take no
-flags at all and hardcode their port.
+running instance; one (`cargo_capacity_probe.py`) takes no flags at all and
+hardcodes its port.
 
-**Gotcha:** not every probe uses `argparse` — the two flagless ones above
-have no `--help` handling either, so passing `--help` doesn't print usage
-and exit, it silently runs the *actual probe* (which boots a real engine and
-can hang for minutes if you weren't expecting that). Check the header
-docstring instead of reaching for `--help` when in doubt.
+**Gotcha:** not every probe uses `argparse` — the flagless one above has no
+`--help` handling either, so passing `--help` doesn't print usage and exit,
+it silently runs the *actual probe* (which boots a real engine and can hang
+for minutes if you weren't expecting that). Check the header docstring
+instead of reaching for `--help` when in doubt.
 
 "Boot" below is `arena` (flat synthetic terrain via
 `scripts/movement_arena.lua`, no world generation — fast) or `worldgen`
@@ -155,7 +155,7 @@ docstring instead of reaching for `--help` when in doubt.
 | `craft_probe.py` | #325, #326, #343, #327 | arena | `craft.*` API: catalogue, execute, work stations, crafter-derived quality, smelting. |
 | `craft_bill_probe.py` | #329 | arena | Craft-bill backend (`craft.addBill`/claim/progress/complete verbs) + `craft_job` AI: claim a bill, source inputs from the ground and from cargo storage, work the built station, the fresh output instances laid down at the station (a carried same-def item stays carried), knowledge gate. |
 | `crop_probe.py` | #334 | worldgen | Row-crop natural placement (`tomato_plant`) + groundcover `world.plantCropAt` (`wheat`) into a `CropPlot`, growth under the real clock, harvest, refusal for a row_crop species, save/load round-trip. |
-| `disarm_probe.py` | #193 | worldgen | Disabled-hand auto-drop must re-fire. |
+| `disarm_probe.py` | #193 | arena | Disabled-hand auto-drop must re-fire. |
 | `flora_growth_probe.py` | #332 | worldgen | Derived flora growth/age/phase under the advancing calendar; fruiting-window gating; survives save/load. |
 | `follow_command_priority_probe.py` | #306 | arena | Follow-command priority against other AI goals. |
 | `foraging_probe.py` | #94 | worldgen | Foraging AI + harvestable-flora gating. |
@@ -213,8 +213,8 @@ python3 tools/run_probes.py --only craft --exact
 # List known probes and exit
 python3 tools/run_probes.py --list
 
-# Override --port on probes that support it (a couple of flagless ones keep
-# their own hardcoded port regardless)
+# Override --port on probes that support it (the one flagless probe keeps
+# its own hardcoded port regardless)
 python3 tools/run_probes.py --port 9500
 ```
 

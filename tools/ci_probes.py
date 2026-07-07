@@ -66,14 +66,13 @@ UNCLASSIFIED = "unclassified"
 # a newly-registered probe can't silently land in neither bucket.
 MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
-    # Linux CI runner destabilizes run-to-run (medic_coord PR #535 run 1,
-    # disarm run 2); within-run retry can't fix run-to-run flakiness. ---
+    # Linux CI runner destabilizes run-to-run (medic_coord PR #535 run 1);
+    # within-run retry can't fix run-to-run flakiness. ---
     "craft_bill": (FLAKY, "craft_job AI claim/work timing flakes run-to-run on CI"),
     "role": (FLAKY, "role-hysteresis timing flakes run-to-run on CI"),
     "chop": (FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),
     "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
     "medic_coord": (FLAKY, "medic-selection timing flaked on the Linux runner (PR #535 run 1)"),
-    "disarm": (FLAKY, "disabled-hand re-fire timing flaked on the Linux runner (PR #535 run 2)"),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
@@ -87,6 +86,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "collapse_crawl": (TARGETED, "narrow #304 collapse/crawl hysteresis regression"),
     "concussion_revive": (TARGETED, "narrow #304 concussion revive hysteresis regression"),
     "cooking": (TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),
+    "disarm": (TARGETED, "narrow #193 disabled-hand auto-drop regression"),
     "injury_log": (TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),
     # --- base-failing: fails today on master for content reasons unrelated
     # to CI infrastructure; gating it would redden every PR. ---

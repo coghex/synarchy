@@ -42,9 +42,9 @@ import time
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Base for the unique per-probe ports handed out in parallel mode (--jobs).
-# Chosen above the fixed ports of the two probes that don't take --port
-# (cargo_capacity 9009, disarm 9193) and clear of the GUI port 8008, so a
-# concurrent batch never double-binds a port.
+# Chosen above the fixed port of the one probe that doesn't take --port
+# (cargo_capacity 9009) and clear of the GUI port 8008, so a concurrent
+# batch never double-binds a port.
 PARALLEL_PORT_BASE = 9400
 
 # (key, script filename, supports --port, one-line purpose for --list)
@@ -69,7 +69,7 @@ PROBES = [
      "craft.* API: catalogue, execute, stations, quality, smelting (#325/#326/#343/#327)"),
     ("craft_bill", "craft_bill_probe.py", True,
      "craft-bill backend + craft_job AI: queue/claim/progress, source (ground+cargo) -> work -> produce loop (#329)"),
-    ("disarm", "disarm_probe.py", False,
+    ("disarm", "disarm_probe.py", True,
      "disabled-hand auto-drop must re-fire (#193)"),
     ("flora_growth", "flora_growth_probe.py", True,
      "derived flora growth/age/phase under the advancing calendar (#332)"),
