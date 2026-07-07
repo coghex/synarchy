@@ -14,13 +14,19 @@ Checks:
                  infection down and spends a pill.
   4. SEPSIS    — the sepsis failure-meter rises while a wound festers.
 
-NOTE: run against an engine built with the TEST infection rate
-(infectionBaseRate ~0.05, grace ~5) so growth is observable in seconds.
+Growth under the real production rate (infectionBaseRate 0.0016, 60s grace)
+takes real minutes — too slow for a gate. This probe sets
+SYNARCHY_INFECTION_TEST_MODE=1 (#593) on its OWN engine subprocess before
+booting it, which swaps in a test-tuned rate/grace (0.05 / 5s) — scoped to
+this one process via env var, so it never touches production gameplay
+(every other engine instance, including the player's, is unaffected). That
+makes the growth/sepsis assertions below observable in seconds; there is no
+skip path — a run of this probe always exercises all four checks.
 
 Usage: python3 tools/infection_probe.py [--port 9147]
 """
 from __future__ import annotations
-import argparse, glob, socket, subprocess, sys, time
+import argparse, glob, os, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/infection_probe_engine.log"
@@ -66,6 +72,10 @@ def main():
     ap.add_argument("--port", type=int, default=9147)
     args = ap.parse_args()
     port = args.port
+    # Scoped to this process's own engine subprocess only (#593) — see the
+    # module docstring. subprocess.Popen (in probelib.boot) inherits the
+    # current environment by default, so setting it here is sufficient.
+    os.environ["SYNARCHY_INFECTION_TEST_MODE"] = "1"
     proc = boot(port, log=LOG)
     passed = True
     try:
@@ -93,15 +103,6 @@ def main():
         time.sleep(8.0)
         i1 = woundInf(port, "_PAT")
         pose = send(port, "return unit.getPose(_PAT) or '?'")
-        # PRODUCTION-RATE GUARD: the real infectionBaseRate (~0.0016) grows
-        # only ~0.01 over 8 s — far below this probe's thresholds. This probe
-        # only means anything against a TEST-rate build (~0.05). If growth is
-        # negligible, the engine is on the production rate: skip, don't fail.
-        if i1 is not None and i0 is not None and (i1 - i0) < 0.02:
-            print("  [SKIP] infection growth negligible — engine is on the "
-                  "PRODUCTION infection rate.\n         Rebuild with the TEST "
-                  "rate (infectionBaseRate ~0.05, grace ~5) to run this probe.")
-            return 0
         passed &= check("infection starts ~0", i0 is not None and i0 < 0.05, f"i0={i0}")
         passed &= check("infection rose after ~8s", i1 is not None and i1 > i0 + 0.05,
                         f"{i0}->{i1}")
