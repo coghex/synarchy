@@ -48,6 +48,7 @@ ALL_KEYS = {p[0] for p in PROBES}
 CI_ELIGIBLE = {
     "cargo_capacity",
     "craft",
+    "medic_coord",
     "repair_item",
 }
 
@@ -66,13 +67,12 @@ UNCLASSIFIED = "unclassified"
 # a newly-registered probe can't silently land in neither bucket.
 MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
-    # Linux CI runner destabilizes run-to-run (medic_coord PR #535 run 1);
+    # Linux CI runner destabilizes run-to-run;
     # within-run retry can't fix run-to-run flakiness. ---
     "craft_bill": (FLAKY, "craft_job AI claim/work timing flakes run-to-run on CI"),
     "role": (FLAKY, "role-hysteresis timing flakes run-to-run on CI"),
     "chop": (FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),
     "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
-    "medic_coord": (FLAKY, "medic-selection timing flaked on the Linux runner (PR #535 run 1)"),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
@@ -141,7 +141,9 @@ CORE_GLOBS = [
 # manual-only because they are scenario-heavy or too narrowly targeted.
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
-      "scripts/injury_log*.lua", "src/Infection/*", "data/infections/*"],
+      "scripts/injury_log*.lua"],
+     {"medic_coord"}),
+    (["src/Infection/*", "data/infections/*"],
      set()),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
