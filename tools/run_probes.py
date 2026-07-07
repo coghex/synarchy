@@ -109,10 +109,15 @@ PROBES = [
 DEFAULT_TIMEOUT = 600.0
 
 
-def select(only: str | None) -> list[tuple[str, str, bool, str]]:
+def select(only: str | None, exact: bool = False) -> list[tuple[str, str, bool, str]]:
     if not only:
         return list(PROBES)
     needles = [n.strip() for n in only.split(",") if n.strip()]
+    if exact:
+        # Match probe KEYS exactly. The CI gate (#530) needs this: a
+        # substring "craft" would otherwise also pull in "craft_bill".
+        wanted = set(needles)
+        return [p for p in PROBES if p[0] in wanted]
     selected = [p for p in PROBES if any(n in p[0] or n in p[1] for n in needles)]
     return selected
 
@@ -156,6 +161,9 @@ def main() -> int:
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", default=None,
                      help="comma-separated substrings matched against probe key/filename")
+    ap.add_argument("--exact", action="store_true",
+                     help="treat --only as exact probe KEYS, not substrings (the CI gate "
+                          "uses this so e.g. 'craft' can't also select 'craft_bill')")
     ap.add_argument("--list", action="store_true", help="list known probes and exit")
     ap.add_argument("--port", type=int, default=None,
                      help="override --port on probes that support it (default: avoids 8008; "
@@ -164,12 +172,17 @@ def main() -> int:
                      help=f"per-probe wall-clock timeout in seconds (default {DEFAULT_TIMEOUT:.0f})")
     ap.add_argument("--tail", type=int, default=25,
                      help="lines of captured output to print for a failing probe")
+    ap.add_argument("--retries", type=int, default=0,
+                     help="on failure, re-run a probe SOLO up to N more times before "
+                          "marking it failed — absorbs the sequential-engine contention "
+                          "flakes seen in a back-to-back run (#530); a probe that passes "
+                          "on any attempt counts as PASS")
     args = ap.parse_args()
 
     if args.port == 8008:
         sys.exit("refusing --port 8008: that's the user's GUI port, see CLAUDE.md")
 
-    chosen = select(args.only)
+    chosen = select(args.only, exact=args.exact)
     if not chosen:
         print(f"--only {args.only!r} matched no probes; see --list", file=sys.stderr)
         return 2
@@ -186,9 +199,18 @@ def main() -> int:
     results = []
     for i, (key, script, supports_port, purpose) in enumerate(chosen, 1):
         print(f"[{i}/{len(chosen)}] {script} ... ", end="", flush=True)
-        ok, timed_out, elapsed, out = run_one(script, supports_port, args.port, args.timeout)
+        attempt = 0
+        while True:
+            ok, timed_out, elapsed, out = run_one(script, supports_port, args.port, args.timeout)
+            attempt += 1
+            if ok or attempt > args.retries:
+                break
+            first = "TIMEOUT" if timed_out else "FAIL"
+            print(f"{first}, retrying solo ({attempt}/{args.retries}) ... ",
+                  end="", flush=True)
         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-        print(f"{status} ({elapsed:.1f}s)")
+        note = f"  [passed on retry {attempt}]" if ok and attempt > 1 else ""
+        print(f"{status} ({elapsed:.1f}s){note}")
         if not ok and args.tail > 0:
             tail_lines = out.splitlines()[-args.tail:]
             for ln in tail_lines:

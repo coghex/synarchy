@@ -51,7 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # fetch-depth: 0 so the path-selective probe step (#530) can diff a
+      # PR against its base to see which files changed.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # X11/GL headers are needed to compile GLFW-b; libvulkan-dev to
       # link the vulkan bindings; glslang-tools provides the
@@ -154,3 +158,30 @@ jobs:
       # dev machine (macOS/aarch64); Linux output matches them exactly.
       - name: world_check --quick
         run: python3 tools/world_check.py --quick
+
+      # Validate the path->probe mapping wiring on every run (cheap, no
+      # engine) — a broken mapping would otherwise only surface when a PR
+      # mis-selects.
+      - name: ci_probes self-test
+        run: python3 tools/ci_probes.py --self-test
+
+      # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
+      # diff against the base, pick the CI-eligible probes relevant to the
+      # changed files (full curated set for core/unclassified changes, none
+      # for docs/assets), and run them against the exe already built above.
+      # --retries 1 re-runs a failed probe SOLO before failing, to absorb
+      # the sequential-engine contention flakes a back-to-back run shows.
+      - name: Behavior probes (path-selective)
+        if: github.event_name == 'pull_request'
+        run: |
+          BASE='${{ github.event.pull_request.base.sha }}'
+          echo "Diffing against base $BASE"
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          echo "Changed files:"; echo "$CHANGED" | sed 's/^/  /'
+          ONLY="$(printf '%s\n' "$CHANGED" | python3 tools/ci_probes.py --stdin)"
+          if [ -z "$ONLY" ]; then
+            echo "No behavior probes selected for this change — skipping."
+            exit 0
+          fi
+          echo "Selected probes: $ONLY"
+          python3 tools/run_probes.py --only "$ONLY" --exact --retries 1
