@@ -8,16 +8,20 @@ They're normally run one at a time, by hand, whichever is relevant to a
 change. This script runs a selection of them back-to-back and prints a
 single PASS/FAIL summary.
 
-Probes are run SEQUENTIALLY, one full engine boot+teardown at a time — this
-script does not attempt to make probes share a running engine (they're
-independent scripts, each owning its own boot/teardown, not built around an
-injectable engine handle). A full run is therefore slow: expect low tens of
-minutes. This is NOT part of any default test tier (see CLAUDE.md Testing
-Tiers) — run it deliberately, and prefer `--only` to scope it to what your
-change touches.
+Probes each own their engine (boot + teardown). By default they run one at
+a time; `--jobs N` runs up to N CONCURRENTLY, each an independent engine on
+a unique port (#531). Probes canNOT share a single engine — 8 neutralise
+the global `unit_ai.update`, 37 load defs engine-wide, many reuse the same
+world/page names, and 16 restart the engine, so there is no clean per-
+scenario isolation on one long-lived engine; running independent engines in
+parallel gets the speed without the isolation problem. A full sequential
+run is low tens of minutes; `--jobs` cuts wall-time to ~total/N (bounded by
+the slowest single probe). This is NOT part of any default test tier (see
+CLAUDE.md Testing Tiers) — run it deliberately, and prefer `--only`.
 
 Usage:
-  python3 tools/run_probes.py                  # run everything
+  python3 tools/run_probes.py                  # run everything, sequentially
+  python3 tools/run_probes.py --jobs 4         # up to 4 probes at once
   python3 tools/run_probes.py --only combat,movement
   python3 tools/run_probes.py --list
   python3 tools/run_probes.py --port 9500       # override --port where supported
@@ -28,6 +32,7 @@ invocation (e.g. --only matched nothing).
 """
 from __future__ import annotations
 import argparse
+import concurrent.futures
 import os
 import signal
 import subprocess
@@ -35,6 +40,12 @@ import sys
 import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Base for the unique per-probe ports handed out in parallel mode (--jobs).
+# Chosen above the fixed ports of the two probes that don't take --port
+# (cargo_capacity 9009, disarm 9193) and clear of the GUI port 8008, so a
+# concurrent batch never double-binds a port.
+PARALLEL_PORT_BASE = 9400
 
 # (key, script filename, supports --port, one-line purpose for --list)
 PROBES = [
@@ -156,6 +167,24 @@ def run_one(script: str, supports_port: bool, port: int | None, timeout: float):
     return ok, timed_out, elapsed, out or ""
 
 
+def run_with_retry(script, supports_port, port, timeout, retries, announce=None):
+    """Run a probe, re-running SOLO up to `retries` times on failure.
+
+    Returns (status, elapsed, out, attempts). `announce(kind, attempt,
+    retries)` is an optional callback for live progress before each retry.
+    """
+    attempt = 0
+    while True:
+        ok, timed_out, elapsed, out = run_one(script, supports_port, port, timeout)
+        attempt += 1
+        if ok or attempt > retries:
+            break
+        if announce:
+            announce("TIMEOUT" if timed_out else "FAIL", attempt, retries)
+    status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+    return status, elapsed, out, attempt
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -177,6 +206,12 @@ def main() -> int:
                           "marking it failed — absorbs the sequential-engine contention "
                           "flakes seen in a back-to-back run (#530); a probe that passes "
                           "on any attempt counts as PASS")
+    ap.add_argument("--jobs", type=int, default=1, metavar="N",
+                     help="run up to N probes CONCURRENTLY, each its own engine on a "
+                          "unique port (#531). Cuts wall-time to ~total/N. Default 1 = the "
+                          "sequential behavior CI relies on. Since concurrency raises "
+                          "contention, --retries re-runs failures SOLO after the parallel "
+                          "batch. Cap N to (cores - 1) or so — each probe is a full engine.")
     args = ap.parse_args()
 
     if args.port == 8008:
@@ -193,36 +228,86 @@ def main() -> int:
             print(f"{key:28s} {script:32s} {purpose}{flag}")
         return 0
 
-    print(f"Running {len(chosen)} probe(s) sequentially "
-          f"(timeout {args.timeout:.0f}s each)...\n")
+    n = len(chosen)
+    results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
+    wall_start = time.time()
 
-    results = []
-    for i, (key, script, supports_port, purpose) in enumerate(chosen, 1):
-        print(f"[{i}/{len(chosen)}] {script} ... ", end="", flush=True)
-        attempt = 0
-        while True:
-            ok, timed_out, elapsed, out = run_one(script, supports_port, args.port, args.timeout)
-            attempt += 1
-            if ok or attempt > args.retries:
-                break
-            first = "TIMEOUT" if timed_out else "FAIL"
-            print(f"{first}, retrying solo ({attempt}/{args.retries}) ... ",
-                  end="", flush=True)
-        status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-        note = f"  [passed on retry {attempt}]" if ok and attempt > 1 else ""
-        print(f"{status} ({elapsed:.1f}s){note}")
-        if not ok and args.tail > 0:
-            tail_lines = out.splitlines()[-args.tail:]
-            for ln in tail_lines:
-                print(f"    {ln}")
-        results.append((key, script, status, elapsed))
+    if args.jobs <= 1:
+        # Sequential — the mode CI relies on: live, ordered, inline retry.
+        print(f"Running {n} probe(s) sequentially (timeout {args.timeout:.0f}s each)...\n")
 
-    passed = sum(1 for _, _, status, _ in results if status == "PASS")
-    total_time = sum(elapsed for _, _, _, elapsed in results)
-    print(f"\n{passed}/{len(results)} passed, total {total_time:.1f}s")
-    if passed != len(results):
+        def announce(kind, attempt, retries):
+            print(f"{kind}, retrying solo ({attempt}/{retries}) ... ", end="", flush=True)
+
+        for i, (key, script, supports_port, purpose) in enumerate(chosen, 1):
+            print(f"[{i}/{n}] {script} ... ", end="", flush=True)
+            status, elapsed, out, attempts = run_with_retry(
+                script, supports_port, args.port, args.timeout, args.retries, announce)
+            note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
+            print(f"{status} ({elapsed:.1f}s){note}")
+            if status != "PASS" and args.tail > 0:
+                for ln in out.splitlines()[-args.tail:]:
+                    print(f"    {ln}")
+            results[key] = (script, status, elapsed, out)
+    else:
+        # Parallel (#531) — one independent engine per probe, up to --jobs at
+        # once, each on a unique port. No isolation issue: separate processes,
+        # separate ports, unique save names. Retries run SOLO afterward,
+        # since parallel contention is exactly what a retry needs to escape.
+        jobs = args.jobs
+        print(f"Running {n} probe(s), up to {jobs} concurrently "
+              f"(timeout {args.timeout:.0f}s each)...\n")
+
+        def work(idx, probe):
+            key, script, supports_port, _ = probe
+            ok, timed_out, elapsed, out = run_one(
+                script, supports_port, PARALLEL_PORT_BASE + idx, args.timeout)
+            status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+            return key, script, status, elapsed, out
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+            futs = [ex.submit(work, i, p) for i, p in enumerate(chosen)]
+            for done, fut in enumerate(concurrent.futures.as_completed(futs), 1):
+                key, script, status, elapsed, out = fut.result()
+                print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
+                results[key] = (script, status, elapsed, out)
+
+        failed = [p for p in chosen if results[p[0]][1] != "PASS"]
+        if failed and args.retries > 0:
+            # The parallel batch was already the FIRST attempt, so a probe
+            # gets exactly `--retries` more solo attempts here — total
+            # attempts (1 + retries) match the sequential path, no bonus try.
+            print(f"\nRe-running {len(failed)} failed probe(s) SOLO "
+                  f"(up to {args.retries} more attempt(s) each; the parallel "
+                  f"batch was the first)...")
+            for key, script, supports_port, _ in failed:
+                for r in range(1, args.retries + 1):
+                    ok, timed_out, elapsed, out = run_one(
+                        script, supports_port, PARALLEL_PORT_BASE, args.timeout)
+                    status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+                    print(f"  {script} solo retry {r}/{args.retries} ... "
+                          f"{status} ({elapsed:.1f}s)")
+                    results[key] = (script, status, elapsed, out)
+                    if ok:
+                        break
+
+        if args.tail > 0:
+            for key, script, _, _ in chosen:
+                r = results[key]
+                if r[1] != "PASS":
+                    print(f"\n--- {r[0]} ({r[1]}) ---")
+                    for ln in r[3].splitlines()[-args.tail:]:
+                        print(f"    {ln}")
+
+    wall = time.time() - wall_start
+    ordered = [(key, results[key][0], results[key][1], results[key][2]) for key, *_ in chosen]
+    passed = sum(1 for _, _, status, _ in ordered if status == "PASS")
+    probe_time = sum(elapsed for _, _, _, elapsed in ordered)
+    extra = f" (wall {wall:.1f}s, {probe_time / wall:.1f}x)" if args.jobs > 1 and wall > 0 else ""
+    print(f"\n{passed}/{n} passed, total probe-time {probe_time:.1f}s{extra}")
+    if passed != n:
         print("FAILED:")
-        for key, script, status, _ in results:
+        for key, script, status, _ in ordered:
             if status != "PASS":
                 print(f"  {status:8s} {script}")
         return 1
