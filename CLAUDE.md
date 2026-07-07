@@ -53,6 +53,27 @@ macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
 tracked baselines are platform-agnostic; a worldgen-output PR that
 skips its tier-3 rebaseline fails CI.
 
+On PRs, CI additionally runs a **path-selective, blocking behavior-probe
+gate** (#530): `tools/ci_probes.py` diffs the PR against its base and
+picks which behavior probes to run — only the ones relevant to the
+changed files, the full curated set for a core/unclassified change
+(fail-safe: anything the mapping can't classify runs everything), and
+**zero** probes for a docs/assets-only change. Selected probes run via
+`run_probes.py --only ... --retries 1` (a failed probe re-runs SOLO once
+before failing the PR, to absorb the sequential-engine contention flakes
+a back-to-back run shows). Only a **curated CI-eligible subset** is
+gated — fast + deterministic probes (see `CI_ELIGIBLE` in
+`tools/ci_probes.py`). Deliberately NOT gated, and left to the manual
+`run_probes.py` full run: the flaky ones (craft_bill, role, chop,
+foraging), the slow/worldgen ones (flora_growth, till, multiworld_save,
+location_*, farm_ai), and the ones that fail on master for content
+reasons (construction, combat_anim, follow_command_priority,
+location_content, repair_ai #489, physiology, lua_orphan_prune). Growing
+the eligible set is a follow-up: prove a probe deterministic across
+repeated runs, then add its key to `CI_ELIGIBLE`. The path→probe map
+lives in `tools/ci_probes.py`; a change there re-runs its `--self-test`
+(a blocking CI step of its own).
+
 Conventions that keep this fast — don't undo them:
 - hspec worldgen specs **share generated worlds** via
   `Test.Headless.Harness.sharedWorld env seed size plates` (one engine
