@@ -159,7 +159,7 @@ instead of reaching for `--help` when in doubt.
 | `flora_growth_probe.py` | #332 | worldgen | Derived flora growth/age/phase under the advancing calendar; fruiting-window gating; survives save/load. |
 | `follow_command_priority_probe.py` | #306 | arena | Follow-command priority against other AI goals. |
 | `foraging_probe.py` | #94 | worldgen | Foraging AI + harvestable-flora gating. |
-| `infection_probe.py` | general infection-system guard | arena | Infection growth / antiseptic prevention / antibiotic cure / sepsis meter, end-to-end. |
+| `infection_probe.py` | #593 | arena | Infection growth / antiseptic prevention / antibiotic cure / sepsis meter, end-to-end. Boots its own engine with `SYNARCHY_INFECTION_TEST_MODE=1` (test-tuned rate/grace, scoped to that one process) so growth is observable in seconds without touching production gameplay. |
 | `injury_log_probe.py` | logging arc (general) | arena | Injury-log stream roundtrip: `injury.emit`/`drainEvents`, `unit.injure`, `emitEventForUnit` tagging. |
 | `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
@@ -266,8 +266,7 @@ python3 tools/ci_probes.py --changed src/Power/Network.hs
 python3 tools/ci_probes.py --self-test
 
 # Every registered probe's CI status: CI-eligible, or manual-only with a
-# reason category (flaky / base-failing / slow/worldgen-heavy /
-# build-config-gated / unclassified)
+# reason category (flaky / base-failing / slow/worldgen-heavy / unclassified)
 python3 tools/ci_probes.py --status
 ```
 
