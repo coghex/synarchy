@@ -274,13 +274,22 @@ def main() -> int:
 
         failed = [p for p in chosen if results[p[0]][1] != "PASS"]
         if failed and args.retries > 0:
+            # The parallel batch was already the FIRST attempt, so a probe
+            # gets exactly `--retries` more solo attempts here — total
+            # attempts (1 + retries) match the sequential path, no bonus try.
             print(f"\nRe-running {len(failed)} failed probe(s) SOLO "
-                  f"(up to {args.retries} each)...")
+                  f"(up to {args.retries} more attempt(s) each; the parallel "
+                  f"batch was the first)...")
             for key, script, supports_port, _ in failed:
-                status, elapsed, out, _ = run_with_retry(
-                    script, supports_port, PARALLEL_PORT_BASE, args.timeout, args.retries)
-                print(f"  {script} ... {status} ({elapsed:.1f}s)")
-                results[key] = (script, status, elapsed, out)
+                for r in range(1, args.retries + 1):
+                    ok, timed_out, elapsed, out = run_one(
+                        script, supports_port, PARALLEL_PORT_BASE, args.timeout)
+                    status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+                    print(f"  {script} solo retry {r}/{args.retries} ... "
+                          f"{status} ({elapsed:.1f}s)")
+                    results[key] = (script, status, elapsed, out)
+                    if ok:
+                        break
 
         if args.tail > 0:
             for key, script, _, _ in chosen:
