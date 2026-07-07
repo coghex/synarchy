@@ -198,7 +198,10 @@ worldGetGenDefaultsFn env = do
 --   Only updates fields that are present in the table.
 worldSetGenConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetGenConfigFn env = do
-    -- Arg 1 is a table on the stack
+    -- The config table starts on top of the Lua stack. hslua's 'Lua.nth N'
+    -- is top-relative, so 'Lua.nth 1' means "current top", not "argument 1".
+    -- The nested helpers below rely on that: once getfield pushes a subtable,
+    -- another 'Lua.nth 1' addresses the pushed subtable.
     let getIntField ∷ Lua.Name → Int → Lua.LuaE Lua.Exception Int
         getIntField name def = do
             _ ← Lua.getfield (Lua.nth 1) name
