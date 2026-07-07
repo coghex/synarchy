@@ -190,23 +190,62 @@ script's header docstring for its exact flag set.
 
 ### `run_probes.py` — opt-in aggregate runner
 
-Runs a selection of the probes above back-to-back and prints a per-probe
-PASS/FAIL summary, exiting non-zero if any failed.
+Runs a selection of the probes above and prints a per-probe PASS/FAIL
+summary, exiting non-zero if any failed. `python3 tools/run_probes.py
+--list` is the authoritative count and listing of registered probes — it's
+grown over time (currently in the low 30s) and this doc doesn't try to
+track the exact number.
 
 ```bash
-# Run everything (slow — boots ~27 engines in sequence)
+# Run everything, sequentially (slow — low tens of minutes)
 python3 tools/run_probes.py
 
-# Run a subset, matched by substring against the probe name
+# Run up to 4 probes concurrently, each its own engine on its own port (#531)
+python3 tools/run_probes.py --jobs 4
+
+# Run a subset, matched by substring against the probe key/filename
 python3 tools/run_probes.py --only combat,movement
+
+# Match --only against exact probe KEYS instead of substrings — 'craft'
+# won't also pull in 'craft_bill'
+python3 tools/run_probes.py --only craft --exact
 
 # List known probes and exit
 python3 tools/run_probes.py --list
 
-# Override --port on probes that support it (the two flagless ones keep
+# Override --port on probes that support it (a couple of flagless ones keep
 # their own hardcoded port regardless)
 python3 tools/run_probes.py --port 9500
 ```
+
+Each selected probe still shells out to its own subprocess and boots its
+own headless engine — probes canNOT share one running engine (several
+neutralise the global `unit_ai.update`, load defs engine-wide, reuse the
+same world/page names, or restart the engine mid-run), so there's no clean
+per-scenario isolation on a shared instance. What `--jobs` changes is
+whether those independent engines run one after another or several at
+once:
+
+- **Default (`--jobs 1`), sequential:** one engine at a time; total cost is
+  roughly the sum of each probe's own boot + scenario time. This is the
+  mode CI's selective gate (`tools/ci_probes.py`, #530) relies on.
+- **`--jobs N`, concurrent:** up to `N` probes run at once, each its own
+  engine on a unique port (#531), cutting wall-time to roughly
+  `total / N`, bounded by the slowest single probe. Concurrency raises
+  engine-boot and port contention, so failures are more likely to be
+  flakes than with `--jobs 1`. Cap `N` at (cores − 1) or so — each probe
+  is a full engine process.
+
+A full run (any `--jobs`) is slow; it is *not* part of any default test
+tier — see `CLAUDE.md` Testing Tiers. Prefer `--only` for day-to-day use.
+
+`--retries N` re-runs a failed probe SOLO (never concurrently, regardless
+of `--jobs`) up to `N` more times before it's counted as failed — a probe
+that passes on any attempt counts as PASS. This absorbs the contention
+flakes a back-to-back or concurrent run can introduce; it does not paper
+over a probe that's genuinely broken. `--tail N` prints the last `N` lines
+of a failing probe's captured output for a quicker look without re-running
+it by hand.
 
 `--list` shows the full probe registry but not CI status. For that, see
 `tools/ci_probes.py --status` below.
@@ -227,18 +266,10 @@ python3 tools/ci_probes.py --changed src/Power/Network.hs
 python3 tools/ci_probes.py --self-test
 
 # Every registered probe's CI status: CI-eligible, or manual-only with a
-# reason category (flaky / base-failing / slow-worldgen-heavy /
+# reason category (flaky / base-failing / slow/worldgen-heavy /
 # build-config-gated / unclassified)
 python3 tools/ci_probes.py --status
 ```
-
-It shells out to each probe as its own subprocess and runs them
-**sequentially, one engine at a time** — it does not attempt to make probes
-share a single running engine (they're independent scripts with their own
-boot/teardown, not built around an injectable engine handle), so the total
-cost is roughly the sum of each probe's own boot + scenario time. That
-makes a full run slow (easily 15+ minutes); it is *not* part of any default
-test tier — see `CLAUDE.md` Testing Tiers.
 
 ## Directory layout
 ```
