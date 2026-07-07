@@ -98,9 +98,8 @@ data BuildingDef = BuildingDef
       -- ^ "appearing" / "built" → animation name in bdAnimations.
     , bdPowerDrain    ∷ !Float
       -- ^ Watts drawn whenever this building is Built (#361) — flat,
-      --   not scaled by whether a crafter is actively working it (the
-      --   issue's "standby vs active" question resolved simple:
-      --   constant draw, mirroring a real appliance). 0 (default) = an
+      --   not scaled by whether anything is actively happening at it;
+      --   an always-on appliance's constant draw. 0 (default) = an
       --   ordinary building, unaffected by the power grid — a building
       --   is a power CONSUMER iff this is > 0; there's no separate
       --   requires_power flag to fall out of sync with it. Deliberately
@@ -109,6 +108,13 @@ data BuildingDef = BuildingDef
       --   drain fresh from BuildingManager + this field every call
       --   (see Power.Network.consumersOn), the same way its position
       --   is already derived rather than duplicated.
+      --   #590 SUPERSEDES this for CRAFT STATIONS: a station's actual
+      --   electrical load is job-dependent (Craft.Types.rdPowerDraw,
+      --   drawn only while a power-tagged recipe is actively being
+      --   worked — see Power.Network.activeCraftConsumersOn), not a
+      --   flat per-building wattage. This field remains for a
+      --   hypothetical future ALWAYS-ON non-crafting device (lights,
+      --   etc.); no shipped or crafting building should set it.
     } deriving (Show, Eq)
 
 -- | A placed building. anchor = bottom-left corner of the footprint.

@@ -1,47 +1,68 @@
 #!/usr/bin/env python3
-"""Powered-workshop consumer probe (#361) — the generic power-drain
-consumer on top of #358 (nodes) / #359 (wire) / #360 (network balance).
+"""Job-dependent craft-recipe power draw probe (#590) — supersedes the
+original #361 building-level consumer model for CRAFTING purposes.
 
-#361 gives power a purpose: a workshop building def can set a
-`power_drain` (watts) and becomes a CONSUMER — not a Power.Types node
-(Power.Network derives its tile + drain fresh from BuildingManager every
-call, see Power.Network.consumersOn) — whose drain folds into whatever
-network its tile is wired to. A building is a consumer iff its
-power_drain is > 0; no shipped building sets one today (workbench/furnace
-stay power-free — assigning power_drain to real content, incl. any new
-art it wants, is a follow-up, not this probe's job). `power.
-isBuildingPowered(bid)` answers the gating question; `Engine.Scripting.
-Lua.API.Craft.validateStation` refuses craft.executeAt on an unpowered
-station, and the craft_job AI's "working" phase pours no progress while
-browned out (idle, not failed) — resuming automatically once the network
-has generation/charge again.
+#361 gave power its first consumer: a workshop building def could set a
+flat `power_drain` (watts) and draw it constantly whenever Built,
+regardless of whether anyone was actually working it. #590 replaces that
+for craft/repair stations with a JOB-dependent load: the recipe itself
+carries an optional `power_draw` (watts, default 0 — most recipes are
+unaffected). A recipe with power_draw > 0 only demands power WHILE its
+craft bill is actively claimed (Craft.Bills — Power.Network.
+activeCraftConsumersOn folds every claimed, unpaused, power-drawing bill
+into the network's live drain); an idle Built station with no claimed
+bill draws nothing, even at full generation. `power.
+isStationPoweredForRecipe(bid, recipeId)` is the job-aware gating query
+(a zero-power recipe is always true, any station, wired or not);
+`Engine.Scripting.Lua.API.Craft.validateStation` refuses craft.executeAt/
+repair.repairAt on a station that can't satisfy a positive-power
+recipe's demand, and the craft_job AI's "working" phase pours no
+progress while browned out (idle, not failed) — resuming automatically
+once the network can cover it. `power.isBuildingPowered(bid)` (the old
+#361 query) still exists for a hypothetical future ALWAYS-ON non-crafting
+device via bdPowerDrain — no shipped or crafting building sets that
+field any more, so it's trivially true for every craft station.
 
 This probe registers its OWN throwaway building + recipe defs (mirroring
 how tools/craft_bill_probe.py injects a temp recipe YAML) rather than
-flipping a shipped building's power_drain — so it exercises the #361
-mechanism in complete isolation from every other probe's fixtures.
+flipping a shipped building/recipe — so it exercises the #590 mechanism
+in complete isolation from every other probe's fixtures. The workshop
+def carries NO power_drain (per #590, a craft station's load lives on
+the recipe); the probe recipe carries `power_draw: 150`.
 
 What it does (all against a single flat arena):
-  1. Boots headless, loads real defs + a synthetic power_drain=150W
-     "forge" workshop + a tiny probe recipe for it, builds the workshop
-     through the normal materials + build-progress machinery.
-  2. Unwired: power.isBuildingPowered is false; craft.executeAt refuses
-     with a "no power" reason.
+  1. Boots headless, loads real defs + a synthetic "forge" workshop (no
+     power_drain) + a tiny power_draw=150W probe recipe for it, builds
+     the workshop through the normal materials + build-progress
+     machinery. power.isBuildingPowered is trivially true throughout
+     (the building itself never draws) — only the recipe gate matters.
+  2. Unwired: power.isStationPoweredForRecipe is false; craft.executeAt
+     refuses with a "no power" reason.
   3. Wires a solar panel + battery to the workshop (2 wire tiles, the
      panel bridges them exactly like the #360 connectivity tests) at
-     midnight: still unpowered (0 generation, 0 stored) — wiring alone
-     isn't enough. power.listNetworks() reports drainW == the workshop's
-     power_drain and consumerIds includes it.
-  4. Flips to noon (panel's peak output alone covers the drain): now
-     powered, and craft.executeAt succeeds.
-  5. AI end-to-end at midnight: craft_job claims + fetches + walks up to
-     the built station but pours NO bill progress while browned out (idle,
-     not failed, not released); flipping to noon lets it complete.
-  6. A short real fast-forward at noon shows the battery's storedWh
-     actually RISE (generation > drain); the same fast-forward at midnight
-     shows it FALL (drain with no generation) — the day/night balance the
-     issue's "Done when" calls for, with a real consumer's drain now
-     folded in throughout (not the synthetic map #360's own tests use).
+     midnight, with NO bill claimed yet: still unpowered (0 generation,
+     0 stored), and power.listNetworks() reports drainW == 0 — wired
+     alone isn't a draw.
+  4. Flips to noon (panel's peak output alone would cover the recipe's
+     draw): power.isStationPoweredForRecipe flips true and
+     craft.executeAt succeeds — but power.listNetworks() STILL reports
+     drainW == 0, because no bill is claimed: full generation, idle
+     station, zero demand (the #590 "not merely because it exists"
+     requirement).
+  5. Manually claims a bill (bypassing the AI) to isolate the claim
+     transition: drainW jumps to 150W the instant it's claimed, and
+     drops back to 0 the instant it's released — proving drain tracks
+     the ACTIVE job, not the station or the queued bill.
+  6. AI end-to-end at midnight: craft_job claims + fetches + walks up to
+     the built station (drainW reads 150W while claimed) but pours NO
+     bill progress while browned out (idle, not failed, not released);
+     flipping to noon lets it complete, after which drainW returns to 0
+     (the bill is done and gone).
+  7. A short real fast-forward with a bill held claimed (deterministic,
+     AI off) shows the battery's storedWh actually RISE at noon
+     (generation 400W > drain 150W) and FALL at midnight (drain with no
+     generation) — the day/night balance the issue's "Done when" calls
+     for, driven by a real ACTIVE job's draw, not a synthetic map entry.
 
 Usage: python3 tools/power_workshop_probe.py [--port 9361]
 Exit 0 = every check passed.
@@ -75,19 +96,19 @@ recipes:
     outputs:
       - item: steel_hardware
         count: 1
+    power_draw: {PROBE_DRAIN_W}
 """
 
 # A throwaway workshop def: no materials to deliver (build_work alone
-# gates it Built), one "forge" operation, and the power_drain (#361)
-# under test — reusing an existing texture path since art isn't the
-# point here (see the probe's docstring: assigning power_drain to real
-# content is a follow-up, not this fixture).
+# gates it Built), one "forge" operation. Deliberately NO power_drain
+# (#590) — a craft station's electrical load lives on the recipe now,
+# not the building; see the probe's docstring.
 TEST_BUILDINGS = f"""\
 buildings:
   - name: "{PROBE_BUILDING}"
     display_name: "Probe Bench"
     category: "Production"
-    description: "Throwaway #361 test fixture — not shipped content."
+    description: "Throwaway #590 test fixture — not shipped content."
     sprite: "assets/textures/buildings/workbench/default.png"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
@@ -95,7 +116,6 @@ buildings:
     build_work: 60.0
     operations:
       - forge
-    power_drain: {PROBE_DRAIN_W}
 """
 
 PAGE = "power_workshop_probe"
@@ -242,15 +262,29 @@ def poll(port: int, seconds: float, fn, interval: float = 1.0) -> bool:
     return False
 
 
-def network_for(port: int, bid: int):
-    """The single network containing consumer building bid, or None."""
+def first_network(port: int):
+    """This probe only ever wires up one network — its (only) entry
+    from power.listNetworks(), or None before anything's wired. Keying
+    off array position rather than a building id matters here: a node
+    (panel/battery) never appears in consumerIds, and an idle station
+    with no claimed bill doesn't either (#590) — so a lookup keyed on
+    "which network mentions bid X" would miss exactly the idle case
+    this probe is built to exercise."""
     nets = jget(port, "return power.listNetworks()")
-    if not isinstance(nets, list):
-        return None
-    for net in nets:
-        if isinstance(net, dict) and bid in (net.get("consumerIds") or []):
-            return net
+    if isinstance(nets, list) and nets and isinstance(nets[0], dict):
+        return nets[0]
     return None
+
+
+def drain_of(port: int) -> float | None:
+    net = first_network(port)
+    return net.get("drainW") if isinstance(net, dict) else None
+
+
+def powered_for_recipe(port: int, bid: int, recipe: str) -> str:
+    return send(port,
+        f"return power.isStationPoweredForRecipe({bid}, '{recipe}')"
+        ).strip('"')
 
 
 def main() -> int:
@@ -269,6 +303,11 @@ def main() -> int:
             f.write(TEST_RECIPES)
         n = as_int(send(port, f"return engine.loadRecipeYaml('{TEST_RECIPE_YAML}')"))
         passed = check(passed, n == 1, "probe recipe loaded", f"count={n}")
+        recipe = jget(port, f"return craft.get('{PROBE_RECIPE}')")
+        passed = check(passed,
+            isinstance(recipe, dict) and recipe.get("powerDraw") == PROBE_DRAIN_W,
+            "craft.get exposes powerDraw alongside the other recipe fields",
+            recipe)
         with open(TEST_BUILDING_YAML, "w") as f:
             f.write(TEST_BUILDINGS)
         n = as_int(send(port, f"return engine.loadBuildingYaml('{TEST_BUILDING_YAML}')"))
@@ -289,11 +328,18 @@ def main() -> int:
         uid = spawn_acolyte(port, 6, 3)
         bid_w = spawn_station(port, uid, PROBE_BUILDING, 6, 2, {})
 
+        # --- 0. The building itself carries no power_drain (#590): the
+        # OLD #361 query is trivially true regardless of wiring — only
+        # the recipe-aware gate below is meaningful for this station.
+        always = send(port, f"return power.isBuildingPowered({bid_w})").strip('"')
+        passed = check(passed, always == "true",
+                       "isBuildingPowered is trivially true (no power_drain set)",
+                       always)
+
         # --- 1. Never wired: unpowered, executeAt refuses ---
-        powered = send(port, f"return power.isBuildingPowered({bid_w})").strip('"')
+        powered = powered_for_recipe(port, bid_w, PROBE_RECIPE)
         passed = check(passed, powered == "false",
-                       "power_drain workshop starts unpowered (never wired)",
-                       powered)
+                       "isStationPoweredForRecipe false (never wired)", powered)
 
         send(port, f"unit.addItem({uid}, 'steel_bar'); return 'ok'")
         r = jget(port,
@@ -304,7 +350,8 @@ def main() -> int:
             and "no power" in str(r.get("err", "")),
             "craft.executeAt refuses with a no-power reason (unwired)", r)
 
-        # --- 2. Wire a panel + battery to the workshop, still midnight ---
+        # --- 2. Wire a panel + battery to the workshop, still midnight,
+        # no bill claimed yet: wiring alone must not draw ---
         send(port, f"unit.addItem({uid}, 'solar_panel'); "
                    f"unit.addItem({uid}, 'high_voltage_battery'); return 'ok'")
         panel_bid = as_int(send(port,
@@ -328,28 +375,33 @@ def main() -> int:
         # Two wire stubs; the panel at (8,2) is orthogonally adjacent to
         # BOTH (7,2) and (9,2), bridging them (+ the workshop at (6,2)
         # and the battery at (10,2)) into one network — same bridging
-        # mechanic as the #360 connectivity tests, just with a consumer
-        # building riding along instead of only nodes.
+        # mechanic as the #360 connectivity tests, just with a station
+        # riding along instead of only nodes.
         send(port, "require('scripts.wire').place(7, 2); return 'ok'")
         send(port, "require('scripts.wire').place(9, 2); return 'ok'")
 
         # wire.place queues a world command the world thread applies on
         # its own next iteration — poll rather than querying the very
         # instant after both sends (the same class of async landing as
-        # world.setTime below).
+        # world.setTime below). The workshop itself only appears in
+        # consumerIds once isStationPoweredForRecipe (or an active bill)
+        # asks about it, so poll on the two NODES landing on one network.
         poll(port, 5,
-             lambda: len((network_for(port, bid_w) or {}).get("nodeIds", [])) == 2,
+             lambda: len((first_network(port) or {}).get("nodeIds", [])) == 2,
              interval=0.2)
-        net = network_for(port, bid_w)
+        net = first_network(port)
         passed = check(passed,
             isinstance(net, dict)
             and sorted(net.get("nodeIds", [])) == sorted(
                 [panel_node["id"], batt_node["id"]])
-            and net.get("drainW") == PROBE_DRAIN_W and net.get("generationW") == 0,
-            f"wired at midnight: one network, drainW={PROBE_DRAIN_W}W, generationW=0",
-            net)
+            and net.get("generationW") == 0,
+            "wired at midnight: one network, generationW=0", net)
+        passed = check(passed,
+            drain_of(port) == 0,
+            "drainW == 0 while wired but no bill is claimed (idle station)",
+            drain_of(port))
 
-        powered = send(port, f"return power.isBuildingPowered({bid_w})").strip('"')
+        powered = powered_for_recipe(port, bid_w, PROBE_RECIPE)
         passed = check(passed, powered == "false",
                        "still unpowered at midnight (wired but no charge/generation)",
                        powered)
@@ -361,7 +413,9 @@ def main() -> int:
             and "no power" in str(r.get("err", "")),
             "craft.executeAt still refuses (wired, unpowered)", r)
 
-        # --- 3. Flip to noon: panel's peak output alone covers the drain ---
+        # --- 3. Flip to noon: panel's peak output alone covers the
+        # recipe's draw, but with no bill claimed the network must
+        # still show zero drain — full generation, idle station ---
         send(port, f"world.setTime('{PAGE}', 12, 0); return 'ok'")
         noon_ready = poll(port, 10,
             lambda: (as_float(send(port,
@@ -370,9 +424,13 @@ def main() -> int:
             interval=0.5)
         passed = check(passed, noon_ready, "time flip to noon landed (generationW > 300)")
 
-        powered = send(port, f"return power.isBuildingPowered({bid_w})").strip('"')
+        powered = powered_for_recipe(port, bid_w, PROBE_RECIPE)
         passed = check(passed, powered == "true",
-                       "powered at noon (400W generation > 150W drain)", powered)
+                       "powered at noon (400W generation > 150W draw)", powered)
+        passed = check(passed,
+            drain_of(port) == 0,
+            "drainW still 0 at noon with no bill claimed (#590: not merely "
+            "because it exists or is powered)", drain_of(port))
 
         before_bars = ground_count_near(port, "steel_hardware", 6, 2, 3)
         r = jget(port,
@@ -381,7 +439,24 @@ def main() -> int:
         passed = check(passed, isinstance(r, dict) and r.get("ok") is True,
                        "craft.executeAt succeeds once powered", r)
 
-        # --- 4. AI end-to-end: stall at midnight, resume at noon ---
+        # --- 4. Manually claim/release a bill (no AI): drain must track
+        # the claim transition exactly ---
+        bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE, 1)
+        passed = check(passed, bill_id is not None, "manual bill queued", msg)
+        claimed = send(port,
+            f"return craft.claimBill({bill_id}, {uid}, 60)").strip('"')
+        passed = check(passed, claimed == "true", "manual claim succeeds", claimed)
+        passed = check(passed,
+            drain_of(port) == PROBE_DRAIN_W,
+            "drainW == 150W the instant the bill is claimed", drain_of(port))
+        send(port, f"craft.releaseBill({bill_id}); return 'ok'")
+        passed = check(passed,
+            drain_of(port) == 0,
+            "drainW back to 0 the instant the bill is released", drain_of(port))
+        send(port, f"craft.cancelBill({bill_id}); return 'ok'")
+
+        # --- 5. AI end-to-end: claim shows drain, stall at midnight,
+        # resume at noon, drain returns to 0 once the bill is gone ---
         send(port, f"world.setTime('{PAGE}', 0, 0); return 'ok'")
         send(port, f"unit.addItem({uid}, 'steel_bar'); return 'ok'")
         bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE, 1)
@@ -396,6 +471,9 @@ def main() -> int:
             port, f"local b = craft.getBill({bill_id}); "
                   f"return b and b.claimant or -1") == uid)
         passed = check(passed, claimed, "AI claims the bill")
+        passed = check(passed,
+            drain_of(port) == PROBE_DRAIN_W,
+            "drainW == 150W while the AI holds the claim", drain_of(port))
 
         # Give the AI a few seconds standing at the (browned-out) station
         # — progress must NOT move.
@@ -415,9 +493,19 @@ def main() -> int:
         passed = check(passed, after_bars > before_bars,
                        "fresh output appeared at the station",
                        f"{before_bars} -> {after_bars}")
+        passed = check(passed,
+            drain_of(port) == 0,
+            "drainW back to 0 once the bill is done and gone", drain_of(port))
 
-        # --- 5. Day/night balance: consumer drain actually moves storedWh ---
+        # --- 6. Day/night balance under a real ACTIVE job's drain ---
+        # (deterministic: AI off, bill held claimed by hand for the
+        # whole fast-forward so the drain is continuous, not dependent
+        # on the AI actually finishing crafts inside the window).
         ai_off(port)
+        bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE)  # repeat forever
+        passed = check(passed, bill_id is not None, "day/night bill queued", msg)
+        send(port, f"craft.claimBill({bill_id}, {uid}, 3600); return 'ok'")
+
         stored0 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         send(port, f"world.setTime('{PAGE}', 12, 0); return 'ok'")
         send(port, f"world.setTimeScale('{PAGE}', 60); return 'ok'")
@@ -426,7 +514,7 @@ def main() -> int:
         stored1 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         passed = check(passed,
             stored0 is not None and stored1 is not None and stored1 > stored0,
-            "battery storedWh rises over simulated daylight (generation > drain)",
+            "battery storedWh rises over simulated daylight (generation > active drain)",
             f"{stored0} -> {stored1}")
 
         send(port, f"world.setTime('{PAGE}', 0, 0); return 'ok'")
@@ -436,8 +524,9 @@ def main() -> int:
         stored2 = as_float(jget(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         passed = check(passed,
             stored1 is not None and stored2 is not None and stored2 < stored1,
-            "battery storedWh falls over simulated night (drain, no generation)",
+            "battery storedWh falls over simulated night (active drain, no generation)",
             f"{stored1} -> {stored2}")
+        send(port, f"craft.releaseBill({bill_id}); craft.cancelBill({bill_id}); return 'ok'")
 
         print("\n" + ("ALL POWER WORKSHOP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1

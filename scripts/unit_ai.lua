@@ -3855,12 +3855,13 @@ local function craftExecute(uid, s, params)
     -- and the verbs are synchronous, so the returned value is
     -- authoritative — no local copy needed.
     if job.phase == "working" then
-        -- #361: a requires_power station that's unwired or browned
-        -- out pours no progress this tick — idle, not failed. Reset
-        -- lastCraftAt so the elapsed-time accumulator doesn't credit
-        -- the unpowered gap once power returns (same guard the phase
-        -- transitions above already use).
-        if not power.isBuildingPowered(job.bid) then
+        -- #590: a power-drawing recipe (job.recipeId's power_draw > 0)
+        -- pours no progress this tick while its station can't be
+        -- satisfied — idle, not failed. A zero-power recipe always
+        -- passes, wired or not. Reset lastCraftAt so the elapsed-time
+        -- accumulator doesn't credit the unpowered gap once power
+        -- returns (same guard the phase transitions above already use).
+        if not power.isStationPoweredForRecipe(job.bid, job.recipeId) then
             s.lastCraftAt = now
             return
         end

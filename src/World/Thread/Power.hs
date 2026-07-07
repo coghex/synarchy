@@ -25,7 +25,8 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Power.Types (PowerNodes(..))
-import Power.Network (tickPowerNodes, wireTilesOn, positionsOf, consumersOn)
+import Power.Network (tickPowerNodes, wireTilesOn, positionsOf, consumersOn,
+                      activeCraftConsumersOn, combineConsumers)
 import World.Time.Types (WorldTime, worldTimeToSunAngle)
 import World.Types (WorldPageId, WorldState(..))
 
@@ -42,14 +43,17 @@ tickPowerNetworks ∷ EngineEnv → WorldPageId → WorldState → Float → IO 
 tickPowerNetworks env pageId ws dtGame = do
     nodes0 ← readIORef (wsPowerNodesRef ws)
     when (not (HM.null (pnsNodes nodes0))) $ do
-        wt  ← readIORef (wsTimeRef ws)
-        td  ← readIORef (wsTilesRef ws)
-        bm  ← readIORef (buildingManagerRef env)
-        now ← readIORef (gameTimeRef env)
+        wt    ← readIORef (wsTimeRef ws)
+        td    ← readIORef (wsTilesRef ws)
+        bm    ← readIORef (buildingManagerRef env)
+        now   ← readIORef (gameTimeRef env)
+        rm    ← readIORef (recipeManagerRef env)
+        bills ← readIORef (wsCraftBillsRef ws)
         let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)
             wireTiles   = wireTilesOn td
             drainByNode = HM.empty
-            consumers   = consumersOn pageId now bm
+            consumers   = combineConsumers (consumersOn pageId now bm)
+                            (activeCraftConsumersOn pageId now bm rm bills)
         -- Snapshot-and-clobber would lose any node power.placeNode
         -- registers between the read above and the write below (both
         -- this tick and placeNode hit wsPowerNodesRef). Recompute

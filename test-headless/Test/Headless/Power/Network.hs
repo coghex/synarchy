@@ -1,8 +1,14 @@
 {-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Power-network connectivity + energy balance tests (#360), plus
---   #361's requires_power consumer folding. No engine/Lua needed — the
---   connectivity + brownout math (incl. consumer drain) is fully
---   exercised here with synthetic nodes/consumers.
+--   #361's requires_power consumer folding and #590's combineConsumers
+--   union. No engine/Lua needed — the connectivity + brownout math
+--   (incl. consumer drain) is fully exercised here with synthetic
+--   nodes/consumers. activeCraftConsumersOn itself (#590 — job-
+--   dependent recipe drain) needs a real BuildingManager/RecipeManager/
+--   CraftBills to exercise meaningfully; that's covered end-to-end by
+--   tools/power_workshop_probe.py instead, matching how every other
+--   Building/Craft-manager-shaped consumer here (consumersOn included)
+--   is engine-probe-tested rather than hand-built in hspec.
 module Test.Headless.Power.Network (spec) where
 
 import UPrelude
@@ -294,3 +300,22 @@ spec = do
                     pnwConsumerIds net `shouldBe` [workshop]
                     pnwDrainW net `shouldBe` 150
                 _     → expectationFailure ("expected exactly one network, got " <> show nets)
+
+    describe "combineConsumers (#590 — always-on + active-job union)" $ do
+        it "sums drain for a building present on both sides" $ do
+            let always = HM.singleton workshop ((2, 0), 50)
+                active  = HM.singleton workshop ((2, 0), 150)
+            combineConsumers always active
+                `shouldBe` HM.singleton workshop ((2, 0), 200)
+
+        it "keeps entries that only appear on one side untouched" $ do
+            let always = HM.singleton workshop ((2, 0), 50)
+                active  = HM.singleton workshop2 ((1, 1), 150)
+            combineConsumers always active
+                `shouldBe` HM.fromList [ (workshop,  ((2, 0), 50))
+                                       , (workshop2, ((1, 1), 150)) ]
+
+        it "is a no-op when one side is empty" $ do
+            let active = HM.singleton workshop ((2, 0), 150)
+            combineConsumers HM.empty active `shouldBe` active
+            combineConsumers active HM.empty `shouldBe` active

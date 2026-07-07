@@ -26,7 +26,7 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingActivity(..), BuildingManager(..),
                        currentActivity, footprintDist)
-import Engine.Scripting.Lua.API.Power (isBuildingPowered)
+import Engine.Scripting.Lua.API.Power (isRecipePoweredAt)
 
 -- | craft.execute(uid, recipeId) → ok, idsOrErr. Runs one craft
 --   against the unit's TOP-LEVEL inventory: knowledge gate, then
@@ -87,7 +87,13 @@ validateStation env uid rid bid = do
     bm      ← readIORef (buildingManagerRef env)
     um      ← readIORef (unitManagerRef env)
     now     ← readIORef (gameTimeRef env)
-    powered ← isBuildingPowered env bid
+    -- #590: power is job-dependent — a recipe with no power_draw (the
+    -- default) needs none checked at all, regardless of the station's
+    -- own wiring. An unknown recipe id resolves to 0 draw here (trivially
+    -- "powered"); the Either block below still refuses it on its own
+    -- "unknown recipe" check, so the outcome is unaffected either way.
+    let drawW = maybe 0 rdPowerDraw (lookupRecipe rid rm)
+    powered ← isRecipePoweredAt env bid drawW
     return $ do
         recipe ← note ("unknown recipe " <> rid) (lookupRecipe rid rm)
         inst   ← note "no such building" (HM.lookup bid (bmInstances bm))
@@ -101,12 +107,12 @@ validateStation env uid rid bid = do
                   <> rdStation recipe)
         unless (currentActivity now inst def ≡ Built) $
             Left "station not built yet"
-        -- #361: a requires_power station that isn't wired to a
-        -- charged network can't run its recipes. Checked here even
-        -- though the craft_job AI already gates its own progress-pour
-        -- loop on the same query (unit_ai.lua), so craft.executeAt
-        -- stays correct for any other caller (debug console, tests,
-        -- a future station type) too.
+        -- #590: a power-drawing recipe (rdPowerDraw > 0) that can't be
+        -- satisfied by the station's network can't run. Checked here
+        -- even though the craft_job AI already gates its own
+        -- progress-pour loop on the same query (unit_ai.lua), so
+        -- craft.executeAt/repair.repairAt stay correct for any other
+        -- caller (debug console, tests) too.
         unless powered $
             Left ("station " <> biDefName inst <> " has no power")
         let utile = (floor (uiGridX u), floor (uiGridY u))

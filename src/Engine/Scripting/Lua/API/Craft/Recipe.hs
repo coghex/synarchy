@@ -50,6 +50,7 @@ loadRecipeYamlFn env = do
                             , rdSkill     = rySkill d
                             , rdRepairAxis = toRepairAxis ⊚ ryRepairAxis d
                             , rdOutputTemp = ryOutputTemp d
+                            , rdPowerDraw  = ryPowerDraw d
                             }
                     atomicModifyIORef' (recipeManagerRef env) $ \m →
                         (RecipeManager
@@ -82,10 +83,11 @@ pushIngredient i = do
     Lua.setfield (-2) "count"
 
 -- | Push a RecipeDef as a Lua table: { id, name, station, work,
---   knowledge?, skill?, repairAxis?, inputs = [{item,count}…],
+--   knowledge?, skill?, repairAxis?, powerDraw, inputs = [{item,count}…],
 --   fuel = {item,count}?, outputs = [{item,count}…] }. Shared by
 --   craft.get and repair.get (Engine.Scripting.Lua.API.Repair) so both
---   accessors report the identical shape.
+--   accessors report the identical shape. powerDraw (#590) is always
+--   present (0 = never power-gated), unlike the other optional fields.
 pushRecipe ∷ RecipeDef → Lua.LuaE Lua.Exception ()
 pushRecipe d = do
     Lua.newtable
@@ -101,6 +103,7 @@ pushRecipe d = do
     forM_ (rdSkill d)      $ putS "skill"
     forM_ (rdRepairAxis d) $ \axis → putS "repairAxis" (repairAxisName axis)
     forM_ (rdOutputTemp d) $ putN "outputTemp"
+    putN "powerDraw" (rdPowerDraw d)
     Lua.newtable
     forM_ (zip [1..] (rdInputs d)) $ \(i, ing) → do
         pushIngredient ing

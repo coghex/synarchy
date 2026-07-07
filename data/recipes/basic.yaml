@@ -32,6 +32,17 @@
 #              tracked temperature instead of ambient (e.g. 100 for
 #              fresh-brewed coffee). Omitted = ambient, the historical
 #              default.
+#   power_draw: optional watts this recipe demands from its station
+#              WHILE being worked (#590). Omitted/0 (default, every
+#              recipe here) = never power-gated, runs at any Built
+#              station regardless of the power grid. Positive = the
+#              craft AI's work-pour stalls (without losing progress or
+#              consuming inputs) whenever the station's network can't
+#              cover it; craft.executeAt/repair.repairAt refuse outright
+#              with a "no power" reason. This is the job-dependent load
+#              — see Building.Types.bdPowerDrain for the (currently
+#              unused by any craft station) building-level always-on
+#              alternative.
 #
 # Outputs spawn factory-new: condition + sharpness 100.
 recipes:
