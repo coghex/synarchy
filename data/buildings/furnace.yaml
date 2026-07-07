@@ -36,3 +36,29 @@ buildings:
     operations:
       - smelt
       - repair_condition
+
+    # While materials aren't satisfied the building renders as a
+    # translucent ghost (uses default.png with 0.6 alpha). Once they
+    # arrive, the construction anim plays through these 8 frames,
+    # tracking build progress directly (build_work > 0 — see
+    # Building.Render.pickBuildingFrame) rather than real time, so fps
+    # only matters if bdBuildWork were ever dropped to 0. With no
+    # "built" anim defined, the engine pins frame 8 as the built
+    # sprite — same picture, no snap.
+    state_animations:
+      appearing: furnace-construct
+
+    animations:
+      furnace-construct:
+        fps: 4
+        loop: false
+        frames:
+          default:
+            - "assets/textures/buildings/furnace/construct/frame_001.png"
+            - "assets/textures/buildings/furnace/construct/frame_002.png"
+            - "assets/textures/buildings/furnace/construct/frame_003.png"
+            - "assets/textures/buildings/furnace/construct/frame_004.png"
+            - "assets/textures/buildings/furnace/construct/frame_005.png"
+            - "assets/textures/buildings/furnace/construct/frame_006.png"
+            - "assets/textures/buildings/furnace/construct/frame_007.png"
+            - "assets/textures/buildings/furnace/construct/frame_008.png"
