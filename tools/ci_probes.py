@@ -54,6 +54,7 @@ CI_ELIGIBLE = {
     "cargo_capacity",
     "collapse_crawl",
     "concussion_revive",
+    "cooking",
     "craft",
     "injury_log",
     "item_instance",
@@ -93,15 +94,15 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
       "scripts/injury_log*.lua", "src/Infection/*", "data/infections/*"],
      {"collapse_crawl", "concussion_revive", "injury_log"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
-      "scripts/craft*.lua"],
-     {"craft"}),
+      "scripts/craft*.lua", "scripts/cooking*.lua"],
+     {"craft", "cooking"}),
     (["src/Power/*", "scripts/wire.lua", "scripts/power*.lua",
       "data/structure_packs/*"],
      {"power_workshop"}),
     (["src/Item/*", "data/items/*", "src/Equipment/*", "data/equipment/*"],
      {"item_instance", "item_temp", "cargo_capacity", "repair_item"}),
     (["src/Building/*", "data/buildings/*"],
-     {"power_workshop", "craft"}),
+     {"power_workshop", "craft", "cooking"}),
 ]
 
 
@@ -153,7 +154,7 @@ def _self_test() -> int:
     cases = [
         (["README.md"], [], "docs only"),
         (["docs/foo.md", "assets/x.png"], [], "docs+assets"),
-        (["data/recipes/smelting.yaml"], sorted({"craft"}), "recipes -> craft"),
+        (["data/recipes/smelting.yaml"], sorted({"craft", "cooking"}), "recipes -> craft+cooking"),
         (["src/Power/Network.hs"], sorted({"power_workshop"}), "power"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
         (["src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE), "unclassified -> full"),
