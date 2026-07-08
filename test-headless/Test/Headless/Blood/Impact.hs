@@ -9,6 +9,12 @@ import Test.Hspec
 import Blood.Types
 import Blood.Impact
 
+-- | Unwrap an expected 'Just', failing the example (not crashing) on
+--   'Nothing' — avoids incomplete `let Just x = ...` pattern bindings,
+--   which fail the -Werror=incomplete-uni-patterns CI gate.
+expectJust ∷ HasCallStack ⇒ String → Maybe a → IO a
+expectJust msg = maybe (expectationFailure msg >> error msg) pure
+
 spec ∷ Spec
 spec = do
     describe "impactBloodForWound / stab" $ do
@@ -17,8 +23,10 @@ spec = do
 
         it "a high-severity stab produces a stronger request than a \
            \low-severity one" $ do
-            let Just lo = impactBloodForWound "stab" 0.1
-                Just hi = impactBloodForWound "stab" 0.9
+            lo ← expectJust "low-severity stab should create blood"
+                    (impactBloodForWound "stab" 0.1)
+            hi ← expectJust "high-severity stab should create blood"
+                    (impactBloodForWound "stab" 0.9)
             ibSeverity hi `shouldSatisfy` (> ibSeverity lo)
             ibOpacity hi `shouldSatisfy` (> ibOpacity lo)
             ibFootprint hi `shouldSatisfy` (> ibFootprint lo)
@@ -29,17 +37,21 @@ spec = do
 
     describe "impactBloodForWound / arterial and severed" $ do
         it "arterial always creates at least a moderate-severity mark" $ do
-            let Just ib = impactBloodForWound "arterial" 0.05
+            ib ← expectJust "arterial should create blood"
+                    (impactBloodForWound "arterial" 0.05)
             ibSeverity ib `shouldSatisfy` (≥ SeverityModerate)
 
         it "severed always creates at least a moderate-severity mark" $ do
-            let Just ib = impactBloodForWound "severed" 0.05
+            ib ← expectJust "severed should create blood"
+                    (impactBloodForWound "severed" 0.05)
             ibSeverity ib `shouldSatisfy` (≥ SeverityModerate)
 
         it "a high-severity arterial wound still scales stronger than a \
            \barely-there one" $ do
-            let Just lo = impactBloodForWound "arterial" 0.1
-                Just hi = impactBloodForWound "arterial" 0.95
+            lo ← expectJust "low-severity arterial should create blood"
+                    (impactBloodForWound "arterial" 0.1)
+            hi ← expectJust "high-severity arterial should create blood"
+                    (impactBloodForWound "arterial" 0.95)
             ibSeverity hi `shouldSatisfy` (> ibSeverity lo)
             ibOpacity hi `shouldSatisfy` (> ibOpacity lo)
 

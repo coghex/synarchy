@@ -73,7 +73,7 @@ import Unit.Injury (penetrate, penetrateDeposits, woundFactor, tissueInjuryKind
                    , tissueCapacityWeight, defaultPartCapacity)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.LineOfSight (unitAwareness)
-import Blood.Impact (spawnImpactBlood)
+import Blood.Impact (ImpactBlood(..), impactBloodForWound, spawnImpactBlood)
 
 -- ----- Tuning constants -----
 
@@ -556,20 +556,38 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                                      limbName weaponName detailStr
                                      (lungeSpeed > 0))
 
-            -- Impact blood (#607): ONE mark per landed hit, keyed off the
-            -- SAME headline (kind, severity) the death-check/stance-hit/
-            -- verb-tier narration already use — never per-wound, so a
-            -- multi-layer paw hit stays bounded to a single decal
-            -- (requirement 9). Direction is the real attacker→target
-            -- vector (always available here, unlike a fall or a debug
-            -- unit.injure call).
+            -- Impact blood (#607): ONE mark per landed hit, chosen from
+            -- the ACTUAL per-wound kinds this hit produced — NOT the
+            -- swing's headline mechanism. A tissue layer can register as
+            -- "fracture"/"internal"/"arterial" even under a "blunt"/
+            -- "slash" swing (Unit.Injury.tissueInjuryKind), so the
+            -- headline kind/severity alone could both mask a catastrophic
+            -- fracture buried in `wounds` and wrongly draw blood for a
+            -- swing whose headline reads "blunt" but whose only wound is
+            -- "internal". Picks whichever wound would draw the STRONGEST
+            -- mark (mirrors how the fall-injury hook below picks its
+            -- worst injury); never per-wound, so a multi-layer paw hit
+            -- stays bounded to a single decal (requirement 9). Direction
+            -- is the real attacker→target vector (always available here,
+            -- unlike a fall or a debug unit.injure call).
             let dx = uiGridX tgt - uiGridX atk
                 dy = uiGridY tgt - uiGridY atk
                 impactAngle = atan2 dy dx
                 impactSeed  = round (impactAngle * 1000.0) ∷ Int
-            spawnImpactBlood env (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
-                (uiGridZ tgt) headKind severity impactAngle impactSeed
-                (Just (UnitId tgtRaw)) gt
+                impactCandidates =
+                    [ (w, ib)
+                    | w ← wounds
+                    , Just ib ← [impactBloodForWound (woundKind w) (woundSeverity w)]
+                    ]
+            case impactCandidates of
+                [] → pure ()
+                _  → do
+                    let (worstWound, _) = maximumBy
+                            (\(_, a) (_, b) → compare (ibOpacity a) (ibOpacity b))
+                            impactCandidates
+                    spawnImpactBlood env (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
+                        (uiGridZ tgt) (woundKind worstWound) (woundSeverity worstWound)
+                        impactAngle impactSeed (Just (UnitId tgtRaw)) gt
 
             -- Landed hit ⇒ the weapon takes wear (dulls, fractures, can
             -- break). Natural weapons don't wear.

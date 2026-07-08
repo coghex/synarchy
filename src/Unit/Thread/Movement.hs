@@ -131,7 +131,7 @@ tickAllMovement dt env utsRef = do
     -- death. Mirrors the climb-XP drain above.
     sm ← readIORef (substanceManagerRef env)
     let fallResults =
-            [ (uid, injs, foldr (max . fiSeverity) 0 injs)
+            [ (uid, injs, foldr (max . fiSeverity) 0 injs, usRealX ss, usRealY ss, usGridZ ss)
             | (uid, ss) ← HM.toList simStates'''
             , Just drop ← [usPendingFallDrop ss]
             , Just inst ← [HM.lookup uid (umInstances um)]
@@ -142,7 +142,7 @@ tickAllMovement dt env utsRef = do
             ]
     when (not (null fallResults)) $
         atomicModifyIORef' (unitManagerRef env) $ \um' →
-            let applyOne (uid, injs, _) m = case HM.lookup uid m of
+            let applyOne (uid, injs, _, _, _, _) m = case HM.lookup uid m of
                     Nothing → m
                     Just inst →
                         let ws = [ Wound { woundPart     = fiPart i
@@ -164,7 +164,7 @@ tickAllMovement dt env utsRef = do
     -- Feed the injury log: one event per fall that actually hurt someone,
     -- carrying a "detail" string (part:woundKind:sevPct|…) the injury-log
     -- prose turns into a clause list, plus the worst severity + count.
-    forM_ fallResults $ \(uid, injs, worst) → when (not (null injs)) $
+    forM_ fallResults $ \(uid, injs, worst, _, _, _) → when (not (null injs)) $
         let detail = T.intercalate "|"
                 [ T.intercalate ":"
                     [ fiPart i, fiKind i
@@ -180,7 +180,12 @@ tickAllMovement dt env utsRef = do
     -- breaks several bones at once stays bounded to a single decal —
     -- requirement 9). A fall has no "attacker", so direction always
     -- falls back to a deterministic seeded angle (requirement 7).
-    forM_ fallResults $ \(uid, injs, _) → when (not (null injs)) $
+    -- Position comes from THIS tick's fresh sim state (gx, gy, gz),
+    -- not the unit-manager mirror -- that mirror is only refreshed by
+    -- a separate publish-to-render pass (Unit.Thread), so at this
+    -- point in the tick it can still be one tick behind the landing
+    -- this very fall just computed (a floating mid-air decal bug).
+    forM_ fallResults $ \(uid, injs, _, gx, gy, gz) → when (not (null injs)) $
         case HM.lookup uid (umInstances um) of
             Nothing   → pure ()
             Just inst →
@@ -188,13 +193,13 @@ tickAllMovement dt env utsRef = do
                         (\a b → if fiSeverity a ≥ fiSeverity b then a else b) injs
                     seed = round (now * 1000.0) + fromIntegral (unUnitId uid)
                     angle = impactFallbackAngle seed
-                in spawnImpactBlood env (uiPage inst) (uiGridX inst) (uiGridY inst)
-                     (uiGridZ inst) (fiKind worstInjury) (fiSeverity worstInjury)
+                in spawnImpactBlood env (uiPage inst) gx gy gz
+                     (fiKind worstInjury) (fiSeverity worstInjury)
                      angle seed (Just uid) now
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)
-                              | (uid, _, worst) ← fallResults ]
+                              | (uid, _, worst, _, _, _) ← fallResults ]
         setFall uid ss = case HM.lookup uid stunMap of
             Just stun → ss { usGetUpAt = Just (now + stun)
                            , usPendingFallDrop = Nothing }
