@@ -405,19 +405,11 @@ end
 -- Camera Zoom (normal scroll, no shift, no UI focus)
 -----------------------------------------------------------
 
-local zoomImpulseScale = 0.4
-
 function worldView.onScroll(dx, dy)
     if not worldView.visible then return end
-
-    local current = camera.getZoomVelocity()
-    local zoom = camera.getZoom()
-    local impulse = zoomImpulseScale * zoom
-    if dy > 0 then
-        camera.setZoomVelocity(current - impulse)
-    elseif dy < 0 then
-        camera.setZoomVelocity(current + impulse)
-    end
+    -- Calibrated by scroll amount, not event count (#596) — see
+    -- camera.applyScrollZoom / Engine.Loop.Camera.scrollZoomImpulse.
+    camera.applyScrollZoom(dy)
 end
 
 -----------------------------------------------------------
