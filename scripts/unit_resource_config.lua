@@ -157,18 +157,14 @@ local config = {
             regen_factor_collapsed = 0.12,
             regen_factor_crouching = 0.12,
         },
-        -- Sleep pressure (circadian epic #479 / #611): the LONG, multi-day
-        -- "sleep debt" resource — separate from exhaustion above (short-
-        -- horizon, regens with ordinary rest) and from the circadian urge
-        -- read live via scripts/circadian.lua (a time-of-day PULL, never
-        -- stored). Deliberately DRAIN-ONLY for now — no regen_factor_*
-        -- fields at all, so it can only fall, never recover from idling
-        -- (the existing regen_factor_idle shortcut every other resource
-        -- uses would defeat the point: "not idling" must not clear sleep
-        -- debt). It only ever reaches empty and sits there until #612
-        -- lands the real Sleeping pose and a matching regen path; nothing
-        -- reads/reacts to sleep_pressure yet, so an empty pool has no
-        -- gameplay effect this issue (no collapse_threshold/kill_on_zero).
+        -- Sleep pressure (circadian epic #479 / #611 / #612): the LONG,
+        -- multi-day "sleep debt" resource — separate from exhaustion above
+        -- (short-horizon, regens with ordinary rest) and from the circadian
+        -- urge read live via scripts/circadian.lua (a time-of-day PULL,
+        -- never stored). Only regens via regen_factor_sleeping below (the
+        -- Sleeping pose, #612) — the existing regen_factor_idle shortcut
+        -- every other resource uses would defeat the point: "not idling"
+        -- must not clear sleep debt.
         sleep_pressure = {
             max_from = "max_sleep_pressure",
             -- Flat per-second drain regardless of activity/pose — sleep
@@ -182,6 +178,14 @@ local config = {
             -- 2.5 * 1440 = 3600s to drain max_sleep_pressure to 0, so
             -- drain_constant_frac = 1 / 3600.
             drain_constant_frac = 1 / 3600,
+            -- Regen while actually asleep (pose == "sleeping", #612).
+            -- regen = regen_factor_sleeping * endurance, and
+            -- max_sleep_pressure = endurance * 10 (unit_stats.lua), so a
+            -- factor of 10/T fills the pool from empty in T real-seconds
+            -- regardless of endurance. T = 480s = 8 game-hours (a full
+            -- night's sleep at DAY_SECONDS=1440 ⇒ 60 real-sec/game-hour) ⇒
+            -- 10/480 = 1/48.
+            regen_factor_sleeping = 1 / 48,
             -- Circadian-urge bump shape (scripts/circadian.lua reads
             -- these via this SAME per-def entry, not a separate table, so
             -- #613's species differentiation has one place to override

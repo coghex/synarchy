@@ -117,6 +117,8 @@ PROBES = [
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
     ("save_pause", "save_pause_probe.py", True,
      "save/load pause-semantics regression (#42)"),
+    ("sleep", "sleep_probe.py", False,
+     "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
     ("thermo_altitude", "thermo_altitude_probe.py", True,
      "altitude-lapse thermal effect (#308)"),
 ]

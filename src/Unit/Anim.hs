@@ -24,6 +24,7 @@ poseTag Collapsed = "collapsed"
 poseTag Dead      = "dead"
 poseTag Climbing  = "climbing"
 poseTag Falling   = "falling"
+poseTag Sleeping  = "sleeping"
 
 -- | State key for a pose + activity, used to look up the animation
 --   in `udStateAnims`. The convention is `<pose>-<activity>` for

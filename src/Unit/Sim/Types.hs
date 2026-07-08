@@ -149,7 +149,7 @@ data MoveTarget = MoveTarget
 --   so inserting or reordering constructors silently shifts every saved
 --   unit's `usPose`. If the pose set legitimately needs to change, bump
 --   `currentSaveVersion` in `World.Save.Types`.
-data Pose = Standing | Crouching | Crawling | Collapsed | Dead | Climbing | Falling
+data Pose = Standing | Crouching | Crawling | Collapsed | Dead | Climbing | Falling | Sleeping
     deriving (Show, Eq, Generic, Serialize)
 
 -- | Depth ordering used to derive reverse playback for shared
@@ -171,6 +171,10 @@ poseDepth Climbing  = 1
 -- is going from upright to in-air-going-down). Falling → Collapsed
 -- is forward (further descent into the ground).
 poseDepth Falling   = 2
+-- Sleeping only ever transitions to/from Crawling (lying down onto the
+-- ground to sleep): depth 3 keeps Crawling→Sleeping forward and
+-- Sleeping→Crawling (waking) reverse, matching the Collapsed convention.
+poseDepth Sleeping  = 3
 
 -- | The current activity the unit is doing. Drives anim selection and
 --   movement gating. APPEND-ONLY for the same reason as `Pose` and

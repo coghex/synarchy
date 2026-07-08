@@ -288,6 +288,8 @@ local function fracColorFn(cur, maxName, crit, warn)
         return dangerColor(c / m, crit, warn)
     end
 end
+local function sleepPressureColorFn(uid)
+    local c, m = stats.get(uid, "sleep_pressure"), stats.get(uid, "max_sleep_pressure"); return (c and m and m > 0) and dangerColor(1 - c / m, 0.10, 0.30) or L.CONTENT_VAL_COLOR end
 
 -- Blood value tooltip: the live BLEED rate in ml/s (with %/s of total blood
 -- in parens). engine.getBlood exposes bleedRate (L/s) summed over wounds.
@@ -332,6 +334,8 @@ function M.buildStatusPanel(rect, uid)
           colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) },
         { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
           colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) },
+        { key = "sleep_pressure", value = function(u) return fmtCurMax(u, "sleep_pressure", "max_sleep_pressure") end,
+          colorFn = sleepPressureColorFn },   -- inverted: HIGH means needs sleep
         { key          = "carrying_capacity",
           value        = fmtCarry,
           valueTooltip = statDefs.carryValueTooltip },

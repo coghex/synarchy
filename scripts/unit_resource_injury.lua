@@ -133,7 +133,17 @@ function M.tickInjuries(uid, info, pose)
         elseif pose == "crawling" then
             -- Legs healed enough to walk — stand up (revive handles the
             -- Crawling→Standing snap; checkRevive handles Collapsed).
-            unit.revive(uid)
+            -- Exception (#612): the sleep goal's lie-down/wake-up chain
+            -- passes through Crawling as a deliberate WAYPOINT (stand ->
+            -- crouch -> crawl -> sleep), not an injury symptom — reviving
+            -- mid-chain would snap a healthy, about-to-sleep unit back to
+            -- Standing and the AI would just re-descend forever, never
+            -- reaching Sleeping. unit_ai_sleep.lua drives the unit back up
+            -- itself once the chain completes.
+            local s = require("scripts.unit_ai").getState(uid)
+            if not (s and s.sleepPhase) then
+                unit.revive(uid)
+            end
         end
     end
     return false

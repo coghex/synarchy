@@ -58,6 +58,8 @@ local STAT_DEFS = {
         desc = "Energy store (kcal available to spend). Fed by digestion, drained by metabolism and activity. At 0 the body catabolizes fat, then muscle — starvation." },
     hydration    = { icon = "hydration",    name = "Hydration",
         desc = "Need for water. Drops faster than hunger; critical in hot climates." },
+    sleep_pressure = { icon = "sleep",      name = "Sleep",
+        desc = "Rest reserve. Drains while awake over multiple days, refills while actually sleeping. As it runs low (faster near the circadian sleep window) the unit is driven to find somewhere to lie down." },
     blood        = { icon = "blood",        name = "Blood",
         desc = "Blood volume in litres. Drained by bleeding wounds; below 30% triggers unconsciousness, ≤0 means death." },
     pain         = { icon = "pain",         name = "Pain",
