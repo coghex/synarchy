@@ -31,7 +31,7 @@ loadFontFn env backendState = do
   case (path, size) of
     (Just pathBS, Just sizeVal) → do
       handle ← Lua.liftIO $ do
-        let pathStr = T.unpack $ TE.decodeUtf8 pathBS
+        let pathStr = T.unpack $ TE.decodeUtf8Lenient pathBS
             (lteq, _) = lbsMsgQueues backendState
         
         -- Check if font is already cached
@@ -74,8 +74,8 @@ spawnTextFn env backendState = do
         logDebug logger CatLua $ "Lua spawning text with ID " 
                        <> T.pack (show objId)
         let fontHandle = FontHandle $ fromIntegral fh
-            textStr = TE.decodeUtf8 textBS
-            cStr = T.unpack $ TE.decodeUtf8 c
+            textStr = TE.decodeUtf8Lenient textBS
+            cStr = T.unpack $ TE.decodeUtf8Lenient c
             msg = LuaSpawnTextRequest objId (realToFrac xVal) (realToFrac yVal)
                   fontHandle textStr (colorToVec4 cStr) layerId (realToFrac size)
             lteq = luaToEngineQueue env
@@ -99,7 +99,7 @@ setTextFn env = do
   case (objIdNum, text) of
     (Just idVal, Just textBS) → do
       Lua.liftIO $ do
-        let textStr = TE.decodeUtf8 textBS
+        let textStr = TE.decodeUtf8Lenient textBS
             msg = LuaSetTextRequest (ObjectId (fromIntegral idVal)) textStr
             lteq = luaToEngineQueue env
         Q.writeQueue lteq msg
@@ -133,7 +133,7 @@ getTextWidthFn env = do
       (Just fh, Just textBS, Just size) → do
           width ← Lua.liftIO $ do
               let fontHandle = FontHandle (fromIntegral fh)
-                  textStr = T.unpack $ TE.decodeUtf8 textBS
+                  textStr = T.unpack $ TE.decodeUtf8Lenient textBS
               fontCache ← readIORef (fontCacheRef env)
               case Map.lookup fontHandle (fcFonts fontCache) of
                   Nothing → return 0.0
