@@ -450,6 +450,10 @@ library
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
+                     UI.Tooltip.Layout
+                     UI.Tooltip.Lock
+                     UI.Tooltip.Render
+                     UI.Tooltip.State
                      Unit.Types
                      Unit.Anim
                      Unit.Stats
@@ -577,6 +581,12 @@ library
                      World.Thread.Command.Texture
                      World.Thread.Command.UI
                      World.Thread.Command.Edit
+                     World.Thread.Command.Edit.Sync
+                     World.Thread.Command.Edit.Terrain
+                     World.Thread.Command.Edit.Structure
+                     World.Thread.Command.Edit.Vegetation
+                     World.Thread.Command.Edit.Dig
+                     World.Thread.Command.Edit.Fluid
                      World.Thread.Command.Location
                      World.Grid
                      World.Render
@@ -611,6 +621,9 @@ library
                      World.Generate.Strata
                      World.Generate.Types
                      World.Generate.Config
+                     World.Generate.Config.Types
+                     World.Generate.Config.Normalize
+                     World.Generate.Config.IO
                      World.Geology
                      World.Geology.Types
                      World.Geology.Ore
