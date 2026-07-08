@@ -53,6 +53,28 @@ local function dawnHasArrived(uid, s)
     return prev ~= nil and prev < DAWN_ANGLE and angle >= DAWN_ANGLE
 end
 
+-- Sample up to MAX_SPOT_ATTEMPTS candidate points within radius of
+-- (originX, originY), returning the first one whose tile isn't fluid
+-- (mirrors unit_ai_water's nearestNonFluidNeighbor — a basic passability
+-- check, not the dedicated threat/hazard safety filtering the v1 design
+-- explicitly deferred). Falls back to the last sampled candidate if
+-- every attempt landed on fluid (e.g. a small island) — the walk simply
+-- fails and sleep_spot_max_wait re-rolls on the next attempt.
+local MAX_SPOT_ATTEMPTS = 8
+local function pickSleepSpot(originX, originY, radius)
+    local x, y
+    for _ = 1, MAX_SPOT_ATTEMPTS do
+        local angle = math.random() * 2 * math.pi
+        local dist  = math.random() * radius
+        x = originX + math.cos(angle) * dist
+        y = originY + math.sin(angle) * dist
+        if not world.getFluidAt(math.floor(x), math.floor(y)) then
+            return x, y
+        end
+    end
+    return x, y
+end
+
 local function shouldWake(uid, s)
     if s.sleepWakeRequested then
         s.sleepWakeRequested = nil
@@ -136,17 +158,17 @@ local function sleepExecute(uid, s, params)
 
     -- No phase yet: pick a nearby spot once per session (mirrors
     -- unit_ai_water's search-session anchoring) and walk to it. "Any
-    -- flat open tile" — no dedicated safety filtering (v1 decision);
-    -- normal pathing already routes around impassable terrain.
+    -- flat open tile" — no dedicated threat/hazard safety filtering
+    -- (v1 decision), but pickSleepSpot still steers off literal fluid
+    -- tiles; normal pathing routes around the rest of the impassable
+    -- terrain it can't dodge by picking a different target.
     local info = unit.getInfo(uid)
     if not info then return end
     if not s.sleepSpot or s.sleepSession ~= s.actionStartedAt then
-        local angle = math.random() * 2 * math.pi
-        local dist  = math.random() * params.sleep_spot_radius
-        s.sleepSpot       = { x = info.gridX + math.cos(angle) * dist,
-                              y = info.gridY + math.sin(angle) * dist }
-        s.sleepSession    = s.actionStartedAt
-        s.sleepSpotPickedAt = engine.gameTime()
+        local x, y = pickSleepSpot(info.gridX, info.gridY, params.sleep_spot_radius)
+        s.sleepSpot          = { x = x, y = y }
+        s.sleepSession       = s.actionStartedAt
+        s.sleepSpotPickedAt  = engine.gameTime()
     end
 
     local d = core.distance(info.gridX, info.gridY, s.sleepSpot.x, s.sleepSpot.y)

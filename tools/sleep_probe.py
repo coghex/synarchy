@@ -226,6 +226,50 @@ def main() -> int:
             return 1
         print("PASS: sleeping->crawling reverses the shared asset")
 
+        # ---- sleepUtility blends exhaustion (scripts/exhaustion.lua,
+        # #610), not just sleep_pressure deficit + circadian urge. Calls
+        # sleepUtility directly (deterministic — no AI-timing dependency)
+        # at a fixed deficit/time so only exhaustion varies between the
+        # two reads. Still runs with unit_ai.update neutralised (from the
+        # low-level section above) so the real AI can't also act on uid1
+        # in the background and race sleepPhase out from under this. ----
+        max_sp1 = max_sleep_pressure(uid1)
+        send(PORT, f"unit.setStat({uid1}, 'sleep_pressure', {0.65 * max_sp1})",
+             expect_result=False)  # deficit == sleep_min_deficit floor
+        send(PORT, f"world.setTime('{ARENA}', 12, 0)", expect_result=False)  # noon: urge ~= 0
+        max_exh = send(PORT,
+            f"return require('scripts.unit_stats').get({uid1}, 'max_exhaustion')")
+        try:
+            max_exh = float(max_exh)
+        except (TypeError, ValueError):
+            print(f"FAIL (setup): max_exhaustion -> {max_exh!r}")
+            return 2
+
+        def sleep_utility() -> float:
+            raw = send(PORT,
+                f"local sleepGoal = require('scripts.unit_ai_sleep'); "
+                f"local ai = require('scripts.unit_ai'); "
+                f"local cfg = require('scripts.unit_ai_tunables'); "
+                f"return sleepGoal.sleepUtility({uid1}, ai.getState({uid1}), cfg.acolyte)")
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                print(f"FAIL: sleepUtility -> {raw!r}")
+                sys.exit(1)
+
+        send(PORT, f"unit.setStat({uid1}, 'exhaustion', {max_exh})", expect_result=False)
+        rested_utility = sleep_utility()
+        send(PORT, f"unit.setStat({uid1}, 'exhaustion', 0)", expect_result=False)
+        exhausted_utility = sleep_utility()
+        if not (exhausted_utility > rested_utility + 1.0):
+            print(f"FAIL: exhaustion did not raise sleepUtility (rested="
+                  f"{rested_utility:.4f}, exhausted={exhausted_utility:.4f}) — "
+                  f"same sleep_pressure deficit and circadian urge throughout, "
+                  f"so the gap should come from exhaustion alone")
+            return 1
+        print(f"PASS: exhaustion raises go_to_sleep utility at a fixed "
+              f"deficit/time ({rested_utility:.4f} -> {exhausted_utility:.4f})")
+
         # Restore the real update closures saved above — phase 2 needs
         # genuine AI-driven decisions AND the real resource tick
         # (sleep_pressure regen, the locomotor watchdog's #612 exemption).
