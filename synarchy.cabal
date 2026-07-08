@@ -355,9 +355,12 @@ library
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
+                     Engine.Graphics.Font.Atlas
                      Engine.Graphics.Font.Data
                      Engine.Graphics.Font.Draw
                      Engine.Graphics.Font.Load
+                     Engine.Graphics.Font.SDF
+                     Engine.Graphics.Font.Upload
                      Engine.Graphics.Font.Util
                      Engine.Graphics.Font.STB
                      Engine.Graphics.Transform
