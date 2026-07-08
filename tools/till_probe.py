@@ -201,21 +201,33 @@ def main():
             print("  [FAIL] could not quiet find_water goal")
             passed = False
 
+        # Single combined round-trip per poll (designation + veg + anim in
+        # one Lua call) instead of three separate `send`s: each `send` costs
+        # a fixed ~DEFAULT_IDLE settle regardless of how fast the engine
+        # replies, so three sequential calls floor the loop around ~1s/iter
+        # even with no explicit sleep — too coarse to reliably catch
+        # till_equip_seconds' 1.0s equip-anim window. One call per iteration
+        # (no added sleep) polls at roughly that same ~0.3s floor, giving
+        # 2-3 samples inside any 1s window instead of a coin flip.
         deadline = time.time() + 90.0
         tilled = cleared = False
-        seen_anims = set()
+        seen_anims = []
         while time.time() < deadline:
-            time.sleep(2.0)
-            d4 = jget(port,
-                      f"return till.getDesignationAt('main_world',{tx},{ty})")
-            if not isinstance(d4, dict):
-                cleared = True
-            veg = jget(port, f"return world.getVegAt({tx},{ty})")
-            if veg == TILLED_SOIL_VEG_ID:
-                tilled = True
-            info = jget(port, f"return unit.getInfo({uid})")
-            if isinstance(info, dict) and info.get("currentAnim"):
-                seen_anims.add(info["currentAnim"])
+            poll = jget(port,
+                        f"local d=till.getDesignationAt('main_world',{tx},{ty}); "
+                        f"local v=world.getVegAt({tx},{ty}); "
+                        f"local i=unit.getInfo({uid}); "
+                        f"return {{cleared=(d==nil), "
+                        f"tilled=(v=={TILLED_SOIL_VEG_ID}), "
+                        f"anim=(i and i.currentAnim or '')}}")
+            if isinstance(poll, dict):
+                if poll.get("cleared"):
+                    cleared = True
+                if poll.get("tilled"):
+                    tilled = True
+                anim = poll.get("anim")
+                if anim and (not seen_anims or seen_anims[-1] != anim):
+                    seen_anims.append(anim)
             if tilled and cleared:
                 break
         ok4 = tilled and cleared
@@ -223,16 +235,25 @@ def main():
         print(f"  [{'PASS' if ok4 else 'FAIL'}] acolyte tills the tile "
               f"autonomously: veg_flipped={tilled} designation_cleared="
               f"{cleared}")
+        print(f"  anim timeline: " + " -> ".join(seen_anims))
         if not ok4:
             print("\nSOME FAILED")
             return 1
 
-        # --- 4b. Dedicated push animation (#517), not the shovel placeholder ---
-        ok4c = "pushing" in seen_anims
+        # --- 4b. Dedicated push animation set (#517), not the shovel
+        # placeholder — both the equip transition and the work loop must
+        # be observed, and neither old placeholder name may appear.
+        seen_set = set(seen_anims)
+        ok4c = {"standing_to_pushing", "pushing"} <= seen_set
         passed &= ok4c
-        print(f"  [{'PASS' if ok4c else 'FAIL'}] till AI plays the dedicated "
-              f"'pushing' animation, not the shovel placeholder: "
-              f"seen={sorted(seen_anims)}")
+        print(f"  [{'PASS' if ok4c else 'FAIL'}] till AI plays both "
+              f"standing_to_pushing and pushing: seen={sorted(seen_set)}")
+
+        placeholder_anims = {"standing_to_holding_shovel", "shoveling"}
+        ok4d = not (seen_set & placeholder_anims)
+        passed &= ok4d
+        print(f"  [{'PASS' if ok4d else 'FAIL'}] no shovel-placeholder "
+              f"animation observed: seen={sorted(seen_set)}")
 
         # --- 5. Plantable contract holds post-till ---
         post = jget(port, f"return world.isPlantable({tx},{ty})")
