@@ -17,9 +17,14 @@
 #     pieces reference "material: pleated_wool"/"leather" for combat
 #     resistance, not a craftable input). Needs a harvesting/sourcing
 #     design before a recipe can consume it.
-#   - electric_motor / processing_unit — "make: factory", not player-
-#     fabricable; the issue itself notes these gate a future power/
-#     tech tier via the "assemble" station, not this one.
+#   - processing_unit — "make: factory", not player-fabricable; still
+#     gates a future power/tech tier.
+#   - electric_motor — was in the same boat until #591: it's now
+#     player-fabricable via machine_electric_motor at machine_shop's
+#     dedicated "machine" station (data/recipes/machining.yaml), kept
+#     off workbench's "assemble" on purpose so the power requirement
+#     stays exclusive to the new station and workbench's own role
+#     doesn't change.
 recipes:
   - id: forge_pick_steel
     name: "Forge Steel Pick"

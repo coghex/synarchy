@@ -93,6 +93,8 @@ PROBES = [
      "geometry-stamp idempotency survives a cleared anchor floor + save/reload (#424)"),
     ("lua_orphan_prune", "lua_orphan_prune_probe.py", True,
      "Lua per-id AI state pruned (not inherited) after a save load (#195)"),
+    ("machine_shop", "machine_shop_probe.py", True,
+     "electric furnace smelt recipe + machine_shop wiring/motor recipes, real content (#591)"),
     ("medic_coord", "medic_coord_probe.py", True,
      "bestMedicFor/medicAvailable distance-discounted selection fix"),
     ("movement", "movement_probe.py", True,

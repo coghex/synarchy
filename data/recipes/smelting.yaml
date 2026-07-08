@@ -12,6 +12,14 @@
 # ore chunk → 4 × 0.5 kg bars (~20% metal yield); bronze pairs a copper
 # with a tin chunk (the coal is fuel only — for steel it also supplies
 # the carbon, hence no separate iron_bar step).
+#
+# #591 adds one powered alternative alongside the coal-fired variants:
+# smelt_steel_electric skips the fuel line entirely and carries a
+# recipe-level power_draw (#590) instead — same ore input and bar
+# yield as the coal recipes, just a different energy source. The coal
+# recipes are completely unaffected (power_draw defaults to 0) and
+# keep working exactly as before, wired or not — this is additive,
+# not a replacement.
 recipes:
   - id: smelt_steel_lignite
     name: "Smelt Steel (lignite)"
@@ -87,4 +95,14 @@ recipes:
     work: 30
     outputs:
       - item: bronze_bar
+        count: 4
+  - id: smelt_steel_electric
+    name: "Smelt Steel (Electric)"
+    station: smelt
+    inputs:
+      - item: iron_ore_chunk
+    work: 30
+    power_draw: 250
+    outputs:
+      - item: steel_bar
         count: 4
