@@ -244,7 +244,7 @@ end
 unitAi.setConfig("bear_brown", {
     thought_interval = 1.0,
     thought_jitter   = 0.3,
-    -- Combat re-evaluation cadence. See unit_ai.scheduleNext —
+    -- Combat re-evaluation cadence. See unit_ai_core.lua's scheduleNext —
     -- charging units need sub-second range checks or they walk
     -- straight through their target.
     combat_thought_interval = 0.1,

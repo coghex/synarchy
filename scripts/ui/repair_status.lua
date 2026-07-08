@@ -3,13 +3,13 @@
 -- Item rows across panels (unit inventory / equip slots / accessories)
 -- want the same three things: a name-suffix badge, a tooltip hint
 -- line, and a "Prioritize Repair" context-menu toggle. All three read
--- the repair state scripts/unit_ai.lua owns (repairClaims /
+-- the repair state scripts/unit_ai_repair.lua owns (repairClaims /
 -- repairPriority, #302/#303) through its public accessors, so this is
 -- the one place that turns that into UI — mirrors quality_tier.lua.
 --
 -- Only items the repair AI can ever consider (own inventory / equipped
 -- / accessories, or the nearest technomule's inventory — see the
--- repair_job comment in unit_ai.lua) carry both an instanceId and a
+-- repair_job comment in unit_ai_repair.lua) carry both an instanceId and a
 -- condition field; that is also exactly the set eligible for a
 -- priority flag. Ground items and generic cargo-building storage are
 -- deliberately excluded (#302: item.listGround() exposes neither

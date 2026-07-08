@@ -3,7 +3,7 @@
 -- (coffee first). Mechanism-only, mirroring craft.execute/till.designate
 -- — callable directly (debug console, tests, a future AI action) rather
 -- than itself deciding WHEN to drink. Autonomous AI consumption is left
--- to a follow-up: unit_ai.lua's drink_from_canteen already owns
+-- to a follow-up: unit_ai_needs.lua's drink_from_canteen already owns
 -- "thirst" for plain water, and whether/when a unit should reach for
 -- coffee instead (or as well) is a real prioritisation question outside
 -- this issue's "does drinking coffee do the right scaled things" scope.
@@ -12,12 +12,12 @@ local stats = require("scripts.unit_stats")
 
 local consumable = {}
 
--- Per-held-defName config. sip_litres mirrors unit_ai.lua's canteen
--- convention (a bounded "one action" dose, not the whole container).
+-- Per-held-defName config. sip_litres mirrors unit_ai_tunables.lua's
+-- canteen convention (a bounded "one action" dose, not the whole container).
 local EFFECTS = {
     coffee_pot = {
         sip_litres           = 0.25,
-        -- Same rate as canteen water (unit_ai.lua's
+        -- Same rate as canteen water (unit_ai_tunables.lua's
         -- drink_hydration_per_litre) at quality 100; scales down with
         -- quality per the epic's "excellent hydrates more" ask.
         hydration_per_litre  = 11.0,

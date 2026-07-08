@@ -130,7 +130,8 @@ SKIP_GLOBS = [
 CORE_GLOBS = [
     "src/Engine/Core/*", "src/Engine/Monad*",
     "src/Unit/*", "src/World/Thread/*", "src/World/Save/*",
-    "scripts/unit_ai.lua", "scripts/unit_resources.lua", "scripts/unit_stats.lua",
+    "scripts/unit_ai.lua", "scripts/unit_ai_*.lua",
+    "scripts/unit_resources.lua", "scripts/unit_stats.lua",
     "scripts/movement_arena.lua",
     "data/units/*", "data/materials/*", "data/substances/*",
     "tools/probelib.py", "tools/run_probes.py", "tools/ci_probes.py",
@@ -245,6 +246,8 @@ def _self_test() -> int:
          [],
          "infection probes are manual-only (#593)"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
+        (["scripts/unit_ai_combat.lua"], sorted(CI_ELIGIBLE),
+         "unit_ai_*.lua submodule (#538) -> full"),
         (["src/SomethingNew/X.hs"], sorted(CI_ELIGIBLE), "unclassified -> full"),
         (["README.md", "src/Power/Network.hs"], [], "docs ignored, power manual-only"),
     ]
