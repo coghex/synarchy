@@ -812,6 +812,11 @@ library
 executable synarchy
     -- .hs or .lhs file containing the Main module.
     main-is: Main.hs
+    other-modules: App.Cli
+                 , App.Exception
+                 , App.Graphical
+                 , App.Headless
+                 , App.Dump
     -- LANGUAGE extensions used by modules in this package.
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
