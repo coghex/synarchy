@@ -27,10 +27,12 @@ module Blood.Impact
     , impactOpacity
     , impactFallbackAngle
     , impactBloodForWound
+    , pickImpactWound
     , spawnImpactBlood
     ) where
 
 import UPrelude
+import Data.List (maximumBy)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Combat.Wounds (destroyThreshold)
 import Engine.Core.State (EngineEnv(..))
@@ -144,6 +146,36 @@ impactBloodForWound kind severity = case kind of
               _            → AnisotropyNone
         , ibOpacity    = impactOpacity severity
         }
+
+-- | Pick the ONE wound (of several a single attack/fall produced) whose
+--   impact-blood request should represent the whole event — the shared
+--   selection every multi-wound producer uses to satisfy requirement 9
+--   ("bounded per event, not per wound") without losing a wound kind's
+--   own gating/flooring in the process.
+--
+--   Ranked by the resulting severity BUCKET first, opacity only as a
+--   tiebreaker — NOT by raw input severity, and not by opacity alone.
+--   Either of those would undo 'impactBloodForWound's own kind-specific
+--   handling: an ordinary wound with merely-higher raw severity would
+--   silently outrank a low-nominal-severity arterial/severed wound that
+--   should read as the more significant injury (arterial/severed's
+--   'SeverityModerate' floor only means anything if the RANKING looks at
+--   the floored bucket); worse, selecting purely by raw severity BEFORE
+--   checking which wounds actually qualify can pick a non-qualifying
+--   wound (say a fracture at 0.9, still under 'destroyThreshold') over a
+--   lower-severity wound that DOES qualify (a concussion right at
+--   'catastrophicBluntThreshold'), losing the mark entirely even though
+--   a qualifying candidate existed.
+--
+--   'Nothing' when none of the candidates create blood at all.
+pickImpactWound ∷ [(Text, Float)] → Maybe (Text, Float, ImpactBlood)
+pickImpactWound candidates =
+    case [ (k, s, ib) | (k, s) ← candidates, Just ib ← [impactBloodForWound k s] ] of
+        []         → Nothing
+        qualifying → Just $ maximumBy
+            (\(_, _, a) (_, _, b) → compare
+                (ibSeverity a, ibOpacity a) (ibSeverity b, ibOpacity b))
+            qualifying
 
 -- | Place one impact-blood decal for a fresh wound, or do nothing —
 --   either because 'impactBloodForWound' says this wound shouldn't

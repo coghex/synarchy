@@ -42,7 +42,7 @@ import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
-import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
+import Blood.Impact (spawnImpactBlood, impactFallbackAngle, pickImpactWound)
 import Unit.Thread.Movement.Types
     (UnitMoveStats(..), defaultMoveStats, baselineUnitHeight)
 import Unit.Thread.Movement.Leap
@@ -175,27 +175,30 @@ tickAllMovement dt env utsRef = do
              , ("count",    T.pack (show (length injs)))
              , ("severity", T.pack (show worst)) ]
 
-    -- Impact blood (#607): ONE mark per fall, keyed off the single
-    -- WORST injury (never per fractured part, so a bad fall that
-    -- breaks several bones at once stays bounded to a single decal —
-    -- requirement 9). A fall has no "attacker", so direction always
-    -- falls back to a deterministic seeded angle (requirement 7).
-    -- Position comes from THIS tick's fresh sim state (gx, gy, gz),
-    -- not the unit-manager mirror -- that mirror is only refreshed by
-    -- a separate publish-to-render pass (Unit.Thread), so at this
-    -- point in the tick it can still be one tick behind the landing
-    -- this very fall just computed (a floating mid-air decal bug).
+    -- Impact blood (#607): ONE mark per fall (never per fractured part,
+    -- so a bad fall that breaks several bones at once stays bounded to
+    -- a single decal — requirement 9). pickImpactWound resolves which
+    -- single injury represents the fall — NOT just the raw-severity
+    -- worst one, since the worst-by-severity injury might not itself
+    -- clear its own catastrophic threshold while a lower-severity one
+    -- in the same fall does. A fall has no "attacker", so direction
+    -- always falls back to a deterministic seeded angle (requirement 7).
+    -- Position comes from THIS tick's fresh sim state (gx, gy, gz), not
+    -- the unit-manager mirror -- that mirror is only refreshed by a
+    -- separate publish-to-render pass (Unit.Thread), so at this point in
+    -- the tick it can still be one tick behind the landing this very
+    -- fall just computed (a floating mid-air decal bug).
     forM_ fallResults $ \(uid, injs, _, gx, gy, gz) → when (not (null injs)) $
         case HM.lookup uid (umInstances um) of
             Nothing   → pure ()
             Just inst →
-                let worstInjury = foldr1
-                        (\a b → if fiSeverity a ≥ fiSeverity b then a else b) injs
-                    seed = round (now * 1000.0) + fromIntegral (unUnitId uid)
-                    angle = impactFallbackAngle seed
-                in spawnImpactBlood env (uiPage inst) gx gy gz
-                     (fiKind worstInjury) (fiSeverity worstInjury)
-                     angle seed (Just uid) now
+                case pickImpactWound [ (fiKind i, fiSeverity i) | i ← injs ] of
+                    Nothing → pure ()
+                    Just (kind, sev, _) →
+                        let seed = round (now * 1000.0) + fromIntegral (unUnitId uid)
+                            angle = impactFallbackAngle seed
+                        in spawnImpactBlood env (uiPage inst) gx gy gz
+                             kind sev angle seed (Just uid) now
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)

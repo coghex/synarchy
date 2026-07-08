@@ -73,7 +73,7 @@ import Unit.Injury (penetrate, penetrateDeposits, woundFactor, tissueInjuryKind
                    , tissueCapacityWeight, defaultPartCapacity)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.LineOfSight (unitAwareness)
-import Blood.Impact (ImpactBlood(..), impactBloodForWound, spawnImpactBlood)
+import Blood.Impact (pickImpactWound, spawnImpactBlood)
 
 -- ----- Tuning constants -----
 
@@ -564,30 +564,21 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
             -- headline kind/severity alone could both mask a catastrophic
             -- fracture buried in `wounds` and wrongly draw blood for a
             -- swing whose headline reads "blunt" but whose only wound is
-            -- "internal". Picks whichever wound would draw the STRONGEST
-            -- mark (mirrors how the fall-injury hook below picks its
-            -- worst injury); never per-wound, so a multi-layer paw hit
-            -- stays bounded to a single decal (requirement 9). Direction
-            -- is the real attacker→target vector (always available here,
-            -- unlike a fall or a debug unit.injure call).
+            -- "internal". pickImpactWound resolves which single wound
+            -- represents the hit (requirement 9: bounded per event, not
+            -- per wound). Direction is the real attacker→target vector
+            -- (always available here, unlike a fall or a debug
+            -- unit.injure call).
             let dx = uiGridX tgt - uiGridX atk
                 dy = uiGridY tgt - uiGridY atk
                 impactAngle = atan2 dy dx
                 impactSeed  = round (impactAngle * 1000.0) ∷ Int
-                impactCandidates =
-                    [ (w, ib)
-                    | w ← wounds
-                    , Just ib ← [impactBloodForWound (woundKind w) (woundSeverity w)]
-                    ]
-            case impactCandidates of
-                [] → pure ()
-                _  → do
-                    let (worstWound, _) = maximumBy
-                            (\(_, a) (_, b) → compare (ibOpacity a) (ibOpacity b))
-                            impactCandidates
+            case pickImpactWound [ (woundKind w, woundSeverity w) | w ← wounds ] of
+                Nothing → pure ()
+                Just (kind, sev, _) →
                     spawnImpactBlood env (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
-                        (uiGridZ tgt) (woundKind worstWound) (woundSeverity worstWound)
-                        impactAngle impactSeed (Just (UnitId tgtRaw)) gt
+                        (uiGridZ tgt) kind sev impactAngle impactSeed
+                        (Just (UnitId tgtRaw)) gt
 
             -- Landed hit ⇒ the weapon takes wear (dulls, fractures, can
             -- break). Natural weapons don't wear.

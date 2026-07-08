@@ -93,6 +93,46 @@ spec = do
            \brain) creates blood" $
             impactBloodForWound "concussion" 0.85 `shouldSatisfy` isJust'
 
+    describe "pickImpactWound" $ do
+        it "returns Nothing when no candidate qualifies for blood" $
+            pickImpactWound [("internal", 1.0), ("blunt", 0.1)] `shouldBe` Nothing
+
+        it "picks the higher-severity-bucket wound, e.g. a catastrophic \
+           \blunt hit over a merely-moderate stab" $ do
+            (kind, _, _) ← expectJust "expected a qualifying candidate"
+                (pickImpactWound [("stab", 0.3), ("blunt", 0.9)])
+            kind `shouldBe` "blunt"
+
+        it "REGRESSION: ranks by the FLOORED severity bucket, not raw \
+           \opacity -- a barely-there arterial nick (floored to \
+           \SeverityModerate) must outrank an even-lower-severity \
+           \ordinary stab, even though the stab's raw opacity is \
+           \numerically higher" $ do
+            (kind, _, ib) ← expectJust "expected a qualifying candidate"
+                (pickImpactWound [("stab", 0.05), ("arterial", 0.01)])
+            -- Sanity: this only tests something if the stab really WOULD
+            -- win on raw opacity alone (proving the old ranking was
+            -- wrong, not just that both approaches happen to agree).
+            stabIb ← expectJust "stab should create blood"
+                (impactBloodForWound "stab" 0.05)
+            arterialIbRaw ← expectJust "arterial should create blood"
+                (impactBloodForWound "arterial" 0.01)
+            ibOpacity stabIb `shouldSatisfy` (> ibOpacity arterialIbRaw)
+            kind `shouldBe` "arterial"
+            ibSeverity ib `shouldBe` SeverityModerate
+
+        it "REGRESSION: a lower-severity wound that QUALIFIES beats a \
+           \higher-severity wound that doesn't clear its OWN threshold \
+           \(picking by raw severity first can miss the only \
+           \qualifying candidate)" $ do
+            -- fracture at 0.9 is below its own destroyThreshold (1.0)
+            -- and does NOT qualify; concussion at 0.85 is AT its own
+            -- catastrophic threshold and DOES -- even though 0.9 > 0.85.
+            (kind, sev, _) ← expectJust "expected the concussion to qualify"
+                (pickImpactWound [("fracture", 0.9), ("concussion", 0.85)])
+            kind `shouldBe` "concussion"
+            sev `shouldBe` 0.85
+
     describe "impactSeverityBucket" $ do
         it "mirrors injury_log.lua's T1..T4 tier boundaries" $ do
             impactSeverityBucket 0.10 `shouldBe` SeverityMinor
