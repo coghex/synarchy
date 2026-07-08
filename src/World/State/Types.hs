@@ -33,7 +33,8 @@ import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
 import Power.Types (PowerNodes, emptyPowerNodes)
-import Blood.Types (BloodStore, emptyBloodStore, defaultBloodTextureCap)
+import Blood.Types (BloodStore, BloodTextureId, emptyBloodStore, defaultBloodTextureCap)
+import Engine.Asset.Handle (TextureHandle)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import World.Flora.CropPlot (CropPlots, emptyCropPlots)
@@ -166,6 +167,21 @@ data WorldState = WorldState
       --   worlds and dies with the WorldState; a reloaded world gets a
       --   fresh empty store. Never saved — #604 is explicitly model +
       --   debug-surface only, no save/load persistence.
+    , wsBloodTextureHandlesRef ∷ IORef (HM.HashMap BloodTextureId (TextureHandle, IO ()))
+      -- ^ GPU-upload state for #606's procedurally generated blood
+      --   textures: which 'BloodTextureId's currently have a live
+      --   bindless 'TextureHandle', plus that texture's own GPU
+      --   cleanup action. Populated/pruned once per frame by
+      --   'World.Render.BloodQuads.uploadBloodTextures' — reading
+      --   'wsBloodStoreRef's FIFO to upload anything new and unregister
+      --   anything evicted — since the FIFO itself is mutated from the
+      --   Lua/world thread with no GPU access of its own. Deliberately
+      --   NOT torn down when a world page is removed from
+      --   'WorldManager' (a small, bounded leak — at most
+      --   'defaultBloodTextureCap' tiny textures per destroyed world —
+      --   traded for not plumbing a cross-thread GPU-dispose signal
+      --   into the handful of world-teardown sites for content that's
+      --   already explicitly out-of-scope for persistence).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -206,6 +222,7 @@ emptyWorldState = do
     wsCropPlotsRef ← newIORef emptyCropPlots
     wsPlantDesignationsRef ← newIORef HM.empty
     wsBloodStoreRef ← newIORef (emptyBloodStore defaultBloodTextureCap)
+    wsBloodTextureHandlesRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -219,7 +236,7 @@ emptyWorldState = do
                         wsChopDesignationsRef wsCraftBillsRef
                         wsPowerNodesRef wsTillDesignationsRef
                         wsCropPlotsRef wsPlantDesignationsRef
-                        wsBloodStoreRef
+                        wsBloodStoreRef wsBloodTextureHandlesRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling
