@@ -462,6 +462,11 @@ library
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
+                     Unit.Thread.Command.Body
+                     Unit.Thread.Command.Spawn
+                     Unit.Thread.Command.Lifecycle
+                     Unit.Thread.Command.Motion
+                     Unit.Thread.Command.Pose
                      Unit.Thread.Movement
                      Building.Types
                      Building.Command.Types
