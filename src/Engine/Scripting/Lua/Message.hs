@@ -56,6 +56,7 @@ import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
 import World.Render.Zoom.Types (ZoomAtlasInfo(..), zoomTileSize)
+import World.Render.BloodQuads (uploadBloodTextures)
 import World.State.Types (WorldManager(..), WorldState(..), bumpQuadCacheGen)
 import qualified Graphics.UI.GLFW as GLFW
 import Vulkan.Core10
@@ -100,6 +101,7 @@ processLuaMessages = do
     process messages
     whenGraphical handleWorldPreview
     whenGraphical handleZoomAtlasUpload
+    whenGraphical uploadBloodTextures
   where
     process [] = pure ()
     process (LuaLoadTextureRequest handle path : rest) = do

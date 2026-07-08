@@ -603,11 +603,13 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "repairAt" (repairAtFn env)
   Lua.setglobal (Lua.Name "repair")
 
-  -- Blood global (#604) — the world-scoped blood decal model + debug
-  -- surface: spawn a decal (reusing a near-matching generated-texture
-  -- descriptor or minting + FIFO-evicting a new one), list current
-  -- decals / texture descriptors, and clear both. No rendering, no
-  -- combat hook, no real GPU texture generation yet (see Blood.Types +
+  -- Blood global (#604 + #606) — the world-scoped blood decal model +
+  -- debug surface: spawn a decal (reusing a near-matching generated-
+  -- texture descriptor or minting + FIFO-evicting a new one), list
+  -- current decals / texture descriptors (each now reporting its
+  -- generated pixel data — Blood.Texture), query resolved per-decal
+  -- render records (Blood.Render — same data World.Render.BloodQuads
+  -- turns into world-space quads), and clear both (see Blood.Types +
   -- docs/blood_decals.md).
   Lua.newtable
   registerLuaFunction "spawn"          (bloodSpawnFn env)
@@ -616,6 +618,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getTexture"     (bloodGetTextureFn env)
   registerLuaFunction "listTextures"   (bloodListTexturesFn env)
   registerLuaFunction "getTextureCap"  (bloodGetTextureCapFn env)
+  registerLuaFunction "getRenderQuads" (bloodGetRenderQuadsFn env)
   registerLuaFunction "clear"          (bloodClearFn env)
   Lua.setglobal (Lua.Name "blood")
 

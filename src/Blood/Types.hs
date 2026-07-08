@@ -47,6 +47,7 @@ module Blood.Types
     , BloodStore(..)
     , emptyBloodStore
     , defaultBloodTextureCap
+    , defaultBloodDecalCap
     , spawnDecal
     , clearBlood
     ) where
@@ -58,6 +59,7 @@ import Data.List (sortOn)
 import Data.Foldable (toList)
 import Data.Maybe (mapMaybe)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import Data.Sequence (Seq, (|>))
 import World.Page.Types (WorldPageId)
@@ -327,13 +329,35 @@ data BloodDecalSpec = BloodDecalSpec
     , bspOpacity    ∷ !Float
     } deriving (Show, Eq, Generic)
 
+-- | 'bdlOrder' is the FIFO insertion order 'evictDecalsOverCap' walks to
+--   find the oldest decal — the same "HashMap alone can't answer which
+--   one is oldest" reasoning as 'BloodTexturePool.btpOrder'. It can run
+--   slightly ahead of 'bdlDecals' (an id texture-eviction already
+--   removed via 'removeDecalsForTexture' still sitting in the queue
+--   until it reaches the front) rather than staying perfectly
+--   synchronised on every removal.
 data BloodDecals = BloodDecals
     { bdlDecals ∷ !(HM.HashMap BloodDecalId BloodDecal)
+    , bdlOrder  ∷ !(Seq BloodDecalId)
     , bdlNextId ∷ !Word32
+    , bdlCap    ∷ !Int
     } deriving (Show, Eq, Generic)
 
-emptyBloodDecals ∷ BloodDecals
-emptyBloodDecals = BloodDecals HM.empty 1
+-- | The #606 default cap on live decals per world page — independent of
+--   'defaultBloodTextureCap' (many decals can legitimately share one
+--   reused texture, per the near-match design). Without a bound of its
+--   own, decals whose requests keep reusing an already-live texture
+--   never age out (only texture eviction cascades to decal removal),
+--   so repeated same/near-same spawns — a long fight, a filler-heavy
+--   probe — could otherwise grow the decal list, and the per-frame
+--   render-record scan over it, without bound. Small on purpose, same
+--   "not final tuning" caveat as the texture cap (design doc's "Aging,
+--   caps, and cleanup tuning" is the later issue for that).
+defaultBloodDecalCap ∷ Int
+defaultBloodDecalCap = 512
+
+emptyBloodDecals ∷ Int → BloodDecals
+emptyBloodDecals cap = BloodDecals HM.empty Seq.empty 1 cap
 
 addDecal ∷ BloodDecalSpec → BloodDecals → (BloodDecals, BloodDecalId)
 addDecal spec decals =
@@ -356,9 +380,27 @@ addDecal spec decals =
             , bdeSourceUnit = bspSourceUnit spec
             , bdeOpacity    = bspOpacity spec
             }
-    in ( decals { bdlDecals = HM.insert did d (bdlDecals decals)
-                , bdlNextId = bdlNextId decals + 1 }
-       , did )
+        inserted = decals
+            { bdlDecals = HM.insert did d (bdlDecals decals)
+            , bdlOrder  = bdlOrder decals |> did
+            , bdlNextId = bdlNextId decals + 1
+            }
+    in ( evictDecalsOverCap inserted, did )
+
+-- | Drop from the front of the FIFO until at or under 'bdlCap' —
+--   recurses (rather than dropping once) both to converge in one call
+--   when the cap is lowered below the current size, and to skip over
+--   any already-removed id still sitting at the front of 'bdlOrder'
+--   without that costing more than the extra pop.
+evictDecalsOverCap ∷ BloodDecals → BloodDecals
+evictDecalsOverCap decals
+    | HM.size (bdlDecals decals) ≤ max 0 (bdlCap decals) = decals
+    | otherwise = case Seq.viewl (bdlOrder decals) of
+        Seq.EmptyL → decals
+        oldest Seq.:< rest → evictDecalsOverCap decals
+            { bdlDecals = HM.delete oldest (bdlDecals decals)
+            , bdlOrder  = rest
+            }
 
 lookupDecal ∷ BloodDecalId → BloodDecals → Maybe BloodDecal
 lookupDecal did = HM.lookup did . bdlDecals
@@ -384,10 +426,18 @@ wetnessAt now d =
                    (bdeInitialWetness d - realToFrac (age / bloodDryDuration)))
 
 -- | Drop every decal referencing an evicted texture (issue #604
---   requirement #4: eviction cascades to dependent decals).
+--   requirement #4: eviction cascades to dependent decals). Also prunes
+--   'bdlOrder' of the same ids — left unpruned, it would grow by one
+--   stale entry per texture-eviction-cascaded decal forever, undoing
+--   the point of bounding 'bdlDecals' in the first place (a leak in the
+--   FIFO queue itself rather than the map it drives eviction from).
 removeDecalsForTexture ∷ BloodTextureId → BloodDecals → BloodDecals
-removeDecalsForTexture tid decals = decals
-    { bdlDecals = HM.filter ((≢ tid) . bdeTexture) (bdlDecals decals) }
+removeDecalsForTexture tid decals =
+    let dropped = HM.keysSet (HM.filter ((≡ tid) . bdeTexture) (bdlDecals decals))
+    in decals
+        { bdlDecals = HM.filter ((≢ tid) . bdeTexture) (bdlDecals decals)
+        , bdlOrder  = Seq.filter (\did → not (HS.member did dropped)) (bdlOrder decals)
+        }
 
 -- | The combined per-world blood state (see module haddock for why
 --   pool + decals share one record instead of two refs).
@@ -396,8 +446,13 @@ data BloodStore = BloodStore
     , bstDecals ∷ !BloodDecals
     } deriving (Show, Eq, Generic)
 
+-- | @cap@ bounds the texture pool; the decal store always gets
+--   'defaultBloodDecalCap' (nothing today needs a custom decal cap per
+--   call site, unlike the texture cap the #604 test suite already
+--   exercises at non-default sizes).
 emptyBloodStore ∷ Int → BloodStore
-emptyBloodStore cap = BloodStore (emptyBloodTexturePool cap) emptyBloodDecals
+emptyBloodStore cap =
+    BloodStore (emptyBloodTexturePool cap) (emptyBloodDecals defaultBloodDecalCap)
 
 -- | The one spawn entrypoint: resolve @req@ against the texture pool
 --   (reuse or create + evict), cascade-remove any decal orphaned by an
