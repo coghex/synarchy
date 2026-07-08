@@ -21,7 +21,7 @@ import Engine.Graphics.Base
 import Engine.Graphics.Config
 import Engine.Graphics.Camera
 import Engine.Graphics.Types
-import Engine.Graphics.Font.Load (createFontDescriptorPool)
+import Engine.Graphics.Font.Upload (createFontDescriptorPool)
 import Engine.Graphics.Font.Draw (createFontPipeline
                                  , createFontUIPipeline, createFontQuadBuffer)
 import Engine.Graphics.Window.Types (Window(..))
