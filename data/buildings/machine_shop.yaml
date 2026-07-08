@@ -1,0 +1,35 @@
+buildings:
+  - name: "machine_shop"
+    display_name: "Machine Shop"
+    category: "Production"
+    description: "A precision workshop of power-driven lathes and stamping presses. Runs machine recipes that fabricate electrical components straight off the grid."
+    sprite: "assets/textures/buildings/machine_shop/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"
+
+    # Worker-seconds at the solo rate — heavier than the workbench's
+    # hand tools, lighter than the furnace's masonry build.
+    build_work: 200.0
+
+    # Steel frame plus a motor to drive the lathe. The motor has to
+    # come from the technomule's starting stock (or ground loot) —
+    # this station can't require its own machine-fabricated
+    # electric_motor output (#591) to build the station that makes it.
+    materials:
+      steel_bar:      8
+      steel_hardware: 6
+      steel_plate:    4
+      electric_motor: 1
+
+    # Staging space for craft inputs/fuel and outputs (kg) — see
+    # furnace.yaml.
+    storage_capacity: 100.0
+
+    # Work-station operations (#591). "machine" is a DEDICATED
+    # operation, not workbench's existing "assemble" — keeping it
+    # separate is what makes the grid load-bearing: workbench keeps
+    # its current power-free role untouched, and only this station's
+    # recipes carry a recipe-level power_draw (#590).
+    operations:
+      - machine

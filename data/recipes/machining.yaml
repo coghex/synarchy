@@ -1,0 +1,39 @@
+# Machine-shop tier (#591) — bronze/steel stock -> electrical
+# components, run at machine_shop (data/buildings/machine_shop.yaml,
+# station "machine"). Both recipes carry a recipe-level power_draw
+# (#590, Craft.Types.rdPowerDraw): the station only makes progress
+# while its network can cover the draw — see tools/machine_shop_probe.py
+# for the #591 gate proving that stall/resume loop against this real
+# content (tools/power_workshop_probe.py already covers the #590
+# mechanism itself against synthetic fixture data).
+#
+# machine_wiring feeds machine_electric_motor: spool wiring first, then
+# assemble the motor from wiring + steel_bar — a small two-step chain,
+# same ore/bar/output-count stylization as the smelting and
+# fabrication tiers.
+recipes:
+  - id: machine_wiring
+    name: "Spool Wiring"
+    station: machine
+    inputs:
+      - item: bronze_bar
+        count: 1
+    work: 15
+    power_draw: 120
+    outputs:
+      - item: wiring
+        count: 8
+
+  - id: machine_electric_motor
+    name: "Assemble Electric Motor"
+    station: machine
+    inputs:
+      - item: steel_bar
+        count: 1
+      - item: wiring
+        count: 4
+    work: 25
+    power_draw: 200
+    outputs:
+      - item: electric_motor
+        count: 1

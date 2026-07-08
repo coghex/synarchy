@@ -88,6 +88,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "cooking": (TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),
     "disarm": (TARGETED, "narrow #193 disabled-hand auto-drop regression"),
     "injury_log": (TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),
+    "machine_shop": (TARGETED, "electric furnace + machine_shop content regression, narrower "
+                               "than the generic #590 power-draw mechanism probe"),
     # --- base-failing: fails today on master for content reasons unrelated
     # to CI infrastructure; gating it would redden every PR. ---
     "construction": (BASE_FAILING, "fails on master for content reasons"),

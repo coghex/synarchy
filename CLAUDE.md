@@ -530,8 +530,10 @@ building sets `power_drain` any more, and `validateStation`/`craft_job`
 no longer consult `isBuildingPowered` at all.
 
 No shipped building sets a `power_drain` today — `workbench` and
-`furnace` are both power-free (`furnace` stays the fuel-burning smelter
-via `data/recipes/smelting.yaml`'s coal `fuel:` blocks).
+`furnace` are both power-free as *buildings*. `furnace` gained a
+powered `smelt` recipe alongside its coal-fired ones in #591 (see
+below) — the electrical load lives on that recipe's `power_draw`
+(#590), not on the building.
 
 - **`Test.Headless.Power.Network`** (hspec) — the pure `consumersOn`/
   `groupByComponent` folding: drain sums into `drainW`, a consumer not
@@ -650,6 +652,47 @@ Craft.Bills`'s "working (#590)" block covers `cbWorking`'s pure
 transitions directly: default-False, `setBillWorking`, preserved across
 a same-holder refresh, reset on a different-claimant takeover, cleared
 by `releaseBill`/`completeBillCycle`, and untouched by `setBillPaused`.
+
+### Testing the electric furnace + machine shop headless (#591)
+
+The first shipped content to actually use #590's recipe-level power
+draw. There's only ever one furnace — `furnace`
+(`data/buildings/furnace.yaml`) — not a separate powered/fuel pair:
+`smelt_steel_electric` (`data/recipes/smelting.yaml`) is a plain
+`power_draw`-carrying alternative sitting alongside the existing
+coal-fired `smelt_steel_*`/`smelt_bronze_*` recipes at the SAME `smelt`
+station, same ore input and bar yield, no `fuel:` line. The coal
+recipes are untouched and keep working with no power at all.
+
+`machine_shop` (`data/buildings/machine_shop.yaml`) is the genuinely
+new building — a dedicated `"machine"` station operation, deliberately
+NOT folded into `workbench`'s existing (currently recipe-less)
+`"assemble"` operation, so the power requirement stays exclusive to
+the new station and `workbench` keeps its current power-free role
+untouched. `data/recipes/machining.yaml` has two `power_draw`-carrying
+recipes: `machine_wiring` (bronze_bar → wiring) feeds
+`machine_electric_motor` (steel_bar + wiring → electric_motor) — the
+first player-fabricable path to a good that was previously only
+`make: factory` spawn/loot stock.
+
+Turnkey harness: **`python3 tools/machine_shop_probe.py`** — the #591
+gate. Boots headless on a flat arena, builds a real `furnace` and a
+real `machine_shop` through their normal materials + build-progress
+machinery (not synthetic fixtures — `tools/power_workshop_probe.py`
+already covers the #590 mechanism itself in isolation), and asserts:
+both new recipes load with `power_draw > 0` and no `fuel` line;
+existing coal-fired smelting still succeeds on a completely unwired
+furnace (the regression check that #591 is additive); both new
+recipes refuse with "no power" while unwired; wiring each to its own
+solar panel + battery and flipping to noon lets `craft.executeAt`
+succeed for `smelt_steel_electric`, `machine_wiring`, and
+`machine_electric_motor` in turn, with fresh output appearing each
+time; and a manually-driven bill (claim → mark working → add progress
+→ complete, AI off throughout for determinism) on `machine_wiring`
+shows progress frozen at midnight and completing once flipped to noon.
+`building.listDefs()` is also checked for `machine_shop`'s real sprite
+path (not a missing or reused placeholder) and its `"machine"`
+operation.
 
 ### Testing tilling headless (#333)
 
