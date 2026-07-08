@@ -86,12 +86,24 @@ each check correctly identifies the issue it's meant to catch.
 python3 tools/test_audit.py
 ```
 
+### `lua_module_budget.py`
+Cheap, no-engine guard (#545) for Lua files that were split into a shell
+plus small per-domain modules with an agreed physical-line budget, such
+as `scripts/debug.lua` + `scripts/debug/*.lua` or
+`scripts/unit_resources.lua` + `scripts/unit_resource*.lua`. Fails if
+any budgeted file grows back past its limit.
+
+```bash
+python3 tools/lua_module_budget.py
+```
+
 ### Workflow
 
 Before committing a change:
 ```bash
-python3 tools/test_audit.py     # unit tests pass
-python3 tools/world_check.py    # regression suite passes
+python3 tools/test_audit.py               # unit tests pass
+python3 tools/lua_module_budget.py        # Lua module line budgets pass
+python3 tools/world_check.py              # regression suite passes
 ```
 
 After an intentional change that improves (or legitimately alters) world
@@ -282,6 +294,7 @@ tools/
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
+├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── *_probe.py              (headless behavior probes — see above)
 └── baselines/

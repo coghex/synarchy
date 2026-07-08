@@ -153,6 +153,13 @@ jobs:
       - name: Test audit
         run: python3 tools/test_audit.py
 
+      # Cheap, no-engine guard (#545): fails if a Lua module that was
+      # split to stay reviewable (e.g. the debug overlay or
+      # unit-resource physiology splits) grows back past its agreed line
+      # budget.
+      - name: Lua module line budget
+        run: python3 tools/lua_module_budget.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
@@ -167,8 +174,9 @@ jobs:
 
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the
-      # changed files (full curated set for core/unclassified changes, none
-      # for docs/assets), and run them against the exe already built above.
+      # changed files (full curated smoke set for core/unclassified changes,
+      # none for docs/assets or manual-only probe areas), and run them
+      # against the exe already built above.
       # --retries 1 re-runs a failed probe SOLO before failing, to absorb
       # the sequential-engine contention flakes a back-to-back run shows.
       - name: Behavior probes (path-selective)

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
 - **Debug output:** Set `ENGINE_DEBUG=Vulkan,Graphics,etc...` environment variable
 
 ## Testing Tiers
@@ -23,7 +23,10 @@ stays in seconds and the expensive gates run once, at the end.
 2. **Before reporting done (~3 min total).**
    `cabal test synarchy-test-headless` (~1 min — one engine, worlds
    memoized across specs) · `python3 tools/world_check.py` (21 seeds,
-   ~2 min) · `python3 tools/test_audit.py` (instant).
+   ~2 min) · `python3 tools/test_audit.py` (instant) ·
+   `python3 tools/lua_module_budget.py` (instant — #541/#545 line-budget
+   guard for split Lua modules such as unit-resource physiology and the
+   debug overlay).
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (adds the
    w128 volcano exposure case, +~25 s), then re-capture baselines
@@ -52,8 +55,10 @@ edit baseline JSON by hand — regenerate with `world_baseline.py`.
 CI (`.github/workflows/ci.yml`, #436) runs on every PR and push to
 master, on Linux: full build with `-Werror` (the #435 warning-clean
 state is enforced, dependency warnings excluded), both test-suite
-builds, the headless suite, `test_audit.py`, and `world_check --quick`
-— all blocking. Worldgen output proved bit-identical between
+builds, the headless suite, `test_audit.py`, `tools/lua_module_budget.py`
+(#541/#545 — fails if a Lua module split to stay reviewable grows back
+past its agreed line budget), and `world_check --quick` — all
+blocking. Worldgen output proved bit-identical between
 macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
 tracked baselines are platform-agnostic; a worldgen-output PR that
 skips its tier-3 rebaseline fails CI.
