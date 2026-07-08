@@ -80,22 +80,31 @@ end
 -- points per ring, rings expanding outward by spacing) — but unlike
 -- water, flatness/fluid are directly queryable from wherever the unit
 -- currently stands, so this SAMPLES candidate tiles instead of
--- physically walking+FOV-scanning to each one. Returns the first valid
--- tile found, or the last sampled candidate if the whole radius is
--- exhausted (sleep_spot_max_wait then re-rolls on the next attempt).
+-- physically walking+FOV-scanning to each one. The whole rosette is
+-- rotated by a random angleOffset each call (mirrors
+-- unit_ai_water.lua's per-session searchAngleOffset jitter) — without
+-- it this is a pure function of (origin, radius, spacing), so a retry
+-- after a failed/timed-out pick would deterministically re-find the
+-- exact same dead candidate instead of exploring different ground.
+-- Returns nil if no ring/direction combination is valid anywhere in
+-- the search — the caller retries with a fresh rotation on its next
+-- tick rather than settling for an invalid fallback.
 local function pickSleepSpot(originX, originY, radius, spacing)
     local rings = math.max(1, math.floor(radius / spacing))
-    local x, y = originX, originY
+    local angleOffset = math.random() * 2 * math.pi
+    local cosA, sinA  = math.cos(angleOffset), math.sin(angleOffset)
     for ring = 1, rings do
         for _, d in ipairs(SEARCH_DIRECTIONS) do
-            x = originX + d[1] * ring * spacing
-            y = originY + d[2] * ring * spacing
+            local rx = d[1] * cosA - d[2] * sinA
+            local ry = d[1] * sinA + d[2] * cosA
+            local x  = originX + rx * ring * spacing
+            local y  = originY + ry * ring * spacing
             if isValidSleepTile(math.floor(x), math.floor(y)) then
                 return x, y
             end
         end
     end
-    return x, y
+    return nil
 end
 
 local function shouldWake(uid, s)
@@ -187,6 +196,8 @@ local function sleepExecute(uid, s, params)
         local x, y = pickSleepSpot(info.gridX, info.gridY,
                                    params.sleep_spot_radius,
                                    params.sleep_spot_ring_spacing)
+        if not x then return end  -- nothing valid this rotation; retry
+                                   -- next tick with a fresh one
         s.sleepSpot          = { x = x, y = y }
         s.sleepSession       = s.actionStartedAt
         s.sleepSpotPickedAt  = engine.gameTime()
