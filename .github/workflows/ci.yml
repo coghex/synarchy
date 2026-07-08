@@ -200,6 +200,7 @@ jobs:
         run: |
           BASE='${{ github.event.pull_request.base.sha }}'
           echo "Diffing against base $BASE"
+          git fetch --no-tags origin "$BASE"
           CHANGED="$(git diff --name-only "$BASE" HEAD)"
           echo "Changed files:"; echo "$CHANGED" | sed 's/^/  /'
           ONLY="$(printf '%s\n' "$CHANGED" | python3 tools/ci_probes.py --stdin)"
