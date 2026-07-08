@@ -49,6 +49,7 @@ import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Network as PowerNetwork
+import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
@@ -117,6 +118,7 @@ main = hspec $ do
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
     describe "Power.Network" PowerNetwork.spec
+    describe "Blood.Types" BloodTypes.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
