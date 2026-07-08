@@ -53,23 +53,46 @@ local function dawnHasArrived(uid, s)
     return prev ~= nil and prev < DAWN_ANGLE and angle >= DAWN_ANGLE
 end
 
--- Sample up to MAX_SPOT_ATTEMPTS candidate points within radius of
--- (originX, originY), returning the first one whose tile isn't fluid
--- (mirrors unit_ai_water's nearestNonFluidNeighbor — a basic passability
--- check, not the dedicated threat/hazard safety filtering the v1 design
--- explicitly deferred). Falls back to the last sampled candidate if
--- every attempt landed on fluid (e.g. a small island) — the walk simply
--- fails and sleep_spot_max_wait re-rolls on the next attempt.
-local MAX_SPOT_ATTEMPTS = 8
-local function pickSleepSpot(originX, originY, radius)
-    local x, y
-    for _ = 1, MAX_SPOT_ATTEMPTS do
-        local angle = math.random() * 2 * math.pi
-        local dist  = math.random() * radius
-        x = originX + math.cos(angle) * dist
-        y = originY + math.sin(angle) * dist
-        if not world.getFluidAt(math.floor(x), math.floor(y)) then
-            return x, y
+-- 8 compass directions, matching unit_ai_water.lua's SEARCH_DIRECTIONS
+-- rosette exactly (diagonals pre-normalised so every waypoint in a ring
+-- sits at the same physical distance from the origin).
+local SEARCH_DIRECTIONS = {
+    {  1,        0,        },  -- E
+    {  0.707107, 0.707107  },  -- SE
+    {  0,        1         },  -- S
+    { -0.707107, 0.707107  },  -- SW
+    { -1,        0         },  -- W
+    { -0.707107, -0.707107 },  -- NW
+    {  0,        -1        },  -- N
+    {  0.707107, -0.707107 },  -- NE
+}
+
+-- "Any flat open tile" (v1 design): flat (world.getSlopeAt == 0, per
+-- CLAUDE.md's slope bitmask) and dry. Not the dedicated threat/hazard
+-- safety filtering the v1 design explicitly deferred — just enough to
+-- stop the AI from settling on a slope or the middle of a lake.
+local function isValidSleepTile(gx, gy)
+    return world.getSlopeAt(gx, gy) == 0 and not world.getFluidAt(gx, gy)
+end
+
+-- Rosette-style widening search for a sleep spot, geometrically the
+-- same pattern as unit_ai_water.lua's search_for_water (8 compass
+-- points per ring, rings expanding outward by spacing) — but unlike
+-- water, flatness/fluid are directly queryable from wherever the unit
+-- currently stands, so this SAMPLES candidate tiles instead of
+-- physically walking+FOV-scanning to each one. Returns the first valid
+-- tile found, or the last sampled candidate if the whole radius is
+-- exhausted (sleep_spot_max_wait then re-rolls on the next attempt).
+local function pickSleepSpot(originX, originY, radius, spacing)
+    local rings = math.max(1, math.floor(radius / spacing))
+    local x, y = originX, originY
+    for ring = 1, rings do
+        for _, d in ipairs(SEARCH_DIRECTIONS) do
+            x = originX + d[1] * ring * spacing
+            y = originY + d[2] * ring * spacing
+            if isValidSleepTile(math.floor(x), math.floor(y)) then
+                return x, y
+            end
         end
     end
     return x, y
@@ -157,15 +180,13 @@ local function sleepExecute(uid, s, params)
     end
 
     -- No phase yet: pick a nearby spot once per session (mirrors
-    -- unit_ai_water's search-session anchoring) and walk to it. "Any
-    -- flat open tile" — no dedicated threat/hazard safety filtering
-    -- (v1 decision), but pickSleepSpot still steers off literal fluid
-    -- tiles; normal pathing routes around the rest of the impassable
-    -- terrain it can't dodge by picking a different target.
+    -- unit_ai_water's search-session anchoring) and walk to it.
     local info = unit.getInfo(uid)
     if not info then return end
     if not s.sleepSpot or s.sleepSession ~= s.actionStartedAt then
-        local x, y = pickSleepSpot(info.gridX, info.gridY, params.sleep_spot_radius)
+        local x, y = pickSleepSpot(info.gridX, info.gridY,
+                                   params.sleep_spot_radius,
+                                   params.sleep_spot_ring_spacing)
         s.sleepSpot          = { x = x, y = y }
         s.sleepSession       = s.actionStartedAt
         s.sleepSpotPickedAt  = engine.gameTime()

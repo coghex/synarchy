@@ -234,8 +234,11 @@ def main() -> int:
         # low-level section above) so the real AI can't also act on uid1
         # in the background and race sleepPhase out from under this. ----
         max_sp1 = max_sleep_pressure(uid1)
-        send(PORT, f"unit.setStat({uid1}, 'sleep_pressure', {0.65 * max_sp1})",
-             expect_result=False)  # deficit == sleep_min_deficit floor
+        send(PORT, f"unit.setStat({uid1}, 'sleep_pressure', {0.60 * max_sp1})",
+             expect_result=False)  # deficit = 0.40, comfortably clear of the
+                                    # 0.35 sleep_min_deficit gate — not exactly
+                                    # on it, which is float-boundary-fragile
+                                    # across the Python->Lua round-trip
         send(PORT, f"world.setTime('{ARENA}', 12, 0)", expect_result=False)  # noon: urge ~= 0
         max_exh = send(PORT,
             f"return require('scripts.unit_stats').get({uid1}, 'max_exhaustion')")

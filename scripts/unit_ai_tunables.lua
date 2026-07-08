@@ -104,17 +104,22 @@ local config = {
         sleep_deficit_weight  = 9.0,
         sleep_urge_weight     = 4.0,
         sleep_exhaustion_weight = 2.0,
-        -- Walk-to-spot geometry: pick one random point within radius
-        -- per sleep session (mirrors wander's radius pick), no
-        -- dedicated safety filtering (v1 decision — "any flat open
-        -- tile"; normal pathing already avoids impassable terrain).
-        -- sleep_spot_max_wait bounds a bad pick (unreachable — e.g. the
-        -- stuck-walk watchdog gave up on it): comfortably above the
-        -- worst-case walk time at meander speed (sleep_spot_radius / a
-        -- slow ~0.5 tiles/s ≈ 12s) so it never cuts off a genuinely
-        -- slow-but-progressing walk, but still re-picks a spot rather
-        -- than retrying a dead one forever.
+        -- Walk-to-spot geometry: a rosette-style widening search (8
+        -- compass points per ring, geometrically the same pattern as
+        -- search_for_water below) samples candidate tiles directly —
+        -- flatness/fluid are queryable from where the unit stands, no
+        -- physical walk-and-scan needed — picking the first flat, dry
+        -- one within radius. "Any flat open tile" (v1 decision): no
+        -- dedicated threat/hazard safety filtering, just enough to skip
+        -- a slope or a lake. sleep_spot_ring_spacing=2.0 over radius=6.0
+        -- gives 3 rings. sleep_spot_max_wait bounds a bad pick anyway
+        -- (unreachable — e.g. the stuck-walk watchdog gave up on it):
+        -- comfortably above the worst-case walk time at meander speed
+        -- (radius / a slow ~0.5 tiles/s ≈ 12s), so it never cuts off a
+        -- genuinely slow-but-progressing walk, but still re-picks a
+        -- spot rather than retrying a dead one forever.
         sleep_spot_radius        = 6.0,
+        sleep_spot_ring_spacing  = 2.0,
         sleep_spot_arrival_tiles = 1.0,
         sleep_spot_max_wait      = 25.0,
         -- Eating. Mirror of drink_from_canteen: only fires when hunger
