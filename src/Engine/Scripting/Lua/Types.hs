@@ -1,3 +1,4 @@
+{-# LANGUAGE Strict, StrictData #-}
 module Engine.Scripting.Lua.Types where
 
 import UPrelude
