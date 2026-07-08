@@ -468,6 +468,12 @@ library
                      Unit.Thread.Command.Motion
                      Unit.Thread.Command.Pose
                      Unit.Thread.Movement
+                     Unit.Thread.Movement.Types
+                     Unit.Thread.Movement.Leap
+                     Unit.Thread.Movement.Fall
+                     Unit.Thread.Movement.Timers
+                     Unit.Thread.Movement.Climb
+                     Unit.Thread.Movement.PathAdvance
                      Building.Types
                      Building.Command.Types
                      Building.Thread.Command
