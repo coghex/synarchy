@@ -1,10 +1,10 @@
-module Test.Engine.Input.Thread (spec) where
+module Test.Engine.Input.State (spec) where
 
 import UPrelude
 import Test.Hspec
 import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
-import Engine.Input.Thread
+import Engine.Input.State
   (shouldTrackKeyStateWhileTextFocused, updateWindowState, heldButtonReleases)
 import Engine.Input.Types
 
@@ -27,7 +27,7 @@ allReleased s = Map.null (inpKeyStates s)
 
 spec ∷ Spec
 spec = do
-  describe "Engine.Input.Thread" $ do
+  describe "Engine.Input.State" $ do
     describe "shouldTrackKeyStateWhileTextFocused" $ do
       it "keeps held modifier presses visible while text input is focused" $ do
         shouldTrackKeyStateWhileTextFocused GLFW.Key'LeftShift
