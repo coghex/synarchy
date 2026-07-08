@@ -102,11 +102,23 @@ def main() -> int:
         print(f"PASS: different style ({s4['textureId']}) and severity "
               f"({s5['textureId']}) each minted a distinct texture")
 
-        textures_so_far = len(list_textures())
+        listed = list_textures()
+        textures_so_far = len(listed)
         if textures_so_far != 3:
             print(f"FAIL (setup): expected 3 distinct textures so far, "
                   f"got {textures_so_far}")
             return 2
+
+        # blood.getTexture's reported FIFO order must match its actual
+        # rank in listTextures() (oldest = 0), not a hardcoded value.
+        expected_order = {t["id"]: i for i, t in enumerate(listed)}
+        for tid in (s1["textureId"], s4["textureId"], s5["textureId"]):
+            got = get_texture(tid)
+            if not got or got.get("order") != expected_order[tid]:
+                print(f"FAIL: blood.getTexture({tid}) order={got and got.get('order')!r}, "
+                      f"expected {expected_order[tid]}")
+                return 1
+        print("PASS: blood.getTexture reports the correct FIFO order")
 
         # --- 3/4. exceeding the cap evicts the oldest descriptor, and --
         #          cascades to every decal that referenced it ----------

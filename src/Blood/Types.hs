@@ -41,6 +41,8 @@ module Blood.Types
     , addDecal
     , lookupDecal
     , allDecals
+    , bloodDryDuration
+    , wetnessAt
     , removeDecalsForTexture
     , BloodStore(..)
     , emptyBloodStore
@@ -52,7 +54,7 @@ module Blood.Types
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
-import Data.List (sortOn, foldl')
+import Data.List (sortOn)
 import Data.Foldable (toList)
 import Data.Maybe (mapMaybe)
 import qualified Data.HashMap.Strict as HM
@@ -199,7 +201,7 @@ matchThreshold = 1
 --   the lower texture id (oldest) — an arbitrary but deterministic
 --   choice, since distance alone doesn't order equally-close matches.
 findMatch ∷ BloodTextureRequest → BloodTexturePool → Maybe BloodTextureId
-findMatch req pool = case sortOn snd candidates of
+findMatch req pool = case sortOn (\(tid, dist) → (dist, tid)) candidates of
     (tid, _) : _ → Just tid
     []           → Nothing
   where
@@ -293,6 +295,12 @@ data BloodDecal = BloodDecal
       --   derived at read time (now - bdeCreatedAt), not stored — no
       --   ticking system owns this yet (#604 scope excludes rain/
       --   fluid interaction and aging renders).
+    , bdeInitialWetness ∷ !Float
+      -- ^ Wetness at creation, 0..1 (design doc's "current age/
+      --   wetness/dryness" — the stored half; a caller can spawn an
+      --   already-drying mark, e.g. blood found rather than freshly
+      --   made). Current wetness/dryness is derived from this plus age
+      --   at read time — see 'wetnessAt'.
     , bdeWoundKind  ∷ !Text
     , bdeSeverity   ∷ !SeverityBucket
     , bdeSourceUnit ∷ !(Maybe UnitId)
@@ -312,6 +320,7 @@ data BloodDecalSpec = BloodDecalSpec
     , bspRotation   ∷ !Float
     , bspScale      ∷ !Float
     , bspCreatedAt  ∷ !Double
+    , bspInitialWetness ∷ !Float
     , bspWoundKind  ∷ !Text
     , bspSeverity   ∷ !SeverityBucket
     , bspSourceUnit ∷ !(Maybe UnitId)
@@ -341,6 +350,7 @@ addDecal spec decals =
             , bdeRotation   = bspRotation spec
             , bdeScale      = bspScale spec
             , bdeCreatedAt  = bspCreatedAt spec
+            , bdeInitialWetness = bspInitialWetness spec
             , bdeWoundKind  = bspWoundKind spec
             , bdeSeverity   = bspSeverity spec
             , bdeSourceUnit = bspSourceUnit spec
@@ -356,6 +366,22 @@ lookupDecal did = HM.lookup did . bdlDecals
 -- | Every decal, oldest (lowest id) first.
 allDecals ∷ BloodDecals → [BloodDecal]
 allDecals = sortOn bdeId . HM.elems . bdlDecals
+
+-- | Game-seconds for a decal to linearly dry from its initial wetness
+--   to fully dry (design doc's "Aging": wet → drying → old/faded).
+--   Only a placeholder scale for this issue's derived read — no
+--   ticking system exists yet to drive a real aging *render*.
+bloodDryDuration ∷ Double
+bloodDryDuration = 600
+
+-- | Current wetness, 0 (dry) .. 1 (fresh/wet), derived from a decal's
+--   stored initial wetness and its age at @now@ — never stored itself,
+--   so there's nothing to tick. 'dryness' is simply @1 - wetnessAt@.
+wetnessAt ∷ Double → BloodDecal → Float
+wetnessAt now d =
+    let age = max 0 (now - bdeCreatedAt d)
+    in max 0 (min (bdeInitialWetness d)
+                   (bdeInitialWetness d - realToFrac (age / bloodDryDuration)))
 
 -- | Drop every decal referencing an evicted texture (issue #604
 --   requirement #4: eviction cascades to dependent decals).

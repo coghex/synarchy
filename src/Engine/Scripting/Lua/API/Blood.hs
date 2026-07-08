@@ -15,6 +15,7 @@ module Engine.Scripting.Lua.API.Blood
     ) where
 
 import UPrelude
+import Data.List (elemIndex)
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified HsLua as Lua
@@ -49,7 +50,9 @@ resolveBloodPage env Nothing = activeWorldPage env
 --   ("smooth"|"moderate"|"rough", default "moderate"), seed (int,
 --   default 0), surfaceZ (int, default 0), offsetX/offsetY (default
 --   0), rotation (default 0), scale (default 1), opacity (default 1),
---   sourceUnit (unit id), pageId (defaults to the active world).
+--   wetness (0..1, default 1 — a caller can spawn an already-drying
+--   mark), sourceUnit (unit id), pageId (defaults to the active
+--   world).
 --
 --   Any of style/footprint/anisotropy/edge/severity given but
 --   unrecognised fails the call outright (nil, reason) rather than
@@ -95,6 +98,7 @@ bloodSpawnFn env = do
     rot       ← getFloatProp "rotation" 0
     scl       ← getFloatProp "scale" 1
     opac      ← getFloatProp "opacity" 1
+    wet       ← getFloatProp "wetness" 1
     mUnitN    ← getNumProp "sourceUnit"
     mPageStr  ← getStrProp "pageId"
     let fail_ msg = Lua.pushnil >> Lua.pushstring msg >> return 2
@@ -136,6 +140,7 @@ bloodSpawnFn env = do
                                         , bspRotation   = rot
                                         , bspScale      = scl
                                         , bspCreatedAt  = now
+                                        , bspInitialWetness = max 0 (min 1 wet)
                                         , bspWoundKind  = woundKind
                                         , bspSeverity   = severity
                                         , bspSourceUnit = mSourceUnit
@@ -195,7 +200,9 @@ bloodListDecalsFn env = do
         Lua.rawseti (-2) (fromIntegral i)
     return 1
 
--- | blood.getTexture(textureId) → table | nil.
+-- | blood.getTexture(textureId) → table | nil. @order@ is the
+--   descriptor's actual 0-based FIFO rank (oldest = 0), matching what
+--   'listTextures' reports for the same id — not hardcoded.
 bloodGetTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodGetTextureFn env = do
     idArg ← Lua.tointeger 1
@@ -206,12 +213,13 @@ bloodGetTextureFn env = do
             case mPage of
                 Nothing      → return Nothing
                 Just (_, ws) → do
-                    store ← readIORef (wsBloodStoreRef ws)
-                    pure $ lookupTexture (BloodTextureId (fromIntegral n))
-                                          (bstPool store)
+                    let tid = BloodTextureId (fromIntegral n)
+                    pool ← bstPool ⊚ readIORef (wsBloodStoreRef ws)
+                    pure $ (\rank → (rank, allTextures pool !! rank))
+                        ⊚ elemIndex tid (map btdId (allTextures pool))
     case mTex of
-        Just d  → pushTexture 0 d >> return 1
-        Nothing → Lua.pushnil >> return 1
+        Just (rank, d) → pushTexture rank d >> return 1
+        Nothing        → Lua.pushnil >> return 1
 
 -- | blood.listTextures() → array of descriptor tables on the active
 --   world's texture pool, oldest (front of the FIFO) first. Each entry
@@ -276,15 +284,20 @@ pushTexture rank d = do
     putI "seed" (btdSeed d)
 
 -- | Push one decal: { id, texture, page, x, y, surfaceZ, offsetX,
---   offsetY, rotation, scale, createdAt, age, woundKind, severity,
---   sourceUnit, opacity }. @age@ (design doc's "current age") is
---   derived from the caller's current game time, not stored.
+--   offsetY, rotation, scale, createdAt, age, wetness, dryness,
+--   woundKind, severity, sourceUnit, opacity }. @age@/@wetness@
+--   (design doc's "current age/wetness/dryness") are derived from the
+--   caller's current game time plus the decal's stored creation time /
+--   initial wetness — see 'Blood.Types.wetnessAt' — not themselves
+--   stored (no ticking system owns aging yet). @dryness@ is simply
+--   @1 - wetness@, exposed directly rather than making callers compute it.
 pushDecal ∷ Double → BloodDecal → Lua.LuaE Lua.Exception ()
 pushDecal now d = do
     Lua.newtable
     let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
         putN k v = Lua.pushnumber (Lua.Number (realToFrac v)) >> Lua.setfield (-2) k
         putS k v = Lua.pushstring (TE.encodeUtf8 v) >> Lua.setfield (-2) k
+        wetness = wetnessAt now d
     putI "id"      (unBloodDecalId (bdeId d))
     putI "texture" (unBloodTextureId (bdeTexture d))
     (case bdePage d of WorldPageId pageTxt → putS "page" pageTxt)
@@ -297,6 +310,8 @@ pushDecal now d = do
     putN "scale"    (bdeScale d)
     putN "createdAt" (bdeCreatedAt d)
     putN "age" (max 0 (now - bdeCreatedAt d))
+    putN "wetness" wetness
+    putN "dryness" (1 - wetness)
     putS "woundKind" (bdeWoundKind d)
     putS "severity"  (severityText (bdeSeverity d))
     (case bdeSourceUnit d of

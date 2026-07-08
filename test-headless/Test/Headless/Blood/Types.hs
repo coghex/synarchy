@@ -36,6 +36,7 @@ specFor tid = BloodDecalSpec
     , bspRotation   = 0
     , bspScale      = 1
     , bspCreatedAt  = 0
+    , bspInitialWetness = 1
     , bspWoundKind  = "stab"
     , bspSeverity   = SeverityModerate
     , bspSourceUnit = Nothing
@@ -170,6 +171,41 @@ spec = do
             let (_, tid, isNew, _) = requestTexture baseReq (bstPool cleared)
             tid `shouldBe` BloodTextureId 1
             isNew `shouldBe` True
+
+    describe "wetnessAt" $ do
+        it "is the initial wetness at age 0" $
+            wetnessAt 0 (decalAt 0 1) `shouldBe` 1
+
+        it "dries linearly toward 0 as age approaches bloodDryDuration" $
+            wetnessAt (bloodDryDuration / 2) (decalAt 0 1) `shouldBe` 0.5
+
+        it "never goes below 0 once fully dry" $
+            wetnessAt (bloodDryDuration * 10) (decalAt 0 1) `shouldBe` 0
+
+        it "never exceeds its own initial wetness, even at age 0" $
+            wetnessAt 0 (decalAt 0 0.4) `shouldBe` 0.4
+
+-- | A minimal decal for exercising 'wetnessAt' directly, without going
+-- through 'addDecal'/'spawnDecal'.
+decalAt ∷ Double → Float → BloodDecal
+decalAt createdAt initialWetness = BloodDecal
+    { bdeId         = BloodDecalId 1
+    , bdeTexture    = BloodTextureId 1
+    , bdePage       = page
+    , bdeX          = 0
+    , bdeY          = 0
+    , bdeSurfaceZ   = 0
+    , bdeOffsetX    = 0
+    , bdeOffsetY    = 0
+    , bdeRotation   = 0
+    , bdeScale      = 1
+    , bdeCreatedAt  = createdAt
+    , bdeInitialWetness = initialWetness
+    , bdeWoundKind  = "stab"
+    , bdeSeverity   = SeverityModerate
+    , bdeSourceUnit = Nothing
+    , bdeOpacity    = 1
+    }
 
 -- | The descriptor a fresh pool would assign to @req@ — for exercising
 -- 'requestDistance' directly without going through 'requestTexture'.
