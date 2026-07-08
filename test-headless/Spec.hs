@@ -51,6 +51,7 @@ import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Network as PowerNetwork
 import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.Blood.Texture as BloodTexture
+import qualified Test.Headless.Blood.Impact as BloodImpact
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
@@ -121,6 +122,7 @@ main = hspec $ do
     describe "Power.Network" PowerNetwork.spec
     describe "Blood.Types" BloodTypes.spec
     describe "Blood.Texture" BloodTexture.spec
+    describe "Blood.Impact" BloodImpact.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec

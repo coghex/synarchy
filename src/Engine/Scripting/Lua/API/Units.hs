@@ -163,6 +163,7 @@ import Item.Types (ItemDef(..)
 import Item.Ground (spawnGroundItem)
 import Combat.Wounds (bleedRateFor, kindBleedFactor)
 import Combat.Types (pushInjuryEvent)
+import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP, applyItemBuffs)
 import qualified Unit.Selection as Sel
@@ -4668,13 +4669,15 @@ unitInjureFn env = do
                     , woundClean    = False
                     , woundInfectionType = ""
                     , woundNecrosis = 0.0 }
-            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+            mPos ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
-                    Nothing   → (um, False)
+                    Nothing   → (um, Nothing)
                     Just inst →
                         let inst' = inst { uiWounds = w : uiWounds inst }
-                        in (um { umInstances =
-                                   HM.insert uid inst' (umInstances um) }, True)
+                        in ( um { umInstances =
+                                    HM.insert uid inst' (umInstances um) }
+                           , Just (uiPage inst, uiGridX inst, uiGridY inst, uiGridZ inst) )
+            let ok = mPos ≢ Nothing
             -- A successful (non-combat) wound feeds the injury log.
             Lua.liftIO $ when ok $
                 pushInjuryEvent (injuryEventsRef env) now (fromIntegral n)
@@ -4682,6 +4685,19 @@ unitInjureFn env = do
                     [ ("part",      TE.decodeUtf8Lenient partBS)
                     , ("woundKind", TE.decodeUtf8Lenient kindBS)
                     , ("severity",  T.pack (show (woundSeverity w))) ]
+            -- Impact blood (#607): unit.injure has no attacker, so
+            -- direction always falls back to a deterministic seeded
+            -- angle (requirement 7) — this debug path exists precisely
+            -- so headless probes can exercise every wound kind without
+            -- staging a real attack (requirement 2).
+            Lua.liftIO $ case mPos of
+                Nothing → pure ()
+                Just (page, gx, gy, gz) → do
+                    let seed  = round (now * 1000.0) + fromIntegral n
+                        angle = impactFallbackAngle seed
+                    spawnImpactBlood env page gx gy gz
+                        (TE.decodeUtf8Lenient kindBS) (woundSeverity w)
+                        angle seed (Just uid) now
             Lua.pushboolean ok
             return 1
         _ → Lua.pushboolean False >> return 1

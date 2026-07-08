@@ -320,6 +320,71 @@ fills in the pieces #604 deliberately left open:
   tiny (≤32×32) textures per destroyed world page; a follow-up if it
   ever matters in practice.
 
+## Implementation notes (#607)
+
+The third landing (`Blood.Impact`) connects fresh wound creation to
+one-shot impact blood — the "Injury behavior" section above, made
+concrete:
+
+- **Reused existing severity signals, not a new "blunt severity"
+  threshold**, per the issue's explicit ask. Two thresholds, both
+  already load-bearing elsewhere:
+  - `catastrophicBluntThreshold = 0.85` — `scripts/injury_log.lua`'s
+    own T4 tier boundary, the point at which that script's narration
+    switches to "crushing" (bone), "pulverizing" (nerve — the same
+    family concussion's wording draws from), or "pulping" (soft
+    tissue). Gates `blunt` and `concussion`: below it, a hit is merely
+    "strikes"/"clubs"/"bashes"/"smashes" — no blood; at/above it, blood.
+  - `Combat.Wounds.destroyThreshold = 1.0` — the existing structural-
+    destruction cutoff (a fracture/severed wound at/above it "destroys"
+    the part). Gates `fracture`.
+  - `impactSeverityBucket` reuses the SAME T1..T4 boundaries
+    (0.25/0.50/0.85) for the generated mark's own severity bucket, so
+    "how strong the mark looks" agrees with "how the wound narrates".
+- **Wound kind → style** (`defaultStyleForWound`) was already defined
+  in `Engine.Scripting.Lua.API.Blood` for the #604 debug `blood.spawn`
+  surface's inferred-style default; it now lives in `Blood.Impact` and
+  that Lua module imports it, so an automatic impact mark and a
+  manually-spawned one for the same wound kind read as the same family
+  of mark instead of two mappings that could drift apart.
+- **`internal` never draws blood**, at any severity — it's the one
+  kind with no "catastrophic" exception, since it names damage with no
+  plausible skin-breaking mechanism.
+- **`arterial`/`severed` floor at `SeverityModerate`** rather than
+  being unconditionally `SeverityCatastrophic` — "always at least a
+  strong mark" (the design's "high-volume" framing) while still
+  scaling further with actual severity above that floor, so the "wound
+  severity must affect amount" requirement holds for every kind that
+  draws blood, not just stab/slash.
+- **Direction**: real attacker→target angle when one exists (combat
+  resolution always has both positions); `impactFallbackAngle` — a
+  pure function of a caller-supplied deterministic seed — otherwise
+  (falls have no attacker; `unit.injure` is a bare debug call). Feeds
+  the decal's own `bspRotation`, not the texture's internal seed.
+- **Bounded per event, not per wound.** A single landed hit or fall can
+  produce several tissue-layer wounds (a combo "paw", several
+  fractured bones); each PRODUCER calls `spawnImpactBlood` at most
+  ONCE per event, keyed off the same "headline" (kind, severity) the
+  surrounding code already treats as canonical for that event (combat
+  resolution's death-check/stance-hit scalar; the fall model's
+  worst-injury scalar) — `spawnImpactBlood` itself always places
+  exactly one decal per call, so bounding is entirely the caller's
+  responsibility, not something the shared function enforces.
+- **Three production call sites**, all Haskell (no Lua round-trip):
+  `Combat.Resolution.runResolution` (after the wound-append + hit
+  event), `Unit.Thread.Movement.tickAllMovement` (after the fall
+  injury-log push), and `Engine.Scripting.Lua.API.Units.unitInjureFn`
+  (the debug surface requirement 2 calls for, letting headless probes
+  exercise every wound kind without staging a real attack). The
+  wound-tick's `propagateSevering` cascade (a destroyed part severing
+  its children, `Combat.Wounds`) is deliberately NOT a fourth site —
+  it's bookkeeping on an ALREADY-bled wound, not a fresh injury landing.
+- **Skips safely, never crashes**, per requirement 8:
+  `spawnImpactBlood` looks up the wounded unit's page in `wmWorlds`
+  and does nothing if it isn't found, after the wound itself has
+  already been committed — a missing/unloaded page can never roll back
+  or corrupt the wound creation it rode in on.
+
 ## Suggested issue split
 
 ### 1. Epic: procedural injury blood decals

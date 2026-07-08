@@ -42,6 +42,7 @@ import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
+import Blood.Impact (spawnImpactBlood, impactFallbackAngle, pickImpactWound)
 import Unit.Thread.Movement.Types
     (UnitMoveStats(..), defaultMoveStats, baselineUnitHeight)
 import Unit.Thread.Movement.Leap
@@ -130,7 +131,7 @@ tickAllMovement dt env utsRef = do
     -- death. Mirrors the climb-XP drain above.
     sm ← readIORef (substanceManagerRef env)
     let fallResults =
-            [ (uid, injs, foldr (max . fiSeverity) 0 injs)
+            [ (uid, injs, foldr (max . fiSeverity) 0 injs, usRealX ss, usRealY ss, usGridZ ss)
             | (uid, ss) ← HM.toList simStates'''
             , Just drop ← [usPendingFallDrop ss]
             , Just inst ← [HM.lookup uid (umInstances um)]
@@ -141,7 +142,7 @@ tickAllMovement dt env utsRef = do
             ]
     when (not (null fallResults)) $
         atomicModifyIORef' (unitManagerRef env) $ \um' →
-            let applyOne (uid, injs, _) m = case HM.lookup uid m of
+            let applyOne (uid, injs, _, _, _, _) m = case HM.lookup uid m of
                     Nothing → m
                     Just inst →
                         let ws = [ Wound { woundPart     = fiPart i
@@ -163,7 +164,7 @@ tickAllMovement dt env utsRef = do
     -- Feed the injury log: one event per fall that actually hurt someone,
     -- carrying a "detail" string (part:woundKind:sevPct|…) the injury-log
     -- prose turns into a clause list, plus the worst severity + count.
-    forM_ fallResults $ \(uid, injs, worst) → when (not (null injs)) $
+    forM_ fallResults $ \(uid, injs, worst, _, _, _) → when (not (null injs)) $
         let detail = T.intercalate "|"
                 [ T.intercalate ":"
                     [ fiPart i, fiKind i
@@ -174,9 +175,34 @@ tickAllMovement dt env utsRef = do
              , ("count",    T.pack (show (length injs)))
              , ("severity", T.pack (show worst)) ]
 
+    -- Impact blood (#607): ONE mark per fall (never per fractured part,
+    -- so a bad fall that breaks several bones at once stays bounded to
+    -- a single decal — requirement 9). pickImpactWound resolves which
+    -- single injury represents the fall — NOT just the raw-severity
+    -- worst one, since the worst-by-severity injury might not itself
+    -- clear its own catastrophic threshold while a lower-severity one
+    -- in the same fall does. A fall has no "attacker", so direction
+    -- always falls back to a deterministic seeded angle (requirement 7).
+    -- Position comes from THIS tick's fresh sim state (gx, gy, gz), not
+    -- the unit-manager mirror -- that mirror is only refreshed by a
+    -- separate publish-to-render pass (Unit.Thread), so at this point in
+    -- the tick it can still be one tick behind the landing this very
+    -- fall just computed (a floating mid-air decal bug).
+    forM_ fallResults $ \(uid, injs, _, gx, gy, gz) → when (not (null injs)) $
+        case HM.lookup uid (umInstances um) of
+            Nothing   → pure ()
+            Just inst →
+                case pickImpactWound [ (fiKind i, fiSeverity i) | i ← injs ] of
+                    Nothing → pure ()
+                    Just (kind, sev, _) →
+                        let seed = round (now * 1000.0) + fromIntegral (unUnitId uid)
+                            angle = impactFallbackAngle seed
+                        in spawnImpactBlood env (uiPage inst) gx gy gz
+                             kind sev angle seed (Just uid) now
+
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)
-                              | (uid, _, worst) ← fallResults ]
+                              | (uid, _, worst, _, _, _) ← fallResults ]
         setFall uid ss = case HM.lookup uid stunMap of
             Just stun → ss { usGetUpAt = Just (now + stun)
                            , usPendingFallDrop = Nothing }

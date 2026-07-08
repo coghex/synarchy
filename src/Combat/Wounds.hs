@@ -33,6 +33,7 @@ module Combat.Wounds
     , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
     , bleedRateFor        -- current L/sec blood loss (for the info panel)
     , kindBleedFactor     -- per-kind bleed multiplier (treat-action ranking)
+    , destroyThreshold    -- the "structurally destroyed" severity (#607 impact blood)
     ) where
 
 import UPrelude

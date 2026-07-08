@@ -195,6 +195,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Network
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
+                   Test.Headless.Blood.Impact
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.World.TimeLocal
@@ -522,6 +523,7 @@ library
                      Blood.Types
                      Blood.Texture
                      Blood.Render
+                     Blood.Impact
                      Engine.Scripting.Lua.API.Blood
                      Location.Types
                      Location.Overlay.Types
