@@ -3154,7 +3154,13 @@ units:
             - "assets/textures/units/acolyte/animations/pushing/north/frame_008.png"
 
       standing_to_pushing:
-        fps: 8
+        # 5 frames (not 9, unlike standing_to_holding_shovel/pickaxe — a
+        # deliberate scope choice for this transition, see #517 PR
+        # discussion) at 5fps spans exactly till_equip_seconds (1.0s, see
+        # unit_ai_tunables.lua), so it finishes right as the work phase
+        # takes over instead of freezing on frame_004 for part of the
+        # equip window.
+        fps: 5
         loop: false
         flip: true
         frames:
