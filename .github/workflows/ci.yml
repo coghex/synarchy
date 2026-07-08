@@ -158,7 +158,7 @@ jobs:
       # unit-resource physiology splits) grows back past its agreed line
       # budget.
       - name: Lua module line budget
-       run: python3 tools/lua_module_budget.py
+        run: python3 tools/lua_module_budget.py
 
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
