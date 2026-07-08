@@ -69,6 +69,35 @@ local config = {
         -- average max_hydration (~43 L), matching the design target
         -- "a full canteen should refill an average acolyte by ~50%".
         drink_hydration_per_litre = 11.0,
+        -- Sleep (go_to_sleep, circadian epic #479/#611/#612). Utility =
+        -- base + deficit_weight·deficit + urge_weight·circadianUrge,
+        -- where deficit = 1 - sleep_pressure/max (0 = fully rested, 1 =
+        -- fully sleep-deprived) and circadianUrge is the dusk-centered
+        -- bump (scripts/circadian.lua, 0..1). Gated by sleep_min_deficit
+        -- so a freshly-rested unit never even considers napping.
+        --   deficit at the floor (0.35), midday (urge≈0):
+        --     0 + 9·0.35 + 4·0 = 3.15 — routine, below follow_command,
+        --     so ordinary daytime tiredness doesn't interrupt work.
+        --   deficit at the floor (0.35), dusk peak (urge=1):
+        --     0 + 9·0.35 + 4·1 = 7.15 — just crosses follow_command
+        --     (7.0): a moderately tired acolyte settles down for the
+        --     night once dusk hits rather than working through it.
+        --   deficit high (0.78+), any time of day:
+        --     0 + 9·0.78 ≈ 7.0+ — genuine multi-day sleep deprivation
+        --     forces sleep even under a standing order, mirroring
+        --     hunger/thirst's dire-need override (#306).
+        -- Once the lie-down/sleep/wake sequence starts it locks in at
+        -- math.huge (sleepUtility), same as drink_from_source.
+        sleep_min_deficit     = 0.35,
+        sleep_base_weight     = 0.0,
+        sleep_deficit_weight  = 9.0,
+        sleep_urge_weight     = 4.0,
+        -- Walk-to-spot geometry: pick one random point within radius
+        -- per sleep session (mirrors wander's radius pick), no
+        -- dedicated safety filtering (v1 decision — "any flat open
+        -- tile"; normal pathing already avoids impassable terrain).
+        sleep_spot_radius        = 6.0,
+        sleep_spot_arrival_tiles = 1.0,
         -- Eating. Mirror of drink_from_canteen: only fires when hunger
         -- drops below eat_max_fraction (0.25) of max_hunger; utility =
         -- (1 - hungerFrac) · eat_weight. Because it only fires past the

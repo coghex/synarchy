@@ -58,6 +58,7 @@ require("scripts.unit_ai_farm")
 local repairMod     = require("scripts.unit_ai_repair")
 local pickup        = require("scripts.unit_ai_pickup")
 local medic         = require("scripts.unit_ai_medic")
+local sleepGoal     = require("scripts.unit_ai_sleep")
 
 -----------------------------------------------------------
 -- Action registry per unit type
@@ -131,6 +132,7 @@ unitAi.registerActions("acolyte", {
     { name = "refill_canteen", utility = water.refillUtility, execute = water.refillExecute },
     { name = "search_for_water", utility = water.searchUtility, execute = water.searchExecute },
     { name = "drink_from_source", utility = water.drinkFromSourceUtility, execute = water.drinkFromSourceExecute },
+    { name = "go_to_sleep", utility = sleepGoal.sleepUtility, execute = sleepGoal.sleepExecute },
     { name = "notify_allies", utility = notify.notifyAlliesUtility, execute = notify.notifyAlliesExecute },
     { name = "build_nearby", utility = logistics.buildNearbyUtility, execute = logistics.buildNearbyExecute },
     { name = "deliver_to_build_site", utility = deliver.deliverUtility, execute = deliver.deliverExecute },

@@ -969,13 +969,15 @@ parsePose "crawling"  = Just Crawling
 parsePose "collapsed" = Just Collapsed
 parsePose "climbing"  = Just Climbing
 parsePose "falling"   = Just Falling
+parsePose "sleeping"  = Just Sleeping
 parsePose _           = Nothing
 
 -- | unit.getPose(uid) — returns the unit's current pose as a string,
 --   one of: "standing" / "crouching" / "crawling" / "collapsed" /
---   "dead" / "climbing" / "falling" (the full `Unit.Anim.poseTag`
---   set). nil if the unit doesn't exist. Reads `uiPose`, mirrored from
---   `usPose` by Unit.Thread.publishToRender every tick.
+--   "dead" / "climbing" / "falling" / "sleeping" (the full
+--   `Unit.Anim.poseTag` set). nil if the unit doesn't exist. Reads
+--   `uiPose`, mirrored from `usPose` by Unit.Thread.publishToRender
+--   every tick.
 unitGetPoseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPoseFn env = do
     idArg ← Lua.tointeger 1

@@ -659,6 +659,8 @@ local STAT_DEFS = {
         desc = "Energy store (kcal available to spend). Fed by digestion, drained by metabolism and activity. At 0 the body catabolizes fat, then muscle — starvation." },
     hydration    = { icon = "hydration",    name = "Hydration",
         desc = "Need for water. Drops faster than hunger; critical in hot climates." },
+    sleep_pressure = { icon = "sleep",      name = "Sleep",
+        desc = "Accumulated need for sleep. Rises while awake (faster near the circadian sleep window), resets while sleeping. At the ceiling the unit is driven to find somewhere to lie down." },
     blood        = { icon = "blood",        name = "Blood",
         desc = "Blood volume in litres. Drained by bleeding wounds; below 30% triggers unconsciousness, ≤0 means death." },
     pain         = { icon = "pain",         name = "Pain",
@@ -734,7 +736,7 @@ local iconCache = {}
 -- Icons live in kind subfolders (assets/textures/icons/<kind>/<name>.png) but
 -- are referenced by bare name (e.g. "strength"). Build a one-time
 -- basename -> full-path index over the subfolders so callers stay name-only.
-local ICON_SUBDIRS = { "stat", "skill", "status", "injury", "infection", "knowledge" }
+local ICON_SUBDIRS = { "stat", "skill", "status", "injury", "infection", "knowledge", "effects" }
 local iconIndex = nil
 local function buildIconIndex()
     iconIndex = {}
@@ -1592,6 +1594,16 @@ local function fracColorFn(cur, maxName, crit, warn)
     end
 end
 
+-- Sleep pressure is the inverse of every other daily-need resource: HIGH
+-- is the dangerous end (needs sleep), not low. Reuse dangerColor on the
+-- inverted fraction rather than teaching fracColorFn a direction flag.
+local function sleepPressureColorFn(uid)
+    local c = stats.get(uid, "sleep_pressure")
+    local m = stats.get(uid, "max_sleep_pressure")
+    if not (c and m and m > 0) then return CONTENT_VAL_COLOR end
+    return dangerColor(1 - (c / m), 0.10, 0.30)
+end
+
 -- Blood value tooltip: the live BLEED rate in ml/s (with %/s of total blood
 -- in parens). engine.getBlood exposes bleedRate (L/s) summed over wounds.
 local function bloodValueTooltip(uid)
@@ -1635,6 +1647,8 @@ local function buildStatusPanel(rect, uid)
           colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) },
         { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
           colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) },
+        { key = "sleep_pressure", value = function(u) return fmtCurMax(u, "sleep_pressure", "max_sleep_pressure") end,
+          colorFn = sleepPressureColorFn },
         { key          = "carrying_capacity",
           value        = fmtCarry,
           valueTooltip = carryValueTooltip },

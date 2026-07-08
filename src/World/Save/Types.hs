@@ -124,7 +124,12 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 80  -- v80: CraftBill (Craft.Bills) gains a new
+currentSaveVersion = 81  -- v81: Pose (Unit.Sim.Types) gains a new
+                         --      trailing 'Sleeping' constructor (#612)
+                         --      for the circadian sleep-goal AI.
+                         --      Appended at the end, per Pose's own
+                         --      append-only policy.
+                         -- v80: CraftBill (Craft.Bills) gains a new
                          --      trailing 'cbWorking' field (#590) — is
                          --      the claimant CURRENTLY pouring work
                          --      into this cycle (vs. still fetching/

@@ -429,6 +429,7 @@ units:
       crouching-idle:        crouching_idle
       crawling-idle:         crawling_idle
       crawling-walk:         crawling
+      sleeping-idle:         sleeping_idle
       collapsed-idle:        injured_collapse  # holds the last frame
       dead-idle:             death             # same — last frame
       # Pose transitions. Forward asset reused for the reverse direction
@@ -443,6 +444,13 @@ units:
       crawling-to-crouching: crouching_to_crawling
       crawling-to-collapsed: crawling_to_collapsed
       collapsed-to-crawling: crawling_to_collapsed
+      # Going to sleep is a ground-level pose (#612): the AI chains
+      # standing → crouching → crawling (existing transitions above)
+      # then this final crawling → sleeping hop; reverse (waking) plays
+      # the same asset backward, same shared-asset convention as every
+      # other pose pair above.
+      crawling-to-sleeping:  crawling_to_sleeping
+      sleeping-to-crawling:  crawling_to_sleeping
 
       # Climbing. Engine triggers Standing → Climbing automatically
       # when a movement step hits a cliff (Z increases AND the
@@ -1298,6 +1306,118 @@ units:
             - "assets/textures/units/acolyte/animations/crawling_idle/north/frame_006.png"
             - "assets/textures/units/acolyte/animations/crawling_idle/north/frame_007.png"
             - "assets/textures/units/acolyte/animations/crawling_idle/north/frame_008.png"
+
+      sleeping_idle:
+        fps: 4
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/sleeping_idle/north/frame_008.png"
+
+      crawling_to_sleeping:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling_to_sleeping/north/frame_008.png"
 
       crawling_to_collapsed:
         fps: 8

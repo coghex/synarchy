@@ -71,6 +71,7 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     if inOrganFailure then
         regenFactor = 0
     elseif pose     == "collapsed" then regenFactor = params.regen_factor_collapsed
+    elseif pose     == "sleeping"  then regenFactor = params.regen_factor_sleeping
     elseif pose     == "crawling"  then regenFactor = params.regen_factor_crawling
     elseif pose     == "crouching" then regenFactor = params.regen_factor_crouching
     elseif activity == "walking"   then regenFactor = params.regen_factor_walking
