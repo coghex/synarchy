@@ -88,9 +88,10 @@ python3 tools/test_audit.py
 
 ### `lua_module_budget.py`
 Cheap, no-engine guard (#545) for Lua files that were split into a shell
-plus small per-domain modules with an agreed physical-line budget (e.g.
-`scripts/debug.lua` + `scripts/debug/*.lua`). Fails if any budgeted file
-grows back past its limit.
+plus small per-domain modules with an agreed physical-line budget, such
+as `scripts/debug.lua` + `scripts/debug/*.lua` or
+`scripts/unit_resources.lua` + `scripts/unit_resource*.lua`. Fails if
+any budgeted file grows back past its limit.
 
 ```bash
 python3 tools/lua_module_budget.py
@@ -100,8 +101,9 @@ python3 tools/lua_module_budget.py
 
 Before committing a change:
 ```bash
-python3 tools/test_audit.py     # unit tests pass
-python3 tools/world_check.py    # regression suite passes
+python3 tools/test_audit.py               # unit tests pass
+python3 tools/lua_module_budget.py        # Lua module line budgets pass
+python3 tools/world_check.py              # regression suite passes
 ```
 
 After an intentional change that improves (or legitimately alters) world

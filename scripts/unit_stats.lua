@@ -82,6 +82,16 @@ local derived = {
         return e and e * 10 or nil
     end,
 
+    -- Exhaustion pool size (circadian epic #479 / #610) — same scale as
+    -- stamina. Only the exhaustion/max_exhaustion RATIO matters (it drives
+    -- the movement-speed penalty in exhaustion.lua), so reusing stamina's
+    -- formula keeps the two pools comparably sized without needing its own
+    -- justification.
+    max_exhaustion = function(uid)
+        local e = unit.getStat(uid, "endurance")
+        return e and e * 10 or nil
+    end,
+
     -- Current metabolic burn rate, kcal per real-second. Activity-
     -- AWARE — the walking 1.5× multiplier is folded in here so every
     -- downstream consumer (hunger drain, Phase 4 catabolism deficit,

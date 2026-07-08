@@ -169,6 +169,113 @@ def small_creature_section(port, seconds):
     return passed
 
 
+def _exhaustion(port, uid):
+    r = send(port, f"return unit.getStat({uid},'exhaustion') or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def _sprint_speed(port, uid):
+    r = send(port, f"return require('scripts.movement_speed').sprint({uid}) or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def exhaustion_section(port, seconds):
+    """Exhaustion meter regression coverage (circadian epic #479 / #610):
+      * Drains faster under sustained exertion (combat) than at idle.
+      * Recovers on its own when a fatigued unit rests.
+      * A fatigued unit's sprint speed is measurably lower than a fully
+        rested unit's (the movement-speed penalty, exhaustion.lua).
+      * Wildlife (bear_brown) carries the same exhaustion resource.
+    All on the flat temperate arena, AI wander already neutralised."""
+    passed = True
+    win = min(seconds, 20.0)
+
+    # --- 1. Activity-scaled drain: idle vs forced-combat ---
+    set_climate(port, 14, 0.4)
+    idle = spawn_batch(port, 2, "acolyte", x0=1)
+    actv = spawn_batch(port, 2, "acolyte", x0=8)
+    if not idle or not actv:
+        print("  [FAIL] exhaustion: could not spawn acolytes")
+        return False
+    e_idle0 = sum(_exhaustion(port, u) for u in idle) / len(idle)
+    e_actv0 = sum(_exhaustion(port, u) for u in actv) / len(actv)
+    actv_lua = "{" + ",".join(str(u) for u in actv) + "}"
+    def force_combat():
+        send(port, f"for _,u in ipairs({actv_lua}) do "
+                   f"unit.setAnimOverride(u,'attack_quick') end; return 'ok'")
+    force_combat()
+    t_end = time.time() + win
+    while time.time() < t_end:
+        force_combat()
+        time.sleep(0.2)
+    e_idleD = sum(_exhaustion(port, u) for u in idle) / len(idle) - e_idle0
+    e_actvD = sum(_exhaustion(port, u) for u in actv) / len(actv) - e_actv0
+    ok1 = e_actvD < e_idleD
+    passed &= ok1
+    print(f"  [{'PASS' if ok1 else 'FAIL'}] exhaustion drains faster in combat: "
+          f"idle {e_idleD:+.2f} vs combat {e_actvD:+.2f}")
+
+    # --- 2. Recovery at rest: force near-empty, confirm it climbs back up ---
+    # max_exhaustion is a pure Lua-derived stat (unit_stats.lua), never
+    # written into engine uiStats — must read it via stats.get, not the
+    # raw unit.getStat (which always returns nil for it).
+    rest = spawn_batch(port, 1, "acolyte", x0=14)[0]
+    mx = float(send(port, f"return require('scripts.unit_stats')"
+                          f".get({rest},'max_exhaustion') or -1"))
+    send(port, f"unit.setStat({rest},'exhaustion',{mx * 0.1}); return 'ok'")
+    e0 = _exhaustion(port, rest)
+    time.sleep(win)
+    e1 = _exhaustion(port, rest)
+    ok2 = e1 is not None and e0 is not None and e1 > e0
+    passed &= ok2
+    print(f"  [{'PASS' if ok2 else 'FAIL'}] exhaustion recovers at rest: "
+          f"{e0:.2f} -> {e1:.2f} (max {mx:.1f})")
+
+    # --- 3. Movement-speed penalty: fatigued vs fully-rested sprint ---
+    rested = spawn_batch(port, 1, "acolyte", x0=17)[0]
+    fatigued = spawn_batch(port, 1, "acolyte", x0=20)[0]
+    send(port, f"local ms=require('scripts.unit_stats'); "
+               f"unit.setStat({rested},'exhaustion',"
+               f"ms.get({rested},'max_exhaustion')); return 'ok'")
+    send(port, f"local ms=require('scripts.unit_stats'); "
+               f"unit.setStat({fatigued},'exhaustion',"
+               f"ms.get({fatigued},'max_exhaustion') * 0.05); return 'ok'")
+    sp_rested = _sprint_speed(port, rested)
+    sp_fatigued = _sprint_speed(port, fatigued)
+    ok3 = (sp_rested is not None and sp_fatigued is not None
+           and sp_rested > 0 and sp_fatigued < sp_rested * 0.9)
+    passed &= ok3
+    print(f"  [{'PASS' if ok3 else 'FAIL'}] fatigued unit sprints slower: "
+          f"rested {sp_rested:.2f} vs fatigued {sp_fatigued:.2f} tiles/s")
+
+    # --- 4. Wildlife carries the same resource ---
+    bear = spawn_batch(port, 1, "bear_brown", x0=23)
+    ok4 = False
+    if bear:
+        b = bear[0]
+        bmx = send(port, f"return require('scripts.unit_stats')"
+                         f".get({b},'max_exhaustion') or -1").strip()
+        try:
+            ok4 = float(bmx) > 0
+        except ValueError:
+            ok4 = False
+        print(f"  [{'PASS' if ok4 else 'FAIL'}] bear_brown has exhaustion: max={bmx}")
+    else:
+        print("  [WARN] exhaustion wildlife check: could not spawn bear_brown")
+        bear = []
+    passed &= ok4
+
+    for u in idle + actv + [rest, rested, fatigued] + bear:
+        send(port, f"unit.destroy({u}); return 'ok'")
+    return passed
+
+
 def _calories(port, uid):
     r = send(port, f"return unit.getCalories({uid}) or -1")
     try:
@@ -486,6 +593,7 @@ def main():
         # / hydration drain gets starved if it runs after dozens of units
         # have piled up across the climate scenarios.
         passed &= hunger_section(port, args.seconds)
+        passed &= exhaustion_section(port, args.seconds)
         for name, ambient, humidity, check in SCENARIOS:
             set_climate(port, ambient, humidity)
             spawn_batch(port, args.count)

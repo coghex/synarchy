@@ -154,8 +154,9 @@ jobs:
         run: python3 tools/test_audit.py
 
       # Cheap, no-engine guard (#545): fails if a Lua module that was
-      # split to stay reviewable (e.g. the debug-overlay split) grows
-      # back past its agreed line budget.
+      # split to stay reviewable (e.g. the debug overlay or
+      # unit-resource physiology splits) grows back past its agreed line
+      # budget.
       - name: Lua module line budget
         run: python3 tools/lua_module_budget.py
 
