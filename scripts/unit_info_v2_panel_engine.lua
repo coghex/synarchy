@@ -25,7 +25,7 @@ local iconCache = {}
 -- Icons live in kind subfolders (assets/textures/icons/<kind>/<name>.png) but
 -- are referenced by bare name (e.g. "strength"). Build a one-time
 -- basename -> full-path index over the subfolders so callers stay name-only.
-local ICON_SUBDIRS = { "stat", "skill", "status", "injury", "infection", "knowledge" }
+local ICON_SUBDIRS = { "stat", "skill", "status", "injury", "infection", "knowledge", "effects" }
 local iconIndex = nil
 local function buildIconIndex()
     iconIndex = {}
