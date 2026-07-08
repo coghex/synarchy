@@ -265,7 +265,7 @@ data BodyPart = BodyPart
     , bpAffectsLocomotion ∷ !Bool
       -- ^ True for the direct mobility apparatus (legs, feet — the
       --   quadruped equivalents too). A wound here is what
-      --   'Unit.Thread.Command.injurySpeedMult' weights heaviest when
+      --   'Unit.Thread.Command.Body.injurySpeedMult' weights heaviest when
       --   scaling movement speed. Species with different leg-part
       --   naming (a robot's "hindquarter", say) just set this flag
       --   instead of the engine matching a fixed id list.
