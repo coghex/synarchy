@@ -449,6 +449,10 @@ library
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
+                     UI.Tooltip.Layout
+                     UI.Tooltip.Lock
+                     UI.Tooltip.Render
+                     UI.Tooltip.State
                      Unit.Types
                      Unit.Anim
                      Unit.Stats
