@@ -184,6 +184,46 @@ A dedicated blood/decal pipeline may be useful later, but the first
 version should prove the gameplay and visual behavior before adding a
 new renderer path.
 
+## Implementation notes (#604)
+
+The first landing (model + debug surface, `Blood.Types` +
+`Engine.Scripting.Lua.API.Blood`) pins down some things this design left
+open:
+
+- **Match metric.** Style and the severity/amount bucket are hard
+  gates — any difference there always mints a new descriptor,
+  regardless of the other dimensions (this is what makes "different
+  styles or severity buckets create distinct descriptors" a hard
+  contract, not just a likely outcome). Wound kind, footprint,
+  anisotropy, and edge are soft: a wound-kind mismatch costs a flat 2,
+  each bucketed dimension costs its ordinal distance, and a request
+  reuses the closest existing descriptor whose total cost is ≤ 1 (one
+  near-match bucket step away still reuses; two or more, or any
+  wound-kind mismatch on its own, mint a new descriptor).
+- **Texture cap.** Defaults to 24 (`Blood.Types.defaultBloodTextureCap`)
+  — small on purpose, since this landing is the model and debug
+  surface, not final tuning (see "Aging, caps, and cleanup tuning"
+  below).
+- **Storage shape.** The texture pool and the decal store live in one
+  combined `Blood.Types.BloodStore` (one `IORef` per world page,
+  `wsBloodStoreRef`) rather than two separate registries. Eviction has
+  to cascade into decal removal, and that cascade needs to be atomic
+  against a concurrent Lua call — two separate refs would only allow
+  evicting the texture and removing its decals as two non-atomic
+  steps.
+- **Scope held to the issue.** No `Serialize` instance, no
+  `WorldPageSave` field, no save-version bump — the store is
+  per-session and dies with the `WorldState`, mirroring
+  `wsStructureStageRef`. No rendering, no combat/wound hook, and no
+  real texture generation (`btdSeed` is stored but unused pending a
+  future generator).
+- **Debug Lua surface.** `blood.spawn(gx, gy, woundKind, severity[,
+  props])` resolves/creates a texture and places a decal in one call;
+  `blood.getDecal`/`listDecals`, `blood.getTexture`/`listTextures`
+  (oldest-first, each entry carries its 0-based FIFO rank),
+  `blood.getTextureCap`, and `blood.clear` round out the inspection +
+  reset surface.
+
 ## Suggested issue split
 
 ### 1. Epic: procedural injury blood decals
