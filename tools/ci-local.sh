@@ -48,10 +48,13 @@ cabal build synarchy-test-graphical
 echo "==> [3/5] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/5] test audit"
+echo "==> [4/6] test audit"
 python3 tools/test_audit.py
 
-echo "==> [5/5] world_check --quick"
+echo "==> [5/6] lua module size audit"
+python3 tools/lua_module_size_audit.py
+
+echo "==> [6/6] world_check --quick"
 python3 tools/world_check.py --quick
 
 echo "==> make ci: all gates passed"

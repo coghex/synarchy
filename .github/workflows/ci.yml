@@ -153,6 +153,12 @@ jobs:
       - name: Test audit
         run: python3 tools/test_audit.py
 
+      # Cheap, no-engine line-budget guard (#541): keeps the
+      # unit-resource/physiology Lua split from regressing back into one
+      # monolith.
+      - name: Lua module size audit
+        run: python3 tools/lua_module_size_audit.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.

@@ -86,12 +86,23 @@ each check correctly identifies the issue it's meant to catch.
 python3 tools/test_audit.py
 ```
 
+### `lua_module_size_audit.py`
+Cheap, no-engine line-budget guard (#541): fails if
+`scripts/unit_resources.lua` or any sibling `scripts/unit_resource_*.lua`
+physiology module exceeds 500 physical lines. Keeps the unit-resource
+split from regressing back into one monolith.
+
+```bash
+python3 tools/lua_module_size_audit.py
+```
+
 ### Workflow
 
 Before committing a change:
 ```bash
-python3 tools/test_audit.py     # unit tests pass
-python3 tools/world_check.py    # regression suite passes
+python3 tools/test_audit.py               # unit tests pass
+python3 tools/lua_module_size_audit.py    # Lua module line budgets pass
+python3 tools/world_check.py              # regression suite passes
 ```
 
 After an intentional change that improves (or legitimately alters) world
