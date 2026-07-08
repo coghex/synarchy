@@ -51,12 +51,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      # Keep ghcup under a user-writable prefix so actions/cache can
-      # restore it cleanly. Restoring into /usr/local/.ghcup started
-      # failing with tar "Cannot utime / Cannot change mode" errors on
-      # current hosted runners, which silently degraded the toolchain
-      # cache into a miss every run.
-      GHCUP_INSTALL_BASE_PREFIX: ${{ runner.temp }}/ghcup-root
+      # Keep ghcup under a user-writable prefix inside the checked-out
+      # workspace so actions/cache can restore it cleanly. Restoring into
+      # /usr/local/.ghcup started failing with tar "Cannot utime /
+      # Cannot change mode" errors on current hosted runners, which
+      # silently degraded the toolchain cache into a miss every run.
+      GHCUP_INSTALL_BASE_PREFIX: ${{ github.workspace }}/.ci-ghcup-root
     steps:
       # fetch-depth: 0 so the path-selective probe step (#530) can diff a
       # PR against its base to see which files changed.
