@@ -16,6 +16,7 @@ local repairStatus = require("scripts.ui.repair_status")
 local items = require("scripts.unit_info_v2_items")
 local data  = require("scripts.unit_info_v2_inventory_data")
 local L     = require("scripts.unit_info_v2_layout")
+local utf8Safe = require("scripts.ui.utf8_safe")
 
 local M = {}
 
@@ -33,7 +34,10 @@ unitInfoV2.lastInvKey      = nil   -- hash of the rendered (uid, tab, items)
 -- Truncate `text` to fit within `maxPx` of horizontal space at the
 -- given font + size, appending ".." when truncated. Binary-searches
 -- the prefix so this stays O(log n) per call even for long strings.
--- Returns the original text unchanged if it already fits.
+-- Returns the original text unchanged if it already fits. Every
+-- candidate cut point is snapped to a complete UTF-8 character boundary
+-- (utf8Safe) so a multi-byte character is never split into a dangling
+-- lead byte -- string.sub cuts by byte offset, not codepoint.
 local function truncateToWidth(text, font, fontSize, maxPx)
     if not text or text == "" or maxPx <= 0 then return text end
     local full = engine.getTextWidth(font, text, fontSize)
@@ -44,11 +48,12 @@ local function truncateToWidth(text, font, fontSize, maxPx)
     local lo, hi = 0, #text
     while lo < hi do
         local mid = math.floor((lo + hi + 1) / 2)
-        local sub = text:sub(1, mid)
+        local cut = utf8Safe.snapToCharBoundary(text, mid)
+        local sub = text:sub(1, cut)
         local w = engine.getTextWidth(font, sub, fontSize) + ellW
         if w <= maxPx then lo = mid else hi = mid - 1 end
     end
-    return text:sub(1, lo) .. ellipsis
+    return text:sub(1, utf8Safe.snapToCharBoundary(text, lo)) .. ellipsis
 end
 
 local function applyInvTabStyling()

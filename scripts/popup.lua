@@ -13,10 +13,11 @@
 -- entirely by clicking a popup line (pans the camera to that event's
 -- coords) — there is no per-category "go_to" button.
 
-local scale  = require("scripts.ui.scale")
-local panel  = require("scripts.ui.panel")
-local label  = require("scripts.ui.label")
-local button = require("scripts.ui.button")
+local scale    = require("scripts.ui.scale")
+local panel    = require("scripts.ui.panel")
+local label    = require("scripts.ui.label")
+local button   = require("scripts.ui.button")
+local utf8Safe = require("scripts.ui.utf8_safe")
 
 local popup = package.loaded["scripts.popup"] or {}
 package.loaded["scripts.popup"] = popup
@@ -177,7 +178,10 @@ local function lineDisplayText(p, line)
 end
 
 -- Truncate text to fit maxWidthPx, suffixing "..." (pixel-accurate
--- binary search using engine.getTextWidth).
+-- binary search using engine.getTextWidth). Every candidate cut point is
+-- snapped to a complete UTF-8 character boundary (utf8Safe) so a
+-- multi-byte character (e.g. an accented letter) is never split into a
+-- dangling lead byte -- string.sub cuts by byte offset, not codepoint.
 local function truncateToWidth(text, font, fontSize, maxWidthPx)
     if engine.getTextWidth(font, text, fontSize) <= maxWidthPx then
         return text
@@ -185,14 +189,15 @@ local function truncateToWidth(text, font, fontSize, maxWidthPx)
     local lo, hi = 1, #text
     while lo < hi do
         local mid = math.floor((lo + hi + 1) / 2)
-        local candidate = string.sub(text, 1, mid) .. "..."
+        local cut = utf8Safe.snapToCharBoundary(text, mid)
+        local candidate = string.sub(text, 1, cut) .. "..."
         if engine.getTextWidth(font, candidate, fontSize) <= maxWidthPx then
             lo = mid
         else
             hi = mid - 1
         end
     end
-    return string.sub(text, 1, lo) .. "..."
+    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, lo)) .. "..."
 end
 
 -----------------------------------------------------------

@@ -37,6 +37,7 @@ local panel       = require("scripts.ui.panel")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local brokenOverlay = require("scripts.ui.broken_overlay")
+local utf8Safe    = require("scripts.ui.utf8_safe")
 
 -----------------------------------------------------------
 -- Layout constants. Mirrors cargo_inventory_panel so the two read the
@@ -109,7 +110,10 @@ local function contentHash(uid, defName, instanceId)
 end
 
 -- Binary-search truncation with ".." suffix (same rule as the cargo
--- panel) so long item names don't run into the weight column.
+-- panel) so long item names don't run into the weight column. Every
+-- candidate cut point is snapped to a complete UTF-8 character boundary
+-- (utf8Safe) so a multi-byte character is never split into a dangling
+-- lead byte -- string.sub cuts by byte offset, not codepoint.
 local function truncateToWidth(text, font, fontPx, maxPx)
     if not text or text == "" then return text end
     local fullW = engine.getTextWidth(font, text, fontPx) or 0
@@ -117,11 +121,12 @@ local function truncateToWidth(text, font, fontPx, maxPx)
     local lo, hi = 1, #text
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
-        local candidate = string.sub(text, 1, mid) .. ".."
+        local cut = utf8Safe.snapToCharBoundary(text, mid)
+        local candidate = string.sub(text, 1, cut) .. ".."
         local w = engine.getTextWidth(font, candidate, fontPx) or 0
         if w <= maxPx then lo = mid + 1 else hi = mid end
     end
-    return string.sub(text, 1, math.max(1, lo - 1)) .. ".."
+    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, math.max(1, lo - 1))) .. ".."
 end
 
 -----------------------------------------------------------
