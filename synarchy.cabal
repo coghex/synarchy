@@ -651,6 +651,11 @@ library
                      World.Save.Serialize
                      World.Scale
                      World.Slope
+                     World.Slope.Compute
+                     World.Slope.EdgePatch
+                     World.Slope.FaceMaps
+                     World.Slope.Recompute
+                     World.Slope.Roughness
                      World.SideFace.Base
                      World.SideFace.Types
                      World.SideFace.Compute
