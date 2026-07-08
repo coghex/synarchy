@@ -223,27 +223,42 @@ local function tickOne(uid, defName)
     -- unpathable waypoint). Force a stop after N seconds without
     -- movement so the AI re-decides from idle. Engine-side root cause
     -- (path stall) tracked separately; this is the safety net.
+    --
+    -- watchX/Y only advances on real progress (>0.1 tiles), so the
+    -- 0.01 (squared-tiles) check is CUMULATIVE since the last progress
+    -- point, not a single ~0.1s sample delta — the old per-tick
+    -- version force-stopped any sufficiently slow (meander-speed) walk
+    -- regardless of real progress, since one tick's delta never alone
+    -- cleared the threshold (#612, surfaced by the sleep goal's longer
+    -- walk-to-spot leg).
     do
         local wi = unit.getInfo(uid)
         if wi then
             local moving = (activity == "walking" or activity == "running")
-            if moving and s.watchX then
-                local moved = (wi.gridX - s.watchX) ^ 2
-                            + (wi.gridY - s.watchY) ^ 2
-                if moved > 0.01 then
+            if moving then
+                if not s.watchX then
+                    s.watchX, s.watchY = wi.gridX, wi.gridY
                     s.lastProgressAt = engine.gameTime()
-                elseif engine.gameTime() - (s.lastProgressAt or engine.gameTime())
-                       > (params.stuck_walk_timeout or 6.0) then
-                    engine.logDebug("unitAi: stuck-walk watchdog stopped unit "
-                        .. tostring(uid))
-                    unit.stop(uid)
-                    core.reportFailure(uid, "Stuck — can't reach destination")
-                    s.lastProgressAt = engine.gameTime()
+                else
+                    local moved = (wi.gridX - s.watchX) ^ 2
+                                + (wi.gridY - s.watchY) ^ 2
+                    if moved > 0.01 then
+                        s.watchX, s.watchY = wi.gridX, wi.gridY
+                        s.lastProgressAt = engine.gameTime()
+                    elseif engine.gameTime() - (s.lastProgressAt or engine.gameTime())
+                           > (params.stuck_walk_timeout or 6.0) then
+                        engine.logDebug("unitAi: stuck-walk watchdog stopped unit "
+                            .. tostring(uid))
+                        unit.stop(uid)
+                        core.reportFailure(uid, "Stuck — can't reach destination")
+                        s.watchX, s.watchY = wi.gridX, wi.gridY
+                        s.lastProgressAt = engine.gameTime()
+                    end
                 end
             else
+                s.watchX, s.watchY = nil, nil
                 s.lastProgressAt = engine.gameTime()
             end
-            s.watchX, s.watchY = wi.gridX, wi.gridY
         end
     end
     local newSources = water.scanForWater(uid, s, params)
