@@ -610,6 +610,9 @@ library
                      World.Generate.Strata
                      World.Generate.Types
                      World.Generate.Config
+                     World.Generate.Config.Types
+                     World.Generate.Config.Normalize
+                     World.Generate.Config.IO
                      World.Geology
                      World.Geology.Types
                      World.Geology.Ore
