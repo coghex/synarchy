@@ -27,6 +27,8 @@ BUDGETS: list[tuple[str, list[str], int]] = [
      ["scripts/debug.lua", "scripts/debug/*.lua"], 500),
     ("unit-resource physiology split (#541)",
      ["scripts/unit_resources.lua", "scripts/unit_resource*.lua"], 500),
+    ("unit-AI split (#538)",
+     ["scripts/unit_ai.lua", "scripts/unit_ai_*.lua"], 500),
 ]
 
 

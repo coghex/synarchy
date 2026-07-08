@@ -4,8 +4,9 @@
 -- consumers can't drift apart:
 --   * unit_resources.lua — drains stamina as (speed/comfort)², making
 --     comfort the stamina-neutral cruise.
---   * unit_ai.lua — maps the unit's regime (ambient / ordered / alarmed)
---     to a commanded speed passed to unit.moveTo.
+--   * the unit_ai_*.lua action modules — map the unit's regime
+--     (ambient / ordered / alarmed) to a commanded speed passed to
+--     unit.moveTo.
 --
 -- Speeds are in tiles/sec. `max_speed` (unit YAML) is the reference top
 -- speed at agility 1.0; actual sprint scales linearly with agility.

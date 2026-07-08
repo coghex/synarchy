@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Headless medic-coordination probe.
 
-Verifies the squad-medic auto-treat coordination fix in scripts/unit_ai.lua
-(bestMedicFor / medicAvailable / distance-discounted selection). The bug:
+Verifies the squad-medic auto-treat coordination fix in
+scripts/unit_ai_medic.lua (bestMedicFor / medicAvailable /
+distance-discounted selection). The bug:
 a free LESSER medic refused to treat a second bleeding ally because it
 deferred to the most-CAPABLE medic — even when that medic was already busy
 treating someone else (only an in-combat best medic freed a lesser one).
