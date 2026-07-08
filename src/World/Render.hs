@@ -21,6 +21,7 @@ import World.Render.Camera (cameraChanged)
 import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
 import World.Render.GroundItemQuads (renderGroundItemQuads)
 import World.Render.SpoilQuads (renderSpoilQuads)
+import World.Render.BloodQuads (renderBloodDecalQuads)
 import Unit.Render (renderUnitQuads)
 import Building.Render (renderBuildingQuads, renderGhostQuad)
 import Structure.Render (renderStructureQuads)
@@ -128,6 +129,21 @@ updateWorldTiles env = do
                     Nothing → return V.empty
             return $ V.concat spResults
 
+    -- Blood decal quads (#606): per-frame, same reason as ground items —
+    -- aging tint is derived from the current game time, and a texture
+    -- only has GPU-resident data once 'uploadBloodTextures' catches up
+    -- (Engine.Scripting.Lua.Message), so a decal simply doesn't
+    -- contribute a quad until then.
+    bloodQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            blResults ← forM (wmVisible worldManager) $ \pageId →
+                case lookup pageId (wmWorlds worldManager) of
+                    Just worldState →
+                        renderBloodDecalQuads env pageId worldState tileAlpha
+                    Nothing → return V.empty
+            return $ V.concat blResults
+
     -- Unit quads are generated every frame (cheap: handful of sprites)
     -- so they respond instantly to movement
     unitQuads ← if tileAlpha ≤ 0.001
@@ -200,7 +216,7 @@ updateWorldTiles env = do
     -- Static terrain rides pre-sorted per layer; everything per-tick
     -- stays a flat run the frame loop sorts (it's small) and merges in.
     let dynQuads = worldCursorQuads <> spoilQuads
-                <> groundItemQuads
+                <> bloodQuads <> groundItemQuads
                 <> buildingQuads <> structureQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
     return (LayeredQuads tileQuads dynQuads)

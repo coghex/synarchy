@@ -224,6 +224,102 @@ open:
   `blood.getTextureCap`, and `blood.clear` round out the inspection +
   reset surface.
 
+## Implementation notes (#606)
+
+The second landing (procedural texture generation + world-space
+rendering, `Blood.Texture` + `Blood.Render` + `World.Render.BloodQuads`)
+fills in the pieces #604 deliberately left open:
+
+- **Texture generation.** `Blood.Texture.generateBloodTexture` is a
+  pure function of a `BloodTextureDescriptor` — no IO, no lookup table.
+  It folds every descriptor field into one `StdGen` seed
+  (`descriptorSeed`), then composes a handful of soft-edged "splat"
+  primitives into the requested style: a pool is 1–2 big overlapping
+  blobs, drops/spatter scatter many small splats (count scaled by
+  severity), and streak/smear lay a chain of splats along a seeded
+  direction (thin+tapered vs. short+wide). Anisotropy is applied as a
+  shared rotate/stretch transform over the whole canvas rather than
+  per-splat, so it reads as directional regardless of style. Canvas
+  size is bounded by footprint bucket (16/24/32 px square,
+  `maxBloodTextureDim` = 32) — RGBA8, fully transparent
+  (`0,0,0,0`) outside the generated shape. Determinism/distinctness/
+  bounds are covered directly in `Test.Headless.Blood.Texture`
+  (`cabal test synarchy-test-headless --test-options='--match
+  "Blood"'`).
+- **Aging stays decal-level, not texture-level**, exactly as the
+  design's "Aging" section calls for: `Blood.Render.decalTint` derives
+  an RGB tint + alpha from a decal's current `wetnessAt` (fresh =
+  saturated dark red at full opacity; dry = desaturated brown at a
+  0.35 alpha floor, never vanishing outright — eviction is what
+  removes a mark, not aging). No texture is ever regenerated for
+  aging.
+- **Rendering reuses the existing quad/bindless path**, per
+  requirement 9 — no dedicated decal pipeline. `World.Render.BloodQuads`
+  splits into two independent halves that only meet through a new
+  per-world `wsBloodTextureHandlesRef` map:
+  - `uploadBloodTextures` (GPU-touching, runs once per frame from
+    `Engine.Scripting.Lua.Message.processLuaMessages`, gated on
+    `whenGraphical` — headless has no device) diffs each loaded
+    world's texture FIFO against what's already GPU-resident: uploads
+    pixel data for anything new (`Engine.Graphics.Vulkan.Texture.
+    createTextureFromRGBABytes`, a factored-out version of the
+    staging-buffer upload `handleWorldPreview`/`handleZoomAtlasUpload`
+    already did inline) and registers it with the bindless system.
+    Eviction unregisters the bindless slot, drops the now-stale
+    `textureSizeRef` entry, and disposes the GPU image/view — but only
+    after a `deviceWaitIdle`, since this runs from `processLuaMessages`
+    before `drawFrame`, and `drawFrame` only waits the CURRENT frame's
+    own fence, not every frame still in flight (the same reasoning
+    `Engine.Scripting.Lua.Message.disposeTransientTexture` documents
+    for the shared preview/zoom-atlas texture). The wait only fires
+    when a pass actually has something to evict, not every frame.
+  - `renderBloodDecalQuads` (pure IO, no GPU calls, same shape as
+    `World.Render.GroundItemQuads`) turns each visible decal into a
+    `SortableQuad`, sat at a sort-key nudge of 0.0003 above bare
+    terrain (0.0) and below ground items/units (0.0006) — the same
+    convention `World.Render.SpoilQuads`/`FloraQuads` use for "sits on
+    the ground". Rotation is applied as real corner-vertex rotation
+    (no shader change); a decal whose texture hasn't been GPU-uploaded
+    yet (or never will be, headless) simply contributes no quad.
+  - Chunk-visibility culling (`isChunkVisibleWrapped`/
+    `computeViewBounds`, the same functions ground items use) keeps
+    the VISIBLE quad count bounded regardless of world size.
+- **Decal count has its own cap, independent of the texture cap.**
+  Texture-FIFO eviction cascades to remove its decals, but a request
+  that keeps *reusing* an already-live texture (the near-match design
+  is built to encourage exactly that) never triggers texture eviction
+  at all — without a bound of its own, decals could accumulate
+  forever, and `Blood.Render.bloodRenderRecords` scans every stored
+  decal before `renderBloodDecalQuads` gets to cull by visibility, so
+  an unbounded decal list means unbounded per-frame work even for an
+  empty screen. `BloodDecals` now carries its own FIFO
+  (`bdlOrder`/`bdlCap`, `defaultBloodDecalCap` = 512, mirroring
+  `BloodTexturePool`'s `btpOrder`/`btpCap`) — `addDecal` evicts the
+  oldest decal once over cap, independent of which texture it
+  references. `removeDecalsForTexture` (the texture-eviction cascade)
+  also prunes `bdlOrder` of the ids it removes, so that queue can't
+  grow unboundedly stale either.
+- **Debug/headless surface without a GPU.** `blood.getRenderQuads
+  ([pageId])` exposes `Blood.Render.bloodRenderRecords` directly —
+  the same resolved position/tint/alpha data the real renderer
+  consumes, computed purely from the decal + texture-pool state (no
+  dependency on `wsBloodTextureHandlesRef`/GPU upload), so a headless
+  probe can assert renderability and aging tint without a display.
+  `blood.listTextures`/`getTexture` also now report each descriptor's
+  generated `width`/`height`/`pixelHash` (regenerated on demand via
+  `generateBloodTexture` — never cached alongside the descriptor, so
+  it can't drift from what actually gets uploaded).
+- **Scope cut: no GPU cleanup on world teardown.** FIFO eviction
+  *within* a live world always unregisters + disposes the GPU texture
+  (requirement 5). A handful of world-teardown sites (full page
+  removal, save-load stale-page cleanup) do NOT — the last few
+  registered blood textures for a destroyed world page currently leak
+  their GPU resource rather than routing a dispose signal across the
+  world→render thread boundary for content that's already explicitly
+  out of scope for persistence. Bounded by `defaultBloodTextureCap`
+  tiny (≤32×32) textures per destroyed world page; a follow-up if it
+  ever matters in practice.
+
 ## Suggested issue split
 
 ### 1. Epic: procedural injury blood decals

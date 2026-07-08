@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""Headless probe for issue #604: blood decal model + debug surface.
+"""Headless probe for issue #604/#606: blood decal model, procedural
+texture generation, and world-render records.
 
 Boots headless, builds a flat arena (no worldgen/AI needed — blood.* is a
 pure registry op, not tied to terrain or units), and drives the blood.*
-debug Lua surface (Engine.Scripting.Lua.API.Blood / Blood.Types) end to
-end.
+debug Lua surface (Engine.Scripting.Lua.API.Blood / Blood.Types /
+Blood.Texture / Blood.Render) end to end.
 
 Checks:
   1. same/near-same requests reuse a texture descriptor.
   2. different styles or severity buckets create distinct descriptors.
   3. exceeding the texture cap evicts the oldest descriptor.
   4. evicting a descriptor removes associated decals.
-  5. clear leaves both descriptor and decal lists empty.
+  5. every listed texture reports generated pixel data (width/height/hash).
+  6. a spawned decal produces a renderable record (blood.getRenderQuads).
+  7. an evicted texture's decals never appear in getRenderQuads either.
+  8. a decal spawned already-dry reports a darker, fainter render tint
+     than a decal spawned fresh.
+  9. clear leaves both descriptor and decal lists empty.
+
+blood.getRenderQuads() deliberately doesn't touch the GPU (no headless
+device exists to upload to) — it reports the same resolved data
+(Blood.Render.bloodRenderRecords) the real renderer
+(World.Render.BloodQuads) turns into world-space quads once
+uploadBloodTextures has run on a graphical session.
 
 PASS  = all checks hold.
 FAIL  = any check violated (bug in the model/debug surface).
@@ -58,6 +70,10 @@ def get_texture(tid: int):
 
 def get_texture_cap() -> int:
     return int(float(send(PORT, "return blood.getTextureCap()")))
+
+
+def get_render_quads() -> list:
+    return send_json(PORT, "return blood.getRenderQuads()") or []
 
 
 def main() -> int:
@@ -188,7 +204,70 @@ def main() -> int:
         print("PASS: evicting the oldest texture cascade-removed exactly "
               f"the {len(evicted_decal_ids)} decal(s) that referenced it")
 
-        # --- 5. clear leaves both lists empty ---------------------------
+        # --- 5. every listed texture reports generated pixel data ------
+        for t in after_evict:
+            w, h, ph = t.get("width"), t.get("height"), t.get("pixelHash")
+            if not (isinstance(w, (int, float)) and w > 0
+                    and isinstance(h, (int, float)) and h > 0
+                    and ph is not None):
+                print(f"FAIL: texture {t.get('id')} missing generated "
+                      f"pixel data (width={w!r}, height={h!r}, "
+                      f"pixelHash={ph!r})")
+                return 1
+            if w > 32 or h > 32:
+                print(f"FAIL: texture {t.get('id')} exceeds the bounded "
+                      f"max size (got {w}x{h})")
+                return 1
+        print(f"PASS: all {len(after_evict)} listed textures report "
+              "generated, bounded pixel data")
+
+        # --- 6/7. renderable records exist for live decals, never for --
+        #          evicted ones ------------------------------------------
+        quads = get_render_quads()
+        quad_decal_ids = {q["decal"] for q in quads}
+        if not survivors.issubset(quad_decal_ids):
+            print(f"FAIL: blood.getRenderQuads() is missing survivor "
+                  f"decal(s) {survivors - quad_decal_ids}")
+            return 1
+        if evicted_decal_ids & quad_decal_ids:
+            print(f"FAIL: blood.getRenderQuads() still reports evicted "
+                  f"decal(s) {evicted_decal_ids & quad_decal_ids}")
+            return 1
+        for q in quads:
+            for key in ("texture", "x", "y", "tintR", "tintG", "tintB", "alpha"):
+                if key not in q:
+                    print(f"FAIL: render record for decal {q.get('decal')} "
+                          f"is missing '{key}'")
+                    return 1
+        print(f"PASS: getRenderQuads() reports exactly the live decals "
+              f"({len(quad_decal_ids)}) with full render data, none evicted")
+
+        # --- 8. an already-dry decal reads darker/fainter than a fresh --
+        #        one spawned at (about) the same time ---------------------
+        fresh = spawn(50, 50, "agingcheck", "moderate",
+                      {"style": "pool", "wetness": 1})
+        old = spawn(51, 51, "agingcheck", "moderate",
+                    {"style": "pool", "wetness": 0.02})
+        if old["textureId"] != fresh["textureId"]:
+            print("FAIL (setup): fresh/old aging-check decals unexpectedly "
+                  f"minted different textures ({fresh['textureId']} vs "
+                  f"{old['textureId']})")
+            return 2
+        by_decal = {q["decal"]: q for q in get_render_quads()}
+        freshQ, oldQ = by_decal.get(fresh["decalId"]), by_decal.get(old["decalId"])
+        if freshQ is None or oldQ is None:
+            print(f"FAIL: aging-check decals missing from getRenderQuads "
+                  f"(fresh={freshQ!r}, old={oldQ!r})")
+            return 1
+        if not (oldQ["alpha"] < freshQ["alpha"] and oldQ["tintR"] < freshQ["tintR"]):
+            print(f"FAIL: an already-dry decal did not read darker/fainter "
+                  f"than a fresh one (fresh={freshQ!r}, old={oldQ!r})")
+            return 1
+        print(f"PASS: aged decal tint (alpha={oldQ['alpha']:.3f}, "
+              f"tintR={oldQ['tintR']:.3f}) is darker/fainter than fresh "
+              f"(alpha={freshQ['alpha']:.3f}, tintR={freshQ['tintR']:.3f})")
+
+        # --- 9. clear leaves both lists empty ---------------------------
         cleared = send(PORT, "return blood.clear()")
         if cleared.lower() != "true":
             print(f"FAIL: blood.clear() returned {cleared!r}")

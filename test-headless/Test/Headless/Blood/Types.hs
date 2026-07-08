@@ -133,6 +133,38 @@ spec = do
                     map btdId (allTextures finalPool) `shouldBe` [id2, id3]
                 _ → expectationFailure "expected exactly 3 distinct texture ids"
 
+    describe "decal cap eviction (#606)" $ do
+        it "addDecal stays within cap, evicting the oldest decal first" $ do
+            let decals0 = emptyBloodDecals 2
+                go (ds, ids) _ =
+                    let (ds', did) = addDecal (specFor (BloodTextureId 1)) ds
+                    in (ds', ids ++ [did])
+                (finalDecals, allIds) = foldl' go (decals0, []) [1, 2, 3 ∷ Int]
+            length (allDecals finalDecals) `shouldBe` 2
+            case allIds of
+                [id1, id2, id3] → do
+                    lookupDecal id1 finalDecals `shouldBe` Nothing
+                    map bdeId (allDecals finalDecals) `shouldBe` [id2, id3]
+                _ → expectationFailure "expected exactly 3 distinct decal ids"
+
+        it "a texture that keeps getting reused still caps live decal \
+           \count (the unbounded-render-work case)" $ do
+            -- Every spawn reuses the SAME texture (identical request), so
+            -- ONLY the decal cap -- not texture-eviction cascade -- can
+            -- bound the decal count here.
+            let store0 = emptyBloodStore 24
+                n = defaultBloodDecalCap + 3
+                go (store, ids) _ =
+                    let (store', did, _, _) = spawnDecal baseReq specFor store
+                    in (store', ids ++ [did])
+                (finalStore, allIds) = foldl' go (store0, []) [1 .. n ∷ Int]
+                liveIds = map bdeId (allDecals (bstDecals finalStore))
+            length allIds `shouldBe` n
+            length liveIds `shouldBe` defaultBloodDecalCap
+            -- the OLDEST decals were evicted, the NEWEST survive.
+            liveIds `shouldBe` drop 3 allIds
+            length (allTextures (bstPool finalStore)) `shouldBe` 1
+
     describe "spawnDecal / eviction cascade" $ do
         it "evicting a texture removes every decal that referenced it" $ do
             let store0 = emptyBloodStore 2

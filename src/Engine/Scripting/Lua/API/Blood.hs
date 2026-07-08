@@ -1,9 +1,14 @@
 {-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
--- | Debug/headless Lua surface for the blood decal model (#604):
---   spawn a decal with explicit parameters, inspect the decal list and
---   the texture-descriptor FIFO, and clear both. No rendering, no
---   combat hook, no real GPU texture generation, no save/load — see
---   Blood.Types and docs/blood_decals.md.
+-- | Debug/headless Lua surface for the blood decal model (#604) and its
+--   procedural texture generation + world-render records (#606): spawn
+--   a decal with explicit parameters, inspect the decal list and the
+--   texture-descriptor FIFO (each descriptor now also reports its
+--   generated pixel data via 'Blood.Texture'), query resolved per-decal
+--   render records (Blood.Render — the same data
+--   'World.Render.BloodQuads' turns into world-space quads, exposed
+--   here so headless callers can verify renderability without a GPU),
+--   and clear both. See Blood.Types, Blood.Texture, Blood.Render, and
+--   docs/blood_decals.md.
 module Engine.Scripting.Lua.API.Blood
     ( bloodSpawnFn
     , bloodGetDecalFn
@@ -11,6 +16,7 @@ module Engine.Scripting.Lua.API.Blood
     , bloodGetTextureFn
     , bloodListTexturesFn
     , bloodGetTextureCapFn
+    , bloodGetRenderQuadsFn
     , bloodClearFn
     ) where
 
@@ -24,6 +30,8 @@ import World.Page.Types (WorldPageId(..))
 import World.Types (WorldManager(..), WorldState(..))
 import Unit.Types (UnitId(..))
 import Blood.Types
+import Blood.Texture (generateBloodTexture, bloodTextureHash, btiWidth, btiHeight)
+import Blood.Render (BloodRenderRecord(..), bloodRenderRecords)
 
 -- | Resolve which world page a blood op targets: a named page (any in
 --   wmWorlds, even hidden/non-active) when a page id is given, else
@@ -250,6 +258,34 @@ bloodGetTextureCapFn env = do
     Lua.pushinteger (fromIntegral cap)
     return 1
 
+-- | blood.getRenderQuads([pageId]) → array of render-record tables
+--   (issue #606: the resolved per-decal data a world-space quad needs —
+--   see 'Blood.Render.bloodRenderRecords'), on the given page or the
+--   active world if omitted. A decal whose texture reference has been
+--   evicted never appears here (it's already gone from the decal list —
+--   'removeDecalsForTexture' — and 'bloodRenderRecord' re-checks the
+--   pool defensively on top of that). Each record's tint/alpha reflect
+--   the decal's CURRENT age at call time (Blood.Render.decalTint), so a
+--   decal spawned with a low @wetness@ reports a darker, fainter tint
+--   than one spawned fresh — headless-observable aging, without a GPU.
+bloodGetRenderQuadsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+bloodGetRenderQuadsFn env = do
+    mPageArg ← Lua.tostring 1
+    let mPageStr = TE.decodeUtf8Lenient ⊚ mPageArg
+    recs ← Lua.liftIO $ do
+        mTarget ← resolveBloodPage env mPageStr
+        case mTarget of
+            Nothing         → pure []
+            Just (pid, ws)  → do
+                now   ← readIORef (gameTimeRef env)
+                store ← readIORef (wsBloodStoreRef ws)
+                pure (bloodRenderRecords now pid store)
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] recs) $ \(i, r) → do
+        pushRenderRecord r
+        Lua.rawseti (-2) (fromIntegral i)
+    return 1
+
 -- | blood.clear() → true. Empties both the decal list and the texture
 --   pool on the active world (issue #604 acceptance: "clear leaves
 --   both descriptor and decal lists empty").
@@ -267,12 +303,18 @@ bloodClearFn env = do
     return 1
 
 -- | Push one texture descriptor: { id, order, style, woundKind,
---   severity, footprint, anisotropy, edge, seed }.
+--   severity, footprint, anisotropy, edge, seed, width, height,
+--   pixelHash }. The last three (#606) confirm generated texture data
+--   actually exists for this descriptor — regenerated on demand from
+--   the descriptor via 'generateBloodTexture' (pure and deterministic,
+--   so this never drifts from what 'World.Render.BloodQuads' uploads)
+--   rather than cached alongside it.
 pushTexture ∷ Int → BloodTextureDescriptor → Lua.LuaE Lua.Exception ()
 pushTexture rank d = do
     Lua.newtable
     let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
         putS k v = Lua.pushstring (TE.encodeUtf8 v) >> Lua.setfield (-2) k
+        img = generateBloodTexture d
     putI "id"    (unBloodTextureId (btdId d))
     putI "order" rank
     putS "style"      (styleText (btdStyle d))
@@ -282,6 +324,9 @@ pushTexture rank d = do
     putS "anisotropy" (anisotropyText (btdAnisotropy d))
     putS "edge"       (edgeText (btdEdge d))
     putI "seed" (btdSeed d)
+    putI "width"     (btiWidth img)
+    putI "height"    (btiHeight img)
+    putI "pixelHash" (bloodTextureHash img)
 
 -- | Push one decal: { id, texture, page, x, y, surfaceZ, offsetX,
 --   offsetY, rotation, scale, createdAt, age, wetness, dryness,
@@ -318,6 +363,33 @@ pushDecal now d = do
         Just (UnitId uid) → putI "sourceUnit" uid
         Nothing           → Lua.pushnil >> Lua.setfield (-2) "sourceUnit")
     putN "opacity" (bdeOpacity d)
+
+-- | Push one render record: { decal, texture, page, x, y, surfaceZ,
+--   offsetX, offsetY, rotation, scale, tintR, tintG, tintB, alpha } —
+--   the resolved data 'World.Render.BloodQuads' turns into a world-space
+--   quad (Blood.Render.BloodRenderRecord). @tintR/G/B@ and @alpha@
+--   already fold in aging (Blood.Render.decalTint): a fresher decal
+--   reports a brighter tint and higher alpha than an older one.
+pushRenderRecord ∷ BloodRenderRecord → Lua.LuaE Lua.Exception ()
+pushRenderRecord r = do
+    Lua.newtable
+    let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
+        putN k v = Lua.pushnumber (Lua.Number (realToFrac v)) >> Lua.setfield (-2) k
+        putS k v = Lua.pushstring (TE.encodeUtf8 v) >> Lua.setfield (-2) k
+    putI "decal"   (unBloodDecalId (brrDecal r))
+    putI "texture" (unBloodTextureId (brrTexture r))
+    (case brrPage r of WorldPageId pageTxt → putS "page" pageTxt)
+    putN "x" (brrX r)
+    putN "y" (brrY r)
+    putI "surfaceZ" (brrSurfaceZ r)
+    putN "offsetX" (brrOffsetX r)
+    putN "offsetY" (brrOffsetY r)
+    putN "rotation" (brrRotation r)
+    putN "scale"    (brrScale r)
+    putN "tintR" (brrTintR r)
+    putN "tintG" (brrTintG r)
+    putN "tintB" (brrTintB r)
+    putN "alpha" (brrAlpha r)
 
 -- | The style a bare (no explicit style) request defaults to, keyed
 --   off the wound kind — mirrors docs/blood_decals.md's "Injury

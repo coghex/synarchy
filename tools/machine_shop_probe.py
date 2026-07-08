@@ -355,7 +355,7 @@ def main() -> int:
         # gate of its own (Craft.Bills.addBillProgress) — the gate lives
         # in the craft_job AI's own discipline of checking
         # power.isStationPoweredForRecipe(bid, recipe, billId) before
-        # ever calling addBillProgress (scripts/unit_ai.lua, "working"
+        # ever calling addBillProgress (scripts/unit_ai_craft.lua, "working"
         # phase). This phase mirrors that exact AI decision by hand
         # (AI still neutralised) rather than asserting a gate that
         # doesn't exist on the primitive itself. ---
