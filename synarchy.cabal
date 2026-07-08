@@ -641,6 +641,13 @@ library
                      World.Geology.Timeline.RiverTrace
                      World.Geology.Coastal
                      World.Geology.Coastal.Types
+                     World.Geology.Coastal.Constants
+                     World.Geology.Coastal.RiverMouth
+                     World.Geology.Coastal.Noise
+                     World.Geology.Coastal.Material
+                     World.Geology.Coastal.Distance
+                     World.Geology.Coastal.Smoothing
+                     World.Geology.Coastal.Breach
                      World.Fluid.Seabed
                      World.Fluid.Seabed.Types
                      World.Fluid.OceanMask
