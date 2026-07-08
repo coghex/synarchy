@@ -47,9 +47,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute CI image tag
+        id: meta
+        run: |
+          set -euo pipefail
+          TAG="ci-$(sha256sum .github/ci/Dockerfile | cut -c1-16)"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/synarchy-ci:${TAG}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push CI image if missing
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "CI image already exists: $IMAGE"
+            exit 0
+          fi
+          docker build --pull -t "$IMAGE" -f .github/ci/Dockerfile .github/ci
+          docker push "$IMAGE"
+
   build-test:
+    needs: ci-image
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      # Keep ghcup under a user-writable prefix so actions/cache can
+      # restore it cleanly. Restoring into /usr/local/.ghcup started
+      # failing with tar "Cannot utime / Cannot change mode" errors on
+      # current hosted runners, which silently degraded the toolchain
+      # cache into a miss every run.
+      GHCUP_INSTALL_BASE_PREFIX: ${{ runner.temp }}/ghcup-root
     steps:
       # fetch-depth: 0 so the path-selective probe step (#530) can diff a
       # PR against its base to see which files changed.
@@ -57,32 +112,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      # X11/GL headers are needed to compile GLFW-b; libvulkan-dev to
-      # link the vulkan bindings; glslang-tools provides the
-      # glslangValidator binary that vulkan-utils' vert/frag
-      # quasiquoters shell out to at COMPILE time (ShaderCode.hs).
-      # No GPU or display is needed — the test suite runs headless.
-      - name: Install system libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libvulkan-dev glslang-tools xorg-dev libxi-dev libxrandr-dev \
-            libxinerama-dev libxcursor-dev libxxf86vm-dev \
-            libgl1-mesa-dev pkg-config
-
       # Cache the ghcup-installed toolchain so "Set up GHC" reuses GHC
-      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min). On
-      # these runners haskell-actions/setup installs ghcup under
-      # /usr/local/.ghcup (NOT ~/.ghcup — caching that path saved 0 bytes),
-      # and the runner user owns it, so it restores without sudo. Restored
-      # before setup so the action finds the existing install; saved at
-      # post-job. Static key — only a compiler/cabal version bump
-      # invalidates it.
+      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min).
+      # ghcup stores its payload under $GHCUP_INSTALL_BASE_PREFIX/.ghcup on
+      # Unix, so we steer it into a user-writable runner-temp prefix and
+      # cache that exact directory. Restored before setup so the action
+      # finds the existing install; saved at post-job. Static key — only a
+      # compiler/Cabal version bump invalidates it.
       - name: Cache GHC toolchain
         uses: actions/cache@v4
         with:
-          path: /usr/local/.ghcup
-          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v2
+          path: ${{ env.GHCUP_INSTALL_BASE_PREFIX }}/.ghcup
+          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v3
 
       - name: Set up GHC
         id: setup
