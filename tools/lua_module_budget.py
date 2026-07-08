@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Line-budget guard for Lua modules split out to stay reviewable (#545).
+"""Line-budget guard for Lua modules split out to stay reviewable.
 
 Some large Lua files get split into a shell/coordinator plus small
 per-domain modules, with an explicit agreement that every file involved
@@ -7,9 +7,8 @@ stays under a physical-line budget. This script is the cheap,
 no-engine-needed guard that catches a regression back past that budget.
 
 Add an entry to BUDGETS whenever a future split takes on the same
-guarantee (e.g. the unit_ai.lua / unit_resources.lua splits) rather than
-writing a new one-off script — the pattern generalizes across all of
-them.
+guarantee rather than writing a new one-off script — the pattern
+generalizes across all of them.
 
 Usage:
   python3 tools/lua_module_budget.py
@@ -26,6 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGETS: list[tuple[str, list[str], int]] = [
     ("debug overlay split (#545)",
      ["scripts/debug.lua", "scripts/debug/*.lua"], 500),
+    ("unit-resource physiology split (#541)",
+     ["scripts/unit_resources.lua", "scripts/unit_resource*.lua"], 500),
 ]
 
 

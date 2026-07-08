@@ -23,7 +23,10 @@ stays in seconds and the expensive gates run once, at the end.
 2. **Before reporting done (~3 min total).**
    `cabal test synarchy-test-headless` (~1 min — one engine, worlds
    memoized across specs) · `python3 tools/world_check.py` (21 seeds,
-   ~2 min) · `python3 tools/test_audit.py` (instant).
+   ~2 min) · `python3 tools/test_audit.py` (instant) ·
+   `python3 tools/lua_module_budget.py` (instant — #541/#545 line-budget
+   guard for split Lua modules such as unit-resource physiology and the
+   debug overlay).
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (adds the
    w128 volcano exposure case, +~25 s), then re-capture baselines
@@ -53,9 +56,9 @@ CI (`.github/workflows/ci.yml`, #436) runs on every PR and push to
 master, on Linux: full build with `-Werror` (the #435 warning-clean
 state is enforced, dependency warnings excluded), both test-suite
 builds, the headless suite, `test_audit.py`, `tools/lua_module_budget.py`
-(#545 — fails if a Lua module split to stay reviewable grows back past
-its agreed line budget), and `world_check --quick` — all blocking.
-Worldgen output proved bit-identical between
+(#541/#545 — fails if a Lua module split to stay reviewable grows back
+past its agreed line budget), and `world_check --quick` — all
+blocking. Worldgen output proved bit-identical between
 macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
 tracked baselines are platform-agnostic; a worldgen-output PR that
 skips its tier-3 rebaseline fails CI.
