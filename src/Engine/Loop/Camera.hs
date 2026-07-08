@@ -3,6 +3,10 @@ module Engine.Loop.Camera
     ( updateCameraPanning
     , updateCameraMouseDrag
     , updateCameraZoom
+    , stepCameraZoom
+    , scrollZoomImpulse
+    , zoomMin
+    , zoomMax
     , applyLimits
     , applyLimitsChunks
     , applyGotoLimits
@@ -269,23 +273,45 @@ zoomMin = 0.25         -- closest zoom
 zoomMax ∷ Float
 zoomMax = 100
 
+-- | scroll-to-zoom calibration (#596): the velocity impulse contributed
+--   by one frame's total scroll delta (every raw GLFW callback since the
+--   last frame, summed). Scaled by the delta itself, not merely its
+--   sign, so total impulse tracks total scroll amount rather than how
+--   many callbacks it arrived as — a wheel notch that the OS splits into
+--   several smaller deltas contributes the same total as one clean
+--   delta of the same sum. dy > 0 zooms out, dy < 0 zooms in (camZoom is
+--   viewport half-height, so smaller = closer).
+zoomScrollScale ∷ Float
+zoomScrollScale = 1.2
+
+scrollZoomImpulse ∷ Float → Float → Float
+scrollZoomImpulse zoom dy = zoomScrollScale * zoom * dy
+
+-- | One frame's zoom integration: apply velocity, clamp to bounds, apply
+--   friction (scaled by the pre-update zoom, so deceleration feels
+--   consistent whether zoomed in or out), and snap to rest below
+--   'zoomMinSpeed'. Pure so it can be exercised directly by tests,
+--   independent of the IORef/EngineM plumbing (#596).
+stepCameraZoom ∷ Float → Float → Float → (Float, Float)
+stepCameraZoom dtF z zv =
+    let -- Apply velocity
+        z'  = min zoomMax (max zoomMin (z + zv * dtF))
+        -- Kill velocity when we hit the zoom floor
+        hitMin = z' ≤ zoomMin ∧ zv < 0
+        hitMax = z' ≥ zoomMax ∧ zv > 0
+        -- Apply friction to velocity
+        zv' = if hitMin ∨ hitMax then 0 else applyFriction zv (zoomFriction * z * dtF)
+        -- Snap to zero when slow enough
+        zv'' = if abs zv' < zoomMinSpeed then 0 else zv'
+    in (z', zv'')
+
 updateCameraZoom ∷ EngineM ε σ ()
 updateCameraZoom = do
     env ← ask
     dt ← gets (deltaTime . timingState)
     let dtF = realToFrac dt ∷ Float
     liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        let zv  = camZoomVelocity cam
-            z   = camZoom cam
-            -- Apply velocity
-            z'  = min zoomMax (max zoomMin (z + zv * dtF))
-            -- Kill velocity when we hit the zoom floor
-            hitMin = z' ≤ zoomMin ∧ zv < 0
-            hitMax = z' ≥ zoomMax ∧ zv > 0
-            -- Apply friction to velocity
-            zv' = if hitMin ∨ hitMax then 0 else applyFriction zv (zoomFriction * z * dtF)
-            -- Snap to zero when slow enough
-            zv'' = if abs zv' < zoomMinSpeed then 0 else zv'
+        let (z', zv'') = stepCameraZoom dtF (camZoom cam) (camZoomVelocity cam)
         in (cam { camZoom = z', camZoomVelocity = zv'' }, ())
 
 stepAxis ∷ Float → Float → Float → Float → Float → Float → Float

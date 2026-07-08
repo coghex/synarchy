@@ -8,7 +8,7 @@ module Engine.Core.Log
   , defaultLogConfig
   , initLogger
   , shutdownLogger
-  
+
   -- * Category management
   , enableCategory
   , disableCategory
@@ -16,7 +16,7 @@ module Engine.Core.Log
   , isEnabled
   , getEnabledCategories
   , parseCategory
-  
+
   -- * Core logging functions
   , logDebug
   , logThreadDebug
@@ -32,12 +32,12 @@ module Engine.Core.Log
   , logInfoS
   , logWarnS
   , logErrorS
-  
+
   -- * Exception integration
   , logAndThrow
   , logException
   , traceLog
-  
+
   -- * Types
   , LogLevel(..)
   , LogEntry(..)
@@ -46,151 +46,20 @@ module Engine.Core.Log
   ) where
 
 import UPrelude
-import Data.Char (toLower, toUpper)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as Map
 import qualified Data.Time.Clock as Clock
-import qualified Data.Time.Format as TimeFormat
-import Data.Maybe (mapMaybe)
-import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
-import Control.Concurrent (ThreadId, myThreadId)
-import Control.Monad (foldM)
+import Data.IORef (newIORef, readIORef, atomicModifyIORef')
+import Control.Concurrent (myThreadId)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
-import GHC.Stack (HasCallStack, CallStack, callStack, getCallStack, SrcLoc(..))
-import System.IO (Handle, stdout, hFlush)
+import GHC.Stack (HasCallStack, CallStack, callStack, getCallStack, SrcLoc)
+import System.IO (hFlush)
 import System.Environment (lookupEnv)
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType, mkErrorContext)
-
-data LogLevel
-  = LevelDebug
-  | LevelInfo
-  | LevelWarn
-  | LevelError
-  deriving (Show, Eq, Ord, Enum, Bounded)
-
-data LogCategory
-  = CatVulkan
-  | CatGraphics
-  | CatRender
-  | CatShader
-  | CatDescriptor
-  | CatSwapchain
-  | CatTexture
-  | CatFont
-  | CatAsset
-  | CatResource
-  | CatLua
-  | CatScript
-  | CatInput
-  | CatScene
-  | CatUI
-  | CatWorld
-  | CatUnit
-  | CatThread
-  | CatSystem
-  | CatInit
-  | CatState
-  | CatGeneral
-  | CatTest
-  | CatEvent  -- ^ Player Events subsystem (registry load, unknown
-              --   category warnings from 'Engine.PlayerEvent.emitEvent').
-  deriving (Show, Eq, Ord, Enum, Bounded)
-
-parseCategory ∷ Text → Maybe LogCategory
-parseCategory t = case T.toLower t of
-  "vulkan"      → Just CatVulkan
-  "graphics"    → Just CatGraphics
-  "render"      → Just CatRender
-  "shader"      → Just CatShader
-  "descriptor"  → Just CatDescriptor
-  "swapchain"   → Just CatSwapchain
-  "texture"     → Just CatTexture
-  "font"        → Just CatFont
-  "asset"       → Just CatAsset
-  "resource"    → Just CatResource
-  "lua"         → Just CatLua
-  "script"      → Just CatScript
-  "input"       → Just CatInput
-  "scene"       → Just CatScene
-  "ui"          → Just CatUI
-  "thread"      → Just CatThread
-  "system"      → Just CatSystem
-  "init"        → Just CatInit
-  "state"       → Just CatState
-  "general"     → Just CatGeneral
-  "test"        → Just CatTest
-  "event"       → Just CatEvent
-  _             → Nothing
-
-data LogBackend
-  = LogToHandle Handle            -- ^ Write to file handle (stdout, stderr, file)
-  | LogToFile FilePath            -- ^ Write to file (auto-opens)
-  | LogToCallback (LogEntry → IO ())  -- ^ Custom callback
-  | LogMulti [LogBackend]         -- ^ Multiple backends
-
-instance Show LogBackend where
-  show (LogToHandle _) = "LogToHandle"
-  show (LogToFile path) = "LogToFile " ++ path
-  show (LogToCallback _) = "LogToCallback"
-  show (LogMulti backends) = "LogMulti " ++ show backends
-
-data LogEntry = LogEntry
-  { leLevel      ∷ LogLevel
-  , leCategory   ∷ LogCategory
-  , leMessage    ∷ Text
-  , leFields     ∷ Map.Map Text Text  -- ^ Structured key-value fields
-  , leTimestamp  ∷ Clock.UTCTime
-  , leThreadId   ∷ ThreadId
-  , leSrcLoc     ∷ Maybe SrcLoc  -- ^ Source location (single, not full stack)
-  , leContext    ∷ [Text]  -- ^ Contextual breadcrumbs (e.g., ["Initialization", "Vulkan", "Swapchain"])
-  } deriving (Show)
-
-data LogContext = LogContext
-  { lcFields  ∷ Map.Map Text Text  -- ^ Extra fields to add to all logs
-  , lcBreadcrumbs ∷ [Text]         -- ^ Contextual path (e.g., function names)
-  } deriving (Show)
-
-instance Semigroup LogContext where
-  (LogContext f1 b1) <> (LogContext f2 b2) = 
-    LogContext (Map.union f2 f1) (b1 <> b2)
-
-instance Monoid LogContext where
-  mempty = LogContext Map.empty []
-
-data LoggerState = LoggerState
-  { lsBackend         ∷ LogBackend
-  , lsMinLevel        ∷ IORef LogLevel           -- ^ Global minimum level
-  , lsCategoryLevels  ∷ IORef (Map.Map LogCategory LogLevel)  -- ^ Per-category levels
-  , lsDebugEnabled    ∷ IORef (Map.Map LogCategory Bool)      -- ^ Debug-only category flags
-  , lsContext         ∷ IORef LogContext         -- ^ Thread-local would be better, but IORef works
-  , lsEnabled         ∷ IORef Bool               -- ^ Master enable/disable
-  , lsShowLocation    ∷ Bool                     -- ^ Show source location?
-  }
-
-data LogConfig = LogConfig
-  { lcBackend          ∷ LogBackend
-  , lcMinLevel         ∷ LogLevel
-  , lcCategoryLevels   ∷ Map.Map LogCategory LogLevel
-  , lcDebugCategories  ∷ [LogCategory]  -- ^ Categories enabled for debug by default
-  , lcEnableByDefault  ∷ Bool
-  , lcShowThreadId     ∷ Bool
-  , lcShowTimestamp    ∷ Bool
-  , lcShowLocation     ∷ Bool  -- ^ Show source location (file:line)?
-  } deriving (Show)
-
-defaultLogConfig ∷ LogConfig
-defaultLogConfig = LogConfig
-  { lcBackend = LogToHandle stdout
-  , lcMinLevel = LevelInfo
-  , lcCategoryLevels = Map.empty  -- Use global minimum by default
-  , lcDebugCategories = []  -- No debug categories enabled by default
-  , lcEnableByDefault = True
-  , lcShowThreadId = True
-  , lcShowTimestamp = True
-  , lcShowLocation = True
-  }
+import Engine.Core.Log.Types
+import Engine.Core.Log.Env (parseLogLevel, loadCategoryLevelsFromEnv, loadDebugCategoriesFromEnv)
+import Engine.Core.Log.Format (writeLogEntry, writeThreadLogEntry)
 
 -- | Applies env-var overrides (@ENGINE_LOG_LEVEL@, @ENGINE_DEBUG@, etc.)
 --   on top of the supplied 'LogConfig'
@@ -200,13 +69,13 @@ initLogger LogConfig{..} = do
   let minLevel = maybe lcMinLevel parseLogLevel envLevel
   categoryLevels ← loadCategoryLevelsFromEnv lcCategoryLevels
   debugCategories ← loadDebugCategoriesFromEnv lcDebugCategories
-  
+
   minLevelRef ← newIORef minLevel
   categoryLevelsRef ← newIORef categoryLevels
   debugEnabledRef ← newIORef debugCategories
   contextRef ← newIORef mempty
   enabledRef ← newIORef lcEnableByDefault
-  
+
   return LoggerState
     { lsBackend = lcBackend
     , lsMinLevel = minLevelRef
@@ -217,49 +86,8 @@ initLogger LogConfig{..} = do
     , lsShowLocation = lcShowLocation
     }
 
-parseLogLevel ∷ String → LogLevel
-parseLogLevel s = case map toLower s of
-  "debug" → LevelDebug
-  "info"  → LevelInfo
-  "warn"  → LevelWarn
-  "error" → LevelError
-  _       → LevelInfo
-
--- | Check @ENGINE_LOG_\<CATEGORY\>=\<level\>@ env vars
-loadCategoryLevelsFromEnv ∷ Map.Map LogCategory LogLevel → IO (Map.Map LogCategory LogLevel)
-loadCategoryLevelsFromEnv initial = do
-  let categories = [minBound .. maxBound] ∷ [LogCategory]
-  foldM loadOne initial categories
-  where
-    loadOne acc cat = do
-      let envVar = "ENGINE_LOG_" <> map toUpper (show cat)
-      mLevel ← lookupEnv envVar
-      case mLevel of
-        Just lvl → return $ Map.insert cat (parseLogLevel lvl) acc
-        Nothing  → return acc
-
--- | Parse @ENGINE_DEBUG=Vulkan,Lua,Graphics@ (or @all@)
-loadDebugCategoriesFromEnv ∷ [LogCategory] → IO (Map.Map LogCategory Bool)
-loadDebugCategoriesFromEnv defaults = do
-  mDebugStr ← lookupEnv "ENGINE_DEBUG"
-  let defaultMap = Map.fromList [(cat, True) | cat ← defaults]
-  case mDebugStr of
-    Nothing → return defaultMap
-    Just str → case str of
-                    "all" → return $ Map.fromList $ [(CatVulkan, True), (CatGraphics, True), (CatShader, True),
-                                      (CatDescriptor, True), (CatSwapchain, True), (CatTexture, True),
-                                      (CatFont, True), (CatAsset, True), (CatResource, True),
-                                      (CatLua, True), (CatScript, True), (CatInput, True),
-                                      (CatScene, True), (CatUI, True), (CatThread, True),
-                                      (CatSystem, True), (CatInit, True), (CatState, True),
-                                      (CatGeneral, True), (CatTest, True), (CatEvent, True)]
-                    _      → do
-                                let catNames = map T.strip $ T.splitOn "," (T.pack str)
-                                    cats = mapMaybe parseCategory catNames
-                                return $ Map.fromList [(cat, True) | cat ← cats]
-
 shutdownLogger ∷ LoggerState → IO ()
-shutdownLogger LoggerState{..} = 
+shutdownLogger LoggerState{..} =
   case lsBackend of
     LogToHandle h → hFlush h
     LogToFile _ → return ()  -- File handles managed separately
@@ -327,12 +155,12 @@ extractCallSite cs =
       , "getLogger"  -- Also skip the logger fetcher
       ]
 
-logMessage ∷ (HasCallStack, MonadIO m) 
-           ⇒ LoggerState 
-           → LogLevel 
-           → LogCategory 
-           → Text 
-           → Map.Map Text Text 
+logMessage ∷ (HasCallStack, MonadIO m)
+           ⇒ LoggerState
+           → LogLevel
+           → LogCategory
+           → Text
+           → Map.Map Text Text
            → m ()
 logMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
   shouldLog ← isEnabled ls cat level
@@ -340,7 +168,7 @@ logMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
     now ← Clock.getCurrentTime
     tid ← myThreadId
     ctx ← readIORef lsContext
-    
+
     let srcLoc = if lsShowLocation then extractCallSite callStack else Nothing
         entry = LogEntry
           { leLevel = level
@@ -352,15 +180,15 @@ logMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
           , leSrcLoc = srcLoc
           , leContext = lcBreadcrumbs ctx
           }
-    
+
     writeLogEntry lsBackend entry
 
-logThreadMessage ∷ (HasCallStack, MonadIO m) 
-                 ⇒ LoggerState 
-                 → LogLevel 
-                 → LogCategory 
-                 → Text 
-                 → Map.Map Text Text 
+logThreadMessage ∷ (HasCallStack, MonadIO m)
+                 ⇒ LoggerState
+                 → LogLevel
+                 → LogCategory
+                 → Text
+                 → Map.Map Text Text
                  → m ()
 logThreadMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
   shouldLog ← isEnabled ls cat level
@@ -368,7 +196,7 @@ logThreadMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
     now ← Clock.getCurrentTime
     tid ← myThreadId
     ctx ← readIORef lsContext
-    
+
     let srcLoc = if lsShowLocation then extractCallSite callStack else Nothing
         entry = LogEntry
           { leLevel = level
@@ -380,82 +208,8 @@ logThreadMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
           , leSrcLoc = srcLoc
           , leContext = lcBreadcrumbs ctx
           }
-    
+
     writeThreadLogEntry lsBackend entry
-
-
-writeLogEntry ∷ LogBackend → LogEntry → IO ()
-writeLogEntry backend entry = case backend of
-  LogToHandle h → TIO.hPutStrLn h (formatLogEntry entry) >> hFlush h
-  LogToFile path → appendFile path (T.unpack $ formatLogEntry entry <> "\n")
-  LogToCallback cb → cb entry
-  LogMulti backends → mapM_ (`writeLogEntry` entry) backends
-
-writeThreadLogEntry ∷ LogBackend → LogEntry → IO ()
-writeThreadLogEntry backend entry = case backend of
-  LogToHandle h → TIO.hPutStrLn h (formatThreadLogEntry entry) >> hFlush h
-  LogToFile path → appendFile path (T.unpack $ formatThreadLogEntry entry <> "\n")
-  LogToCallback cb → cb entry
-  LogMulti backends → mapM_ (`writeLogEntry` entry) backends
-
-formatLogEntry ∷ LogEntry → Text
-formatLogEntry LogEntry{..} = 
-  T.intercalate " " $ filter (not . T.null)
-    [ formatTimestamp leTimestamp
-    , formatLevel leLevel
-    , formatCategory leCategory
-    , formatThread leThreadId
-    , formatContext leContext
-    , formatLocation leSrcLoc
-    , leMessage
-    , formatFields leFields
-    ]
-
-formatThreadLogEntry ∷ LogEntry → Text
-formatThreadLogEntry LogEntry{..} = 
-  T.intercalate " " $ filter (not . T.null)
-    [ formatTimestamp leTimestamp
-    , formatLevel leLevel
-    , formatCategory leCategory
-    , ""
-    , ""
-    , ""
-    , leMessage
-    , formatFields leFields
-    ]
-
-formatTimestamp ∷ Clock.UTCTime → Text
-formatTimestamp t = T.pack $ TimeFormat.formatTime TimeFormat.defaultTimeLocale "%Y-%m-%d %H:%M:%S" t
-
-formatLevel ∷ LogLevel → Text
-formatLevel LevelDebug = "[DEBUG]"
-formatLevel LevelInfo  = "[INFO]"
-formatLevel LevelWarn  = "[WARN]"
-formatLevel LevelError = "[ERROR]"
-
-formatCategory ∷ LogCategory → Text
-formatCategory cat = "[" <> T.pack (drop 3 (show cat)) <> "]"
-
-formatThread ∷ ThreadId → Text
-formatThread tid = "[Θ:" <> T.pack (drop 9 (show tid)) <> "]"
-
-formatContext ∷ [Text] → Text
-formatContext [] = ""
-formatContext ctx = "[" <> T.intercalate " > " ctx <> "]"
-
-formatLocation ∷ Maybe SrcLoc → Text
-formatLocation Nothing = ""
-formatLocation (Just loc) = 
-  let modName = T.pack $ srcLocModule loc
-      fileName = T.takeWhileEnd (/= '.') modName  -- Get last component
-  in "[" <> fileName <> ":" <> T.pack (show (srcLocStartLine loc)) <> "]"
-
-formatFields ∷ Map.Map Text Text → Text
-formatFields fields 
-  | Map.null fields = ""
-  | otherwise = "{" <> T.intercalate ", " (map formatField $ Map.toList fields) <> "}"
-  where
-    formatField (k, v) = k <> "=" <> v
 
 logDebug ∷ (HasCallStack, MonadIO m)
          ⇒ LoggerState → LogCategory → Text → m ()
@@ -520,7 +274,7 @@ logException ∷ (HasCallStack, MonadIO m)
              → LogCategory
              → EngineException
              → m ()
-logException ls cat ex = 
+logException ls cat ex =
   logErrorS ls cat ("Exception caught: " <> T.pack (show ex)) []
 
 -- | Log entry and exit of a function, including the return value

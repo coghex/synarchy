@@ -205,6 +205,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Camera.GotoClamp
+                   Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge
                    Test.Headless.Render.PanMargin
     default-extensions: DefaultSignatures
@@ -405,6 +406,9 @@ library
                      Engine.Core.State
                      Engine.Core.Types
                      Engine.Core.Log
+                     Engine.Core.Log.Types
+                     Engine.Core.Log.Env
+                     Engine.Core.Log.Format
                      Engine.Core.Log.Monad
                      Engine.Core.Thread
                      Engine.Core.Error.Exception
@@ -815,6 +819,11 @@ library
 executable synarchy
     -- .hs or .lhs file containing the Main module.
     main-is: Main.hs
+    other-modules: App.Cli
+                 , App.Exception
+                 , App.Graphical
+                 , App.Headless
+                 , App.Dump
     -- LANGUAGE extensions used by modules in this package.
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
