@@ -351,11 +351,8 @@ local config = {
         till_equip_seconds = 1.0,
         till_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
         till_xp_per_till   = 1.0,   -- farming XP (#265/#336) per tilled tile
-        -- No dedicated push/tiller animation exists yet — the shovel
-        -- work set is the closest hand-tool-on-ground visual (same
-        -- reuse-until-real-art convention as chop_equip_anim above).
-        till_equip_anim = "standing_to_holding_shovel",
-        till_work_anim  = "shoveling",
+        till_equip_anim = "standing_to_pushing",
+        till_work_anim  = "pushing",
         -- Planting (plant_designation, #336). Structure mirrors till
         -- exactly (claim/walk/equip/work-progress), skill-scaled by the
         -- new farming skill (#265) like chop/mining. Completion

@@ -50,13 +50,6 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      # Keep ghcup under a user-writable prefix inside the checked-out
-      # workspace so actions/cache can restore it cleanly. Restoring into
-      # /usr/local/.ghcup started failing with tar "Cannot utime /
-      # Cannot change mode" errors on current hosted runners, which
-      # silently degraded the toolchain cache into a miss every run.
-      GHCUP_INSTALL_BASE_PREFIX: ${{ github.workspace }}/.ci-ghcup-root
     steps:
       # fetch-depth: 0 so the path-selective probe step (#530) can diff a
       # PR against its base to see which files changed.
@@ -78,17 +71,33 @@ jobs:
             libgl1-mesa-dev pkg-config
 
       # Cache the ghcup-installed toolchain so "Set up GHC" reuses GHC
-      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min).
-      # ghcup stores its payload under $GHCUP_INSTALL_BASE_PREFIX/.ghcup on
-      # Unix, so we steer it into a user-writable runner-temp prefix and
-      # cache that exact directory. Restored before setup so the action
-      # finds the existing install; saved at post-job. Static key — only a
-      # compiler/Cabal version bump invalidates it.
+      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min). On
+      # these runners haskell-actions/setup installs ghcup under
+      # /usr/local/.ghcup (NOT ~/.ghcup — caching that path saved 0 bytes),
+      # and the runner user owns it, so it restores without sudo. Restored
+      # before setup so the action finds the existing install; saved at
+      # post-job. Static key — only a compiler/cabal version bump
+      # invalidates it.
+      #
+      # A prior attempt (since reverted) redirected this via
+      # GHCUP_INSTALL_BASE_PREFIX to work around this path's cache-restore
+      # sometimes failing with tar "Cannot utime / Cannot change mode" on
+      # current hosted runners. That redirect broke correctness instead:
+      # haskell-actions/setup@v2's own toolchain discovery still resolves
+      # tools at the DEFAULT /home/runner/.ghcup/bin regardless of
+      # GHCUP_INSTALL_BASE_PREFIX, so the 9.12.2 install landed in the
+      # custom prefix never made it onto PATH for later steps — cabal
+      # silently built against whatever pre-existing GHC (9.14.1) the
+      # runner image ships at the default location instead, which forced
+      # the dependency solver down to ancient, broken package versions
+      # (vulkan-3.7). A cache miss here just means a slower (~2.5 min)
+      # re-download of the CORRECT compiler every run — worse than a
+      # silently wrong one.
       - name: Cache GHC toolchain
         uses: actions/cache@v4
         with:
-          path: ${{ env.GHCUP_INSTALL_BASE_PREFIX }}/.ghcup
-          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v3
+          path: /usr/local/.ghcup
+          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v2
 
       - name: Set up GHC
         id: setup
