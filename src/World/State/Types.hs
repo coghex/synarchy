@@ -33,6 +33,7 @@ import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
 import Power.Types (PowerNodes, emptyPowerNodes)
+import Blood.Types (BloodStore, emptyBloodStore, defaultBloodTextureCap)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import World.Flora.CropPlot (CropPlots, emptyCropPlots)
@@ -158,6 +159,13 @@ data WorldState = WorldState
       --   the world thread (WorldDesignatePlant / cancel commands),
       --   read by the render pass (marker) and the farm AI (#336).
       --   Persisted in saves (wpsPlantDesignations).
+    , wsBloodStoreRef ∷ IORef BloodStore
+      -- ^ Blood decal model (#604): generated-texture FIFO pool +
+      --   world decal placements (see Blood.Types). Like
+      --   wsStructureStageRef, per-world so it can't leak across
+      --   worlds and dies with the WorldState; a reloaded world gets a
+      --   fresh empty store. Never saved — #604 is explicitly model +
+      --   debug-surface only, no save/load persistence.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -197,6 +205,7 @@ emptyWorldState = do
     wsTillDesignationsRef ← newIORef HM.empty
     wsCropPlotsRef ← newIORef emptyCropPlots
     wsPlantDesignationsRef ← newIORef HM.empty
+    wsBloodStoreRef ← newIORef (emptyBloodStore defaultBloodTextureCap)
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -210,6 +219,7 @@ emptyWorldState = do
                         wsChopDesignationsRef wsCraftBillsRef
                         wsPowerNodesRef wsTillDesignationsRef
                         wsCropPlotsRef wsPlantDesignationsRef
+                        wsBloodStoreRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

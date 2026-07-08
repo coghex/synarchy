@@ -193,6 +193,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
                    Test.Headless.Power.Network
+                   Test.Headless.Blood.Types
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.World.TimeLocal
@@ -461,6 +462,11 @@ library
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
+                     Unit.Thread.Command.Body
+                     Unit.Thread.Command.Spawn
+                     Unit.Thread.Command.Lifecycle
+                     Unit.Thread.Command.Motion
+                     Unit.Thread.Command.Pose
                      Unit.Thread.Movement
                      Building.Types
                      Building.Command.Types
@@ -506,6 +512,8 @@ library
                      Power.Network
                      Engine.Scripting.Lua.API.Power
                      Engine.Scripting.Lua.API.Repair
+                     Blood.Types
+                     Engine.Scripting.Lua.API.Blood
                      Location.Types
                      Location.Overlay.Types
                      Location.Overlay
