@@ -540,6 +540,12 @@ library
                      Combat.Thread
                      Combat.Resolution
                      Combat.Wounds
+                     Combat.Wounds.Bleed
+                     Combat.Wounds.Constants
+                     Combat.Wounds.Healing
+                     Combat.Wounds.Infection
+                     Combat.Wounds.Sever
+                     Combat.Wounds.Tick
                      Sim.State.Types
                      Sim.Fluid.Types
                      Sim.Fluid.Active
