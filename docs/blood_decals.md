@@ -264,8 +264,15 @@ fills in the pieces #604 deliberately left open:
     pixel data for anything new (`Engine.Graphics.Vulkan.Texture.
     createTextureFromRGBABytes`, a factored-out version of the
     staging-buffer upload `handleWorldPreview`/`handleZoomAtlasUpload`
-    already did inline) and registers it with the bindless system;
-    unregisters + disposes anything the FIFO evicted.
+    already did inline) and registers it with the bindless system.
+    Eviction unregisters the bindless slot, drops the now-stale
+    `textureSizeRef` entry, and disposes the GPU image/view — but only
+    after a `deviceWaitIdle`, since this runs from `processLuaMessages`
+    before `drawFrame`, and `drawFrame` only waits the CURRENT frame's
+    own fence, not every frame still in flight (the same reasoning
+    `Engine.Scripting.Lua.Message.disposeTransientTexture` documents
+    for the shared preview/zoom-atlas texture). The wait only fires
+    when a pass actually has something to evict, not every frame.
   - `renderBloodDecalQuads` (pure IO, no GPU calls, same shape as
     `World.Render.GroundItemQuads`) turns each visible decal into a
     `SortableQuad`, sat at a sort-key nudge of 0.0003 above bare
@@ -276,8 +283,22 @@ fills in the pieces #604 deliberately left open:
     yet (or never will be, headless) simply contributes no quad.
   - Chunk-visibility culling (`isChunkVisibleWrapped`/
     `computeViewBounds`, the same functions ground items use) keeps
-    per-frame cost bounded regardless of how many decals a long session
-    accumulates.
+    the VISIBLE quad count bounded regardless of world size.
+- **Decal count has its own cap, independent of the texture cap.**
+  Texture-FIFO eviction cascades to remove its decals, but a request
+  that keeps *reusing* an already-live texture (the near-match design
+  is built to encourage exactly that) never triggers texture eviction
+  at all — without a bound of its own, decals could accumulate
+  forever, and `Blood.Render.bloodRenderRecords` scans every stored
+  decal before `renderBloodDecalQuads` gets to cull by visibility, so
+  an unbounded decal list means unbounded per-frame work even for an
+  empty screen. `BloodDecals` now carries its own FIFO
+  (`bdlOrder`/`bdlCap`, `defaultBloodDecalCap` = 512, mirroring
+  `BloodTexturePool`'s `btpOrder`/`btpCap`) — `addDecal` evicts the
+  oldest decal once over cap, independent of which texture it
+  references. `removeDecalsForTexture` (the texture-eviction cascade)
+  also prunes `bdlOrder` of the ids it removes, so that queue can't
+  grow unboundedly stale either.
 - **Debug/headless surface without a GPU.** `blood.getRenderQuads
   ([pageId])` exposes `Blood.Render.bloodRenderRecords` directly —
   the same resolved position/tint/alpha data the real renderer

@@ -34,7 +34,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Data.Maybe (mapMaybe)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Vulkan.Core10 (Device, PhysicalDevice, CommandPool, Queue)
+import Vulkan.Core10 (Device, PhysicalDevice, CommandPool, Queue, deviceWaitIdle)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Asset.Handle (TextureHandle, toInt)
@@ -94,6 +94,14 @@ syncWorldBloodTextures dev pdev cmdPool queue bindless0 (_pid, ws) = do
         staleIds  = filter (\tid → not (HM.member tid liveDescs)) (HM.keys known)
         newDescs  = [ d | (tid, d) ← HM.toList liveDescs
                         , not (HM.member tid known) ]
+    -- An evicted texture may still be sampled by an already-submitted,
+    -- not-yet-presented frame: this runs from processLuaMessages, before
+    -- drawFrame, and drawFrame only waits the CURRENT frame's own fence,
+    -- not every frame still in flight (same reasoning
+    -- Engine.Scripting.Lua.Message.disposeTransientTexture documents for
+    -- the preview/zoom-atlas texture). Wait once, only when this pass
+    -- actually has something to destroy, rather than stalling every frame.
+    when (not (null staleIds)) $ liftIO (deviceWaitIdle dev)
     (bindless1, known1) ← foldM (evictOne dev) (bindless0, known) staleIds
     (bindless2, known2) ← foldM (uploadOne dev pdev cmdPool queue)
                                  (bindless1, known1) newDescs
@@ -102,12 +110,19 @@ syncWorldBloodTextures dev pdev cmdPool queue bindless0 (_pid, ws) = do
 
 type HandleMap = HM.HashMap BloodTextureId (TextureHandle, IO ())
 
+-- | Unregister + dispose one evicted texture's GPU resources (after the
+--   caller has already waited for the device to go idle — see
+--   'syncWorldBloodTextures'), and drop its now-stale 'textureSizeRef'
+--   entry (issue #606 review: eviction must fully release generated
+--   bookkeeping, not just the bindless slot).
 evictOne ∷ Device → (BindlessTextureSystem, HandleMap) → BloodTextureId
         → EngineM ε σ (BindlessTextureSystem, HandleMap)
 evictOne dev (bl, known) tid = case HM.lookup tid known of
     Nothing            → pure (bl, known)
     Just (h, cleanup)  → do
         bl' ← unregisterTexture dev h bl
+        env ← ask
+        liftIO $ atomicModifyIORef' (textureSizeRef env) (\m → (HM.delete h m, ()))
         liftIO cleanup
         pure (bl', HM.delete tid known)
 
