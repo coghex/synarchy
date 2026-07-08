@@ -173,8 +173,9 @@ jobs:
 
       # Path-selective, BLOCKING behavior-probe gate (#530). Only on PRs:
       # diff against the base, pick the CI-eligible probes relevant to the
-      # changed files (full curated set for core/unclassified changes, none
-      # for docs/assets), and run them against the exe already built above.
+      # changed files (full curated smoke set for core/unclassified changes,
+      # none for docs/assets or manual-only probe areas), and run them
+      # against the exe already built above.
       # --retries 1 re-runs a failed probe SOLO before failing, to absorb
       # the sequential-engine contention flakes a back-to-back run shows.
       - name: Behavior probes (path-selective)
