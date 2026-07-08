@@ -92,6 +92,16 @@ local derived = {
         return e and e * 10 or nil
     end,
 
+    -- Sleep-pressure pool size (circadian epic #479 / #611) — same
+    -- reuse-stamina's-scale reasoning as max_exhaustion: only the
+    -- sleep_pressure/max_sleep_pressure RATIO is ever read (currently by
+    -- nothing — #611 is instrumentation only; #612 is the first
+    -- consumer), so there's no separate calibration to invent here.
+    max_sleep_pressure = function(uid)
+        local e = unit.getStat(uid, "endurance")
+        return e and e * 10 or nil
+    end,
+
     -- Current metabolic burn rate, kcal per real-second. Activity-
     -- AWARE — the walking 1.5× multiplier is folded in here so every
     -- downstream consumer (hunger drain, Phase 4 catabolism deficit,

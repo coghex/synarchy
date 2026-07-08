@@ -157,6 +157,46 @@ local config = {
             regen_factor_collapsed = 0.12,
             regen_factor_crouching = 0.12,
         },
+        -- Sleep pressure (circadian epic #479 / #611): the LONG, multi-day
+        -- "sleep debt" resource — separate from exhaustion above (short-
+        -- horizon, regens with ordinary rest) and from the circadian urge
+        -- read live via scripts/circadian.lua (a time-of-day PULL, never
+        -- stored). Deliberately DRAIN-ONLY for now — no regen_factor_*
+        -- fields at all, so it can only fall, never recover from idling
+        -- (the existing regen_factor_idle shortcut every other resource
+        -- uses would defeat the point: "not idling" must not clear sleep
+        -- debt). It only ever reaches empty and sits there until #612
+        -- lands the real Sleeping pose and a matching regen path; nothing
+        -- reads/reacts to sleep_pressure yet, so an empty pool has no
+        -- gameplay effect this issue (no collapse_threshold/kill_on_zero).
+        sleep_pressure = {
+            max_from = "max_sleep_pressure",
+            -- Flat per-second drain regardless of activity/pose — sleep
+            -- debt accrues from being AWAKE, not from exertion (unlike
+            -- exhaustion, this has no drain_activity_scaled). Proportional
+            -- to max (mirrors hydration's drain_constant_frac) so the
+            -- depletion TIME is size/endurance-invariant. Calibrated to
+            -- empty from full in 2.5 in-game days — inside the issue's
+            -- "meaningfully drains over ~2-3 days, not hours" target —
+            -- at DAY_SECONDS=1440 real-seconds/game-day (unit_stats.lua):
+            -- 2.5 * 1440 = 3600s to drain max_sleep_pressure to 0, so
+            -- drain_constant_frac = 1 / 3600.
+            drain_constant_frac = 1 / 3600,
+            -- Circadian-urge bump shape (scripts/circadian.lua reads
+            -- these via this SAME per-def entry, not a separate table, so
+            -- #613's species differentiation has one place to override
+            -- both the pressure drain and the urge curve together).
+            -- circadian_center is a world.getSunAngleAt-scale sun angle
+            -- (0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk); 0.75 = dusk,
+            -- "spikes... around dusk" per the issue. circadian_width is
+            -- the bump's half-width on the same 0..1 scale; 0.125 = 3
+            -- game-hours either side (a 6-hour-wide window, roughly
+            -- 3pm-9pm), comfortably "a few hours" and leaving both
+            -- midnight (distance 0.25 from dusk) and noon (distance 0.25)
+            -- outside the window — i.e. exactly flat, not just small.
+            circadian_center = 0.75,
+            circadian_width  = 0.125,
+        },
     },
     -- Bears need stamina so combat drain (Combat.Resolution applies
     -- 5% per quick, 25% per heavy of max_stamina) lands somewhere.
@@ -190,6 +230,15 @@ local config = {
             regen_factor_collapsed = 0.12,
             regen_factor_crouching = 0.12,
         },
+        -- Same drain-only sleep-pressure model as acolyte (circadian epic
+        -- #479 / #611) — see the acolyte entry above for the full
+        -- calibration rationale.
+        sleep_pressure = {
+            max_from            = "max_sleep_pressure",
+            drain_constant_frac = 1 / 3600,
+            circadian_center    = 0.75,
+            circadian_width     = 0.125,
+        },
     },
     -- Red squirrel: same minimal stamina model as the bear so flight
     -- sprints and the (rare) combat drain land somewhere. Tiny prey —
@@ -218,6 +267,15 @@ local config = {
             regen_factor_walking   = 0.10,
             regen_factor_collapsed = 0.12,
             regen_factor_crouching = 0.12,
+        },
+        -- Same drain-only sleep-pressure model as acolyte (circadian epic
+        -- #479 / #611) — see the acolyte entry above for the full
+        -- calibration rationale.
+        sleep_pressure = {
+            max_from            = "max_sleep_pressure",
+            drain_constant_frac = 1 / 3600,
+            circadian_center    = 0.75,
+            circadian_width     = 0.125,
         },
     },
 }
