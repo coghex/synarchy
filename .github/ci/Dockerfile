@@ -1,16 +1,20 @@
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
     bash \
+    build-essential \
     ca-certificates \
     curl \
     git \
     glslang-tools \
     gzip \
+    libffi-dev \
     libgl1-mesa-dev \
+    libgmp-dev \
+    libncurses-dev \
     libvulkan-dev \
     libxcursor-dev \
     libxi-dev \
@@ -22,4 +26,5 @@ RUN apt-get update \
     tar \
     xorg-dev \
     xz-utils \
+    zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
