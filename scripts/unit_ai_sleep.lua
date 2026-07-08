@@ -21,9 +21,10 @@
 -- acolyte) is explicitly deferred; the only additional hook is the
 -- public wake API below, so other systems can force a wake.
 
-local core     = require("scripts.unit_ai_core")
-local mv       = require("scripts.movement_speed")
-local circadian = require("scripts.circadian")
+local core       = require("scripts.unit_ai_core")
+local mv         = require("scripts.movement_speed")
+local circadian  = require("scripts.circadian")
+local exhaustion = require("scripts.exhaustion")
 
 local unitAi = package.loaded["scripts.unit_ai"]
 
@@ -81,9 +82,17 @@ local function sleepUtility(uid, s, params)
     if deficit < params.sleep_min_deficit then return -math.huge end
 
     local urge = circadian.getCircadianUrge(uid) or 0
+    -- exhaustion.fraction is "restedness" (1=fresh, 0=fatigued) — invert
+    -- to a deficit so it stacks with sleep_pressure's deficit the same
+    -- way. Short-horizon (regens with ordinary rest, per exhaustion.lua),
+    -- so it's a minor nudge on top of the sleep_pressure/urge baseline,
+    -- not an independent trigger — exhaustion.lua's own header calls out
+    -- feeding it into this utility as #612's job.
+    local exhaustionDeficit = 1 - (exhaustion.fraction(uid) or 1.0)
     return params.sleep_base_weight
          + params.sleep_deficit_weight * deficit
          + params.sleep_urge_weight * urge
+         + params.sleep_exhaustion_weight * exhaustionDeficit
 end
 
 local function sleepExecute(uid, s, params)
@@ -134,15 +143,22 @@ local function sleepExecute(uid, s, params)
     if not s.sleepSpot or s.sleepSession ~= s.actionStartedAt then
         local angle = math.random() * 2 * math.pi
         local dist  = math.random() * params.sleep_spot_radius
-        s.sleepSpot    = { x = info.gridX + math.cos(angle) * dist,
-                           y = info.gridY + math.sin(angle) * dist }
-        s.sleepSession = s.actionStartedAt
+        s.sleepSpot       = { x = info.gridX + math.cos(angle) * dist,
+                              y = info.gridY + math.sin(angle) * dist }
+        s.sleepSession    = s.actionStartedAt
+        s.sleepSpotPickedAt = engine.gameTime()
     end
 
     local d = core.distance(info.gridX, info.gridY, s.sleepSpot.x, s.sleepSpot.y)
     if d <= params.sleep_spot_arrival_tiles then
         s.sleepPhase = "lying_down"
         unit.transitionTo(uid, "crouching", STRIDE_LIE_DOWN)
+    elseif engine.gameTime() - (s.sleepSpotPickedAt or engine.gameTime())
+           > params.sleep_spot_max_wait then
+        -- Unreachable (e.g. the stuck-walk watchdog gave up on it) —
+        -- drop it so the next tick picks a different spot instead of
+        -- retrying the same dead target forever.
+        s.sleepSpot = nil
     else
         unit.moveTo(uid, s.sleepSpot.x, s.sleepSpot.y, mv.meander(uid))
     end

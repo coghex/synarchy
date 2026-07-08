@@ -70,18 +70,29 @@ local config = {
         -- "a full canteen should refill an average acolyte by ~50%".
         drink_hydration_per_litre = 11.0,
         -- Sleep (go_to_sleep, circadian epic #479/#611/#612). Utility =
-        -- base + deficit_weight·deficit + urge_weight·circadianUrge,
+        -- base + deficit_weight·deficit + urge_weight·circadianUrge
+        --      + exhaustion_weight·exhaustionDeficit,
         -- where deficit = 1 - sleep_pressure/max (0 = fully rested, 1 =
-        -- fully sleep-deprived) and circadianUrge is the dusk-centered
-        -- bump (scripts/circadian.lua, 0..1). Gated by sleep_min_deficit
-        -- so a freshly-rested unit never even considers napping.
-        --   deficit at the floor (0.35), midday (urge≈0):
-        --     0 + 9·0.35 + 4·0 = 3.15 — routine, below follow_command,
-        --     so ordinary daytime tiredness doesn't interrupt work.
-        --   deficit at the floor (0.35), dusk peak (urge=1):
-        --     0 + 9·0.35 + 4·1 = 7.15 — just crosses follow_command
-        --     (7.0): a moderately tired acolyte settles down for the
-        --     night once dusk hits rather than working through it.
+        -- fully sleep-deprived), circadianUrge is the dusk-centered bump
+        -- (scripts/circadian.lua, 0..1), and exhaustionDeficit = 1 -
+        -- exhaustion.fraction (scripts/exhaustion.lua's SHORT-horizon
+        -- fatigue, 0..1). Gated by sleep_min_deficit so a freshly-rested
+        -- unit never even considers napping.
+        --   deficit at the floor (0.35), midday (urge≈0), rested:
+        --     0 + 9·0.35 + 4·0 + 2·0 = 3.15 — routine, below
+        --     follow_command, so ordinary daytime tiredness doesn't
+        --     interrupt work.
+        --   deficit at the floor (0.35), dusk peak (urge=1), rested:
+        --     0 + 9·0.35 + 4·1 + 2·0 = 7.15 — just crosses
+        --     follow_command (7.0): a moderately tired acolyte settles
+        --     down for the night once dusk hits rather than working
+        --     through it.
+        --   deficit at the floor, midday, fully exhausted (rare — a hard
+        --   day's labour without meaningful sleep debt yet):
+        --     0 + 9·0.35 + 4·0 + 2·1 = 5.15 — still below
+        --     follow_command; exhaustion alone is a nudge, never the
+        --     dominant term (matches exhaustion.lua's own "doesn't
+        --     collapse or seek rest on its own").
         --   deficit high (0.78+), any time of day:
         --     0 + 9·0.78 ≈ 7.0+ — genuine multi-day sleep deprivation
         --     forces sleep even under a standing order, mirroring
@@ -92,12 +103,20 @@ local config = {
         sleep_base_weight     = 0.0,
         sleep_deficit_weight  = 9.0,
         sleep_urge_weight     = 4.0,
+        sleep_exhaustion_weight = 2.0,
         -- Walk-to-spot geometry: pick one random point within radius
         -- per sleep session (mirrors wander's radius pick), no
         -- dedicated safety filtering (v1 decision — "any flat open
         -- tile"; normal pathing already avoids impassable terrain).
+        -- sleep_spot_max_wait bounds a bad pick (unreachable — e.g. the
+        -- stuck-walk watchdog gave up on it): comfortably above the
+        -- worst-case walk time at meander speed (sleep_spot_radius / a
+        -- slow ~0.5 tiles/s ≈ 12s) so it never cuts off a genuinely
+        -- slow-but-progressing walk, but still re-picks a spot rather
+        -- than retrying a dead one forever.
         sleep_spot_radius        = 6.0,
         sleep_spot_arrival_tiles = 1.0,
+        sleep_spot_max_wait      = 25.0,
         -- Eating. Mirror of drink_from_canteen: only fires when hunger
         -- drops below eat_max_fraction (0.25) of max_hunger; utility =
         -- (1 - hungerFrac) · eat_weight. Because it only fires past the
