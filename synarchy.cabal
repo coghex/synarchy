@@ -543,6 +543,12 @@ library
                      Combat.Thread
                      Combat.Resolution
                      Combat.Wounds
+                     Combat.Wounds.Bleed
+                     Combat.Wounds.Constants
+                     Combat.Wounds.Healing
+                     Combat.Wounds.Infection
+                     Combat.Wounds.Sever
+                     Combat.Wounds.Tick
                      Sim.State.Types
                      Sim.Fluid.Types
                      Sim.Fluid.Active
@@ -635,6 +641,13 @@ library
                      World.Geology.Timeline.RiverTrace
                      World.Geology.Coastal
                      World.Geology.Coastal.Types
+                     World.Geology.Coastal.Constants
+                     World.Geology.Coastal.RiverMouth
+                     World.Geology.Coastal.Noise
+                     World.Geology.Coastal.Material
+                     World.Geology.Coastal.Distance
+                     World.Geology.Coastal.Smoothing
+                     World.Geology.Coastal.Breach
                      World.Fluid.Seabed
                      World.Fluid.Seabed.Types
                      World.Fluid.OceanMask
