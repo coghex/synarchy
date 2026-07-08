@@ -405,6 +405,9 @@ library
                      Engine.Core.State
                      Engine.Core.Types
                      Engine.Core.Log
+                     Engine.Core.Log.Types
+                     Engine.Core.Log.Env
+                     Engine.Core.Log.Format
                      Engine.Core.Log.Monad
                      Engine.Core.Thread
                      Engine.Core.Error.Exception
