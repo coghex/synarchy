@@ -68,6 +68,7 @@ import Engine.Scripting.Lua.API.Infection
 import Engine.Scripting.Lua.API.Craft
 import Engine.Scripting.Lua.API.Power
 import Engine.Scripting.Lua.API.Repair
+import Engine.Scripting.Lua.API.Blood
 import Engine.Scripting.Lua.API.Locations
 import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.Flora
@@ -601,6 +602,22 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getNames" (repairGetNamesFn env)
   registerLuaFunction "repairAt" (repairAtFn env)
   Lua.setglobal (Lua.Name "repair")
+
+  -- Blood global (#604) — the world-scoped blood decal model + debug
+  -- surface: spawn a decal (reusing a near-matching generated-texture
+  -- descriptor or minting + FIFO-evicting a new one), list current
+  -- decals / texture descriptors, and clear both. No rendering, no
+  -- combat hook, no real GPU texture generation yet (see Blood.Types +
+  -- docs/blood_decals.md).
+  Lua.newtable
+  registerLuaFunction "spawn"          (bloodSpawnFn env)
+  registerLuaFunction "getDecal"       (bloodGetDecalFn env)
+  registerLuaFunction "listDecals"     (bloodListDecalsFn env)
+  registerLuaFunction "getTexture"     (bloodGetTextureFn env)
+  registerLuaFunction "listTextures"   (bloodListTexturesFn env)
+  registerLuaFunction "getTextureCap"  (bloodGetTextureCapFn env)
+  registerLuaFunction "clear"          (bloodClearFn env)
+  Lua.setglobal (Lua.Name "blood")
 
   -- Loot table global — weighted rolls against data/loot_tables/*.yaml
   -- (loaded via engine.loadLootTableYaml). Consumed by a `loot_table`
