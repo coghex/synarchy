@@ -8,7 +8,7 @@
 --
 --   * Sweat drains salt (in thermo.tick) → depletion.
 --   * Drinking plain water raises hydration, not salt → DILUTION (hyponatremia).
---   * Eating food adds salt (unit_ai eatExecute) → the player-controllable input.
+--   * Eating food adds salt (unit_ai_needs.lua eatExecute) → the player-controllable input.
 --   * The kidneys EXCRETE excess salt (so hypernatremia self-corrects) but can't
 --     CREATE it — so a sweated-out unit must EAT to recover. That asymmetry is
 --     what makes food matter in the heat.

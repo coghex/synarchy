@@ -235,7 +235,7 @@ def main() -> int:
         # --- 6. Wire connectivity (#360): join the panel (7,5) and the
         # battery (8,5) with a two-tile wire run just south of them, and
         # confirm both land on ONE network. M.place is the same verb the
-        # wire designation job calls (scripts/unit_ai.lua) — calling it
+        # wire designation job calls (scripts/unit_ai_construct.lua) — calling it
         # directly here skips the job/AI machinery, matching how other
         # probes call a tool module's placement function directly.
         for gx, gy in [(7, 6), (8, 6)]:

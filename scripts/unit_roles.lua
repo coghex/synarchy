@@ -16,7 +16,7 @@
 -- save support: skills already persist in uiSkills, and re-deriving on
 -- load lands on the same answer.
 --
--- Weighting contract (see the utility ladder in unit_ai.lua): weights
+-- Weighting contract (see the utility ladder in unit_ai_tunables.lua): weights
 -- apply ONLY to work-action ENTRY utilities, never to in-progress lock
 -- values (6.0). Boosting a lock would climb past player orders (7.0);
 -- dampening one would let another work entry steal an in-progress job.
