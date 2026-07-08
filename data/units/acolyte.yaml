@@ -3096,3 +3096,95 @@ units:
             - "assets/textures/units/acolyte/animations/walk/north/frame_003.png"
             - "assets/textures/units/acolyte/animations/walk/north/frame_004.png"
             - "assets/textures/units/acolyte/animations/walk/north/frame_005.png"
+
+      pushing:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/pushing/north/frame_008.png"
+
+      standing_to_pushing:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south/frame_004.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/south-east/frame_004.png"
+          east:
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/east/frame_004.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north-east/frame_004.png"
+          north:
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing_to_pushing/north/frame_004.png"

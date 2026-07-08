@@ -203,6 +203,7 @@ def main():
 
         deadline = time.time() + 90.0
         tilled = cleared = False
+        seen_anims = set()
         while time.time() < deadline:
             time.sleep(2.0)
             d4 = jget(port,
@@ -212,6 +213,9 @@ def main():
             veg = jget(port, f"return world.getVegAt({tx},{ty})")
             if veg == TILLED_SOIL_VEG_ID:
                 tilled = True
+            info = jget(port, f"return unit.getInfo({uid})")
+            if isinstance(info, dict) and info.get("currentAnim"):
+                seen_anims.add(info["currentAnim"])
             if tilled and cleared:
                 break
         ok4 = tilled and cleared
@@ -222,6 +226,13 @@ def main():
         if not ok4:
             print("\nSOME FAILED")
             return 1
+
+        # --- 4b. Dedicated push animation (#517), not the shovel placeholder ---
+        ok4c = "pushing" in seen_anims
+        passed &= ok4c
+        print(f"  [{'PASS' if ok4c else 'FAIL'}] till AI plays the dedicated "
+              f"'pushing' animation, not the shovel placeholder: "
+              f"seen={sorted(seen_anims)}")
 
         # --- 5. Plantable contract holds post-till ---
         post = jget(port, f"return world.isPlantable({tx},{ty})")
