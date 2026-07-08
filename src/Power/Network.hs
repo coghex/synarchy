@@ -39,6 +39,19 @@
 --   never BRIDGES two otherwise-disconnected wire runs the way a node
 --   can — only registry nodes drive the union-find merge — since a
 --   workshop is a passive tap on the grid, not infrastructure.
+--
+--   #590 supersedes 'consumersOn' as the source of CRAFTING load:
+--   'activeCraftConsumersOn' derives a station's draw from its
+--   currently claimed craft bills that are ACTIVELY BEING WORKED
+--   ('Craft.Bills.cbWorking') and whose recipe carries an 'rdPowerDraw'
+--   instead of a flat building-level wattage — a station idle,
+--   between jobs, or still being fetched-for/walked-to draws nothing,
+--   and two recipes at the same station can demand different loads (or
+--   none). 'consumersOn' / 'bdPowerDrain' remain for a hypothetical
+--   future ALWAYS-ON non-crafting device
+--   (lights, etc. — out of #590's scope); no shipped or crafting
+--   consumer should set 'bdPowerDrain' any more. Callers that want the
+--   full live demand union both via 'combineConsumers'.
 module Power.Network
     ( PowerNetworkStatus(..)
     , PowerNetworkSnapshot(..)
@@ -49,6 +62,8 @@ module Power.Network
     , wireTilesOn
     , positionsOf
     , consumersOn
+    , activeCraftConsumersOn
+    , combineConsumers
     ) where
 
 import UPrelude
@@ -58,6 +73,8 @@ import qualified Data.HashSet as HS
 import Building.Types (BuildingId, BuildingDef(..), BuildingInstance(..),
                         BuildingManager(..), BuildingActivity(Built),
                         currentActivity)
+import Craft.Bills (BillId, CraftBill(..), CraftBills(..))
+import Craft.Types (RecipeManager, RecipeDef(..), lookupRecipe)
 import Structure.Types (StructureSlot(..))
 import World.Chunk.Types (LoadedChunk(..))
 import World.Page.Types (WorldPageId)
@@ -350,3 +367,58 @@ consumersOn pageId now bm = HM.fromList
     , bdPowerDrain def > 0
     , currentActivity now bi def ≡ Built
     ]
+
+-- | #590's job-dependent consumer source: every Built station's tile +
+--   drain, derived from its currently claimed craft bills that are
+--   ACTIVELY BEING WORKED ('cbWorking') and whose recipe demands power
+--   ('rdPowerDraw' > 0) — not from a flat building-level wattage
+--   (contrast 'consumersOn'). This keys off 'cbWorking', NOT
+--   'cbClaimant' alone and NOT (not . cbPaused): a bill that's merely
+--   claimed but still being fetched-for or walked-to draws nothing yet
+--   (the craft AI only flips 'cbWorking' once it's actually standing at
+--   the station pouring progress — see 'Craft.Bills.setBillWorking'),
+--   while a PAUSED bill whose existing holder is still finishing the
+--   current cycle (Craft.Bills.claimAvailable lets them) keeps drawing
+--   the whole time — pausing only blocks fresh claims, it never touches
+--   'cbWorking'. An idle Built station (no bill actively worked) never
+--   appears here at all. A station with two simultaneously WORKED
+--   power-drawing bills (two crafters, two different bills) sums both
+--   loads, matching 'consumersOn's fold-by-building shape. Recipes with
+--   'rdPowerDraw' = 0 (the default) never contribute, regardless of
+--   work state — requirement #3's "always runnable" recipes are simply
+--   invisible to the power grid.
+--
+--   @exclude@ drops one specific bill (by id) from the fold before
+--   summing — the hook 'Engine.Scripting.Lua.API.Power.isRecipePoweredAt'
+--   uses to ask "what does this station ALREADY draw from every OTHER
+--   source" so it can add the query's own recipe draw back in exactly
+--   once, whether or not that recipe happens to already be running here
+--   as an active bill. Pass 'Nothing' for a plain "what's actually
+--   drawing right now" read (network ticks/queries).
+activeCraftConsumersOn ∷ Maybe BillId → WorldPageId → Double
+                       → BuildingManager → RecipeManager → CraftBills
+                       → HM.HashMap BuildingId ((Int, Int), Float)
+activeCraftConsumersOn exclude pageId now bm rm bills = HM.fromListWith addDrain
+    [ (cbStation bill, ((biAnchorX bi, biAnchorY bi), watts))
+    | bill ← HM.elems (cbsBills bills)
+    , maybe True (≢ cbId bill) exclude
+    , cbClaimant bill ≢ Nothing
+    , cbWorking bill
+    , Just recipe ← [lookupRecipe (cbRecipe bill) rm]
+    , let watts = rdPowerDraw recipe
+    , watts > 0
+    , Just bi  ← [HM.lookup (cbStation bill) (bmInstances bm)]
+    , biPage bi ≡ pageId
+    , Just def ← [HM.lookup (biDefName bi) (bmDefs bm)]
+    , currentActivity now bi def ≡ Built
+    ]
+  where addDrain (tile, w1) (_, w2) = (tile, w1 + w2)
+
+-- | Fold two consumer maps for the same building into one, summing
+--   wattage at a shared tile — how a caller wanting the FULL live
+--   demand (both 'consumersOn's always-on buildings and
+--   'activeCraftConsumersOn's active jobs) combines them.
+combineConsumers ∷ HM.HashMap BuildingId ((Int, Int), Float)
+                 → HM.HashMap BuildingId ((Int, Int), Float)
+                 → HM.HashMap BuildingId ((Int, Int), Float)
+combineConsumers = HM.unionWith (\(tile, w1) (_, w2) → (tile, w1 + w2))

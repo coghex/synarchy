@@ -46,6 +46,7 @@ daggerRecipe = RecipeDef
     , rdSkill     = Just "smithing"
     , rdRepairAxis = Nothing
     , rdOutputTemp = Nothing
+    , rdPowerDraw  = 0
     }
 
 -- | A fuelled variant whose fuel line repeats an input item.
@@ -195,6 +196,37 @@ spec = do
                 Left err → expectationFailure (show err)
                 Right f  → case ryfRecipes f of
                     [d] → ryOutputTemp d `shouldBe` Just 100
+                    ds → expectationFailure $
+                        "expected exactly one recipe, got " <> show (length ds)
+
+        it "power_draw defaults to 0 when omitted (#590)" $ do
+            let src = BS8.pack $ unlines
+                    [ "recipes:"
+                    , "  - id: plain_craft"
+                    , "    station: forge"
+                    , "    inputs: []"
+                    , "    outputs: []"
+                    ]
+            case parseFile src of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [d] → ryPowerDraw d `shouldBe` 0
+                    ds → expectationFailure $
+                        "expected exactly one recipe, got " <> show (length ds)
+
+        it "reads power_draw (#590)" $ do
+            let src = BS8.pack $ unlines
+                    [ "recipes:"
+                    , "  - id: powered_test"
+                    , "    station: assemble"
+                    , "    inputs: []"
+                    , "    outputs: []"
+                    , "    power_draw: 250"
+                    ]
+            case parseFile src of
+                Left err → expectationFailure (show err)
+                Right f  → case ryfRecipes f of
+                    [d] → ryPowerDraw d `shouldBe` 250
                     ds → expectationFailure $
                         "expected exactly one recipe, got " <> show (length ds)
 

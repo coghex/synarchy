@@ -34,6 +34,7 @@ module Craft.Bills
     , addBillProgress
     , completeBillCycle
     , setBillPaused
+    , setBillWorking
     , reorderBill
     , pruneToStations
     ) where
@@ -91,6 +92,20 @@ data CraftBill = CraftBill
       --   'claimAvailable'), but a claimant already on it when it's
       --   paused keeps working to the end of the current cycle rather
       --   than being ripped off mid-craft.
+    , cbWorking   ∷ !Bool
+      -- ^ #590: is the current claimant ACTIVELY pouring work into this
+      --   cycle right now, as opposed to still fetching materials or
+      --   walking to the station? Distinct from merely holding the
+      --   claim — the craft AI sets this True only once it reaches its
+      --   "working" phase ('setBillWorking') and False again on
+      --   completion, release, or leaving that phase early (preempted).
+      --   Power.Network.activeCraftConsumersOn keys a station's live
+      --   power demand off THIS flag (plus 'cbClaimant'), not off
+      --   'cbPaused' — a crafter still walking over doesn't draw power
+      --   yet, and, conversely, a bill paused mid-cycle keeps drawing
+      --   for as long as its existing holder keeps working it (pausing
+      --   never touches this flag, only blocks fresh claims). False
+      --   (not working) whenever unclaimed. Appended field — save v80.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | The per-world bill set. The id counter lives inside so it
@@ -120,6 +135,7 @@ addBill station recipe count bills =
             , cbProgress  = 0
             , cbSeq       = fromIntegral (cbsNextId bills)
             , cbPaused    = False
+            , cbWorking   = False
             }
     in ( bills { cbsBills  = HM.insert bid bill (cbsBills bills)
                , cbsNextId = cbsNextId bills + 1 }
@@ -168,21 +184,46 @@ claimAvailable now timeout alive uid bill = case cbClaimant bill of
 --   exist or someone else's claim is still fresh. Run inside one
 --   atomicModifyIORef' this is the whole cross-crafter race: exactly
 --   one of two simultaneous claimants sees True.
+--
+--   'cbWorking' rides along: a SAME-holder refresh (the craft AI calls
+--   this every tick regardless of phase, including throughout
+--   "working") leaves it untouched, so it doesn't flicker off between
+--   the explicit 'setBillWorking' call and the next refresh. Any other
+--   transition — a fresh claim from unclaimed, or a takeover from a
+--   different (expired/dead) claimant — resets it to False: a new
+--   holder starts at "fetch", not already mid-work, even if the
+--   previous holder left it stuck True.
 claimBill ∷ Double → Double → (UnitId → Bool) → BillId → UnitId
           → CraftBills → (CraftBills, Bool)
 claimBill now timeout alive bid uid bills = case lookupBill bid bills of
     Just bill | claimAvailable now timeout alive uid bill →
-        let bill' = bill { cbClaimant = Just uid, cbClaimedAt = now }
+        let sameHolder = cbClaimant bill ≡ Just uid
+            bill' = bill { cbClaimant = Just uid, cbClaimedAt = now
+                         , cbWorking = sameHolder ∧ cbWorking bill }
         in (bills { cbsBills = HM.insert bid bill' (cbsBills bills) }, True)
     _ → (bills, False)
 
 -- | Hand a bill back to pending (claim released, progress kept — see
---   'cbProgress'). False when the id names nothing.
+--   'cbProgress'). Also clears 'cbWorking' — no one is pouring work
+--   into it any more. False when the id names nothing.
 releaseBill ∷ BillId → CraftBills → (CraftBills, Bool)
 releaseBill bid bills = case lookupBill bid bills of
     Nothing → (bills, False)
     Just bill →
-        let bill' = bill { cbClaimant = Nothing }
+        let bill' = bill { cbClaimant = Nothing, cbWorking = False }
+        in (bills { cbsBills = HM.insert bid bill' (cbsBills bills) }, True)
+
+-- | Mark whether the current claimant is ACTIVELY pouring work into
+--   this cycle right now (#590) — see 'cbWorking'. The craft AI calls
+--   this True once it reaches its "working" phase and False again when
+--   leaving it early (preempted); completion/release already clear it
+--   on their own ('completeBillCycle' / 'releaseBill'). False for an
+--   unknown bill.
+setBillWorking ∷ BillId → Bool → CraftBills → (CraftBills, Bool)
+setBillWorking bid working bills = case lookupBill bid bills of
+    Nothing → (bills, False)
+    Just bill →
+        let bill' = bill { cbWorking = working }
         in (bills { cbsBills = HM.insert bid bill' (cbsBills bills) }, True)
 
 -- | Pour work into the current cycle; progress clamps to [0, 1].
@@ -203,20 +244,23 @@ addBillProgress bid delta bills = case lookupBill bid bills of
 --   A finite bill that reaches 0 is removed; a repeat bill stays at
 --   -1 forever. Returns the new remaining count (0 = bill done and
 --   gone), or Nothing for an unknown bill. The claim is kept so the
---   crafter rolls straight into the next cycle without re-claiming.
+--   crafter rolls straight into the next cycle without re-claiming,
+--   but 'cbWorking' resets to False either way — the next cycle (if
+--   any) starts back at fetching/walking, not already mid-work.
 completeBillCycle ∷ BillId → CraftBills → (CraftBills, Maybe Int)
 completeBillCycle bid bills = case lookupBill bid bills of
     Nothing → (bills, Nothing)
     Just bill
         | cbRemaining bill < 0 →
-            let bill' = bill { cbProgress = 0 }
+            let bill' = bill { cbProgress = 0, cbWorking = False }
             in ( bills { cbsBills = HM.insert bid bill' (cbsBills bills) }
                , Just (-1) )
         | cbRemaining bill ≤ 1 →
             (bills { cbsBills = HM.delete bid (cbsBills bills) }, Just 0)
         | otherwise →
             let bill' = bill { cbProgress = 0
-                             , cbRemaining = cbRemaining bill - 1 }
+                             , cbRemaining = cbRemaining bill - 1
+                             , cbWorking = False }
             in ( bills { cbsBills = HM.insert bid bill' (cbsBills bills) }
                , Just (cbRemaining bill') )
 

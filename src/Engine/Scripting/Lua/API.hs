@@ -566,6 +566,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "addBillProgress"   (craftAddBillProgressFn env)
   registerLuaFunction "completeBillCycle" (craftCompleteBillCycleFn env)
   registerLuaFunction "setBillPaused"     (craftSetBillPausedFn env)
+  registerLuaFunction "setBillWorking"    (craftSetBillWorkingFn env)
   registerLuaFunction "reorderBill"       (craftReorderBillFn env)
   Lua.setglobal (Lua.Name "craft")
 
@@ -585,6 +586,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "listNetworks"       (powerListNetworksFn env)
   registerLuaFunction "getNetworkForNode"  (powerGetNetworkForNodeFn env)
   registerLuaFunction "isBuildingPowered"  (powerIsBuildingPoweredFn env)
+  registerLuaFunction "isStationPoweredForRecipe"
+                                            (powerIsStationPoweredForRecipeFn env)
   Lua.setglobal (Lua.Name "power")
 
   -- Repair global (#301) — the policy layer on top of unit.repairItem

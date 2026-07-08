@@ -124,7 +124,11 @@ runRepairAt env uid rid iid bid = do
         Just recipe → case rdRepairAxis recipe of
             Nothing → return (Left (rid <> " is not a repair recipe"))
             Just axis → do
-                gate ← validateStation env uid rid bid
+                -- Repairs aren't bill-driven (no Craft.Bills entry ever
+                -- registers a repair job as an active consumer), so
+                -- there's no bill to exclude here — Nothing is always
+                -- correct, unlike craft.executeAt's job.billId case.
+                gate ← validateStation env Nothing uid rid bid
                 case gate of
                     Left err → return (Left err)
                     Right () → do

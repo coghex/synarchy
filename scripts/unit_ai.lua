@@ -3847,6 +3847,11 @@ local function craftExecute(uid, s, params)
         unit.stop(uid)
         job.phase = "working"
         s.lastCraftAt = now
+        -- #590: mark the bill as ACTIVELY worked only now — fetching
+        -- and walking (above) never drew power; standing at the
+        -- station about to pour progress does. craftOnExit/completion/
+        -- release all clear this back off.
+        craft.setBillWorking(job.billId, true)
         return
     end
 
@@ -3855,12 +3860,17 @@ local function craftExecute(uid, s, params)
     -- and the verbs are synchronous, so the returned value is
     -- authoritative — no local copy needed.
     if job.phase == "working" then
-        -- #361: a requires_power station that's unwired or browned
-        -- out pours no progress this tick — idle, not failed. Reset
-        -- lastCraftAt so the elapsed-time accumulator doesn't credit
-        -- the unpowered gap once power returns (same guard the phase
-        -- transitions above already use).
-        if not power.isBuildingPowered(job.bid) then
+        -- #590: a power-drawing recipe (job.recipeId's power_draw > 0)
+        -- pours no progress this tick while its station can't be
+        -- satisfied — idle, not failed. A zero-power recipe always
+        -- passes, wired or not. job.billId is passed so the engine
+        -- excludes THIS bill's own already-registered draw before
+        -- re-adding it, rather than double-counting it (or dropping
+        -- some other simultaneous consumer at the same station).
+        -- Reset lastCraftAt so the elapsed-time accumulator doesn't
+        -- credit the unpowered gap once power returns (same guard the
+        -- phase transitions above already use).
+        if not power.isStationPoweredForRecipe(job.bid, job.recipeId, job.billId) then
             s.lastCraftAt = now
             return
         end
@@ -3878,7 +3888,7 @@ local function craftExecute(uid, s, params)
         end
         if job.work <= 0 then progress = 1.0 end
         if progress >= 1.0 then
-            local ok, res = craft.executeAt(uid, job.recipeId, job.bid)
+            local ok, res = craft.executeAt(uid, job.recipeId, job.bid, job.billId)
             if not ok then
                 -- Inventory raced away / station broke between ticks —
                 -- hand the bill back and let the next scan re-plan.
@@ -3907,11 +3917,14 @@ end
 
 -- Preempted mid-work (thirst, combat, player order): re-enter through
 -- the walking phase so the elapsed-time accumulator restarts — same
--- guard as construction's onExit.
+-- guard as construction's onExit. Also clears #590's working flag: a
+-- crafter walked away from the station mid-cycle is no longer drawing
+-- power for it.
 local function craftOnExit(uid, s, params)
     local job = s.craftJob
     if job and job.phase == "working" then
         job.phase = "walking"
+        craft.setBillWorking(job.billId, false)
     end
 end
 

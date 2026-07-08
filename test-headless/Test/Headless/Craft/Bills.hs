@@ -1,7 +1,8 @@
 {-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | Craft-bill backend tests (#329): the pure queue/claim/progress
 --   transitions in Craft.Bills that the craft.* bill verbs wrap, plus
---   the save-format roundtrip (bills persist in WorldPageSave, v70).
+--   the save-format roundtrip (bills persist in WorldPageSave, v70;
+--   'cbWorking' appended in v80 for #590's job-dependent power draw).
 --   The engine-integrated path (Lua verbs → craft AI → executeAt) is
 --   gated by tools/craft_bill_probe.py.
 module Test.Headless.Craft.Bills (spec) where
@@ -186,6 +187,72 @@ spec = do
                 (_, ok)  = claimBill 10 30 everyoneAlive bid worker1 b2
             ok `shouldBe` True
 
+    describe "working (#590)" $ do
+        it "a freshly added bill starts not working" $ do
+            let (bills, bid) = oneBill
+            cbWorking ⊚ lookupBill bid bills `shouldBe` Just False
+
+        it "setBillWorking sets and clears the flag" $ do
+            let (bills, bid) = oneBill
+                (b1, _)  = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, ok1) = setBillWorking bid True b1
+                (b3, ok2) = setBillWorking bid False b2
+            ok1 `shouldBe` True
+            cbWorking ⊚ lookupBill bid b2 `shouldBe` Just True
+            ok2 `shouldBe` True
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "setBillWorking is False for an unknown bill" $ do
+            snd (setBillWorking (BillId 999) True emptyCraftBills)
+                `shouldBe` False
+
+        it "a same-holder refresh (claimBill) preserves cbWorking" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = claimBill 20 30 everyoneAlive bid worker1 b2
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just True
+
+        it "a takeover by a DIFFERENT claimant resets cbWorking" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = claimBill 45 30 everyoneAlive bid worker2 b2
+                    -- worker1's claim expired (timeout 30) — worker2
+                    -- takes over and must start unmarked, not inherit
+                    -- worker1's stale "working" state.
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "releaseBill clears cbWorking" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = releaseBill bid b2
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "completeBillCycle clears cbWorking on a continuing bill" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = completeBillCycle bid b2
+            cbRemaining ⊚ lookupBill bid b3 `shouldBe` Just 2
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "completeBillCycle clears cbWorking on a repeat bill" $ do
+            let (bills, bid) = addBill station1 "r" (-1) emptyCraftBills
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = completeBillCycle bid b2
+            cbRemaining ⊚ lookupBill bid b3 `shouldBe` Just (-1)
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "pausing a working bill does NOT clear cbWorking (holder keeps drawing)" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+            cbWorking ⊚ lookupBill bid b3 `shouldBe` Just True
+
     describe "reorder (#330)" $ do
         it "moving a bill up swaps cbSeq with its predecessor" $ do
             let (b1, i1) = addBill station1 "a" 1 emptyCraftBills
@@ -225,11 +292,12 @@ spec = do
                 `shouldBe` False
 
     describe "persistence" $ do
-        it "roundtrips through the save encoding (claims included)" $ do
+        it "roundtrips through the save encoding (claims + working included)" $ do
             let (b0, bid) = oneBill
                 (b1, _) = claimBill 12.5 30 everyoneAlive bid worker1 b0
                 (b2, _) = addBillProgress bid 0.25 b1
-            S.decode (S.encode b2) `shouldBe` Right b2
+                (b3, _) = setBillWorking bid True b2
+            S.decode (S.encode b3) `shouldBe` Right b3
 
         it "pruneToStations drops bills whose station is gone" $ do
             let (b1, i1) = addBill station1 "a" 1 emptyCraftBills

@@ -21,7 +21,9 @@ module Engine.Scripting.Lua.API.Power
     , powerListNetworksFn
     , powerGetNetworkForNodeFn
     , powerIsBuildingPoweredFn
+    , powerIsStationPoweredForRecipeFn
     , isBuildingPowered
+    , isRecipePoweredAt
     ) where
 
 import UPrelude
@@ -39,11 +41,14 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
+import Craft.Bills (BillId(..))
+import Craft.Types (RecipeDef(..), lookupRecipe)
 import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
 import Unit.Pathing.Cost (lookupTerrainZ)
 import Item.Types (ItemInstance(..))
 import Power.Types
-import Power.Network (wireTilesOn, positionsOf, computeSnapshots, consumersOn)
+import Power.Network (wireTilesOn, positionsOf, computeSnapshots, consumersOn,
+                      activeCraftConsumersOn, combineConsumers)
 import qualified Power.Network as PN
 
 -- | power.isPlaceable(itemDefName) → bool. Lets a caller (the build
@@ -258,10 +263,28 @@ pushNode node = do
     roleText PowerSource  = "source"
     roleText PowerStorage = "storage"
 
+-- | The full live consumer demand on a page: #361's always-on
+--   'bdPowerDrain' buildings unioned with #590's job-dependent active
+--   craft-bill load — every network status computation needs BOTH
+--   folded in, or a busy crafting station's demand could hide behind an
+--   under-reported Brownout. @exclude@ is threaded straight to
+--   'activeCraftConsumersOn' — 'Nothing' for a plain "what's actually
+--   drawing" read; 'Just billId' to drop one specific bill's own
+--   contribution (see 'isRecipePoweredAt').
+liveConsumersOn ∷ EngineEnv → Maybe BillId → WorldPageId → Double
+               → BuildingManager → WorldState
+               → IO (HM.HashMap BuildingId ((Int, Int), Float))
+liveConsumersOn env exclude pageId now bm ws = do
+    rm    ← readIORef (recipeManagerRef env)
+    bills ← readIORef (wsCraftBillsRef ws)
+    pure $ combineConsumers (consumersOn pageId now bm)
+                (activeCraftConsumersOn exclude pageId now bm rm bills)
+
 -- | Gather the active world's current network snapshots (#360):
 --   connectivity + generation/drain/stored/capacity/status, recomputed
 --   live from this instant's sun angle, folding in every requires_power
---   building's drain (#361) via 'consumersOn'.
+--   building's drain (#361) plus every active craft job's draw (#590)
+--   via 'liveConsumersOn'. A plain read — no bill excluded.
 activeNetworkSnapshots ∷ EngineEnv → IO [PN.PowerNetworkSnapshot]
 activeNetworkSnapshots env = do
     mPage ← activeWorldPage env
@@ -276,20 +299,22 @@ activeNetworkSnapshots env = do
             let sunAngle   = worldTimeToSunAngle wt
                 wireTiles  = wireTilesOn td
                 positions  = positionsOf pageId bm nodes
-                consumers  = consumersOn pageId now bm
+            consumers ← liveConsumersOn env Nothing pageId now bm ws
             pure (computeSnapshots sunAngle HM.empty wireTiles nodes
                                     positions consumers)
 
--- | Whether a building's power requirement (#361), if any, is currently
---   met. A building whose def has no power_drain (≤ 0) is trivially
---   always powered — this is only meaningful to ask about a consumer.
---   Otherwise: false if the building doesn't exist, isn't Built, or its
---   network (if it has one at all) is in Brownout; true once wired to a
---   network whose generation/storage currently covers the demand.
---   Shared by the craft_job AI's per-tick gate (power.isBuildingPowered)
---   and Engine.Scripting.Lua.API.Craft's validateStation — the same
---   reuse pattern as that module already applies to validateStation
---   itself (see Repair.hs).
+-- | Whether a building's OWN power requirement (#361), if any, is
+--   currently met. A building whose def has no power_drain (≤ 0) is
+--   trivially always powered — this is only meaningful to ask about an
+--   always-on consumer (a hypothetical future device; no shipped/craft
+--   building sets this any more, see #590). Otherwise: false if the
+--   building doesn't exist, isn't Built, or its network (if it has one
+--   at all) is in Brownout; true once wired to a network whose
+--   generation/storage currently covers the FULL demand (including any
+--   concurrently active craft jobs on the same network). Crafting/
+--   repair should use 'isRecipePoweredAt' instead — a station with no
+--   'bdPowerDrain' of its own is trivially "powered" here regardless of
+--   what its recipes demand.
 isBuildingPowered ∷ EngineEnv → BuildingId → IO Bool
 isBuildingPowered env bid = do
     bm ← readIORef (buildingManagerRef env)
@@ -308,15 +333,68 @@ isBuildingPowered env bid = do
                             wt    ← readIORef (wsTimeRef ws)
                             td    ← readIORef (wsTilesRef ws)
                             now   ← readIORef (gameTimeRef env)
+                            consumers ← liveConsumersOn env Nothing (biPage inst) now bm ws
                             let sunAngle   = worldTimeToSunAngle wt
                                 wireTiles  = wireTilesOn td
                                 positions  = positionsOf (biPage inst) bm nodes
-                                consumers  = consumersOn (biPage inst) now bm
                                 nets = computeSnapshots sunAngle HM.empty
                                             wireTiles nodes positions consumers
                             pure $ case find (elem bid . PN.pnwConsumerIds) nets of
                                 Just net → PN.pnwStatus net ≡ PN.Powered
                                 Nothing  → False
+
+-- | Whether a STATION can currently satisfy a recipe's power demand
+--   (#590) — the job-dependent gate 'Craft.Execute.Execute.validateStation'
+--   and the craft_job AI's per-tick working-phase check both use. A
+--   recipe with @drawW ≤ 0@ (the default — most recipes) is always
+--   satisfied, at any station, wired or not (requirement #3). A
+--   positive-drawing recipe needs its station's tile on a network whose
+--   generation/storage covers the FULL demand: every OTHER consumer at
+--   that station (another always-on device, or another active bill)
+--   PLUS this call's own @drawW@, added exactly once.
+--
+--   @mBillId@ is the bill this specific check is FOR, if any (the
+--   craft_job AI passes its own @job.billId@ from both its per-tick
+--   working-phase gate and its cycle-completion 'craft.executeAt' call;
+--   a bare/ad-hoc call — debug console, tests — passes 'Nothing'). When
+--   given, that bill is EXCLUDED from the "every other consumer" total
+--   before @drawW@ is added back in, so a bill already registered as an
+--   active consumer for exactly this draw is counted once, not twice —
+--   simply re-using 'liveConsumersOn's existing entry for @bid@ (as an
+--   earlier version of this function did via 'HM.insertWith'-keep)
+--   would silently DROP any consumer that ISN'T this bill (another
+--   simultaneous bill, or an always-on device sharing the building),
+--   undercounting exactly the scenario this exclusion fixes. False if
+--   the station doesn't exist, isn't on any power network at all (no
+--   source/storage reachable), or the network is in Brownout.
+isRecipePoweredAt ∷ EngineEnv → Maybe BillId → BuildingId → Float → IO Bool
+isRecipePoweredAt env mBillId bid drawW
+    | drawW ≤ 0 = pure True
+    | otherwise = do
+        bm ← readIORef (buildingManagerRef env)
+        case HM.lookup bid (bmInstances bm) of
+            Nothing → pure False
+            Just inst → do
+                wm ← readIORef (worldManagerRef env)
+                case lookup (biPage inst) (wmWorlds wm) of
+                    Nothing → pure False
+                    Just ws → do
+                        nodes ← readIORef (wsPowerNodesRef ws)
+                        wt    ← readIORef (wsTimeRef ws)
+                        td    ← readIORef (wsTilesRef ws)
+                        now   ← readIORef (gameTimeRef env)
+                        othersOnly ← liveConsumersOn env mBillId (biPage inst) now bm ws
+                        let sunAngle  = worldTimeToSunAngle wt
+                            wireTiles = wireTilesOn td
+                            positions = positionsOf (biPage inst) bm nodes
+                            tile      = (biAnchorX inst, biAnchorY inst)
+                            consumers = HM.insertWith (\(_, new) (_, old) → (tile, new + old))
+                                            bid (tile, drawW) othersOnly
+                            nets = computeSnapshots sunAngle HM.empty
+                                        wireTiles nodes positions consumers
+                        pure $ case find (elem bid . PN.pnwConsumerIds) nets of
+                            Just net → PN.pnwStatus net ≡ PN.Powered
+                            Nothing  → False
 
 -- | power.isBuildingPowered(bid) → bool (#361).
 powerIsBuildingPoweredFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -325,6 +403,38 @@ powerIsBuildingPoweredFn env = do
     ok ← case idArg of
         Nothing → return False
         Just n  → Lua.liftIO $ isBuildingPowered env (BuildingId (fromIntegral n))
+    Lua.pushboolean ok
+    return 1
+
+-- | power.isStationPoweredForRecipe(bid, recipeId[, billId]) → bool
+--   (#590). The job-dependent counterpart to isBuildingPowered: looks
+--   the recipe up itself and delegates to isRecipePoweredAt with its
+--   rdPowerDraw. An unknown recipe id resolves to 0 draw here, so this
+--   is trivially true for it (same as any other zero-power recipe) —
+--   callers that need "unknown recipe" to be a hard refusal should go
+--   through validateStation instead, which checks recipe existence
+--   separately and returns that as its own distinct error. Unlike
+--   isBuildingPowered, this is meaningful for ANY station regardless of
+--   the building def's own bdPowerDrain. The optional @billId@ is the
+--   bill this check is FOR (the craft_job AI's own job.billId) — see
+--   isRecipePoweredAt's haddock for why passing it matters: it excludes
+--   that bill's own already-registered draw before re-adding it once,
+--   so it isn't silently counted twice or, worse, dropped along with
+--   every OTHER simultaneous consumer at the same station. Omit it for
+--   a bare/ad-hoc check with no bill involved.
+powerIsStationPoweredForRecipeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+powerIsStationPoweredForRecipeFn env = do
+    bidArg ← Lua.tointeger 1
+    ridArg ← Lua.tostring 2
+    billArg ← Lua.tointeger 3
+    ok ← case (bidArg, ridArg) of
+        (Just b, Just ridBS) → Lua.liftIO $ do
+            rm ← readIORef (recipeManagerRef env)
+            let rid     = TE.decodeUtf8 ridBS
+                drawW   = maybe 0 rdPowerDraw (lookupRecipe rid rm)
+                mBillId = BillId . fromIntegral ⊚ billArg
+            isRecipePoweredAt env mBillId (BuildingId (fromIntegral b)) drawW
+        _ → return False
     Lua.pushboolean ok
     return 1
 

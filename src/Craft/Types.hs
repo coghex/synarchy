@@ -91,6 +91,22 @@ data RecipeDef = RecipeDef
                                               --   the smelter). Nothing =
                                               --   outputs spawn at ambient
                                               --   (the historical default).
+    , rdPowerDraw ∷ !Float                    -- ^ #590: watts this recipe
+                                              --   demands from its station
+                                              --   WHILE being worked. 0
+                                              --   (default, every recipe
+                                              --   predating #590) = never
+                                              --   gated on power, runs at
+                                              --   any Built station
+                                              --   regardless of network
+                                              --   status. Positive = the
+                                              --   job-dependent consumer
+                                              --   load (replaces the old
+                                              --   #361 building-level
+                                              --   bdPowerDrain for crafting
+                                              --   purposes — see
+                                              --   Power.Network's
+                                              --   activeCraftConsumersOn).
     } deriving (Show, Eq)
 
 -- | Everything a craft consumes: inputs plus the fuel line, if any.
