@@ -12,8 +12,9 @@
 
 local M = {}
 
-local injuries = require("scripts.injuries")
-local salts    = require("scripts.salts")
+local injuries   = require("scripts.injuries")
+local salts      = require("scripts.salts")
+local exhaustion = require("scripts.exhaustion")
 
 local function clamp(x, lo, hi)
     return math.max(lo, math.min(hi, x))
@@ -70,9 +71,11 @@ end
 function M.sprint(uid)
     local maxsp = unit.getMaxSpeed(uid) or 0
     local agi   = unit.getStat(uid, "agility") or 1.0
-    -- Salt cramps (hyponatremia) slow the whole speed band too, like a limp.
+    -- Salt cramps (hyponatremia) and low exhaustion (circadian epic #479 /
+    -- #610) both slow the whole speed band too, like a limp.
     return maxsp * clamp(agi, 0.3, 3.0)
          * injuries.speedMultiplier(uid) * salts.speedMultiplier(uid)
+         * exhaustion.speedMultiplier(uid)
          * M.encumbranceMultiplier(uid)
 end
 
