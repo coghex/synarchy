@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Camera
     , cameraGetZoomFadeEndFn
     , cameraGetZoomVelocityFn
     , cameraSetZoomVelocityFn
+    , cameraApplyScrollZoomFn
     , cameraGetZSliceFn
     , cameraSetZSliceFn
     , cameraGotoTileFn
@@ -24,7 +25,7 @@ import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..), resolveActiveWorld)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
-import Engine.Loop.Camera (applyGotoLimits, gotoTileZoomSafe)
+import Engine.Loop.Camera (applyGotoLimits, gotoTileZoomSafe, scrollZoomImpulse)
 import World.Grid
 import World.Types
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -116,6 +117,22 @@ cameraSetZoomVelocityFn env = do
         Just (Lua.Number v) → Lua.liftIO $
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZoomVelocity = realToFrac v }, ())
+        _ → pure ()
+    return 0
+
+-- | camera.applyScrollZoom(dy)
+--   Applies one frame's (already-coalesced) scroll delta to zoom
+--   velocity, calibrated by scroll amount rather than event count
+--   (#596). The single call site both world_view.lua and
+--   test_arena.lua's onScroll route through, so the two stay in sync.
+cameraApplyScrollZoomFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraApplyScrollZoomFn env = do
+    dyArg ← Lua.tonumber 1
+    case dyArg of
+        Just (Lua.Number dy) → Lua.liftIO $
+            atomicModifyIORef' (cameraRef env) $ \cam →
+                let impulse = scrollZoomImpulse (camZoom cam) (realToFrac dy)
+                in (cam { camZoomVelocity = camZoomVelocity cam + impulse }, ())
         _ → pure ()
     return 0
 

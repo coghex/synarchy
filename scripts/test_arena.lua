@@ -253,18 +253,9 @@ end
 
 function testArena.onScroll(dx, dy)
     if not testArena.visible then return end
-    -- Same velocity-based zoom as world_view.onScroll. The old direct
-    -- setZoom clamped to [0.1, 1.5], which predates the current zoom
-    -- scale (world_view boots at zoom 64) — one scroll notch would
-    -- have snapped the camera to 1.5.
-    local current = camera.getZoomVelocity()
-    local zoom = camera.getZoom()
-    local impulse = 0.4 * zoom
-    if dy > 0 then
-        camera.setZoomVelocity(current - impulse)
-    elseif dy < 0 then
-        camera.setZoomVelocity(current + impulse)
-    end
+    -- Same calibrated zoom as world_view.onScroll (#596) — both route
+    -- through camera.applyScrollZoom so they can't drift apart again.
+    camera.applyScrollZoom(dy)
 end
 
 function testArena.onZSliceScroll(dx, dy)
