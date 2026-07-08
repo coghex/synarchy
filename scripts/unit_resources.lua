@@ -231,6 +231,34 @@ local config = {
             -- BMR alone — that's the food being stored.
             surplus_regrowth = true,
         },
+        -- Exhaustion (circadian epic #479 / #610): short-horizon physical
+        -- fatigue, separate from stamina (per-action exertion, regens fast)
+        -- and from the future sleep-pressure meter (#611, multi-day debt
+        -- only real sleep clears). Drains under sustained exertion, recovers
+        -- with rest. No collapse/kill/death threshold here — exhaustion
+        -- never forces a unit down on its own; its only effect this issue
+        -- is the movement-speed penalty in scripts/exhaustion.lua. Feeding
+        -- into the "go to sleep" AI utility is #612's job, once #611 lands.
+        exhaustion = {
+            max_from = "max_exhaustion",
+            -- Baseline drain scaled by exertion, same shape as hydration's
+            -- drain_constant_frac + drain_activity_scaled. At idle
+            -- (activityMultiplier 1.0) this is small; regen_factor_idle
+            -- comfortably outpaces it below. Under combat/mining
+            -- (activityMultiplier 2.0-2.5) it overtakes idle-pose regen.
+            drain_constant_frac   = 0.008,
+            drain_activity_scaled = true,
+            -- Recovery scaled by endurance, mirroring stamina's hook. At
+            -- endurance 1.0 (max_exhaustion 10): idle nets ≈ +0.04/s (full
+            -- recovery from empty in ~4 game-hours), sustained mining nets
+            -- ≈ -0.04/s, combat ≈ -0.08/s, continuous walking a gentle
+            -- ≈ -0.02/s (walking gets its own smaller regen_factor since a
+            -- moving unit isn't as restful as a standing one).
+            regen_factor_idle      = 0.12,
+            regen_factor_walking   = 0.10,
+            regen_factor_collapsed = 0.12,
+            regen_factor_crouching = 0.12,
+        },
     },
     -- Bears need stamina so combat drain (Combat.Resolution applies
     -- 5% per quick, 25% per heavy of max_stamina) lands somewhere.
@@ -253,6 +281,17 @@ local config = {
             -- No organ_failure_check — wildlife doesn't (yet) have
             -- the body-composition catabolism layer that drives it.
         },
+        -- Same exhaustion model as acolyte (circadian epic #479 / #610) —
+        -- see the acolyte entry above for the full calibration rationale.
+        exhaustion = {
+            max_from               = "max_exhaustion",
+            drain_constant_frac    = 0.008,
+            drain_activity_scaled  = true,
+            regen_factor_idle      = 0.12,
+            regen_factor_walking   = 0.10,
+            regen_factor_collapsed = 0.12,
+            regen_factor_crouching = 0.12,
+        },
     },
     -- Red squirrel: same minimal stamina model as the bear so flight
     -- sprints and the (rare) combat drain land somewhere. Tiny prey —
@@ -270,6 +309,17 @@ local config = {
             collapse_threshold     = 0.1,
             revive_threshold       = 0.5,
             kill_on_zero           = true,
+        },
+        -- Same exhaustion model as acolyte (circadian epic #479 / #610) —
+        -- see the acolyte entry above for the full calibration rationale.
+        exhaustion = {
+            max_from               = "max_exhaustion",
+            drain_constant_frac    = 0.008,
+            drain_activity_scaled  = true,
+            regen_factor_idle      = 0.12,
+            regen_factor_walking   = 0.10,
+            regen_factor_collapsed = 0.12,
+            regen_factor_crouching = 0.12,
         },
     },
 }
