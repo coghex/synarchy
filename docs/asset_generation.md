@@ -134,7 +134,7 @@ Recipe for a new unit (validated with bear_brown, 2026-06):
    referenced path exists.
 6. `data/units/<name>.yaml` is auto-discovered (`startup_loader.lua` `addYamlDir("data/units")`).
    Rendering/spawning needs nothing else; *behavior* needs Lua wiring (a `<species>_ai.lua`
-   config, `unit_resources.lua` species block, `unit_ai.lua` COMBAT_ANIM_SUFFIX entry) — engine/
+   config, `unit_resources.lua` species block, `unit_ai_combat_attack.lua` COMBAT_ANIM_SUFFIX entry) — engine/
    Lua territory, check with the user first.
 
 ## Gotchas index

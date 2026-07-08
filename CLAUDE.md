@@ -24,9 +24,9 @@ stays in seconds and the expensive gates run once, at the end.
    `cabal test synarchy-test-headless` (~1 min — one engine, worlds
    memoized across specs) · `python3 tools/world_check.py` (21 seeds,
    ~2 min) · `python3 tools/test_audit.py` (instant) ·
-   `python3 tools/lua_module_budget.py` (instant — #541/#545 line-budget
-   guard for split Lua modules such as unit-resource physiology and the
-   debug overlay).
+   `python3 tools/lua_module_budget.py` (instant — #538/#541/#545
+   line-budget guard for split Lua modules such as unit AI,
+   unit-resource physiology, and the debug overlay).
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (adds the
    w128 volcano exposure case, +~25 s), then re-capture baselines
@@ -56,8 +56,8 @@ CI (`.github/workflows/ci.yml`, #436) runs on every PR and push to
 master, on Linux: full build with `-Werror` (the #435 warning-clean
 state is enforced, dependency warnings excluded), both test-suite
 builds, the headless suite, `test_audit.py`, `tools/lua_module_budget.py`
-(#541/#545 — fails if a Lua module split to stay reviewable grows back
-past its agreed line budget), and `world_check --quick` — all
+(#538/#541/#545 — fails if a Lua module split to stay reviewable grows
+back past its agreed line budget), and `world_check --quick` — all
 blocking. Worldgen output proved bit-identical between
 macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
 tracked baselines are platform-agnostic; a worldgen-output PR that
@@ -172,6 +172,30 @@ Procedural world with geological simulation in `World/`:
 
 ### Lua scripting
 `Engine.Scripting.Lua.*` provides a Lua API for game logic. Lua scripts live in the repo-root `scripts/` directory (UI, menus, HUD, world management); `engine.loadScript` paths are relative to the repo root (e.g. `engine.loadScript("scripts/ui_manager.lua")`). The API modules in `Engine.Scripting.Lua.API.*` expose engine functionality to Lua.
+
+`scripts/unit_ai.lua` (#538) is the unit-AI entry/orchestration module
+only — the self-registering singleton, the tunables/action-registry
+wiring, the per-unit dispatch loop (`tickOne`), and the
+init/update/shutdown/onSaveLoaded engine lifecycle. Every domain's
+utility/execute bodies live in `scripts/unit_ai_*.lua` submodules
+(needs, water, combat + combat_attack, notify, deliver, logistics,
+construct, craft, dig, chop, farm — till/plant/harvest, repair, pickup,
+medic), each required by the orchestrator and capped at 500 physical
+lines (`tools/lua_module_budget.py`, wired into CI and `make ci`).
+Shared plumbing (per-unit AI state, the goal layer, distance/footprint
+geometry, water-source memory) lives in `scripts/unit_ai_core.lua`; the
+inventory→ground→mule materials-sourcing ladder shared by
+deliver/construct/craft/repair lives in `scripts/unit_ai_fetch.lua`.
+Submodules reach the shared `unitAi` singleton via
+`package.loaded["scripts.unit_ai"]` (valid once required from
+`unit_ai.lua`, which registers it first) — the same self-registration
+pattern the header comment there describes. Public API functions
+(`commandMove`, `commandAttack`, `getState`, `till`/`plant`/`harvest`,
+repair's priority-flag queries, ...) stay attached to the `unitAi`
+table from whichever submodule owns them, exactly as before the split;
+only internal action utility/execute/onExit functions move to a
+plain `return M` module table, imported by the orchestrator's action
+registry.
 
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering. UI layout and behavior is driven from Lua scripts.
@@ -745,14 +769,12 @@ toolbar icon, designation marker, and tilled-soil ground texture are
 functional placeholders (correct size/alpha conventions, matching
 sibling assets) pending real pixel art too.
 
-`unit_ai.lua` sits at Lua's 200-local-per-chunk ceiling: a new work
-action's helpers ride as fields on the existing `unitAi` module table
-(`unitAi.till.*`, plain assignments) rather than one top-level `local`
-per helper (the dig/chop convention) — adding even a couple of new
-top-level locals broke script loading (`too many local variables`).
-Any future action added the old way should check `grep -c "^local "
-scripts/unit_ai.lua` stays at parity with what's on disk before adding
-more top-level locals.
+Till/plant/harvest's helpers ride as fields on the existing `unitAi`
+module table (`unitAi.till.*`, plain assignments) rather than one
+top-level `local` per helper — originally a workaround for
+`unit_ai.lua`'s single-chunk 200-local ceiling, which #538's module
+split (below) has since resolved, but kept as-is across that split so
+the public shape (any caller poking `unitAi.till.claims`) doesn't move.
 
 Turnkey harness: **`python3 tools/till_probe.py`** — the #333 gate.
 Boots headless on a real generated world (natural ground cover needs

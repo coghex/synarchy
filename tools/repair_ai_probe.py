@@ -53,7 +53,7 @@ it IS the machinery under test, unlike movement_probe which neutralises it):
 Test fixtures deliberately use condition/sharpness = 5 (not 20-40) for the
 "degraded but not broken" cases: repair_job's utility (base 1.2 * severity)
 must clear ambient wander's utility (up to ~0.8 at full stamina, scripts/
-unit_ai.lua wanderUtility) for the AI to reliably prioritize it over idling
+unit_ai_needs.lua wanderUtility) for the AI to reliably prioritize it over idling
 — severity=(1-5/50)^2=0.81 gives a comfortable margin (0.97 > 0.8).
 
 Usage: python3 tools/repair_ai_probe.py [--port 9382] [--phase all]
