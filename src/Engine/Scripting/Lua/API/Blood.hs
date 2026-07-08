@@ -32,6 +32,7 @@ import Unit.Types (UnitId(..))
 import Blood.Types
 import Blood.Texture (generateBloodTexture, bloodTextureHash, btiWidth, btiHeight)
 import Blood.Render (BloodRenderRecord(..), bloodRenderRecords)
+import Blood.Impact (defaultStyleForWound)
 
 -- | Resolve which world page a blood op targets: a named page (any in
 --   wmWorlds, even hidden/non-active) when a page id is given, else
@@ -391,19 +392,6 @@ pushRenderRecord r = do
     putN "tintB" (brrTintB r)
     putN "alpha" (brrAlpha r)
 
--- | The style a bare (no explicit style) request defaults to, keyed
---   off the wound kind — mirrors docs/blood_decals.md's "Injury
---   behavior" mapping (stab → pool, slash → directional streak, blunt/
---   arterial/severed → spatter). Anything else defaults to a small
---   drops mark rather than guessing a directional shape.
-defaultStyleForWound ∷ Text → BloodStyle
-defaultStyleForWound wk = case wk of
-    "stab"     → StylePool
-    "slash"    → StyleStreak
-    "blunt"    → StyleSpatter
-    "arterial" → StyleSpatter
-    "severed"  → StyleSpatter
-    _          → StyleDrops
 
 parseStyle ∷ Text → Maybe BloodStyle
 parseStyle "pool"    = Just StylePool

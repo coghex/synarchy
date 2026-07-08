@@ -42,6 +42,7 @@ import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..))
 import Unit.Fall (FallInjury(..), fallInjuries, fallStunFor)
+import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
 import Unit.Thread.Movement.Types
     (UnitMoveStats(..), defaultMoveStats, baselineUnitHeight)
 import Unit.Thread.Movement.Leap
@@ -173,6 +174,23 @@ tickAllMovement dt env utsRef = do
              [ ("detail",   detail)
              , ("count",    T.pack (show (length injs)))
              , ("severity", T.pack (show worst)) ]
+
+    -- Impact blood (#607): ONE mark per fall, keyed off the single
+    -- WORST injury (never per fractured part, so a bad fall that
+    -- breaks several bones at once stays bounded to a single decal —
+    -- requirement 9). A fall has no "attacker", so direction always
+    -- falls back to a deterministic seeded angle (requirement 7).
+    forM_ fallResults $ \(uid, injs, _) → when (not (null injs)) $
+        case HM.lookup uid (umInstances um) of
+            Nothing   → pure ()
+            Just inst →
+                let worstInjury = foldr1
+                        (\a b → if fiSeverity a ≥ fiSeverity b then a else b) injs
+                    seed = round (now * 1000.0) + fromIntegral (unUnitId uid)
+                    angle = impactFallbackAngle seed
+                in spawnImpactBlood env (uiPage inst) (uiGridX inst) (uiGridY inst)
+                     (uiGridZ inst) (fiKind worstInjury) (fiSeverity worstInjury)
+                     angle seed (Just uid) now
 
     -- Knockdown stun per landed unit, keyed for the sim writeback.
     let stunMap = HM.fromList [ (uid, fallStunFor worst)
