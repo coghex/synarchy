@@ -531,6 +531,9 @@ library
                      World.Geology.Timeline.Volcanism
                      World.Geology.Timeline.River
                      World.Geology.Timeline.RiverTrace
+                     World.Geology.Timeline.Loop
+                     World.Geology.Timeline.Stitch
+                     World.Geology.Timeline.Compact
                      World.Geology.Coastal
                      World.Geology.Coastal.Types
                      World.Geology.Coastal.Constants
