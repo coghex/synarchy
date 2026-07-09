@@ -413,6 +413,9 @@ library
                      Item.Temperature
                      Engine.Asset.YamlItems
                      Engine.Scripting.Lua.API.Items
+                     Engine.Scripting.Lua.API.Items.Defs
+                     Engine.Scripting.Lua.API.Items.Ground
+                     Engine.Scripting.Lua.API.Items.Render
                      Equipment.Types
                      Engine.Asset.YamlEquipment
                      Engine.Scripting.Lua.API.Equipment
