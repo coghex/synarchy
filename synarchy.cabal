@@ -615,6 +615,9 @@ library
                      World.Fluid.Seabed.Types
                      World.Fluid.OceanMask
                      World.Geology.Erosion
+                     World.Geology.Erosion.Math
+                     World.Geology.Erosion.Sediment
+                     World.Geology.Erosion.Climate
                      World.Geology.Event
                      World.Hydrology.Types
                      World.Hydrology.Event
