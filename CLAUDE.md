@@ -862,6 +862,30 @@ headless and checks the injury stream roundtrip, `unit.injure` →
 event, and `emitEventForUnit` → `getEventLog().uid` (gating), plus a
 best-effort real-fall test. `--no-fall` skips the movement phase.
 
+### Testing config state headless (#638)
+
+`config/video.yaml`, `config/keybinds.yaml`, and `config/notifications.yaml`
+are gitignored local runtime state written by the settings UI's save
+paths (`engine.saveVideoConfig`/`saveKeybinds`/`setNotificationOverrides`),
+not versioned source. Boot falls back to the tracked
+`config/video_default.yaml`/`config/keybinds_default.yaml` templates
+(`Engine.Core.Init.resolveConfigPath`) when the local file is absent;
+`config/notifications.yaml` has no separate default file — it
+self-materializes from `data/notification_categories.yaml`'s
+`default_settings`, same as before #638. Existing on-disk files from
+before this change are left untouched (untracked via `git rm --cached`,
+not deleted), so nobody's local preferences are silently discarded.
+
+Turnkey harness: **`python3 tools/config_state_probe.py`** — the #638
+gate. Backs up any local config files present (restored afterward), boots
+headless to confirm a simulated fresh clone falls back to the versioned
+templates, exercises the three public save paths, and asserts
+`git status --short -- config .gitignore` is clean both before and after.
+Also covered by pure hspec coverage (no engine): `cabal test
+synarchy-test-headless --test-options='--match "config"'` includes
+`Test.Headless.Core.ConfigState`'s direct tests of `resolveConfigPath`
+and the notification-overrides materialize/round-trip contract.
+
 ### Shutdown
 
 ```bash
