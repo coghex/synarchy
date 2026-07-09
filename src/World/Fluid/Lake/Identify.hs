@@ -24,7 +24,7 @@
 --
 --   Output is a 'WorldLakes' that the chunk-gen composer reads with
 --   no priority flood, BFS, or bordered-region work at runtime. The
---   per-chunk 'smoothIslandColumns' pass in 'World.Generate.Chunk'
+--   per-chunk 'smoothIslandColumns' pass in 'World.Generate.Chunk.Fluid'
 --   handles 1–5 z column artifacts the global flood inherently can't
 --   address (noise spikes that the timeline despike misses).
 --

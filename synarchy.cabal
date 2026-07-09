@@ -509,6 +509,10 @@ library
                      World.Generate.Constants
                      World.Generate.Coordinates
                      World.Generate.Chunk
+                     World.Generate.Chunk.Fluid
+                     World.Generate.Chunk.SoilGates
+                     World.Generate.Chunk.Columns
+                     World.Generate.Chunk.Zoom
                      World.Generate.InitTerrain
                      World.Generate.Timeline
                      World.Generate.Timeline.Fast
