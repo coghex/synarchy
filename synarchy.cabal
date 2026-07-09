@@ -24,9 +24,24 @@ build-type:         Custom
 tested-with:        GHC ==9.12.2
 extra-doc-files:    CHANGELOG.md
                     README.md
--- Headers for the c-sources below; sdist does not pick these up from
--- include-dirs on its own.
+                    CLAUDE.md
+-- The sdist is the source tree: besides the headers for the c-sources
+-- below (which sdist does not pick up from include-dirs on its own),
+-- ship the runtime/test resources the engine and test suites load from
+-- relative paths at run time — game-data YAML, image/font assets, the
+-- Lua game scripts, and the versioned config templates. The config
+-- entries are enumerated (not globbed) on purpose: config/ also holds
+-- gitignored local runtime state (keybinds.yaml, video.yaml,
+-- notifications.yaml, #638) that a glob would leak into the tarball.
 extra-source-files: cbits/*.h
+                    data/**/*.yaml
+                    assets/**/*.png
+                    assets/**/*.ttf
+                    scripts/**/*.lua
+                    config/keybinds_default.yaml
+                    config/pathing.yaml
+                    config/video_default.yaml
+                    config/world_gen_default.yaml
 
 source-repository head
     type:     git
