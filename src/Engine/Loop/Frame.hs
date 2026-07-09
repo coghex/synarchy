@@ -26,15 +26,18 @@ import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Config (brightnessToMultiplier)
 import Engine.Graphics.Window.Types (Window(..))
-import Engine.Graphics.Types (DevQueues(..))
+import Engine.Graphics.Types (DevQueues(..), ScreenshotRequest(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
+import Engine.Graphics.Vulkan.Screenshot (PendingCapture(..), prepareCapture
+                                         , finishCapture)
 import Engine.Graphics.Vulkan.Types
 import Engine.Loop.Resource (validateDescriptorState, getFrameResources, 
                               getCommandBuffer, getDevice, getSwapchain,
                               getQueues, extractWindow)
+import qualified Engine.Core.Queue as Q
 import Engine.Scene.Render
 import Engine.Scene.Types
 import UI.Render (renderUIPages)
@@ -183,13 +186,29 @@ drawFrame = do
             -- Validate resources
             state'' ← gets graphicsState
             validateDescriptorState state''
-            
+
+            -- Pending debug.captureScreenshot request (#643)? Allocate
+            -- its staging buffer now so the copy-out can ride this
+            -- frame's command buffer and fence. At most one request
+            -- per frame — the console verb blocks per call anyway.
+            mCapReq ← liftIO $ Q.tryReadQueue (screenshotRequestQueue env)
+            mCapture ← case mCapReq of
+                Nothing → pure Nothing
+                Just req → case (swapchainInfo state'', vulkanPDevice state'') of
+                    (Just si, Just pDev) →
+                        prepareCapture device pDev si imageIndex req
+                    _ → do
+                        liftIO $ Q.writeQueue (srReply req) $ Left
+                            "captureScreenshot: no swapchain available"
+                        pure Nothing
+
             -- Record command buffer
             cmdBuffer ← getCommandBuffer resources
             liftIO $ resetCommandBuffer cmdBuffer zero
             recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
                                      (fromIntegral frameIdx)
                                      dynamicBuffer layeredBatches
+                                     ((\pc → (pcImage pc, pcBuffer pc)) ⊚ mCapture)
             
             -- Submit + present both use the per-IMAGE render-finished
             -- semaphore (the image count can differ from frames in flight,
@@ -221,9 +240,20 @@ drawFrame = do
                 Left err → logAndThrowM CatGraphics
                   (ExGraphics SwapchainError) $ T.pack $
                     "Failed to present: " ⧺ show err
-                
+
                 Right () → pure ()
-            
+
+            -- Finish a pending screenshot (#643): once this frame's
+            -- fence signals, the copy recorded after the render pass
+            -- has executed — read the staging buffer back, reply to
+            -- the requester, free the buffer. One extra fence wait on
+            -- capture frames only (the next drawFrame for this slot
+            -- would wait on it anyway).
+            forM_ mCapture $ \pc → do
+                _ ← liftIO $ waitForFences device
+                        (V.singleton (frInFlight resources)) True maxBound
+                liftIO $ finishCapture device pc
+
             -- Update frame index
             let nextFrame = (frameIdx + 1) `mod` fromIntegral (gcMaxFrames defaultGraphicsConfig)
             modify $ \s → s { graphicsState = (graphicsState s) {

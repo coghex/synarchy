@@ -165,6 +165,7 @@ library
                      Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
+                     Engine.Graphics.Screenshot
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
                      Engine.Graphics.Config
@@ -188,6 +189,7 @@ library
                      Engine.Graphics.Vulkan.Recreate
                      Engine.Graphics.Vulkan.Sampler.Types
                      Engine.Graphics.Vulkan.Sampler.Cache
+                     Engine.Graphics.Vulkan.Screenshot
                      Engine.Graphics.Vulkan.ShaderCode
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync
@@ -232,10 +234,13 @@ library
                      Engine.Scripting.Lua.Message.Scene
                      Engine.Scripting.Lua.Message.WorldTexture
                      Engine.Scripting.Lua.Thread
+                     Engine.Scripting.Lua.Thread.Console
+                     Engine.Scripting.Lua.Thread.Dispatch
                      Engine.Scripting.Lua.Script
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
                      Engine.Scripting.Lua.API.Register.UI
                      Engine.Scripting.Lua.API.Register.Unit
@@ -249,6 +254,7 @@ library
                      Engine.Scripting.Lua.API.Core
                      Engine.Scripting.Lua.API.Camera
                      Engine.Scripting.Lua.API.Debug
+                     Engine.Scripting.Lua.API.Screenshot
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
                      Engine.Scripting.Lua.API.Save
@@ -299,6 +305,10 @@ library
                      Engine.Scripting.Lua.API.WorldQuery.Pick
                      Engine.Scripting.Lua.API.WorldQuery.Location
                      Engine.Scripting.Lua.API.Forage
+                     Engine.Scripting.Lua.API.Forage.Lookup
+                     Engine.Scripting.Lua.API.Forage.Query
+                     Engine.Scripting.Lua.API.Forage.Harvest
+                     Engine.Scripting.Lua.API.Forage.Crop
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
@@ -417,6 +427,9 @@ library
                      Item.Temperature
                      Engine.Asset.YamlItems
                      Engine.Scripting.Lua.API.Items
+                     Engine.Scripting.Lua.API.Items.Defs
+                     Engine.Scripting.Lua.API.Items.Ground
+                     Engine.Scripting.Lua.API.Items.Render
                      Equipment.Types
                      Engine.Asset.YamlEquipment
                      Engine.Scripting.Lua.API.Equipment
@@ -461,6 +474,12 @@ library
                      Combat.Types
                      Combat.Thread
                      Combat.Resolution
+                     Combat.Resolution.Constants
+                     Combat.Resolution.Common
+                     Combat.Resolution.Strike
+                     Combat.Resolution.Damage
+                     Combat.Resolution.Wear
+                     Combat.Resolution.Events
                      Combat.Wounds
                      Combat.Wounds.Bleed
                      Combat.Wounds.Constants
@@ -875,6 +894,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.AmbientLight
+                   Test.Headless.Graphics.Screenshot
                    Test.Headless.Construct.Corners
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
@@ -903,10 +923,12 @@ test-suite synarchy-test-headless
                 , containers
                 , GLFW-b
                 , hspec
+                , JuicyPixels
                 , synarchy
                 , text
                 , stm
                 , vector
+                , vulkan
                 , unordered-containers
                 , deepseq
                 , random

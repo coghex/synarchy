@@ -86,6 +86,7 @@ initializeEngineWith logBackend = do
   simQueue ← Q.newQueue
   luaToEngineQueue ← Q.newQueue
   engineToLuaQueue ← Q.newQueue
+  screenshotRequestQueue ← Q.newQueue
   
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
@@ -216,6 +217,7 @@ initializeEngineWith logBackend = do
         , sunAngleRef        = sunAngleRef
         , worldPreviewRef    = worldPreviewRef
         , zoomAtlasDataRef   = zoomAtlasDataRef
+        , screenshotRequestQueue = screenshotRequestQueue
         , worldQuadsRef      = worldQuadsRef
         , textureSystemRef   = textureSystemRef
         , samplerCacheRef    = samplerCacheRef
