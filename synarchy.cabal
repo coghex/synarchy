@@ -206,6 +206,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
+                   Test.Headless.Core.ConfigState
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge
@@ -240,6 +241,8 @@ test-suite synarchy-test-headless
                 , bytestring
                 , cereal
                 , yaml
+                , directory
+                , filepath
     default-language: GHC2024
     -- Warnings apply to BOTH profiles (#435): prod is the default for all
     -- routine work, so it must carry the full warning set. Keep this the
@@ -379,6 +382,17 @@ library
                      Engine.Scripting.Lua.Script
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
+                     Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.Register.Engine
+                     Engine.Scripting.Lua.API.Register.UI
+                     Engine.Scripting.Lua.API.Register.Unit
+                     Engine.Scripting.Lua.API.Register.Building
+                     Engine.Scripting.Lua.API.Register.Designation
+                     Engine.Scripting.Lua.API.Register.Equipment
+                     Engine.Scripting.Lua.API.Register.Craft
+                     Engine.Scripting.Lua.API.Register.Item
+                     Engine.Scripting.Lua.API.Register.World
+                     Engine.Scripting.Lua.API.Register.Camera
                      Engine.Scripting.Lua.API.Core
                      Engine.Scripting.Lua.API.Camera
                      Engine.Scripting.Lua.API.Debug

@@ -238,6 +238,21 @@ units:
       lying-to-sleeping:           lying_down_to_sleeping
       sleeping-to-lying:           lying_down_to_sleeping # reversed
 
+      # go_to_sleep goal pose chain (#613): the engine's real Pose enum
+      # only has Standing/Crouching/Crawling/Sleeping (not the bear_rest
+      # flavor poses above), so unit_ai_sleep.lua's standing -> crouching
+      # -> crawling -> sleeping descent needs its own keys — reusing the
+      # SAME sit/lie/sleep assets bear_rest already uses above. sleeping-
+      # idle needs no new entry: "sleeping" is a real Pose tag already,
+      # so the "Resting poses" mapping above resolves it directly.
+      crouching-idle:              sitting_idle
+      standing-to-crouching:       standing_to_sitting
+      crouching-to-standing:       standing_to_sitting    # reversed
+      crouching-to-crawling:       sitting_to_lying_down
+      crawling-to-crouching:       sitting_to_lying_down  # reversed
+      crawling-to-sleeping:        lying_down_to_sleeping
+      sleeping-to-crawling:        lying_down_to_sleeping # reversed
+
       # Climbing. Engine triggers Standing → Climbing automatically
       # when a movement step hits a cliff. At the top, engine
       # auto-chains Climbing → Crawling → Standing via usPostTransition.

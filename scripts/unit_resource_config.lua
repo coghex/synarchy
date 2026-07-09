@@ -234,14 +234,21 @@ local config = {
             regen_factor_collapsed = 0.12,
             regen_factor_crouching = 0.12,
         },
-        -- Same drain-only sleep-pressure model as acolyte (circadian epic
-        -- #479 / #611) — see the acolyte entry above for the full
-        -- calibration rationale.
+        -- Same sleep-pressure model as acolyte (circadian epic #479 /
+        -- #611 / #612), but nocturnal (#613): brown bears shift toward
+        -- nocturnal activity to avoid daytime human/player disturbance
+        -- (a documented real-world pattern), so their circadian urge
+        -- peaks near DAWN (0.25) instead of dusk (0.75) — sleepy after a
+        -- night active, bedding down as the sun comes up. regen_factor_
+        -- sleeping is set (unlike red_squirrel below, which has no
+        -- go_to_sleep candidate wired up yet) since bear_ai.lua registers
+        -- the real go_to_sleep goal for bear_brown.
         sleep_pressure = {
-            max_from            = "max_sleep_pressure",
-            drain_constant_frac = 1 / 3600,
-            circadian_center    = 0.75,
-            circadian_width     = 0.125,
+            max_from              = "max_sleep_pressure",
+            drain_constant_frac   = 1 / 3600,
+            regen_factor_sleeping = 1 / 48,
+            circadian_center      = 0.25,
+            circadian_width       = 0.125,
         },
     },
     -- Red squirrel: same minimal stamina model as the bear so flight

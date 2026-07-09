@@ -64,7 +64,15 @@ cabal test synarchy-test-headless
 - `test/`, `test-headless/` — hspec test suites (`synarchy-test-graphical`, `synarchy-test-headless`)
 - `tools/` — Python worldgen regression tools (see `tools/README.md`) and headless behavior probes (see `CLAUDE.md`)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
-- `config/` — YAML config (keybinds, video, pathing, notifications, world-gen defaults)
+- `config/` — YAML config. Versioned defaults/templates (tracked):
+  `keybinds_default.yaml`, `video_default.yaml`, `pathing.yaml`,
+  `world_gen_default.yaml`. Local runtime state (gitignored,
+  machine-specific, written by the settings UI's Save actions):
+  `keybinds.yaml`, `video.yaml`, `notifications.yaml` — absent on a
+  fresh clone; the engine falls back to the matching `_default.yaml`
+  template (keybinds/video) or materializes the file from
+  `data/notification_categories.yaml`'s defaults (notifications) until
+  the first Save creates it (#638)
 - `data/` — game data YAML (buildings, items, units, flora, recipes, materials, structure packs, ...)
 - `assets/` — textures and fonts
 - `scripts/` — Lua scripts driving game logic (UI, AI, world management, item/building loaders)
