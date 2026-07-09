@@ -244,6 +244,7 @@ function hud.createUI()
 
     hud.logToggleId = toggle.new({
         name = "log_mode_toggle",
+        widgetType = "toolbarTool",
         page = hud.global_page,
         items = {
             (function()
@@ -311,6 +312,7 @@ function hud.createUI()
 
     hud.mapToggleId = toggle.new({
         name = "map_mode_toggle",
+        widgetType = "toolbarTool",
         page = hud.zoom_page,
         items = {
             {
@@ -372,6 +374,7 @@ function hud.createUI()
 
     hud.toolToggleId = toggle.new({
         name = "tool_mode_toggle",
+        widgetType = "toolbarTool",
         page = hud.world_page,
         items = {
             -- Stacked bottom-up: mine above build above default/info

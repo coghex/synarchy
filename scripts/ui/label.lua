@@ -233,4 +233,49 @@ function label.destroyList(ids)
     end
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- Text elements report uePosition as their BASELINE with a zero-sized
+-- bounding box (see the tooltip hit-box comment in label.new above) —
+-- UI.getElementInfo's raw x/y/width/height would misrepresent a
+-- label's visual footprint. When a tooltip hit-box exists it's already
+-- the engine's own "visible glyph mass" rectangle, so use it directly;
+-- otherwise reconstruct the same convention (glyphs sit above the
+-- baseline, roughly fontSize*1.25 tall) from the locally-measured text
+-- width.
+function label.dump()
+    local out = {}
+    for id, lbl in pairs(labels) do
+        local handle = lbl.hitBoxId or lbl.textId
+        local info = handle and UI.getElementInfo(handle) or nil
+        local x, y, w, h
+        if lbl.hitBoxId and info then
+            x, y, w, h = info.x, info.y, info.width, info.height
+        else
+            x = info and info.x or 0
+            y = (info and info.y or 0) - lbl.fontSize
+            w = lbl.width
+            h = math.floor(lbl.fontSize * 1.25)
+        end
+        if info and info.pageVisible and info.visible then
+            table.insert(out, {
+                id = "label:" .. id,
+                name = lbl.name,
+                type = "label",
+                bounds = { x = x, y = y, w = w, h = h },
+                label = lbl.text,
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 return label

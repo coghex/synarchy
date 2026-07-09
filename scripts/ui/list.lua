@@ -595,4 +595,46 @@ function list.isListCallback(callbackName)
     return callbackName == LIST_ITEM_CALLBACK
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- One entry per visible slot (each has its own hit-box and is
+-- independently clickable); slots beyond the current item count are
+-- skipped (empty rows in a short list).
+function list.dump()
+    local out = {}
+    for id, ls in pairs(lists) do
+        for _, slot in ipairs(ls.slotElements) do
+            local dataIndex = ls.scrollOffset + slot.slot
+            local item = ls.items[dataIndex]
+            if item then
+                local info = slot.hitId and UI.getElementInfo(slot.hitId) or nil
+                if info and info.pageVisible and info.visible then
+                    table.insert(out, {
+                        id = "list:" .. id .. ":" .. slot.slot,
+                        name = ls.name .. "_item_" .. dataIndex,
+                        type = "list",
+                        bounds = {
+                            x = info and info.x or ls.x,
+                            y = info and info.y or ls.y,
+                            w = info and info.width or ls.width,
+                            h = info and info.height or ls.itemHeight,
+                        },
+                        label = item.text,
+                        enabled = info ~= nil and info.clickable,
+                        visible = info ~= nil and info.visible,
+                        hovered = info ~= nil and info.hovered,
+                        focused = info ~= nil and info.focused,
+                        value = (dataIndex == ls.selectedIndex),
+                        screen = info and info.page or nil,
+                        handle = info and info.handle or nil,
+                    })
+                end
+            end
+        end
+    end
+    return out
+end
+
 return list
