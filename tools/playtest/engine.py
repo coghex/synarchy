@@ -242,6 +242,7 @@ class FakeEngine(PlaytestEngine):
     def __init__(self):
         super().__init__(port=0, log_path=os.devnull)
         self.injected: list[str] = []
+        self.fired: list[str] = []
         self.paused = True
 
     def launch(self, ready_timeout: float = 0) -> None:
@@ -274,4 +275,4 @@ class FakeEngine(PlaytestEngine):
         return {"ok": True}
 
     def lua_fire(self, code: str) -> None:
-        pass
+        self.fired.append(code)

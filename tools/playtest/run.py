@@ -190,9 +190,24 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
         print(f"  [warn] {source_dir} has no replay.jsonl entries")
         return "replay_empty"
     src_meta = load_meta(source_dir)
+    # Seed pinning: the create-world screen randomizes its seed box on a
+    # fresh instance, so pure input reinjection would build a different
+    # world. Until the replayed world exists, force the recorded seed
+    # into the form state the Generate button reads
+    # (createWorldMenu.pending.seed, hex — the seed box's onChange
+    # writes the same field, so a session that TYPED its seed replays
+    # identically too). This is how --replay reproduces "same seed" for
+    # randomized sessions.
+    force_seed = src_meta.get("world_seed")
+    if force_seed is not None:
+        trace.meta["replay_forced_seed"] = force_seed
     for entry in entries:
         turn = entry["turn"]
         eng.set_paused(True)
+        if force_seed is not None and trace.meta.get("world_seed") is None:
+            eng.lua_fire(
+                'pcall(function() require("scripts.create_world_menu")'
+                f'.pending.seed = "{force_seed:x}" end)')
         frame = trace.frame_path(turn)
         fb_size = eng.screenshot(frame)
         acks = eng.inject(entry["pre"])
@@ -214,16 +229,17 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
         eng.set_paused(True)
         if entry["post"]:
             eng.inject(entry["post"])
-    # Seed comparison: with a UI-randomized seed the replayed world
-    # diverges from the session's — detectable, recorded, and warned.
-    src_seed = src_meta.get("world_seed")
+    # Seed verification backstop: pinning should make these match; a
+    # mismatch means the replayed run diverged (e.g. different menu
+    # path) and world-dependent turns can't be trusted.
     got_seed = trace.meta.get("world_seed")
     trace.meta["replay_seed_match"] = (
-        None if src_seed is None and got_seed is None else src_seed == got_seed)
+        None if force_seed is None and got_seed is None
+        else force_seed == got_seed)
     if trace.meta["replay_seed_match"] is False:
-        print(f"  [warn] replayed world seed {got_seed} != session's {src_seed} "
-              "— the session's seed was UI-randomized; world-dependent turns "
-              "will diverge (type an explicit seed for reproducible worlds)")
+        print(f"  [warn] replayed world seed {got_seed} != session's "
+              f"{force_seed} despite pinning — the replay diverged before "
+              "world creation; world-dependent turns will not match")
     return "replay_complete"
 
 
@@ -289,8 +305,13 @@ def selftest() -> int:
               f"{reng.injected} vs {eng.injected}")
         check("replay covers every turn", len(load_turns(rdir)) == 5,
               str(len(load_turns(rdir))))
-        check("replay seed comparison recorded",
-              load_meta(rdir).get("replay_seed_match") is True)
+        rmeta = load_meta(rdir)
+        check("replay pinned the recorded seed into the create-world form",
+              rmeta.get("replay_forced_seed") == 4242
+              and any('pending.seed = "1092"' in c for c in reng.fired),
+              str(reng.fired))
+        check("replay seed verification recorded",
+              rmeta.get("replay_seed_match") is True)
 
         # 3. stuck-loop detection: constant action + constant frame
         sdir = os.path.join(tmp, "stuck")

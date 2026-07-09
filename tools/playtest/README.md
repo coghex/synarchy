@@ -126,10 +126,13 @@ Notes on trace contents:
 - **World seed:** `world.getSeed()` (added with this harness) is
   polled in every oracle snapshot; the first non-null value — the seed
   the player actually got, typed or randomized — is promoted into
-  `meta.world_seed`. A replay records `replay_seed_match` and warns
-  when the replayed world's seed differs (a UI-randomized seed can't
-  be re-rolled by input reinjection); for reproducible worlds, give
-  the persona a goal that types an explicit seed.
+  `meta.world_seed`. `--replay` **pins that seed**: until the replayed
+  world exists, it forces the recorded seed into the create-world
+  form state the Generate button reads (the same field the seed box's
+  onChange writes, so typed-seed sessions replay identically too), so
+  randomized-seed sessions rebuild the same world. `replay_seed_match`
+  is recorded as a verification backstop, with a warning if the replay
+  diverged before world creation.
 - **F4 outcomes** (#646) haven't landed; `meta.f4_outcomes` says so.
   When the outcome tap ships, its per-turn records join the oracle
   snapshot in `engine.py:oracle_snapshot`.
