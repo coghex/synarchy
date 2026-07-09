@@ -400,6 +400,10 @@ library
                      Equipment.Types
                      Engine.Asset.YamlEquipment
                      Engine.Scripting.Lua.API.Equipment
+                     Engine.Scripting.Lua.API.Equipment.Class
+                     Engine.Scripting.Lua.API.Equipment.Slot
+                     Engine.Scripting.Lua.API.Equipment.Accessory
+                     Engine.Scripting.Lua.API.Equipment.Render
                      Substance.Types
                      Engine.Asset.YamlSubstance
                      Engine.Scripting.Lua.API.Substance
