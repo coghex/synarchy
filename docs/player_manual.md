@@ -65,11 +65,12 @@ itself first.
 The toolbar in the bottom-left holds the work tools: **mine**,
 **build**, **chop trees**, **till soil**, **plant crops**, and the
 default selection tool. (Some toolbar buttons keep alternates behind a
-right-click on the button itself.) The marking tools all work the same
-way: one click anchors a corner, a second click marks out the
-rectangle; right-click or Escape cancels. Marked work goes on the
-colony's shared list and any able acolyte will get to it — over time
-they gravitate toward the work they've grown skilled at.
+right-click on the button itself.) Most area tools use two clicks:
+anchor a corner, then mark the rectangle; right-click or Escape
+cancels. Planting is single-tile: click tilled soil, choose a crop, and
+that tile is marked. Marked work goes on the colony's shared list and
+any able acolyte will get to it — over time they gravitate toward the
+work they've grown skilled at.
 
 Building works from the same toolbar: choose a building, place its
 outline, and your acolytes haul materials to it and put it up.
