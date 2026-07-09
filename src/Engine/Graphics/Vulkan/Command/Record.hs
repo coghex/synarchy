@@ -18,6 +18,7 @@ import Engine.Core.State
 import Engine.Core.Types (EngineConfig(..), BootProfile(..))
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Types (SwapchainInfo(..))
+import Engine.Graphics.Vulkan.Screenshot (recordScreenshotCopy)
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Command.Sprite (renderSpritesBindless, renderSpritesBindlessUI)
 import Engine.Graphics.Vulkan.Command.Text (renderTextBatches, ensureTextInstanceBuffer, uploadTextInstances)
@@ -27,11 +28,16 @@ import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
 import Vulkan.Zero
 
--- | Record scene command buffer with sprite and text batches
+-- | Record scene command buffer with sprite and text batches. When a
+--   screenshot capture is pending (#643), @mCapture@ carries the
+--   swapchain image being rendered plus the staging buffer to copy it
+--   into; the copy is recorded after the render pass so the captured
+--   pixels are exactly what this frame presents.
 recordSceneCommandBuffer ∷ CommandBuffer → Word64 → Int → SceneDynamicBuffer
                          → Map.Map LayerId (V.Vector RenderItem)
+                         → Maybe (Image, Buffer)
                          → EngineM ε σ ()
-recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBatches = do
+recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBatches mCapture = do
     logDebugSM CatRender "Recording command buffer"
       [("image", T.pack $ show imageIndex)
       ,("frame_in_flight", T.pack $ show frameInFlight)
@@ -158,6 +164,11 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
 
     logDebugM CatRender "Ending render pass"
     cmdEndRenderPass cmdBuf
+    -- Pending screenshot (#643): the render pass just left the
+    -- swapchain image in PRESENT_SRC; copy it out before the buffer
+    -- closes so the capture rides this frame's submission and fence.
+    forM_ mCapture $ \(capImg, capBuf) →
+        liftIO $ recordScreenshotCopy cmdBuf capImg capBuf swapchainExtent
     liftIO $ endCommandBuffer cmdBuf
 
 -- | Render items in a single layer
