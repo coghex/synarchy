@@ -675,6 +675,10 @@ library
                      World.Fluid.IceLevel
                      World.Fluid.Lake.Types
                      World.Fluid.Lake.Identify
+                     World.Fluid.Lake.Identify.Ocean
+                     World.Fluid.Lake.Identify.Flood
+                     World.Fluid.Lake.Identify.Components
+                     World.Fluid.Lake.Identify.ChunkIndex
                      World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
