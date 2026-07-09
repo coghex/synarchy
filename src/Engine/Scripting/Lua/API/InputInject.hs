@@ -42,7 +42,6 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
-import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Input.Inject

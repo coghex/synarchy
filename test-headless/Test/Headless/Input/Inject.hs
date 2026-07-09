@@ -80,8 +80,8 @@ spec = do
 
         it "modifiers bracket a click (down before move, up after release)" $ do
             let evs = clickSequence pos GLFW.MouseButton'1 shiftMod
-            case (head evs, last evs) of
-                (InputKeyEvent k1 s1 _, InputKeyEvent k2 s2 _) → do
+            case (evs, reverse evs) of
+                (InputKeyEvent k1 s1 _ : _, InputKeyEvent k2 s2 _ : _) → do
                     (k1, s1) `shouldBe`
                         (GLFW.Key'LeftShift, GLFW.KeyState'Pressed)
                     (k2, s2) `shouldBe`

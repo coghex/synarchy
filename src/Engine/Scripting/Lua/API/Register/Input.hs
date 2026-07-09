@@ -2,7 +2,6 @@ module Engine.Scripting.Lua.API.Register.Input
   ( registerInputAPI
   ) where
 
-import UPrelude
 import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.InputInject
