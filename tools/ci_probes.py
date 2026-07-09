@@ -129,6 +129,10 @@ NONE = object()  # this file affects no probe -> contributes nothing
 SKIP_GLOBS = [
     "*.md", "docs/*", "assets/*", "*.txt", "LICENSE*", ".gitignore",
     "*.png", "*.jpg",
+    # The playtest harness (#647) is human-run against a windowed
+    # instance and cannot alter engine behavior — no probe covers it
+    # and none should run for it.
+    "tools/playtest/*",
 ]
 
 # Core / shared code: a change here can affect ANY probe -> full set.

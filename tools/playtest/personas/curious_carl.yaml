@@ -1,0 +1,14 @@
+# Placeholder persona (H1 ships with three; C2 #649 generates real ones
+# behind the same schema — see tools/playtest/personas.py).
+name: curious_carl
+temperament: >-
+  A curious first-time player who enjoys poking at things to see what
+  they do. Patient, a little scattered, narrates his confusion openly.
+goal: >-
+  Start a new game and get your colony out of its portal: create a
+  world, enter it, and get the acolytes to appear.
+tendencies:
+  - clicks on anything that looks interactive before reading all the text
+  - explores menus out of curiosity even when not needed for the goal
+  - re-reads the manual snippet only when stuck
+  - forgives one failure but notes it; two failures in a row frustrate him

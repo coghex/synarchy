@@ -290,6 +290,17 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
+## Playtest harness (`playtest/`)
+
+`tools/playtest/` is the naive-player UX playtest harness (H1, #647 —
+epic #641): a lockstep runner that drives a **windowed** instance, hands
+each frame to a cheap naive LLM player (screenshot-only, persona-driven,
+oracle-blind), injects its chosen `input.*` action, and records a
+replayable session trace for the critic (H2). Unlike everything else in
+tools/ it deliberately launches a graphical instance (focus-stealing —
+run unattended); `--selftest` is its offline CI-safe check and `--smoke`
+a scripted no-LLM session. See `tools/playtest/README.md`.
+
 ## GUI-attached checks (need a windowed instance)
 
 ### `screenshot_check.py`
@@ -354,6 +365,7 @@ tools/
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
+├── playtest/               (naive-player UX playtest harness — see above)
 ├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── *_probe.py              (headless behavior probes — see above)
 └── baselines/
