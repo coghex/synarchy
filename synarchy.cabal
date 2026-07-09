@@ -165,6 +165,7 @@ library
                      Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
+                     Engine.Graphics.Screenshot
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
                      Engine.Graphics.Config
@@ -188,6 +189,7 @@ library
                      Engine.Graphics.Vulkan.Recreate
                      Engine.Graphics.Vulkan.Sampler.Types
                      Engine.Graphics.Vulkan.Sampler.Cache
+                     Engine.Graphics.Vulkan.Screenshot
                      Engine.Graphics.Vulkan.ShaderCode
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync
@@ -232,6 +234,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
                      Engine.Scripting.Lua.API.Register.UI
                      Engine.Scripting.Lua.API.Register.Unit
@@ -245,6 +248,7 @@ library
                      Engine.Scripting.Lua.API.Core
                      Engine.Scripting.Lua.API.Camera
                      Engine.Scripting.Lua.API.Debug
+                     Engine.Scripting.Lua.API.Screenshot
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
                      Engine.Scripting.Lua.API.Save
@@ -861,6 +865,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.AmbientLight
+                   Test.Headless.Graphics.Screenshot
                    Test.Headless.Construct.Corners
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
@@ -889,10 +894,12 @@ test-suite synarchy-test-headless
                 , containers
                 , GLFW-b
                 , hspec
+                , JuicyPixels
                 , synarchy
                 , text
                 , stm
                 , vector
+                , vulkan
                 , unordered-containers
                 , deepseq
                 , random

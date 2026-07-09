@@ -290,6 +290,32 @@ python3 tools/ci_probes.py --self-test
 python3 tools/ci_probes.py --status
 ```
 
+## GUI-attached checks (need a windowed instance)
+
+### `screenshot_check.py`
+
+The #643 gate for `debug.captureScreenshot(path)` — the swapchain PNG
+capture verb the UX playtest harness (#641) perceives through. The verb
+copies the swapchain image, so it CANNOT work under the GPU-less
+`--headless` mode (where it deliberately returns a clear error — that
+path is covered by the always-on hspec suite instead). This check
+therefore does NOT boot an engine: it **attaches to an already-running
+graphical instance** (launch the game normally first) and is human-run
+only — never part of CI or `run_probes.py`.
+
+```bash
+# with the game running (its console listens on 8008):
+python3 tools/screenshot_check.py
+python3 tools/screenshot_check.py --port 9008
+```
+
+Asserts the reply shape (`{path, width, height}`), PNG validity, IHDR
+dims matching the reply, non-all-black pixels, a clean `{error=...}` on
+an unwritable path, and that the instance stays responsive. Colors and
+orientation still deserve a human eyeball against the live window; the
+pure swizzle/row-order contract is pinned by
+`Test.Headless.Graphics.Screenshot` in the hspec suite.
+
 ## Directory layout
 ```
 tools/
@@ -301,6 +327,7 @@ tools/
 ├── test_audit.py           (unit tests)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
+├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── *_probe.py              (headless behavior probes — see above)
 └── baselines/
     ├── _seeds.json         (seed list config)
