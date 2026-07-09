@@ -1,95 +1,78 @@
 cabal-version:      3.16
--- The name of the package.
-name: synarchy
--- The package version.
-version: 0.1.0.0
--- URL for the project homepage or repository.
-homepage: https://github.com/coghex/synarchy
--- The license under which the package is released.
-license: MIT
--- The file containing the license text.
-license-file: LICENSE
--- The package author(s).
-author: coghex
--- An email address to which users can send suggestions, bug reports, and patches.
-maintainer: vincecoghlan@gmail.com
-category: Game
-build-type: Custom
--- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
-extra-doc-files: CHANGELOG.md
-data-files: dat/*
+name:               synarchy
+version:            0.1.0.0
+synopsis:           Vulkan-based colony-simulation game with procedural worlds
+description:
+    Synarchy is a colony-simulation game and engine written in Haskell:
+    a bindless Vulkan renderer with GLFW windowing, a multi-threaded
+    engine core (render, input, world, unit, and Lua scripting threads
+    communicating over STM), procedural world generation with geological,
+    hydrological, and climate simulation, and game logic driven from an
+    embedded Lua scripting API.
+    .
+    This package is developed and built from its source repository; it is
+    not published to Hackage. See README.md for build and test
+    instructions and CLAUDE.md for the full development workflow.
+homepage:           https://github.com/coghex/synarchy
+bug-reports:        https://github.com/coghex/synarchy/issues
+license:            MIT
+license-file:       LICENSE
+author:             coghex
+maintainer:         vincecoghlan@gmail.com
+category:           Game
+build-type:         Custom
+tested-with:        GHC ==9.12.2
+extra-doc-files:    CHANGELOG.md
+                    README.md
+                    CLAUDE.md
+-- The sdist is the source tree: besides the headers for the c-sources
+-- below (which sdist does not pick up from include-dirs on its own),
+-- ship the runtime/test resources the engine and test suites load from
+-- relative paths at run time — game-data YAML, image/font assets, the
+-- Lua game scripts, and the versioned config templates. The config
+-- entries are enumerated (not globbed) on purpose: config/ also holds
+-- gitignored local runtime state (keybinds.yaml, video.yaml,
+-- notifications.yaml, #638) that a glob would leak into the tarball.
+extra-source-files: cbits/*.h
+                    data/**/*.yaml
+                    assets/**/*.png
+                    assets/**/*.ttf
+                    scripts/**/*.lua
+                    config/keybinds_default.yaml
+                    config/pathing.yaml
+                    config/video_default.yaml
+                    config/world_gen_default.yaml
+
+source-repository head
+    type:     git
+    location: https://github.com/coghex/synarchy.git
+
+-- Setup.hs only clears the macOS quarantine xattr from freshly built
+-- artifacts after each build; everything else is stock Cabal.
 custom-setup
     setup-depends: base >=4.17 && <5
                  , Cabal >=3.16 && <3.17
                  , directory >=1.3 && <1.4
                  , process >=1.6 && <1.7
--- defaults to no debug
+
 flag dev
+    description: Development profile - Vulkan validation layers, ENGINE_DEBUG
+                 plumbing, and (macOS) address sanitizer for the graphical
+                 test suite. Give it its own build dir; see CLAUDE.md.
     default: False
+    manual: True
 
 flag profile
+    description: Cost-centre profiling (-fprof-late on top of the prod -O2);
+                 see CLAUDE.md for the full recipe.
     default: False
+    manual: True
 
-test-suite synarchy-test-graphical
-    type: exitcode-stdio-1.0
-    hs-source-dirs: test
-    main-is: Spec.hs
-    other-modules: Test.UPrelude
-                   Test.Engine.Core.Queue
-                   Test.Engine.Core.Var
-                   Test.Engine.Input.State
-                   Test.Engine.Graphics.Window.GLFW
-                   Test.Engine.Graphics.Vulkan.Instance
-                   Test.Engine.Graphics.Vulkan.Surface
-                   Test.Engine.Graphics.Vulkan.Helpers
-                   Test.Engine.Graphics.Vulkan.Device
-    default-extensions: DefaultSignatures
-                     , DuplicateRecordFields
-                     , MagicHash
-                     , NoMonomorphismRestriction
-                     , NoImplicitPrelude
-                     , NumDecimals
-                     , OverloadedStrings
-                     , PatternSynonyms
-                     , QuantifiedConstraints
-                     , RecordWildCards
-                     , TypeFamilyDependencies
-                     , UnicodeSyntax
-                     , ViewPatterns
-                     , QuasiQuotes
-    build-depends: base
-                , base-unicode-symbols
-                , async
-                , bytestring
-                , containers
-                , directory
-                , filepath
-                , hspec
-                , hslua
-                , JuicyPixels
-                , synarchy
-                , text
-                , monad-logger
-                , stm
-                , mtl
-                , vector
-                , vector-algorithms
-                , vector-th-unbox
-                , cereal
-                , yaml
-                , aeson
-                , random
-                , deepseq
-                , parallel
-                , unordered-containers
-                , GLFW-b
-                , vulkan
-                , vulkan-utils
-    default-language: GHC2024
-    -- Warnings apply to BOTH profiles (#435): prod is the default for all
-    -- routine work, so it must carry the full warning set. Keep this the
-    -- single source of truth — don't re-add warning flags inside the
-    -- dev/prod conditionals below.
+-- Shared warning policy (#435): prod is the default for all routine
+-- work, so it must carry the full warning set. Keep this the single
+-- source of truth — don't re-add warning flags inside per-component
+-- stanzas or the build-policy conditionals below.
+common warnings
     ghc-options: -Wall
                  -Wcompat
                  -Wincomplete-record-updates
@@ -103,203 +86,69 @@ test-suite synarchy-test-graphical
                  -- type-defaults: all literal defaulting in log/format
                  -- code; annotating adds noise without catching bugs.
                  -Wno-type-defaults
-    if flag(dev)
-      if os(darwin)
-          cpp-options: -DDARWIN -DDEVELOPMENT
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O1
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -haddock
-                       -fno-full-laziness
-                       -fno-cse
-                       -fsanitize=address
-                       -fPIC
-                       -optl-Wl,-dead_strip
-                       -optl-Wl,-bind_at_load
-      else
-          cpp-options: -DDEVELOPMENT
-          ghc-options: -O1
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -haddock
-    else
-      if os(darwin)
-          cpp-options: -DDARWIN
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O2
-                       -optc-O3
-                       -fexcess-precision
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -feager-blackholing
-      else
-          ghc-options: -O2
-                       -optc-O3
-                       -fexcess-precision
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -feager-blackholing
-    if flag(profile)
-          ghc-options: -fprof-late
 
-test-suite synarchy-test-headless
-    type: exitcode-stdio-1.0
-    hs-source-dirs: test-headless
-    main-is: Spec.hs
-    other-modules: Test.Headless.Harness
-                   Test.Headless.WorldGen
-                   Test.Headless.WorldGen.Geology
-                   Test.Headless.WorldGen.Parity
-                   Test.Headless.WorldGen.Flatness
-                   Test.Headless.WorldGen.SoilGate
-                   Test.Headless.WorldGen.SoilShed
-                   Test.Headless.WorldGen.Exposure
-                   Test.Headless.WorldGen.ZoomParity
-                   Test.Headless.WorldGen.BorderProbe
-                   Test.Headless.WorldGen.WrapSeam
-                   Test.Headless.WorldGen.CoastBreach
-                   Test.Headless.WorldGen.BedDepth
-                   Test.Headless.Unit.Pathing.Cost
-                   Test.Headless.Unit.Pathing.AStar
-                   Test.Headless.Unit.Pathing.Config
-                   Test.Headless.Unit.Render.PickFrame
-                   Test.Headless.Unit.Anim
-                   Test.Headless.Unit.Injury
-                   Test.Headless.Unit.InjurySpeed
-                   Test.Headless.Unit.Fall
-                   Test.Headless.Unit.Stats
-                   Test.Headless.Unit.NightPerception
-                   Test.Headless.Item.Temperature
-                   Test.Headless.Item.BuffYaml
-                   Test.Headless.Item.QualityTier
-                   Test.Headless.Asset.TextureFallback
-                   Test.Headless.World.Save.Sanitize
-                   Test.Headless.World.Save.Serialize
-                   Test.Headless.World.CursorInfo
-                   Test.Headless.World.SelectTileZ
-                   Test.Headless.World.Spoil
-                   Test.Headless.Combat.Damage
-                   Test.Headless.Combat.Severing
-                   Test.Headless.Combat.Wounds
-                   Test.Headless.Magma.Shape
-                   Test.Headless.Sim.Seam
-                   Test.Headless.Input.KeyNames
-                   Test.Headless.Input.Bindings
-                   Test.Headless.Graphics.VideoConfig
-                   Test.Headless.Graphics.AmbientLight
-                   Test.Headless.Construct.Corners
-                   Test.Headless.Craft.Execute
-                   Test.Headless.Craft.Bills
-                   Test.Headless.Power.Types
-                   Test.Headless.Power.Network
-                   Test.Headless.Blood.Types
-                   Test.Headless.Blood.Texture
-                   Test.Headless.Blood.Impact
-                   Test.Headless.UI.Tooltip
-                   Test.Headless.World.Calendar
-                   Test.Headless.World.TimeLocal
-                   Test.Headless.World.FloraGrowth
-                   Test.Headless.River.Graph
-                   Test.Headless.World.Render.FrontWallLift
-                   Test.Headless.World.Render.SideFace
-                   Test.Headless.World.Render.SlopeBit
-                   Test.Headless.World.Render.ZoomBakeUV
-                   Test.Headless.Render.ViewportGuard
-                   Test.Headless.Core.ConfigState
-                   Test.Headless.Camera.GotoClamp
-                   Test.Headless.Camera.ZoomScroll
-                   Test.Headless.Scene.BatchMerge
-                   Test.Headless.Render.PanMargin
-    default-extensions: DefaultSignatures
-                     , DuplicateRecordFields
-                     , MagicHash
-                     , NoMonomorphismRestriction
-                     , NoImplicitPrelude
-                     , NumDecimals
-                     , OverloadedStrings
-                     , PatternSynonyms
-                     , QuantifiedConstraints
-                     , RecordWildCards
-                     , TypeFamilyDependencies
-                     , UnicodeSyntax
-                     , ViewPatterns
-                     , QuasiQuotes
-    build-depends: base
-                , base-unicode-symbols
-                , containers
-                , GLFW-b
-                , hspec
-                , synarchy
-                , text
-                , stm
-                , vector
-                , unordered-containers
-                , deepseq
-                , random
-                , linear
-                , bytestring
-                , cereal
-                , yaml
-                , directory
-                , filepath
+common lang
     default-language: GHC2024
-    -- Warnings apply to BOTH profiles (#435): prod is the default for all
-    -- routine work, so it must carry the full warning set. Keep this the
-    -- single source of truth — don't re-add warning flags inside the
-    -- dev/prod conditionals below.
-    ghc-options: -Wall
-                 -Wcompat
-                 -Wincomplete-record-updates
-                 -Wincomplete-uni-patterns
-                 -Wincomplete-patterns
-                 -Wno-ambiguous-fields
-                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
-                 -- risk the wrong-variable bugs the warning guards against.
-                 -- Revisit incrementally, not as a sweep (#435).
-                 -Wno-name-shadowing
-                 -- type-defaults: all literal defaulting in log/format
-                 -- code; annotating adds noise without catching bugs.
-                 -Wno-type-defaults
-    if flag(dev)
-      if os(darwin)
-          cpp-options: -DDARWIN -DDEVELOPMENT
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O1
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -fno-full-laziness
-                       -fno-cse
-                       -fPIC
-                       -optl-Wl,-dead_strip
-                       -optl-Wl,-bind_at_load
-      else
-          cpp-options: -DDEVELOPMENT
-          ghc-options: -O1
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-    else
-      if os(darwin)
-          cpp-options: -DDARWIN
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O2
-                       -optc-O3
-                       -fexcess-precision
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -feager-blackholing
-      else
-          ghc-options: -O2
-                       -optc-O3
-                       -fexcess-precision
-                       -threaded
-                       "-with-rtsopts=-N -A128M"
-                       -feager-blackholing
-    if flag(profile)
-          ghc-options: -fprof-late
+    default-extensions: DefaultSignatures
+                      , DuplicateRecordFields
+                      , MagicHash
+                      , NoMonomorphismRestriction
+                      , NoImplicitPrelude
+                      , NumDecimals
+                      , OverloadedStrings
+                      , PatternSynonyms
+                      , QuantifiedConstraints
+                      , RecordWildCards
+                      , TypeFamilyDependencies
+                      , UnicodeSyntax
+                      , ViewPatterns
+                      , QuasiQuotes
 
+-- Shared dev/prod/profile option policy (#635). Before this existed as
+-- four hand-copied conditional blocks that had silently drifted apart;
+-- any change to profile options belongs HERE, not in a component stanza.
+-- Per-component extras are limited to RTS options (executables/tests)
+-- and the graphical suite's macOS address sanitizer.
+common build-policy
+    ghc-options: -threaded
+    if flag(dev)
+      cpp-options: -DDEVELOPMENT
+      -- No explicit -O here: Cabal's default -O1 already applies, and
+      -- `cabal check` rejects spelling it out.
+      ghc-options: -haddock
+      if os(darwin)
+        cpp-options: -DDARWIN
+        ghc-options: -optP-Wno-nonportable-include-path
+                     -fno-full-laziness
+                     -fno-cse
+                     -fPIC
+                     -optl-Wl,-dead_strip
+                     -optl-Wl,-bind_at_load
+    else
+      -- `cabal check` warns that -O2 is "rarely needed"; here it is
+      -- deliberate and load-bearing: the prod profile is documented as
+      -- -O2 -optc-O3 (CLAUDE.md) and worldgen/render throughput depends
+      -- on it. Accepted warning, not an oversight.
+      ghc-options: -O2
+                   -optc-O3
+                   -fexcess-precision
+                   -feager-blackholing
+      if os(darwin)
+        cpp-options: -DDARWIN
+        ghc-options: -optP-Wno-nonportable-include-path
+    if flag(profile)
+      ghc-options: -fprof-late
+
+-- Dependency bounds policy: only `base` (and the custom-setup deps)
+-- carry explicit upper bounds — that is the one `cabal check` treats as
+-- an error. This package is built from this repository against a pinned
+-- toolchain (see tested-with), not released to Hackage, so speculative
+-- PVP upper bounds on the ~35 direct dependencies would only cause
+-- solver churn; `cabal check`'s missing-upper-bounds warning on the
+-- rest is accepted deliberately (#635).
 
 library
+    import: warnings, lang, build-policy
     -- Expose the modules you want to test
     exposed-modules: UPrelude
                      Math
@@ -415,6 +264,18 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.Units
+                     Engine.Scripting.Lua.API.Units.Yaml
+                     Engine.Scripting.Lua.API.Units.Spawn
+                     Engine.Scripting.Lua.API.Units.Survival
+                     Engine.Scripting.Lua.API.Units.Query
+                     Engine.Scripting.Lua.API.Units.List
+                     Engine.Scripting.Lua.API.Units.Combat
+                     Engine.Scripting.Lua.API.Units.Equipment
+                     Engine.Scripting.Lua.API.Units.Inventory
+                     Engine.Scripting.Lua.API.Units.Cargo
+                     Engine.Scripting.Lua.API.Units.Stats
+                     Engine.Scripting.Lua.API.Units.Selection
+                     Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.WorldQuery
                      Engine.Scripting.Lua.API.Forage
@@ -517,6 +378,12 @@ library
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
+                     Engine.Scripting.Lua.API.Buildings.Yaml
+                     Engine.Scripting.Lua.API.Buildings.Spawn
+                     Engine.Scripting.Lua.API.Buildings.Progress
+                     Engine.Scripting.Lua.API.Buildings.Materials
+                     Engine.Scripting.Lua.API.Buildings.Query
+                     Engine.Scripting.Lua.API.Buildings.Selection
                      Engine.Scripting.Lua.API.Structure
                      Engine.Scripting.Lua.API.Construct
                      Engine.Scripting.Lua.API.Chop
@@ -770,27 +637,11 @@ library
                      World.ZoomMap.Cache
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
-    -- Use the same extensions as your executable
-    default-extensions: DefaultSignatures
-                      , DuplicateRecordFields
-                      , FlexibleInstances
-                      , MagicHash
-                      , NoMonomorphismRestriction
-                      , NoImplicitPrelude
-                      , NumDecimals
-                      , OverloadedStrings
-                      , PatternSynonyms
-                      , QuantifiedConstraints
-                      , RecordWildCards
-                      , TypeFamilyDependencies
-                      , UnicodeSyntax
-                      , ViewPatterns
-                      , QuasiQuotes
+    default-extensions: FlexibleInstances
     other-extensions: Strict
                     , StrictData
                     , TemplateHaskell
-    -- Same dependencies as your executable
-    build-depends: base
+    build-depends: base >=4.20 && <5
                  , base-unicode-symbols
                  , bytestring
                  , containers
@@ -834,64 +685,9 @@ library
         cbits/lua_debug.c
     include-dirs:
         cbits
-    cc-options: -O2
-    default-language: GHC2024
-    -- Warnings apply to BOTH profiles (#435): prod is the default for all
-    -- routine work, so it must carry the full warning set. Keep this the
-    -- single source of truth — don't re-add warning flags inside the
-    -- dev/prod conditionals below.
-    ghc-options: -Wall
-                 -Wcompat
-                 -Wincomplete-record-updates
-                 -Wincomplete-uni-patterns
-                 -Wincomplete-patterns
-                 -Wno-ambiguous-fields
-                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
-                 -- risk the wrong-variable bugs the warning guards against.
-                 -- Revisit incrementally, not as a sweep (#435).
-                 -Wno-name-shadowing
-                 -- type-defaults: all literal defaulting in log/format
-                 -- code; annotating adds noise without catching bugs.
-                 -Wno-type-defaults
-    if flag(dev)
-      if os(darwin)
-          cpp-options: -DDARWIN -DDEVELOPMENT
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O1
-                       -threaded
-                       -haddock
-                       -fno-full-laziness
-                       -fno-cse
-                       -fPIC
-                       -optl-Wl,-dead_strip
-                       -optl-Wl,-bind_at_load
-      else
-          cpp-options: -DDEVELOPMENT
-          ghc-options: -O1
-                       -threaded
-                       -haddock
-    else
-      if os(darwin)
-          cpp-options: -DDARWIN
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O2
-                       -optc-O3
-                       -Wno-ambiguous-fields
-                       -fexcess-precision
-                       -threaded
-                       -feager-blackholing
-      else
-          ghc-options: -O2
-                       -optc-O3
-                       -Wno-ambiguous-fields
-                       -fexcess-precision
-                       -threaded
-                       -feager-blackholing
-    if flag(profile)
-          ghc-options: -fprof-late
-
 
 executable synarchy
+    import: warnings, lang, build-policy
     -- .hs or .lhs file containing the Main module.
     main-is: Main.hs
     other-modules: App.Cli
@@ -901,27 +697,12 @@ executable synarchy
                  , App.Dump
                  , App.Preview
                  , App.ResourceRoot
-    -- LANGUAGE extensions used by modules in this package.
-    default-extensions: DefaultSignatures
-                      , DuplicateRecordFields
-                      , MagicHash
-                      , NoMonomorphismRestriction
-                      , NoImplicitPrelude
-                      , NumDecimals
-                      , OverloadedStrings
-                      , FlexibleInstances
-                      , PatternSynonyms
-                      , QuantifiedConstraints
-                      , RecordWildCards
-                      , TypeFamilyDependencies
-                      , UnicodeSyntax
-                      , ViewPatterns
-                      , QuasiQuotes
+    default-extensions: FlexibleInstances
     other-extensions: Strict
                     , StrictData
                     , TemplateHaskell
     -- Other library packages from which modules are imported.
-    build-depends: base
+    build-depends: base >=4.20 && <5
                  , base-unicode-symbols
                  , bytestring
                  , containers
@@ -956,65 +737,140 @@ executable synarchy
                  , utf8-string
     -- Directories containing source files.
     hs-source-dirs: app
-    -- Base language which the package is written in.
-    default-language: GHC2024
-    -- Warnings apply to BOTH profiles (#435): prod is the default for all
-    -- routine work, so it must carry the full warning set. Keep this the
-    -- single source of truth — don't re-add warning flags inside the
-    -- dev/prod conditionals below.
-    ghc-options: -Wall
-                 -Wcompat
-                 -Wincomplete-record-updates
-                 -Wincomplete-uni-patterns
-                 -Wincomplete-patterns
-                 -Wno-ambiguous-fields
-                 -- name-shadowing: ~70 pre-existing shadows; bulk renames
-                 -- risk the wrong-variable bugs the warning guards against.
-                 -- Revisit incrementally, not as a sweep (#435).
-                 -Wno-name-shadowing
-                 -- type-defaults: all literal defaulting in log/format
-                 -- code; annotating adds noise without catching bugs.
-                 -Wno-type-defaults
-    if flag(dev)
-      if os(darwin)
-          cpp-options: -DDARWIN -DDEVELOPMENT
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O1
-                       -Wall
-                       -Wcompat
-                       -Wincomplete-record-updates
-                       -Wincomplete-uni-patterns
-                       -Wincomplete-patterns
-                       -threaded
-                       -rtsopts
-                       "-with-rtsopts=-N -A128M"
-                       -haddock
-      else
-          cpp-options: -DDEVELOPMENT
-          ghc-options: -O1
-                       -threaded
-                       -rtsopts
-                       "-with-rtsopts=-N -A128M"
-                       -haddock
-    else
-      if os(darwin)
-          cpp-options: -DDARWIN
-          ghc-options: -optP-Wno-nonportable-include-path
-                       -O2
-                       -optc-O3
-                       -fexcess-precision
-                       -threaded
-                       -rtsopts
-                       "-with-rtsopts=-N -A128M"
-                       -feager-blackholing
-      else
-          ghc-options: -O2
-                       -optc-O3
-                       -fexcess-precision
-                       -threaded
-                       -rtsopts
-                       "-with-rtsopts=-N -A128M"
-                       -feager-blackholing
+    ghc-options: -rtsopts
+                 "-with-rtsopts=-N -A128M"
 
-    if flag(profile)
-          ghc-options: -fprof-late
+test-suite synarchy-test-graphical
+    import: warnings, lang, build-policy
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test
+    main-is: Spec.hs
+    other-modules: Test.UPrelude
+                   Test.Engine.Core.Queue
+                   Test.Engine.Core.Var
+                   Test.Engine.Input.State
+                   Test.Engine.Graphics.Window.GLFW
+                   Test.Engine.Graphics.Vulkan.Instance
+                   Test.Engine.Graphics.Vulkan.Surface
+                   Test.Engine.Graphics.Vulkan.Helpers
+                   Test.Engine.Graphics.Vulkan.Device
+    build-depends: base >=4.20 && <5
+                , base-unicode-symbols
+                , async
+                , bytestring
+                , containers
+                , directory
+                , filepath
+                , hspec
+                , hslua
+                , JuicyPixels
+                , synarchy
+                , text
+                , monad-logger
+                , stm
+                , mtl
+                , vector
+                , vector-algorithms
+                , vector-th-unbox
+                , cereal
+                , yaml
+                , aeson
+                , random
+                , deepseq
+                , parallel
+                , unordered-containers
+                , GLFW-b
+                , vulkan
+                , vulkan-utils
+    ghc-options: "-with-rtsopts=-N -A128M"
+    if flag(dev) && os(darwin)
+      ghc-options: -fsanitize=address
+
+test-suite synarchy-test-headless
+    import: warnings, lang, build-policy
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test-headless
+    main-is: Spec.hs
+    other-modules: Test.Headless.Harness
+                   Test.Headless.WorldGen
+                   Test.Headless.WorldGen.Geology
+                   Test.Headless.WorldGen.Parity
+                   Test.Headless.WorldGen.Flatness
+                   Test.Headless.WorldGen.SoilGate
+                   Test.Headless.WorldGen.SoilShed
+                   Test.Headless.WorldGen.Exposure
+                   Test.Headless.WorldGen.ZoomParity
+                   Test.Headless.WorldGen.BorderProbe
+                   Test.Headless.WorldGen.WrapSeam
+                   Test.Headless.WorldGen.CoastBreach
+                   Test.Headless.WorldGen.BedDepth
+                   Test.Headless.Unit.Pathing.Cost
+                   Test.Headless.Unit.Pathing.AStar
+                   Test.Headless.Unit.Pathing.Config
+                   Test.Headless.Unit.Render.PickFrame
+                   Test.Headless.Unit.Anim
+                   Test.Headless.Unit.Injury
+                   Test.Headless.Unit.InjurySpeed
+                   Test.Headless.Unit.Fall
+                   Test.Headless.Unit.Stats
+                   Test.Headless.Unit.NightPerception
+                   Test.Headless.Item.Temperature
+                   Test.Headless.Item.BuffYaml
+                   Test.Headless.Item.QualityTier
+                   Test.Headless.Asset.TextureFallback
+                   Test.Headless.World.Save.Sanitize
+                   Test.Headless.World.Save.Serialize
+                   Test.Headless.World.CursorInfo
+                   Test.Headless.World.SelectTileZ
+                   Test.Headless.World.Spoil
+                   Test.Headless.Combat.Damage
+                   Test.Headless.Combat.Severing
+                   Test.Headless.Combat.Wounds
+                   Test.Headless.Magma.Shape
+                   Test.Headless.Sim.Seam
+                   Test.Headless.Input.KeyNames
+                   Test.Headless.Input.Bindings
+                   Test.Headless.Graphics.VideoConfig
+                   Test.Headless.Graphics.AmbientLight
+                   Test.Headless.Construct.Corners
+                   Test.Headless.Craft.Execute
+                   Test.Headless.Craft.Bills
+                   Test.Headless.Power.Types
+                   Test.Headless.Power.Network
+                   Test.Headless.Blood.Types
+                   Test.Headless.Blood.Texture
+                   Test.Headless.Blood.Impact
+                   Test.Headless.UI.Tooltip
+                   Test.Headless.World.Calendar
+                   Test.Headless.World.TimeLocal
+                   Test.Headless.World.FloraGrowth
+                   Test.Headless.River.Graph
+                   Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.SideFace
+                   Test.Headless.World.Render.SlopeBit
+                   Test.Headless.World.Render.ZoomBakeUV
+                   Test.Headless.Render.ViewportGuard
+                   Test.Headless.Core.ConfigState
+                   Test.Headless.Camera.GotoClamp
+                   Test.Headless.Camera.ZoomScroll
+                   Test.Headless.Scene.BatchMerge
+                   Test.Headless.Render.PanMargin
+    build-depends: base >=4.20 && <5
+                , base-unicode-symbols
+                , containers
+                , GLFW-b
+                , hspec
+                , synarchy
+                , text
+                , stm
+                , vector
+                , unordered-containers
+                , deepseq
+                , random
+                , linear
+                , bytestring
+                , cereal
+                , yaml
+                , directory
+                , filepath
+    ghc-options: "-with-rtsopts=-N -A128M"
