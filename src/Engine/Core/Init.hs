@@ -5,6 +5,7 @@ module Engine.Core.Init
   , initializeEngineHeadless
   , initializeEngineHeadlessWith
   , EngineInitResult(..)
+  , resolveConfigPath
   ) where
 
 import UPrelude
