@@ -264,6 +264,18 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.Units
+                     Engine.Scripting.Lua.API.Units.Yaml
+                     Engine.Scripting.Lua.API.Units.Spawn
+                     Engine.Scripting.Lua.API.Units.Survival
+                     Engine.Scripting.Lua.API.Units.Query
+                     Engine.Scripting.Lua.API.Units.List
+                     Engine.Scripting.Lua.API.Units.Combat
+                     Engine.Scripting.Lua.API.Units.Equipment
+                     Engine.Scripting.Lua.API.Units.Inventory
+                     Engine.Scripting.Lua.API.Units.Cargo
+                     Engine.Scripting.Lua.API.Units.Stats
+                     Engine.Scripting.Lua.API.Units.Selection
+                     Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.WorldQuery
                      Engine.Scripting.Lua.API.Forage
