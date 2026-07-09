@@ -295,6 +295,10 @@ library
                      Engine.Scripting.Lua.API.WorldQuery.Pick
                      Engine.Scripting.Lua.API.WorldQuery.Location
                      Engine.Scripting.Lua.API.Forage
+                     Engine.Scripting.Lua.API.Forage.Lookup
+                     Engine.Scripting.Lua.API.Forage.Query
+                     Engine.Scripting.Lua.API.Forage.Harvest
+                     Engine.Scripting.Lua.API.Forage.Crop
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
@@ -460,6 +464,12 @@ library
                      Combat.Types
                      Combat.Thread
                      Combat.Resolution
+                     Combat.Resolution.Constants
+                     Combat.Resolution.Common
+                     Combat.Resolution.Strike
+                     Combat.Resolution.Damage
+                     Combat.Resolution.Wear
+                     Combat.Resolution.Events
                      Combat.Wounds
                      Combat.Wounds.Bleed
                      Combat.Wounds.Constants
@@ -534,6 +544,10 @@ library
                      World.Generate.Constants
                      World.Generate.Coordinates
                      World.Generate.Chunk
+                     World.Generate.Chunk.Fluid
+                     World.Generate.Chunk.SoilGates
+                     World.Generate.Chunk.Columns
+                     World.Generate.Chunk.Zoom
                      World.Generate.InitTerrain
                      World.Generate.Timeline
                      World.Generate.Timeline.Fast
@@ -646,6 +660,12 @@ library
                      World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
+                     World.Fluid.River.Identify.Common
+                     World.Fluid.River.Identify.Flow
+                     World.Fluid.River.Identify.Components
+                     World.Fluid.River.Identify.Breakthrough
+                     World.Fluid.River.Identify.BedDepth
+                     World.Fluid.River.Identify.ChunkIndex
                      World.Fluid.Lava
                      World.Magma.Overlay
                      World.Magma.Types
