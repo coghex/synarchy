@@ -454,6 +454,10 @@ library
                      World.Thread.Command.Basic
                      World.Thread.Command.Init
                      World.Thread.Command.Save
+                     World.Thread.Command.Save.RestoreIds
+                     World.Thread.Command.Save.WriteWorld
+                     World.Thread.Command.Save.LoadPage
+                     World.Thread.Command.Save.LoadWorld
                      World.Thread.Command.Time
                      World.Thread.Command.Cursor
                      World.Thread.Command.Texture
