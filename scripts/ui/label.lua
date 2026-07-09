@@ -259,7 +259,7 @@ function label.dump()
             w = lbl.width
             h = math.floor(lbl.fontSize * 1.25)
         end
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "label:" .. id,
                 name = lbl.name,

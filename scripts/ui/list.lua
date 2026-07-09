@@ -610,7 +610,7 @@ function list.dump()
             local item = ls.items[dataIndex]
             if item then
                 local info = slot.hitId and UI.getElementInfo(slot.hitId) or nil
-                if info and info.pageVisible then
+                if info and info.pageVisible and info.visible then
                     table.insert(out, {
                         id = "list:" .. id .. ":" .. slot.slot,
                         name = ls.name .. "_item_" .. dataIndex,

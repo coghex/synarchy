@@ -652,7 +652,7 @@ function toggle.dump()
     for gid, grp in pairs(groups) do
         for i, btn in ipairs(grp.buttons) do
             local info = btn.spriteId and UI.getElementInfo(btn.spriteId) or nil
-            if info and info.pageVisible then
+            if info and info.pageVisible and info.visible then
                 table.insert(out, {
                     id = "toggle:" .. gid .. ":" .. i,
                     name = btn.name,

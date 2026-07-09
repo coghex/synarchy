@@ -18,6 +18,7 @@ local registry = {}
 local button   = require("scripts.ui.button")
 local checkbox = require("scripts.ui.checkbox")
 local textbox  = require("scripts.ui.textbox")
+local randbox  = require("scripts.ui.randbox")
 local dropdown = require("scripts.ui.dropdown")
 local toggle   = require("scripts.ui.toggle")
 local slider   = require("scripts.ui.slider")
@@ -27,14 +28,15 @@ local label    = require("scripts.ui.label")
 local panel    = require("scripts.ui.panel")
 
 local WIDGET_MODULES = {
-    button, checkbox, textbox, dropdown, toggle,
+    button, checkbox, textbox, randbox, dropdown, toggle,
     slider, tabbar, uiList, label, panel,
 }
 
 -- ui.dumpWidgets() -> JSON array of every currently-rendered
 -- interactive UI element (bounds in the same F1/F2 framebuffer-pixel
 -- space), aggregated across the widget modules above. Each module's
--- own dump() already excludes widgets on a currently-hidden page.
+-- own dump() already excludes widgets on a currently-hidden page or
+-- that are themselves (or through a hidden ancestor) not visible.
 --
 -- Some screens (the main menu, notably) build their clickable elements
 -- with raw UI.newBox/UI.setOnClick calls instead of going through a
@@ -42,11 +44,13 @@ local WIDGET_MODULES = {
 -- main_menu.lua's own comment. Those would otherwise be entirely
 -- invisible to this oracle, so as a second pass every element on a
 -- visible page is bulk-read from the engine (UI.getVisibleElements)
--- and any INTERACTIVE one (has an onClick/onRightClick callback) not
--- already reported by a widget module above is included too, with a
--- best-effort label (its engine-side name, e.g. "create_world_box" —
--- text content isn't queryable back from a raw UI.newText element, so
--- this is what's available without one).
+-- and any INTERACTIVE one (has an onClick/onRightClick callback), that
+-- is itself visible and not already reported by a widget module above,
+-- is included too. Its label prefers the engine-resolved visible text
+-- (UI.getVisibleElements walks the element's own text-render children,
+-- e.g. "Create World" for the main menu's create_world_box) and falls
+-- back to the engine-side name (e.g. "create_world_box") only when no
+-- text child exists (an icon-only control).
 function registry.dumpWidgets()
     local out = {}
     local known = {}
@@ -58,13 +62,13 @@ function registry.dumpWidgets()
     end
 
     for _, el in ipairs(UI.getVisibleElements()) do
-        if el.interactive and not known[el.handle] then
+        if el.interactive and el.visible and not known[el.handle] then
             table.insert(out, {
                 id = "element:" .. el.handle,
                 name = el.name,
                 type = "button",
                 bounds = { x = el.x, y = el.y, w = el.width, h = el.height },
-                label = el.name,
+                label = el.text or el.name,
                 enabled = el.clickable,
                 visible = el.visible,
                 hovered = el.hovered,

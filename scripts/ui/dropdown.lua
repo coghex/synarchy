@@ -1174,7 +1174,7 @@ function dropdown.dump()
     local out = {}
     for id, dd in pairs(dropdowns) do
         local info = dd.displayBoxId and UI.getElementInfo(dd.displayBoxId) or nil
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "dropdown:" .. id,
                 name = dd.name,

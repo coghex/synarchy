@@ -398,7 +398,7 @@ function panel.dump()
     local out = {}
     for id, p in pairs(panels) do
         local info = p.boxId and UI.getElementInfo(p.boxId) or nil
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "panel:" .. id,
                 name = p.name,

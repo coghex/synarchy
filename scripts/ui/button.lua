@@ -322,7 +322,7 @@ function button.dump()
     local out = {}
     for id, btn in pairs(buttons) do
         local info = btn.boxId and UI.getElementInfo(btn.boxId) or nil
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "button:" .. id,
                 name = btn.name,

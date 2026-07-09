@@ -307,7 +307,7 @@ function tabbar.dump()
     for id, tb in pairs(tabbars) do
         for i, tab in ipairs(tb.tabs) do
             local info = tab.boxId and UI.getElementInfo(tab.boxId) or nil
-            if info and info.pageVisible then
+            if info and info.pageVisible and info.visible then
                 table.insert(out, {
                     id = "tabbar:" .. id .. ":" .. i,
                     name = tab.name,

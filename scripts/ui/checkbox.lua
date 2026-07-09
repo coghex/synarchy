@@ -233,7 +233,7 @@ function checkbox.dump()
     local out = {}
     for id, cb in pairs(checkboxes) do
         local info = cb.spriteId and UI.getElementInfo(cb.spriteId) or nil
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "checkbox:" .. id,
                 name = cb.name,

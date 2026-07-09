@@ -467,7 +467,7 @@ function slider.dump()
     for id, sl in pairs(sliders) do
         local originInfo = sl.leftCapId and UI.getElementInfo(sl.leftCapId) or nil
         local info = sl.trackSpriteId and UI.getElementInfo(sl.trackSpriteId) or nil
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "slider:" .. id,
                 name = sl.name,

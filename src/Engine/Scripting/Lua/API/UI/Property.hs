@@ -87,14 +87,26 @@ uiIsPageVisibleFn env = do
 -- | Push a table with one element's info fields onto the Lua stack:
 --   { handle, x, y (absolute framebuffer-pixel position), width,
 --     height, visible, clickable, interactive (has an onClick or
---     onRightClick callback), zIndex, name, page (page name),
+--     onRightClick callback), zIndex, name, text, page (page name),
 --     pageVisible, hovered, focused }. Shared by 'uiGetElementInfoFn'
 --   (one element by handle) and 'uiGetVisibleElementsFn' (every
 --   element on every visible page) so both report identical fields.
---   pageVisible is distinct from visible: an element can have
---   visible=true while sitting on a page that's currently hidden/
---   inactive (UI.showPage/hidePage), so a caller that wants "actually
---   on screen right now" needs both.
+--
+--   visible is 'isEffectivelyVisible' (this element AND every ancestor
+--   up to the page root), matching what the renderer/hit-tester
+--   actually treat as "on screen" — a visible child of a hidden parent
+--   (e.g. a collapsed panel) is not on screen either. pageVisible is a
+--   separate, coarser signal: an element can be visible=true while
+--   sitting on a page that's currently hidden/inactive (UI.showPage/
+--   hidePage), so a caller that wants "actually rendered right now"
+--   needs both.
+--
+--   text is a best-effort visible caption (see 'elementText') — the
+--   element's own text if it IS a text element, else its first
+--   text-rendering child. Present for screens that build clickable
+--   elements out of raw UI.newBox/UI.newText instead of a
+--   scripts/ui/*.lua widget module (e.g. the main menu), where there's
+--   no Lua-side cache of the label to fall back on.
 pushElementInfoTable ∷ ElementHandle → UIElement → UIPageManager → Lua.LuaE Lua.Exception ()
 pushElementInfoTable handle el mgr = do
     let (ax, ay) = fromMaybe (0, 0) (getElementAbsolutePosition handle mgr)
@@ -104,6 +116,8 @@ pushElementInfoTable handle el mgr = do
         isHovered = upmHovered mgr ≡ Just handle
         isFocused = upmGlobalFocus mgr ≡ Just handle
         isInteractive = isJust (ueOnClick el) ∨ isJust (ueOnRightClick el)
+        visible = isEffectivelyVisible handle mgr
+        mText = elementText el mgr
     Lua.newtable
     Lua.pushinteger (fromIntegral (unElementHandle handle))
     Lua.setfield (Lua.nth 2) "handle"
@@ -115,7 +129,7 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "width"
     Lua.pushnumber (realToFrac h)
     Lua.setfield (Lua.nth 2) "height"
-    Lua.pushboolean (ueVisible el)
+    Lua.pushboolean visible
     Lua.setfield (Lua.nth 2) "visible"
     Lua.pushboolean (ueClickable el)
     Lua.setfield (Lua.nth 2) "clickable"
@@ -125,6 +139,10 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "zIndex"
     Lua.pushstring (TE.encodeUtf8 (ueName el))
     Lua.setfield (Lua.nth 2) "name"
+    case mText of
+        Just t  → Lua.pushstring (TE.encodeUtf8 t)
+        Nothing → Lua.pushnil
+    Lua.setfield (Lua.nth 2) "text"
     Lua.pushstring (TE.encodeUtf8 pageName)
     Lua.setfield (Lua.nth 2) "page"
     Lua.pushboolean pageVisible

@@ -650,7 +650,7 @@ function textbox.dump()
     for id, tb in pairs(textboxes) do
         local info = tb.boxId and UI.getElementInfo(tb.boxId) or nil
         local value = tb.boxId and (UI.getTextInput(tb.boxId) or "") or ""
-        if info and info.pageVisible then
+        if info and info.pageVisible and info.visible then
             table.insert(out, {
                 id = "textbox:" .. id,
                 name = tb.name,

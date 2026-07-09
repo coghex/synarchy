@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module UI.Manager.Query
   ( getElementAbsolutePosition
+  , isEffectivelyVisible
+  , elementText
   , getPageElements
   , getElementChildren
   , isPointInElement
@@ -41,6 +43,46 @@ getElementAbsolutePosition handle mgr =
                         Nothing → (0, 0)
                         Just parent → computeAbsolutePos (depth + 1) parent
         in (px + ex, py + ey)
+
+-- | True iff this element AND every ancestor up to the page root has
+--   'ueVisible' set — i.e. it's actually rendered right now, matching
+--   'hitsAtPointBy' below (an invisible element prunes its whole
+--   subtree from both rendering and hit-testing, so a visible child of
+--   a hidden parent is still not "on screen"). A bare 'ueVisible'
+--   check on the element alone misses that case.
+isEffectivelyVisible ∷ ElementHandle → UIPageManager → Bool
+isEffectivelyVisible handle mgr =
+    case Map.lookup handle (upmElements mgr) of
+        Nothing → False
+        Just elem → computeVisible (0 ∷ Int) elem
+  where
+    computeVisible depth element =
+        ueVisible element ∧
+        case ueParent element of
+            _ | depth ≥ 64 → True
+            Nothing → True
+            Just parentHandle →
+                case Map.lookup parentHandle (upmElements mgr) of
+                    Nothing → True
+                    Just parent → computeVisible (depth + 1) parent
+
+-- | Best-effort visible text for an element: its own text if it's a
+--   text element, otherwise the first direct child that is (the
+--   box-plus-centered-label-child shape used throughout the UI kit —
+--   see e.g. button.lua, main_menu.lua's raw menu-item boxes,
+--   tabbar.lua's tabs). Deliberately shallow (direct children only) so
+--   it can't wander into an unrelated grandchild's caption.
+elementText ∷ UIElement → UIPageManager → Maybe Text
+elementText element mgr = case ueRenderData element of
+    RenderText style → Just (utsText style)
+    _ → firstChildText (ueChildren element)
+  where
+    firstChildText [] = Nothing
+    firstChildText (h:hs) = case Map.lookup h (upmElements mgr) of
+        Just child → case ueRenderData child of
+            RenderText style → Just (utsText style)
+            _ → firstChildText hs
+        Nothing → firstChildText hs
 
 getPageElements ∷ PageHandle → UIPageManager → [UIElement]
 getPageElements pageHandle mgr =
