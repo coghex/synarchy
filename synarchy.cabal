@@ -644,6 +644,15 @@ library
                      World.Page.Types
                      World.Plate
                      World.Plate.Types
+                     World.Plate.Hash
+                     World.Plate.Wrap
+                     World.Plate.Noise
+                     World.Plate.Generation
+                     World.Plate.Glacier
+                     World.Plate.Query
+                     World.Plate.Coast
+                     World.Plate.Profiles
+                     World.Plate.Elevation
                      World.Region.Types
                      World.State.Types
                      World.Save.Types
