@@ -295,4 +295,42 @@ function tabbar.getSize(id)
     return tb.width, tb.height + tb.frameHeight
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- One entry per tab (each has its own boxId and is independently
+-- clickable); the content frame itself isn't interactive so it's not
+-- dumped.
+function tabbar.dump()
+    local out = {}
+    for id, tb in pairs(tabbars) do
+        for i, tab in ipairs(tb.tabs) do
+            local info = tab.boxId and UI.getElementInfo(tab.boxId) or nil
+            if info and info.pageVisible and info.visible then
+                table.insert(out, {
+                    id = "tabbar:" .. id .. ":" .. i,
+                    name = tab.name,
+                    type = "tabbar",
+                    bounds = {
+                        x = info and info.x or 0,
+                        y = info and info.y or 0,
+                        w = info and info.width or tab.width,
+                        h = info and info.height or tb.height,
+                    },
+                    label = tab.name,
+                    enabled = info ~= nil and info.clickable,
+                    visible = info ~= nil and info.visible,
+                    hovered = info ~= nil and info.hovered,
+                    focused = info ~= nil and info.focused,
+                    value = (i == tb.selectedIndex),
+                    screen = info and info.page or nil,
+                    handle = info and info.handle or nil,
+                })
+            end
+        end
+    end
+    return out
+end
+
 return tabbar

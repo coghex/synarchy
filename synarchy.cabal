@@ -264,6 +264,18 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.Units
+                     Engine.Scripting.Lua.API.Units.Yaml
+                     Engine.Scripting.Lua.API.Units.Spawn
+                     Engine.Scripting.Lua.API.Units.Survival
+                     Engine.Scripting.Lua.API.Units.Query
+                     Engine.Scripting.Lua.API.Units.List
+                     Engine.Scripting.Lua.API.Units.Combat
+                     Engine.Scripting.Lua.API.Units.Equipment
+                     Engine.Scripting.Lua.API.Units.Inventory
+                     Engine.Scripting.Lua.API.Units.Cargo
+                     Engine.Scripting.Lua.API.Units.Stats
+                     Engine.Scripting.Lua.API.Units.Selection
+                     Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.WorldQuery
                      Engine.Scripting.Lua.API.Forage
@@ -454,6 +466,10 @@ library
                      World.Thread.Command.Basic
                      World.Thread.Command.Init
                      World.Thread.Command.Save
+                     World.Thread.Command.Save.RestoreIds
+                     World.Thread.Command.Save.WriteWorld
+                     World.Thread.Command.Save.LoadPage
+                     World.Thread.Command.Save.LoadWorld
                      World.Thread.Command.Time
                      World.Thread.Command.Cursor
                      World.Thread.Command.Texture
@@ -687,6 +703,7 @@ executable synarchy
                  , App.Headless
                  , App.Dump
                  , App.Preview
+                 , App.ResourceRoot
     default-extensions: FlexibleInstances
     other-extensions: Strict
                     , StrictData

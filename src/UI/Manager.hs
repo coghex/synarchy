@@ -53,6 +53,8 @@ module UI.Manager
   , setSpriteColor
     -- * Queries
   , getElementAbsolutePosition
+  , isEffectivelyVisible
+  , elementText
   , getPageElements
   , removeFromPage
   , getElementChildren
