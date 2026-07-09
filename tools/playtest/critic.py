@@ -153,13 +153,15 @@ it is MECHANICALLY VERIFIED after your reply:
 candidate's own turn) and the oracle record that grounds it;
 - player_quote must be copied VERBATIM from the player's recorded \
 words (their note/observation/expectation) for the cited turns — \
-never paraphrase inside the quote field; leave it empty only when \
-the covered candidate has no player note;
+never paraphrase inside the quote field. It may be empty ONLY when \
+the trace recorded no player words at all for those turns (e.g. a \
+crash before the player ever spoke);
 - the oracle field must restate the candidate's RECORDED data: \
 include at least one verbatim atom from the digest — the outcome \
 value and its reason, an event text, or the clicked widget's label — \
-for each covered candidate. Free prose that references nothing \
-recorded is rejected as unverifiable;
+for each covered candidate. Naming a harness join tag does NOT count; \
+free prose that references nothing recorded is rejected as \
+unverifiable;
 - NO ungrounded findings: a hunch without oracle backing is either \
 dropped or explicitly confidence=low with the gap named;
 - when outcome records are absent (older traces), reason from events \
@@ -256,9 +258,10 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
     as machine hints (the model judges; these steer and ground it)."""
     cands = []
 
-    def add(turn, reasons, oracle_excerpt, player_note=""):
+    def add(turn, reasons, oracle_excerpt, player_note="", player_words=""):
         cands.append({"cid": f"C{len(cands) + 1}", "turn": turn,
                       "player_note": player_note,
+                      "player_words": player_words or player_note,
                       "reasons": reasons, "oracle": oracle_excerpt})
 
     for s in signals:
@@ -321,13 +324,20 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
                 "events": s["events"], "outcomes": s["outcomes"],
                 "clicked_widget": s["clicked_widget"],
                 "visual_change_next": s["visual_change_next"],
-            }, player_note=s["note"])
+            }, player_note=s["note"],
+                player_words=(s["note"] or s["observation"]
+                              or s["expectation"]))
 
     if meta.get("stop_reason") == "engine_crash":
-        add(meta.get("turns", 0) or 0,
+        crash_turn = meta.get("turns", 0) or 0
+        s_last = next((s for s in signals if s["turn"] == crash_turn), None)
+        add(crash_turn,
             ["engine crash ended the session (crash/blocker)"],
-            {"crash_detail": meta.get("crash_detail"),
-             "engine_log_tail": (meta.get("engine_log_tail") or "")[-1500:]})
+            {"stop_reason": "engine_crash",
+             "crash_detail": meta.get("crash_detail"),
+             "engine_log_tail": (meta.get("engine_log_tail") or "")[-1500:]},
+            player_words=(s_last and (s_last["note"] or s_last["observation"]
+                                      or s_last["expectation"]) or ""))
     return cands
 
 
@@ -379,6 +389,8 @@ def build_digest(meta: dict, signals: list[dict],
         lines.append(f"{c['cid']} (turn {c['turn']}):")
         if c.get("player_note"):
             lines.append(f"  player_note: {c['player_note']}")
+        elif c.get("player_words"):
+            lines.append(f"  player_words: {c['player_words']}")
         for r in c["reasons"]:
             lines.append(f"  - {r}")
     if not candidates:
@@ -520,8 +532,9 @@ class FakeCritic:
                 cid, rest = line.split(" ", 1)
                 cur = (cid.rstrip(":"), int(rest.split("turn ")[1].split(")")[0]))
                 note = ""
-            elif cur and line.strip().startswith("player_note: "):
-                note = line.strip()[len("player_note: "):]
+            elif cur and line.strip().startswith(("player_note: ",
+                                                  "player_words: ")):
+                note = line.strip().split(": ", 1)[1]
             elif cur and line.strip().startswith("- "):
                 reason = line.strip()[2:]
                 cid, turn = cur
@@ -582,8 +595,12 @@ def _anchor_strings(cand: dict) -> set[str]:
     """Verbatim atoms from the candidate's RECORDED oracle data — a
     finding's oracle prose must contain at least one of these, so
     fabricated 'evidence' the trace never recorded can't pass
-    coverage. Atoms: outcome values/reasons/verbs, event texts/cats,
-    the clicked widget's label/id, plus the harness join tags."""
+    coverage. Only recorded data qualifies (outcome values/reasons/
+    verbs, event texts/cats, the clicked widget's label/id, crash
+    details) — harness-derived join tags are NOT anchors, since
+    parroting a tag proves nothing about the record. A candidate with
+    no recorded atoms at all (e.g. a pure stuck-loop) has an empty set
+    and the anchor check is skipped for it."""
     atoms: list[str] = []
     o = cand.get("oracle") or {}
     for rec in o.get("outcomes") or []:
@@ -603,10 +620,9 @@ def _anchor_strings(cand: dict) -> set[str]:
                 atoms.append(w[k])
     if isinstance(o.get("crash_detail"), str):
         atoms.append(o["crash_detail"])
-    for r in cand.get("reasons") or []:
-        atoms.append(r.split(":", 1)[0] if ":" in r else r)
-        if r.startswith("engine crash"):
-            atoms += ["crash", "engine crash"]
+    if o.get("stop_reason") == "engine_crash":
+        # recorded in meta.stop_reason, so these ARE record-grounded
+        atoms += ["engine_crash", "crash"]
     return {_norm(a) for a in atoms if len(_norm(a)) >= 4}
 
 
@@ -616,7 +632,12 @@ class ValidationCtx:
     def __init__(self, candidates: list[dict], turns: list[dict],
                  audit_calls: list[dict]):
         self.by_cid = {c["cid"]: c for c in candidates}
-        self.valid_turns = {t.get("turn") for t in turns}
+        # every candidate's own turn is adjudicable by construction —
+        # a crash before the first recorded turn yields a candidate at
+        # a turn number with no turn record, and it must still be
+        # coverable rather than auto-rejected as nonexistent
+        self.valid_turns = ({t.get("turn") for t in turns}
+                            | {c["turn"] for c in candidates})
         # frames actually shown, per adjudication call number
         self.frames_by_call = {a["call"]: set(a["frames"]) for a in audit_calls}
         self.trace_frames = {t.get("turn") for t in turns
@@ -657,17 +678,25 @@ def coverage_of(f: dict, ctx: ValidationCtx, warnings: list[str]) -> set[str]:
                         "forced low")
         f["confidence"] = "low"
         return set()
-    # a non-empty quote must be the player's ACTUAL recorded words for
-    # the cited turns — a fabricated quote poisons the whole finding
+    # the quote must be the player's ACTUAL recorded words for the
+    # cited turns: a fabricated quote poisons the whole finding, and
+    # an EMPTY quote is only acceptable when the trace recorded no
+    # player words at all for those turns (e.g. a pre-first-turn
+    # crash) — otherwise every finding cites the player's own voice
     quote = _norm(ev.get("player_quote") or "")
-    if quote:
-        recorded = " | ".join(ctx.player_text.get(n, "") for n in turns)
-        if quote not in recorded:
-            warnings.append(f"finding {title!r} attributes words to the "
-                            "player that the trace never recorded — "
-                            "excluded from coverage, confidence forced low")
-            f["confidence"] = "low"
-            return set()
+    recorded = " | ".join(ctx.player_text.get(n, "") for n in turns)
+    if quote and quote not in recorded:
+        warnings.append(f"finding {title!r} attributes words to the "
+                        "player that the trace never recorded — "
+                        "excluded from coverage, confidence forced low")
+        f["confidence"] = "low"
+        return set()
+    if not quote and _norm(recorded):
+        warnings.append(f"finding {title!r} cites turns where the player "
+                        "wrote words but provides no player_quote — "
+                        "coverage stripped (quote the player verbatim)")
+        f["confidence"] = "low"
+        return set()
     oracle_text = _norm(ev.get("oracle") or "")
     covered = set()
     shown = ctx.frames_by_call.get(f.get("adjudication_call"), set())
@@ -680,11 +709,6 @@ def coverage_of(f: dict, ctx: ValidationCtx, warnings: list[str]) -> set[str]:
         if cand["turn"] not in turns:
             warnings.append(f"finding {title!r} claims {cid} but does not "
                             f"cite its turn {cand['turn']} — coverage "
-                            "stripped for that candidate")
-            continue
-        if cand.get("player_note") and not quote:
-            warnings.append(f"finding {title!r} claims {cid} (a player-noted "
-                            "friction) without quoting the player — coverage "
                             "stripped for that candidate")
             continue
         anchors = ctx.anchors_by_cid.get(cid, set())
@@ -730,6 +754,10 @@ def validate_findings(data: dict, candidates: list[dict],
         ev.setdefault("oracle", "")
         f["evidence"] = ev
         f["covers"] = sorted(coverage_of(f, ctx, warnings))
+        if f["evidence"]["candidate_ids"] and not f["covers"]:
+            # a finding whose every claimed candidate was stripped is
+            # unverified — it must not be presented as confident
+            f["confidence"] = "low"
     data["findings"] = findings
     missing = [c["cid"] for c in uncovered(data, candidates)]
     return data, warnings + ([f"unadjudicated candidates: {', '.join(missing)}"]
@@ -1176,10 +1204,14 @@ def selftest() -> int:
               fab.asks == 2 and not uncovered(fab_data, cands))
         check("fabricated quote warned about explicitly",
               "never recorded" in fab_report)
+        check("stripped finding is demoted to low confidence",
+              all(f_["confidence"] == "low" for f_ in fab_data["findings"]
+                  if f_["title"] == "fabricated"))
 
-        # anchoring unit checks against a note-less, outcome-derived
-        # candidate (turn 6): empty quote + REAL recorded atom passes;
-        # made-up oracle prose does not
+        # anchoring unit checks against the note-less, outcome-derived
+        # candidate (turn 6): the player still WROTE words that turn
+        # (observation/expectation), so a verbatim quote of those is
+        # required; the oracle must contain a recorded atom
         c6cand = next(c for c in cands if c["turn"] == 6)
         uctx = ValidationCtx(cands, turns,
                              [{"call": 1, "frames": [6]}])
@@ -1187,19 +1219,54 @@ def selftest() -> int:
                 "severity": "major", "verdict": "defect",
                 "confidence": "high", "adjudication_call": 1,
                 "evidence": {"turns": [6], "candidate_ids": [c6cand["cid"]],
-                             "player_quote": "",
+                             "player_quote":
+                                 "Placing a marker now that things settled.",
                              "oracle": "the action came back rejected: "
                                        "insufficient materials"},
                 "root_cause_hypothesis": ""}
         w1: list[str] = []
-        check("note-less candidate: empty quote + recorded atom covers",
+        check("note-less candidate: verbatim quote + recorded atom covers",
               coverage_of(ok_f, uctx, w1) == {c6cand["cid"]}, str(w1))
+        noq_f = dict(ok_f, evidence=dict(ok_f["evidence"], player_quote=""))
+        w1b: list[str] = []
+        check("empty quote rejected when the player wrote words that turn",
+              coverage_of(noq_f, uctx, w1b) == set()
+              and any("no player_quote" in w for w in w1b), str(w1b))
         bad_f = dict(ok_f, evidence=dict(ok_f["evidence"],
                                          oracle="something vague"))
         w2: list[str] = []
-        check("note-less candidate: unanchored oracle prose is rejected",
+        check("unanchored oracle prose is rejected",
               coverage_of(bad_f, uctx, w2) == set()
               and any("RECORDED oracle data" in w for w in w2), str(w2))
+        tag_f = dict(ok_f, evidence=dict(
+            ok_f["evidence"],
+            oracle="clearly a bad-outcome-join / silent-failure-join here"))
+        w3: list[str] = []
+        check("a harness join tag alone does not anchor oracle evidence",
+              coverage_of(tag_f, uctx, w3) == set(), str(w3))
+
+        # a crash BEFORE the first recorded turn must still be
+        # adjudicable: its candidate turn has no turn record, no frame,
+        # and no player words — an empty quote is legitimately allowed
+        crash_cands = friction_candidates(
+            {"stop_reason": "engine_crash", "turns": 0,
+             "crash_detail": "boom"}, [])
+        check("pre-first-turn crash yields a candidate",
+              len(crash_cands) == 1 and crash_cands[0]["turn"] == 0,
+              str(crash_cands))
+        cctx = ValidationCtx(crash_cands, [], [{"call": 1, "frames": []}])
+        crash_f = {"title": "c", "category": "crash", "severity": "blocker",
+                   "verdict": "defect", "confidence": "high",
+                   "adjudication_call": 1,
+                   "evidence": {"turns": [0],
+                                "candidate_ids": [crash_cands[0]["cid"]],
+                                "player_quote": "",
+                                "oracle": "the engine crashed at startup: boom"},
+                   "root_cause_hypothesis": ""}
+        w4: list[str] = []
+        check("pre-first-turn crash candidate is coverable",
+              coverage_of(crash_f, cctx, w4) == {crash_cands[0]["cid"]},
+              str(w4))
 
     if failures:
         print(f"critic selftest: FAILED ({len(failures)}): {', '.join(failures)}")
