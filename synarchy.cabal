@@ -229,6 +229,10 @@ library
                      Engine.Scripting.Lua.Types
                      Engine.Scripting.Lua.Material
                      Engine.Scripting.Lua.Message
+                     Engine.Scripting.Lua.Message.Video
+                     Engine.Scripting.Lua.Message.Texture
+                     Engine.Scripting.Lua.Message.Scene
+                     Engine.Scripting.Lua.Message.WorldTexture
                      Engine.Scripting.Lua.Thread
                      Engine.Scripting.Lua.Thread.Console
                      Engine.Scripting.Lua.Thread.Dispatch

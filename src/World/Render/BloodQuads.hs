@@ -8,7 +8,7 @@
 --     ('Blood.Texture.generateBloodTexture') for anything new, and
 --     unregisters + disposes anything the FIFO evicted (issue #606
 --     requirement 5). Mirrors the staging-buffer upload
---     'Engine.Scripting.Lua.Message.handleZoomAtlasUpload' already does
+--     'Engine.Scripting.Lua.Message.WorldTexture.handleZoomAtlasUpload' already does
 --     for the zoom atlas, generalized from "one shared texture" to "a
 --     per-world set of independently-lived textures".
 --
@@ -64,7 +64,7 @@ import World.Types
 
 -- | Sync every loaded world's blood-texture FIFO to the GPU. Windows
 --   'wmWorlds' rather than just 'wmVisible' — mirrors
---   'Engine.Scripting.Lua.Message.invalidateAllWorldRenderCaches' — so a
+--   'Engine.Scripting.Lua.Message.Texture.invalidateAllWorldRenderCaches' — so a
 --   hidden world's decals are already uploaded the moment it becomes
 --   visible instead of popping in a frame late.
 uploadBloodTextures ∷ EngineM ε σ ()
@@ -98,7 +98,7 @@ syncWorldBloodTextures dev pdev cmdPool queue bindless0 (_pid, ws) = do
     -- not-yet-presented frame: this runs from processLuaMessages, before
     -- drawFrame, and drawFrame only waits the CURRENT frame's own fence,
     -- not every frame still in flight (same reasoning
-    -- Engine.Scripting.Lua.Message.disposeTransientTexture documents for
+    -- Engine.Scripting.Lua.Message.WorldTexture.disposeTransientTexture documents for
     -- the preview/zoom-atlas texture). Wait once, only when this pass
     -- actually has something to destroy, rather than stalling every frame.
     when (not (null staleIds)) $ liftIO (deviceWaitIdle dev)
