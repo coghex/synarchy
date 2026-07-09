@@ -51,6 +51,8 @@ registerUIAPI env = do
   registerLuaFunction "setSize"      (uiSetSizeFn env)
   registerLuaFunction "setVisible"   (uiSetVisibleFn env)
   registerLuaFunction "isPageVisible" (uiIsPageVisibleFn env)
+  registerLuaFunction "getElementInfo" (uiGetElementInfoFn env)
+  registerLuaFunction "getVisibleElements" (uiGetVisibleElementsFn env)
   registerLuaFunction "setClickable" (uiSetClickableFn env)
   registerLuaFunction "setZIndex"    (uiSetZIndexFn env)
   registerLuaFunction "setColor"     (uiSetColorFn env)

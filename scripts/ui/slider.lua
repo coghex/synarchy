@@ -454,4 +454,42 @@ function slider.onHoverLeave(elemHandle)
     end
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- Bounds cover the full assembly (left cap through right cap); the
+-- left cap's absolute position anchors it since track/knob only cover
+-- part of the width. Enabled/visible/hovered/focused read off the
+-- track, the slider's primary clickable element.
+function slider.dump()
+    local out = {}
+    for id, sl in pairs(sliders) do
+        local originInfo = sl.leftCapId and UI.getElementInfo(sl.leftCapId) or nil
+        local info = sl.trackSpriteId and UI.getElementInfo(sl.trackSpriteId) or nil
+        if info and info.pageVisible and info.visible then
+            table.insert(out, {
+                id = "slider:" .. id,
+                name = sl.name,
+                type = "slider",
+                bounds = {
+                    x = originInfo and originInfo.x or sl.x,
+                    y = originInfo and originInfo.y or sl.y,
+                    w = sl.width,
+                    h = sl.height,
+                },
+                label = nil,
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                value = sl.value,
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 return slider

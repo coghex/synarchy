@@ -192,6 +192,7 @@ instead of reaching for `--help` when in doubt.
 | `repair_item_probe.py` | #300 | worldgen | `unit.repairItem` primitive. |
 | `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
 | `repair_ai_probe.py` | #302 | arena | `repair_job` AI end-to-end: claim, own/equipped/mule-held sourcing, station routing, dead-claimant release, `smith` role weighting. |
+| `resource_root_probe.py` | #636 | worldgen (size 64, one dump) | Resource-root launch contract: the built binary run from a temp directory OUTSIDE the repo fails with an actionable error when no root is given, and works (`--dump` JSON via `--resource-root`, `--headless` READY/console/clean quit via `SYNARCHY_ROOT`) when pointed at the checkout. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
 | `text_encoding_probe.py` | #618 | none (no world/scripts needed) | `TE.decodeUtf8Lenient` in the Lua text API: `engine.setText` with a truncated multi-byte UTF-8 sequence (`"caf\195"`) no longer raises a Lua error and the malformed text round-trips through `engine.getText`, plus the well-formed control case and a liveness/responsiveness check. |

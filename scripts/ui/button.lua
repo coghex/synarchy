@@ -308,4 +308,42 @@ function button.isButtonCallback(callbackName)
     return callbackName == BUTTON_CALLBACK
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- Normalized dump of every live button, for ui.dumpWidgets(). Bounds/
+-- visible/enabled/hovered/focused come from the engine's own element
+-- state (UI.getElementInfo), not the locally-cached x/y — those are
+-- only accurate for page-root buttons; a button created with `parent`
+-- stores parent-relative coordinates, so the engine's resolved
+-- absolute position is the only reliable source.
+function button.dump()
+    local out = {}
+    for id, btn in pairs(buttons) do
+        local info = btn.boxId and UI.getElementInfo(btn.boxId) or nil
+        if info and info.pageVisible and info.visible then
+            table.insert(out, {
+                id = "button:" .. id,
+                name = btn.name,
+                type = "button",
+                bounds = {
+                    x = info and info.x or btn.x,
+                    y = info and info.y or btn.y,
+                    w = info and info.width or btn.width,
+                    h = info and info.height or btn.height,
+                },
+                label = btn.text,
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 return button
