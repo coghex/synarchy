@@ -65,7 +65,11 @@ main = do
       -- --preview wins over headless/graphical dispatch, same as --dump
       -- above: a bare `--preview ...` shouldn't also stand up the normal
       -- boot path.
-      Just (cat, mItem) → case classifyPreviewCategory cat of
+      Just Nothing → do
+          hPutStrLn stderr $ "--preview requires a target, e.g. "
+              ⧺ "--preview icons or --preview units/acolyte"
+          exitWith (ExitFailure 1)
+      Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
         UnknownPreviewCategory → do
             hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
                 ⧺ " (expected one of: icons, equipment, hud, items, ui, "

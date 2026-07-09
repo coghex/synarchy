@@ -73,15 +73,21 @@ parseRegion ("--region":s:_) =
 parseRegion (_:rest) = parseRegion rest
 
 -- | Parse --preview category[/item] from args.
---   Returns Nothing if --preview not present, Just (category, mItem)
---   otherwise. Mirrors 'parseRegion''s shape.
-parsePreview ∷ [String] → Maybe (String, Maybe String)
+--   Nothing = --preview not present at all (normal dispatch continues).
+--   Just Nothing = --preview given with no value following it — an
+--   error, NOT "not present": the caller must not silently fall through
+--   to normal headless/graphical dispatch here.
+--   Just (Just (category, mItem)) = --preview <value> parsed. A trailing
+--   slash with nothing after it (@--preview units/@) is treated the same
+--   as a bare category (mItem = Nothing), not an empty item name.
+parsePreview ∷ [String] → Maybe (Maybe (String, Maybe String))
 parsePreview [] = Nothing
-parsePreview ("--preview":s:_) = Just $
+parsePreview ["--preview"] = Just Nothing
+parsePreview ("--preview":s:_) = Just $ Just $
     case splitOn '/' s of
-        (cat:item:_) → (cat, Just item)
-        [cat]        → (cat, Nothing)
-        []           → (s, Nothing)
+        (cat:item:_) | not (null item) → (cat, Just item)
+        (cat:_)                        → (cat, Nothing)
+        []                             → (s, Nothing)
 parsePreview (_:rest) = parsePreview rest
 
 -- | Which of the epic's hardcoded --preview categories 'cat' names, if

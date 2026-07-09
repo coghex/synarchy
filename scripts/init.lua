@@ -29,13 +29,19 @@ local injuryLogScriptId = nil
 local thoughtLogScriptId = nil
 local unitLogScriptId = nil
 
+-- --preview boot (#632, phase 1 of the --preview epic #427) gates the
+-- handlers below the same way it gates game.init's script list: none of
+-- the normal gameplay/UI modules they lazily require are loaded in this
+-- profile, so update/input handling has nothing to do here.
+local isPreview = false
+
 function game.init(scriptId)
-    -- --preview boot (#632, phase 1 of the --preview epic #427): a
-    -- structurally distinct thread topology (window + Vulkan, no world/
-    -- unit/sim/combat threads) with its own minimal Lua entry point.
-    -- Skip every normal gameplay/UI script below — none of it has
-    -- anything to attach to in this profile.
+    -- A structurally distinct thread topology (window + Vulkan, no
+    -- world/unit/sim/combat threads) with its own minimal Lua entry
+    -- point. Skip every normal gameplay/UI script below — none of it
+    -- has anything to attach to in this profile.
     if engine.getBootProfile() == "preview" then
+        isPreview = true
         uiScriptId = engine.loadScript("scripts/preview_manager.lua", 0.1)
         return
     end
@@ -193,6 +199,7 @@ function game.init(scriptId)
 end
 
 function game.update(dt)
+    if isPreview then return end
     -- Lazily resolve any structure texture-palette ids that need a runtime
     -- handle (after a save/load). No-op in steady state.
     require("scripts.structures").resolvePending()
@@ -203,6 +210,7 @@ local MOUSE_LEFT  = 1
 local MOUSE_RIGHT = 2
 
 function game.onMouseDown(button, x, y)
+    if isPreview then return end
     -- Only handle clicks that reach us — UI hit-tests run earlier in
     -- the input thread; if a UI element ate the click, this never fires.
     local debugOverlay = require("scripts.debug")
@@ -954,6 +962,7 @@ function game.onMouseUp(button, x, y, downRoute)
 end
 
 function game.onKeyDown(key)
+    if isPreview then return end
     -- Don't run gameplay key handlers while a menu/overlay is up (#182).
     -- Menus and overlays don't establish UI focus, so the input thread
     -- stays in the generic game-keydown path and broadcasts every key to

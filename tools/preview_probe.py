@@ -9,7 +9,10 @@ what IS headlessly verifiable:
      booting any engine thread.
   2. An unrecognized category prints an error and exits 1, also without
      ever booting.
-  3. A real preview boot (simple category, or grouped+item) reaches the
+  3. A bare --preview (no category at all) prints an error and exits 1,
+     also without ever booting — it must NOT silently fall through to
+     the normal headless/graphical boot path.
+  4. A real preview boot (simple category, or grouped+item) reaches the
      debug console (same READY handshake as --headless), reports its
      boot profile as "preview", and echoes back the exact (category,
      item) target it was launched with via engine.getPreviewTarget().
@@ -61,8 +64,27 @@ def check_unrecognized_category() -> bool:
                  f"rc={r.returncode} stderr={r.stderr.strip()!r}")
 
 
+def check_missing_target() -> bool:
+    print("3. bare --preview (no target at all): exit 1, no READY, no silent fallthrough")
+    # A regression here falls through to a real graphical boot, which
+    # blocks indefinitely (a window waiting on user input) rather than
+    # exiting — bound the wait so a regression FAILs fast instead of
+    # hanging the probe, and never sits out the full default timeout.
+    try:
+        r = run_cli("--preview", timeout=15.0)
+    except subprocess.TimeoutExpired:
+        return check("missing-target", False,
+                     "process did not exit within 15s — likely fell through "
+                     "to a real graphical boot instead of erroring")
+    ok = (r.returncode == 1
+          and "READY" not in r.stdout
+          and "--preview requires a target" in r.stderr)
+    return check("missing-target", ok,
+                 f"rc={r.returncode} stderr={r.stderr.strip()!r}")
+
+
 def check_real_preview_boot(port: int) -> bool:
-    print("3. real preview boot: boot profile + preview target over the debug console")
+    print("4. real preview boot: boot profile + preview target over the debug console")
     proc = boot(port, log=LOG, mode=("--preview", "units/acolyte"),
                 label="preview engine")
     try:
@@ -89,6 +111,7 @@ def main() -> int:
     results = [
         check_grouped_no_item(),
         check_unrecognized_category(),
+        check_missing_target(),
         check_real_preview_boot(args.port),
     ]
 
