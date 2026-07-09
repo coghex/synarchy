@@ -206,6 +206,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
+                   Test.Headless.Core.ConfigState
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge
@@ -240,6 +241,8 @@ test-suite synarchy-test-headless
                 , bytestring
                 , cereal
                 , yaml
+                , directory
+                , filepath
     default-language: GHC2024
     -- Warnings apply to BOTH profiles (#435): prod is the default for all
     -- routine work, so it must carry the full warning set. Keep this the

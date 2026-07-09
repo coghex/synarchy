@@ -206,7 +206,13 @@ registry.
 - `app/Main.hs` — Executable entry point (draw loop)
 - `test/` — hspec unit tests (engine core and Vulkan primitives)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
-- `config/` — YAML config (keybinds, video settings)
+- `config/` — YAML config. `*_default.yaml` / `pathing.yaml` /
+  `world_gen_default.yaml` are versioned defaults/templates (tracked).
+  `keybinds.yaml`, `video.yaml`, `notifications.yaml` are local
+  runtime state (gitignored) that the settings UI's Save actions
+  write — absent on a fresh clone, where boot falls back to the
+  `_default.yaml` template or (notifications) materializes from
+  `data/notification_categories.yaml` (#638)
 - `data/` — Game data YAML (materials, vegetation, flora, units)
 - `assets/` — Images and graphical resources
 - `scripts/` — Lua scripts for game logic
@@ -855,6 +861,38 @@ Turnkey harness: **`python3 tools/injury_log_probe.py`** — boots
 headless and checks the injury stream roundtrip, `unit.injure` →
 event, and `emitEventForUnit` → `getEventLog().uid` (gating), plus a
 best-effort real-fall test. `--no-fall` skips the movement phase.
+
+### Testing config state headless (#638)
+
+`config/video.yaml`, `config/keybinds.yaml`, and `config/notifications.yaml`
+are gitignored local runtime state written by the settings UI's save
+paths (`engine.saveVideoConfig`/`saveKeybinds`/`setNotificationOverrides`),
+not versioned source. Boot falls back to the tracked
+`config/video_default.yaml`/`config/keybinds_default.yaml` templates
+(`Engine.Core.Init.resolveConfigPath`) when the local file is absent;
+`config/notifications.yaml` has no separate default file — it
+self-materializes from `data/notification_categories.yaml`'s
+`default_settings`, same as before #638. Existing on-disk files from
+before this change are left untouched (untracked via `git rm --cached`,
+not deleted), so nobody's local preferences are silently discarded.
+
+The pre-#638 tracked `config/video.yaml`/`config/notifications.yaml` had
+already drifted from their own templates/registry (`ui_scale: 1.5`/
+`vsync: false`; `building.popup`/`unit_warning.pause` flipped from the
+registry's `false`) — exactly the accidental-local-preference problem
+#638 removes, not an intentional default. A fresh clone deliberately
+gets the clean template/registry values, not the old drifted ones;
+`config_state_probe.py` pins this explicitly.
+
+Turnkey harness: **`python3 tools/config_state_probe.py`** — the #638
+gate. Backs up any local config files present (restored afterward), boots
+headless to confirm a simulated fresh clone falls back to the versioned
+templates, exercises the three public save paths, and asserts
+`git status --short -- config .gitignore` is clean both before and after.
+Also covered by pure hspec coverage (no engine): `cabal test
+synarchy-test-headless --test-options='--match "config"'` includes
+`Test.Headless.Core.ConfigState`'s direct tests of `resolveConfigPath`
+and the notification-overrides materialize/round-trip contract.
 
 ### Shutdown
 

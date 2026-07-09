@@ -3,6 +3,13 @@ dist-newstyle/
 dist-prof/
 *.prof
 config/shell_history.txt
+# Local runtime/user config state (#638) — written by the settings UI's
+# Save actions. Versioned defaults/templates (config/*_default.yaml,
+# config/pathing.yaml, config/world_gen_default.yaml) are NOT covered by
+# these and stay tracked.
+config/video.yaml
+config/keybinds.yaml
+config/notifications.yaml
 saves/
 .claude/
 src/World/Hydrology/DESIGN.md
