@@ -16,6 +16,17 @@ Vulkan to run. Vulkan SDK, glslang, and validation layers to develop, plus GHC (
 
 The engine also has a **headless mode** (no window, no GPU) for scripted world generation, automated testing, and agent workflows — see the Debug Console section below and `CLAUDE.md` for the full headless API (world generation, unit/combat queries, save/load, dump mode).
 
+### Resource root (running from outside the repo)
+
+All runtime resources — `scripts/`, `assets/`, `data/`, `config/` — are loaded relative to a single **resource root**. By default that's the current working directory, so running from the repo root (as `cabal run` does) needs no flags. To launch the built executable from any other directory, point it at a checkout with the `--resource-root` flag or the `SYNARCHY_ROOT` environment variable (the flag wins if both are set):
+
+```bash
+/path/to/built/synarchy --headless --resource-root /path/to/synarchy-checkout
+SYNARCHY_ROOT=/path/to/synarchy-checkout /path/to/built/synarchy --dump
+```
+
+The root is validated at startup: a nonexistent root, or one missing any of the four resource directories, fails immediately with an error naming the root in use and the missing paths. `python3 tools/resource_root_probe.py` regression-tests this contract end to end.
+
 ## Testing
 
 `cabal test` builds and runs the test suites. `synarchy-test-headless` (hspec unit/integration tests, no GPU) is the one to reach for during iteration:

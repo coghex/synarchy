@@ -6,6 +6,7 @@ module App.Cli
   , allLayers
   , parseDump
   , parseArg
+  , parseStrArg
   , parseRegion
   , parsePreview
   , PreviewCategoryKind(..)
@@ -61,6 +62,16 @@ parseArg flag (f:n:rest)
         _         → parseArg flag rest
     | otherwise = parseArg flag (n:rest)
 parseArg _ [_] = Nothing
+
+-- | Parse --flag VALUE from args, returning the raw token. Unlike
+--   'parseArg' there's no 'reads' round-trip — a filepath would need
+--   Haskell string quoting to survive one.
+parseStrArg ∷ String → [String] → Maybe String
+parseStrArg _ [] = Nothing
+parseStrArg flag (f:v:rest)
+    | f ≡ flag  = Just v
+    | otherwise = parseStrArg flag (v:rest)
+parseStrArg _ [_] = Nothing
 
 -- | Parse --region cx1,cy1,cx2,cy2 from args
 parseRegion ∷ [String] → (Int, Int, Int, Int)
