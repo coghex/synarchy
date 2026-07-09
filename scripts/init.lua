@@ -30,6 +30,16 @@ local thoughtLogScriptId = nil
 local unitLogScriptId = nil
 
 function game.init(scriptId)
+    -- --preview boot (#632, phase 1 of the --preview epic #427): a
+    -- structurally distinct thread topology (window + Vulkan, no world/
+    -- unit/sim/combat threads) with its own minimal Lua entry point.
+    -- Skip every normal gameplay/UI script below — none of it has
+    -- anything to attach to in this profile.
+    if engine.getBootProfile() == "preview" then
+        uiScriptId = engine.loadScript("scripts/preview_manager.lua", 0.1)
+        return
+    end
+
     -- Initialize debug
     debugScriptId = engine.loadScript("scripts/debug.lua", 0.1)
 

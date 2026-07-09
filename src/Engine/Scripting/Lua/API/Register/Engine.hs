@@ -9,7 +9,8 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       setTickIntervalFn, pauseScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
                                       listFilesFn, setPausedFn, isPausedFn,
-                                      getBootProfileFn, realTimeFn, gameTimeFn)
+                                      getBootProfileFn, getPreviewTargetFn,
+                                      realTimeFn, gameTimeFn)
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn
@@ -84,6 +85,7 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "toggleDebug"       (toggleDebugFn backendState)
   registerLuaFunction "getFPS"            (getFPSFn env)
   registerLuaFunction "getBootProfile"    (getBootProfileFn env)
+  registerLuaFunction "getPreviewTarget"  (getPreviewTargetFn env)
   registerLuaFunction "setPaused"         (setPausedFn env)
   registerLuaFunction "isPaused"          (isPausedFn env)
   registerLuaFunction "realTime"          realTimeFn

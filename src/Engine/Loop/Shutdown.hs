@@ -21,10 +21,12 @@ import Engine.Scene.Types (createBatchManager, SceneManager(..)
                           , SceneDynamicBuffer(..), TextInstanceBuffer(..))
 import Vulkan.Core10 (deviceWaitIdle, destroyBuffer, freeMemory)
 
--- | Shutdown the engine
-shutdownEngine ∷ Window → ThreadState → ThreadState → ThreadState → ThreadState
-  → EngineM ε σ ()
-shutdownEngine (Window win) unitThreadState worldThreadState
+-- | Shutdown the engine. 'unitThreadState'/'worldThreadState' are
+--   'Nothing' for a boot profile that never started them (preview mode
+--   — see 'App.Preview' — has no world/unit/sim/combat threads at all).
+shutdownEngine ∷ Window → Maybe ThreadState → Maybe ThreadState
+  → ThreadState → ThreadState → EngineM ε σ ()
+shutdownEngine (Window win) mUnitThreadState mWorldThreadState
                             inputThreadState luaThreadState = do
     logInfoM CatSystem "Starting engine shutdown..."
     state ← gets graphicsState
@@ -92,10 +94,10 @@ shutdownEngine (Window win) unitThreadState worldThreadState
     env ← ask
 
     logDebugM CatSystem "Shutting down unit thread..."
-    liftIO $ shutdownThread unitThreadState
+    liftIO $ forM_ mUnitThreadState shutdownThread
 
     logDebugM CatSystem "Shutting down world thread..."
-    liftIO $ shutdownThread worldThreadState
+    liftIO $ forM_ mWorldThreadState shutdownThread
 
     logDebugM CatSystem "Shutting down input thread..."
     liftIO $ shutdownThread inputThreadState

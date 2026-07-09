@@ -899,6 +899,7 @@ executable synarchy
                  , App.Graphical
                  , App.Headless
                  , App.Dump
+                 , App.Preview
     -- LANGUAGE extensions used by modules in this package.
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

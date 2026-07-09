@@ -7,6 +7,9 @@ module App.Cli
   , parseDump
   , parseArg
   , parseRegion
+  , parsePreview
+  , PreviewCategoryKind(..)
+  , classifyPreviewCategory
   ) where
 
 import UPrelude
@@ -68,6 +71,37 @@ parseRegion ("--region":s:_) =
             (cx1, cy1, cx2, cy2)
         _ → (-8, -8, 8, 8)
 parseRegion (_:rest) = parseRegion rest
+
+-- | Parse --preview category[/item] from args.
+--   Returns Nothing if --preview not present, Just (category, mItem)
+--   otherwise. Mirrors 'parseRegion''s shape.
+parsePreview ∷ [String] → Maybe (String, Maybe String)
+parsePreview [] = Nothing
+parsePreview ("--preview":s:_) = Just $
+    case splitOn '/' s of
+        (cat:item:_) → (cat, Just item)
+        [cat]        → (cat, Nothing)
+        []           → (s, Nothing)
+parsePreview (_:rest) = parsePreview rest
+
+-- | Which of the epic's hardcoded --preview categories 'cat' names, if
+--   any. Simple categories preview a single flat asset folder; grouped
+--   categories require a specific --preview <category>/<item> (the
+--   folder holds many named entries, e.g. one per unit).
+data PreviewCategoryKind
+    = SimplePreviewCategory
+    | GroupedPreviewCategory
+    | UnknownPreviewCategory
+    deriving (Eq, Show)
+
+classifyPreviewCategory ∷ String → PreviewCategoryKind
+classifyPreviewCategory cat
+    | cat `elem` simpleCategories  = SimplePreviewCategory
+    | cat `elem` groupedCategories = GroupedPreviewCategory
+    | otherwise                    = UnknownPreviewCategory
+  where
+    simpleCategories  = ["icons", "equipment", "hud", "items", "ui", "world"]
+    groupedCategories = ["units", "flora", "buildings"]
 
 splitOn ∷ Char → String → [String]
 splitOn _ [] = [""]
