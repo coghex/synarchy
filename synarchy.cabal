@@ -295,6 +295,10 @@ library
                      Engine.Scripting.Lua.API.WorldQuery.Pick
                      Engine.Scripting.Lua.API.WorldQuery.Location
                      Engine.Scripting.Lua.API.Forage
+                     Engine.Scripting.Lua.API.Forage.Lookup
+                     Engine.Scripting.Lua.API.Forage.Query
+                     Engine.Scripting.Lua.API.Forage.Harvest
+                     Engine.Scripting.Lua.API.Forage.Crop
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
