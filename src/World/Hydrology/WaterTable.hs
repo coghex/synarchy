@@ -13,7 +13,7 @@
 --   Wet climates push the saturated horizon up close to the surface;
 --   arid climates push it far below. No priority flood, no per-tile
 --   spillway propagation — the global table handles surface placement,
---   and 'World.Generate.Chunk.applyFluidWt' lifts this baseline once
+--   and 'World.Generate.Chunk.SoilGates.applyFluidWt' lifts this baseline once
 --   the fluid map is known: under-fluid bump (dig through a lake /
 --   river bed or the ocean floor exposes water) plus a fresh-water
 --   shore halo (riparian groundwater; feeds the wetland-soil gate).
@@ -56,7 +56,7 @@ depthFromClimate c =
 --   @ly * chunkSize + lx@.
 --
 --   This is the subsurface baseline. Surface water (lakes) is placed
---   separately by 'World.Generate.Chunk.composeFluidMap' from the
+--   separately by 'World.Generate.Chunk.Fluid.composeFluidMap' from the
 --   global 'WorldLakes' table; the caller in 'generateChunk' patches
 --   the result of this function so under-lake tiles have @wt ≥
 --   lake.surface@ before storing on 'LoadedChunk'.

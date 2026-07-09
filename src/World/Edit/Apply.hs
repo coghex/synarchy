@@ -151,7 +151,7 @@ applyEdit (WeSetFluidTile gx gy ft) lc
             oldTop     = lcSurfaceMap lc VU.! idx
             -- River renders flat at fcSurface to hide protrusions; other
             -- fluid types use max(terrain/old, fluid). Mirrors the rule in
-            -- World.Generate.Chunk.mkSurfaceMap and Sim.Thread.
+            -- World.Generate.Chunk.Fluid.mkSurfaceMap and Sim.Thread.
             renderedSurf = case ft of
                 River → newSurface
                 _     → max oldTop newSurface
