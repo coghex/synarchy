@@ -15,3 +15,6 @@ saves/
 src/World/Hydrology/DESIGN.md
 soil
 stone
+
+# Playtest harness session traces (#647) — per-run output, never committed
+tools/playtest/sessions/

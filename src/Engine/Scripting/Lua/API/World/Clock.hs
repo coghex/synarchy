@@ -6,6 +6,7 @@ module Engine.Scripting.Lua.API.World.Clock
     , worldSetTimeFn
     , worldSetDateFn
     , worldGetDateFn
+    , worldGetSeedFn
     , worldSetTimeScaleFn
     , worldGetTimeScaleFn
     , worldGetActiveWorldIdFn
@@ -17,7 +18,7 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldState)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import World.Types
@@ -138,6 +139,29 @@ worldGetDateFn env = do
                         (worldAbsoluteDay calendar date))
                     Lua.setfield (-2) "absoluteDay"
                 Nothing → Lua.pushnil
+        Nothing → Lua.pushnil
+    return 1
+
+-- | world.getSeed([pageId]) → seed or nil
+-- The generation seed of the given (default: active) world page. Added
+-- for the playtest harness (#647): the session trace records the real
+-- seed of whatever world the player created through the UI, so a
+-- session with a randomized seed is still diagnosable and a replay's
+-- world divergence is detectable. nil while no world (or no gen
+-- params yet) exists.
+worldGetSeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetSeedFn env = do
+    pageIdArg ← Lua.tostring 1
+    mWs ← Lua.liftIO $ case pageIdArg of
+        Just pageIdBS → do
+            mgr ← readIORef (worldManagerRef env)
+            pure (lookup (WorldPageId (TE.decodeUtf8 pageIdBS)) (wmWorlds mgr))
+        Nothing → activeWorldState env
+    mParams ← Lua.liftIO $ case mWs of
+        Just ws → readIORef (wsGenParamsRef ws)
+        Nothing → pure Nothing
+    case mParams of
+        Just params → Lua.pushinteger (fromIntegral (wgpSeed params))
         Nothing → Lua.pushnil
     return 1
 
