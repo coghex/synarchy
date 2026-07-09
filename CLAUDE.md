@@ -206,7 +206,13 @@ registry.
 - `app/Main.hs` — Executable entry point (draw loop)
 - `test/` — hspec unit tests (engine core and Vulkan primitives)
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
-- `config/` — YAML config (keybinds, video settings)
+- `config/` — YAML config. `*_default.yaml` / `pathing.yaml` /
+  `world_gen_default.yaml` are versioned defaults/templates (tracked).
+  `keybinds.yaml`, `video.yaml`, `notifications.yaml` are local
+  runtime state (gitignored) that the settings UI's Save actions
+  write — absent on a fresh clone, where boot falls back to the
+  `_default.yaml` template or (notifications) materializes from
+  `data/notification_categories.yaml` (#638)
 - `data/` — Game data YAML (materials, vegetation, flora, units)
 - `assets/` — Images and graphical resources
 - `scripts/` — Lua scripts for game logic
