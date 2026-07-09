@@ -217,6 +217,32 @@ registry.
 - `assets/` — Images and graphical resources
 - `scripts/` — Lua scripts for game logic
 
+## Resource Root
+
+Every runtime resource family — `scripts/`, `assets/`, `data/`,
+`config/` — is loaded by cwd-relative paths. The executable resolves
+ONE resource root at startup (`App.ResourceRoot`, #636) and chdirs
+into it, so all relative paths (Haskell and Lua alike) resolve there.
+Precedence: `--resource-root <path>` flag > `SYNARCHY_ROOT` env var >
+current working directory. Running from the repo root (the normal dev
+workflow, incl. every `cabal run` example in this file) therefore
+needs nothing; launching the built binary from anywhere else needs one
+of the two explicit forms:
+
+```bash
+$(cabal list-bin exe:synarchy) --headless --port 9008 --resource-root ~/work/synarchy
+SYNARCHY_ROOT=~/work/synarchy $(cabal list-bin exe:synarchy) --dump
+```
+
+The root is validated before any dispatch: a nonexistent root, or one
+missing a resource family directory, exits 1 with an error naming the
+root, where it came from, and each missing path. Note the chdir means
+relative *output* paths (`saves/`, config saves) also land under the
+resource root, matching a repo-root launch. Gate:
+`python3 tools/resource_root_probe.py` (manual-only probe) proves
+`--dump` and `--headless` both work from a temp directory outside the
+repo.
+
 ## Headless Mode & Debug Console
 
 The engine supports a headless mode for automated testing, scripted world generation, and agent workflows. No GPU, no window, no focus stealing.
