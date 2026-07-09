@@ -310,8 +310,10 @@ python3 tools/screenshot_check.py --port 9008
 ```
 
 Asserts the reply shape (`{path, width, height}`), PNG validity, IHDR
-dims matching the reply, non-all-black pixels, a clean `{error=...}` on
-an unwritable path, and that the instance stays responsive. Colors and
+dims matching the reply, pixels not one uniform color (unfiltered per
+the PNG spec, RGB only — the capture forces alpha opaque, so an
+all-black frame must still be caught), a clean `{error=...}` on an
+unwritable path, and that the instance stays responsive. Colors and
 orientation still deserve a human eyeball against the live window; the
 pure swizzle/row-order contract is pinned by
 `Test.Headless.Graphics.Screenshot` in the hspec suite.

@@ -13,8 +13,10 @@ launch the game normally (its debug console listens on port 8008), then:
 It asserts, against the live instance:
   1. debug.captureScreenshot(path) returns {path, width, height},
   2. the file is a valid PNG whose IHDR dimensions match the reply,
-  3. the decompressed pixel data isn't uniformly zero (an all-black
-     capture is the classic wrong-layout/wrong-image symptom),
+  3. the pixels (unfiltered per the PNG spec, RGB only — the capture
+     path forces alpha opaque) aren't one uniform color: an all-black
+     or solid-color capture is the classic wrong-layout/wrong-image
+     symptom,
   4. an unwritable path comes back as {error=...}, not a crash, and the
      instance still answers afterwards.
 
@@ -51,10 +53,14 @@ def read_png_ihdr(path: str) -> tuple[int, int]:
         return w, h
 
 
-def png_pixels_all_zero(path: str) -> bool:
-    """Decompress every IDAT chunk; True if the raw stream is all zeros
-    (filter bytes included — an all-black image is all-zero here)."""
+def png_is_uniform_color(path: str) -> bool:
+    """True if every pixel has the same RGB value (alpha ignored — the
+    capture path forces it to 255, so an opaque all-black frame must
+    still be caught). Unfilters the scanlines per the PNG spec; the
+    engine's encoder always writes 8-bit RGBA (color type 6), which is
+    asserted rather than assumed."""
     idat = b""
+    w = h = bit_depth = color_type = None
     with open(path, "rb") as f:
         f.read(8)
         while True:
@@ -64,12 +70,60 @@ def png_pixels_all_zero(path: str) -> bool:
             length, ctype = struct.unpack(">I", hdr[:4])[0], hdr[4:]
             data = f.read(length)
             f.read(4)  # crc
-            if ctype == b"IDAT":
+            if ctype == b"IHDR":
+                w, h, bit_depth, color_type = struct.unpack(">IIBB", data[:10])
+            elif ctype == b"IDAT":
                 idat += data
-            if ctype == b"IEND":
+            elif ctype == b"IEND":
                 break
+    if (bit_depth, color_type) != (8, 6):
+        raise AssertionError(
+            f"{path}: expected 8-bit RGBA (bit depth 8, color type 6), "
+            f"got bit depth {bit_depth}, color type {color_type}")
+
     raw = zlib.decompress(idat)
-    return not any(raw)
+    bpp = 4
+    stride = w * bpp
+    prior = bytearray(stride)
+    first_rgb = None
+    for y in range(h):
+        base = y * (stride + 1)
+        filt = raw[base]
+        line = bytearray(raw[base + 1:base + 1 + stride])
+        if filt == 1:    # Sub
+            for x in range(bpp, stride):
+                line[x] = (line[x] + line[x - bpp]) & 0xFF
+        elif filt == 2:  # Up
+            for x in range(stride):
+                line[x] = (line[x] + prior[x]) & 0xFF
+        elif filt == 3:  # Average
+            for x in range(stride):
+                left = line[x - bpp] if x >= bpp else 0
+                line[x] = (line[x] + (left + prior[x]) // 2) & 0xFF
+        elif filt == 4:  # Paeth
+            for x in range(stride):
+                a = line[x - bpp] if x >= bpp else 0
+                b = prior[x]
+                c = prior[x - bpp] if x >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                if pa <= pb and pa <= pc:
+                    pr = a
+                elif pb <= pc:
+                    pr = b
+                else:
+                    pr = c
+                line[x] = (line[x] + pr) & 0xFF
+        elif filt != 0:
+            raise AssertionError(f"{path}: unknown PNG filter {filt}")
+        for x in range(0, stride, bpp):
+            rgb = (line[x], line[x + 1], line[x + 2])
+            if first_rgb is None:
+                first_rgb = rgb
+            elif rgb != first_rgb:
+                return False  # second color found — not uniform
+        prior = line
+    return True
 
 
 def main() -> int:
@@ -111,7 +165,7 @@ def main() -> int:
     check("IHDR dims match reply",
           (w, h) == (reply.get("width"), reply.get("height")),
           f"png={w}x{h} reply={reply.get('width')}x{reply.get('height')}")
-    check("pixels not uniformly black", not png_pixels_all_zero(out_path))
+    check("pixels not one uniform color", not png_is_uniform_color(out_path))
 
     bad = send_json(
         port,

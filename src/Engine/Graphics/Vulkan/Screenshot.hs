@@ -20,7 +20,6 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Foreign.Ptr (castPtr)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
 import Engine.Graphics.Types (ScreenshotGrab(..), ScreenshotOrder(..)
