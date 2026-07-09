@@ -4,6 +4,10 @@
 --   All other threads (input, world, debug console) communicate via
 --   STM queues (luaQueue for LuaMsg, TQueue for DebugCommand).
 --   The Lua.State is NEVER accessed from another thread.
+--
+--   Debug-console command handling lives in 'Engine.Scripting.Lua.Thread.Console';
+--   engine-to-Lua message dispatch lives in 'Engine.Scripting.Lua.Thread.Dispatch'.
+--   Both are re-exported here so the public API is unchanged.
 module Engine.Scripting.Lua.Thread
   ( startLuaThread
   , runLuaLoop
@@ -16,26 +20,22 @@ import UPrelude
 import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.API (registerLuaAPI)
-import Engine.Scripting.Lua.API.Shell (setupShellSandbox, luaValueToText)
+import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
-import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules, nowSeconds)
+import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), startDebugServer, pollDebugCommand)
+import Engine.Scripting.Lua.Thread.Console (processDebugCommands, debugBuiltin)
+import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
-import World.State.Types (wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (EngineConfig(..))
-import Engine.Input.Types (InputState, keyToText, clickRouteText)
-import UI.Types (ElementHandle(..))
-import qualified Graphics.UI.GLFW as GLFW
+import Engine.Input.Types (InputState)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Map.Strict as Map
-import Data.List (find)
-import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, tryPutMVar)
@@ -62,13 +62,13 @@ startLuaThread env = do
             logDebug logger CatLua "Lua API registered."
             setupShellSandbox (lbsLuaState backendState)
             logDebug logger CatLua "Shell sandbox set up."
-            
+
             let scriptPath = "scripts/init.lua"
             currentSecs ← nowSeconds
-            
+
             initScriptId ← atomicModifyIORef' (lbsNextScriptId backendState)
                 (\n → (n + 1, n))
-            
+
             result ← Lua.runWith (lbsLuaState backendState) $
                 loadModuleRef scriptPath
 
@@ -83,26 +83,26 @@ startLuaThread env = do
                           , scriptModuleRef = modRef
                           , scriptPaused    = False
                           }
-                    
+
                     atomically $ modifyTVar' (lbsScripts backendState) $
                         Map.insert initScriptId initScript
-                    
-                    logDebug logger CatLua $ "Lua script module loaded with ID: " 
+
+                    logDebug logger CatLua $ "Lua script module loaded with ID: "
                                    <> T.pack (show initScriptId)
-                    
+
                     when (isValidRef modRef) $ do
                         logDebug logger CatLua "Calling init() on Lua module"
-                        _ ← callModuleFunction backendState modRef "init" 
+                        _ ← callModuleFunction backendState modRef "init"
                             [ScriptNumber (fromIntegral initScriptId)]
                         return ()
-                    
+
                     logDebug logger CatLua "Lua module initialized"
 
                 Left errMsg →
                     logWarn logger CatLua $
                         "Failed to load Lua script: " <> T.pack scriptPath
                         <> " - " <> errMsg
-            
+
             let port = ecDebugPort (engineConfig env)
             eDebugQueue ← startDebugServer port (debugBuiltin env)
             debugQueue ← case eDebugQueue of
@@ -119,7 +119,7 @@ startLuaThread env = do
                     atomically newTQueue
             tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue `finally` putMVar doneVar ()
             return tid
-        ) 
+        )
         (\(e ∷ SomeException) → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatLua $ "Lua thread failed to start: " <> T.pack (show e)
@@ -232,399 +232,3 @@ runLuaLoop env ls stateRef debugQueue = do
                 pure False
               )
             when ok $ runLuaLoop env ls stateRef debugQueue
-
--- | Process all pending debug commands from the TCP server.
---   Each command is a line of Lua code. We execute it via
---   loadstring + pcall and send the result back through the MVar.
-processDebugCommands ∷ Lua.State → TQueue DebugCommand → IO ()
-processDebugCommands lst debugQueue = do
-    mCmd ← pollDebugCommand debugQueue
-    case mCmd of
-        Nothing → return ()
-        Just (DebugCommand cmdText responseMVar) → do
-            result ← executeDebugLua lst cmdText
-            putMVar responseMVar result
-            processDebugCommands lst debugQueue
-
--- | Debug-console BUILT-INS, run on the per-connection client thread
---   (see 'startDebugServer') so they never block the single Lua thread.
---
---   'world.waitForInit' / 'world.waitForChunks' only poll world-state
---   IORefs — no Lua state — so handling them here means: (a) the Lua
---   thread stays free (a second connection can poll progress mid-wait,
---   ticks keep running); (b) there's no debug-server response cap on the
---   wait (the old 30 s 'takeMVar' timeout used to make 'waitForInit(300)'
---   over netcat spuriously report a timeout on any world taking >30 s to
---   generate). Returns 'Nothing' for anything it doesn't recognise, so
---   the command falls through to the Lua thread unchanged.
-debugBuiltin ∷ EngineEnv → Text → IO (Maybe Text)
-debugBuiltin env cmd =
-    let t0 = T.strip cmd
-        t1 = maybe t0 T.strip (T.stripPrefix "return " t0)
-        t2 = T.strip (fromMaybe t1 (T.stripSuffix ";" t1))
-        isQuit = t2 ≡ "engine.quit"
-               ∨ case matchCall "engine.quit" t2 of Just _ → True; Nothing → False
-    in if isQuit
-       -- Handle quit HERE, on the client thread, so the ack is sent before
-       -- the Lua thread (which would otherwise answer this command) is torn
-       -- down. Round-tripping quit through the thread it's about to kill is
-       -- the shutdown race that left the client blocked on the full 30 s
-       -- response timeout. Same effect as quitFn: just flip the lifecycle
-       -- flag; the main/headless loop drives the actual teardown.
-       then writeIORef (lifecycleRef env) CleaningUp ≫ return (Just "shutting down")
-       else case matchCall "world.waitForInit" t2 of
-           Just arg → Just <$> runWaitForInit env (fromMaybe 600 arg)
-           Nothing  → case matchCall "world.waitForChunks" t2 of
-               Just arg → Just <$> runWaitForChunks env (fromMaybe 120 arg)
-               Nothing  → return Nothing
-
--- | Match @<fn>(<int?>)@ exactly. @Just Nothing@ = no/empty arg (use the
---   caller's default); @Just (Just n)@ = explicit timeout; @Nothing@ =
---   not this call, or a non-integer arg → fall through to Lua.
-matchCall ∷ Text → Text → Maybe (Maybe Int)
-matchCall fn t = case T.stripPrefix fn t of
-    Nothing → Nothing
-    Just rest →
-        let r = T.strip rest
-        in if not (T.null r) ∧ T.head r ≡ '(' ∧ T.last r ≡ ')'
-           then let inner = T.strip (T.init (T.drop 1 r))
-                in if T.null inner
-                   then Just Nothing
-                   else case T.decimal inner of
-                          Right (n, rm) | T.null (T.strip rm) → Just (Just n)
-                          _                                   → Nothing
-           else Nothing
-
--- | Poll the active world's load phase until done (or timeout), then
---   return the same tab-joined progress 'world.getInitProgress' yields.
-runWaitForInit ∷ EngineEnv → Int → IO Text
-runWaitForInit env timeoutSec = loop (timeoutSec * 4) ⌦ \_ → fmtInitProgress env
-  where
-    loop ∷ Int → IO ()
-    loop 0 = return ()
-    loop n = do
-        mWs ← activeWorldState env
-        case mWs of
-            Just ws → do
-                phase ← readIORef (wsLoadPhaseRef ws)
-                case phase of
-                    LoadDone → return ()
-                    _        → threadDelay 250000 ≫ loop (n - 1)
-            Nothing → threadDelay 250000 ≫ loop (n - 1)
-
--- | Poll the active world's init queue until empty (or timeout); return
---   the remaining chunk count (matches 'world.waitForChunks').
-runWaitForChunks ∷ EngineEnv → Int → IO Text
-runWaitForChunks env timeoutSec = T.pack ∘ show ⊚ loop (timeoutSec * 4)
-  where
-    remaining ∷ IO Int
-    remaining = do
-        mWs ← activeWorldState env
-        case mWs of
-            Just ws → length ⊚ readIORef (wsInitQueueRef ws)
-            Nothing → return 0
-    loop ∷ Int → IO Int
-    loop 0 = remaining
-    loop n = do
-        r ← remaining
-        if r ≡ 0 then return 0 else threadDelay 250000 ≫ loop (n - 1)
-
--- | Format the active world's load phase as the four tab-separated
---   values 'world.getInitProgress' returns: phase, current, total, stage.
-fmtInitProgress ∷ EngineEnv → IO Text
-fmtInitProgress env = do
-    mWs ← activeWorldState env
-    case mWs of
-        Just ws → do
-            phase ← readIORef (wsLoadPhaseRef ws)
-            return $ case phase of
-                LoadIdle           → fmt 0 0 0 "idle"
-                LoadPhase1 c t     → fmt 1 c t "setup"
-                LoadPhase2 rm t    → fmt 2 (t - rm) t "chunks"
-                LoadDone           → fmt 3 1 1 "done"
-        Nothing → return (fmt 0 0 0 "idle")
-  where
-    -- Match 'world.getInitProgress' over the console exactly: the stage
-    -- string is rendered quoted by 'luaValueToText', so quote it here.
-    fmt ∷ Int → Int → Int → Text → Text
-    fmt a b c s = T.intercalate "\t" [tshow a, tshow b, tshow c, "\"" <> s <> "\""]
-    tshow = T.pack ∘ show
-
--- | Execute a Lua string and return the result as text.
---   Uses loadstring to compile, then pcall to run safely.
---   Captures return values and any errors.
---   Tables are automatically serialized to JSON format.
-executeDebugLua ∷ Lua.State → Text → IO Text
-executeDebugLua lst cmdText = Lua.runWith lst $ do
-    let code = TE.encodeUtf8 cmdText
-        chunkName = Lua.Name ("=" <> code)
-    -- Try wrapping in "return ..." first for expressions
-    let returnWrapped = "return " <> code
-    status ← Lua.loadbuffer returnWrapped chunkName
-    status' ← if status ≡ Lua.OK
-        then return Lua.OK
-        else do
-            Lua.pop 1  -- pop error from failed load
-            Lua.loadbuffer code chunkName
-    case status' of
-        Lua.OK → do
-            -- Run the loaded chunk with pcall
-            callStatus ← Lua.pcall 0 Lua.multret Nothing
-            case callStatus of
-                Lua.OK → do
-                    -- Collect all return values
-                    top ← Lua.gettop
-                    if top ≡ 0
-                        then return "ok"
-                        else do
-                            parts ← forM [1..top] $ \i →
-                                luaValueToText 0 i
-                            Lua.settop 0
-                            return (T.intercalate "\t" parts)
-                _ → do
-                    err ← Lua.tostring (-1)
-                    Lua.pop 1
-                    return $ "error: " <> maybe "unknown" TE.decodeUtf8Lenient err
-        _ → do
-            err ← Lua.tostring (-1)
-            Lua.pop 1
-            return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8Lenient err
-
-processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
-processLuaMsgs env ls stateRef = do
-    let (_, etlq) = lbsMsgQueues ls
-    mMsg ← Q.tryReadQueue etlq
-    case mMsg of
-        Just msg → do
-            logger ← readIORef (loggerRef env)
-            logDebug logger CatLua $ "Engine-to-Lua message: " <> T.pack (show msg)
-            processLuaMsg env ls stateRef msg
-            processLuaMsgs env ls stateRef
-        Nothing → return ()
-
-processLuaMsg ∷ EngineEnv → LuaBackendState → IORef ThreadControl → LuaMsg → IO ()
-processLuaMsg env ls stateRef msg = case msg of
-  LuaTextureLoaded handle assetId → do
-    logger ← readIORef (loggerRef env)
-    logDebug logger CatLua $ 
-        "Texture loaded with handle " <> T.pack (show handle) 
-        <> " as asset " <> T.pack (show assetId)
-  LuaFontLoaded handle path → do
-    logger ← readIORef (loggerRef env)
-    logDebug logger CatLua $ 
-        "Font " <> T.pack (show path)
-        <> " loaded with handle " <> T.pack (show handle)
-  LuaFontLoadFailed err → do
-    logger ← readIORef (loggerRef env)
-    logWarn logger CatLua $ 
-        "Font load failed: " <> T.pack (show err)
-  LuaThreadKill → writeIORef stateRef ThreadStopped
-  LuaMouseDownEvent button x y → do
-    let buttonNum = case button of
-          GLFW.MouseButton'1 → 1
-          GLFW.MouseButton'2 → 2
-          GLFW.MouseButton'3 → 3
-          _                  → 0
-    broadcastToModules ls "onMouseDown"
-      [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
-  LuaMouseUpEvent button x y downRoute → do
-    let buttonNum = case button of
-          GLFW.MouseButton'1 → 1
-          GLFW.MouseButton'2 → 2
-          GLFW.MouseButton'3 → 3
-          _                  → 0
-    -- onMouseUp fires on every physical release (UI widget drags
-    -- depend on it); the 4th arg says where the matching press was
-    -- routed ("game"/"ui"/"swallowed") so handlers can pair with
-    -- onMouseDown by filtering on "game".
-    broadcastToModules ls "onMouseUp"
-      [ ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y
-      , ScriptString (clickRouteText downRoute) ]
-  LuaScrollEvent dx dy → do
-    broadcastToModules ls "onScroll"
-      [ ScriptNumber (realToFrac dx)
-      , ScriptNumber (realToFrac dy)
-      ]
-  LuaZSliceScroll dx dy → do
-    broadcastToModules ls "onZSliceScroll"
-      [ ScriptNumber (realToFrac dx)
-      , ScriptNumber (realToFrac dy)
-      ]
-  LuaUIClickEvent elemHandle callbackName → do
-    let (ElementHandle h) = elemHandle
-    broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
-  LuaUIRightClickEvent elemHandle callbackName → do
-    let (ElementHandle h) = elemHandle
-    broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
-  LuaUIScrollEvent elemHandle dx dy → do
-    let (ElementHandle h) = elemHandle
-    broadcastToModules ls "onUIScroll"
-      [ ScriptNumber (fromIntegral h)
-      , ScriptNumber (realToFrac dx)
-      , ScriptNumber (realToFrac dy)
-      ]
-  LuaUICharInput c → 
-    broadcastToModules ls "onUICharInput" [ScriptString (T.singleton c)]
-  LuaUIBackspace → 
-    broadcastToModules ls "onUIBackspace" []
-  LuaUIDelete → 
-    broadcastToModules ls "onUIDelete" []
-  LuaUISubmit → 
-    broadcastToModules ls "onUISubmit" []
-  LuaUIEscape → 
-    broadcastToModules ls "onUIEscape" []
-  LuaUICursorLeft → 
-    broadcastToModules ls "onUICursorLeft" []
-  LuaUICursorRight → 
-    broadcastToModules ls "onUICursorRight" []
-  LuaUIHome → 
-    broadcastToModules ls "onUIHome" []
-  LuaUIEnd → 
-    broadcastToModules ls "onUIEnd" []
-  LuaUIFocusLost → 
-    broadcastToModules ls "onUIFocusLost" []
-  LuaKeyDownEvent key glfwKey → do
-    -- Expose the exact key for the duration of the (synchronous) onKeyDown
-    -- broadcast so engine.keyMatchesAction can resolve the precise side of
-    -- a merged modifier; clear it afterwards.
-    writeIORef (currentKeyDownRef env) (Just glfwKey)
-    broadcastToModules ls "onKeyDown" [ScriptString (keyToText key)]
-    writeIORef (currentKeyDownRef env) Nothing
-  LuaKeyUpEvent key → 
-    broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
-  LuaShellToggle → 
-    broadcastToModules ls "onShellToggle" []
-  LuaArenaReady pageId →
-    broadcastToModules ls "onArenaReady" [ScriptString pageId]
-  LuaStampLocation pageId locId gx gy →
-    broadcastToModules ls "onStampLocation"
-        [ ScriptString pageId, ScriptString locId
-        , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy) ]
-  LuaOpenArena →
-    broadcastToModules ls "onOpenArena" []
-  LuaDebugToggle → do
-    logger ← readIORef (loggerRef env)
-    logDebug logger CatLua "Debug overlay toggle requested"
-    scriptsMap ← readTVarIO (lbsScripts ls)
-    let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
-                            (Map.elems scriptsMap)
-    case mDebugScript of
-      Just debugScript → do
-        when (isValidRef (scriptModuleRef debugScript)) $ do
-          _ ← callModuleFunction ls
-                                 (scriptModuleRef debugScript) "toggle" []
-          return ()
-      Nothing → 
-        logWarn logger CatLua "Debug script not found"
-  LuaDebugShow → do
-    logger ← readIORef (loggerRef env)
-    logDebug logger CatLua "Debug overlay show requested"
-    scriptsMap ← readTVarIO (lbsScripts ls)
-    let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
-                            (Map.elems scriptsMap)
-    case mDebugScript of
-      Just debugScript → do
-        when (isValidRef (scriptModuleRef debugScript)) $ do
-          _ ← callModuleFunction ls
-                                 (scriptModuleRef debugScript) "show" []
-          return ()
-      Nothing → 
-        logWarn logger CatLua "Debug script not found"
-  LuaDebugHide → do
-    logger ← readIORef (loggerRef env)
-    logDebug logger CatLua "Debug overlay hide requested"
-    scriptsMap ← readTVarIO (lbsScripts ls)
-    let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
-                            (Map.elems scriptsMap)
-    case mDebugScript of
-      Just debugScript → do
-        when (isValidRef (scriptModuleRef debugScript)) $ do
-          _ ← callModuleFunction ls
-                                 (scriptModuleRef debugScript) "hide" []
-          return ()
-      Nothing → 
-        logWarn logger CatLua "Debug script not found"
-  LuaWindowResize w h → do
-    broadcastToModules ls "onWindowResize"
-      [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
-  LuaFramebufferResize w h → do
-    broadcastToModules ls "onFramebufferResize"
-      [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
-  LuaAssetLoaded assetType handle path → do
-    broadcastToModules ls "onAssetLoaded"
-      [ ScriptString assetType
-      , ScriptNumber (fromIntegral handle)
-      , ScriptString path
-      ]
-  LuaCharInput fid c → 
-    broadcastToModules ls "onCharInput"
-      [ScriptNumber (fromIntegral fid), ScriptString (T.singleton c)]
-  LuaTextBackspace fid → 
-    broadcastToModules ls "onTextBackspace" [ScriptNumber (fromIntegral fid)]
-  LuaTextDelete fid → 
-    broadcastToModules ls "onTextDelete" [ScriptNumber (fromIntegral fid)]
-  LuaTabPressed fid → 
-    broadcastToModules ls "onTabPressed" [ScriptNumber (fromIntegral fid)]
-  LuaTextSubmit fid → 
-    broadcastToModules ls "onTextSubmit" [ScriptNumber (fromIntegral fid)]
-  LuaFocusLost fid → 
-    broadcastToModules ls "onFocusLost" [ScriptNumber (fromIntegral fid)]
-  LuaCursorUp fid → 
-    broadcastToModules ls "onCursorUp" [ScriptNumber (fromIntegral fid)]
-  LuaCursorDown fid → 
-    broadcastToModules ls "onCursorDown" [ScriptNumber (fromIntegral fid)]
-  LuaCursorLeft fid → 
-    broadcastToModules ls "onCursorLeft" [ScriptNumber (fromIntegral fid)]
-  LuaCursorRight fid → 
-    broadcastToModules ls "onCursorRight" [ScriptNumber (fromIntegral fid)]
-  LuaCursorHome fid → 
-    broadcastToModules ls "onCursorHome" [ScriptNumber (fromIntegral fid)]
-  LuaCursorEnd fid → 
-    broadcastToModules ls "onCursorEnd" [ScriptNumber (fromIntegral fid)]
-  LuaInterrupt fid → 
-    broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
-  LuaWorldGenLog text →
-    broadcastToModules ls "onWorldGenLog" [ScriptString text]
-  LuaSaveLoaded survUnitIds survBuildingIds →
-    broadcastToModules ls "onSaveLoaded"
-      [ intsToScriptArray survUnitIds
-      , intsToScriptArray survBuildingIds ]
-  LuaHudLogInfo text1 text2 kind →
-    broadcastToModules ls "onSetInfoText"
-      [ScriptString text1, ScriptString text2, ScriptString kind]
-  LuaHudLogWeatherInfo text →
-    broadcastToModules ls "onSetWeatherInfo" [ScriptString text]
-  LuaHudLogResourcesInfo text →
-    broadcastToModules ls "onSetResourcesInfo" [ScriptString text]
-  LuaWorldPreviewReady handleInt →
-    broadcastToModules ls "onWorldPreviewReady"
-      [ScriptNumber (fromIntegral handleInt)]
-  LuaShowPopup category msg r g b a mCoords →
-    broadcastToModules ls "onShowPopup"
-      [ ScriptString category
-      , ScriptString msg
-      , ScriptNumber (realToFrac r)
-      , ScriptNumber (realToFrac g)
-      , ScriptNumber (realToFrac b)
-      , ScriptNumber (realToFrac a)
-      , coordsToScriptValue mCoords
-      ]
-
--- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
---   Used by 'LuaSaveLoaded' to hand the surviving loaded-page unit /
---   building ids to the Lua reconcile callback; it iterates with @ipairs@.
-intsToScriptArray ∷ [Int] → ScriptValue
-intsToScriptArray xs = ScriptTable $
-    zipWith (\i x → ( ScriptNumber (fromIntegral (i ∷ Int))
-                    , ScriptNumber (fromIntegral x) ))
-            [1..] xs
-
--- | Encode the optional payload as either @{x=gx, y=gy}@ or 'nil'.
---   The Lua-side popup module makes a line clickable only when its
---   coords are non-nil.
-coordsToScriptValue ∷ Maybe (Int, Int) → ScriptValue
-coordsToScriptValue Nothing = ScriptNil
-coordsToScriptValue (Just (gx, gy)) = ScriptTable
-    [ (ScriptString "x", ScriptNumber (fromIntegral gx))
-    , (ScriptString "y", ScriptNumber (fromIntegral gy))
-    ]
