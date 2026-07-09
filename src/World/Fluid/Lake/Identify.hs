@@ -38,7 +38,7 @@
 --   physical tile appears at both its canonical position and its
 --   u-alias, each with its full physical neighbourhood in-grid, and
 --   the per-chunk index stores entries under both (unwrapped) chunk
---   keys. ('World.Fluid.River.Identify.stepDir' wraps E/W as an
+--   keys. ('World.Fluid.River.Identify.Common.stepDir' wraps E/W as an
 --   x-torus instead; on real terrain the two conventions are
 --   equivalent because those torus edges only reach void.)
 module World.Fluid.Lake.Identify

@@ -643,6 +643,12 @@ library
                      World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
+                     World.Fluid.River.Identify.Common
+                     World.Fluid.River.Identify.Flow
+                     World.Fluid.River.Identify.Components
+                     World.Fluid.River.Identify.Breakthrough
+                     World.Fluid.River.Identify.BedDepth
+                     World.Fluid.River.Identify.ChunkIndex
                      World.Fluid.Lava
                      World.Magma.Overlay
                      World.Magma.Types
