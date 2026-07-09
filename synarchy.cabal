@@ -220,6 +220,7 @@ library
                      Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
+                     Engine.Input.Inject
                      Engine.Input.State
                      Engine.Input.Types
                      Engine.Input.Thread
@@ -242,6 +243,7 @@ library
                      Engine.Scripting.Lua.API.Internal
                      Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
+                     Engine.Scripting.Lua.API.Register.Input
                      Engine.Scripting.Lua.API.Register.UI
                      Engine.Scripting.Lua.API.Register.Unit
                      Engine.Scripting.Lua.API.Register.Building
@@ -254,6 +256,7 @@ library
                      Engine.Scripting.Lua.API.Core
                      Engine.Scripting.Lua.API.Camera
                      Engine.Scripting.Lua.API.Debug
+                     Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.Screenshot
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
@@ -892,6 +895,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
+                   Test.Headless.Input.Inject
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
