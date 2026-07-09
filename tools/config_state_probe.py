@@ -137,6 +137,26 @@ def main() -> int:
                   "return tostring(c.log) end end; return 'NOTFOUND'")
         passed &= check("notification defaults come from the registry",
                          r == "false", r)
+        # Pinned deliberately (#638 PR review): the pre-#638 tracked
+        # config/notifications.yaml had building.popup=true and
+        # unit_warning.pause=true, which do NOT match
+        # data/notification_categories.yaml's registry defaults below.
+        # That mismatch was itself accidental local-preference drift —
+        # the exact problem #638 removes — not an intentional default,
+        # so a fresh clone deliberately gets the clean registry values,
+        # not the old drifted ones.
+        r = send(args.port,
+                  "local cfg = engine.getNotificationCfg(); "
+                  "for _,c in ipairs(cfg) do if c.id == 'building' then "
+                  "return tostring(c.popup) end end; return 'NOTFOUND'")
+        passed &= check("building.popup comes from the registry (not the old drifted file)",
+                         r == "false", r)
+        r = send(args.port,
+                  "local cfg = engine.getNotificationCfg(); "
+                  "for _,c in ipairs(cfg) do if c.id == 'unit_warning' then "
+                  "return tostring(c.pause) end end; return 'NOTFOUND'")
+        passed &= check("unit_warning.pause comes from the registry (not the old drifted file)",
+                         r == "false", r)
 
         for p in ("config/video.yaml", "config/keybinds.yaml"):
             passed &= check(f"{p} not written just by loading", not os.path.exists(p))

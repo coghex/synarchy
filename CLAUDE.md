@@ -876,6 +876,14 @@ self-materializes from `data/notification_categories.yaml`'s
 before this change are left untouched (untracked via `git rm --cached`,
 not deleted), so nobody's local preferences are silently discarded.
 
+The pre-#638 tracked `config/video.yaml`/`config/notifications.yaml` had
+already drifted from their own templates/registry (`ui_scale: 1.5`/
+`vsync: false`; `building.popup`/`unit_warning.pause` flipped from the
+registry's `false`) — exactly the accidental-local-preference problem
+#638 removes, not an intentional default. A fresh clone deliberately
+gets the clean template/registry values, not the old drifted ones;
+`config_state_probe.py` pins this explicitly.
+
 Turnkey harness: **`python3 tools/config_state_probe.py`** — the #638
 gate. Backs up any local config files present (restored afterward), boots
 headless to confirm a simulated fresh clone falls back to the versioned
