@@ -12,6 +12,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Register.Debug (registerDebugAPI)
 import Engine.Scripting.Lua.API.Register.Engine (registerEngineAPI)
+import Engine.Scripting.Lua.API.Register.Input (registerInputAPI)
 import Engine.Scripting.Lua.API.Register.UI (registerUIAPI)
 import Engine.Scripting.Lua.API.Register.Unit (registerUnitAPI)
 import Engine.Scripting.Lua.API.Register.Building (registerBuildingAPI)
@@ -28,6 +29,7 @@ registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IO ()
 registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerEngineAPI lst env backendState
   registerDebugAPI env
+  registerInputAPI env
   registerUIAPI env
   registerUnitAPI env
   registerBuildingAPI env

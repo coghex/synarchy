@@ -318,6 +318,30 @@ orientation still deserve a human eyeball against the live window; the
 pure swizzle/row-order contract is pinned by
 `Test.Headless.Graphics.Screenshot` in the hspec suite.
 
+### `input_check.py`
+
+The #644 gate for the `input.*` synthetic-input verbs — the playtest
+harness's (#641) actor-output channel. Like `screenshot_check.py` it
+**attaches to an already-running graphical instance** (the verbs refuse
+under the GPU-less `--headless` mode, where no input thread runs) and
+is human-run only. Run it from the main menu for the cleanest routing
+assertions:
+
+```bash
+python3 tools/input_check.py             # attach to port 8008
+python3 tools/input_check.py --port 9008
+```
+
+Loads `scripts/input_check_fixture.lua` (UI elements at known
+framebuffer coordinates that record every input broadcast) and asserts
+end to end: the framebuffer→window DPI conversion via
+`engine.getMousePosition`, click-at-pixel activates the element drawn
+there, a `{"shift"}` mods click is observed as held shift inside the
+click callback, key hold/release state + broadcasts, `input.type` into
+a focused text field with Backspace/Enter editing, UI-vs-game scroll
+routing, and a full drag with `"game"` down/up route pairing. The
+fixture tears itself down afterwards.
+
 ## Directory layout
 ```
 tools/
@@ -330,6 +354,7 @@ tools/
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
+├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── *_probe.py              (headless behavior probes — see above)
 └── baselines/
     ├── _seeds.json         (seed list config)

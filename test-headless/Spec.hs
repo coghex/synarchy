@@ -42,6 +42,7 @@ import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
+import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
@@ -115,6 +116,7 @@ main = hspec $ do
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
+    describe "Input.Inject" InputInject.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
