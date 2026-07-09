@@ -122,6 +122,14 @@ data EngineEnv = EngineEnv
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
   , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString))  -- ^ Pending zoom atlas pixel data for GPU upload
+  , screenshotRequestQueue ∷ Q.Queue ScreenshotRequest
+    -- ^ Pending debug.captureScreenshot requests (#643). The Lua
+    --   thread enqueues; the render thread drains one per frame in
+    --   'drawFrame' (copies the swapchain image to a staging buffer
+    --   inside that frame's command buffer) and replies on the
+    --   request's own queue. Never drained under GPU-less headless
+    --   mode — the verb checks 'ecHeadless' first and errors out
+    --   without enqueueing.
   , worldQuadsRef       ∷ IORef LayeredQuads
     -- ^ World quads split static (pre-sorted per layer at quad-cache
     --   rebuild) / dynamic (per-tick), written by the world thread,

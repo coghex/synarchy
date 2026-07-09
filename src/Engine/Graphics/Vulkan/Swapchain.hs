@@ -68,7 +68,10 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
         , imageColorSpace = cs
         , imageExtent = sExtent
         , imageArrayLayers = 1
+          -- TRANSFER_SRC lets debug.captureScreenshot (#643) copy the
+          -- presented image into a host-visible staging buffer.
         , imageUsage = IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                     ⌄ IMAGE_USAGE_TRANSFER_SRC_BIT
         , imageSharingMode = sharing
         , queueFamilyIndices = qfi
         , preTransform = currentTransform capabilities
