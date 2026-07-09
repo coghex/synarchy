@@ -1163,6 +1163,42 @@ function dropdown.getElementHandle(id)
     return dd.displayBoxId
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- Bounds cover the closed display box + arrow (dd.width is the total,
+-- displayWidth + arrowSize); the open option list is a transient popup
+-- and isn't enumerated here, mirroring toggle's open-options popup.
+function dropdown.dump()
+    local out = {}
+    for id, dd in pairs(dropdowns) do
+        local info = dd.displayBoxId and UI.getElementInfo(dd.displayBoxId) or nil
+        if info and info.pageVisible and info.visible then
+            table.insert(out, {
+                id = "dropdown:" .. id,
+                name = dd.name,
+                type = "dropdown",
+                bounds = {
+                    x = info and info.x or dd.x,
+                    y = info and info.y or dd.y,
+                    w = dd.width,
+                    h = info and info.height or dd.height,
+                },
+                label = dropdown.getText(id),
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                value = dropdown.getValue(id),
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 function dropdown.isDropdownCallback(callbackName)
     return callbackName == DROPDOWN_CALLBACK
         or callbackName == OPTION_CALLBACK

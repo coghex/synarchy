@@ -12,6 +12,7 @@ import Engine.Core.Types (BootProfile(..))
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory)
+import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
 import App.Dump (runDump)
@@ -28,6 +29,10 @@ main = do
 #endif
 
   args ← getArgs
+  -- Resolve + chdir into the runtime resource root before ANY dispatch
+  -- (#636): scripts/, assets/, data/, config/ are all loaded by
+  -- cwd-relative paths from here on.
+  applyResourceRoot args
   let headless = "--headless" `elem` args
       bootProfile = if "--arena" `elem` args then BootArena else BootNormal
       mDump    = parseDump args

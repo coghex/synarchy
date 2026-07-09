@@ -50,6 +50,13 @@ function M.load()
 
     isPreview = false
 
+    -- UI widget introspection oracle (F3, #645): a plain query module
+    -- with no per-tick work of its own, so a require (not loadScript)
+    -- is enough. Wiring the bare `ui` global here — rather than as a
+    -- side effect inside registry.lua — keeps requiring the module
+    -- elsewhere side-effect-free.
+    ui = require("scripts.ui.registry")
+
     -- Initialize debug
     debugScriptId = engine.loadScript("scripts/debug.lua", 0.1)
 

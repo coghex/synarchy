@@ -806,4 +806,42 @@ function randbox.onHoverLeave(elemHandle)
     if hlId then UI.setVisible(hlId, false) end
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- A randbox is a textbox variant (text input + a randomize button), so
+-- it's reported as type "textbox" rather than inventing a new taxonomy
+-- entry. Bounds cover the full assembly (input + randomize button);
+-- rb.width already includes both (see rb.new above).
+function randbox.dump()
+    local out = {}
+    for id, rb in pairs(randboxes) do
+        local info = rb.boxId and UI.getElementInfo(rb.boxId) or nil
+        local value = rb.boxId and (UI.getTextInput(rb.boxId) or "") or ""
+        if info and info.pageVisible and info.visible then
+            table.insert(out, {
+                id = "randbox:" .. id,
+                name = rb.name,
+                type = "textbox",
+                bounds = {
+                    x = info.x,
+                    y = info.y,
+                    w = rb.width,
+                    h = info.height,
+                },
+                label = value,
+                enabled = info.clickable,
+                visible = info.visible,
+                hovered = info.hovered,
+                focused = info.focused,
+                value = value,
+                screen = info.page,
+                handle = info.handle,
+            })
+        end
+    end
+    return out
+end
+
 return randbox
