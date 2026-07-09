@@ -192,6 +192,7 @@ instead of reaching for `--help` when in doubt.
 | `repair_ai_probe.py` | #302 | arena | `repair_job` AI end-to-end: claim, own/equipped/mule-held sourcing, station routing, dead-claimant release, `smith` role weighting. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
+| `text_encoding_probe.py` | #618 | none (no world/scripts needed) | `TE.decodeUtf8Lenient` in the Lua text API: `engine.setText` with a truncated multi-byte UTF-8 sequence (`"caf\195"`) no longer raises a Lua error and the malformed text round-trips through `engine.getText`, plus the well-formed control case and a liveness/responsiveness check. |
 | `thermo_altitude_probe.py` | #308 | worldgen (size 128) | Altitude-lapse thermal effect. |
 | `till_probe.py` | #333 | worldgen | Till-designation layer + till AI end to end: designate/cancel, fluid-tile exclusion, save/load, autonomous tilling (`world.getVegAt` confirms the flip), idempotent re-sweep. |
 | `wire_probe.py` | #359 | arena | Wire structure piece: connection-aware autotile shape derivation (adjacency → isolated/end/straight/corner/tee/cross) and the `construct_job` AI placing a real wire tile from a designation. |

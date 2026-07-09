@@ -119,6 +119,8 @@ PROBES = [
      "save/load pause-semantics regression (#42)"),
     ("sleep", "sleep_probe.py", False,
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
+    ("text_encoding", "text_encoding_probe.py", True,
+     "TE.decodeUtf8Lenient in the Lua text API: malformed UTF-8 through engine.setText no longer errors, and round-trips through engine.getText (#618)"),
     ("thermo_altitude", "thermo_altitude_probe.py", True,
      "altitude-lapse thermal effect (#308)"),
 ]

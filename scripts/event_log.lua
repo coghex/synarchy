@@ -26,6 +26,7 @@ local label     = require("scripts.ui.label")
 local button    = require("scripts.ui.button")
 local tabbar    = require("scripts.ui.tabbar")
 local scrollbar = require("scripts.ui.scrollbar")
+local utf8Safe  = require("scripts.ui.utf8_safe")
 
 -- Singleton (mirrors pause.lua / popup.lua so engine.loadScript and
 -- require both reach the same table).
@@ -330,7 +331,10 @@ end
 
 -- Truncate text to fit within maxWidthPx, suffixing "...". Uses the
 -- engine's text-measurement so the result is pixel-accurate rather
--- than guessing by character count.
+-- than guessing by character count. Every candidate cut point is snapped
+-- to a complete UTF-8 character boundary (utf8Safe) so a multi-byte
+-- character is never split into a dangling lead byte -- string.sub cuts
+-- by byte offset, not codepoint.
 local function truncateToWidth(text, font, fontSize, maxWidthPx)
     if engine.getTextWidth(font, text, fontSize) <= maxWidthPx then
         return text
@@ -340,14 +344,15 @@ local function truncateToWidth(text, font, fontSize, maxWidthPx)
     local lo, hi = 1, #text
     while lo < hi do
         local mid = math.floor((lo + hi + 1) / 2)
-        local candidate = string.sub(text, 1, mid) .. ellipsis
+        local cut = utf8Safe.snapToCharBoundary(text, mid)
+        local candidate = string.sub(text, 1, cut) .. ellipsis
         if engine.getTextWidth(font, candidate, fontSize) <= maxWidthPx then
             lo = mid
         else
             hi = mid - 1
         end
     end
-    return string.sub(text, 1, lo) .. ellipsis
+    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, lo)) .. ellipsis
 end
 
 -- Position the visible row labels for the current activeTabKey +

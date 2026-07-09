@@ -31,6 +31,7 @@ local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local brokenOverlay = require("scripts.ui.broken_overlay")
 local qualityTier = require("scripts.ui.quality_tier")
+local utf8Safe    = require("scripts.ui.utf8_safe")
 
 -----------------------------------------------------------
 -- Layout constants. Mirrors unit_info_v2's inventory section so
@@ -362,6 +363,9 @@ end
 -- Binary-search truncation with ".." suffix when the text would
 -- exceed maxPx in width. Lets long stored-item names sit politely in
 -- the available column instead of running into the weight readout.
+-- Every candidate cut point is snapped to a complete UTF-8 character
+-- boundary (utf8Safe) so a multi-byte character is never split into a
+-- dangling lead byte -- string.sub cuts by byte offset, not codepoint.
 local function truncateToWidth(text, font, fontPx, maxPx)
     if not text or text == "" then return text end
     local fullW = engine.getTextWidth(font, text, fontPx) or 0
@@ -370,11 +374,12 @@ local function truncateToWidth(text, font, fontPx, maxPx)
     local lo, hi = 1, #text
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
-        local candidate = string.sub(text, 1, mid) .. ".."
+        local cut = utf8Safe.snapToCharBoundary(text, mid)
+        local candidate = string.sub(text, 1, cut) .. ".."
         local w = engine.getTextWidth(font, candidate, fontPx) or 0
         if w <= maxPx then lo = mid + 1 else hi = mid end
     end
-    return string.sub(text, 1, math.max(1, lo - 1)) .. ".."
+    return string.sub(text, 1, utf8Safe.snapToCharBoundary(text, math.max(1, lo - 1))) .. ".."
 end
 
 -----------------------------------------------------------
