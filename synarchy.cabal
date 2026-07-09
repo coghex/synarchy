@@ -447,6 +447,15 @@ library
                      UI.Types
                      UI.Focus
                      UI.Manager
+                     UI.Manager.Core
+                     UI.Manager.Page
+                     UI.Manager.Element
+                     UI.Manager.Hierarchy
+                     UI.Manager.Focus
+                     UI.Manager.Property
+                     UI.Manager.Query
+                     UI.Manager.Text
+                     UI.Manager.BoxTexture
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
