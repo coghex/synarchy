@@ -518,6 +518,13 @@ library
                      World.Thread.Command.Save.LoadWorld
                      World.Thread.Command.Time
                      World.Thread.Command.Cursor
+                     World.Thread.Command.Cursor.Common
+                     World.Thread.Command.Cursor.Select
+                     World.Thread.Command.Cursor.Mine
+                     World.Thread.Command.Cursor.Construct
+                     World.Thread.Command.Cursor.Chop
+                     World.Thread.Command.Cursor.Till
+                     World.Thread.Command.Cursor.Plant
                      World.Thread.Command.Texture
                      World.Thread.Command.UI
                      World.Thread.Command.Edit
