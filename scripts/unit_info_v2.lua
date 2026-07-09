@@ -10,7 +10,7 @@
 -- HUD info panel still handles tile info; only the unit-info push is
 -- skipped.
 --
--- Lifecycle: loaded via engine.loadScript from init.lua. Polls
+-- Lifecycle: loaded via engine.loadScript from init_loader.lua. Polls
 -- unit.getSelected() each tick; shows the page when >=1 unit is
 -- selected, hides on deselect. All section content rebuilds when the
 -- selection identity changes.
