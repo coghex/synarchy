@@ -7,8 +7,8 @@
 -- Lifecycle:
 --   * engine.loadScript registers the module (so it receives any
 --     future engine broadcasts; today there are none).
---   * ui_manager.checkReady calls event_log.bootstrap(...) once
---     fonts and box textures are ready.
+--   * uiManager.ensurePopupsAndLogs() calls event_log.bootstrap(...)
+--     once fonts and box textures are ready.
 --   * hud.lua provides a top-left toggle button that calls
 --     event_log.toggle(). The panel does NOT pause the engine
 --     (per user choice 2026-05-18) — gameplay continues while open.
@@ -566,8 +566,8 @@ function eventLog.init(scriptId)
     end
 end
 
--- Called from ui_manager.checkReady once textures + fonts are loaded.
--- Build the panel chrome but leave it hidden — the player opens it
+-- Called from uiManager.ensurePopupsAndLogs() once textures + fonts are
+-- loaded. Build the panel chrome but leave it hidden — the player opens it
 -- via the HUD log button. boxTex is the panel-style 9-box (used for
 -- the panel background); btnTex is the button-style 9-box (used for
 -- the close X and any future action buttons inside the panel).
