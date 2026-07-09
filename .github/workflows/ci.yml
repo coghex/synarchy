@@ -15,18 +15,25 @@
 # -Werror is applied to the synarchy package only (not dependencies),
 # so the warning-clean state from #435 is enforced, not just observed.
 #
-# Build caching (#526): three caches persist across runs so a typical PR
-# recompiles only the modules it changed rather than all 360+ —
-#   1. the cabal dependency store (unchanged from the original gate),
-#   2. the GHC/cabal toolchain (~/.ghcup), so "Set up GHC" reuses the
-#      compiler instead of re-downloading it, and
-#   3. the project build products (dist-newstyle), so GHC's recompilation
+# Build caching (#526, reworked in #671): the GHC/cabal toolchain and a
+# hackage index snapshot are baked into the CI image (ci-v2 — see
+# .github/ci/Dockerfile; the old actions/cache toolchain cache never hit
+# inside the container, so GHC was silently re-downloaded every run), and
+# two caches persist across runs so a typical PR recompiles only the
+# modules it changed rather than all 360+ —
+#   1. the cabal dependency store (at the image-pinned CABAL_DIR), and
+#   2. the project build products (dist-newstyle), so GHC's recompilation
 #      avoidance rebuilds only dirty modules + their reverse-deps.
 # The dist-newstyle key includes the GHC and Cabal versions and the
 # dependency plan hash (so a compiler/Cabal bump or a dependency change
 # invalidates it) plus a per-commit suffix so every run saves a fresh
 # snapshot; restore-keys let the next run restore the most recent
 # snapshot for partial reuse.
+# Both key families carry a v2 marker BEFORE the variable parts: caches
+# captured before #671 hold content archived under the old toolchain
+# paths (actions/cache preserves absolute paths), so restoring one would
+# extract to a location nothing reads from — the marker keeps
+# prefix-matched restore-keys from ever picking them up.
 # GitHub's 10 GB LRU cache eviction bounds the accumulation.
 #
 # Trade-off accepted at #526: there is NO separate from-scratch clean
@@ -56,11 +63,12 @@ jobs:
     container:
       # Fixed literal tag on purpose: GitHub validates container.image
       # before any jobs run, so it cannot depend on outputs from an image-
-      # builder job. Refresh ci-v1 in place via
+      # builder job. Refresh ci-v2 in place via
       # .github/workflows/ci-image.yml when the Dockerfile changes. If we
       # ever want a new literal generation tag, bump both the image
-      # publisher and this reference together.
-      image: ghcr.io/coghex/synarchy-ci:ci-v1
+      # publisher and this reference together (#671 did exactly that for
+      # v1 -> v2: the toolchain moved into the image, see below).
+      image: ghcr.io/coghex/synarchy-ci:ci-v2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -71,44 +79,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Cache the ghcup-installed toolchain so "Set up GHC" reuses GHC
-      # 9.12.2 instead of re-downloading + unpacking it (~2.5 min). On
-      # these runners haskell-actions/setup installs ghcup under
-      # /usr/local/.ghcup (NOT ~/.ghcup — caching that path saved 0 bytes),
-      # and the runner user owns it, so it restores without sudo. Restored
-      # before setup so the action finds the existing install; saved at
-      # post-job. Static key — only a compiler/cabal version bump
-      # invalidates it.
-      #
-      # A prior attempt (since reverted) redirected this via
-      # GHCUP_INSTALL_BASE_PREFIX to work around this path's cache-restore
-      # sometimes failing with tar "Cannot utime / Cannot change mode" on
-      # current hosted runners. That redirect broke correctness instead:
-      # haskell-actions/setup@v2's own toolchain discovery still resolves
-      # tools at the DEFAULT /home/runner/.ghcup/bin regardless of
-      # GHCUP_INSTALL_BASE_PREFIX, so the 9.12.2 install landed in the
-      # custom prefix never made it onto PATH for later steps — cabal
-      # silently built against whatever pre-existing GHC (9.14.1) the
-      # runner image ships at the default location instead, which forced
-      # the dependency solver down to ancient, broken package versions
-      # (vulkan-3.7). A cache miss here just means a slower (~2.5 min)
-      # re-download of the CORRECT compiler every run — worse than a
-      # silently wrong one.
-      - name: Cache GHC toolchain
-        uses: actions/cache@v4
-        with:
-          path: /usr/local/.ghcup
-          key: ghcup-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-v2
-
-      - name: Set up GHC
-        id: setup
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: '9.12.2'
-          cabal-version: '3.16.1.0'
+      # The toolchain is baked into the ci-v2 image (#671) — no
+      # haskell-actions/setup, no toolchain cache. (The previous cache
+      # never hit inside the container: the action installs via the
+      # mounted runner tool cache, not the path we cached, so GHC was
+      # re-downloaded on every run.) This step only exports the image's
+      # paths for later steps — image ENV isn't reliably propagated
+      # through the runner's docker-exec env — and hard-fails with the
+      # exact versions if the image is stale, rather than letting cabal
+      # silently pick up some other compiler.
+      - name: Toolchain (baked into the CI image)
+        run: |
+          /usr/local/.ghcup/bin/ghc --version
+          /usr/local/.ghcup/bin/cabal --version
+          echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
+          echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
 
       - name: Configure (-Werror for the local package only)
         run: |
+          # Incremental against the index snapshot baked into the image —
+          # a delta fetch of seconds, not a full index download.
           cabal update
           # Scoped to `package synarchy` so dependency warnings can't
           # fail the build — only regressions against #435's clean slate.
@@ -119,13 +109,14 @@ jobs:
           cabal build all --dry-run
 
       # plan.json exists after --dry-run; its hash keys the store cache.
+      # The store path is static because the image pins CABAL_DIR (#671).
       - name: Restore dependency cache
         uses: actions/cache/restore@v4
         id: cache
         with:
-          path: ${{ steps.setup.outputs.cabal-store }}
-          key: deps-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
-          restore-keys: deps-${{ runner.os }}-ghc9.12.2-
+          path: /usr/local/cabal/store
+          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
 
       # Cache the project build products so GHC recompiles only dirty
       # modules. plan.json (from the --dry-run above) exists now, so its
@@ -138,10 +129,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dist-newstyle
-          key: dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ github.sha }}
+          key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ github.sha }}
           restore-keys: |
-            dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
-            dist-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
+            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
+            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
 
       - name: Build dependencies
         run: cabal build all --only-dependencies
@@ -152,8 +143,8 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ steps.setup.outputs.cabal-store }}
-          key: deps-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          path: /usr/local/cabal/store
+          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
 
       - name: Build (library + executable)
         run: cabal build all
@@ -193,8 +184,13 @@ jobs:
       # changed files (full curated smoke set for core/unclassified changes,
       # none for docs/assets or manual-only probe areas), and run them
       # against the exe already built above.
-      # --retries 1 re-runs a failed probe SOLO before failing, to absorb
-      # the sequential-engine contention flakes a back-to-back run shows.
+      # --jobs 2 (#671) pairs probes on the 4-vCPU runner — the eligible
+      # set ran strictly sequentially before (~4 min for the full set of
+      # 4). --retries 1 re-runs a failed probe SOLO before failing; that
+      # solo re-run is the designed absorber for exactly the parallel-
+      # engine contention flakes --jobs can introduce, so if flaky
+      # retries start showing up regularly here, drop back to --jobs 1
+      # rather than growing the retry count.
       - name: Behavior probes (path-selective)
         if: github.event_name == 'pull_request'
         run: |
@@ -210,4 +206,4 @@ jobs:
             exit 0
           fi
           echo "Selected probes: $ONLY"
-          python3 tools/run_probes.py --only "$ONLY" --exact --retries 1
+          python3 tools/run_probes.py --only "$ONLY" --exact --retries 1 --jobs 2
