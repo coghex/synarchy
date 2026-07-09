@@ -2,7 +2,7 @@
 
 -- | Tile-resolution ocean mask, propagated to chunk gen.
 --
---   The ocean placed by 'World.Generate.Chunk.composeFluidMap' was
+--   The ocean placed by 'World.Generate.Chunk.Fluid.composeFluidMap' was
 --   historically decided at CHUNK resolution ('chunkOrNeighborOceanic'
 --   — a coarse chunk-flood with median-elevation gating). Where that
 --   flood can't propagate through a chunk (a chunk-scale land sill, or
