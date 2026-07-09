@@ -230,6 +230,8 @@ library
                      Engine.Scripting.Lua.Material
                      Engine.Scripting.Lua.Message
                      Engine.Scripting.Lua.Thread
+                     Engine.Scripting.Lua.Thread.Console
+                     Engine.Scripting.Lua.Thread.Dispatch
                      Engine.Scripting.Lua.Script
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
