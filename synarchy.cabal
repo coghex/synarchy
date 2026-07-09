@@ -615,10 +615,18 @@ library
                      World.Fluid.Seabed.Types
                      World.Fluid.OceanMask
                      World.Geology.Erosion
+                     World.Geology.Erosion.Math
+                     World.Geology.Erosion.Sediment
+                     World.Geology.Erosion.Climate
                      World.Geology.Event
                      World.Hydrology.Types
                      World.Hydrology.Event
                      World.Hydrology.Simulation
+                     World.Hydrology.Simulation.Types
+                     World.Hydrology.Simulation.Grid
+                     World.Hydrology.Simulation.PriorityFlood
+                     World.Hydrology.Simulation.Flow
+                     World.Hydrology.Simulation.LakeDedup
                      World.Hydrology.WaterTable
                      World.Hydrology.River
                      World.Hydrology.River.Meander
@@ -636,6 +644,15 @@ library
                      World.Page.Types
                      World.Plate
                      World.Plate.Types
+                     World.Plate.Hash
+                     World.Plate.Wrap
+                     World.Plate.Noise
+                     World.Plate.Generation
+                     World.Plate.Glacier
+                     World.Plate.Query
+                     World.Plate.Coast
+                     World.Plate.Profiles
+                     World.Plate.Elevation
                      World.Region.Types
                      World.State.Types
                      World.Save.Types
@@ -670,6 +687,10 @@ library
                      World.Fluid.IceLevel
                      World.Fluid.Lake.Types
                      World.Fluid.Lake.Identify
+                     World.Fluid.Lake.Identify.Ocean
+                     World.Fluid.Lake.Identify.Flood
+                     World.Fluid.Lake.Identify.Components
+                     World.Fluid.Lake.Identify.ChunkIndex
                      World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
@@ -693,6 +714,9 @@ library
                      World.Weather.Types
                      World.Weather.Log
                      World.Weather.Generate
+                     World.Weather.Generate.OceanRegions
+                     World.Weather.Generate.Freshwater
+                     World.Weather.Generate.ClimateBuilder
                      World.Weather.Lookup
                      World.Weather.Ambient
                      World.Material
