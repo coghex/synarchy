@@ -622,6 +622,11 @@ library
                      World.Hydrology.Types
                      World.Hydrology.Event
                      World.Hydrology.Simulation
+                     World.Hydrology.Simulation.Types
+                     World.Hydrology.Simulation.Grid
+                     World.Hydrology.Simulation.PriorityFlood
+                     World.Hydrology.Simulation.Flow
+                     World.Hydrology.Simulation.LakeDedup
                      World.Hydrology.WaterTable
                      World.Hydrology.River
                      World.Hydrology.River.Meander
@@ -673,6 +678,10 @@ library
                      World.Fluid.IceLevel
                      World.Fluid.Lake.Types
                      World.Fluid.Lake.Identify
+                     World.Fluid.Lake.Identify.Ocean
+                     World.Fluid.Lake.Identify.Flood
+                     World.Fluid.Lake.Identify.Components
+                     World.Fluid.Lake.Identify.ChunkIndex
                      World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
@@ -696,6 +705,9 @@ library
                      World.Weather.Types
                      World.Weather.Log
                      World.Weather.Generate
+                     World.Weather.Generate.OceanRegions
+                     World.Weather.Generate.Freshwater
+                     World.Weather.Generate.ClimateBuilder
                      World.Weather.Lookup
                      World.Weather.Ambient
                      World.Material
