@@ -246,8 +246,9 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
     as machine hints (the model judges; these steer and ground it)."""
     cands = []
 
-    def add(turn, reasons, oracle_excerpt):
+    def add(turn, reasons, oracle_excerpt, player_note=""):
         cands.append({"cid": f"C{len(cands) + 1}", "turn": turn,
+                      "player_note": player_note,
                       "reasons": reasons, "oracle": oracle_excerpt})
 
     for s in signals:
@@ -280,7 +281,16 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
                                "actually informed the player about THIS action "
                                "or was unrelated (a silent failure can hide "
                                "behind unrelated noise)")
-        if s["action"].get("do") == "click" and s["clicked_widget"] is None:
+        # Phantom-affordance requires the F4 deadclick contract (or,
+        # in traces without outcome records, an explicitly fed-back
+        # nothing + a player note). F3 enumerates UI widgets, not the
+        # game world — an ordinary successful world click hits no
+        # widget and must NOT become a candidate.
+        deadclicked = any(isinstance(o, dict) and o.get("outcome") == "deadclick"
+                          for o in s["outcomes"])
+        if s["action"].get("do") == "click" and s["clicked_widget"] is None \
+                and (deadclicked
+                     or (not s["outcomes"] and not feedback_bits and s["note"])):
             reasons.append("phantom-affordance-join: the click hit no widget "
                            f"(per the F3 dump); {feedback}")
         if s["note"] and ("noth" in s["note"].lower()
@@ -301,7 +311,7 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
                 "events": s["events"], "outcomes": s["outcomes"],
                 "clicked_widget": s["clicked_widget"],
                 "visual_change_next": s["visual_change_next"],
-            })
+            }, player_note=s["note"])
 
     if meta.get("stop_reason") == "engine_crash":
         add(meta.get("turns", 0) or 0,
@@ -336,16 +346,15 @@ def build_digest(meta: dict, signals: list[dict],
         if s["injected"]:
             lines.append(f"  injected: {json.dumps(s['injected'])}")
             lines.append(f"  acks: {json.dumps(s['acks'])}")
-        # Full F3 widget dump (compact fields), deduped when identical
-        # to the previous turn's so long sessions stay readable.
-        compact = [{k: w.get(k) for k in
-                    ("id", "label", "type", "bounds", "enabled", "visible")}
-                   for w in s["widgets"] if isinstance(w, dict)]
-        key = json.dumps(compact, sort_keys=True)
+        # Full, LOSSLESS F3 widget dump — state-bearing fields (value,
+        # focused, hovered, ...) included, so a toggle flipping value
+        # is a real change. Deduped only when the serialized records
+        # are byte-identical to the previous turn's.
+        key = json.dumps(s["widgets"], sort_keys=True)
         if key == prev_widgets_key:
             lines.append("  widgets: (unchanged from previous turn)")
         else:
-            lines.append(f"  widgets: {json.dumps(compact, sort_keys=True)}")
+            lines.append(f"  widgets: {key}")
             prev_widgets_key = key
         lines.append(f"  oracle: menu={s['current_menu']!r} paused={s['paused']} "
                      f"events={json.dumps(s['events'])} "
@@ -354,9 +363,12 @@ def build_digest(meta: dict, signals: list[dict],
                      f"visual_change_next={s['visual_change_next']} "
                      f"stuck={s['stuck']}")
     lines.append("")
-    lines.append("FRICTION CANDIDATES (adjudicate every id)")
+    lines.append("FRICTION CANDIDATES (adjudicate every id; quote the "
+                 "player's own words when a note exists)")
     for c in candidates:
         lines.append(f"{c['cid']} (turn {c['turn']}):")
+        if c.get("player_note"):
+            lines.append(f"  player_note: {c['player_note']}")
         for r in c["reasons"]:
             lines.append(f"  - {r}")
     if not candidates:
@@ -364,54 +376,69 @@ def build_digest(meta: dict, signals: list[dict],
     return "\n".join(lines)
 
 
-def select_frames(trace_dir: str, turns: list[dict], candidates: list[dict],
-                  max_frames: int) -> tuple[list[tuple[int, str]], list[str]]:
-    """Screenshots the critic actually looks at. Priority order keeps
-    the evidence honest under the budget: (1) every candidate's OWN
-    turn — each adjudicated friction point should be seen — then
-    (2) each candidate's next turn (to judge visible effects), then
-    (3) the session bookends. Returns (frames, warnings); a candidate
-    whose own frame didn't fit the budget is warned about explicitly,
-    so the report never silently pretends the critic saw it."""
+def _frame_path(trace_dir: str, by_turn: dict, n: int) -> str | None:
+    t = by_turn.get(n)
+    if not t:
+        return None
+    p = os.path.join(trace_dir, t.get("screenshot", ""))
+    return p if os.path.isfile(p) else None
+
+
+def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
+                 max_frames: int
+                 ) -> tuple[list[tuple[list[dict], list[tuple[int, str]]]],
+                            list[str]]:
+    """Split the adjudication into calls such that EVERY candidate's
+    own-turn screenshot is actually shown in the call that adjudicates
+    it (the H2 multimodal-evidence requirement) — a warning about an
+    unseen frame is not a substitute. Greedy: pack candidates into a
+    batch while their frames (own turn, then the following turn for
+    the visible effect) fit --max-frames; overflow starts a new call.
+    A candidate-free session gets one call with the session bookends.
+    Returns (batches, warnings)."""
     by_turn = {t.get("turn"): t for t in turns}
+    batches: list[tuple[list[dict], list[tuple[int, str]]]] = []
+    cur: list[dict] = []
+    cur_frames: list[tuple[int, str]] = []
+    warnings: list[str] = []
 
-    def path_of(n):
-        t = by_turn.get(n)
-        if not t:
-            return None
-        p = os.path.join(trace_dir, t.get("screenshot", ""))
-        return p if os.path.isfile(p) else None
+    def flush():
+        nonlocal cur, cur_frames
+        if cur:
+            batches.append((cur, sorted(cur_frames)))
+        cur, cur_frames = [], []
 
-    passes = [
-        [(c["cid"], c["turn"]) for c in candidates],            # own turns
-        [(None, c["turn"] + 1) for c in candidates],            # effects
-        [(None, turns[0].get("turn", 1)) if turns else (None, 0),
-         (None, turns[-1].get("turn", len(turns))) if turns else (None, 0)],
-    ]
-    out: list[tuple[int, str]] = []
-    seen: set[int] = set()
-    unseen_cands: list[str] = []
-    for p, wants in enumerate(passes):
-        for cid, n in wants:
-            if n in seen:
-                continue
-            path = path_of(n)
-            if path is None:
-                continue
-            if len(out) >= max_frames:
-                if p == 0 and cid:
-                    unseen_cands.append(cid)
-                continue
-            seen.add(n)
-            out.append((n, path))
-    out.sort(key=lambda pair: pair[0])
-    warnings = []
-    if unseen_cands:
-        warnings.append(
-            "frame budget (--max-frames) exhausted: the critic did NOT see "
-            "screenshots for candidate(s) " + ", ".join(unseen_cands)
-            + " — treat their visual judgments as lower-confidence")
-    return out, warnings
+    for c in candidates:
+        own = _frame_path(trace_dir, by_turn, c["turn"])
+        own_needed = (1 if own and all(n != c["turn"] for n, _ in cur_frames)
+                      else 0)
+        if cur and len(cur_frames) + own_needed > max_frames:
+            flush()
+            own_needed = 1 if own else 0
+        if own and own_needed and len(cur_frames) < max_frames:
+            cur_frames.append((c["turn"], own))
+        elif own and own_needed:
+            # only possible when max_frames < 1
+            warnings.append(f"frame budget too small: candidate {c['cid']}"
+                            f" adjudicated WITHOUT its turn-{c['turn']} "
+                            "screenshot")
+        cur.append(c)
+        nxt = _frame_path(trace_dir, by_turn, c["turn"] + 1)
+        if nxt and len(cur_frames) < max_frames \
+                and all(n != c["turn"] + 1 for n, _ in cur_frames):
+            cur_frames.append((c["turn"] + 1, nxt))
+    flush()
+
+    if not batches:
+        frames: list[tuple[int, str]] = []
+        for n in ([turns[0].get("turn"), turns[-1].get("turn")]
+                  if turns else []):
+            p = _frame_path(trace_dir, by_turn, n)
+            if p and len(frames) < max_frames \
+                    and all(m != n for m, _ in frames):
+                frames.append((n, p))
+        batches = [([], sorted(frames))]
+    return batches, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -472,41 +499,49 @@ class FakeCritic:
     --eval, which runs the real model on the canned trace."""
 
     def adjudicate(self, digest: str, manual: str, frames, ask=None) -> dict:
+        import re
+        only = set(re.findall(r"C\d+", ask)) if ask else None
         findings = []
         # parse candidate blocks back out of the digest
         cur = None
+        note = ""
         for line in digest.splitlines():
             if line.startswith("C") and "(turn " in line:
                 cid, rest = line.split(" ", 1)
                 cur = (cid.rstrip(":"), int(rest.split("turn ")[1].split(")")[0]))
+                note = ""
+            elif cur and line.strip().startswith("player_note: "):
+                note = line.strip()[len("player_note: "):]
             elif cur and line.strip().startswith("- "):
                 reason = line.strip()[2:]
                 cid, turn = cur
+                if only is not None and cid not in only:
+                    continue
                 if reason.startswith("silent-failure-join"):
                     findings.append(self._mk(
                         "Silent failure", "missing-feedback", "major", "defect",
-                        cid, turn, reason))
+                        cid, turn, reason, note))
                 elif reason.startswith("bad-outcome-join"):
                     findings.append(self._mk(
                         "Rejection masked by unrelated feedback",
                         "missing-feedback", "major", "defect",
-                        cid, turn, reason))
+                        cid, turn, reason, note))
                 elif reason.startswith("phantom-affordance-join"):
                     findings.append(self._mk(
                         "Phantom affordance", "phantom-affordance", "minor",
-                        "defect", cid, turn, reason))
+                        "defect", cid, turn, reason, note))
                 elif reason.startswith("feedback-was-shown-join"):
                     findings.append(self._mk(
                         "Feedback shown but missed", "discoverability", "minor",
-                        "intended", cid, turn, reason))
+                        "intended", cid, turn, reason, note))
                 elif reason.startswith("engine crash"):
                     findings.append(self._mk(
                         "Engine crash", "crash", "blocker", "defect",
-                        cid, turn, reason))
+                        cid, turn, reason, note))
                 else:
                     findings.append(self._mk(
                         "Player friction", "other", "polish", "intended",
-                        cid, turn, reason))
+                        cid, turn, reason, note))
                 cur = (cid, turn)
         # merge multiple findings for the same cid into the first
         merged: dict[str, dict] = {}
@@ -517,11 +552,11 @@ class FakeCritic:
                 "findings": list(merged.values())}
 
     @staticmethod
-    def _mk(title, category, severity, verdict, cid, turn, reason):
+    def _mk(title, category, severity, verdict, cid, turn, reason, quote=""):
         return {"title": title, "category": category, "severity": severity,
                 "verdict": verdict, "confidence": "high",
                 "evidence": {"turns": [turn], "candidate_ids": [cid],
-                             "player_quote": "", "oracle": reason},
+                             "player_quote": quote, "oracle": reason},
                 "root_cause_hypothesis": "[fake critic]"}
 
 
@@ -529,16 +564,75 @@ class FakeCritic:
 # 3. Validation + rendering
 # ---------------------------------------------------------------------------
 
-def _grounded(f: dict) -> bool:
-    """The evidence-discipline gate: a finding only counts if it cites
-    turn(s) AND an oracle record. (The player quote may legitimately be
-    empty — e.g. a crash the player never got to comment on.)"""
+class ValidationCtx:
+    """Everything coverage validation checks findings against."""
+
+    def __init__(self, candidates: list[dict], turns: list[dict],
+                 audit_calls: list[dict]):
+        self.by_cid = {c["cid"]: c for c in candidates}
+        self.valid_turns = {t.get("turn") for t in turns}
+        # frames actually shown, per adjudication call number
+        self.frames_by_call = {a["call"]: set(a["frames"]) for a in audit_calls}
+        self.trace_frames = {t.get("turn") for t in turns
+                             if t.get("screenshot")}
+
+
+def coverage_of(f: dict, ctx: ValidationCtx, warnings: list[str]) -> set[str]:
+    """The candidate ids this finding VALIDLY covers, applying the
+    evidence discipline (review finding 4): turns must be non-empty,
+    real trace turns; an oracle record must be cited; each claimed
+    candidate's own turn must be among the cited turns; a candidate
+    born from a player note requires a non-empty player quote; and the
+    candidate's own frame must have been SHOWN in the call that
+    produced the finding (finding 3) when it exists in the trace.
+    Violations strip coverage (forcing the repair pass) and warn."""
     ev = f.get("evidence") or {}
-    return bool(ev.get("turns")) and bool((ev.get("oracle") or "").strip())
+    title = f.get("title")
+    turns = ev.get("turns") or []
+    if not turns or not (ev.get("oracle") or "").strip():
+        warnings.append(f"finding {title!r} is UNGROUNDED (no turns and/or "
+                        "no oracle record) — excluded from coverage, "
+                        "confidence forced low")
+        f["confidence"] = "low"
+        return set()
+    bogus = [n for n in turns if n not in ctx.valid_turns]
+    if bogus:
+        warnings.append(f"finding {title!r} cites nonexistent turn(s) "
+                        f"{bogus} — excluded from coverage, confidence "
+                        "forced low")
+        f["confidence"] = "low"
+        return set()
+    covered = set()
+    shown = ctx.frames_by_call.get(f.get("adjudication_call"), set())
+    for cid in ev.get("candidate_ids") or []:
+        cand = ctx.by_cid.get(cid)
+        if cand is None:
+            warnings.append(f"finding {title!r} claims unknown candidate "
+                            f"{cid!r} — ignored")
+            continue
+        if cand["turn"] not in turns:
+            warnings.append(f"finding {title!r} claims {cid} but does not "
+                            f"cite its turn {cand['turn']} — coverage "
+                            "stripped for that candidate")
+            continue
+        if cand.get("player_note") and not (ev.get("player_quote") or "").strip():
+            warnings.append(f"finding {title!r} claims {cid} (a player-noted "
+                            "friction) without quoting the player — coverage "
+                            "stripped for that candidate")
+            continue
+        if cand["turn"] in ctx.trace_frames and cand["turn"] not in shown:
+            warnings.append(f"finding {title!r} claims {cid} but the model "
+                            f"was never shown turn {cand['turn']}'s "
+                            "screenshot in that call — coverage stripped "
+                            "(repair will re-adjudicate with the frame)")
+            continue
+        covered.add(cid)
+    return covered
 
 
-def validate_findings(data: dict, candidates: list[dict]) -> tuple[dict, list[str]]:
-    warnings = []
+def validate_findings(data: dict, candidates: list[dict],
+                      ctx: ValidationCtx) -> tuple[dict, list[str]]:
+    warnings: list[str] = []
     data = dict(data or {})
     data.setdefault("summary", "")
     findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
@@ -561,13 +655,7 @@ def validate_findings(data: dict, candidates: list[dict]) -> tuple[dict, list[st
         ev.setdefault("player_quote", "")
         ev.setdefault("oracle", "")
         f["evidence"] = ev
-        if not _grounded(f):
-            # ungrounded findings never count as coverage, and are
-            # marked so the reader can't mistake them for evidence
-            warnings.append(f"finding {f.get('title')!r} is UNGROUNDED "
-                            "(no turns and/or no oracle record) — excluded "
-                            "from candidate coverage, confidence forced low")
-            f["confidence"] = "low"
+        f["covers"] = sorted(coverage_of(f, ctx, warnings))
     data["findings"] = findings
     missing = [c["cid"] for c in uncovered(data, candidates)]
     return data, warnings + ([f"unadjudicated candidates: {', '.join(missing)}"]
@@ -575,10 +663,10 @@ def validate_findings(data: dict, candidates: list[dict]) -> tuple[dict, list[st
 
 
 def uncovered(data: dict, candidates: list[dict]) -> list[dict]:
-    """Candidates not yet covered by a GROUNDED finding — an
-    ungrounded claim of coverage doesn't count (review finding 4)."""
-    covered = {cid for f in data.get("findings", []) if _grounded(f)
-               for cid in (f.get("evidence") or {}).get("candidate_ids", [])}
+    """Candidates not covered by a VALIDLY grounded finding (per
+    coverage_of — computed into f['covers'] during validation)."""
+    covered = {cid for f in data.get("findings", [])
+               for cid in f.get("covers", [])}
     return [c for c in candidates if c["cid"] not in covered]
 
 
@@ -591,15 +679,6 @@ def _assign_ids(findings: list[dict]) -> None:
                                  min(f["evidence"]["turns"] or [999])))
     for i, f in enumerate(findings, 1):
         f["id"] = f"F{i:02d}"
-
-
-def _screenshot_refs(f: dict, turns_by_n: dict) -> list[str]:
-    refs = []
-    for n in f["evidence"]["turns"]:
-        t = turns_by_n.get(n)
-        if t and t.get("screenshot"):
-            refs.append(t["screenshot"])
-    return refs
 
 
 def render_report(meta: dict, data: dict, warnings: list[str],
@@ -666,7 +745,7 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
     signals = build_signals(trace_dir, turns)
     candidates = friction_candidates(meta, signals)
     digest = build_digest(meta, signals, candidates)
-    frames, frame_warnings = select_frames(trace_dir, turns, candidates,
+    batches, frame_warnings = plan_batches(trace_dir, turns, candidates,
                                            max_frames)
 
     manual = ""
@@ -678,37 +757,81 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
     except OSError:
         manual = "(manual unavailable)"
 
-    data = critic.adjudicate(digest, manual, frames)
-    data, warnings = validate_findings(data, candidates)
+    # Adjudicate in batches so every candidate's own screenshot is in
+    # the call that judges it (finding 3): each call carries the full
+    # digest, its batch's frames, and an explicit only-these-ids ask.
+    audit_calls: list[dict] = []
+    findings: list[dict] = []
+    summary = None
 
-    # one bounded repair pass for anything left unadjudicated (or only
-    # covered by ungrounded findings) — WITH the missing candidates'
-    # own frames, so the repair judges from the same evidence
+    def one_call(subset, frames, ask):
+        call_no = len(audit_calls) + 1
+        audit_calls.append({"call": call_no,
+                            "candidate_ids": [c["cid"] for c in subset],
+                            "frames": [n for n, _ in frames]})
+        result = critic.adjudicate(digest, manual, frames, ask=ask)
+        for f in result.get("findings") or []:
+            if isinstance(f, dict):
+                f["adjudication_call"] = call_no
+                findings.append(f)
+        return result.get("summary") or ""
+
+    for subset, frames in batches:
+        ask = None
+        if len(batches) > 1:
+            ask = ("This pass adjudicates ONLY these candidate ids: "
+                   + (", ".join(c["cid"] for c in subset) or "(none)")
+                   + ". The other candidates are handled in separate passes "
+                   "with their own screenshots — do not emit findings for "
+                   "them here.")
+        s = one_call(subset, frames, ask)
+        if summary is None:
+            summary = s
+
+    data = {"summary": summary or "", "findings": findings}
+    ctx = ValidationCtx(candidates, turns, audit_calls)
+    data, warnings = validate_findings(data, candidates, ctx)
+
+    # one bounded repair pass for anything left unadjudicated (or
+    # covered only by findings that failed the evidence discipline) —
+    # WITH those candidates' own frames
     missing = uncovered(data, candidates)
     if missing:
-        repair_frames, _ = select_frames(trace_dir, turns, missing, max_frames)
-        ask = ("These candidate ids were left unadjudicated (or covered only "
-               "by findings with no grounding evidence): "
-               + ", ".join(c["cid"] for c in missing)
-               + ". Produce findings covering ONLY these ids now, each citing "
-               "its turns and oracle record "
-               "(same schema; the earlier findings are already recorded).")
+        repair_batches, _ = plan_batches(trace_dir, turns, missing, max_frames)
         try:
-            extra = critic.adjudicate(digest, manual, repair_frames, ask=ask)
-            data["findings"] += (extra.get("findings") or [])
-            data, warnings = validate_findings(data, candidates)
+            for subset, frames in repair_batches:
+                ask = ("These candidate ids were left unadjudicated (or "
+                       "covered only by findings that failed the evidence "
+                       "discipline): "
+                       + ", ".join(c["cid"] for c in subset)
+                       + ". Produce findings covering ONLY these ids now, "
+                       "each citing its turn(s), the player's own words when "
+                       "a note exists, and the grounding oracle record "
+                       "(same schema; earlier findings are already recorded).")
+                one_call(subset, frames, ask)
+            data = {"summary": data["summary"], "findings": findings}
+            ctx = ValidationCtx(candidates, turns, audit_calls)
+            data, warnings = validate_findings(data, candidates, ctx)
         except Exception as e:  # keep the report; warn honestly
             warnings.append(f"repair pass failed: {e}")
     warnings = frame_warnings + warnings
 
     _assign_ids(data["findings"])
     turns_by_n = {t.get("turn"): t for t in turns}
+    frames_by_call = {a["call"]: set(a["frames"]) for a in audit_calls}
     for f in data["findings"]:
-        f["screenshots"] = _screenshot_refs(f, turns_by_n)
+        # attach only screenshots the model was actually shown in the
+        # call that produced this finding — a report must never imply
+        # the critic saw a frame it didn't (review finding 3)
+        shown = frames_by_call.get(f.get("adjudication_call"), set())
+        f["screenshots"] = [ref for n, ref in
+                            ((n, (turns_by_n.get(n) or {}).get("screenshot"))
+                             for n in f["evidence"]["turns"])
+                            if ref and n in shown]
         f["evidence"]["screenshots"] = f["screenshots"]
     data["critic_model"] = getattr(critic, "model", "fake")
     data["candidates"] = candidates  # the full pre-analysis, for audit
-    data["frames_shown"] = [n for n, _ in frames]  # what the critic saw
+    data["adjudication_calls"] = audit_calls  # who saw which frames
 
     out_dir = out_dir or trace_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -782,14 +905,46 @@ def selftest() -> int:
               "missing fields" if not all(x in digest for x in
                   ("observation:", "injected:")) else "")
 
-        frames, fwarn = select_frames(tdir, turns, cands, max_frames=2)
-        cand_turns = [c["turn"] for c in cands]
-        check("frame budget prioritizes candidates' own turns",
-              [n for n, _ in frames] == sorted(cand_turns[:2]),
-              str([n for n, _ in frames]))
-        check("starved candidates are warned about explicitly",
-              fwarn and all(c["cid"] in fwarn[0]
-                            for c in cands[2:]), str(fwarn))
+        # ordinary WORLD clicks are not phantom candidates: F3 lists UI
+        # widgets, not world objects (round-2 review blocker)
+        base_click = {
+            "turn": 1, "observation": "", "note": "", "expectation": "",
+            "action": {"do": "click", "x": 5, "y": 5},
+            "injected": ["return input.click(5.0, 5.0)"],
+            "acks": [{"ok": True}], "events": [], "outcomes": [],
+            "bad_outcomes": [], "ack_errors": [],
+            "visual_change_next": True, "clicked_widget": None,
+            "widgets": [], "current_menu": "world_view", "paused": True,
+            "stuck": False,
+        }
+        accepted_click = dict(base_click,
+                              outcomes=[{"verb": "move", "outcome": "accepted"}])
+        check("world click with accepted outcome is no phantom candidate",
+              friction_candidates({}, [accepted_click]) == [])
+        check("outcome-less world click with visible effect is no candidate",
+              friction_candidates({}, [base_click]) == [])
+
+        # widget STATE changes must not dedupe as \"unchanged\"
+        s_a = dict(base_click, widgets=[{"id": "toggle:x", "value": False}])
+        s_b = dict(base_click, turn=2, widgets=[{"id": "toggle:x", "value": True}])
+        s_c = dict(s_b, turn=3)
+        check("widget value flip is a real change in the digest",
+              "(unchanged from previous turn)"
+              not in build_digest({}, [s_a, s_b], []))
+        check("byte-identical widget lists still dedupe",
+              "(unchanged from previous turn)"
+              in build_digest({}, [s_b, s_c], []))
+
+        # batching honesty: a tight frame budget means MORE calls, never
+        # an unseen candidate frame
+        batches, bwarn = plan_batches(tdir, turns, cands, max_frames=2)
+        check("tight frame budget splits into more calls",
+              len(batches) >= 3, str([len(b[0]) for b in batches]))
+        check("every candidate's own frame is in its own call",
+              all(any(n == c["turn"] for n, _ in frames)
+                  for subset, frames in batches for c in subset))
+        check("no starvation warnings needed once batched",
+              not bwarn, str(bwarn))
 
         report_path, findings_path = run_critic(tdir, FakeCritic())
         with open(findings_path) as f:
@@ -813,6 +968,28 @@ def selftest() -> int:
               and "## Intended behavior the player tripped on" in report)
         check("report references screenshots",
               "frames/turn_" in report)
+        check("adjudication audit records calls + frames",
+              isinstance(data.get("adjudication_calls"), list)
+              and all("frames" in a and "candidate_ids" in a
+                      for a in data["adjudication_calls"]))
+        fbc = {a["call"]: set(a["frames"])
+               for a in data["adjudication_calls"]}
+        check("findings only attach screenshots their call actually saw",
+              all(int(ref.rsplit("_", 1)[1].split(".")[0])
+                  in fbc.get(f_["adjudication_call"], set())
+                  for f_ in data["findings"]
+                  for ref in f_.get("screenshots", [])))
+
+        # batched end-to-end: max_frames=2 still covers everything
+        rp4, fp4 = run_critic(tdir, FakeCritic(),
+                              out_dir=os.path.join(tmp, "batched"),
+                              max_frames=2)
+        with open(fp4) as f:
+            data4 = json.load(f)
+        check("batched adjudication covers every candidate",
+              not uncovered(data4, cands)
+              and len(data4["adjudication_calls"]) >= 3,
+              f"calls={len(data4.get('adjudication_calls', []))}")
 
         # coverage repair: a critic that ignores candidates gets one
         # bounded repair ask, then an honest warning
@@ -861,6 +1038,50 @@ def selftest() -> int:
               ug.asks == 2 and not uncovered(ug_data, cands))
         check("ungrounded finding flagged in the report",
               "UNGROUNDED" in ug_report)
+
+        # evidence-alignment negatives: nonexistent turns, and a
+        # player-noted candidate claimed without quoting the player
+        def _one_shot(bad_finding):
+            class BadCritic(FakeCritic):
+                def __init__(self):
+                    self.asks = 0
+
+                def adjudicate(self, digest, manual, frames, ask=None):
+                    self.asks += 1
+                    if ask is None:
+                        return {"summary": "x", "findings": [dict(bad_finding)]}
+                    return FakeCritic.adjudicate(self, digest, manual, frames)
+            return BadCritic()
+
+        mm = _one_shot({"title": "wrong turn", "category": "other",
+                        "severity": "minor", "verdict": "defect",
+                        "confidence": "high",
+                        "evidence": {"turns": [999], "candidate_ids": ["C1"],
+                                     "player_quote": "q", "oracle": "made up"},
+                        "root_cause_hypothesis": ""})
+        rp3, fp3 = run_critic(tdir, mm, out_dir=os.path.join(tmp, "mismatch"))
+        with open(fp3) as f:
+            mm_data = json.load(f)
+        check("nonexistent-turn evidence rejected, repair recovers",
+              mm.asks == 2 and not uncovered(mm_data, cands))
+        check("nonexistent-turn warning surfaces in the report",
+              "nonexistent turn" in open(rp3).read())
+
+        c1_turn = next(c["turn"] for c in cands if c["cid"] == "C1")
+        ql = _one_shot({"title": "no quote", "category": "missing-feedback",
+                        "severity": "major", "verdict": "defect",
+                        "confidence": "high",
+                        "evidence": {"turns": [c1_turn],
+                                     "candidate_ids": ["C1"],
+                                     "player_quote": "",
+                                     "oracle": "outcome rejected"},
+                        "root_cause_hypothesis": ""})
+        rp5, fp5 = run_critic(tdir, ql, out_dir=os.path.join(tmp, "quoteless"))
+        with open(fp5) as f:
+            ql_data = json.load(f)
+        check("player-noted candidate without the player's quote is not "
+              "covered until repaired",
+              ql.asks == 2 and not uncovered(ql_data, cands))
 
     if failures:
         print(f"critic selftest: FAILED ({len(failures)}): {', '.join(failures)}")

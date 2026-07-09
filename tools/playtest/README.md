@@ -169,16 +169,21 @@ the canonical cross-source joins (action-outcome `rejected`/`noop`/
 click-hit-no-widget ⇒ phantom-affordance; player-claims-nothing-
 happened while the oracle shows feedback ⇒ feedback-was-shown; stuck
 loops; crash) and enumerates **friction candidates** with stable ids.
-One multimodal call (default `claude-opus-4-8`, high effort — cost is
-per-session, not per-turn) then adjudicates every candidate as
-**defect** or **intended**, judging against the player manual as the
-intended mental model and actually looking at the friction turns'
-screenshots (`--max-frames` budget). Validation enforces the enums and
-full candidate coverage (one bounded repair pass, then honest
-warnings); findings carry turns + player quote + the grounding oracle
-record, and both verdict buckets render in the report so nothing is
-silently dropped. The full candidate list is embedded in
-`findings.json` for audit.
+Adjudication (default `claude-opus-4-8`, high effort — cost is
+per-session, not per-turn) is **batched** so that every candidate's
+own screenshot is actually shown in the call that judges it:
+`--max-frames` is a per-call budget, and a tight budget means more
+calls, never an unseen candidate frame. The critic judges against the
+player manual as the intended mental model. Validation enforces the
+enums and **evidence-disciplined coverage**: a finding only counts for
+a candidate if it cites real trace turns including that candidate's
+turn, an oracle record, the player's own words when the friction came
+from a note, and only frames its call was actually shown (a bounded
+repair pass re-adjudicates anything stripped, then honest warnings).
+Findings attach only screenshots their call saw; `findings.json`
+embeds the full candidate list and a per-call audit
+(`adjudication_calls`: which candidates, which frames) so nothing is
+silently dropped or overstated.
 
 Testing: `canned_trace.py` builds a synthetic trace with planted
 issues — a genuine silent failure (outcome rejected, no event, no
