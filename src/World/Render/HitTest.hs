@@ -4,7 +4,7 @@
 -- This is the single source of truth for unprojecting a screen pixel to
 -- the tile under it, accounting for the isometric tilt, camera facing,
 -- elevation, z-slice, and the u-wrap chunk-visibility test. Both the
--- per-frame render hover resolution ('World.Render.Quads') and the
+-- per-frame render hover resolution ('World.Render.CursorQuads') and the
 -- synchronous Lua pick (@world.pickTile@) call this so they can never
 -- drift — a drift here would silently place buildings on the wrong tile.
 module World.Render.HitTest
@@ -33,7 +33,8 @@ type HitResult = (Int, Int, Int, Float, (Float, Float))
 
 -- | Unproject a screen pixel to the tile under it. Mirror of the inline
 --   hit-test that drives @worldHoverTile@ each frame; see that comment in
---   'World.Render.Quads' for the elevation / fractional-position rationale.
+--   'World.Render.CursorQuads' for the elevation / fractional-position
+--   rationale.
 --
 --   The arithmetic is identical to the render path; the parameters are the
 --   exact render-frame locals it used (camera facing/zoom/z-slice/position,

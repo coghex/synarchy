@@ -277,6 +277,14 @@ library
                      Engine.Scripting.Lua.API.Units.Selection
                      Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
+                     Engine.Scripting.Lua.API.World.GenConfig
+                     Engine.Scripting.Lua.API.World.Lifecycle
+                     Engine.Scripting.Lua.API.World.Clock
+                     Engine.Scripting.Lua.API.World.Cursor
+                     Engine.Scripting.Lua.API.World.Designation
+                     Engine.Scripting.Lua.API.World.Query
+                     Engine.Scripting.Lua.API.World.Tools
+                     Engine.Scripting.Lua.API.World.Edit
                      Engine.Scripting.Lua.API.WorldQuery
                      Engine.Scripting.Lua.API.WorldQuery.Lookup
                      Engine.Scripting.Lua.API.WorldQuery.Terrain
@@ -502,6 +510,8 @@ library
                      World.Render.ChunkCulling
                      World.Render.HitTest
                      World.Render.Quads
+                     World.Render.WaterSlope
+                     World.Render.CursorQuads
                      World.Render.TileQuads
                      World.Render.FloraQuads
                      World.Render.GroundItemQuads
@@ -521,6 +531,10 @@ library
                      World.Generate.Constants
                      World.Generate.Coordinates
                      World.Generate.Chunk
+                     World.Generate.Chunk.Fluid
+                     World.Generate.Chunk.SoilGates
+                     World.Generate.Chunk.Columns
+                     World.Generate.Chunk.Zoom
                      World.Generate.InitTerrain
                      World.Generate.Timeline
                      World.Generate.Timeline.Fast
@@ -633,6 +647,12 @@ library
                      World.Fluid.Lake.Graben
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
+                     World.Fluid.River.Identify.Common
+                     World.Fluid.River.Identify.Flow
+                     World.Fluid.River.Identify.Components
+                     World.Fluid.River.Identify.Breakthrough
+                     World.Fluid.River.Identify.BedDepth
+                     World.Fluid.River.Identify.ChunkIndex
                      World.Fluid.Lava
                      World.Magma.Overlay
                      World.Magma.Types

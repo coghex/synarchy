@@ -3,8 +3,8 @@
 --
 -- Given mouse coordinates in framebuffer pixels, find which (if any)
 -- spawned unit is under the cursor. Mirrors the screen→world projection
--- in `World/Render/Quads.hs::renderWorldCursorQuads::hitTest` and the
--- per-unit sprite math in `Unit/Render.hs::unitToQuad`.
+-- in `World/Render/CursorQuads.hs::renderWorldCursorQuads::hitTest` and
+-- the per-unit sprite math in `Unit/Render.hs::unitToQuad`.
 --
 -- Returns the unit with the highest gridZ that contains the click —
 -- so clicking a tile with two stacked units selects the one on top.
