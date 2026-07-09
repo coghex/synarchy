@@ -226,6 +226,7 @@ class ScriptedAgent:
     DEFAULT_SCRIPT = [
         {"do": "wait"},
         {"do": "scroll", "dy": -1},
+        {"do": "hold", "name": "W"},   # exercises the pre/post split
         {"do": "key", "name": "Space"},
     ]
 

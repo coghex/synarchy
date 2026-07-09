@@ -44,8 +44,11 @@ Per turn: **pause → screenshot (F1 `debug.captureScreenshot`) → the
 player decides from pixels alone → inject its action (F2 `input.*`) →
 record the oracle snapshot → unpause for a wall-clock `dt` → re-pause.**
 Wall-clock stepping is a deliberate simplicity tradeoff: `--replay`
-reproduces the **input sequence and pacing**, not bit-identical turns
-(deterministic tick-stepping is the noted escape hatch, not built).
+replays every recorded turn — pre-step inputs before the `dt` step,
+post-step inputs (held-key release) after it, empty turns included —
+so the **input sequence and pacing** are faithful, but turns are not
+guaranteed bit-identical (deterministic tick-stepping is the noted
+escape hatch, not built).
 
 ## The cardinal rule: the player is oracle-blind
 
@@ -110,18 +113,23 @@ gitignored):
   the exact injected `input.*` calls and their acks, and the **oracle
   snapshot** (`ui.dumpWidgets`, `engine.getEventLog` delta, current
   menu, pause state), flagged `player_invisible: true`.
-- `replay.jsonl` — the flat ordered injected inputs.
+- `replay.jsonl` — one line **per turn** (no-input turns included, so
+  replay pacing is faithful): `{"turn": N, "pre": [lua...], "post":
+  [lua...]}` — `pre` is injected before the sim step, `post` after it
+  (a held key's `keyUp` rides `post`).
 - `frames/turn_NNNN.png` — the F1 captures.
 - `engine.log` — engine output, copied at session end (an engine crash
   mid-session is a **finding**: the partial trace + logs are retained
   and `stop_reason` is `engine_crash`).
 
 Notes on trace contents:
-- **World seed:** no engine verb exposes the active world's seed, so
-  `meta.world_seed` is null; when the player creates a world through
-  the UI, the create-world screen's oracle widget dump captures the
-  seed box's displayed text at that turn. For reproducible-world
-  sessions, give the persona a goal that types an explicit seed.
+- **World seed:** `world.getSeed()` (added with this harness) is
+  polled in every oracle snapshot; the first non-null value — the seed
+  the player actually got, typed or randomized — is promoted into
+  `meta.world_seed`. A replay records `replay_seed_match` and warns
+  when the replayed world's seed differs (a UI-randomized seed can't
+  be re-rolled by input reinjection); for reproducible worlds, give
+  the persona a goal that types an explicit seed.
 - **F4 outcomes** (#646) haven't landed; `meta.f4_outcomes` says so.
   When the outcome tap ships, its per-turn records join the oracle
   snapshot in `engine.py:oracle_snapshot`.

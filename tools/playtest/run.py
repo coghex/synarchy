@@ -71,6 +71,14 @@ def _action_sig(action: dict) -> str:
     return json.dumps(action, sort_keys=True)
 
 
+def _promote_seed(trace: SessionTrace, oracle: dict) -> None:
+    """First non-null world seed the oracle sees becomes session
+    metadata — the world the player actually ended up in, even when
+    the create-world screen randomized it."""
+    if trace.meta.get("world_seed") is None and oracle.get("world_seed") is not None:
+        trace.meta["world_seed"] = oracle["world_seed"]
+
+
 def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 turns: int, dt: float, max_seconds: float | None,
                 memory_turns: int, stuck_k: int, settle: float = 0.3) -> str:
@@ -110,6 +118,7 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
 
         # 5. oracle snapshot — recorded, never shown to the player
         oracle = eng.oracle_snapshot()
+        _promote_seed(trace, oracle)
 
         # stuck-loop detection: same action, same pixels, K times in a
         # row. A repeat-with-no-change loop is itself a strong
@@ -136,7 +145,7 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             "stuck": stuck,
         }
         trace.record_turn(record)
-        trace.record_replay(turn, calls + post_calls)
+        trace.record_replay(turn, calls, post_calls)
 
         note = decision.get("note") or ""
         print(f"  turn {turn:3d}: {action.get('do'):6s} "
@@ -170,35 +179,51 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
 
 def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                dt: float, settle: float = 0.3) -> str:
-    """Re-inject a recorded session's inputs — no LLM. Reproduces the
-    input sequence + pacing; wall-clock dt means it is NOT guaranteed
+    """Re-inject a recorded session's inputs — no LLM. Faithful to the
+    session's structure: every recorded turn is replayed (including
+    no-input ones, so pacing matches), pre-step calls land before the
+    dt step and post-step calls (a held key's keyUp) after it, exactly
+    as they did live. Wall-clock dt means it is still NOT guaranteed
     bit-identical (accepted tradeoff — see README)."""
     entries = load_replay(source_dir)
     if not entries:
         print(f"  [warn] {source_dir} has no replay.jsonl entries")
         return "replay_empty"
-    by_turn: dict[int, list[str]] = {}
-    for turn, lua in entries:
-        by_turn.setdefault(turn, []).append(lua)
-    for turn in sorted(by_turn):
+    src_meta = load_meta(source_dir)
+    for entry in entries:
+        turn = entry["turn"]
         eng.set_paused(True)
         frame = trace.frame_path(turn)
         fb_size = eng.screenshot(frame)
-        calls = by_turn[turn]
-        acks = eng.inject(calls)
-        time.sleep(settle)
+        acks = eng.inject(entry["pre"])
+        if entry["pre"]:
+            time.sleep(settle)
         oracle = eng.oracle_snapshot()
+        _promote_seed(trace, oracle)
         trace.record_turn({
             "turn": turn, "ts": time.time(),
             "screenshot": os.path.relpath(frame, trace.dir),
             "fb_size": list(fb_size),
             "player": None,   # replay has no player — inputs come from the trace
-            "injected": calls, "acks": acks, "oracle": oracle, "stuck": False,
+            "injected": entry["pre"] + entry["post"], "acks": acks,
+            "oracle": oracle, "stuck": False,
         })
-        print(f"  replay turn {turn:3d}: {len(calls)} call(s)")
+        print(f"  replay turn {turn:3d}: {len(entry['pre'])}+{len(entry['post'])} call(s)")
         eng.set_paused(False)
         time.sleep(dt)
         eng.set_paused(True)
+        if entry["post"]:
+            eng.inject(entry["post"])
+    # Seed comparison: with a UI-randomized seed the replayed world
+    # diverges from the session's — detectable, recorded, and warned.
+    src_seed = src_meta.get("world_seed")
+    got_seed = trace.meta.get("world_seed")
+    trace.meta["replay_seed_match"] = (
+        None if src_seed is None and got_seed is None else src_seed == got_seed)
+    if trace.meta["replay_seed_match"] is False:
+        print(f"  [warn] replayed world seed {got_seed} != session's {src_seed} "
+              "— the session's seed was UI-randomized; world-dependent turns "
+              "will diverge (type an explicit seed for reproducible worlds)")
     return "replay_complete"
 
 
@@ -240,12 +265,18 @@ def selftest() -> int:
         check("meta finished with stop reason",
               meta.get("stop_reason") == reason and meta.get("turns") == 5)
         replay_entries = load_replay(tdir)
-        check("replay.jsonl records the injected inputs",
-              len(replay_entries) >= 1
-              and all("input." in lua for _, lua in replay_entries),
+        check("replay.jsonl has one entry per turn, no-input turns included",
+              len(replay_entries) == 5
+              and [e["turn"] for e in replay_entries] == [1, 2, 3, 4, 5],
               f"{len(replay_entries)} entries")
+        check("held key records its keyUp in the post-step phase",
+              any("keyDown" in c for e in replay_entries for c in e["pre"])
+              and any("keyUp" in c for e in replay_entries for c in e["post"]))
+        check("meta captured the oracle's world seed",
+              meta.get("world_seed") == 4242, str(meta.get("world_seed")))
 
-        # 2. replay against a fresh fake engine — same inputs re-injected
+        # 2. replay against a fresh fake engine — same inputs, same
+        # order (pre before the step, post after), same turn count
         rdir = os.path.join(tmp, "replay")
         rtrace = SessionTrace(rdir, {"mode": "selftest-replay"})
         reng = FakeEngine()
@@ -253,8 +284,13 @@ def selftest() -> int:
         rtrace.finish(rreason)
         check("replay completes without an agent",
               rreason == "replay_complete", rreason)
-        check("replay re-injected the same input calls",
-              reng.injected == [lua for _, lua in replay_entries])
+        check("replay re-injected the identical call sequence",
+              reng.injected == eng.injected,
+              f"{reng.injected} vs {eng.injected}")
+        check("replay covers every turn", len(load_turns(rdir)) == 5,
+              str(len(load_turns(rdir))))
+        check("replay seed comparison recorded",
+              load_meta(rdir).get("replay_seed_match") is True)
 
         # 3. stuck-loop detection: constant action + constant frame
         sdir = os.path.join(tmp, "stuck")
@@ -352,9 +388,9 @@ def main() -> int:
         "persona": persona,
         "manual_path": None if replaying else args.manual,
         "player_model": None,
-        "world_seed": None,  # no engine verb exposes it; the create-world
-                             # screen's widget dump in the oracle carries the
-                             # seed box text when a world is created via UI
+        "world_seed": None,  # promoted from the oracle's world.getSeed()
+                             # the first turn a world exists — the seed the
+                             # player actually got, randomized or typed
         "f4_outcomes": "unavailable (issue #646 open)",
         "replay_of": os.path.abspath(args.replay) if replaying else None,
     }

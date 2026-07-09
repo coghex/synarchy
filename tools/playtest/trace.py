@@ -5,9 +5,13 @@ consumes. H1 records; it never analyzes.
 
     <trace_dir>/
     ├── meta.json        session metadata (persona, model, dt, versions,
-    │                    timestamps, stop_reason, fb size, ...)
+    │                    timestamps, stop_reason, fb size, world_seed, ...)
     ├── turns.jsonl      one JSON object per turn (schema below)
-    ├── replay.jsonl     flat ordered inputs: {"turn": N, "lua": "..."}
+    ├── replay.jsonl     one line PER TURN (no-input turns included, so
+    │                    replay pacing is faithful):
+    │                    {"turn": N, "pre": [lua...], "post": [lua...]}
+    │                    pre = injected before the sim step; post = after
+    │                    it (a held key's keyUp rides post)
     ├── frames/          turn_0001.png ... (F1 captures)
     └── engine.log       engine stdout/stderr copied at session end
 
@@ -52,12 +56,12 @@ class SessionTrace:
         with open(os.path.join(self.dir, "turns.jsonl"), "a") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
 
-    def record_replay(self, turn: int, lua_calls: list[str]) -> None:
-        if not lua_calls:
-            return
+    def record_replay(self, turn: int, pre: list[str], post: list[str]) -> None:
+        """One line per turn — ALWAYS, even with no calls, so replay
+        reproduces the turn count and pacing of the session (a run of
+        'wait' turns is real elapsed game time, not dead trace)."""
         with open(os.path.join(self.dir, "replay.jsonl"), "a") as f:
-            for call in lua_calls:
-                f.write(json.dumps({"turn": turn, "lua": call}) + "\n")
+            f.write(json.dumps({"turn": turn, "pre": pre, "post": post}) + "\n")
 
     def attach_engine_log(self, log_path: str) -> None:
         try:
@@ -78,10 +82,12 @@ def load_meta(trace_dir: str) -> dict:
         return json.load(f)
 
 
-def load_replay(trace_dir: str) -> list[tuple[int, str]]:
-    """The ordered injected inputs of a recorded session."""
+def load_replay(trace_dir: str) -> list[dict]:
+    """The recorded session's turns, in order: each entry is
+    {"turn": N, "pre": [lua...], "post": [lua...]} — no-input turns
+    included."""
     path = os.path.join(trace_dir, "replay.jsonl")
-    entries: list[tuple[int, str]] = []
+    entries: list[dict] = []
     if not os.path.isfile(path):
         return entries
     with open(path) as f:
@@ -89,7 +95,10 @@ def load_replay(trace_dir: str) -> list[tuple[int, str]]:
             line = line.strip()
             if line:
                 obj = json.loads(line)
-                entries.append((int(obj["turn"]), str(obj["lua"])))
+                entries.append({"turn": int(obj["turn"]),
+                                "pre": list(obj.get("pre") or []),
+                                "post": list(obj.get("post") or [])})
+    entries.sort(key=lambda e: e["turn"])
     return entries
 
 

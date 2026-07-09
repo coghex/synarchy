@@ -29,6 +29,7 @@ registerWorldAPI env = do
   registerLuaFunction "setTime" (worldSetTimeFn env)
   registerLuaFunction "setDate" (worldSetDateFn env)
   registerLuaFunction "getDate" (worldGetDateFn env)
+  registerLuaFunction "getSeed" (worldGetSeedFn env)
   registerLuaFunction "setTimeScale" (worldSetTimeScaleFn env)
   registerLuaFunction "getTimeScale" (worldGetTimeScaleFn env)
   registerLuaFunction "getActiveWorldId" (worldGetActiveWorldIdFn env)

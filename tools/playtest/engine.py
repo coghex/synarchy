@@ -219,6 +219,12 @@ class PlaytestEngine:
             self._event_log_seen = len(log)
         else:
             snap["event_log_new"] = []
+        # The active world's generation seed (world.getSeed, added for
+        # this harness) — nil until the player has created a world.
+        # The runner promotes the first non-null value into meta so a
+        # randomized-seed session is still reproducible/diagnosable.
+        seed = self.lua("return world.getSeed()")
+        snap["world_seed"] = seed if isinstance(seed, int) else None
         # F4 (#646, action-outcome tap) hasn't landed; when it does,
         # its per-turn outcomes belong here alongside the widget dump.
         return snap
@@ -262,7 +268,7 @@ class FakeEngine(PlaytestEngine):
 
     def oracle_snapshot(self) -> dict:
         return {"player_invisible": True, "widgets": [], "current_menu": "main",
-                "paused": self.paused, "event_log_new": []}
+                "paused": self.paused, "event_log_new": [], "world_seed": 4242}
 
     def lua(self, code: str, timeout: float = 0):
         return {"ok": True}
