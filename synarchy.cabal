@@ -619,6 +619,11 @@ library
                      World.Hydrology.Types
                      World.Hydrology.Event
                      World.Hydrology.Simulation
+                     World.Hydrology.Simulation.Types
+                     World.Hydrology.Simulation.Grid
+                     World.Hydrology.Simulation.PriorityFlood
+                     World.Hydrology.Simulation.Flow
+                     World.Hydrology.Simulation.LakeDedup
                      World.Hydrology.WaterTable
                      World.Hydrology.River
                      World.Hydrology.River.Meander
