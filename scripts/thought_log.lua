@@ -5,7 +5,7 @@
 -- (a dedicated all-units browser panel is left for a future pass if
 -- wanted — not needed for a "readable per-unit log").
 --
--- Loaded via engine.loadScript (see scripts/init.lua) so it keeps
+-- Loaded via engine.loadScript (see scripts/init_loader.lua) so it keeps
 -- draining thought.drainEvents() in the background even while no
 -- unit-log panel is open, exactly like combat_log/injury_log_panel.
 

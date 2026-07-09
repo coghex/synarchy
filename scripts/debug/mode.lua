@@ -29,7 +29,7 @@ Mode.formatEntry = formatEntry
 --   label         button text
 --   armedField    overlay[] key mirroring the armed value. Kept on the
 --                 overlay table itself (not inside the mode) because
---                 scripts/init.lua reads debugOverlay.armedDef /
+--                 scripts/init_mouse.lua reads debugOverlay.armedDef /
 --                 armedItemDef / armedFluidType / armedTerrainId /
 --                 armedLocation / armedStructure directly.
 --   exclusiveWith armedField names to clear when this mode arms

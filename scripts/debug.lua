@@ -5,7 +5,7 @@
 -- location/structure). Clicking a category's button opens a vertical
 -- list of its entries; clicking an entry arms that category (a "> "
 -- prefix + yellow highlight) and left-clicks on the map perform that
--- category's world action at the hover tile (see scripts/init.lua,
+-- category's world action at the hover tile (see scripts/init_mouse.lua,
 -- which reads the armed* fields and calls unit.spawn / item.spawnGround
 -- / world.setFluidTile / world.addTile / locations.stamp / the
 -- structures module). Exits: right-click, ESC, click the button again,
@@ -192,7 +192,7 @@ rebuildClickableRects = function()
     end
 end
 
--- Public per-category names. These are load-bearing: scripts/init.lua
+-- Public per-category names. These are load-bearing: scripts/init_mouse.lua
 -- and others call debugOverlay.clearArmed()/clearArmedItem()/etc. and
 -- debugOverlay.openSpawnList()/etc. by these exact names.
 local WRAPPER_NAMES = {
