@@ -37,7 +37,7 @@ test-suite synarchy-test-graphical
     other-modules: Test.UPrelude
                    Test.Engine.Core.Queue
                    Test.Engine.Core.Var
-                   Test.Engine.Input.Thread
+                   Test.Engine.Input.State
                    Test.Engine.Graphics.Window.GLFW
                    Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Surface
@@ -366,6 +366,7 @@ library
                      Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
+                     Engine.Input.State
                      Engine.Input.Types
                      Engine.Input.Thread
                      Engine.Scripting.Types
@@ -458,6 +459,10 @@ library
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
+                     UI.Tooltip.Layout
+                     UI.Tooltip.Lock
+                     UI.Tooltip.Render
+                     UI.Tooltip.State
                      Unit.Types
                      Unit.Anim
                      Unit.Stats
@@ -585,6 +590,12 @@ library
                      World.Thread.Command.Texture
                      World.Thread.Command.UI
                      World.Thread.Command.Edit
+                     World.Thread.Command.Edit.Sync
+                     World.Thread.Command.Edit.Terrain
+                     World.Thread.Command.Edit.Structure
+                     World.Thread.Command.Edit.Vegetation
+                     World.Thread.Command.Edit.Dig
+                     World.Thread.Command.Edit.Fluid
                      World.Thread.Command.Location
                      World.Grid
                      World.Render
@@ -619,6 +630,9 @@ library
                      World.Generate.Strata
                      World.Generate.Types
                      World.Generate.Config
+                     World.Generate.Config.Types
+                     World.Generate.Config.Normalize
+                     World.Generate.Config.IO
                      World.Geology
                      World.Geology.Types
                      World.Geology.Ore
