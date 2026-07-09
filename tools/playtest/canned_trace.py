@@ -19,6 +19,13 @@ offline against known ground truth:
             expecting an inventory; no widget is there, the outcome is
             a deadclick, nothing changes.
   turn 5  — quiet turn (no friction) — must NOT become a finding.
+  turn 6  — SILENT FAILURE MASKED BY UNRELATED FEEDBACK: another
+            rejected Place Marker click, but this time an unrelated
+            survival warning fires in the same window and the frame
+            changes (live-world motion). Naive "any feedback = fed
+            back" gating would suppress this; the critic must still
+            see the rejected outcome as a candidate and judge whether
+            the feedback actually informed the player.
 
 The oracle snapshots carry F4-shaped `outcomes` records (the tap
 itself, #646, hasn't landed in live traces yet — the critic reads them
@@ -125,6 +132,17 @@ def build_canned_trace(trace_dir: str) -> str:
                "raw": "", "usage": None},
               [],
               _oracle()),
+        _turn(6, PNG_BLACK,
+              {"observation": "One of the little people is walking around.",
+               "action": {"do": "click", "x": 200, "y": 130},
+               "expectation": "Placing a marker now that things settled.",
+               "note": "",
+               "raw": "", "usage": None},
+              ['return input.click(200.0, 130.0)'],
+              _oracle(events=[{"cat": "survival_warning",
+                               "text": "Acolyte Renn is thirsty"}],
+                      outcomes=[{"verb": "marker.place", "outcome": "rejected",
+                                 "reason": "insufficient materials"}])),
     ]
 
     with open(os.path.join(trace_dir, "turns.jsonl"), "w") as f:
@@ -143,8 +161,8 @@ def build_canned_trace(trace_dir: str) -> str:
         "harness_version": "fixture",
         "mode": "llm",
         "dt": 2.0,
-        "turn_budget": 5,
-        "turns": 5,
+        "turn_budget": 6,
+        "turns": 6,
         "stop_reason": "turn_budget_exhausted",
         "persona": {
             "name": "canned_casey",

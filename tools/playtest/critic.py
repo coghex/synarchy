@@ -218,17 +218,24 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
                                 float(action.get("y", -1)))
         bad = [o for o in outcomes
                if isinstance(o, dict) and o.get("outcome") in BAD_OUTCOMES]
+        widgets = oracle.get("widgets")
         signals.append({
             "turn": t.get("turn", i + 1),
+            "observation": (player.get("observation") or "").strip(),
             "note": (player.get("note") or "").strip(),
             "expectation": (player.get("expectation") or "").strip(),
             "action": action,
+            "injected": t.get("injected") or [],
+            "acks": acks,
             "events": events,
             "outcomes": outcomes,
             "bad_outcomes": bad,
             "ack_errors": ack_errors,
             "visual_change_next": changed,
             "clicked_widget": clicked,
+            "widgets": widgets if isinstance(widgets, list) else [],
+            "current_menu": oracle.get("current_menu"),
+            "paused": oracle.get("paused"),
             "stuck": bool(t.get("stuck")),
         })
     return signals
@@ -245,25 +252,43 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
 
     for s in signals:
         reasons = []
-        is_actiony = s["action"].get("do") in ("click", "drag", "key",
-                                               "type", "scroll", "hold")
-        no_feedback = not s["events"] and s["visual_change_next"] is False
-        if s["bad_outcomes"] and no_feedback:
-            reasons.append("silent-failure-join: action outcome "
-                           f"{s['bad_outcomes'][0].get('outcome')!r} with no "
-                           "user-facing event and no visible frame change")
-        if s["action"].get("do") == "click" and s["clicked_widget"] is None \
-                and is_actiony and no_feedback:
-            reasons.append("phantom-affordance-join: click hit no widget "
-                           "(per the F3 dump) and nothing changed")
+        # What feedback signals existed this turn — CONTEXT for the
+        # critic, never a gate. In a live unpaused world the frame
+        # almost always changes and unrelated events fire, so gating a
+        # bad outcome on "no feedback anywhere" would suppress nearly
+        # every real silent failure (the false-negative class flagged
+        # in review). The critic judges whether the feedback actually
+        # correlated with the action.
+        feedback_bits = []
+        if s["events"]:
+            feedback_bits.append(f"events fired: {json.dumps(s['events'])}")
+        if s["visual_change_next"]:
+            feedback_bits.append("the next frame differs visibly")
+        feedback = ("; ".join(feedback_bits)
+                    if feedback_bits else "NO feedback of any kind "
+                    "(no events, next frame byte-identical)")
+        if s["bad_outcomes"]:
+            kind = s["bad_outcomes"][0].get("outcome")
+            if not feedback_bits:
+                reasons.append(f"silent-failure-join: action outcome {kind!r} "
+                               "with no user-facing event and no visible "
+                               "frame change")
+            else:
+                reasons.append(f"bad-outcome-join: action outcome {kind!r} "
+                               f"({s['bad_outcomes'][0].get('reason', 'no reason')}); "
+                               f"{feedback} — judge whether that feedback "
+                               "actually informed the player about THIS action "
+                               "or was unrelated (a silent failure can hide "
+                               "behind unrelated noise)")
+        if s["action"].get("do") == "click" and s["clicked_widget"] is None:
+            reasons.append("phantom-affordance-join: the click hit no widget "
+                           f"(per the F3 dump); {feedback}")
         if s["note"] and ("noth" in s["note"].lower()
                           or "broken" in s["note"].lower()
                           or "work" in s["note"].lower()) \
-                and (s["events"] or s["visual_change_next"]):
+                and feedback_bits:
             reasons.append("feedback-was-shown-join: the player claims no "
-                           "effect, but the oracle shows "
-                           + ("an event-log entry " if s["events"] else "")
-                           + ("a visible frame change" if s["visual_change_next"] else "").strip())
+                           f"effect, but the oracle shows: {feedback}")
         if s["stuck"]:
             reasons.append("stuck-loop: same action with no visible change, "
                            "repeatedly — strong missing-feedback signal")
@@ -298,15 +323,32 @@ def build_digest(meta: dict, signals: list[dict],
         "TURNS (player fields are what the naive player wrote; oracle/"
         "signals are ground truth it never saw)",
     ]
+    prev_widgets_key = None
     for s in signals:
-        a = json.dumps(s["action"], sort_keys=True)
         lines.append(f"turn {s['turn']}:")
-        lines.append(f"  action: {a}")
+        if s["observation"]:
+            lines.append(f"  observation: {s['observation']}")
+        lines.append(f"  action: {json.dumps(s['action'], sort_keys=True)}")
         if s["expectation"]:
             lines.append(f"  expectation: {s['expectation']}")
         if s["note"]:
             lines.append(f"  note: {s['note']}")
-        lines.append(f"  oracle: events={json.dumps(s['events'])} "
+        if s["injected"]:
+            lines.append(f"  injected: {json.dumps(s['injected'])}")
+            lines.append(f"  acks: {json.dumps(s['acks'])}")
+        # Full F3 widget dump (compact fields), deduped when identical
+        # to the previous turn's so long sessions stay readable.
+        compact = [{k: w.get(k) for k in
+                    ("id", "label", "type", "bounds", "enabled", "visible")}
+                   for w in s["widgets"] if isinstance(w, dict)]
+        key = json.dumps(compact, sort_keys=True)
+        if key == prev_widgets_key:
+            lines.append("  widgets: (unchanged from previous turn)")
+        else:
+            lines.append(f"  widgets: {json.dumps(compact, sort_keys=True)}")
+            prev_widgets_key = key
+        lines.append(f"  oracle: menu={s['current_menu']!r} paused={s['paused']} "
+                     f"events={json.dumps(s['events'])} "
                      f"outcomes={json.dumps(s['outcomes'])} "
                      f"clicked_widget={json.dumps(s['clicked_widget'])} "
                      f"visual_change_next={s['visual_change_next']} "
@@ -323,27 +365,53 @@ def build_digest(meta: dict, signals: list[dict],
 
 
 def select_frames(trace_dir: str, turns: list[dict], candidates: list[dict],
-                  max_frames: int) -> list[tuple[int, str]]:
-    """Screenshots the critic actually looks at: friction turns first
-    (plus the turn after each, to judge visible effects), then the
-    session bookends, capped."""
-    want: list[int] = []
-    for c in candidates:
-        want += [c["turn"], c["turn"] + 1]
-    if turns:
-        want += [turns[0].get("turn", 1), turns[-1].get("turn", len(turns))]
+                  max_frames: int) -> tuple[list[tuple[int, str]], list[str]]:
+    """Screenshots the critic actually looks at. Priority order keeps
+    the evidence honest under the budget: (1) every candidate's OWN
+    turn — each adjudicated friction point should be seen — then
+    (2) each candidate's next turn (to judge visible effects), then
+    (3) the session bookends. Returns (frames, warnings); a candidate
+    whose own frame didn't fit the budget is warned about explicitly,
+    so the report never silently pretends the critic saw it."""
     by_turn = {t.get("turn"): t for t in turns}
-    out, seen = [], set()
-    for n in want:
-        if n in seen or n not in by_turn:
-            continue
-        seen.add(n)
-        path = os.path.join(trace_dir, by_turn[n].get("screenshot", ""))
-        if os.path.isfile(path):
+
+    def path_of(n):
+        t = by_turn.get(n)
+        if not t:
+            return None
+        p = os.path.join(trace_dir, t.get("screenshot", ""))
+        return p if os.path.isfile(p) else None
+
+    passes = [
+        [(c["cid"], c["turn"]) for c in candidates],            # own turns
+        [(None, c["turn"] + 1) for c in candidates],            # effects
+        [(None, turns[0].get("turn", 1)) if turns else (None, 0),
+         (None, turns[-1].get("turn", len(turns))) if turns else (None, 0)],
+    ]
+    out: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    unseen_cands: list[str] = []
+    for p, wants in enumerate(passes):
+        for cid, n in wants:
+            if n in seen:
+                continue
+            path = path_of(n)
+            if path is None:
+                continue
+            if len(out) >= max_frames:
+                if p == 0 and cid:
+                    unseen_cands.append(cid)
+                continue
+            seen.add(n)
             out.append((n, path))
-        if len(out) >= max_frames:
-            break
-    return out
+    out.sort(key=lambda pair: pair[0])
+    warnings = []
+    if unseen_cands:
+        warnings.append(
+            "frame budget (--max-frames) exhausted: the critic did NOT see "
+            "screenshots for candidate(s) " + ", ".join(unseen_cands)
+            + " — treat their visual judgments as lower-confidence")
+    return out, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +486,11 @@ class FakeCritic:
                     findings.append(self._mk(
                         "Silent failure", "missing-feedback", "major", "defect",
                         cid, turn, reason))
+                elif reason.startswith("bad-outcome-join"):
+                    findings.append(self._mk(
+                        "Rejection masked by unrelated feedback",
+                        "missing-feedback", "major", "defect",
+                        cid, turn, reason))
                 elif reason.startswith("phantom-affordance-join"):
                     findings.append(self._mk(
                         "Phantom affordance", "phantom-affordance", "minor",
@@ -456,6 +529,14 @@ class FakeCritic:
 # 3. Validation + rendering
 # ---------------------------------------------------------------------------
 
+def _grounded(f: dict) -> bool:
+    """The evidence-discipline gate: a finding only counts if it cites
+    turn(s) AND an oracle record. (The player quote may legitimately be
+    empty — e.g. a crash the player never got to comment on.)"""
+    ev = f.get("evidence") or {}
+    return bool(ev.get("turns")) and bool((ev.get("oracle") or "").strip())
+
+
 def validate_findings(data: dict, candidates: list[dict]) -> tuple[dict, list[str]]:
     warnings = []
     data = dict(data or {})
@@ -480,15 +561,23 @@ def validate_findings(data: dict, candidates: list[dict]) -> tuple[dict, list[st
         ev.setdefault("player_quote", "")
         ev.setdefault("oracle", "")
         f["evidence"] = ev
-    covered = {cid for f in findings for cid in f["evidence"]["candidate_ids"]}
-    missing = [c["cid"] for c in candidates if c["cid"] not in covered]
+        if not _grounded(f):
+            # ungrounded findings never count as coverage, and are
+            # marked so the reader can't mistake them for evidence
+            warnings.append(f"finding {f.get('title')!r} is UNGROUNDED "
+                            "(no turns and/or no oracle record) — excluded "
+                            "from candidate coverage, confidence forced low")
+            f["confidence"] = "low"
     data["findings"] = findings
+    missing = [c["cid"] for c in uncovered(data, candidates)]
     return data, warnings + ([f"unadjudicated candidates: {', '.join(missing)}"]
                              if missing else [])
 
 
 def uncovered(data: dict, candidates: list[dict]) -> list[dict]:
-    covered = {cid for f in data.get("findings", [])
+    """Candidates not yet covered by a GROUNDED finding — an
+    ungrounded claim of coverage doesn't count (review finding 4)."""
+    covered = {cid for f in data.get("findings", []) if _grounded(f)
                for cid in (f.get("evidence") or {}).get("candidate_ids", [])}
     return [c for c in candidates if c["cid"] not in covered]
 
@@ -577,7 +666,8 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
     signals = build_signals(trace_dir, turns)
     candidates = friction_candidates(meta, signals)
     digest = build_digest(meta, signals, candidates)
-    frames = select_frames(trace_dir, turns, candidates, max_frames)
+    frames, frame_warnings = select_frames(trace_dir, turns, candidates,
+                                           max_frames)
 
     manual = ""
     manual_path = manual_path or meta.get("manual_path") or os.path.join(
@@ -591,19 +681,25 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
     data = critic.adjudicate(digest, manual, frames)
     data, warnings = validate_findings(data, candidates)
 
-    # one bounded repair pass for anything left unadjudicated
+    # one bounded repair pass for anything left unadjudicated (or only
+    # covered by ungrounded findings) — WITH the missing candidates'
+    # own frames, so the repair judges from the same evidence
     missing = uncovered(data, candidates)
     if missing:
-        ask = ("These candidate ids were left unadjudicated: "
+        repair_frames, _ = select_frames(trace_dir, turns, missing, max_frames)
+        ask = ("These candidate ids were left unadjudicated (or covered only "
+               "by findings with no grounding evidence): "
                + ", ".join(c["cid"] for c in missing)
-               + ". Produce findings covering ONLY these ids now "
+               + ". Produce findings covering ONLY these ids now, each citing "
+               "its turns and oracle record "
                "(same schema; the earlier findings are already recorded).")
         try:
-            extra = critic.adjudicate(digest, manual, [], ask=ask)
+            extra = critic.adjudicate(digest, manual, repair_frames, ask=ask)
             data["findings"] += (extra.get("findings") or [])
             data, warnings = validate_findings(data, candidates)
         except Exception as e:  # keep the report; warn honestly
             warnings.append(f"repair pass failed: {e}")
+    warnings = frame_warnings + warnings
 
     _assign_ids(data["findings"])
     turns_by_n = {t.get("turn"): t for t in turns}
@@ -612,6 +708,7 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
         f["evidence"]["screenshots"] = f["screenshots"]
     data["critic_model"] = getattr(critic, "model", "fake")
     data["candidates"] = candidates  # the full pre-analysis, for audit
+    data["frames_shown"] = [n for n, _ in frames]  # what the critic saw
 
     out_dir = out_dir or trace_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -671,6 +768,28 @@ def selftest() -> int:
                                      for r in c4["reasons"]),
               str(c4 and c4["reasons"]))
         check("quiet turn produces no candidate", cand_for(5) is None)
+        c6 = cand_for(6)
+        check("rejected outcome masked by unrelated feedback still a candidate",
+              c6 is not None and any(r.startswith("bad-outcome-join")
+                                     for r in c6["reasons"]),
+              str(c6 and c6["reasons"]))
+
+        digest = build_digest(meta, signals, cands)
+        check("digest carries the full turn record",
+              "observation:" in digest and "injected:" in digest
+              and "acks:" in digest and '"Place Marker"' in digest
+              and "menu='world_view'" in digest,
+              "missing fields" if not all(x in digest for x in
+                  ("observation:", "injected:")) else "")
+
+        frames, fwarn = select_frames(tdir, turns, cands, max_frames=2)
+        cand_turns = [c["turn"] for c in cands]
+        check("frame budget prioritizes candidates' own turns",
+              [n for n, _ in frames] == sorted(cand_turns[:2]),
+              str([n for n, _ in frames]))
+        check("starved candidates are warned about explicitly",
+              fwarn and all(c["cid"] in fwarn[0]
+                            for c in cands[2:]), str(fwarn))
 
         report_path, findings_path = run_critic(tdir, FakeCritic())
         with open(findings_path) as f:
@@ -713,6 +832,35 @@ def selftest() -> int:
             lazy_data = json.load(f)
         check("repair pass recovers unadjudicated candidates",
               lazy.asks == 2 and not uncovered(lazy_data, cands))
+
+        # ungrounded coverage doesn't count: a critic claiming coverage
+        # with no turns/oracle triggers the repair pass and a warning
+        class UngroundedCritic(FakeCritic):
+            def __init__(self):
+                self.asks = 0
+
+            def adjudicate(self, digest, manual, frames, ask=None):
+                self.asks += 1
+                if ask is None:
+                    return {"summary": "hand-waving", "findings": [{
+                        "title": "vibes", "category": "other",
+                        "severity": "minor", "verdict": "defect",
+                        "confidence": "high",
+                        "evidence": {"turns": [], "candidate_ids":
+                                     [c["cid"] for c in cands],
+                                     "player_quote": "", "oracle": ""},
+                        "root_cause_hypothesis": ""}]}
+                return FakeCritic.adjudicate(self, digest, manual, frames)
+
+        ug = UngroundedCritic()
+        rp2, fp2 = run_critic(tdir, ug, out_dir=os.path.join(tmp, "ungrounded"))
+        with open(fp2) as f:
+            ug_data = json.load(f)
+        ug_report = open(rp2).read()
+        check("ungrounded findings don't count as coverage (repair forced)",
+              ug.asks == 2 and not uncovered(ug_data, cands))
+        check("ungrounded finding flagged in the report",
+              "UNGROUNDED" in ug_report)
 
     if failures:
         print(f"critic selftest: FAILED ({len(failures)}): {', '.join(failures)}")
