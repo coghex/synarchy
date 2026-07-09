@@ -25,10 +25,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ci-v2 (#671): generation bump because the image contract changed
+      # (GHC + cabal + hackage index baked in — ci.yml no longer runs
+      # haskell-actions/setup, so it MUST run against ci-v2 or later).
+      # Publishing v2 leaves ci-v1 untouched for any branch still on it.
       - name: Build and push fixed CI image
         uses: docker/build-push-action@v6
         with:
           context: .github/ci
           file: .github/ci/Dockerfile
           push: true
-          tags: ghcr.io/coghex/synarchy-ci:ci-v1
+          tags: ghcr.io/coghex/synarchy-ci:ci-v2

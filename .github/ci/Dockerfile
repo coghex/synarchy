@@ -32,3 +32,32 @@ RUN apt-get update \
 
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
+
+# Toolchain baked into the image (#671): the ghcup-cache approach in
+# ci.yml never hit once the job moved into this container (the action
+# installs via the mounted runner tool cache, not /usr/local/.ghcup), so
+# every run re-downloaded GHC (~2 min). Baking it here makes setup a
+# no-op. Everything lives under HOME-independent prefixes on purpose:
+# GitHub container jobs run steps with HOME=/github/home, so anything
+# installed under the build-time HOME (/root) would be invisible at run
+# time. CABAL_DIR pins cabal's config/index/store to one absolute path
+# for the same reason — it also gives ci.yml a static store path to
+# cache. The `cabal update` snapshots the hackage index so the per-run
+# update is an incremental delta fetch, not a full index download.
+ENV GHCUP_INSTALL_BASE_PREFIX=/usr/local
+ENV CABAL_DIR=/usr/local/cabal
+ENV PATH=/usr/local/.ghcup/bin:${PATH}
+ARG GHC_VERSION=9.12.2
+ARG CABAL_VERSION=3.16.1.0
+RUN curl --proto '=https' --tlsv1.2 -sSf \
+      https://downloads.haskell.org/~ghcup/x86_64-linux-ghcup \
+      -o /usr/local/bin/ghcup \
+ && chmod +x /usr/local/bin/ghcup \
+ # prereleases channel matches what haskell-actions/setup configured, so
+ # the exact same cabal 3.16.1.0 release stays resolvable
+ && ghcup config add-release-channel prereleases \
+ && ghcup install ghc "${GHC_VERSION}" --set \
+ && ghcup install cabal "${CABAL_VERSION}" --set \
+ && cabal update \
+ && ghc --version && cabal --version \
+ && rm -rf /usr/local/.ghcup/cache /usr/local/.ghcup/tmp

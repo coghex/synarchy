@@ -44,8 +44,10 @@ stays in seconds and the expensive gates run once, at the end.
    (#531) to run up to N probes CONCURRENTLY — each its own engine on a
    unique port — cutting a full sweep's wall-time to ~total/N (bounded
    by the slowest single probe); failures are re-run SOLO afterward
-   since parallel contention is what a retry needs to escape. Keep
-   `--jobs 1` (the default) for the CI gate path.
+   since parallel contention is what a retry needs to escape. The CI
+   gate runs `--jobs 2` (#671, revising #531's original jobs-1 call —
+   the solo retry absorbs contention flakes); if CI probe retries turn
+   chronic, dropping the gate back to `--jobs 1` is the intended lever.
 
 Baselines (`tools/baselines/`) are **tracked in git** (#421): a fresh
 clone/worktree can run world_check directly, and a tier-3 re-capture
@@ -70,9 +72,10 @@ changed files, the full curated set for a core/unclassified change
 (fail-safe: anything the mapping can't classify runs everything), and
 **zero** probes for docs/assets-only changes or paths whose probes are
 manual-only. Selected probes run via
-`run_probes.py --only ... --retries 1` (a failed probe re-runs SOLO once
-before failing the PR, to absorb the sequential-engine contention flakes
-a back-to-back run shows). Only a **curated CI-eligible smoke subset** is
+`run_probes.py --only ... --retries 1 --jobs 2` (probes run pairwise on
+the 4-vCPU runner, #671; a failed probe re-runs SOLO once before failing
+the PR, absorbing both back-to-back and parallel-engine contention
+flakes). Only a **curated CI-eligible smoke subset** is
 gated — deterministic probes that are broad and cheap enough for a default
 PR gate. Deliberately NOT gated, and left to the manual `run_probes.py`
 full run: flaky probes (AI-reaction/
