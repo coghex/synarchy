@@ -24,6 +24,7 @@ import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..))
 import System.IO (stdout)
+import System.Directory (doesFileExist)
 import Engine.Core.State
 import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
@@ -54,6 +55,17 @@ import Unit.Pathing.Config (loadPathingConfig)
 
 data EngineInitResult = EngineInitResult
   { eirEnv ∷ EngineEnv }
+
+-- | Prefer a local runtime config file over its versioned default
+--   template (#638). @config/video.yaml@ / @config/keybinds.yaml@ are
+--   gitignored player state written by the settings UI's Save
+--   actions; a fresh clone has neither, so boot falls back to the
+--   tracked @_default.yaml@ template until the first Save creates the
+--   local file.
+resolveConfigPath ∷ FilePath → FilePath → IO FilePath
+resolveConfigPath localPath defaultPath = do
+  hasLocal ← doesFileExist localPath
+  return $ if hasLocal then localPath else defaultPath
 
 -- | Allocate every 'IORef', queue, and subsystem, then bundle into
 --   'EngineEnv'. Logs to stdout (the graphical default).
@@ -89,11 +101,13 @@ initializeEngineWith logBackend = do
   texNameRegRef ← newIORef emptyTextureNameRegistry
   
   inputStateRef ← newIORef defaultInputState
-  keyBindings ← loadKeyBindings logger "config/keybinds.yaml"
+  keybindsPath ← resolveConfigPath "config/keybinds.yaml" "config/keybinds_default.yaml"
+  keyBindings ← loadKeyBindings logger keybindsPath
   keyBindingsRef ← newIORef keyBindings
   currentKeyDownRef ← newIORef Nothing
-  
-  videoConfig ← loadVideoConfig logger "config/video.yaml"
+
+  videoConfigPath ← resolveConfigPath "config/video.yaml" "config/video_default.yaml"
+  videoConfig ← loadVideoConfig logger videoConfigPath
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   windowStateRef ← newIORef defaultWindowState
