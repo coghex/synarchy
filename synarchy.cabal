@@ -366,6 +366,12 @@ library
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
+                     Engine.Scripting.Lua.API.Buildings.Yaml
+                     Engine.Scripting.Lua.API.Buildings.Spawn
+                     Engine.Scripting.Lua.API.Buildings.Progress
+                     Engine.Scripting.Lua.API.Buildings.Materials
+                     Engine.Scripting.Lua.API.Buildings.Query
+                     Engine.Scripting.Lua.API.Buildings.Selection
                      Engine.Scripting.Lua.API.Structure
                      Engine.Scripting.Lua.API.Construct
                      Engine.Scripting.Lua.API.Chop
