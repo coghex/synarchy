@@ -177,7 +177,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
 --   runtime-generated-texture counterpart, for content whose pixels
 --   come from a procedural generator rather than disk (blood decals,
 --   #606). Mirrors the staging-buffer upload
---   Engine.Scripting.Lua.Message's handleWorldPreview /
+--   Engine.Scripting.Lua.Message.WorldTexture's handleWorldPreview /
 --   handleZoomAtlasUpload already do inline for the world-preview and
 --   zoom-atlas textures; factored here so it isn't re-derived a third
 --   time.
