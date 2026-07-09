@@ -118,6 +118,8 @@ PROBES = [
      "repair policy layer, station-gated (#301)"),
     ("repair_ai", "repair_ai_probe.py", True,
      "repair AI: claim/fetch/walk/repair/return + role weighting (#302)"),
+    ("resource_root", "resource_root_probe.py", True,
+     "resource-root launch contract: built exe runs --dump/--headless from outside the repo (#636)"),
     ("role", "role_probe.py", True,
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
     ("save_pause", "save_pause_probe.py", True,

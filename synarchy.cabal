@@ -696,6 +696,7 @@ executable synarchy
                  , App.Headless
                  , App.Dump
                  , App.Preview
+                 , App.ResourceRoot
     default-extensions: FlexibleInstances
     other-extensions: Strict
                     , StrictData
