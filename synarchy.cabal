@@ -382,6 +382,17 @@ library
                      Engine.Scripting.Lua.Script
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
+                     Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.Register.Engine
+                     Engine.Scripting.Lua.API.Register.UI
+                     Engine.Scripting.Lua.API.Register.Unit
+                     Engine.Scripting.Lua.API.Register.Building
+                     Engine.Scripting.Lua.API.Register.Designation
+                     Engine.Scripting.Lua.API.Register.Equipment
+                     Engine.Scripting.Lua.API.Register.Craft
+                     Engine.Scripting.Lua.API.Register.Item
+                     Engine.Scripting.Lua.API.Register.World
+                     Engine.Scripting.Lua.API.Register.Camera
                      Engine.Scripting.Lua.API.Core
                      Engine.Scripting.Lua.API.Camera
                      Engine.Scripting.Lua.API.Debug

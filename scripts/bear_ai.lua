@@ -17,8 +17,9 @@
 -- lives on the unit_ai aiState table, which already roundtrips via
 -- the saveModules registration in unit_ai.init. Nothing extra here.
 
-local unitAi = require("scripts.unit_ai")
-local mv = require("scripts.movement_speed")
+local unitAi   = require("scripts.unit_ai")
+local mv       = require("scripts.movement_speed")
+local sleepGoal = require("scripts.unit_ai_sleep")
 
 local bearAi = package.loaded["scripts.bear_ai"] or {}
 package.loaded["scripts.bear_ai"] = bearAi
@@ -265,6 +266,29 @@ unitAi.setConfig("bear_brown", {
     -- Rest-cycle pacing. Score grows over time-since-last-rest;
     -- ties wander at rest_interval, hits 1.0 at 2 × rest_interval.
     rest_interval = 120.0,
+    -- Sleep (go_to_sleep, circadian epic #479/#611/#612/#613). Same
+    -- utility shape and weights as acolyte (scripts/unit_ai_tunables.lua)
+    -- — only the circadian PHASE differs (bear_brown's sleep_pressure
+    -- entry in unit_resource_config.lua centers on dawn, not dusk), so
+    -- a sleep-deprived bear settles down as night gives way to day
+    -- rather than at dusk. Once deficit crosses sleep_min_deficit this
+    -- comfortably outranks bear_rest's flavor-nap ceiling (2.0), the
+    -- same way it outranks bear's other ambient candidates — bear_rest's
+    -- own goal-interruption-recovery clause (bearRestUtility's "combat
+    -- stole the rest goal" branch) already handles being preempted
+    -- mid-cycle, so no extra wiring is needed for genuine sleep to take
+    -- over from a casual nap.
+    sleep_min_deficit       = 0.35,
+    sleep_base_weight       = 0.0,
+    sleep_deficit_weight    = 9.0,
+    sleep_urge_weight       = 4.0,
+    sleep_exhaustion_weight = 2.0,
+    -- Walk-to-spot geometry, scaled up from acolyte's to match the
+    -- bear's larger wander_radius (8.0 vs 5.0) above.
+    sleep_spot_radius        = 8.0,
+    sleep_spot_ring_spacing  = 2.0,
+    sleep_spot_arrival_tiles = 1.5,
+    sleep_spot_max_wait      = 30.0,
 })
 
 unitAi.registerActions("bear_brown", {
@@ -285,6 +309,10 @@ unitAi.registerActions("bear_brown", {
       execute = bearWanderExecute },
     { name = "bear_idle",   utility = bearIdleUtility,
       execute = bearIdleExecute },
+    -- Genuine circadian-driven sleep (#613), distinct from bear_rest's
+    -- flavor napping above — see the sleep_* tunables' comment.
+    { name = "go_to_sleep", utility = sleepGoal.sleepUtility,
+      execute = sleepGoal.sleepExecute },
 })
 
 -----------------------------------------------------------
