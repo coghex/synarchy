@@ -119,18 +119,23 @@ def _log_path(port: int, log: str | None) -> str:
 
 def boot(port: int, log: str | None = None, args: list[str] | None = None,
          ready_timeout: float = DEFAULT_READY_TIMEOUT,
-         label: str = "engine") -> subprocess.Popen:
-    """Launch a headless engine on ``port`` and block until it prints READY.
+         label: str = "engine",
+         mode: tuple[str, ...] = ("--headless",)) -> subprocess.Popen:
+    """Launch an engine on ``port`` and block until it prints READY.
 
     Exits the probe (non-zero) if the engine dies before READY or never
     prints it. ``args`` are extra CLI args appended after ``--port``.
     ``log`` is the stdout/stderr capture path (defaults to a per-port temp).
+    ``mode`` is the boot-profile flag(s) (default ``--headless``); pass e.g.
+    ``("--preview", "units/acolyte")`` for a preview-mode boot (#632) — the
+    debug console (and its READY print) starts the same way regardless of
+    boot profile, so only the launch flags differ.
     """
     if port == GUI_PORT:
         sys.exit(f"refusing to boot on port {GUI_PORT} (the GUI port); pass a 9xxx port")
     logpath = _log_path(port, log)
     logf = open(logpath, "w")
-    cmd = ["cabal", "run", "-v0", "exe:synarchy", "--", "--headless", "--port", str(port)]
+    cmd = ["cabal", "run", "-v0", "exe:synarchy", "--", *mode, "--port", str(port)]
     if args:
         cmd += args
     proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)

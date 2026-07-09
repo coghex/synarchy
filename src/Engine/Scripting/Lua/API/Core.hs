@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.Core
   , setPausedFn
   , isPausedFn
   , getBootProfileFn
+  , getPreviewTargetFn
   , realTimeFn
   , gameTimeFn
   ) where
@@ -66,6 +67,24 @@ getBootProfileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getBootProfileFn env = do
   Lua.pushstring . TE.encodeUtf8 . bootProfileTag . ecBootProfile $
       engineConfig env
+  return 1
+
+-- | engine.getPreviewTarget() → {category=..., item=...} | nil
+--   The parsed @--preview category[/item]@ target; nil outside preview
+--   boot ('BootPreview'). @item@ is omitted for a bare category.
+getPreviewTargetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getPreviewTargetFn env = do
+  case ecPreviewTarget (engineConfig env) of
+    Nothing → Lua.pushnil
+    Just (cat, mItem) → do
+      Lua.newtable
+      Lua.pushstring (TE.encodeUtf8 cat)
+      Lua.setfield (-2) "category"
+      case mItem of
+        Just item → do
+          Lua.pushstring (TE.encodeUtf8 item)
+          Lua.setfield (-2) "item"
+        Nothing → pure ()
   return 1
 
 -- | engine.realTime() → number

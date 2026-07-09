@@ -30,8 +30,26 @@ local combatLogScriptId = nil
 local injuryLogScriptId = nil
 local thoughtLogScriptId = nil
 local unitLogScriptId = nil
+local previewScriptId = nil
+local isPreview = false
+
+function M.isPreview()
+    return isPreview
+end
 
 function M.load()
+    -- A structurally distinct thread topology (window + Vulkan, no
+    -- world/unit/sim/combat threads) with its own minimal Lua entry
+    -- point. Skip every normal gameplay/UI script below -- none of it
+    -- has anything to attach to in this profile.
+    if engine.getBootProfile() == "preview" then
+        isPreview = true
+        previewScriptId = engine.loadScript("scripts/preview_manager.lua", 0.1)
+        return
+    end
+
+    isPreview = false
+
     -- Initialize debug
     debugScriptId = engine.loadScript("scripts/debug.lua", 0.1)
 
@@ -185,6 +203,9 @@ function M.load()
 end
 
 function M.shutdown()
+    if previewScriptId then
+        engine.killScript(previewScriptId)
+    end
     if debugScriptId then
         engine.killScript(debugScriptId)
     end

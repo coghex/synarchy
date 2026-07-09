@@ -110,6 +110,8 @@ PROBES = [
      "thermoregulation/circulation sanity across controlled environments"),
     ("power_workshop", "power_workshop_probe.py", True,
      "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
+    ("preview", "preview_probe.py", True,
+     "--preview boot skeleton: CLI dispatch (grouped-no-item/unrecognized exit before boot) + boot profile/target over the debug console (#632)"),
     ("repair_item", "repair_item_probe.py", True,
      "unit.repairItem primitive (#300)"),
     ("repair", "repair_probe.py", True,

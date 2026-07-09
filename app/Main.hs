@@ -3,15 +3,19 @@ module Main where
 
 import UPrelude
 import System.Environment (setEnv, getArgs)
+import System.Exit (exitSuccess, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr)
+import qualified Data.Text as T
 import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
 import Engine.Core.Types (BootProfile(..))
 import World.Plate (defaultPlatesFor)
-import App.Cli (parseDump, parseArg, parseRegion)
+import App.Cli (parseDump, parseArg, parseRegion, parsePreview
+               , PreviewCategoryKind(..), classifyPreviewCategory)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
 import App.Dump (runDump)
+import App.Preview (runPreview)
 
 main ∷ IO ()
 main = do
@@ -27,6 +31,7 @@ main = do
   let headless = "--headless" `elem` args
       bootProfile = if "--arena" `elem` args then BootArena else BootNormal
       mDump    = parseDump args
+      mPreview = parsePreview args
       port = parseArg "--port" args
       seed = parseArg "--seed" args
       worldSz = parseArg "--worldSize" args
@@ -56,6 +61,26 @@ main = do
   case mDump of
     Just layers → runDump layers (fromMaybe 42 seed) worldSize
                                  plateCount region
-    Nothing
-      | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
-      | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
+    Nothing → case mPreview of
+      -- --preview wins over headless/graphical dispatch, same as --dump
+      -- above: a bare `--preview ...` shouldn't also stand up the normal
+      -- boot path.
+      Just Nothing → do
+          hPutStrLn stderr $ "--preview requires a target, e.g. "
+              ⧺ "--preview icons or --preview units/acolyte"
+          exitWith (ExitFailure 1)
+      Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
+        UnknownPreviewCategory → do
+            hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
+                ⧺ " (expected one of: icons, equipment, hud, items, ui, "
+                ⧺ "world, units, flora, buildings)"
+            exitWith (ExitFailure 1)
+        GroupedPreviewCategory | isNothing mItem → do
+            putStrLn $ "select a specific " ⧺ cat
+                ⧺ ", e.g. --preview units/acolyte"
+            exitSuccess
+        _ → runPreview (T.pack cat, T.pack ⊚ mItem)
+                        (Just (fromMaybe 8008 port))
+      Nothing
+        | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
+        | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))

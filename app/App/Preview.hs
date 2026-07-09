@@ -1,7 +1,11 @@
--- | Full-graphics boot path: GLFW window + Vulkan, the normal player-facing
---   run mode.
-module App.Graphical
-  ( runGraphical
+-- | Preview boot path: GLFW window + Vulkan, same as 'App.Graphical', but
+--   a structurally distinct thread topology — no world/unit/sim/combat
+--   threads. Phase 1 (#632) of the @--preview@ texture-browser epic
+--   (#427): boots straight to @scripts/preview_manager.lua@ (wired via
+--   @game.init@'s preview branch in @scripts/init.lua@) instead of the
+--   normal menu/HUD script set.
+module App.Preview
+  ( runPreview
   ) where
 
 import UPrelude
@@ -24,41 +28,32 @@ import Engine.Input.Thread (startInputThread)
 import Engine.Loop (mainLoop)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Thread (startLuaThread)
-import World.Thread (startWorldThread)
-import Unit.Thread (startUnitThread)
-import Combat.Thread (startCombatThread)
-import Sim.Thread (startSimThread)
 import App.Exception (guardNativeExceptions)
 
--- | Run engine with full graphics (GLFW window + Vulkan)
-runGraphical ∷ BootProfile → Maybe Int → IO ()
-runGraphical bootProfile mPort = do
-  -- Initialize engine
+-- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
+--   unit, sim, or combat thread. The input thread is kept so the OS
+--   window-close button and the debug console (started inside the Lua
+--   thread, same as headless) both work normally.
+runPreview ∷ (Text, Maybe Text) → Maybe Int → IO ()
+runPreview target mPort = do
   EngineInitResult env ← initializeEngine
 
-  let env' = case mPort of
-        Just p  → env
-            { engineConfig = (engineConfig env)
-                { ecDebugPort = p
-                , ecBootProfile = bootProfile
-                } }
-        Nothing → env
-            { engineConfig = (engineConfig env)
-                { ecBootProfile = bootProfile
-                } }
+  let baseConfig = engineConfig env
+      env' = env
+        { engineConfig = baseConfig
+            { ecDebugPort = fromMaybe (ecDebugPort baseConfig) mPort
+            , ecBootProfile = BootPreview
+            , ecPreviewTarget = Just target
+            } }
 
   inputThreadState ← startInputThread env'
   luaThreadState   ← startLuaThread env'
-  worldThreadState ← startWorldThread env'
-  unitThreadState  ← startUnitThread env'
-  simThreadState   ← startSimThread env'
-  combatThreadState ← startCombatThread env'
 
   videoConfig ← readIORef (videoConfigRef env')
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
-        logInfoM CatSystem "Starting engine..."
+        logInfoM CatSystem "Starting engine (preview)..."
         window ← GLFW.createWindow $ defaultWindowConfig videoConfig
         modify $ \s → s { graphicsState = (graphicsState s) {
                             glfwWindow = Just window } }
@@ -69,24 +64,15 @@ runGraphical bootProfile mPort = do
         _ ← initializeVulkan window
         mainLoop
 
-        -- Combat first: wound ticks enqueue UnitKill/UnitCollapse onto
-        -- the unit queue, so the producer has to stop before the
-        -- consumer (unit thread) is torn down inside shutdownEngine.
-        liftIO $ shutdownThread combatThreadState
-        liftIO $ shutdownThread simThreadState
-        shutdownEngine window (Just unitThreadState) (Just worldThreadState)
+        shutdownEngine window Nothing Nothing
                               inputThreadState luaThreadState
-        logDebugM CatSystem "Engine shutdown complete."
+        logDebugM CatSystem "Preview engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
   case result of
     Left err → do
         putStrLn $ displayException err
-        shutdownThread combatThreadState
-        shutdownThread simThreadState
-        shutdownThread unitThreadState
         shutdownThread inputThreadState
-        shutdownThread worldThreadState
         shutdownThread luaThreadState
         -- Flush buffered log lines — the error context is exactly
         -- what we must not lose — then exit with a failure code.

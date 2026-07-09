@@ -116,6 +116,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "repair": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
     "consumable_effects": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
     "sleep": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
+    "preview": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
 }
 
 # Sentinels (distinct objects so `is` comparisons are unambiguous).

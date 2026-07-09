@@ -7,6 +7,9 @@ module App.Cli
   , parseDump
   , parseArg
   , parseRegion
+  , parsePreview
+  , PreviewCategoryKind(..)
+  , classifyPreviewCategory
   ) where
 
 import UPrelude
@@ -68,6 +71,43 @@ parseRegion ("--region":s:_) =
             (cx1, cy1, cx2, cy2)
         _ → (-8, -8, 8, 8)
 parseRegion (_:rest) = parseRegion rest
+
+-- | Parse --preview category[/item] from args.
+--   Nothing = --preview not present at all (normal dispatch continues).
+--   Just Nothing = --preview given with no value following it — an
+--   error, NOT "not present": the caller must not silently fall through
+--   to normal headless/graphical dispatch here.
+--   Just (Just (category, mItem)) = --preview <value> parsed. A trailing
+--   slash with nothing after it (@--preview units/@) is treated the same
+--   as a bare category (mItem = Nothing), not an empty item name.
+parsePreview ∷ [String] → Maybe (Maybe (String, Maybe String))
+parsePreview [] = Nothing
+parsePreview ["--preview"] = Just Nothing
+parsePreview ("--preview":s:_) = Just $ Just $
+    case splitOn '/' s of
+        (cat:item:_) | not (null item) → (cat, Just item)
+        (cat:_)                        → (cat, Nothing)
+        []                             → (s, Nothing)
+parsePreview (_:rest) = parsePreview rest
+
+-- | Which of the epic's hardcoded --preview categories 'cat' names, if
+--   any. Simple categories preview a single flat asset folder; grouped
+--   categories require a specific --preview <category>/<item> (the
+--   folder holds many named entries, e.g. one per unit).
+data PreviewCategoryKind
+    = SimplePreviewCategory
+    | GroupedPreviewCategory
+    | UnknownPreviewCategory
+    deriving (Eq, Show)
+
+classifyPreviewCategory ∷ String → PreviewCategoryKind
+classifyPreviewCategory cat
+    | cat `elem` simpleCategories  = SimplePreviewCategory
+    | cat `elem` groupedCategories = GroupedPreviewCategory
+    | otherwise                    = UnknownPreviewCategory
+  where
+    simpleCategories  = ["icons", "equipment", "hud", "items", "ui", "world"]
+    groupedCategories = ["units", "flora", "buildings"]
 
 splitOn ∷ Char → String → [String]
 splitOn _ [] = [""]
