@@ -28,7 +28,7 @@ import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (chunkSize)
 import World.Constants (seaLevel)
 import World.Fluid.River.Identify.Common
-    ( dirNorth, dirEast, dirSouth, dirWest, dirNone, stepDir, sortDescOn )
+    ( dirNorth, dirEast, dirSouth, dirWest, stepDir, sortDescOn )
 import World.Fluid.River.Types (River(..))
 
 -- | Reference flow level that maps to one tile of perpendicular width.
