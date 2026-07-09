@@ -34,7 +34,7 @@ import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), lakesInChunk )
 import qualified World.Fluid.Lake.Types as WL
 import World.Fluid.River.Types
-    ( WorldRivers(..), RiverChunkEntry(..), riversInChunk )
+    ( RiverChunkEntry(..), riversInChunk )
 import World.Fluid.OceanMask (oceanBitInChunk)
 
 -- * Fluid composition — global lake table (Phase 2)
