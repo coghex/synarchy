@@ -225,4 +225,37 @@ function checkbox.getSize(id)
     return cb.size, cb.size
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+function checkbox.dump()
+    local out = {}
+    for id, cb in pairs(checkboxes) do
+        local info = cb.spriteId and UI.getElementInfo(cb.spriteId) or nil
+        if info and info.pageVisible then
+            table.insert(out, {
+                id = "checkbox:" .. id,
+                name = cb.name,
+                type = "checkbox",
+                bounds = {
+                    x = info and info.x or cb.x,
+                    y = info and info.y or cb.y,
+                    w = info and info.width or cb.size,
+                    h = info and info.height or cb.size,
+                },
+                label = nil,
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                value = cb.checked,
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 return checkbox

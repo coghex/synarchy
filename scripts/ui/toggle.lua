@@ -272,6 +272,10 @@ function toggle.new(params)
         optionsDirection = params.optionsDirection or "down",
         onChange          = params.onChange,
         onOptionSelect   = params.onOptionSelect,
+        -- Introspection type (F3, #645): most toggle groups are plain
+        -- settings toggles, but hud.lua's toolbar icon stacks pass
+        -- "toolbarTool" so ui.dumpWidgets() can tell them apart.
+        widgetType       = params.widgetType or "toggle",
         buttons          = {},
         openPopup        = nil,   -- { btnIdx, sprites[] }
         -- Tooltip hint shown beneath the title on slot buttons that
@@ -634,6 +638,44 @@ end
 function toggle.isOptionElement(elemHandle)
     local gid, _, _ = findOptionByHandle(elemHandle)
     return gid ~= nil
+end
+
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- One entry per slot button (each is independently clickable). Open
+-- popup options are transient and not enumerated, same call as
+-- dropdown's closed-list dump.
+function toggle.dump()
+    local out = {}
+    for gid, grp in pairs(groups) do
+        for i, btn in ipairs(grp.buttons) do
+            local info = btn.spriteId and UI.getElementInfo(btn.spriteId) or nil
+            if info and info.pageVisible then
+                table.insert(out, {
+                    id = "toggle:" .. gid .. ":" .. i,
+                    name = btn.name,
+                    type = grp.widgetType,
+                    bounds = {
+                        x = info and info.x or 0,
+                        y = info and info.y or 0,
+                        w = info and info.width or grp.size,
+                        h = info and info.height or grp.size,
+                    },
+                    label = btn.tooltip,
+                    enabled = info ~= nil and info.clickable,
+                    visible = info ~= nil and info.visible,
+                    hovered = info ~= nil and info.hovered,
+                    focused = info ~= nil and info.focused,
+                    value = (i == grp.selectedIndex),
+                    screen = info and info.page or nil,
+                    handle = info and info.handle or nil,
+                })
+            end
+        end
+    end
+    return out
 end
 
 return toggle

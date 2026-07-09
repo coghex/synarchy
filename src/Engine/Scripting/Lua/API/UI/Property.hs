@@ -7,6 +7,8 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiSetSizeFn
   , uiSetVisibleFn
   , uiIsPageVisibleFn
+  , uiGetElementInfoFn
+  , uiGetVisibleElementsFn
   , uiSetClickableFn
   , uiSetOnClickFn
   , uiSetOnRightClickFn
@@ -19,6 +21,7 @@ module Engine.Scripting.Lua.API.UI.Property
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
@@ -79,6 +82,92 @@ uiIsPageVisibleFn env = do
                 Just page → Lua.pushboolean (upVisible page)
                 Nothing   → Lua.pushboolean False
         Nothing → Lua.pushboolean False
+    return 1
+
+-- | Push a table with one element's info fields onto the Lua stack:
+--   { handle, x, y (absolute framebuffer-pixel position), width,
+--     height, visible, clickable, interactive (has an onClick or
+--     onRightClick callback), zIndex, name, page (page name),
+--     pageVisible, hovered, focused }. Shared by 'uiGetElementInfoFn'
+--   (one element by handle) and 'uiGetVisibleElementsFn' (every
+--   element on every visible page) so both report identical fields.
+--   pageVisible is distinct from visible: an element can have
+--   visible=true while sitting on a page that's currently hidden/
+--   inactive (UI.showPage/hidePage), so a caller that wants "actually
+--   on screen right now" needs both.
+pushElementInfoTable ∷ ElementHandle → UIElement → UIPageManager → Lua.LuaE Lua.Exception ()
+pushElementInfoTable handle el mgr = do
+    let (ax, ay) = fromMaybe (0, 0) (getElementAbsolutePosition handle mgr)
+        (w, h)   = ueSize el
+        pageName = maybe "" upName (Map.lookup (uePage el) (upmPages mgr))
+        pageVisible = uePage el `Set.member` upmVisiblePages mgr
+        isHovered = upmHovered mgr ≡ Just handle
+        isFocused = upmGlobalFocus mgr ≡ Just handle
+        isInteractive = isJust (ueOnClick el) ∨ isJust (ueOnRightClick el)
+    Lua.newtable
+    Lua.pushinteger (fromIntegral (unElementHandle handle))
+    Lua.setfield (Lua.nth 2) "handle"
+    Lua.pushnumber (realToFrac ax)
+    Lua.setfield (Lua.nth 2) "x"
+    Lua.pushnumber (realToFrac ay)
+    Lua.setfield (Lua.nth 2) "y"
+    Lua.pushnumber (realToFrac w)
+    Lua.setfield (Lua.nth 2) "width"
+    Lua.pushnumber (realToFrac h)
+    Lua.setfield (Lua.nth 2) "height"
+    Lua.pushboolean (ueVisible el)
+    Lua.setfield (Lua.nth 2) "visible"
+    Lua.pushboolean (ueClickable el)
+    Lua.setfield (Lua.nth 2) "clickable"
+    Lua.pushboolean isInteractive
+    Lua.setfield (Lua.nth 2) "interactive"
+    Lua.pushinteger (fromIntegral (ueZIndex el))
+    Lua.setfield (Lua.nth 2) "zIndex"
+    Lua.pushstring (TE.encodeUtf8 (ueName el))
+    Lua.setfield (Lua.nth 2) "name"
+    Lua.pushstring (TE.encodeUtf8 pageName)
+    Lua.setfield (Lua.nth 2) "page"
+    Lua.pushboolean pageVisible
+    Lua.setfield (Lua.nth 2) "pageVisible"
+    Lua.pushboolean isHovered
+    Lua.setfield (Lua.nth 2) "hovered"
+    Lua.pushboolean isFocused
+    Lua.setfield (Lua.nth 2) "focused"
+
+-- | UI.getElementInfo(elementHandle) -> table or nil (see
+--   'pushElementInfoTable' for the field list) — the authoritative
+--   engine-side state for one element, for introspection callers
+--   (e.g. ui.dumpWidgets) that can't trust a widget module's own
+--   cached copy to stay in sync with UI.setVisible/setClickable/
+--   setPosition calls made after construction.
+uiGetElementInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiGetElementInfoFn env = do
+    elemArg ← Lua.tointeger 1
+    case elemArg of
+        Nothing → Lua.pushnil >> return 1
+        Just e  → do
+            let handle = ElementHandle (fromIntegral e)
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            case getElement handle mgr of
+                Nothing → Lua.pushnil >> return 1
+                Just el → pushElementInfoTable handle el mgr >> return 1
+
+-- | UI.getVisibleElements() -> array of element info tables (see
+--   'pushElementInfoTable'), one per element on every currently-
+--   visible page. There is no single authoritative widget registry
+--   (see scripts/ui/registry.lua) — some screens (e.g. the main menu)
+--   build their clickable elements with raw UI.newBox/UI.setOnClick
+--   calls instead of going through a scripts/ui/*.lua widget module,
+--   so ui.dumpWidgets() (F3, #645) falls back to this bulk read of
+--   the engine's own element tree to catch those too.
+uiGetVisibleElementsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiGetVisibleElementsFn env = do
+    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    let els = concatMap (\p → getPageElements (upHandle p) mgr) (getVisiblePages mgr)
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] els) $ \(i, el) → do
+        pushElementInfoTable (ueHandle el) el mgr
+        Lua.rawseti (Lua.nth 2) (fromIntegral i)
     return 1
 
 -- | UI.setClickable(elementHandle, clickable)

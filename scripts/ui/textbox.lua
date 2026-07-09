@@ -641,4 +641,38 @@ function textbox.getSize(id)
     return tb.width, tb.height
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+function textbox.dump()
+    local out = {}
+    for id, tb in pairs(textboxes) do
+        local info = tb.boxId and UI.getElementInfo(tb.boxId) or nil
+        local value = tb.boxId and (UI.getTextInput(tb.boxId) or "") or ""
+        if info and info.pageVisible then
+            table.insert(out, {
+                id = "textbox:" .. id,
+                name = tb.name,
+                type = "textbox",
+                bounds = {
+                    x = info and info.x or tb.x,
+                    y = info and info.y or tb.y,
+                    w = info and info.width or tb.width,
+                    h = info and info.height or tb.height,
+                },
+                label = value,
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                value = value,
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 return textbox

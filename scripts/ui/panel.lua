@@ -387,4 +387,39 @@ function panel.getUIScale(id)
     return p.uiscale
 end
 
+-----------------------------------------------------------
+-- Introspection (F3, #645)
+-----------------------------------------------------------
+
+-- Panels are pure containers (no label/value) but are worth surfacing
+-- for context — their bounds let the critic tell "an active modal
+-- panel is up" from "nothing but the HUD is showing".
+function panel.dump()
+    local out = {}
+    for id, p in pairs(panels) do
+        local info = p.boxId and UI.getElementInfo(p.boxId) or nil
+        if info and info.pageVisible then
+            table.insert(out, {
+                id = "panel:" .. id,
+                name = p.name,
+                type = "panel",
+                bounds = {
+                    x = info and info.x or p.x,
+                    y = info and info.y or p.y,
+                    w = info and info.width or p.width,
+                    h = info and info.height or p.height,
+                },
+                label = nil,
+                enabled = info ~= nil and info.clickable,
+                visible = info ~= nil and info.visible,
+                hovered = info ~= nil and info.hovered,
+                focused = info ~= nil and info.focused,
+                screen = info and info.page or nil,
+                handle = info and info.handle or nil,
+            })
+        end
+    end
+    return out
+end
+
 return panel
