@@ -490,6 +490,8 @@ library
                      World.Render.ChunkCulling
                      World.Render.HitTest
                      World.Render.Quads
+                     World.Render.WaterSlope
+                     World.Render.CursorQuads
                      World.Render.TileQuads
                      World.Render.FloraQuads
                      World.Render.GroundItemQuads
