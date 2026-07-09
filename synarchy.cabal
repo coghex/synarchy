@@ -457,6 +457,12 @@ library
                      Combat.Types
                      Combat.Thread
                      Combat.Resolution
+                     Combat.Resolution.Constants
+                     Combat.Resolution.Common
+                     Combat.Resolution.Strike
+                     Combat.Resolution.Damage
+                     Combat.Resolution.Wear
+                     Combat.Resolution.Events
                      Combat.Wounds
                      Combat.Wounds.Bleed
                      Combat.Wounds.Constants
