@@ -4,13 +4,11 @@
 --   named-slot map, and their buffs are folded into/out of the unit's
 --   stat modifiers (uiModifiers) on equip/unequip.
 module Engine.Scripting.Lua.API.Equipment.Accessory
-    ( removeModifiersBySource
-    , equipmentEquipAccessoryFn
+    ( equipmentEquipAccessoryFn
     , equipmentUnequipAccessoryFn
     ) where
 
 import UPrelude
-import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua

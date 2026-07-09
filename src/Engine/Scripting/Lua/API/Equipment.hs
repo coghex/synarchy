@@ -6,16 +6,22 @@
 --   Equipment.Slot is named-slot equip/unequip, Equipment.Accessory is
 --   the ordered accessory list (equip/unequip folding buffs into
 --   uiModifiers), and Equipment.Render is the shared render-field
---   pusher used by both the loadout and accessory-list queries.
+--   pusher used by both the loadout and accessory-list queries. The
+--   export list is explicit (not a blanket @module@ re-export) so
+--   sub-module-internal helpers (e.g. Equipment.Slot's
+--   removeFirstFromInventoryWhere, needed by Equipment.Accessory)
+--   don't leak onto this top-level module's public API.
 module Engine.Scripting.Lua.API.Equipment
-    ( -- * Equipment class catalogue
-      module Engine.Scripting.Lua.API.Equipment.Class
-      -- * Slot equip/unequip
-    , module Engine.Scripting.Lua.API.Equipment.Slot
-      -- * Accessory equip/unequip
-    , module Engine.Scripting.Lua.API.Equipment.Accessory
-      -- * Render-field pushing
-    , module Engine.Scripting.Lua.API.Equipment.Render
+    ( loadEquipmentYamlFn
+    , equipmentGetClassFn
+    , equipmentGetClassNamesFn
+    , equipmentEquipFn
+    , equipmentUnequipFn
+    , equipmentGetLoadoutFn
+    , equipmentEquipAccessoryFn
+    , equipmentUnequipAccessoryFn
+    , equipmentGetAccessoriesFn
+    , pushItemInstance
     ) where
 
 import Engine.Scripting.Lua.API.Equipment.Class
