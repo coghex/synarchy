@@ -31,6 +31,8 @@ BUDGETS: list[tuple[str, list[str], int]] = [
      ["scripts/unit_ai.lua", "scripts/unit_ai_*.lua"], 500),
     ("unit-info-v2 panel split (#542)",
      ["scripts/unit_info_v2.lua", "scripts/unit_info_v2_*.lua"], 500),
+    ("init.lua game-router split (#543)",
+     ["scripts/init.lua", "scripts/init_*.lua"], 500),
 ]
 
 

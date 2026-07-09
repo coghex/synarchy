@@ -1,5 +1,5 @@
 -- Unit Manager - loads unit definitions and manages live unit instances.
--- Loaded as an engine script from init.lua with its own tick interval.
+-- Loaded as an engine script from init_loader.lua with its own tick interval.
 local unitLoader = require("scripts.unit_loader")
 local buildingLoader = require("scripts.building_loader")
 local itemLoader = require("scripts.item_loader")
