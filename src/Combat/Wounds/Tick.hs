@@ -182,11 +182,11 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
             feverSuppress = max feverSuppressFloor
                               (1 - feverSuppressK * max 0 (coreTemp - 38))
             -- A unit at rest heals faster: sleeping pose applies
-            -- sleepHealMult, everything else uses 1.0. No AI currently
-            -- drives uiPose to "sleeping" (bear_ai.lua's rest cycle
-            -- tracks its own bearPosture field separately, not
-            -- uiPose), but the moment something does, the bonus
-            -- applies with no further wiring needed here.
+            -- sleepHealMult, everything else uses 1.0. The sleep AI
+            -- (#612, PR #640) drives uiPose to "sleeping" via the
+            -- go_to_sleep goal's real Pose chain; bears use the same
+            -- shared goal since #613 (PR #659), not a bearPosture-only
+            -- side channel.
             restMult = if uiPose inst == "sleeping" then sleepHealMult else 1.0
             -- A starving unit heals slower (calorie gating). Wildlife
             -- without a calorie store reads 1.0.
