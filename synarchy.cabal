@@ -37,7 +37,7 @@ test-suite synarchy-test-graphical
     other-modules: Test.UPrelude
                    Test.Engine.Core.Queue
                    Test.Engine.Core.Var
-                   Test.Engine.Input.Thread
+                   Test.Engine.Input.State
                    Test.Engine.Graphics.Window.GLFW
                    Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Surface
@@ -366,6 +366,7 @@ library
                      Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
+                     Engine.Input.State
                      Engine.Input.Types
                      Engine.Input.Thread
                      Engine.Scripting.Types
