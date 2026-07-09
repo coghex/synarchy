@@ -792,17 +792,13 @@ future consumer should call this rather than compare `world.getVegAt`'s
 raw id to 77 — a soil-type-variant tilled texture (the still-open
 follow-up above) only needs `isTilledSoil` to grow to match.
 
-No dedicated push/tiller animation exists yet — `standing_to_holding_
-shovel` / `shoveling` are the closest hand-tool-on-ground visual (same
-reuse-until-real-art convention as chop's pickaxe-swing stand-in for
-felling). **The dedicated push animation + tiller prop art is tracked
-separately as #517** (issue #333's "done when" text calls for it by
-name, so this mechanism-only landing is a deliberate partial close —
-see #517 for the exact frame paths/spec and the one-line
-`till_equip_anim`/`till_work_anim` wiring once the art exists). The
-toolbar icon, designation marker, and tilled-soil ground texture are
-functional placeholders (correct size/alpha conventions, matching
-sibling assets) pending real pixel art too.
+The dedicated push/tiller animation (#517, PR #639) has shipped: the
+till AI's `till_equip_anim`/`till_work_anim` (`scripts/unit_ai_tunables.lua`)
+are wired to `standing_to_pushing`/`pushing`, replacing the earlier
+`standing_to_holding_shovel`/`shoveling` reuse-until-real-art stand-in.
+The toolbar icon, designation marker, and tilled-soil ground texture
+are still functional placeholders (correct size/alpha conventions,
+matching sibling assets) pending real pixel art.
 
 Till/plant/harvest's helpers ride as fields on the existing `unitAi`
 module table (`unitAi.till.*`, plain assignments) rather than one
