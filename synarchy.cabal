@@ -277,7 +277,23 @@ library
                      Engine.Scripting.Lua.API.Units.Selection
                      Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
+                     Engine.Scripting.Lua.API.World.GenConfig
+                     Engine.Scripting.Lua.API.World.Lifecycle
+                     Engine.Scripting.Lua.API.World.Clock
+                     Engine.Scripting.Lua.API.World.Cursor
+                     Engine.Scripting.Lua.API.World.Designation
+                     Engine.Scripting.Lua.API.World.Query
+                     Engine.Scripting.Lua.API.World.Tools
+                     Engine.Scripting.Lua.API.World.Edit
                      Engine.Scripting.Lua.API.WorldQuery
+                     Engine.Scripting.Lua.API.WorldQuery.Lookup
+                     Engine.Scripting.Lua.API.WorldQuery.Terrain
+                     Engine.Scripting.Lua.API.WorldQuery.Fluid
+                     Engine.Scripting.Lua.API.WorldQuery.Chunk
+                     Engine.Scripting.Lua.API.WorldQuery.River
+                     Engine.Scripting.Lua.API.WorldQuery.Climate
+                     Engine.Scripting.Lua.API.WorldQuery.Pick
+                     Engine.Scripting.Lua.API.WorldQuery.Location
                      Engine.Scripting.Lua.API.Forage
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
@@ -400,6 +416,10 @@ library
                      Equipment.Types
                      Engine.Asset.YamlEquipment
                      Engine.Scripting.Lua.API.Equipment
+                     Engine.Scripting.Lua.API.Equipment.Class
+                     Engine.Scripting.Lua.API.Equipment.Slot
+                     Engine.Scripting.Lua.API.Equipment.Accessory
+                     Engine.Scripting.Lua.API.Equipment.Render
                      Substance.Types
                      Engine.Asset.YamlSubstance
                      Engine.Scripting.Lua.API.Substance
