@@ -177,6 +177,9 @@ def _game_chain_check(text: str) -> bool:
             _ROC_CLICK + r'"deadclick"[\s\S]{0,40}?"no tile under cursor"'])
 
 
+_PAO = r"pushActionOutcome[\s\S]{0,150}?"  # Haskell producers' raw push call
+
+
 #   The portal-accepted hook has no distinguishing reason text (success
 #   carries no reason at all), so it's anchored to `building.spawn(...)`
 #   — unique to the portal branch — rather than a reason literal
@@ -197,6 +200,25 @@ _PORTAL_ACCEPTED = (r"building\.spawn\(target\.def, igx, igy\)"
                     r"(?:(?!else)[\s\S])*?" + _ROC + r'outcome\s*=\s*"accepted"')
 
 
+def _portal_accepted_omits_reason(text: str) -> bool:
+    """The portal-accepted debug.recordOutcome{...} block itself must
+    NOT also set a `reason` field — guards the exact review-round-7 bug
+    class (`ok and nil or "constant"` always attaching a failure reason
+    even on success) from resurfacing in this specific call. Bounded by
+    the literal "else" that follows (same structural bound
+    _PORTAL_ACCEPTED itself uses), not a fixed character window: a
+    window wide enough for real source's spacing bridged straight into
+    the ELSE branch's own legitimate reason on a more tightly-packed
+    synthetic fixture (review round 9's self-test caught this)."""
+    m = re.search(_PORTAL_ACCEPTED, text)
+    if not m:
+        return False
+    rest = text[m.end():]
+    else_idx = rest.find("else")
+    body = rest[:else_idx] if else_idx != -1 else rest
+    return "reason" not in body
+
+
 def _build_tool_check(text: str) -> bool:
     if not text:
         return False
@@ -209,6 +231,7 @@ def _build_tool_check(text: str) -> bool:
     return (_all_present(commit_scope, COMMIT_PLACEMENT_REQUIRED)
             and _all_present(handle_scope, HANDLE_MOUSE_DOWN_REQUIRED)
             and _all_present(handle_scope, [_PORTAL_ACCEPTED])
+            and _portal_accepted_omits_reason(handle_scope)
             and _count_at_least(
                 handle_scope, _ROC + r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
             and _count_at_least(
@@ -279,14 +302,16 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
               r'recordMissingWorldOutcome env "world\.designateMine"'])),
         ("B1", "plant.designate (accept/reject + missing-world)",
          # Both branches share the same aoKind literal (only aoOutcome
-         # differs), so a single aoKind presence check reads DONE with
-         # either branch's push deleted (review round 8) — require both
-         # aoOutcome values specifically, not just the shared aoKind.
+         # differs), so a bare field-presence check reads DONE even with
+         # the accepted branch's pushActionOutcome call itself renamed
+         # away (review round 9 — same class of bug as build-tool's
+         # portal-accepted hook) — anchor both outcomes to an actual
+         # pushActionOutcome call, not just the record fields.
          lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Plant.hs",
              [r'aoKind\s*=\s*"plant\.designate"',
-              r'aoOutcome\s*=\s*"accepted"',
-              r'aoOutcome\s*=\s*"rejected"',
+              _PAO + r'aoOutcome\s*=\s*"accepted"',
+              _PAO + r'aoOutcome\s*=\s*"rejected"',
               r'recordMissingWorldOutcome env "plant\.designate"'])),
 
         # --- Layer B Tier 2: common mid-game — fast-follow, not this PR.
@@ -577,7 +602,8 @@ def _self_test() -> list[str]:
         return "\n".join(lines)
 
     def handle_mouse_down_fn(include: set[str], designate_sites: int,
-                             no_world_sites: int) -> str:
+                             no_world_sites: int,
+                             portal_accepted_reason: str | None = None) -> str:
         lines = ["function buildTool.handleMouseDown(button, x, y)"]
         if "offworld" in include:
             lines.append('    debug.recordOutcome{outcome = "rejected", '
@@ -596,7 +622,13 @@ def _self_test() -> list[str]:
             lines.append('    local id = building.spawn(target.def, igx, igy)')
             lines.append('    if id then')
             if "portal_accepted" in include:
-                lines.append('        debug.recordOutcome{outcome = "accepted"}')
+                if portal_accepted_reason is None:
+                    lines.append('        debug.recordOutcome{outcome = "accepted"}')
+                else:
+                    # Review-round-7 bug reintroduced: a reason attached
+                    # to the SUCCESS record.
+                    lines.append('        debug.recordOutcome{outcome = "accepted", '
+                                  f'reason = "{portal_accepted_reason}"}}')
             lines.append('    else')
             if "spawn" in include:
                 lines.append('        debug.recordOutcome{outcome = "rejected", '
@@ -623,6 +655,49 @@ def _self_test() -> list[str]:
     expect("buildTool.commitPlacement: missing the portal-accepted hook "
            "reads gap (review round 8)",
            _build_tool_check(missing_portal_accepted), False)
+    portal_accepted_with_reason = (
+        commit_placement_fn(all_commit_parts) + "\n"
+        + handle_mouse_down_fn(all_handle_parts, 2, 2,
+                               portal_accepted_reason="building.spawn failed"))
+    expect("buildTool.commitPlacement: a reason reintroduced on the "
+           "portal-accepted record reads gap (review round 9 — the "
+           "exact `ok and nil or ...` bug class)",
+           _build_tool_check(portal_accepted_with_reason), False)
+
+    # plant.designate: both branches share the same aoKind literal, so
+    # anchor each aoOutcome to its own pushActionOutcome call (review
+    # round 9 — renaming just the accepted branch's call previously
+    # still read DONE).
+    def plant_fixture(include: set[str], call_name: str = "pushActionOutcome") -> str:
+        lines = []
+        if "accepted" in include:
+            lines.append(f'{call_name} (actionOutcomeRef env) ActionOutcome\n'
+                          '    {{ aoTs = gt, aoKind = "plant.designate"\n'
+                          '    , aoOutcome = "accepted"\n    }}')
+        if "rejected" in include:
+            lines.append(f'{call_name} (actionOutcomeRef env) ActionOutcome\n'
+                          '    {{ aoTs = gt, aoKind = "plant.designate"\n'
+                          '    , aoOutcome = "rejected"\n    }}')
+        if "missing_world" in include:
+            lines.append('recordMissingWorldOutcome env "plant.designate" pageId gx gy')
+        return "\n".join(lines)
+
+    _PLANT_PATTERNS = [r'aoKind\s*=\s*"plant\.designate"',
+                       _PAO + r'aoOutcome\s*=\s*"accepted"',
+                       _PAO + r'aoOutcome\s*=\s*"rejected"',
+                       r'recordMissingWorldOutcome env "plant\.designate"']
+    _PLANT_PARTS = {"accepted", "rejected", "missing_world"}
+    plant_full = plant_fixture(_PLANT_PARTS)
+    expect("plant.designate: all hooks present reads DONE",
+           _all_present(plant_full, _PLANT_PATTERNS), True)
+    for missing in _PLANT_PARTS:
+        expect(f"plant.designate: missing the {missing!r} hook reads gap",
+               _all_present(plant_fixture(_PLANT_PARTS - {missing}), _PLANT_PATTERNS),
+               False)
+    plant_renamed = plant_fixture(_PLANT_PARTS, call_name="someOtherPushFn")
+    expect("plant.designate: pushActionOutcome renamed away (fields kept) "
+           "reads as a gap (review round 9)",
+           _all_present(plant_renamed, _PLANT_PATTERNS), False)
 
     # The exact review-round-3 counter-example: the function bodies keep
     # their ordinary `return nil, "..."` values but EVERY
