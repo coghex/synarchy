@@ -272,7 +272,11 @@ processInput env inpSt event = case event of
             -- the scale division yield NaN/Infinity, and fbW/fbH = 0
             -- collapses the scaled coord to (0,0) — either way the hit-test
             -- below would dispatch a bogus UI/game event. Drop the click.
-            if viewportDegenerate winW winH fbW fbH then return ClickSwallowed else case btn of
+            if viewportDegenerate winW winH fbW fbH
+              then do
+                recordRouteOutcome "noop" (Just "degenerate_viewport")
+                return ClickSwallowed
+              else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
               -- Otherwise hit-test the UI so a middle-click over ANY UI/
               -- menu surface can't fall through to gameplay middle-click
@@ -302,7 +306,15 @@ processInput env inpSt event = case event of
                         recordRouteOutcome "noop" (Just "ui_surface_block")
                         return ClickSwallowed
                     Nothing → do
+                        -- scripts/init_mouse.lua's onMouseDown only
+                        -- branches on MOUSE_LEFT/MOUSE_RIGHT, so a middle
+                        -- press reaching "game" falls through the whole
+                        -- chain with no recordClick call of its own (it
+                        -- drives camera-drag polling instead, not the
+                        -- click-dispatch chain) — record it here or it's
+                        -- invisible to F4 entirely (review round 2).
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        recordRouteOutcome "accepted" (Just "camera_drag")
                         return ClickGame
 
               -- All other buttons: if a tooltip is locked, intercept the
