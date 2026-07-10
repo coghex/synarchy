@@ -33,7 +33,7 @@ import World.Generate (globalToChunk)
 import World.Till.Types (newTillDesignation)
 import World.Vegetation (isTilledSoil)
 import World.Thread.Command.Cursor.Common
-    (maxDesignateSide, recordDesignationOutcome)
+    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetTillAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -64,7 +64,7 @@ handleWorldDesignateTillCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Nothing → pure ()
+        Nothing → recordMissingWorldOutcome env "till.designate" pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             let tillableAt gx gy = do

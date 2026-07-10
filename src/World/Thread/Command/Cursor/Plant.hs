@@ -31,6 +31,7 @@ import World.Generate (globalToChunk)
 import World.Plant.Types (newPlantDesignation)
 import World.Vegetation (isTilledSoil)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
+import World.Thread.Command.Cursor.Common (recordMissingWorldOutcome)
 
 -- | Commit a plant designation at (gx, gy) for the named crop. Refused
 --   (silently — the caller polls plant.getDesignationAt to confirm) if
@@ -48,7 +49,7 @@ handleWorldDesignatePlantCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Nothing → pure ()
+        Nothing → recordMissingWorldOutcome env "plant.designate" pageId gx gy
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (floraCatalogRef env)

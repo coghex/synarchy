@@ -5,12 +5,15 @@
 module World.Thread.Command.Cursor.Common
     ( maxDesignateSide
     , recordDesignationOutcome
+    , recordMissingWorldOutcome
     ) where
 
 import UPrelude
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
+import World.Types (WorldPageId)
+import World.Thread.Helpers (unWorldPageId)
 
 -- | Cap on the designation rectangle's side length. Guards against a
 --   misclick across the map turning into a 100k-tile designation.
@@ -52,5 +55,31 @@ recordDesignationOutcome env kind rejectedReason gx1 gy1 requested applied = do
         , aoApplied   = Just applied
         , aoDropped   = Just dropped
         , aoReason    = reason
+        , aoHandler   = Nothing
+        }
+
+-- | F4 (#646): the queued page no longer exists — destroyed between
+--   enqueue and drain, or a stale/typo'd page id. Distinct from
+--   recordDesignationOutcome's "rejected" (which means "the page
+--   exists but nothing in the sweep qualified"): there's no world
+--   state here to even attempt a filter against, so this is its own
+--   reason rather than routed through the generic requested/applied
+--   calculus. Review round 7 found all four designation verbs
+--   (till/chop/mine/plant) silently dropped this case with no F4
+--   record at all.
+recordMissingWorldOutcome ∷ EngineEnv → Text → WorldPageId → Int → Int → IO ()
+recordMissingWorldOutcome env kind pageId gx1 gy1 = do
+    gt ← readIORef (gameTimeRef env)
+    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+        { aoTs        = gt
+        , aoKind      = kind
+        , aoOutcome   = "rejected"
+        , aoWhereX    = Just gx1
+        , aoWhereY    = Just gy1
+        , aoTarget    = Nothing
+        , aoRequested = Nothing
+        , aoApplied   = Nothing
+        , aoDropped   = Nothing
+        , aoReason    = Just ("world page not found: " <> unWorldPageId pageId)
         , aoHandler   = Nothing
         }

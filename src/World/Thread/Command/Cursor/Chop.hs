@@ -27,7 +27,7 @@ import World.Types
 import World.Generate (chunkToGlobal, globalToChunk)
 import World.Chop.Types (newChopDesignation)
 import World.Thread.Command.Cursor.Common
-    (maxDesignateSide, recordDesignationOutcome)
+    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
 
 handleWorldSetChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -58,7 +58,7 @@ handleWorldDesignateChopCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Nothing → pure ()
+        Nothing → recordMissingWorldOutcome env "chop.designate" pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (floraCatalogRef env)

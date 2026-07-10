@@ -227,22 +227,32 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
         ("B1", "wire.place",
          lambda: _filewide_check(
              "scripts/wire.lua", r"debug\.recordOutcome")),
-        ("B1", "till.designate (partial-drop counts)",
-         lambda: _filewide_check(
+        # Each designation verb needs BOTH its partial/reject-within-a-
+        # loaded-page hook AND its separate missing-world-page hook
+        # (review round 7 found all four silently dropped the latter —
+        # `pure ()` with no F4 record at all when the queued page no
+        # longer exists, a different failure than "page exists, sweep
+        # found nothing").
+        ("B1", "till.designate (partial-drop counts + missing-world)",
+         lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Till.hs",
-             r'recordDesignationOutcome env "till\.designate"')),
-        ("B1", "chop.designate (partial-drop counts)",
-         lambda: _filewide_check(
+             [r'recordDesignationOutcome env "till\.designate"',
+              r'recordMissingWorldOutcome env "till\.designate"'])),
+        ("B1", "chop.designate (partial-drop counts + missing-world)",
+         lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Chop.hs",
-             r'recordDesignationOutcome env "chop\.designate"')),
-        ("B1", "world.designateMine (partial-drop counts)",
-         lambda: _filewide_check(
+             [r'recordDesignationOutcome env "chop\.designate"',
+              r'recordMissingWorldOutcome env "chop\.designate"'])),
+        ("B1", "world.designateMine (partial-drop counts + missing-world)",
+         lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Mine.hs",
-             r'recordDesignationOutcome env "world\.designateMine"')),
-        ("B1", "plant.designate (accept/reject)",
-         lambda: _filewide_check(
+             [r'recordDesignationOutcome env "world\.designateMine"',
+              r'recordMissingWorldOutcome env "world\.designateMine"'])),
+        ("B1", "plant.designate (accept/reject + missing-world)",
+         lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Plant.hs",
-             r'aoKind\s*=\s*"plant\.designate"')),
+             [r'aoKind\s*=\s*"plant\.designate"',
+              r'recordMissingWorldOutcome env "plant\.designate"'])),
 
         # --- Layer B Tier 2: common mid-game — fast-follow, not this PR.
         # Function-scoped: commandMove/commandAttack share a file, as do

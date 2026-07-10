@@ -242,6 +242,21 @@ def main():
         print(f"  [{'PASS' if ok6 else 'FAIL'}] unloaded-anchor sweep reports "
               f"rejected: {drained3}")
 
+        # Review round 7: all four designation handlers silently returned
+        # `pure ()` (no F4 record at all) when the queued page doesn't
+        # exist — a DIFFERENT failure than "page exists, sweep found
+        # nothing" above. A public till.designate('missing_page', ...)
+        # call must still drain a rejected record.
+        send(port, "return debug.drainActionOutcomes()")  # clear noise
+        send(port, "till.designate('missing_page',0,0,2,2); return 'ok'")
+        drained4 = jget(port, "return debug.drainActionOutcomes()")
+        rec4 = drained4[0] if isinstance(drained4, list) and drained4 else {}
+        ok7 = bool(rec4.get("kind") == "till.designate"
+                   and rec4.get("outcome") == "rejected" and rec4.get("reason"))
+        passed &= ok7
+        print(f"  [{'PASS' if ok7 else 'FAIL'}] till.designate against a "
+              f"missing world page reports rejected: {drained4}")
+
         print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
