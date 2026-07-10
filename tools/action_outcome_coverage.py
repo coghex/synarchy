@@ -102,6 +102,7 @@ LAYER_A_SWALLOWED_ROUTES = [
     r'"degenerate_viewport"', r'"tooltip_lock_toggle"',
     r'"ui_surface_block"', r'"camera_drag"',
     r'"tooltip_lock_dismiss"', r'"ui_widget_no_rightclick_handler"',
+    r'"unmapped_button"',  # GLFW buttons 4-8, mapped to Lua button 0
 ]
 LAYER_A_GAME_CHAIN_HANDLERS = [
     r'"debug_overlay"', r'"debug_anim_panel"', r'"build_tool"',
@@ -110,10 +111,26 @@ LAYER_A_GAME_CHAIN_HANDLERS = [
     r'"deselect"', r'"context_menu_building"', r'"context_menu_unit"',
     r'"context_menu_item"', r'"move_order"', r'"context_menu_tile"',
 ]
-BUILD_TOOL_REQUIRED = [
-    r"not a placeable power item", r"no selected unit carries",
-    r"off-world click during placement", r"invalid placement tile",
-    r"building\.spawn failed",
+
+# Anchored on the `reason = `/`outcome = ` FIELD of a debug.recordOutcome{}
+# table literal, same line only ([^\n]* excludes crossing to an unrelated
+# line) — NOT a bare substring search. A bare substring like
+# "not a placeable power item" also appears in commitPlacement's own
+# `return nil, "..."` values a couple of lines below the hook, so it
+# stays present even with every debug.recordOutcome call deleted (review
+# round 3's exact counter-example: a synthetic file with the return-value
+# strings but zero recordOutcome calls read DONE). Requiring the
+# `reason =`/`outcome = ` prefix ties each check to the hook itself.
+COMMIT_PLACEMENT_REQUIRED = [
+    r'reason\s*=[^\n]*"not a placeable power item',
+    r'reason\s*=[^\n]*"no selected unit carries',
+    r"reason\s*=\s*tostring\(buildingIdOrErr\)",
+    r'outcome\s*=\s*"accepted"',
+]
+HANDLE_MOUSE_DOWN_REQUIRED = [
+    r'reason\s*=[^\n]*"off-world click during placement"',
+    r'reason\s*=[^\n]*"invalid placement tile"',
+    r'reason\s*=[^\n]*"building\.spawn failed"',
 ]
 
 
@@ -123,9 +140,20 @@ def _game_chain_check(text: str) -> bool:
 
 
 def _build_tool_check(text: str) -> bool:
-    return bool(text) and _all_present(text, BUILD_TOOL_REQUIRED) \
-        and _count_at_least(text, r"routed to construction\.designate", 2) \
-        and _count_at_least(text, r"no active world id", 2)
+    if not text:
+        return False
+    commit_scope = _function_scope(
+        text, r"^function buildTool\.commitPlacement", LUA_FUNCTION_BOUNDARY)
+    handle_scope = _function_scope(
+        text, r"^function buildTool\.handleMouseDown", LUA_FUNCTION_BOUNDARY)
+    if commit_scope is None or handle_scope is None:
+        return False
+    return (_all_present(commit_scope, COMMIT_PLACEMENT_REQUIRED)
+            and _all_present(handle_scope, HANDLE_MOUSE_DOWN_REQUIRED)
+            and _count_at_least(
+                handle_scope, r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
+            and _count_at_least(
+                handle_scope, r'reason\s*=[^\n]*"no active world id"', 2))
 
 
 # Each entry: (tier, verb, check) where check() -> bool. Built below so
@@ -395,22 +423,91 @@ def _self_test() -> list[str]:
     expect("game chain: only ONE deadclick site (not both branches) reads gap",
            _game_chain_check(only_one_deadclick), False)
 
-    build_tool_counted = ('\nrouted to construction.designate\n'
-                          'routed to construction.designate\n'
-                          'no active world id\nno active world id\n')
-    build_tool_full = synthetic(BUILD_TOOL_REQUIRED) + build_tool_counted
-    expect("buildTool.commitPlacement: all required reads DONE",
-           _build_tool_check(build_tool_full), True)
-    for i, dropped in enumerate(BUILD_TOOL_REQUIRED):
-        missing_one = synthetic(BUILD_TOOL_REQUIRED, i) + build_tool_counted
-        expect(f"buildTool.commitPlacement: missing {dropped!r} reads gap",
-               _build_tool_check(missing_one), False)
-    only_one_designate_site = (synthetic(BUILD_TOOL_REQUIRED)
-                                + '\nrouted to construction.designate\n'
-                                  'no active world id\nno active world id\n')
+    # buildTool.commitPlacement: realistic fixture text (function-scoped,
+    # hook-anchored `reason =`/`outcome = ` fields) rather than bare
+    # literals, so removing a HOOK (not just a word) is what's tested —
+    # review round 3's exact ask.
+    def commit_placement_fn(include: set[str]) -> str:
+        lines = ["function buildTool.commitPlacement(defName, gx, gy)"]
+        if "power" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "not a placeable power item: " .. tostring(defName)}')
+        if "carrier" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "no selected unit carries " .. tostring(defName)}')
+        if "node" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = tostring(buildingIdOrErr)}')
+        if "accepted" in include:
+            lines.append('    debug.recordOutcome{outcome = "accepted"}')
+        lines.append("end")
+        return "\n".join(lines)
+
+    def handle_mouse_down_fn(include: set[str], designate_sites: int,
+                             no_world_sites: int) -> str:
+        lines = ["function buildTool.handleMouseDown(button, x, y)"]
+        if "offworld" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "off-world click during placement"}')
+        if "invalid" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "invalid placement tile"}')
+        if "spawn" in include:
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "building.spawn failed"}')
+        for _ in range(designate_sites):
+            lines.append('    debug.recordOutcome{outcome = "accepted", '
+                          'reason = "routed to construction.designate"}')
+        for _ in range(no_world_sites):
+            lines.append('    debug.recordOutcome{outcome = "rejected", '
+                          'reason = "no active world id"}')
+        lines.append("end")
+        return "\n".join(lines)
+
+    all_commit_parts = {"power", "carrier", "node", "accepted"}
+    all_handle_parts = {"offworld", "invalid", "spawn"}
+    full_fixture = (commit_placement_fn(all_commit_parts) + "\n"
+                    + handle_mouse_down_fn(all_handle_parts, 2, 2))
+    expect("buildTool.commitPlacement: all hooks present reads DONE",
+           _build_tool_check(full_fixture), True)
+
+    # The exact review-round-3 counter-example: the function bodies keep
+    # their ordinary `return nil, "..."` values but EVERY
+    # debug.recordOutcome hook is deleted. Must read as a gap, not DONE.
+    no_hooks_fixture = (
+        'function buildTool.commitPlacement(defName, gx, gy)\n'
+        '    if not power.isPlaceable(defName) then\n'
+        '        return nil, "not a placeable power item"\n'
+        '    end\n'
+        '    return nil, "no selected unit carries " .. defName\n'
+        'end\n'
+        'function buildTool.handleMouseDown(button, x, y)\n'
+        '    if not gx or not gy then return true end\n'
+        'end\n')
+    expect("buildTool.commitPlacement: return-value strings with NO "
+           "recordOutcome hooks read as a gap (review round 3)",
+           _build_tool_check(no_hooks_fixture), False)
+
+    for missing in all_commit_parts:
+        variant = (commit_placement_fn(all_commit_parts - {missing}) + "\n"
+                   + handle_mouse_down_fn(all_handle_parts, 2, 2))
+        expect(f"buildTool.commitPlacement: missing the {missing!r} hook reads gap",
+               _build_tool_check(variant), False)
+    for missing in all_handle_parts:
+        variant = (commit_placement_fn(all_commit_parts) + "\n"
+                   + handle_mouse_down_fn(all_handle_parts - {missing}, 2, 2))
+        expect(f"buildTool.commitPlacement: missing the {missing!r} hook reads gap",
+               _build_tool_check(variant), False)
+    only_one_designate = (commit_placement_fn(all_commit_parts) + "\n"
+                           + handle_mouse_down_fn(all_handle_parts, 1, 2))
     expect("buildTool.commitPlacement: only ONE construction.designate "
-           "record site reads gap",
-           _build_tool_check(only_one_designate_site), False)
+           "hook (of two call sites) reads gap",
+           _build_tool_check(only_one_designate), False)
+    only_one_no_world = (commit_placement_fn(all_commit_parts) + "\n"
+                          + handle_mouse_down_fn(all_handle_parts, 2, 1))
+    expect("buildTool.commitPlacement: only ONE 'no active world id' hook "
+           "(of two call sites) reads gap",
+           _build_tool_check(only_one_no_world), False)
 
     return failures
 
