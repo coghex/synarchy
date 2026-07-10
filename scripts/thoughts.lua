@@ -22,7 +22,8 @@
 -- back toward the physiological target — the fade-over-time a moodlet
 -- wants, for free, with no separate stacking/decay system).
 
-local brain = require("scripts.brain")
+local brain  = require("scripts.brain")
+local mental = require("scripts.mental_state")
 
 local thoughts = package.loaded["scripts.thoughts"] or {}
 package.loaded["scripts.thoughts"] = thoughts
@@ -59,6 +60,11 @@ thoughts.TRIGGERS = {
                                    and (ctx.sunAngle < 0.25 or ctx.sunAngle > 0.75) end,
     day       = function(ctx) return ctx.sunAngle ~= nil
                                    and (ctx.sunAngle >= 0.25 and ctx.sunAngle <= 0.75) end,
+    -- Mental states (#352, scripts/mental_state.lua). A break counts
+    -- as stressed — the misery narration keeps running through it.
+    stressed  = function(ctx) return ctx.mentalState == "stressed"
+                                   or ctx.mentalState == "break" end,
+    euphoric  = function(ctx) return ctx.mentalState == "euphoric" end,
 }
 
 function thoughts.loadCatalogue(path)
@@ -78,6 +84,7 @@ local function buildContext(uid, info)
         hungerFrac  = brain.hungerFrac(uid),
         staminaFrac = brain.staminaFrac(uid),
         mood        = brain.mood(uid),
+        mentalState = mental.state(uid),
     }
     if info and info.gridX and info.gridY then
         ctx.ambient  = world.getAmbientAt  and world.getAmbientAt(info.gridX, info.gridY)

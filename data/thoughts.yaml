@@ -65,6 +65,36 @@ thoughts:
     mood_delta: 0.03
     text: "Fed, rested, unhurt — small things, but enough."
 
+  # ---- state: mental states (#352, scripts/mental_state.lua) ----
+  - id: stressed_fraying
+    category: state
+    trigger: stressed
+    valence: negative
+    weight: 3
+    mood_delta: -0.03
+    text: "Everything is fraying at the edges."
+  - id: stressed_how_much_more
+    category: state
+    trigger: stressed
+    valence: negative
+    weight: 2
+    mood_delta: -0.04
+    text: "How much more of this can anyone take?"
+  - id: euphoric_possible
+    category: state
+    trigger: euphoric
+    valence: positive
+    weight: 3
+    mood_delta: 0.04
+    text: "Everything feels possible today."
+  - id: euphoric_light
+    category: state
+    trigger: euphoric
+    valence: positive
+    weight: 2
+    mood_delta: 0.03
+    text: "Light as air. The world is kind."
+
   # ---- environmental: world.getAmbientAt / world.getSunAngleAt ----
   - id: cold_bite
     category: environmental

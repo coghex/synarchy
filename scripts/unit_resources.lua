@@ -32,6 +32,7 @@ local thermo   = require("scripts.thermo")
 local salts    = require("scripts.salts")
 local brain    = require("scripts.brain")
 local thoughts = require("scripts.thoughts")
+local mental   = require("scripts.mental_state")
 
 local resourceConfig = require("scripts.unit_resource_config")
 local alerts          = require("scripts.unit_resource_alerts")
@@ -110,6 +111,13 @@ function unitResources.update(dt)
                 -- tick's drift treats any nudge as "prev", fading it
                 -- naturally toward the physiological target.
                 thoughts.tick(uid, info, dt)
+                -- Mental states (#352): the threshold machine over the
+                -- state_of_mind brain.tick just computed — the stressed
+                -- label plus break/euphoria episodes. (A thought's mood
+                -- nudge reaches state_of_mind on the NEXT brain.tick,
+                -- per the drift contract above — fine for a machine
+                -- whose bands are minutes-scale.)
+                mental.tick(uid, dt)
                 -- Injuries first: a lethal injury kills the unit (skip the
                 -- rest of its tick); a disabling one collapses it.
                 if not injuryTick.tickInjuries(uid, info, pose0)

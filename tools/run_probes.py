@@ -105,6 +105,8 @@ PROBES = [
      "electric furnace smelt recipe + machine_shop wiring/motor recipes, real content (#591)"),
     ("medic_coord", "medic_coord_probe.py", True,
      "bestMedicFor/medicAvailable distance-discounted selection fix"),
+    ("mental_state", "mental_state_probe.py", True,
+     "mental-state ladder: stressed hysteresis, break episodes + wander/flee AI, euphoria (#352)"),
     ("movement", "movement_probe.py", True,
      "obstacle-course movement: pathing/climbs/falls/ramps"),
     ("multiworld_save", "multiworld_save_probe.py", True,
