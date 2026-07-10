@@ -29,6 +29,7 @@ import argparse
 import glob
 import json
 import sys
+import time
 
 from probelib import boot, quit_engine, send
 
@@ -47,6 +48,7 @@ def bootstrap(port):
     for pattern, fn in [
         ("data/materials/*.yaml", "engine.loadMaterialYaml"),
         ("data/flora/*.yaml",     "engine.loadFloraYaml"),
+        ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
     ]:
         for path in sorted(glob.glob(pattern)):
             send(port, f"{fn}('{path}'); return 'ok'")
@@ -321,6 +323,69 @@ def main():
         passed &= ok7
         print(f"  [{'PASS' if ok7 else 'FAIL'}] till.designate against a "
               f"missing world page reports rejected: {drained4}")
+
+        # Portal placement: buildTool.handleMouseDown's "isStarting"
+        # branch (building.spawn), driven through the REAL player-facing
+        # path — world.pickTile resolves the click, exactly like
+        # wire_probe.py's path-builder phase — rather than the lower-
+        # level buildTool.commitPlacement verb (which only handles power
+        # items; the portal isn't one). Review round 10: no runtime
+        # assertion existed that a real accepted portal placement
+        # carries no reason. Uses its own flat arena rather than the
+        # generated 'probe' world above — pickTile needs a guaranteed-
+        # flat, guaranteed-loaded tile under the click, which generated
+        # terrain doesn't promise.
+        send(port, "engine.loadScript('scripts/build_tool.lua', 0.0); return 'ok'")
+        send(port, "world.initArena('portal_probe'); return 'ok'")
+        send(port, "world.show('portal_probe'); return 'ok'")
+        arena_active = False
+        for _ in range(50):
+            if send(port, "return world.getActiveWorldId()").strip('"') == "portal_probe":
+                arena_active = True
+                break
+            time.sleep(0.2)
+        if not arena_active:
+            passed = False
+            print("  [FAIL] portal_probe arena never became active — "
+                  "portal placement unverified")
+        else:
+            send(port, "return world.loadChunksInRegion(-1, -1, 1, 1)")
+            send(port, "return world.waitForChunks(30)", timeout=35)
+            send(port, "camera.setPosition(0, 0); return 'ok'")
+            fb = jget(port, "return {engine.getFramebufferSize()}")
+            fb_w, fb_h = (fb if isinstance(fb, list) and len(fb) == 2
+                          else (1920, 1080))
+            cx, cy = fb_w / 2, fb_h / 2
+            picked = jget(port, f"return {{world.pickTile({cx}, {cy})}}")
+            # HUD/toolbar never initialise headless (no GPU) — stub the
+            # one field handleMouseDown/enterPlacement actually read
+            # (same technique as wire_probe.py's path-builder phase).
+            send(port, "local bt = require('scripts.build_tool'); "
+                       "bt.hud = { worldId = 'portal_probe' }; return 'ok'")
+            send(port, "local bt = require('scripts.build_tool'); "
+                       "bt.enterPlacement{kind='building', def='acolyte_portal', "
+                       "isStarting=true, displayName='Portal'}; return 'ok'")
+            before_ids = jget(port, "return building.getActiveIds()")
+            before_count = len(before_ids) if isinstance(before_ids, list) else 0
+            send(port, "return debug.drainActionOutcomes()")  # clear noise
+            consumed = jget(port, "local bt = require('scripts.build_tool'); "
+                                   f"return bt.handleMouseDown(1, {cx}, {cy})")
+            drained5 = jget(port, "return debug.drainActionOutcomes()")
+            portal_rec = (drained5[0]
+                          if isinstance(drained5, list) and drained5 else {})
+            after_ids = jget(port, "return building.getActiveIds()")
+            after_count = len(after_ids) if isinstance(after_ids, list) else 0
+            ok8 = bool(consumed is True
+                       and isinstance(picked, list) and len(picked) >= 2
+                       and portal_rec.get("kind") == "buildTool.commitPlacement"
+                       and portal_rec.get("outcome") == "accepted"
+                       and portal_rec.get("reason") is None
+                       and after_count == before_count + 1)
+            passed &= ok8
+            print(f"  [{'PASS' if ok8 else 'FAIL'}] portal placement via the "
+                  f"real buildTool.handleMouseDown path reports accepted "
+                  f"with no reason and actually spawns the building: "
+                  f"{drained5}, buildings {before_count}->{after_count}")
 
         print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1

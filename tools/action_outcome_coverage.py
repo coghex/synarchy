@@ -177,7 +177,17 @@ def _game_chain_check(text: str) -> bool:
             _ROC_CLICK + r'"deadclick"[\s\S]{0,40}?"no tile under cursor"'])
 
 
-_PAO = r"pushActionOutcome[\s\S]{0,150}?"  # Haskell producers' raw push call
+#   Haskell producers' raw pushActionOutcome call, bounded to its OWN
+#   record literal (the run up to the closing `}`) rather than a fixed
+#   character window: plant.designate's accepted/rejected calls sit
+#   close together, and a wide-enough-for-real-source window bridged
+#   from one call's `pushActionOutcome` token straight through a
+#   RENAMED sibling call's leftover `aoOutcome = "..."` field, reading
+#   DONE even with that sibling's own call renamed away (review round
+#   10 — same window-bridging bug class as the portal-accepted check
+#   below, here in the generic Haskell-producer anchor instead of a
+#   single hand-written one).
+_PAO = r"pushActionOutcome(?:(?!\})[\s\S])*?"
 
 
 #   The portal-accepted hook has no distinguishing reason text (success
@@ -196,27 +206,46 @@ _PAO = r"pushActionOutcome[\s\S]{0,150}?"  # Haskell producers' raw push call
 #   EXCEPT a run starting with the literal "else", so the search is
 #   structurally confined to the `if id then` branch itself, regardless
 #   of how much (or how little) sits in between.
-_PORTAL_ACCEPTED = (r"building\.spawn\(target\.def, igx, igy\)"
-                    r"(?:(?!else)[\s\S])*?" + _ROC + r'outcome\s*=\s*"accepted"')
+_PORTAL_ACCEPTED_ANCHOR = r"building\.spawn\(target\.def, igx, igy\)"
+
+
+def _portal_accepted_body(text: str) -> str | None:
+    """Everything from the portal's building.spawn call up to (not
+    including) the branch's own "else" — the whole `if id then ... else`
+    body, not just the span up to outcome="accepted". Bounded the same
+    structural way as _game_chain_check's routes: `(?:(?!else)[\s\S])*`
+    can consume any text EXCEPT a run starting with the literal "else",
+    so this is confined to the `if id then` branch regardless of field
+    order or spacing inside it."""
+    m = re.search(_PORTAL_ACCEPTED_ANCHOR + r"((?:(?!else)[\s\S])*)", text)
+    return m.group(1) if m else None
+
+
+def _portal_accepted_present(text: str) -> bool:
+    """The portal-accepted hook has no distinguishing reason text
+    (success carries no reason at all), so it's anchored to
+    `building.spawn(...)` — unique to the portal branch — rather than a
+    reason literal (review round 8: neither the plain outcome="accepted"
+    text nor the "building.spawn failed" reject reason alone proved this
+    specific hook, since other accepted/rejected calls in the same
+    function already satisfy those)."""
+    body = _portal_accepted_body(text)
+    return body is not None and bool(re.search(r'outcome\s*=\s*"accepted"', body))
 
 
 def _portal_accepted_omits_reason(text: str) -> bool:
     """The portal-accepted debug.recordOutcome{...} block itself must
-    NOT also set a `reason` field — guards the exact review-round-7 bug
-    class (`ok and nil or "constant"` always attaching a failure reason
-    even on success) from resurfacing in this specific call. Bounded by
-    the literal "else" that follows (same structural bound
-    _PORTAL_ACCEPTED itself uses), not a fixed character window: a
-    window wide enough for real source's spacing bridged straight into
-    the ELSE branch's own legitimate reason on a more tightly-packed
-    synthetic fixture (review round 9's self-test caught this)."""
-    m = re.search(_PORTAL_ACCEPTED, text)
-    if not m:
-        return False
-    rest = text[m.end():]
-    else_idx = rest.find("else")
-    body = rest[:else_idx] if else_idx != -1 else rest
-    return "reason" not in body
+    NOT also set a `reason` field anywhere in it — guards the exact
+    review-round-7 bug class (`ok and nil or "constant"` always
+    attaching a failure reason even on success) from resurfacing in
+    this specific call. Checks the WHOLE branch body (see
+    _portal_accepted_body), not just the text after the "accepted"
+    match: a `reason` field reintroduced BEFORE `outcome = "accepted"`
+    in the same record literal — a plausible field-reordering
+    regression — is invisible to a check that only looks forward from
+    the match (review round 10's exact counter-example)."""
+    body = _portal_accepted_body(text)
+    return body is not None and "reason" not in body
 
 
 def _build_tool_check(text: str) -> bool:
@@ -230,7 +259,7 @@ def _build_tool_check(text: str) -> bool:
         return False
     return (_all_present(commit_scope, COMMIT_PLACEMENT_REQUIRED)
             and _all_present(handle_scope, HANDLE_MOUSE_DOWN_REQUIRED)
-            and _all_present(handle_scope, [_PORTAL_ACCEPTED])
+            and _portal_accepted_present(handle_scope)
             and _portal_accepted_omits_reason(handle_scope)
             and _count_at_least(
                 handle_scope, _ROC + r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
@@ -603,7 +632,8 @@ def _self_test() -> list[str]:
 
     def handle_mouse_down_fn(include: set[str], designate_sites: int,
                              no_world_sites: int,
-                             portal_accepted_reason: str | None = None) -> str:
+                             portal_accepted_reason: str | None = None,
+                             portal_accepted_reason_first: bool = False) -> str:
         lines = ["function buildTool.handleMouseDown(button, x, y)"]
         if "offworld" in include:
             lines.append('    debug.recordOutcome{outcome = "rejected", '
@@ -624,6 +654,14 @@ def _self_test() -> list[str]:
             if "portal_accepted" in include:
                 if portal_accepted_reason is None:
                     lines.append('        debug.recordOutcome{outcome = "accepted"}')
+                elif portal_accepted_reason_first:
+                    # Same reason bug, but with the fields in the OTHER
+                    # order — reason precedes outcome in the same record
+                    # literal (review round 10's counter-example: a check
+                    # that only looks forward from the outcome match
+                    # never sees a reason placed before it).
+                    lines.append(f'        debug.recordOutcome{{reason = "{portal_accepted_reason}", '
+                                  'outcome = "accepted"}')
                 else:
                     # Review-round-7 bug reintroduced: a reason attached
                     # to the SUCCESS record.
@@ -663,19 +701,30 @@ def _self_test() -> list[str]:
            "portal-accepted record reads gap (review round 9 — the "
            "exact `ok and nil or ...` bug class)",
            _build_tool_check(portal_accepted_with_reason), False)
+    portal_accepted_reason_before = (
+        commit_placement_fn(all_commit_parts) + "\n"
+        + handle_mouse_down_fn(all_handle_parts, 2, 2,
+                               portal_accepted_reason="building.spawn failed",
+                               portal_accepted_reason_first=True))
+    expect("buildTool.commitPlacement: a reason reintroduced BEFORE "
+           "outcome=\"accepted\" in the same record reads gap (review "
+           "round 10 — field order previously evaded a check that only "
+           "looked forward from the outcome match)",
+           _build_tool_check(portal_accepted_reason_before), False)
 
     # plant.designate: both branches share the same aoKind literal, so
     # anchor each aoOutcome to its own pushActionOutcome call (review
     # round 9 — renaming just the accepted branch's call previously
     # still read DONE).
-    def plant_fixture(include: set[str], call_name: str = "pushActionOutcome") -> str:
+    def plant_fixture(include: set[str], accepted_call: str = "pushActionOutcome",
+                       rejected_call: str = "pushActionOutcome") -> str:
         lines = []
         if "accepted" in include:
-            lines.append(f'{call_name} (actionOutcomeRef env) ActionOutcome\n'
+            lines.append(f'{accepted_call} (actionOutcomeRef env) ActionOutcome\n'
                           '    {{ aoTs = gt, aoKind = "plant.designate"\n'
                           '    , aoOutcome = "accepted"\n    }}')
         if "rejected" in include:
-            lines.append(f'{call_name} (actionOutcomeRef env) ActionOutcome\n'
+            lines.append(f'{rejected_call} (actionOutcomeRef env) ActionOutcome\n'
                           '    {{ aoTs = gt, aoKind = "plant.designate"\n'
                           '    , aoOutcome = "rejected"\n    }}')
         if "missing_world" in include:
@@ -694,10 +743,27 @@ def _self_test() -> list[str]:
         expect(f"plant.designate: missing the {missing!r} hook reads gap",
                _all_present(plant_fixture(_PLANT_PARTS - {missing}), _PLANT_PATTERNS),
                False)
-    plant_renamed = plant_fixture(_PLANT_PARTS, call_name="someOtherPushFn")
-    expect("plant.designate: pushActionOutcome renamed away (fields kept) "
+    plant_renamed = plant_fixture(_PLANT_PARTS, accepted_call="someOtherPushFn",
+                                   rejected_call="someOtherPushFn")
+    expect("plant.designate: BOTH producers renamed away (fields kept) "
            "reads as a gap (review round 9)",
            _all_present(plant_renamed, _PLANT_PATTERNS), False)
+    # Isolate each hook individually (review round 10 — the round 9
+    # self-test only ever renamed both calls together, so it never
+    # proved the checker doesn't bridge from the ONE INTACT call's
+    # pushActionOutcome token across to the OTHER, renamed call's
+    # leftover aoOutcome field — the same window-bridging bug class the
+    # portal-accepted check above was just hardened against).
+    plant_only_accepted_renamed = plant_fixture(
+        _PLANT_PARTS, accepted_call="someOtherPushFn")
+    expect("plant.designate: only the accepted producer renamed (rejected "
+           "intact) reads gap (review round 10)",
+           _all_present(plant_only_accepted_renamed, _PLANT_PATTERNS), False)
+    plant_only_rejected_renamed = plant_fixture(
+        _PLANT_PARTS, rejected_call="someOtherPushFn")
+    expect("plant.designate: only the rejected producer renamed (accepted "
+           "intact) reads gap (review round 10)",
+           _all_present(plant_only_rejected_renamed, _PLANT_PATTERNS), False)
 
     # The exact review-round-3 counter-example: the function bodies keep
     # their ordinary `return nil, "..."` values but EVERY
