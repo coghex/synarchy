@@ -26,6 +26,11 @@ offline against known ground truth:
             back" gating would suppress this; the critic must still
             see the rejected outcome as a candidate and judge whether
             the feedback actually informed the player.
+  turn 7  — NOTE-ONLY FRICTION: the player writes a lost/confused note
+            while doing nothing; there are no outcome/event/widget
+            records at all. The candidate's oracle anchors are the
+            ABSENCE fragments (events=[], outcomes=[], ...) — a critic
+            asserting invented oracle facts for it must be rejected.
 
 The oracle snapshots carry F4-shaped `outcomes` records (the tap
 itself, #646, hasn't landed in live traces yet — the critic reads them
@@ -143,6 +148,15 @@ def build_canned_trace(trace_dir: str) -> str:
                                "text": "Acolyte Renn is thirsty"}],
                       outcomes=[{"verb": "marker.place", "outcome": "rejected",
                                  "reason": "insufficient materials"}])),
+        _turn(7, PNG_BLACK,
+              {"observation": "Same screen as before, as far as I can tell.",
+               "action": {"do": "wait"},
+               "expectation": "Maybe something will happen on its own.",
+               "note": "I feel a bit lost. Nothing on this screen tells me "
+                       "what I should do next.",
+               "raw": "", "usage": None},
+              [],
+              _oracle()),
     ]
 
     with open(os.path.join(trace_dir, "turns.jsonl"), "w") as f:
@@ -161,8 +175,8 @@ def build_canned_trace(trace_dir: str) -> str:
         "harness_version": "fixture",
         "mode": "llm",
         "dt": 2.0,
-        "turn_budget": 6,
-        "turns": 6,
+        "turn_budget": 7,
+        "turns": 7,
         "stop_reason": "turn_budget_exhausted",
         "persona": {
             "name": "canned_casey",

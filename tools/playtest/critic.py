@@ -161,7 +161,10 @@ include at least one verbatim atom from the digest — the outcome \
 value and its reason, an event text, or the clicked widget's label — \
 for each covered candidate. Naming a harness join tag does NOT count; \
 free prose that references nothing recorded is rejected as \
-unverifiable;
+unverifiable. When a candidate has NO outcome/event/widget records, \
+state the absence by quoting the digest's oracle-line fragments \
+verbatim (e.g. "events=[]", "outcomes=[]", "visual_change_next=False") \
+— never assert facts the record doesn't contain;
 - NO ungrounded findings: a hunch without oracle backing is either \
 dropped or explicitly confidence=low with the gap named;
 - when outcome records are absent (older traces), reason from events \
@@ -564,7 +567,9 @@ class FakeCritic:
                 else:
                     findings.append(self._mk(
                         "Player friction", "other", "polish", "intended",
-                        cid, turn, reason, note))
+                        cid, turn,
+                        reason + " — record shows events=[] outcomes=[]",
+                        note))
                 cur = (cid, turn)
         # merge multiple findings for the same cid into the first
         merged: dict[str, dict] = {}
@@ -623,7 +628,20 @@ def _anchor_strings(cand: dict) -> set[str]:
     if o.get("stop_reason") == "engine_crash":
         # recorded in meta.stop_reason, so these ARE record-grounded
         atoms += ["engine_crash", "crash"]
-    return {_norm(a) for a in atoms if len(_norm(a)) >= 4}
+    anchors = {_norm(a) for a in atoms if len(_norm(a)) >= 4}
+    if not anchors:
+        # No positive atoms (a pure player-note candidate): the record
+        # still says something — that NOTHING was recorded. The oracle
+        # field must acknowledge that by quoting the digest's literal
+        # absence fragments instead of inventing facts; these are the
+        # exact substrings the digest's oracle line carries.
+        if not (o.get("events") or []):
+            anchors.add(_norm("events=[]"))
+        if not (o.get("outcomes") or []):
+            anchors.add(_norm("outcomes=[]"))
+        anchors.add(_norm(
+            f"visual_change_next={o.get('visual_change_next')}"))
+    return anchors
 
 
 class ValidationCtx:
@@ -712,7 +730,7 @@ def coverage_of(f: dict, ctx: ValidationCtx, warnings: list[str]) -> set[str]:
                             "stripped for that candidate")
             continue
         anchors = ctx.anchors_by_cid.get(cid, set())
-        if anchors and not any(a in oracle_text for a in anchors):
+        if not any(a in oracle_text for a in anchors):
             warnings.append(f"finding {title!r} claims {cid} but its oracle "
                             "evidence references none of that candidate's "
                             "RECORDED oracle data (outcome/reason/event/"
@@ -998,6 +1016,10 @@ def selftest() -> int:
               c6 is not None and any(r.startswith("bad-outcome-join")
                                      for r in c6["reasons"]),
               str(c6 and c6["reasons"]))
+        c7 = cand_for(7)
+        check("note-only friction is a candidate",
+              c7 is not None and c7["reasons"] ==
+              ["player-reported friction (note)"], str(c7 and c7["reasons"]))
 
         digest = build_digest(meta, signals, cands)
         check("digest carries the full turn record",
@@ -1244,6 +1266,35 @@ def selftest() -> int:
         w3: list[str] = []
         check("a harness join tag alone does not anchor oracle evidence",
               coverage_of(tag_f, uctx, w3) == set(), str(w3))
+
+        # NO candidate skips oracle validation: even a note-only one
+        # has anchors by construction (the recorded ABSENCE fragments),
+        # so fabricated oracle prose cannot cover it
+        u2 = ValidationCtx(cands, turns, [{"call": 1, "frames": [7]}])
+        check("every candidate has a non-empty anchor set",
+              all(u2.anchors_by_cid[c["cid"]] for c in cands),
+              str({c["cid"]: sorted(u2.anchors_by_cid[c["cid"]])
+                   for c in cands if not u2.anchors_by_cid[c["cid"]]}))
+        c7_quote = "I feel a bit lost. Nothing on this screen tells me " \
+                   "what I should do next."
+        fab7 = {"title": "n", "category": "other", "severity": "polish",
+                "verdict": "intended", "confidence": "high",
+                "adjudication_call": 1,
+                "evidence": {"turns": [7], "candidate_ids": [c7["cid"]],
+                             "player_quote": c7_quote,
+                             "oracle": "made-up oracle fact"},
+                "root_cause_hypothesis": ""}
+        w7: list[str] = []
+        check("fabricated oracle on a note-only candidate is rejected",
+              coverage_of(dict(fab7), u2, w7) == set()
+              and any("RECORDED oracle data" in w for w in w7), str(w7))
+        ok7 = dict(fab7, evidence=dict(
+            fab7["evidence"],
+            oracle="the record shows no signals at all: events=[], "
+                   "outcomes=[], and no visible frame change"))
+        w8: list[str] = []
+        check("absence-fragment oracle covers the note-only candidate",
+              coverage_of(ok7, u2, w8) == {c7["cid"]}, str(w8))
 
         # a crash BEFORE the first recorded turn must still be
         # adjudicable: its candidate turn has no turn record, no frame,
