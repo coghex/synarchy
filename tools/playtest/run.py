@@ -75,6 +75,26 @@ def _action_sig(action: dict) -> str:
     return json.dumps(action, sort_keys=True)
 
 
+def _allocate_trace_dir(base: str) -> str:
+    """Atomically reserve a fresh default session directory. Parallel
+    sessions — the offscreen mode's whole point (#650) — can start the
+    same second with the same persona, so the timestamped name is only
+    a preference: os.mkdir is the atomic reservation, and a taken name
+    gets a _2/_3/... suffix instead of two sessions silently sharing
+    (and corrupting) one trace directory."""
+    parent = os.path.dirname(base)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    candidate = base
+    for n in range(2, 1000):
+        try:
+            os.mkdir(candidate)
+            return candidate
+        except FileExistsError:
+            candidate = f"{base}_{n}"
+    raise RuntimeError(f"could not allocate a session trace dir near {base!r}")
+
+
 def _promote_seed(trace: SessionTrace, oracle: dict) -> None:
     """First non-null world seed the oracle sees becomes session
     metadata — the world the player actually ended up in, even when
@@ -344,7 +364,21 @@ def selftest() -> int:
         except ValueError:
             check("unknown render mode rejected", True)
 
-        # 5. persona + prompt assembly stays oracle-blind by shape:
+        # 5. default trace-dir allocation is collision-resistant: two
+        # same-second, same-persona allocations get distinct dirs, and
+        # both exist afterward (mkdir is the reservation).
+        base = os.path.join(tmp, "sessions", "20260709_120000_carl")
+        d1 = _allocate_trace_dir(base)
+        d2 = _allocate_trace_dir(base)
+        d3 = _allocate_trace_dir(base)
+        check("same-name trace dirs allocate distinctly",
+              len({d1, d2, d3}) == 3, f"{d1}, {d2}, {d3}")
+        check("allocated trace dirs all exist",
+              all(os.path.isdir(d) for d in (d1, d2, d3)))
+        check("first allocation keeps the clean timestamped name",
+              d1 == base and d2 == base + "_2" and d3 == base + "_3")
+
+        # 6. persona + prompt assembly stays oracle-blind by shape:
         # build_system_prompt takes persona/manual/fb only
         import inspect
         params = list(inspect.signature(agent_mod.build_system_prompt).parameters)
@@ -418,8 +452,11 @@ def main() -> int:
             persona = dict(persona, goal=args.goal)
         manual = _read_manual(args.manual)
 
-    trace_dir = args.trace_dir or os.path.join(
-        HERE, "sessions", time.strftime("%Y%m%d_%H%M%S") + f"_{os.path.basename(label)}")
+    # An explicit --trace-dir is the caller's to manage; the DEFAULT is
+    # atomically reserved so parallel same-persona sessions can't
+    # collide on a same-second timestamp.
+    trace_dir = args.trace_dir or _allocate_trace_dir(os.path.join(
+        HERE, "sessions", time.strftime("%Y%m%d_%H%M%S") + f"_{os.path.basename(label)}"))
     from playtest import HARNESS_VERSION  # local package
     meta = {
         "harness_version": HARNESS_VERSION,
