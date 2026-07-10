@@ -3,7 +3,6 @@
 -- and reading back widget values from the tab modules.
 local advancedTab  = require("scripts.create_world.advanced_tab")
 local generalTab   = require("scripts.create_world.general_tab")
-local climateTab   = require("scripts.create_world.climate_tab")
 local timelineTab  = require("scripts.create_world.timeline_tab")
 local worldManager = require("scripts.world_manager")
 
@@ -40,9 +39,6 @@ function generation.start(menu, logPanel)
 
     local genVals = generalTab.getWidgetValues()
     for k, v in pairs(genVals) do menu.pending[k] = v end
-
-    local clVals = climateTab.getWidgetValues()
-    for k, v in pairs(clVals) do menu.pending[k] = v end
 
     local tlVals = timelineTab.getWidgetValues()
     if tlVals.eonCount  then menu.pending.timelineEon = tlVals.eonCount  end
