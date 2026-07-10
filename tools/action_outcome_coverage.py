@@ -112,25 +112,29 @@ LAYER_A_GAME_CHAIN_HANDLERS = [
     r'"context_menu_item"', r'"move_order"', r'"context_menu_tile"',
 ]
 
-# Anchored on the `reason = `/`outcome = ` FIELD of a debug.recordOutcome{}
-# table literal, same line only ([^\n]* excludes crossing to an unrelated
-# line) — NOT a bare substring search. A bare substring like
-# "not a placeable power item" also appears in commitPlacement's own
-# `return nil, "..."` values a couple of lines below the hook, so it
-# stays present even with every debug.recordOutcome call deleted (review
-# round 3's exact counter-example: a synthetic file with the return-value
-# strings but zero recordOutcome calls read DONE). Requiring the
-# `reason =`/`outcome = ` prefix ties each check to the hook itself.
+# Anchored to an ACTUAL `debug.recordOutcome{...}` call, not just a bare
+# `reason =`/`outcome = ` field appearing somewhere in the function — a
+# table literal with those exact fields but no `debug.recordOutcome`
+# prefix (e.g. the call renamed, replaced, or deleted while its `{...}`
+# argument was left behind) must NOT read as instrumented (review round
+# 3's counter-example was the bare-substring version of this; round 4
+# found the `reason =`/`outcome = `-only version of the same hole — a
+# `debug.recordOutcome` mention with an entirely different field set
+# elsewhere in the function must not satisfy a DIFFERENT exit's
+# requirement, so each pattern demands the call and its own field
+# within one bounded, lazy window rather than treating "some call
+# exists somewhere" and "this field exists somewhere" as independent).
+_ROC = r"debug\.recordOutcome\{[\s\S]{0,220}?"  # call open + bounded body
 COMMIT_PLACEMENT_REQUIRED = [
-    r'reason\s*=[^\n]*"not a placeable power item',
-    r'reason\s*=[^\n]*"no selected unit carries',
-    r"reason\s*=\s*tostring\(buildingIdOrErr\)",
-    r'outcome\s*=\s*"accepted"',
+    _ROC + r'reason\s*=[^\n]*"not a placeable power item',
+    _ROC + r'reason\s*=[^\n]*"no selected unit carries',
+    _ROC + r"reason\s*=\s*tostring\(buildingIdOrErr\)",
+    _ROC + r'outcome\s*=\s*"accepted"',
 ]
 HANDLE_MOUSE_DOWN_REQUIRED = [
-    r'reason\s*=[^\n]*"off-world click during placement"',
-    r'reason\s*=[^\n]*"invalid placement tile"',
-    r'reason\s*=[^\n]*"building\.spawn failed"',
+    _ROC + r'reason\s*=[^\n]*"off-world click during placement"',
+    _ROC + r'reason\s*=[^\n]*"invalid placement tile"',
+    _ROC + r'reason\s*=[^\n]*"building\.spawn failed"',
 ]
 
 
@@ -151,9 +155,9 @@ def _build_tool_check(text: str) -> bool:
     return (_all_present(commit_scope, COMMIT_PLACEMENT_REQUIRED)
             and _all_present(handle_scope, HANDLE_MOUSE_DOWN_REQUIRED)
             and _count_at_least(
-                handle_scope, r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
+                handle_scope, _ROC + r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
             and _count_at_least(
-                handle_scope, r'reason\s*=[^\n]*"no active world id"', 2))
+                handle_scope, _ROC + r'reason\s*=[^\n]*"no active world id"', 2))
 
 
 # Each entry: (tier, verb, check) where check() -> bool. Built below so
@@ -487,6 +491,17 @@ def _self_test() -> list[str]:
     expect("buildTool.commitPlacement: return-value strings with NO "
            "recordOutcome hooks read as a gap (review round 3)",
            _build_tool_check(no_hooks_fixture), False)
+
+    # The exact review-round-4 counter-example: every `debug.recordOutcome`
+    # CALL renamed away (to some unrelated table constructor) while its
+    # `{outcome = ..., reason = ...}` fields are left completely intact.
+    # A field-only check (no anchor to the call itself) still reads DONE
+    # here; requiring the call is what review round 4 asked for.
+    call_renamed_fixture = (
+        full_fixture.replace("debug.recordOutcome", "someOtherTableCtor"))
+    expect("buildTool.commitPlacement: recordOutcome call renamed away "
+           "(fields kept) reads as a gap (review round 4)",
+           _build_tool_check(call_renamed_fixture), False)
 
     for missing in all_commit_parts:
         variant = (commit_placement_fn(all_commit_parts - {missing}) + "\n"
