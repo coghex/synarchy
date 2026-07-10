@@ -32,6 +32,7 @@ import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
+import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
@@ -95,6 +96,12 @@ main = hspec $ do
         -- drive the #697 fence relay by hand (harness runs neither
         -- the input nor the Lua thread, so the queues are the test's).
         describe "Input.Followup" InputFollowup.spec
+    -- Own engine (not the shared-worlds one above): the #707 save/load
+    -- story snapshots and reloads EVERY live page, so an empty world
+    -- manager keeps it scoped to its own cheap private w8 pages instead
+    -- of re-restoring the shared worlds.
+    aroundAll withHeadlessEngine $
+        describe "World identity (#707)" WorldIdentity.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec

@@ -66,8 +66,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             bm         ← readIORef (buildingManagerRef env)
             um         ← readIORef (unitManagerRef env)
             uts        ← readIORef (utsRef env)
-            -- The primary page's gen params drive the listing metadata.
+            -- The primary page's gen params drive the listing metadata,
+            -- and its player-facing identity (#707) rides along so save
+            -- listings can show the world's name without decoding the
+            -- full page list.
             mActiveParams ← readIORef (wsGenParamsRef primaryWs)
+            primaryIdentity ← readIORef (wsIdentityRef primaryWs)
             case mActiveParams of
                 Nothing →
                     logWarn logger CatWorld
@@ -114,6 +118,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 plantDesigs ← readIORef (wsPlantDesignationsRef ws)
                                 craftBills ← readIORef (wsCraftBillsRef ws)
                                 powerNodes ← readIORef (wsPowerNodesRef ws)
+                                identity  ← readIORef (wsIdentityRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
                                 -- Camera: the VISIBLE page uses the live global
                                 -- Camera2D (authoritative position/zoom/facing
@@ -164,6 +169,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsTillDesignations = tillDesigs
                                     , wpsCropPlots   = cropPlots
                                     , wpsPlantDesignations = plantDesigs
+                                    , wpsIdentity    = identity
                                     }
                     -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
@@ -180,6 +186,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , smWorldSize  = wgpWorldSize activeParams
                             , smPlateCount = wgpPlateCount activeParams
                             , smTimestamp  = timestampTxt
+                            , smWorldName  = wiName ⊚ primaryIdentity
+                            , smWorldGloss = wiGloss =≪ primaryIdentity
                             }
                         sd = SaveData
                             { sdMetadata   = meta

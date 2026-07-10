@@ -101,9 +101,9 @@ spec = do
         -- the seed; the surface maps exercise the whole pipeline).
         -- Size 32 keeps the double generation cheap.
         it "same seed produces identical chunk surface maps" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "det1") 123 32 3)
+            sendWorldCommand env (WorldInit (WorldPageId "det1") 123 32 3 Nothing)
             ws1 ← waitForWorldInit env (WorldPageId "det1") 120
-            sendWorldCommand env (WorldInit (WorldPageId "det2") 123 32 3)
+            sendWorldCommand env (WorldInit (WorldPageId "det2") 123 32 3 Nothing)
             ws2 ← waitForWorldInit env (WorldPageId "det2") 120
 
             t1 ← getWorldTileData ws1
@@ -117,7 +117,7 @@ spec = do
         -- Private world: this test destroys its page, so it must not
         -- touch the shared one.
         it "can destroy a world" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "destroy") 42 32 3)
+            sendWorldCommand env (WorldInit (WorldPageId "destroy") 42 32 3 Nothing)
             _ ← waitForWorldInit env (WorldPageId "destroy") 120
             sendWorldCommand env (WorldDestroy (WorldPageId "destroy"))
             threadDelay 500000

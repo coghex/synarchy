@@ -25,7 +25,10 @@ import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
---   sorted newest-first by timestamp.
+--   sorted newest-first by timestamp. `name` is the save-slot identity
+--   (the directory under saves/). A save whose active page carries a
+--   player-facing identity (#707) additionally exposes `worldName` and,
+--   when one was stored, `worldGloss`; unnamed saves omit both fields.
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveListFn env = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
@@ -41,6 +44,12 @@ saveListFn env = do
         Lua.setfield (-2) "worldSize"
         Lua.pushstring (TE.encodeUtf8 $ smTimestamp meta)
         Lua.setfield (-2) "timestamp"
+        forM_ (smWorldName meta) $ \wn → do
+            Lua.pushstring (TE.encodeUtf8 wn)
+            Lua.setfield (-2) "worldName"
+        forM_ (smWorldGloss meta) $ \wg → do
+            Lua.pushstring (TE.encodeUtf8 wg)
+            Lua.setfield (-2) "worldGloss"
         Lua.rawseti (-2) i
     return 1
 

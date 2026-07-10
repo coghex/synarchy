@@ -50,8 +50,9 @@ import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (dispatchLocationStamps)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Word64 → Int → Int → IO ()
-handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
+    → Word64 → Int → Int → Maybe WorldIdentity → IO ()
+handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
+                       identity = do
     let (worldSize, placeCount) =
             normalizeWorldGenInputs rawWorldSize rawPlaceCount
     when (worldSize ≠ rawWorldSize ∨ placeCount ≠ rawPlaceCount) $ do
@@ -75,6 +76,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount = do
     worldState ← emptyWorldState
     let phaseRef = wsLoadPhaseRef worldState
         totalSteps = 8
+
+    -- Player-facing identity (#707): recorded once at creation, before
+    -- the page is even registered — it never changes afterward. Nothing
+    -- for every caller that doesn't name its world (arena, headless,
+    -- dump, the 4-argument world.init).
+    writeIORef (wsIdentityRef worldState) identity
 
     -- register early so lua can read the loading phase
     atomicModifyIORef' (worldManagerRef env) $ \mgr →

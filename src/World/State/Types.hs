@@ -15,7 +15,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
-import World.Page.Types (WorldPageId(..))
+import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
@@ -182,6 +182,13 @@ data WorldState = WorldState
       --   traded for not plumbing a cross-thread GPU-dispose signal
       --   into the handful of world-teardown sites for content that's
       --   already explicitly out-of-scope for persistence).
+    , wsIdentityRef ∷ IORef (Maybe WorldIdentity)
+      -- ^ The page's optional player-facing identity (#707): display
+      --   name + optional gloss, distinct from the routing page id and
+      --   from any save-slot name. Written exactly once — at creation
+      --   ('WorldInit') or save-load restore ('wpsIdentity') — and
+      --   never mutated afterward (no rename API in this phase).
+      --   Persisted per page in saves (wpsIdentity, v82).
     }
 
 emptyWorldState ∷ IO WorldState
@@ -223,6 +230,7 @@ emptyWorldState = do
     wsPlantDesignationsRef ← newIORef HM.empty
     wsBloodStoreRef ← newIORef (emptyBloodStore defaultBloodTextureCap)
     wsBloodTextureHandlesRef ← newIORef HM.empty
+    wsIdentityRef ← newIORef Nothing
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
@@ -237,6 +245,7 @@ emptyWorldState = do
                         wsPowerNodesRef wsTillDesignationsRef
                         wsCropPlotsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
+                        wsIdentityRef
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

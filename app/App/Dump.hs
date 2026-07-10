@@ -88,7 +88,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldInit (WorldPageId "dump")
                        (fromIntegral seed ∷ Word64)
-                       worldSize plateCount)
+                       worldSize plateCount Nothing)
         -- Timeout scales with worldSize (gen time grows ~ quadratic
         -- with worldSize, not with plate count). Min 300s for tiny
         -- worlds, plenty of headroom for the largest practical sizes.
