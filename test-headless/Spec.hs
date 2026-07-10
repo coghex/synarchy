@@ -44,6 +44,7 @@ import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.Inject as InputInject
+import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
@@ -89,6 +90,10 @@ main = hspec $ do
         describe "Zoom/Detail Parity" ZoomParity.spec
         describe "Border Probe" BorderProbe.spec
         describe "Asset.TextureFallback" TextureFallback.spec
+        -- Not worldgen — needs the live EngineEnv's queues/refs to
+        -- drive the #697 fence relay by hand (harness runs neither
+        -- the input nor the Lua thread, so the queues are the test's).
+        describe "Input.Followup" InputFollowup.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec

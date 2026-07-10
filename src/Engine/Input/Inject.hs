@@ -22,6 +22,20 @@
 --   consumers that read the event's 'GLFW.ModifierKeys' field and
 --   consumers that poll held-key state (engine.isKeyDown's shift-click
 --   checks) observe the modifier exactly as they would a physical one.
+--
+--   Modifier LIFETIME (#697): the releases are not injected inline —
+--   the input thread drains a whole sequence before the Lua thread
+--   runs any callback it produced, so inline releases would already be
+--   the published state by callback time. Instead the releases ride an
+--   'InputFollowup' fence at the end of the sequence: input thread →
+--   'LuaInjectFollowup' → Lua thread → back into the input queue. Both
+--   queues are FIFO, so the releases re-enter strictly after the
+--   action's callbacks have run, and are then processed like any other
+--   key events (no stuck state). Caveat: two mod-bearing sequences
+--   racing through this pipeline concurrently (second verb issued
+--   before the first's fence completes) can release a shared modifier
+--   under the second action's callbacks — the lockstep harness (#647)
+--   acks each verb before the next, so overlap doesn't arise there.
 module Engine.Input.Inject
   ( resolveButton
   , resolveMods
@@ -107,12 +121,28 @@ modUps ∷ ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 modUps (ks, _) =
     [ InputKeyEvent k GLFW.KeyState'Released noMods | k ← reverse ks ]
 
+-- | Modifier releases, deferred behind the sequence's Lua broadcasts
+--   (#697). Inline releases are drained in the same batch as the
+--   action, so by the time the Lua thread runs the click/key callbacks
+--   the published state already shows the modifier up — a synthetic
+--   shift-click reads as a plain click to engine.isKeyDown pollers.
+--   Wrapping the releases in 'InputFollowup' routes them input thread →
+--   Lua thread → input thread; both queues are FIFO, so they are
+--   re-injected only after every callback of the fenced action has
+--   run, then processed normally (nothing sticks). Empty when there
+--   are no modifiers, keeping plain sequences identical.
+deferModUps ∷ ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
+deferModUps mm = case modUps mm of
+    []  → []
+    ups → [InputFollowup ups]
+
 -- | Cursor move only — updates hover/pick/tooltip state like a real
 --   mouse move.
 moveSequence ∷ (Double, Double) → [InputEvent]
 moveSequence (x, y) = [InputCursorMove x y]
 
--- | Full click: mods down → move → press → release → mods up. The
+-- | Full click: mods down → move → press → release → mods up (the
+--   ups deferred behind the click's own Lua callbacks, #697). The
 --   move rides along so the hit-test and any hover-derived state see
 --   the cursor where the click lands.
 clickSequence ∷ (Double, Double) → GLFW.MouseButton
@@ -123,7 +153,7 @@ clickSequence pos@(x, y) btn mm =
       , InputMouseEvent btn pos GLFW.MouseButtonState'Pressed
       , InputMouseEvent btn pos GLFW.MouseButtonState'Released
       ]
-    ⧺ modUps mm
+    ⧺ deferModUps mm
 
 -- | Press without release (drags, holds). Modifier keys go down here
 --   and come back up in the matching 'mouseUpSequence', so a
@@ -136,14 +166,17 @@ mouseDownSequence pos@(x, y) btn mm =
       , InputMouseEvent btn pos GLFW.MouseButtonState'Pressed
       ]
 
--- | Release (ends a drag started by 'mouseDownSequence').
+-- | Release (ends a drag started by 'mouseDownSequence'). Modifier
+--   ups are deferred so the release's own callbacks still observe the
+--   modifier held (#697) — like a human letting go of shift only after
+--   the mouse button.
 mouseUpSequence ∷ (Double, Double) → GLFW.MouseButton
                 → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 mouseUpSequence pos@(x, y) btn mm =
     [ InputCursorMove x y
     , InputMouseEvent btn pos GLFW.MouseButtonState'Released
     ]
-    ⧺ modUps mm
+    ⧺ deferModUps mm
 
 -- | Wheel scroll. Routed against the CURRENT cursor position (like a
 --   real wheel event) — callers targeting a specific element should
@@ -151,14 +184,15 @@ mouseUpSequence pos@(x, y) btn mm =
 scrollSequence ∷ Double → Double → [InputEvent]
 scrollSequence dx dy = [InputScrollEvent dx dy]
 
--- | Press + release of one key, bracketed by its modifiers.
+-- | Press + release of one key, bracketed by its modifiers (releases
+--   deferred behind the tap's Lua callbacks, #697).
 keyTapSequence ∷ GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 keyTapSequence k mm@(_, m) =
     modDowns mm
     ⧺ [ InputKeyEvent k GLFW.KeyState'Pressed m
       , InputKeyEvent k GLFW.KeyState'Released m
       ]
-    ⧺ modUps mm
+    ⧺ deferModUps mm
 
 -- | Hold a key down (camera pan etc.). Modifiers go down first and
 --   stay held until the matching 'keyUpSequence'.
@@ -166,10 +200,11 @@ keyDownSequence ∷ GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent
 keyDownSequence k mm@(_, m) =
     modDowns mm ⧺ [InputKeyEvent k GLFW.KeyState'Pressed m]
 
--- | Release a held key (and its modifiers, after it).
+-- | Release a held key (and its modifiers after it, deferred behind
+--   the release's own Lua callbacks, #697).
 keyUpSequence ∷ GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 keyUpSequence k mm@(_, m) =
-    [InputKeyEvent k GLFW.KeyState'Released m] ⧺ modUps mm
+    [InputKeyEvent k GLFW.KeyState'Released m] ⧺ deferModUps mm
 
 -- | Character input, one char event per character — the GLFW *char*
 --   path text fields listen on, distinct from key events. Only a
