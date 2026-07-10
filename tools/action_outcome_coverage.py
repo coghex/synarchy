@@ -157,8 +157,20 @@ HANDLE_MOUSE_DOWN_REQUIRED = [
 
 
 def _game_chain_check(text: str) -> bool:
+    # Three independent deadclick call sites today: the MOUSE_LEFT
+    # inactive-gameplay gate, the MOUSE_RIGHT inactive-gameplay gate, and
+    # the off-world no-selection tile-menu miss (review round 6 — the
+    # count was stuck at 2, so the two original gates alone satisfied it
+    # even with the third, newer site's hook removed/renamed). Bump this
+    # whenever a genuinely new deadclick site is added. The third site
+    # ALSO gets its own route-specific pattern (its "no tile under
+    # cursor" reason is unique among the three) so it stays covered even
+    # if a future fourth deadclick site changes what the plain count of 3
+    # would mean.
     return bool(text) and _all_present(text, LAYER_A_GAME_CHAIN_HANDLERS) \
-        and _count_at_least(text, _ROC_CLICK + r'"deadclick"', 2)
+        and _count_at_least(text, _ROC_CLICK + r'"deadclick"', 3) \
+        and _all_present(text, [
+            _ROC_CLICK + r'"deadclick"[\s\S]{0,40}?"no tile under cursor"'])
 
 
 def _build_tool_check(text: str) -> bool:
@@ -446,28 +458,46 @@ def _self_test() -> list[str]:
            "(literals kept) reads as a gap (review round 5)",
            _all_present(renamed_call, LAYER_A_SWALLOWED_ROUTES), False)
 
-    def game_chain_fixture(include: set[str], deadclick_sites: int,
+    def game_chain_fixture(include: set[str], deadclick_reasons: list[str],
                             call_name: str = "recordClick") -> str:
         lines = [f'local function {call_name}(handler, outcome, x, y, reason)',
                   '    debug.recordOutcome{kind = "input.click"}', 'end']
         for name in _HANDLER_NAMES:
             if name in include:
                 lines.append(f'{call_name}("{name}", nil, x, y)')
-        for _ in range(deadclick_sites):
-            lines.append(f'{call_name}(nil, "deadclick", x, y, "reason text")')
+        for reason in deadclick_reasons:
+            lines.append(f'{call_name}(nil, "deadclick", x, y, "{reason}")')
         return "\n".join(lines)
 
-    chain_full = game_chain_fixture(set(_HANDLER_NAMES), 2)
-    expect("game chain: all handlers + 2 deadclicks reads DONE",
+    # The three real deadclick sites: both inactive-gameplay gates share
+    # identical text (they really are the same call duplicated in
+    # scripts/init_mouse.lua), the off-world tile-menu miss (review round
+    # 6) has its own distinguishing reason.
+    _INACTIVE_GAMEPLAY = "gameplay input inactive (menu/paused/hidden world)"
+    _REALISTIC_DEADCLICKS = [_INACTIVE_GAMEPLAY, _INACTIVE_GAMEPLAY,
+                              "no tile under cursor"]
+
+    chain_full = game_chain_fixture(set(_HANDLER_NAMES), _REALISTIC_DEADCLICKS)
+    expect("game chain: all handlers + all 3 real deadclick sites reads DONE",
            _game_chain_check(chain_full), True)
     for name in _HANDLER_NAMES:
-        missing_one = game_chain_fixture(set(_HANDLER_NAMES) - {name}, 2)
+        missing_one = game_chain_fixture(set(_HANDLER_NAMES) - {name}, _REALISTIC_DEADCLICKS)
         expect(f"game chain: missing handler {name!r} reads gap",
                _game_chain_check(missing_one), False)
-    only_one_deadclick = game_chain_fixture(set(_HANDLER_NAMES), 1)
-    expect("game chain: only ONE deadclick site (not both branches) reads gap",
-           _game_chain_check(only_one_deadclick), False)
-    chain_renamed_call = game_chain_fixture(set(_HANDLER_NAMES), 2, call_name="someOtherFn")
+    for n in (0, 1, 2):
+        expect(f"game chain: only {n} of 3 real deadclick sites reads gap",
+               _game_chain_check(
+                   game_chain_fixture(set(_HANDLER_NAMES), _REALISTIC_DEADCLICKS[:n])),
+               False)
+    # The review-round-6 exact blocker: enough generic deadclicks to pass
+    # a plain count check, but NONE for the off-world tile-menu miss
+    # specifically — must still read as a gap.
+    generic_only = game_chain_fixture(set(_HANDLER_NAMES), [_INACTIVE_GAMEPLAY] * 4)
+    expect("game chain: 4 generic deadclicks but none for the off-world "
+           "tile-menu miss reads gap (review round 6)",
+           _game_chain_check(generic_only), False)
+    chain_renamed_call = game_chain_fixture(
+        set(_HANDLER_NAMES), _REALISTIC_DEADCLICKS, call_name="someOtherFn")
     expect("game chain: recordClick renamed away (literals kept) reads "
            "as a gap (review round 5)",
            _game_chain_check(chain_renamed_call), False)
