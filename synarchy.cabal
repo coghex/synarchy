@@ -185,6 +185,7 @@ library
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.MSAA
                      Engine.Graphics.Vulkan.Pipeline
+                     Engine.Graphics.Vulkan.Offscreen
                      Engine.Graphics.Vulkan.Pipeline.Bindless
                      Engine.Graphics.Vulkan.Recreate
                      Engine.Graphics.Vulkan.Sampler.Types

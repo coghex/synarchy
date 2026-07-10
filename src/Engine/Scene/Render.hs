@@ -2,7 +2,6 @@
 module Engine.Scene.Render where
 
 import UPrelude
-import Data.Maybe (fromJust)
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import qualified Data.Map.Strict as Map
@@ -33,15 +32,17 @@ updateSceneForRender = do
     logDebugSM CatRender "Updating scene"
         [("activeScene", maybe "none" (T.pack . show) (smActiveScene sceneMgr))]
     
-    -- Safe: only called from drawFrame which already validates glfwWindow
-    -- is Just via extractWindow (see Engine.Loop.Frame). Never called in
-    -- headless or dump mode.
-    let Window win = fromJust $ glfwWindow state
-    (width, height) ← GLFW.getFramebufferSize win
+    -- Only called from drawFrame, never in headless or dump mode —
+    -- windowed the live GLFW framebuffer size is queried (it changes
+    -- under resize); offscreen (#650) there is no window and the fixed
+    -- target extent is the framebuffer size.
     let (screenW, screenH) = case swapchainInfo state of
                                Nothing → (800.0,600.0)
                                Just swapInfo → let Extent2D w h = siSwapExtent swapInfo
                                                in (fromIntegral w, fromIntegral h)
+    (width, height) ← case glfwWindow state of
+        Just (Window win) → GLFW.getFramebufferSize win
+        Nothing           → pure (round screenW, round screenH)
     
     updatedSceneMgr ← updateSceneManager
                             (fromIntegral width) 

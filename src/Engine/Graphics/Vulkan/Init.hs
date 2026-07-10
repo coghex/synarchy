@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Init
   ( initializeVulkan
+  , initializeVulkanOffscreen
   , initializeVulkanCommon
   , createUniformBuffersForFrames
   ) where
@@ -38,6 +39,7 @@ import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
 import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
+import Engine.Graphics.Vulkan.Offscreen (createOffscreenTarget)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
 import Engine.Graphics.Vulkan.Texture.System
@@ -102,6 +104,39 @@ initializeVulkan window = do
   let swapInfo = swapInfo0 { siSwapImgViews = imageViews }
 
   initializeVulkanCommon physicalDevice device queues swapInfo fbSize
+
+-- | Initialize all Vulkan resources for the offscreen path (#650):
+--   no GLFW, no surface, no swapchain — plain images stand in as the
+--   render target, sized by @(w, h)@, one per frame in flight. The
+--   device is picked on graphics capability alone and the present
+--   queue slots alias the graphics queue (nothing ever presents).
+initializeVulkanOffscreen ∷ (Int, Int) → EngineM ε σ CommandPool
+initializeVulkanOffscreen (w, h) = do
+  logDebugM CatVulkan "Creating Vulkan instance (offscreen)"
+  (vkInstance, _debugMessenger) ← allocResource destroyVulkanInstance $
+    createVulkanInstance defaultGraphicsConfig InstanceOffscreen
+  logDebugM CatVulkan "Vulkan instance created successfully"
+
+  logDebugM CatVulkan "Selecting physical device (no surface)"
+  physicalDevice ← pickPhysicalDevice vkInstance Nothing
+
+  logDebugM CatVulkan "Creating logical device"
+  (device, queues) ← createVulkanDevice vkInstance physicalDevice Nothing
+  logDebugM CatVulkan "Logical device created successfully"
+
+  modify $ \s → s { graphicsState = (graphicsState s)
+                    { vulkanInstance = Just vkInstance
+                    , vulkanPDevice  = Just physicalDevice
+                    , vulkanDevice   = Just device
+                    , vulkanSurface  = Nothing
+                    , deviceQueues   = Just queues
+                    } }
+
+  let numFrames = gcMaxFrames defaultGraphicsConfig
+  swapInfo ← createOffscreenTarget physicalDevice device (w, h)
+                 (fromIntegral numFrames)
+
+  initializeVulkanCommon physicalDevice device queues swapInfo (w, h)
 
 -- | Everything after the render target exists — frame resources,
 --   descriptors, texture system, pipelines, framebuffers, sync —
