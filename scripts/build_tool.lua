@@ -781,17 +781,30 @@ function buildTool.handleMouseDown(button, x, y)
                 elseif target.isStarting then
                     -- The portal: bootstrap building, still instant.
                     local id = building.spawn(target.def, igx, igy)
+                    -- Two separate calls (not one shared call with
+                    -- `id and nil or "building.spawn failed"`-style
+                    -- reason): that idiom always selects the constant
+                    -- fallback regardless of id, because `id and nil`
+                    -- collapses to a falsy value either way (review
+                    -- round 7 — a successful spawn recorded a failure
+                    -- reason).
                     if id then
                         engine.logInfo("BuildTool: placed " .. target.def ..
                             " (id=" .. tostring(id) ..
                             ") at " .. igx .. "," .. igy)
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "accepted",
+                            where = { x = igx, y = igy },
+                        }
+                    else
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "rejected",
+                            where = { x = igx, y = igy },
+                            reason = "building.spawn failed",
+                        }
                     end
-                    debug.recordOutcome{
-                        kind = "buildTool.commitPlacement",
-                        outcome = id and "accepted" or "rejected",
-                        where = { x = igx, y = igy },
-                        reason = id and nil or "building.spawn failed",
-                    }
                     buildTool.exitPlacement()
                     if buildTool.hud and buildTool.hud.selectDefaultTool then
                         buildTool.hud.selectDefaultTool()
