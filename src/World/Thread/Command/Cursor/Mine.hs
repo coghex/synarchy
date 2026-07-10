@@ -21,7 +21,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (globalToChunk)
 import World.Mine.Types (designationFromSlope)
-import World.Thread.Command.Cursor.Common (maxDesignateSide)
+import World.Thread.Command.Cursor.Common
+    (maxDesignateSide, recordDesignationOutcome)
 
 handleWorldSetMineAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -98,6 +99,9 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
                 <> " tiles (" <> T.pack (show xLo) <> ","
                 <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
                 <> "," <> T.pack (show yHi) <> ")"
+            recordDesignationOutcome env "world.designateMine"
+                "anchor tile ineligible or unloaded" xLo yLo
+                ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)
 
 handleWorldSetMineDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → TextureHandle → IO ()

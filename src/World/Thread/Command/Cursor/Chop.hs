@@ -26,7 +26,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (chunkToGlobal, globalToChunk)
 import World.Chop.Types (newChopDesignation)
-import World.Thread.Command.Cursor.Common (maxDesignateSide)
+import World.Thread.Command.Cursor.Common
+    (maxDesignateSide, recordDesignationOutcome)
 
 handleWorldSetChopAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -97,6 +98,16 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                 <> " trees (" <> T.pack (show xLo) <> ","
                 <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
                 <> "," <> T.pack (show yHi) <> ")"
+            -- F4 (#646): requested is the FULL swept-rectangle tile
+            -- count, matching till/mine and the naive player's own
+            -- mental model ("I dragged a 5x5 box") — NOT the count of
+            -- flora instances found, which undercounts every empty
+            -- non-flora tile as if it had never been requested at all
+            -- (review round 1: a 5x5 sweep with one tree must report
+            -- 25/1/24 partial, not 1/1/0 accepted).
+            recordDesignationOutcome env "chop.designate"
+                "no harvestable target for the requested tag in the swept rectangle"
+                xLo yLo ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)
 
 handleWorldCancelChopCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()

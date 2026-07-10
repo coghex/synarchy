@@ -30,6 +30,7 @@ import World.Types
 import World.Generate (globalToChunk)
 import World.Plant.Types (newPlantDesignation)
 import World.Vegetation (isTilledSoil)
+import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 
 -- | Commit a plant designation at (gx, gy) for the named crop. Refused
 --   (silently — the caller polls plant.getDesignationAt to confirm) if
@@ -74,6 +75,7 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     if isTilledSoil vg ∧ not hasExistingFlora
                        ∧ not hasExistingPlot
                     then Just z else Nothing
+            gt ← readIORef (gameTimeRef env)
             case (tileZ, resolvedCrop) of
                 (Just z, Just fid) → do
                     atomicModifyIORef' (wsPlantDesignationsRef worldState) $
@@ -81,9 +83,29 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     logDebug logger CatWorld $
                         "Plant designation: (" <> T.pack (show gx) <> ","
                         <> T.pack (show gy) <> ") crop=" <> cropName
-                _ → logDebug logger CatWorld $
+                    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                        { aoTs = gt, aoKind = "plant.designate"
+                        , aoOutcome = "accepted"
+                        , aoWhereX = Just gx, aoWhereY = Just gy, aoTarget = Nothing
+                        , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                        , aoReason = Nothing, aoHandler = Nothing
+                        }
+                _ → do
+                    logDebug logger CatWorld $
                         "Plant designation refused at (" <> T.pack (show gx)
                         <> "," <> T.pack (show gy) <> ") crop=" <> cropName
+                    let reason
+                            | isNothing resolvedCrop =
+                                "unknown or non-plantable crop: " <> cropName
+                            | otherwise =
+                                "tile not tilled soil, or already occupied"
+                    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                        { aoTs = gt, aoKind = "plant.designate"
+                        , aoOutcome = "rejected"
+                        , aoWhereX = Just gx, aoWhereY = Just gy, aoTarget = Nothing
+                        , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                        , aoReason = Just reason, aoHandler = Nothing
+                        }
 
 handleWorldCancelPlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()

@@ -32,7 +32,8 @@ import World.Types
 import World.Generate (globalToChunk)
 import World.Till.Types (newTillDesignation)
 import World.Vegetation (isTilledSoil)
-import World.Thread.Command.Cursor.Common (maxDesignateSide)
+import World.Thread.Command.Cursor.Common
+    (maxDesignateSide, recordDesignationOutcome)
 
 handleWorldSetTillAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -104,6 +105,9 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
                 <> " tiles (" <> T.pack (show xLo) <> ","
                 <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
                 <> "," <> T.pack (show yHi) <> ")"
+            recordDesignationOutcome env "till.designate"
+                "anchor tile ineligible or unloaded" xLo yLo
+                ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)
 
 handleWorldCancelTillCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
