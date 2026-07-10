@@ -745,6 +745,14 @@ function buildTool.handleMouseDown(button, x, y)
         local gx, gy = world.pickTile(x, y)
         if not gx or not gy then
             buildTool.state.lastHoverTile = nil
+            -- F4 (#646): the routing chain (init_mouse.lua) already
+            -- records "build_tool" consumed this click; without this,
+            -- an off-world click during placement looks accepted with
+            -- no corresponding Layer B rejection (review round 1).
+            debug.recordOutcome{
+                kind = "buildTool.commitPlacement", outcome = "rejected",
+                reason = "off-world click during placement",
+            }
             return true
         end
         local igx = math.floor(gx)
@@ -778,6 +786,12 @@ function buildTool.handleMouseDown(button, x, y)
                             " (id=" .. tostring(id) ..
                             ") at " .. igx .. "," .. igy)
                     end
+                    debug.recordOutcome{
+                        kind = "buildTool.commitPlacement",
+                        outcome = id and "accepted" or "rejected",
+                        where = { x = igx, y = igy },
+                        reason = id and nil or "building.spawn failed",
+                    }
                     buildTool.exitPlacement()
                     if buildTool.hud and buildTool.hud.selectDefaultTool then
                         buildTool.hud.selectDefaultTool()
@@ -791,8 +805,28 @@ function buildTool.handleMouseDown(button, x, y)
                     if wid then
                         construction.designate(wid, igx, igy, igx, igy,
                             "building", target.def)
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "accepted", where = { x = igx, y = igy },
+                            reason = "routed to construction.designate",
+                        }
+                    else
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "rejected", where = { x = igx, y = igy },
+                            reason = "no active world id",
+                        }
                     end
                 end
+            else
+                -- F4 (#646): building.canPlaceAt refused the tile —
+                -- previously silent beyond the placement mode simply
+                -- staying open (review round 1).
+                debug.recordOutcome{
+                    kind = "buildTool.commitPlacement", outcome = "rejected",
+                    where = { x = igx, y = igy },
+                    reason = "invalid placement tile",
+                }
             end
         else -- "structure": DF-style two-click rectangle (or, for wire, a
              -- two-click straight PATH — see isWirePath/setLineMode above)
@@ -810,7 +844,18 @@ function buildTool.handleMouseDown(button, x, y)
                     construction.designate(wid, a[1], a[2], x2, y2,
                         "structure", target.pack, target.piece, target.edge)
                     buildTool.state.anchor = nil
+                    debug.recordOutcome{
+                        kind = "buildTool.commitPlacement", outcome = "accepted",
+                        where = { x = x2, y = y2 },
+                        reason = "routed to construction.designate",
+                    }
                 end
+            else
+                debug.recordOutcome{
+                    kind = "buildTool.commitPlacement", outcome = "rejected",
+                    where = { x = igx, y = igy },
+                    reason = "no active world id",
+                }
             end
         end
         return true

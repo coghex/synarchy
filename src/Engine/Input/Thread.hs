@@ -15,6 +15,7 @@ import Engine.Core.Thread
 import Engine.Input.State
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
+import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt, findRightClickableElementAt
@@ -224,7 +225,25 @@ processInput env inpSt event = case event of
         let lq = luaQueue env
             (x, y) = pos
         logger ← readIORef (loggerRef env)
-        
+
+        -- F4 (#646) Layer A: routes that consume a press WITHOUT ever
+        -- queuing a Lua event (ClickSwallowed, and a ClickUI whose
+        -- widget has no handler for this button) are otherwise
+        -- invisible to the oracle — Dispatch.hs only sees the messages
+        -- that actually get queued. Record those routes right here,
+        -- where the decision is made; a route that DOES queue a
+        -- LuaUIClickEvent/LuaUIRightClickEvent is recorded once, in
+        -- Dispatch.hs, to avoid double-recording the same press.
+        let recordRouteOutcome ∷ Text → Maybe Text → IO ()
+            recordRouteOutcome outcome handler = do
+                gt ← readIORef (gameTimeRef env)
+                pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                    { aoTs = gt, aoKind = "input.click", aoOutcome = outcome
+                    , aoWhereX = Nothing, aoWhereY = Nothing, aoTarget = Nothing
+                    , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                    , aoReason = Nothing, aoHandler = handler
+                    }
+
         -- Each press is routed exactly one way (ClickRoute): to the
         -- game (LuaMouseDownEvent), to a UI element (LuaUIClickEvent /
         -- right-click), or swallowed with no Lua event (tooltip lock,
@@ -274,11 +293,13 @@ processInput env inpSt event = case event of
                   then do
                     atomicModifyIORef' (uiManagerRef env) $ \m →
                         (toggleTooltipLock m, ())
+                    recordRouteOutcome "accepted" (Just "tooltip_lock_toggle")
                     return ClickSwallowed
                   else case findElementAt mousePos uiMgr of
                     Just _ → do
                         logDebug logger CatUI
                             "Middle-click swallowed by UI surface"
+                        recordRouteOutcome "noop" (Just "ui_surface_block")
                         return ClickSwallowed
                     Nothing → do
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
@@ -295,7 +316,9 @@ processInput env inpSt event = case event of
                 let locked      = isTooltipLocked uiMgr
                     clickInside = locked ∧ isPointInLockedTooltip mousePos uiMgr
                 if clickInside
-                  then return ClickSwallowed
+                  then do
+                    recordRouteOutcome "accepted" (Just "tooltip_lock_dismiss")
+                    return ClickSwallowed
                   else do
                     when locked $
                         atomicModifyIORef' (uiManagerRef env) $ \m →
@@ -346,6 +369,12 @@ processInput env inpSt event = case event of
                                     Q.writeQueue lq LuaUIFocusLost
                                     logDebug logger CatUI
                                         "Right-click consumed by clickable UI element (no handler)"
+                                    -- No LuaUIRightClickEvent gets queued for
+                                    -- this route, so Dispatch.hs never sees
+                                    -- it either — record it here or it's
+                                    -- invisible to F4 entirely (review #1).
+                                    recordRouteOutcome "accepted"
+                                        (Just "ui_widget_no_rightclick_handler")
                                     return ClickUI
                                 Nothing → do
                                     -- A right-click that misses all UI clears
