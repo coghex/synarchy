@@ -32,7 +32,6 @@
 local unitAi = package.loaded["scripts.unit_ai"] or {}
 package.loaded["scripts.unit_ai"] = unitAi
 
-local brain = require("scripts.brain")
 -- Derived roles (#265): skill-derived labels that weight work-action
 -- ENTRY utilities (locks stay untouched — see unit_roles.lua header).
 local roles = require("scripts.unit_roles")
@@ -59,6 +58,7 @@ local repairMod     = require("scripts.unit_ai_repair")
 local pickup        = require("scripts.unit_ai_pickup")
 local medic         = require("scripts.unit_ai_medic")
 local sleepGoal     = require("scripts.unit_ai_sleep")
+local mentalAi      = require("scripts.unit_ai_mental")
 
 -----------------------------------------------------------
 -- Action registry per unit type
@@ -206,17 +206,10 @@ local function tickOne(uid, defName)
     core.seedInitialGoal(s, defName)
     core.maintainTask(uid, s)
 
-    -- Delirium: a unit whose consciousness has dropped into the delirious band
-    -- (heat stroke / hypoxia / salt imbalance — not yet unconscious, which
-    -- collapses it) can't act purposefully. It stumbles: aimless slow wander,
-    -- no goals/work/combat. Only re-issue when not already moving (no spam).
-    if brain.isDelirious(uid) then
-        if activity ~= "walking" and activity ~= "running" then
-            needs.wanderExecute(uid, s, params)
-        end
-        s.currentAction = "delirious"
-        return
-    end
+    -- Delirium (physiological) and mental break (psychological, #352):
+    -- a unit in either can't act purposefully — no goals/work/combat.
+    -- The behaviours live in scripts/unit_ai_mental.lua.
+    if mentalAi.shortCircuit(uid, s, params, activity) then return end
 
     -- Stuck-walk watchdog. A unit stuck in walking/running with no
     -- position progress never returns to idle, and the execute gate

@@ -93,6 +93,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "lua_strict_msg": (TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),
     "machine_shop": (TARGETED, "electric furnace + machine_shop content regression, narrower "
                                "than the generic #590 power-draw mechanism probe"),
+    "mental_state": (TARGETED, "narrow #352 mental-state ladder/hysteresis/break-AI regression"),
     "resource_root": (TARGETED, "narrow #636 resource-root launch-contract regression "
                                 "(also runs its own small worldgen dump)"),
     "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression"),
