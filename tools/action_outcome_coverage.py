@@ -228,9 +228,15 @@ def _portal_accepted_present(text: str) -> bool:
     reason literal (review round 8: neither the plain outcome="accepted"
     text nor the "building.spawn failed" reject reason alone proved this
     specific hook, since other accepted/rejected calls in the same
-    function already satisfy those)."""
+    function already satisfy those). Requires outcome="accepted" to
+    appear inside an actual `debug.recordOutcome{...}` call (_ROC), not
+    just anywhere in the branch body — review round 11: renaming ONLY
+    the portal-success call to some other table constructor left the
+    literal `outcome = "accepted"` text sitting right there in the
+    body, which a check with no call anchor still happily matched."""
     body = _portal_accepted_body(text)
-    return body is not None and bool(re.search(r'outcome\s*=\s*"accepted"', body))
+    return body is not None and bool(
+        re.search(_ROC + r'outcome\s*=\s*"accepted"', body))
 
 
 def _portal_accepted_omits_reason(text: str) -> bool:
@@ -633,7 +639,8 @@ def _self_test() -> list[str]:
     def handle_mouse_down_fn(include: set[str], designate_sites: int,
                              no_world_sites: int,
                              portal_accepted_reason: str | None = None,
-                             portal_accepted_reason_first: bool = False) -> str:
+                             portal_accepted_reason_first: bool = False,
+                             portal_accepted_call: str = "debug.recordOutcome") -> str:
         lines = ["function buildTool.handleMouseDown(button, x, y)"]
         if "offworld" in include:
             lines.append('    debug.recordOutcome{outcome = "rejected", '
@@ -653,19 +660,19 @@ def _self_test() -> list[str]:
             lines.append('    if id then')
             if "portal_accepted" in include:
                 if portal_accepted_reason is None:
-                    lines.append('        debug.recordOutcome{outcome = "accepted"}')
+                    lines.append(f'        {portal_accepted_call}{{outcome = "accepted"}}')
                 elif portal_accepted_reason_first:
                     # Same reason bug, but with the fields in the OTHER
                     # order — reason precedes outcome in the same record
                     # literal (review round 10's counter-example: a check
                     # that only looks forward from the outcome match
                     # never sees a reason placed before it).
-                    lines.append(f'        debug.recordOutcome{{reason = "{portal_accepted_reason}", '
+                    lines.append(f'        {portal_accepted_call}{{reason = "{portal_accepted_reason}", '
                                   'outcome = "accepted"}')
                 else:
                     # Review-round-7 bug reintroduced: a reason attached
                     # to the SUCCESS record.
-                    lines.append('        debug.recordOutcome{outcome = "accepted", '
+                    lines.append(f'        {portal_accepted_call}{{outcome = "accepted", '
                                   f'reason = "{portal_accepted_reason}"}}')
             lines.append('    else')
             if "spawn" in include:
@@ -711,6 +718,15 @@ def _self_test() -> list[str]:
            "round 10 — field order previously evaded a check that only "
            "looked forward from the outcome match)",
            _build_tool_check(portal_accepted_reason_before), False)
+    portal_accepted_call_renamed = (
+        commit_placement_fn(all_commit_parts) + "\n"
+        + handle_mouse_down_fn(all_handle_parts, 2, 2,
+                                portal_accepted_call="someOtherTableCtor"))
+    expect("buildTool.commitPlacement: ONLY the portal-success call "
+           "renamed away (fields kept) reads gap (review round 11 — "
+           "outcome=\"accepted\" alone, with no debug.recordOutcome "
+           "anchor, previously still read DONE)",
+           _build_tool_check(portal_accepted_call_renamed), False)
 
     # plant.designate: both branches share the same aoKind literal, so
     # anchor each aoOutcome to its own pushActionOutcome call (review
