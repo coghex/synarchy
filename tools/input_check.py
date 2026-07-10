@@ -105,10 +105,12 @@ def main() -> int:
 
     # Load once per engine lifetime: a second loadScript would create a
     # second broadcast-receiving instance sharing the same singleton
-    # state table, double-counting every event.
+    # state table, double-counting every event. The tick rate is
+    # REQUIRED — without it loadScript silently no-ops and the fixture
+    # never registers for broadcasts (require() alone doesn't).
     send(PORT,
          'if not package.loaded["scripts.input_check_fixture"] then '
-         'engine.loadScript("scripts/input_check_fixture.lua") end',
+         'engine.loadScript("scripts/input_check_fixture.lua", 0.0) end',
          expect_result=False)
     geom = lua('return require("scripts.input_check_fixture").setup()')
     if not (isinstance(geom, dict) and "btnX" in geom):

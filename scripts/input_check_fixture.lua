@@ -43,6 +43,9 @@ function M.setup()
         M.page = UI.newPage("input_check_fixture", "modal")
         M.btn = UI.newElement("input_check_btn", BTN_W, BTN_H, M.page)
         UI.addToPage(M.page, M.btn, BTN_X, BTN_Y)
+        -- setOnClick alone doesn't make the element hit-testable; an
+        -- element left unclickable routes clicks through to the game.
+        UI.setClickable(M.btn, true)
         UI.setOnClick(M.btn, "onInputCheckClick")
         M.txt = UI.newElement("input_check_txt", TXT_W, TXT_H, M.page)
         UI.addToPage(M.page, M.txt, TXT_X, TXT_Y)
