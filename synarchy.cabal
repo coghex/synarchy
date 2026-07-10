@@ -731,6 +731,11 @@ library
                      World.Preview
                      World.ZoomMap
                      World.ZoomMap.Cache
+                     World.ZoomMap.Cache.Build
+                     World.ZoomMap.Cache.BuildPixels
+                     World.ZoomMap.Cache.Classify
+                     World.ZoomMap.Cache.Noise
+                     World.ZoomMap.Cache.Pixels
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
     default-extensions: FlexibleInstances
