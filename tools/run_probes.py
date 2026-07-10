@@ -24,7 +24,7 @@ Usage:
   python3 tools/run_probes.py --jobs 4         # up to 4 probes at once
   python3 tools/run_probes.py --only combat,movement
   python3 tools/run_probes.py --list
-  python3 tools/run_probes.py --port 9500       # override --port where supported
+  python3 tools/run_probes.py --port 9500       # override every probe's --port
   python3 tools/run_probes.py --timeout 300
 
 Exit 0 = all selected probes passed. 1 = at least one failed. 2 = bad
@@ -42,107 +42,108 @@ import time
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Base for the unique per-probe ports handed out in parallel mode (--jobs).
-# Chosen above the fixed port of the one probe that doesn't take --port
-# (cargo_capacity 9009) and clear of the GUI port 8008, so a concurrent
-# batch never double-binds a port.
+# Clear of the GUI port 8008 and of every registered probe's own fixed
+# default port, so a concurrent batch never double-binds a port.
 PARALLEL_PORT_BASE = 9400
 
-# (key, script filename, supports --port, one-line purpose for --list)
+# (key, script filename, one-line purpose for --list). Every registered
+# probe accepts --port (#723); each script's own default is its historical
+# fixed port, so a bare invocation behaves exactly as before.
 PROBES = [
-    ("action_outcome", "action_outcome_probe.py", True,
+    ("action_outcome", "action_outcome_probe.py",
      "F4 action-outcome oracle: recordOutcome/drainActionOutcomes public "
      "contract, destructive drain, till/chop mixed-sweep partial paths (#646)"),
-    ("cargo_capacity", "cargo_capacity_probe.py", False,
+    ("cargo_capacity", "cargo_capacity_probe.py",
      "depositToCargo weighs the actual ItemInstance, not the def base weight (#189)"),
-    ("chop", "chop_probe.py", True,
+    ("chop", "chop_probe.py",
      "chop-designation layer + chop AI + wood_log yield (#97)"),
-    ("collapse_crawl", "collapse_crawl_probe.py", True,
+    ("collapse_crawl", "collapse_crawl_probe.py",
      "collapse<->crawl pose hysteresis in tickInjuries (#304)"),
-    ("combat_anim", "combat_anim_probe.py", True,
+    ("combat_anim", "combat_anim_probe.py",
      "real fight headless; verifies swing/death animations play"),
-    ("concussion_revive", "concussion_revive_probe.py", True,
+    ("concussion_revive", "concussion_revive_probe.py",
      "checkRevive concussion-band hysteresis (#304)"),
-    ("config_state", "config_state_probe.py", True,
+    ("config_state", "config_state_probe.py",
      "local runtime config (video/keybinds/notifications) vs versioned "
      "_default.yaml templates never dirties git (#638)"),
-    ("construction", "construction_probe.py", True,
+    ("construction", "construction_probe.py",
      "construct_job AI end-to-end: claim/source/progress/place/stake/release (#96)"),
-    ("consumable_effects", "consumable_effects_probe.py", True,
+    ("consumable_effects", "consumable_effects_probe.py",
      "drink effects scaled by item quality/temperature: hydration/caffeine/mood/warmth (#347)"),
-    ("cooking", "cooking_probe.py", True,
+    ("cooking", "cooking_probe.py",
      "kitchen workshop + cooking skill/basic_cuisine + basic_food/coffee content (#346)"),
-    ("craft", "craft_probe.py", True,
+    ("craft", "craft_probe.py",
      "craft.* API: catalogue, execute, stations, quality, smelting (#325/#326/#343/#327)"),
-    ("craft_bill", "craft_bill_probe.py", True,
+    ("craft_bill", "craft_bill_probe.py",
      "craft-bill backend + craft_job AI: queue/claim/progress, source (ground+cargo) -> work -> produce loop (#329)"),
-    ("disarm", "disarm_probe.py", True,
+    ("disarm", "disarm_probe.py",
      "disabled-hand auto-drop must re-fire (#193)"),
-    ("flora_growth", "flora_growth_probe.py", True,
+    ("flora_growth", "flora_growth_probe.py",
      "derived flora growth/age/phase under the advancing calendar (#332)"),
-    ("follow_command_priority", "follow_command_priority_probe.py", True,
+    ("follow_command_priority", "follow_command_priority_probe.py",
      "follow-command priority against other AI goals (#306)"),
-    ("foraging", "foraging_probe.py", True,
+    ("foraging", "foraging_probe.py",
      "foraging AI + harvestable-flora gating (#94)"),
-    ("infection", "infection_probe.py", True,
+    ("infection", "infection_probe.py",
      "infection growth/prevention/cure/sepsis loop end-to-end"),
-    ("injury_log", "injury_log_probe.py", True,
+    ("injury_log", "injury_log_probe.py",
      "injury-log stream roundtrip: emit/drain, unit.injure, emitEventForUnit"),
-    ("item_instance", "item_instance_probe.py", True,
+    ("item_instance", "item_instance_probe.py",
      "per-instance item identity (#67)"),
-    ("item_temp", "item_temp_probe.py", True,
+    ("item_temp", "item_temp_probe.py",
      "item temperature model (#344)"),
-    ("location_content", "location_content_probe.py", True,
+    ("location_content", "location_content_probe.py",
      "location content spawning + ruin probe (#90, #91)"),
-    ("location_overlay", "location_overlay_probe.py", True,
+    ("location_overlay", "location_overlay_probe.py",
      "world-gen location-overlay placement (#89)"),
-    ("location_stamp_idempotent", "location_stamp_idempotent_probe.py", True,
+    ("location_stamp_idempotent", "location_stamp_idempotent_probe.py",
      "geometry-stamp idempotency survives a cleared anchor floor + save/reload (#424)"),
-    ("lua_orphan_prune", "lua_orphan_prune_probe.py", True,
+    ("lua_orphan_prune", "lua_orphan_prune_probe.py",
      "Lua per-id AI state pruned (not inherited) after a save load (#195)"),
-    ("lua_strict_msg", "lua_strict_msg_probe.py", True,
+    ("lua_strict_msg", "lua_strict_msg_probe.py",
      "a Haskell exception embedded in a LuaToEngineMsg/LuaMsg field must not escape and crash the engine (#622)"),
-    ("machine_shop", "machine_shop_probe.py", True,
+    ("machine_shop", "machine_shop_probe.py",
      "electric furnace smelt recipe + machine_shop wiring/motor recipes, real content (#591)"),
-    ("medic_coord", "medic_coord_probe.py", True,
+    ("medic_coord", "medic_coord_probe.py",
      "bestMedicFor/medicAvailable distance-discounted selection fix"),
-    ("mental_state", "mental_state_probe.py", True,
+    ("mental_state", "mental_state_probe.py",
      "mental-state ladder: stressed hysteresis, break episodes + wander/flee AI, euphoria (#352)"),
-    ("movement", "movement_probe.py", True,
+    ("movement", "movement_probe.py",
      "obstacle-course movement: pathing/climbs/falls/ramps"),
-    ("multiworld_save", "multiworld_save_probe.py", True,
+    ("multiworld_save", "multiworld_save_probe.py",
      "multi-world save -> quit -> restart -> load; cross-page survival (#214, #219)"),
-    ("offscreen", "offscreen_probe.py", True,
+    ("offscreen", "offscreen_probe.py",
      "--offscreen render mode: windowless Vulkan boot, UI flow, screenshots, input injection, parallel instances (#650; needs a GPU)"),
-    ("physiology", "physiology_probe.py", True,
+    ("physiology", "physiology_probe.py",
      "thermoregulation/circulation sanity across controlled environments"),
-    ("power_workshop", "power_workshop_probe.py", True,
+    ("power_workshop", "power_workshop_probe.py",
      "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
-    ("preview", "preview_probe.py", True,
+    ("preview", "preview_probe.py",
      "--preview boot skeleton: CLI dispatch (grouped-no-item/unrecognized exit before boot) + boot profile/target over the debug console (#632)"),
-    ("repair_item", "repair_item_probe.py", True,
+    ("repair_item", "repair_item_probe.py",
      "unit.repairItem primitive (#300)"),
-    ("repair", "repair_probe.py", True,
+    ("repair", "repair_probe.py",
      "repair policy layer, station-gated (#301)"),
-    ("repair_ai", "repair_ai_probe.py", True,
+    ("repair_ai", "repair_ai_probe.py",
      "repair AI: claim/fetch/walk/repair/return + role weighting (#302)"),
-    ("resource_root", "resource_root_probe.py", True,
+    ("resource_root", "resource_root_probe.py",
      "resource-root launch contract: built exe runs --dump/--headless from outside the repo (#636)"),
-    ("role", "role_probe.py", True,
+    ("role", "role_probe.py",
      "derived unit-role hysteresis/demotion/work-XP growth (#265)"),
-    ("save_pause", "save_pause_probe.py", True,
+    ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
-    ("sleep", "sleep_probe.py", False,
+    ("sleep", "sleep_probe.py",
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
-    ("text_encoding", "text_encoding_probe.py", True,
+    ("text_encoding", "text_encoding_probe.py",
      "TE.decodeUtf8Lenient in the Lua text API: malformed UTF-8 through engine.setText no longer errors, and round-trips through engine.getText (#618)"),
-    ("thermo_altitude", "thermo_altitude_probe.py", True,
+    ("thermo_altitude", "thermo_altitude_probe.py",
      "altitude-lapse thermal effect (#308)"),
 ]
 
 DEFAULT_TIMEOUT = 600.0
 
 
-def select(only: str | None, exact: bool = False) -> list[tuple[str, str, bool, str]]:
+def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:
     if not only:
         return list(PROBES)
     needles = [n.strip() for n in only.split(",") if n.strip()]
@@ -155,9 +156,9 @@ def select(only: str | None, exact: bool = False) -> list[tuple[str, str, bool, 
     return selected
 
 
-def run_one(script: str, supports_port: bool, port: int | None, timeout: float):
+def run_one(script: str, port: int | None, timeout: float):
     cmd = ["python3", os.path.join("tools", script)]
-    if port is not None and supports_port:
+    if port is not None:
         cmd += ["--port", str(port)]
     start = time.time()
     proc = subprocess.Popen(
@@ -189,7 +190,7 @@ def run_one(script: str, supports_port: bool, port: int | None, timeout: float):
     return ok, timed_out, elapsed, out or ""
 
 
-def run_with_retry(script, supports_port, port, timeout, retries, announce=None):
+def run_with_retry(script, port, timeout, retries, announce=None):
     """Run a probe, re-running SOLO up to `retries` times on failure.
 
     Returns (status, elapsed, out, attempts). `announce(kind, attempt,
@@ -197,7 +198,7 @@ def run_with_retry(script, supports_port, port, timeout, retries, announce=None)
     """
     attempt = 0
     while True:
-        ok, timed_out, elapsed, out = run_one(script, supports_port, port, timeout)
+        ok, timed_out, elapsed, out = run_one(script, port, timeout)
         attempt += 1
         if ok or attempt > retries:
             break
@@ -217,7 +218,7 @@ def main() -> int:
                           "uses this so e.g. 'craft' can't also select 'craft_bill')")
     ap.add_argument("--list", action="store_true", help="list known probes and exit")
     ap.add_argument("--port", type=int, default=None,
-                     help="override --port on probes that support it (default: avoids 8008; "
+                     help="override every probe's --port (default: avoids 8008; "
                           "each probe keeps its own default if unset)")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
                      help=f"per-probe wall-clock timeout in seconds (default {DEFAULT_TIMEOUT:.0f})")
@@ -245,9 +246,8 @@ def main() -> int:
         return 2
 
     if args.list:
-        for key, script, supports_port, purpose in chosen:
-            flag = "" if supports_port else "  (no --port flag)"
-            print(f"{key:28s} {script:32s} {purpose}{flag}")
+        for key, script, purpose in chosen:
+            print(f"{key:28s} {script:32s} {purpose}")
         return 0
 
     n = len(chosen)
@@ -261,10 +261,10 @@ def main() -> int:
         def announce(kind, attempt, retries):
             print(f"{kind}, retrying solo ({attempt}/{retries}) ... ", end="", flush=True)
 
-        for i, (key, script, supports_port, purpose) in enumerate(chosen, 1):
+        for i, (key, script, purpose) in enumerate(chosen, 1):
             print(f"[{i}/{n}] {script} ... ", end="", flush=True)
             status, elapsed, out, attempts = run_with_retry(
-                script, supports_port, args.port, args.timeout, args.retries, announce)
+                script, args.port, args.timeout, args.retries, announce)
             note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
             print(f"{status} ({elapsed:.1f}s){note}")
             if status != "PASS" and args.tail > 0:
@@ -281,9 +281,9 @@ def main() -> int:
               f"(timeout {args.timeout:.0f}s each)...\n")
 
         def work(idx, probe):
-            key, script, supports_port, _ = probe
+            key, script, _ = probe
             ok, timed_out, elapsed, out = run_one(
-                script, supports_port, PARALLEL_PORT_BASE + idx, args.timeout)
+                script, PARALLEL_PORT_BASE + idx, args.timeout)
             status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
             return key, script, status, elapsed, out
 
@@ -302,10 +302,10 @@ def main() -> int:
             print(f"\nRe-running {len(failed)} failed probe(s) SOLO "
                   f"(up to {args.retries} more attempt(s) each; the parallel "
                   f"batch was the first)...")
-            for key, script, supports_port, _ in failed:
+            for key, script, _ in failed:
                 for r in range(1, args.retries + 1):
                     ok, timed_out, elapsed, out = run_one(
-                        script, supports_port, PARALLEL_PORT_BASE, args.timeout)
+                        script, PARALLEL_PORT_BASE, args.timeout)
                     status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                     print(f"  {script} solo retry {r}/{args.retries} ... "
                           f"{status} ({elapsed:.1f}s)")
@@ -314,7 +314,7 @@ def main() -> int:
                         break
 
         if args.tail > 0:
-            for key, script, _, _ in chosen:
+            for key, script, _ in chosen:
                 r = results[key]
                 if r[1] != "PASS":
                     print(f"\n--- {r[0]} ({r[1]}) ---")
