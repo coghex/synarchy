@@ -94,22 +94,40 @@ def _count_at_least(text: str, pattern: str, n: int) -> bool:
     return len(re.findall(pattern, text)) >= n
 
 
+# Anchored to an ACTUAL oracle call, not just a bare literal appearing
+# somewhere in the file — a handler/route STRING with no producer call
+# anywhere near it (the call renamed, replaced, or deleted while a
+# literal was left behind, e.g. in a stale comment or an unrelated
+# table) must NOT read as instrumented. Review round 3's counter-example
+# was the bare-substring version of this for build-tool; round 4 found
+# the `reason =`/`outcome = `-only version of the same hole there; round
+# 5 found the identical hole here — Layer A's two areas checked only
+# handler literals, never the `recordRouteOutcome`/`recordClick` call
+# itself. Every entry below opens with the real call name and a bounded
+# lazy window before the literal it's checking, mirroring _ROC's fix.
+_ROC_ROUTE = r"recordRouteOutcome[\s\S]{0,80}?"  # Engine.Input.Thread's helper
+_ROC_CLICK = r"recordClick\([\s\S]{0,60}?"       # init_mouse.lua's helper
+
 # Shared source of truth between the real checks below and the self-test:
 # every distinct route/reason literal a multi-route area is expected to
 # carry. Defined once so the self-test proving "remove one -> gap" can't
 # silently drift from what main() actually checks (review round 2).
 LAYER_A_SWALLOWED_ROUTES = [
-    r'"degenerate_viewport"', r'"tooltip_lock_toggle"',
-    r'"ui_surface_block"', r'"camera_drag"',
-    r'"tooltip_lock_dismiss"', r'"ui_widget_no_rightclick_handler"',
-    r'"unmapped_button"',  # GLFW buttons 4-8, mapped to Lua button 0
+    _ROC_ROUTE + r'"degenerate_viewport"', _ROC_ROUTE + r'"tooltip_lock_toggle"',
+    _ROC_ROUTE + r'"ui_surface_block"', _ROC_ROUTE + r'"camera_drag"',
+    _ROC_ROUTE + r'"tooltip_lock_dismiss"',
+    _ROC_ROUTE + r'"ui_widget_no_rightclick_handler"',
+    _ROC_ROUTE + r'"unmapped_button"',  # GLFW buttons 4-8, mapped to Lua button 0
 ]
 LAYER_A_GAME_CHAIN_HANDLERS = [
-    r'"debug_overlay"', r'"debug_anim_panel"', r'"build_tool"',
-    r'"mine_tool"', r'"chop_tool"', r'"till_tool"', r'"plant_tool"',
-    r'"unit_select"', r'"item_select"', r'"building_select"',
-    r'"deselect"', r'"context_menu_building"', r'"context_menu_unit"',
-    r'"context_menu_item"', r'"move_order"', r'"context_menu_tile"',
+    _ROC_CLICK + r'"debug_overlay"', _ROC_CLICK + r'"debug_anim_panel"',
+    _ROC_CLICK + r'"build_tool"', _ROC_CLICK + r'"mine_tool"',
+    _ROC_CLICK + r'"chop_tool"', _ROC_CLICK + r'"till_tool"',
+    _ROC_CLICK + r'"plant_tool"', _ROC_CLICK + r'"unit_select"',
+    _ROC_CLICK + r'"item_select"', _ROC_CLICK + r'"building_select"',
+    _ROC_CLICK + r'"deselect"', _ROC_CLICK + r'"context_menu_building"',
+    _ROC_CLICK + r'"context_menu_unit"', _ROC_CLICK + r'"context_menu_item"',
+    _ROC_CLICK + r'"move_order"', _ROC_CLICK + r'"context_menu_tile"',
 ]
 
 # Anchored to an ACTUAL `debug.recordOutcome{...}` call, not just a bare
@@ -140,7 +158,7 @@ HANDLE_MOUSE_DOWN_REQUIRED = [
 
 def _game_chain_check(text: str) -> bool:
     return bool(text) and _all_present(text, LAYER_A_GAME_CHAIN_HANDLERS) \
-        and _count_at_least(text, r'"deadclick"', 2)
+        and _count_at_least(text, _ROC_CLICK + r'"deadclick"', 2)
 
 
 def _build_tool_check(text: str) -> bool:
@@ -392,40 +410,67 @@ def _self_test() -> list[str]:
 
     # 6. The multi-route areas review round 2 found: prove that dropping
     #    ANY ONE required route/reason literal flips the check to False
-    #    — not just that having all of them reads True. Built from the
-    #    SAME constants _build_verbs() uses, so this can't silently
-    #    drift from what main() actually checks.
-    def literal(pat: str) -> str:
-        """Turn one of our simple literal-plus-optional-'\\.' regex
-        patterns back into the plain source text it's meant to match.
-        Quotes are kept as-is where the pattern has them (e.g.
-        '"degenerate_viewport"') — they're part of the literal text a
-        real source file contains, not regex delimiters."""
-        return pat.replace("\\.", ".")
+    #    — not just that having all of them reads True. Built from
+    #    realistic CALL-SHAPED fixtures (not bare literals) so a
+    #    call-renaming mutation (review round 5) is provably caught too.
+    _ROUTE_NAMES = [
+        "degenerate_viewport", "tooltip_lock_toggle", "ui_surface_block",
+        "camera_drag", "tooltip_lock_dismiss",
+        "ui_widget_no_rightclick_handler", "unmapped_button",
+    ]
+    _HANDLER_NAMES = [
+        "debug_overlay", "debug_anim_panel", "build_tool", "mine_tool",
+        "chop_tool", "till_tool", "plant_tool", "unit_select", "item_select",
+        "building_select", "deselect", "context_menu_building",
+        "context_menu_unit", "context_menu_item", "move_order",
+        "context_menu_tile",
+    ]
 
-    def synthetic(literals: list[str], skip_index: int | None = None) -> str:
-        return "\n".join(literal(p) for i, p in enumerate(literals)
-                          if i != skip_index)
+    def swallowed_routes_fixture(include: set[str], call_name: str = "recordRouteOutcome") -> str:
+        lines = [f"{call_name} ∷ Text → Maybe Text → IO ()",
+                  f"{call_name} outcome handler = do pure ()"]
+        for name in _ROUTE_NAMES:
+            if name in include:
+                lines.append(f'{call_name} "accepted" (Just "{name}")')
+        return "\n".join(lines)
 
-    swallowed_full = synthetic(LAYER_A_SWALLOWED_ROUTES)
+    swallowed_full = swallowed_routes_fixture(set(_ROUTE_NAMES))
     expect("Layer A swallowed routes: all present reads DONE",
            _all_present(swallowed_full, LAYER_A_SWALLOWED_ROUTES), True)
-    for i, dropped in enumerate(LAYER_A_SWALLOWED_ROUTES):
-        expect(f"Layer A swallowed routes: missing {dropped} reads gap",
-               _all_present(synthetic(LAYER_A_SWALLOWED_ROUTES, i),
-                            LAYER_A_SWALLOWED_ROUTES), False)
+    for name in _ROUTE_NAMES:
+        missing_one = swallowed_routes_fixture(set(_ROUTE_NAMES) - {name})
+        expect(f"Layer A swallowed routes: missing {name!r} reads gap",
+               _all_present(missing_one, LAYER_A_SWALLOWED_ROUTES), False)
+    renamed_call = swallowed_routes_fixture(set(_ROUTE_NAMES), call_name="someOtherHelper")
+    expect("Layer A swallowed routes: recordRouteOutcome renamed away "
+           "(literals kept) reads as a gap (review round 5)",
+           _all_present(renamed_call, LAYER_A_SWALLOWED_ROUTES), False)
 
-    two_deadclicks = '\n"deadclick"\n"deadclick"\n'
-    chain_full = synthetic(LAYER_A_GAME_CHAIN_HANDLERS) + two_deadclicks
+    def game_chain_fixture(include: set[str], deadclick_sites: int,
+                            call_name: str = "recordClick") -> str:
+        lines = [f'local function {call_name}(handler, outcome, x, y, reason)',
+                  '    debug.recordOutcome{kind = "input.click"}', 'end']
+        for name in _HANDLER_NAMES:
+            if name in include:
+                lines.append(f'{call_name}("{name}", nil, x, y)')
+        for _ in range(deadclick_sites):
+            lines.append(f'{call_name}(nil, "deadclick", x, y, "reason text")')
+        return "\n".join(lines)
+
+    chain_full = game_chain_fixture(set(_HANDLER_NAMES), 2)
     expect("game chain: all handlers + 2 deadclicks reads DONE",
            _game_chain_check(chain_full), True)
-    for i, dropped in enumerate(LAYER_A_GAME_CHAIN_HANDLERS):
-        missing_one = synthetic(LAYER_A_GAME_CHAIN_HANDLERS, i) + two_deadclicks
-        expect(f"game chain: missing handler {dropped} reads gap",
+    for name in _HANDLER_NAMES:
+        missing_one = game_chain_fixture(set(_HANDLER_NAMES) - {name}, 2)
+        expect(f"game chain: missing handler {name!r} reads gap",
                _game_chain_check(missing_one), False)
-    only_one_deadclick = synthetic(LAYER_A_GAME_CHAIN_HANDLERS) + '\n"deadclick"\n'
+    only_one_deadclick = game_chain_fixture(set(_HANDLER_NAMES), 1)
     expect("game chain: only ONE deadclick site (not both branches) reads gap",
            _game_chain_check(only_one_deadclick), False)
+    chain_renamed_call = game_chain_fixture(set(_HANDLER_NAMES), 2, call_name="someOtherFn")
+    expect("game chain: recordClick renamed away (literals kept) reads "
+           "as a gap (review round 5)",
+           _game_chain_check(chain_renamed_call), False)
 
     # buildTool.commitPlacement: realistic fixture text (function-scoped,
     # hook-anchored `reason =`/`outcome = ` fields) rather than bare
