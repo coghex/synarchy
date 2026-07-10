@@ -18,6 +18,7 @@ import qualified Data.Sequence as Seq
 import Control.Concurrent.STM (newTVarIO)
 import qualified System.Random as Random
 import qualified Combat.Types
+import Engine.ActionOutcome (emptyActionOutcomeQueue)
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
@@ -151,6 +152,7 @@ initializeEngineWith logBackend = do
   combatEventsRef ← newIORef Combat.Types.emptyEventQueue
   injuryEventsRef ← newIORef Combat.Types.emptyEventQueue
   thoughtEventsRef ← newIORef Combat.Types.emptyEventQueue
+  actionOutcomeRef ← newIORef emptyActionOutcomeQueue
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
   pathingConfig ← loadPathingConfig logger "config/pathing.yaml"
@@ -237,6 +239,7 @@ initializeEngineWith logBackend = do
         , combatEventsRef    = combatEventsRef
         , injuryEventsRef    = injuryEventsRef
         , thoughtEventsRef   = thoughtEventsRef
+        , actionOutcomeRef   = actionOutcomeRef
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , pathingConfigRef   = pathingConfigRef

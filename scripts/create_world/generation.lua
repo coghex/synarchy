@@ -135,6 +135,16 @@ function generation.start(menu, logPanel)
     logPanel.addLine(menu, "")
 
     worldView.startGeneration()
+
+    -- F4 (#646): the cold-boot session's first commit boundary. No
+    -- reject path exists today (bad seed/size input silently falls
+    -- back to a default rather than refusing) — always "accepted";
+    -- the checker in tools/action_outcome_coverage.py tracks this verb
+    -- so a future validation gate can't land without also wiring the
+    -- rejected/partial outcome it would introduce.
+    debug.recordOutcome{
+        kind = "createWorld.generate", outcome = "accepted",
+    }
 end
 
 -----------------------------------------------------------

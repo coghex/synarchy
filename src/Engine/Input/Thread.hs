@@ -15,6 +15,7 @@ import Engine.Core.Thread
 import Engine.Input.State
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
+import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt, findRightClickableElementAt
@@ -224,7 +225,31 @@ processInput env inpSt event = case event of
         let lq = luaQueue env
             (x, y) = pos
         logger ← readIORef (loggerRef env)
-        
+
+        -- F4 (#646) Layer A: routes that consume a press WITHOUT ever
+        -- queuing a Lua event (ClickSwallowed, and a ClickUI whose
+        -- widget has no handler for this button) are otherwise
+        -- invisible to the oracle — Dispatch.hs only sees the messages
+        -- that actually get queued. Record those routes right here,
+        -- where the decision is made; a route that DOES queue a
+        -- LuaUIClickEvent/LuaUIRightClickEvent is recorded once, in
+        -- Dispatch.hs, to avoid double-recording the same press.
+        let recordRouteOutcome ∷ Text → Maybe Text → IO ()
+            recordRouteOutcome outcome handler = do
+                gt ← readIORef (gameTimeRef env)
+                pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                    { aoTs = gt, aoKind = "input.click", aoOutcome = outcome
+                    -- The real click position (review round 9 — these
+                    -- routes previously hard-coded Nothing/Nothing,
+                    -- losing the location entirely; the critic needs it
+                    -- to identify a phantom affordance). Window coords,
+                    -- matching what scripts/init_mouse.lua's recordClick
+                    -- records for the game-chain routes.
+                    , aoWhereX = Just x, aoWhereY = Just y, aoTarget = Nothing
+                    , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                    , aoReason = Nothing, aoHandler = handler
+                    }
+
         -- Each press is routed exactly one way (ClickRoute): to the
         -- game (LuaMouseDownEvent), to a UI element (LuaUIClickEvent /
         -- right-click), or swallowed with no Lua event (tooltip lock,
@@ -253,7 +278,11 @@ processInput env inpSt event = case event of
             -- the scale division yield NaN/Infinity, and fbW/fbH = 0
             -- collapses the scaled coord to (0,0) — either way the hit-test
             -- below would dispatch a bogus UI/game event. Drop the click.
-            if viewportDegenerate winW winH fbW fbH then return ClickSwallowed else case btn of
+            if viewportDegenerate winW winH fbW fbH
+              then do
+                recordRouteOutcome "noop" (Just "degenerate_viewport")
+                return ClickSwallowed
+              else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
               -- Otherwise hit-test the UI so a middle-click over ANY UI/
               -- menu surface can't fall through to gameplay middle-click
@@ -274,14 +303,24 @@ processInput env inpSt event = case event of
                   then do
                     atomicModifyIORef' (uiManagerRef env) $ \m →
                         (toggleTooltipLock m, ())
+                    recordRouteOutcome "accepted" (Just "tooltip_lock_toggle")
                     return ClickSwallowed
                   else case findElementAt mousePos uiMgr of
                     Just _ → do
                         logDebug logger CatUI
                             "Middle-click swallowed by UI surface"
+                        recordRouteOutcome "noop" (Just "ui_surface_block")
                         return ClickSwallowed
                     Nothing → do
+                        -- scripts/init_mouse.lua's onMouseDown only
+                        -- branches on MOUSE_LEFT/MOUSE_RIGHT, so a middle
+                        -- press reaching "game" falls through the whole
+                        -- chain with no recordClick call of its own (it
+                        -- drives camera-drag polling instead, not the
+                        -- click-dispatch chain) — record it here or it's
+                        -- invisible to F4 entirely (review round 2).
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        recordRouteOutcome "accepted" (Just "camera_drag")
                         return ClickGame
 
               -- All other buttons: if a tooltip is locked, intercept the
@@ -295,7 +334,9 @@ processInput env inpSt event = case event of
                 let locked      = isTooltipLocked uiMgr
                     clickInside = locked ∧ isPointInLockedTooltip mousePos uiMgr
                 if clickInside
-                  then return ClickSwallowed
+                  then do
+                    recordRouteOutcome "accepted" (Just "tooltip_lock_dismiss")
+                    return ClickSwallowed
                   else do
                     when locked $
                         atomicModifyIORef' (uiManagerRef env) $ \m →
@@ -310,7 +351,7 @@ processInput env inpSt event = case event of
                         case findClickableElementAt mousePos uiMgr' of
                             Just (elemHandle, callback) → do
                                 Q.writeQueue lq
-                                    (LuaUIClickEvent elemHandle callback)
+                                    (LuaUIClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
                                     "UI element left-clicked: " <> callback
                                 return ClickUI
@@ -323,7 +364,7 @@ processInput env inpSt event = case event of
                         case findRightClickableElementAt mousePos uiMgr' of
                             Just (elemHandle, callback) → do
                                 Q.writeQueue lq
-                                    (LuaUIRightClickEvent elemHandle callback)
+                                    (LuaUIRightClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
                                     "UI element right-clicked: " <> callback
                                 return ClickUI
@@ -334,7 +375,7 @@ processInput env inpSt event = case event of
                             -- semantics); only truly empty UI space routes
                             -- the right-click to the world.
                             Nothing → case findClickableElementAt mousePos uiMgr' of
-                                Just _ → do
+                                Just (_leftCallbackHandle, leftClickCallback) → do
                                     -- Consumed by a clickable control with no
                                     -- right-click handler (e.g. an ordinary
                                     -- button). Left-clicking such a control
@@ -346,6 +387,19 @@ processInput env inpSt event = case event of
                                     Q.writeQueue lq LuaUIFocusLost
                                     logDebug logger CatUI
                                         "Right-click consumed by clickable UI element (no handler)"
+                                    -- No LuaUIRightClickEvent gets queued for
+                                    -- this route, so Dispatch.hs never sees
+                                    -- it either — record it here or it's
+                                    -- invisible to F4 entirely (review #1).
+                                    -- The recorded handler is the control's
+                                    -- OWN left-click callback name (its
+                                    -- identity), not a generic placeholder
+                                    -- (review round 8 — the acceptance
+                                    -- criterion is "records the consuming
+                                    -- handler", which a constant string
+                                    -- can't satisfy for more than one
+                                    -- control).
+                                    recordRouteOutcome "accepted" (Just leftClickCallback)
                                     return ClickUI
                                 Nothing → do
                                     -- A right-click that misses all UI clears
@@ -358,7 +412,15 @@ processInput env inpSt event = case event of
                                     return ClickGame
 
                       _ → do
+                        -- GLFW mouse buttons 4-8 (side/extra buttons):
+                        -- Dispatch.hs maps anything past MouseButton'3 to
+                        -- Lua button 0, and init_mouse.lua's onMouseDown
+                        -- only branches on MOUSE_LEFT/MOUSE_RIGHT, so this
+                        -- reaches the end of that chain with no defined
+                        -- behavior anywhere and no recordClick call
+                        -- (review round 3) — record it here instead.
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        recordRouteOutcome "noop" (Just "unmapped_button")
                         return ClickGame
 
         -- The release ALWAYS goes to Lua — UI widget drags (slider
