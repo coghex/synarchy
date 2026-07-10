@@ -96,15 +96,48 @@ coordinates into the frame.
 | `{"do":"wait"}` | nothing — watch time pass |
 | `{"do":"done","reason"}` | nothing — player claims the goal; session ends |
 
-## Personas (the C2 contract)
+## Personas
 
 A persona is a small structured YAML/JSON blob (see
 `personas.py` for the schema): `name`, `temperament`, `goal`,
 `tendencies[]`, optional `prose`. Three hardcoded placeholders ship in
 `personas/` (`curious_carl`, `impatient_imogen`, `methodical_mara`) so
-H1 runs standalone; C2 (#649) generates conforming files and passes
-them by path (`--persona path/to/file.yaml`). `--goal` overrides the
-persona's goal for one session.
+H1 runs standalone; generated personas (below) are passed by path
+(`--persona path/to/file.yaml`). `--goal` overrides the persona's goal
+for one session.
+
+### Persona generation (C2, #649)
+
+`personas.py` also *generates* personas: `generate_persona(seed)` is a
+pure function of a seed — it samples one value per behavioral axis
+(experience / patience / reads_guidance / play_style / persistence,
+plus the session `goal`) from **`personas/axes.yaml`** and assembles
+the H1 fields from each value's tendency/blurb data. Same seed →
+identical spec, so the H1 trace's recorded persona regenerates exactly
+on replay. Adding persona variety is data-editing in `axes.yaml`, not
+code. Generated specs carry extra provenance fields (`seed`, `axes`,
+`sampling`) that H1 ignores.
+
+```bash
+python3 tools/playtest/personas.py --seed 42            # preview one
+python3 tools/playtest/personas.py --seed 42 --count 5  # seeds 42..46
+python3 tools/playtest/personas.py --coverage --count 12  # balanced spread
+python3 tools/playtest/personas.py --seed 42 --out DIR  # write files
+python3 tools/playtest/personas.py --seed 42 --llm      # LLM-flavored blurb
+python3 tools/playtest/personas.py --selftest           # offline check
+```
+
+Two sampling modes: **seeded-random** (default — cheap, varied,
+reproducible per seed) and **`--coverage`** (a balanced
+Latin-hypercube-style spread across the axis space, reproducible from
+`(seed, count)`, so a campaign deliberately spans combinations instead
+of clustering). The default blurb is a deterministic template;
+**`--llm`** rewrites the name + blurb with a cheap model
+(`claude-haiku-4-5` by default, `--model` to change — needs an
+Anthropic key). LLM prose is **frozen into the spec at generation
+time** — files, the H1 trace, and replay always reuse the stored text,
+never regenerate — so the prose can't drift between runs while the
+axes/goal/tendencies stay seed-deterministic regardless.
 
 ## Session trace format (what H2 consumes)
 
@@ -229,3 +262,9 @@ clean and additive.
 - `python3 tools/playtest/critic.py --selftest` — offline critic
   pipeline check (canned trace, fake critic, no key);
   `--eval` is the real-model acceptance run against the planted trace.
+- `python3 tools/playtest/personas.py --selftest` — offline generator
+  check (C2): same-seed determinism, H1 schema conformance (through
+  `load_persona` + real prompt assembly), axis coverage over many
+  seeds, coverage-mode balance/reproducibility, and the LLM-blurb
+  freeze contract via an injected fake completer (no key). A real
+  `--llm` run is the key-holder acceptance for the flavor path.
