@@ -369,7 +369,7 @@ processInput env inpSt event = case event of
                             -- semantics); only truly empty UI space routes
                             -- the right-click to the world.
                             Nothing → case findClickableElementAt mousePos uiMgr' of
-                                Just _ → do
+                                Just (_leftCallbackHandle, leftClickCallback) → do
                                     -- Consumed by a clickable control with no
                                     -- right-click handler (e.g. an ordinary
                                     -- button). Left-clicking such a control
@@ -385,8 +385,15 @@ processInput env inpSt event = case event of
                                     -- this route, so Dispatch.hs never sees
                                     -- it either — record it here or it's
                                     -- invisible to F4 entirely (review #1).
-                                    recordRouteOutcome "accepted"
-                                        (Just "ui_widget_no_rightclick_handler")
+                                    -- The recorded handler is the control's
+                                    -- OWN left-click callback name (its
+                                    -- identity), not a generic placeholder
+                                    -- (review round 8 — the acceptance
+                                    -- criterion is "records the consuming
+                                    -- handler", which a constant string
+                                    -- can't satisfy for more than one
+                                    -- control).
+                                    recordRouteOutcome "accepted" (Just leftClickCallback)
                                     return ClickUI
                                 Nothing → do
                                     -- A right-click that misses all UI clears
