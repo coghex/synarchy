@@ -73,6 +73,61 @@ def _filewide_check(relpath: str, pattern: str) -> bool:
         pattern, path.read_text(encoding="utf-8")) is not None
 
 
+def _all_present(text: str, patterns: list[str]) -> bool:
+    """Every pattern must independently match `text` — for a multi-route
+    area (Layer A's several distinct swallow/no-handler routes, or a
+    single verb's several distinct reject reasons) where a single
+    "does ANY instrumentation exist in this file" pattern would read
+    DONE the moment just one route/reason is wired up, hiding the rest
+    (review round 2)."""
+    return all(re.search(p, text) is not None for p in patterns)
+
+
+def _all_present_check(relpath: str, patterns: list[str]) -> bool:
+    path = REPO_ROOT / relpath
+    if not path.exists():
+        return False
+    return _all_present(path.read_text(encoding="utf-8"), patterns)
+
+
+def _count_at_least(text: str, pattern: str, n: int) -> bool:
+    return len(re.findall(pattern, text)) >= n
+
+
+# Shared source of truth between the real checks below and the self-test:
+# every distinct route/reason literal a multi-route area is expected to
+# carry. Defined once so the self-test proving "remove one -> gap" can't
+# silently drift from what main() actually checks (review round 2).
+LAYER_A_SWALLOWED_ROUTES = [
+    r'"degenerate_viewport"', r'"tooltip_lock_toggle"',
+    r'"ui_surface_block"', r'"camera_drag"',
+    r'"tooltip_lock_dismiss"', r'"ui_widget_no_rightclick_handler"',
+]
+LAYER_A_GAME_CHAIN_HANDLERS = [
+    r'"debug_overlay"', r'"debug_anim_panel"', r'"build_tool"',
+    r'"mine_tool"', r'"chop_tool"', r'"till_tool"', r'"plant_tool"',
+    r'"unit_select"', r'"item_select"', r'"building_select"',
+    r'"deselect"', r'"context_menu_building"', r'"context_menu_unit"',
+    r'"context_menu_item"', r'"move_order"', r'"context_menu_tile"',
+]
+BUILD_TOOL_REQUIRED = [
+    r"not a placeable power item", r"no selected unit carries",
+    r"off-world click during placement", r"invalid placement tile",
+    r"building\.spawn failed",
+]
+
+
+def _game_chain_check(text: str) -> bool:
+    return bool(text) and _all_present(text, LAYER_A_GAME_CHAIN_HANDLERS) \
+        and _count_at_least(text, r'"deadclick"', 2)
+
+
+def _build_tool_check(text: str) -> bool:
+    return bool(text) and _all_present(text, BUILD_TOOL_REQUIRED) \
+        and _count_at_least(text, r"routed to construction\.designate", 2) \
+        and _count_at_least(text, r"no active world id", 2)
+
+
 # Each entry: (tier, verb, check) where check() -> bool. Built below so
 # each verb's own check can pick file-wide vs function-scoped as needed.
 def _build_verbs() -> list[tuple[str, str, callable]]:
@@ -83,21 +138,30 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
              "src/Engine/Scripting/Lua/Thread/Dispatch.hs",
              r'recordWidgetClickOutcome env "')),  # call sites only, not the def
         ("A", "input click -> swallowed/no-handler routes (no event ever queued)",
-         lambda: _filewide_check(
-             "src/Engine/Input/Thread.hs", r'recordRouteOutcome "')),
+         # Every distinct ClickSwallowed/no-handler-ClickUI route this
+         # module knows about — ALL must be present, not just one, or a
+         # route silently loses its record (review round 2 found the
+         # degenerate-viewport and middle-click-miss routes missing
+         # while the others made the whole area read DONE).
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_SWALLOWED_ROUTES)),
         ("A", "input click -> game-world tool/select/deadclick chain",
-         lambda: len(re.findall(
-             r"recordClick\((?:\"|nil)",
-             (REPO_ROOT / "scripts/init_mouse.lua").read_text(encoding="utf-8"))) > 0
-         if (REPO_ROOT / "scripts/init_mouse.lua").exists() else False),
+         lambda: _game_chain_check(
+             (REPO_ROOT / "scripts/init_mouse.lua").read_text(encoding="utf-8")
+             if (REPO_ROOT / "scripts/init_mouse.lua").exists() else "")),
 
         # --- Layer B Tier 1: onboarding + highest naive-frequency (this PR) ---
         ("B1", "createWorld.generate (proceed commit)",
          lambda: _filewide_check(
              "scripts/create_world/generation.lua", r"debug\.recordOutcome")),
         ("B1", "buildTool.commitPlacement",
-         lambda: _filewide_check(
-             "scripts/build_tool.lua", r"debug\.recordOutcome")),
+         # Every distinct reject/accept site handleMouseDown's placement
+         # branch and commitPlacement itself cover — a single file-wide
+         # "does debug.recordOutcome appear anywhere" pattern reads DONE
+         # even if every hook but one were deleted (review round 2).
+         lambda: _build_tool_check(
+             (REPO_ROOT / "scripts/build_tool.lua").read_text(encoding="utf-8")
+             if (REPO_ROOT / "scripts/build_tool.lua").exists() else "")),
         ("B1", "wire.place",
          lambda: _filewide_check(
              "scripts/wire.lua", r"debug\.recordOutcome")),
@@ -293,6 +357,60 @@ def _self_test() -> list[str]:
     route_with_call = route_def_only + '\nrecordRouteOutcome "accepted" (Just "x")\n'
     expect("recordRouteOutcome with a real call site is detected",
            bool(re.search(r'recordRouteOutcome "', route_with_call)), True)
+
+    # 6. The multi-route areas review round 2 found: prove that dropping
+    #    ANY ONE required route/reason literal flips the check to False
+    #    — not just that having all of them reads True. Built from the
+    #    SAME constants _build_verbs() uses, so this can't silently
+    #    drift from what main() actually checks.
+    def literal(pat: str) -> str:
+        """Turn one of our simple literal-plus-optional-'\\.' regex
+        patterns back into the plain source text it's meant to match.
+        Quotes are kept as-is where the pattern has them (e.g.
+        '"degenerate_viewport"') — they're part of the literal text a
+        real source file contains, not regex delimiters."""
+        return pat.replace("\\.", ".")
+
+    def synthetic(literals: list[str], skip_index: int | None = None) -> str:
+        return "\n".join(literal(p) for i, p in enumerate(literals)
+                          if i != skip_index)
+
+    swallowed_full = synthetic(LAYER_A_SWALLOWED_ROUTES)
+    expect("Layer A swallowed routes: all present reads DONE",
+           _all_present(swallowed_full, LAYER_A_SWALLOWED_ROUTES), True)
+    for i, dropped in enumerate(LAYER_A_SWALLOWED_ROUTES):
+        expect(f"Layer A swallowed routes: missing {dropped} reads gap",
+               _all_present(synthetic(LAYER_A_SWALLOWED_ROUTES, i),
+                            LAYER_A_SWALLOWED_ROUTES), False)
+
+    two_deadclicks = '\n"deadclick"\n"deadclick"\n'
+    chain_full = synthetic(LAYER_A_GAME_CHAIN_HANDLERS) + two_deadclicks
+    expect("game chain: all handlers + 2 deadclicks reads DONE",
+           _game_chain_check(chain_full), True)
+    for i, dropped in enumerate(LAYER_A_GAME_CHAIN_HANDLERS):
+        missing_one = synthetic(LAYER_A_GAME_CHAIN_HANDLERS, i) + two_deadclicks
+        expect(f"game chain: missing handler {dropped} reads gap",
+               _game_chain_check(missing_one), False)
+    only_one_deadclick = synthetic(LAYER_A_GAME_CHAIN_HANDLERS) + '\n"deadclick"\n'
+    expect("game chain: only ONE deadclick site (not both branches) reads gap",
+           _game_chain_check(only_one_deadclick), False)
+
+    build_tool_counted = ('\nrouted to construction.designate\n'
+                          'routed to construction.designate\n'
+                          'no active world id\nno active world id\n')
+    build_tool_full = synthetic(BUILD_TOOL_REQUIRED) + build_tool_counted
+    expect("buildTool.commitPlacement: all required reads DONE",
+           _build_tool_check(build_tool_full), True)
+    for i, dropped in enumerate(BUILD_TOOL_REQUIRED):
+        missing_one = synthetic(BUILD_TOOL_REQUIRED, i) + build_tool_counted
+        expect(f"buildTool.commitPlacement: missing {dropped!r} reads gap",
+               _build_tool_check(missing_one), False)
+    only_one_designate_site = (synthetic(BUILD_TOOL_REQUIRED)
+                                + '\nrouted to construction.designate\n'
+                                  'no active world id\nno active world id\n')
+    expect("buildTool.commitPlacement: only ONE construction.designate "
+           "record site reads gap",
+           _build_tool_check(only_one_designate_site), False)
 
     return failures
 
