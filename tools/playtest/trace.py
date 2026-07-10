@@ -9,9 +9,14 @@ consumes. H1 records; it never analyzes.
     ├── turns.jsonl      one JSON object per turn (schema below)
     ├── replay.jsonl     one line PER TURN (no-input turns included, so
     │                    replay pacing is faithful):
-    │                    {"turn": N, "pre": [lua...], "post": [lua...]}
+    │                    {"turn": N, "pre": [lua...], "post": [lua...],
+    │                     "stepped": bool}
     │                    pre = injected before the sim step; post = after
-    │                    it (a held key's keyUp rides post)
+    │                    it (a held key's keyUp rides post). Only calls
+    │                    that actually ran are recorded, and stepped says
+    │                    whether the dt step completed — False for a
+    │                    done/stuck/interrupted turn, which replay must
+    │                    not step or post-inject (#698)
     ├── frames/          turn_0001.png ... (F1 captures)
     └── engine.log       engine stdout/stderr copied at session end
 
@@ -20,10 +25,21 @@ Per-turn record (turns.jsonl):
     ts              float  (unix epoch at capture)
     screenshot      str    (path relative to the trace dir)
     player          {observation, action, expectation, note, raw, usage}
-    injected        [lua strings actually sent]  (incl. post-step keyUp)
-    acks            [per-call ack replies]
+    injected        [lua strings actually sent] — ACKNOWLEDGED pre-step
+                    calls followed by acknowledged post-step calls
+                    only; a call that never ran is never listed, and a
+                    multi-call action interrupted mid-way keeps its
+                    successful prefix (#698)
+    acks            [per-call ack replies]  (one per injected entry,
+                    post-step acks included)
+    post_injected   int   (how many trailing injected entries were
+                    post-step calls; 0 on a turn whose post phase
+                    never ran)
+    stepped         bool  (the unpause-dt-repause sim step completed;
+                    False for done/stuck/interrupted turns)
     oracle          {..., "player_invisible": true}  — captured for the
-                    critic, NEVER shown to the player
+                    critic, NEVER shown to the player; null when the
+                    turn was interrupted before the snapshot completed
     stuck           bool  (this turn tripped the stuck-loop detector)
 """
 from __future__ import annotations
@@ -56,12 +72,17 @@ class SessionTrace:
         with open(os.path.join(self.dir, "turns.jsonl"), "a") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
 
-    def record_replay(self, turn: int, pre: list[str], post: list[str]) -> None:
+    def record_replay(self, turn: int, pre: list[str], post: list[str],
+                      stepped: bool) -> None:
         """One line per turn — ALWAYS, even with no calls, so replay
         reproduces the turn count and pacing of the session (a run of
-        'wait' turns is real elapsed game time, not dead trace)."""
+        'wait' turns is real elapsed game time, not dead trace). pre and
+        post must contain only calls that actually ran, and stepped
+        whether the sim step completed — replay executes exactly these
+        phases, nothing more (#698)."""
         with open(os.path.join(self.dir, "replay.jsonl"), "a") as f:
-            f.write(json.dumps({"turn": turn, "pre": pre, "post": post}) + "\n")
+            f.write(json.dumps({"turn": turn, "pre": pre, "post": post,
+                                "stepped": stepped}) + "\n")
 
     def attach_engine_log(self, log_path: str) -> None:
         try:
@@ -84,8 +105,10 @@ def load_meta(trace_dir: str) -> dict:
 
 def load_replay(trace_dir: str) -> list[dict]:
     """The recorded session's turns, in order: each entry is
-    {"turn": N, "pre": [lua...], "post": [lua...]} — no-input turns
-    included."""
+    {"turn": N, "pre": [lua...], "post": [lua...], "stepped": bool} —
+    no-input turns included. A pre-#698 entry has no "stepped" field;
+    those traces only ever replayed with a step on every turn, so the
+    legacy default is True."""
     path = os.path.join(trace_dir, "replay.jsonl")
     entries: list[dict] = []
     if not os.path.isfile(path):
@@ -97,7 +120,8 @@ def load_replay(trace_dir: str) -> list[dict]:
                 obj = json.loads(line)
                 entries.append({"turn": int(obj["turn"]),
                                 "pre": list(obj.get("pre") or []),
-                                "post": list(obj.get("post") or [])})
+                                "post": list(obj.get("post") or []),
+                                "stepped": bool(obj.get("stepped", True))})
     entries.sort(key=lambda e: e["turn"])
     return entries
 

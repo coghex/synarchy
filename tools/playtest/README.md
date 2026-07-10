@@ -56,7 +56,12 @@ replays every recorded turn — pre-step inputs before the `dt` step,
 post-step inputs (held-key release) after it, empty turns included —
 so the **input sequence and pacing** are faithful, but turns are not
 guaranteed bit-identical (deterministic tick-stepping is the noted
-escape hatch, not built).
+escape hatch, not built). The trace records only the phases that
+actually executed (#698): a turn that ends the session (`done`, stuck
+detection) or is interrupted anywhere between the first injected call
+and the post phase records exactly the acknowledged calls (a
+multi-call action keeps its successful prefix) and whether the step
+completed — replaying it injects no step and no unexecuted call.
 
 ## The cardinal rule: the player is oracle-blind
 
@@ -151,13 +156,18 @@ gitignored):
   `interrupted`), crash detail + engine log tail when applicable.
 - `turns.jsonl` — per turn: screenshot path, the player's structured
   output (observation/action/expectation/note + raw + token usage),
-  the exact injected `input.*` calls and their acks, and the **oracle
-  snapshot** (`ui.dumpWidgets`, `engine.getEventLog` delta, current
-  menu, pause state), flagged `player_invisible: true`.
+  the exact injected `input.*` calls and their acks (**executed calls
+  only**, post-step acks retained; `post_injected` counts the trailing
+  post-step entries and `stepped` says whether the sim step completed,
+  #698), and the **oracle snapshot** (`ui.dumpWidgets`,
+  `engine.getEventLog` delta, current menu, pause state), flagged
+  `player_invisible: true`.
 - `replay.jsonl` — one line **per turn** (no-input turns included, so
   replay pacing is faithful): `{"turn": N, "pre": [lua...], "post":
-  [lua...]}` — `pre` is injected before the sim step, `post` after it
-  (a held key's `keyUp` rides `post`).
+  [lua...], "stepped": bool}` — `pre` is injected before the sim step,
+  `post` after it (a held key's `keyUp` rides `post`); only calls that
+  actually ran are recorded, and a turn with `stepped: false`
+  (done/stuck/interrupted) replays without a step or post calls (#698).
 - `frames/turn_NNNN.png` — the F1 captures.
 - `engine.log` — engine output, copied at session end (an engine crash
   mid-session is a **finding**: the partial trace + logs are retained
@@ -250,9 +260,10 @@ clean and additive.
 ## Testing
 
 - `python3 tools/playtest/run.py --selftest` — offline, CI-safe check
-  of the loop, trace write, replay, stuck detection, and the
-  oracle-blind prompt shape (FakeEngine + scripted agent; no window,
-  no build, no API key).
+  of the loop, trace write, replay, stuck detection, trace phase
+  fidelity (#698: terminal/stuck/interrupted turns record and replay
+  without an invented step or post call), and the oracle-blind prompt
+  shape (FakeEngine + scripted agent; no window, no build, no API key).
 - `python3 tools/playtest/run.py --smoke` — few-turn scripted session
   against a real instance (windowed by default; add
   `--render-mode offscreen` for the windowless #650 substrate —

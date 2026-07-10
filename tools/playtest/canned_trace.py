@@ -83,6 +83,7 @@ def _turn(n, frame, player, injected, oracle, stuck=False):
         "fb_size": [1280, 720],
         "player": player, "injected": injected,
         "acks": [{"ok": True} for _ in injected],
+        "post_injected": 0, "stepped": True,
         "oracle": oracle, "stuck": stuck,
         "_frame_bytes": frame,  # stripped before writing
     }
@@ -169,7 +170,7 @@ def build_canned_trace(trace_dir: str) -> str:
     with open(os.path.join(trace_dir, "replay.jsonl"), "w") as f:
         for t in turns:
             f.write(json.dumps({"turn": t["turn"], "pre": t["injected"],
-                                "post": []}) + "\n")
+                                "post": [], "stepped": True}) + "\n")
 
     meta = {
         "harness_version": "fixture",

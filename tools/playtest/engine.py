@@ -269,6 +269,7 @@ class FakeEngine(PlaytestEngine):
         self.injected: list[str] = []
         self.fired: list[str] = []
         self.paused = True
+        self.unpauses = 0  # sim steps taken — selftest counts them (#698)
 
     def launch(self, ready_timeout: float = 0) -> None:
         self.proc = None
@@ -280,6 +281,8 @@ class FakeEngine(PlaytestEngine):
         pass
 
     def set_paused(self, paused: bool) -> None:
+        if not paused:
+            self.unpauses += 1
         self.paused = paused
 
     def screenshot(self, path: str) -> tuple[int, int]:
