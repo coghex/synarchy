@@ -106,6 +106,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "physiology": (BASE_FAILING, "fails on master for content reasons"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
+    "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),
     "flora_growth": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),
     "multiworld_save": (SLOW_WORLDGEN, "generates two real world pages"),
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),

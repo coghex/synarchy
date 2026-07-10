@@ -49,6 +49,9 @@ PARALLEL_PORT_BASE = 9400
 
 # (key, script filename, supports --port, one-line purpose for --list)
 PROBES = [
+    ("action_outcome", "action_outcome_probe.py", True,
+     "F4 action-outcome oracle: recordOutcome/drainActionOutcomes public "
+     "contract, destructive drain, till/chop mixed-sweep partial paths (#646)"),
     ("cargo_capacity", "cargo_capacity_probe.py", False,
      "depositToCargo weighs the actual ItemInstance, not the def base weight (#189)"),
     ("chop", "chop_probe.py", True,
