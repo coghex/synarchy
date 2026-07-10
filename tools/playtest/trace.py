@@ -25,9 +25,11 @@ Per-turn record (turns.jsonl):
     ts              float  (unix epoch at capture)
     screenshot      str    (path relative to the trace dir)
     player          {observation, action, expectation, note, raw, usage}
-    injected        [lua strings actually sent] — executed pre-step
-                    calls followed by executed post-step calls only;
-                    a call that never ran is never listed (#698)
+    injected        [lua strings actually sent] — ACKNOWLEDGED pre-step
+                    calls followed by acknowledged post-step calls
+                    only; a call that never ran is never listed, and a
+                    multi-call action interrupted mid-way keeps its
+                    successful prefix (#698)
     acks            [per-call ack replies]  (one per injected entry,
                     post-step acks included)
     post_injected   int   (how many trailing injected entries were
@@ -36,7 +38,8 @@ Per-turn record (turns.jsonl):
     stepped         bool  (the unpause-dt-repause sim step completed;
                     False for done/stuck/interrupted turns)
     oracle          {..., "player_invisible": true}  — captured for the
-                    critic, NEVER shown to the player
+                    critic, NEVER shown to the player; null when the
+                    turn was interrupted before the snapshot completed
     stuck           bool  (this turn tripped the stuck-loop detector)
 """
 from __future__ import annotations

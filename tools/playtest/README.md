@@ -58,9 +58,10 @@ so the **input sequence and pacing** are faithful, but turns are not
 guaranteed bit-identical (deterministic tick-stepping is the noted
 escape hatch, not built). The trace records only the phases that
 actually executed (#698): a turn that ends the session (`done`, stuck
-detection) or is interrupted mid-phase never stepped and never landed
-its post-step calls, and its record + replay say so — replaying it
-injects no step and no unexecuted call.
+detection) or is interrupted anywhere between the first injected call
+and the post phase records exactly the acknowledged calls (a
+multi-call action keeps its successful prefix) and whether the step
+completed — replaying it injects no step and no unexecuted call.
 
 ## The cardinal rule: the player is oracle-blind
 
