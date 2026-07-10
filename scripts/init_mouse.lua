@@ -431,9 +431,16 @@ function M.onMouseDown(button, x, y)
                 recordClick("move_order", "noop", x, y, "no tile under cursor")
             end
         else
-            -- No selection → open the tile context menu.
-            contextMenus.tryTileMenu(x, y)
-            recordClick("context_menu_tile", nil, x, y)
+            -- No selection → open the tile context menu. tryTileMenu
+            -- returns false on an off-world click (world.pickTile
+            -- misses) without opening anything — that's a genuine
+            -- deadclick, not an accepted context-menu open (review
+            -- round 5 found this recorded unconditionally as accepted).
+            if contextMenus.tryTileMenu(x, y) then
+                recordClick("context_menu_tile", nil, x, y)
+            else
+                recordClick(nil, "deadclick", x, y, "no tile under cursor")
+            end
         end
     end
 end
