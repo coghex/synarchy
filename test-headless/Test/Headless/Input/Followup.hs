@@ -394,3 +394,56 @@ spec = do
         inputTick env
         reached ← waitForBarrier (inputBarrierRef env) tok2 settleTimeoutMicros
         reached `shouldBe` True
+
+    -- #727 review round 3: processLuaMsgs drains its whole luaQueue
+    -- snapshot in ONE synchronous pass with no pause between messages.
+    -- If an EARLIER call's fence is still sitting there undispatched
+    -- (it timed out before ever calling settle) when a LATER, unrelated
+    -- plain action's own messages land in the SAME queue, one drain
+    -- would dispatch BOTH together — firing the later action's REAL
+    -- callbacks moments after the stale fence's re-injection, before
+    -- the input thread has had any chance to actually process that
+    -- release. injectAndSettle's pre-flush (settle, called BEFORE
+    -- pushing a verb's own sequence) must flush any such backlog
+    -- first, so this can't happen.
+    it "a stale undispatched fence from an earlier call cannot leak into a later action's real callbacks (#727 review)" $ \env → do
+        resetInput env
+        (ls, stateRef, fixtureRef) ← newTestLuaBackend env
+        -- Simulate an EARLIER shift-click whose fence never got
+        -- resolved (as if the call that issued it had already timed
+        -- out without ever reaching its own settle): push + drain the
+        -- primary sequence by hand (bypassing injectAndSettle
+        -- entirely), leaving its LuaInjectFollowup sitting
+        -- undispatched in luaQueue.
+        mapM_ (Q.writeQueue (inputQueue env))
+              (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
+        inputTick env
+        stale ← readIORef (inputStateRef env)
+        shiftState stale `shouldBe` Just True
+        staleMsgs ← drainLua env
+        length (filter isFollowupMsg staleMsgs) `shouldBe` 1
+        -- Put it back exactly as injectAndSettle would find it: a
+        -- pending, undispatched fence, nothing more.
+        case filter isFollowupMsg staleMsgs of
+            [fenceMsg] → Q.writeQueue (luaQueue env) fenceMsg
+            other → expectationFailure $
+                "expected exactly one fence message, got " ⧺ show other
+
+        -- NOW drive the REAL injectAndSettle for an unrelated PLAIN
+        -- action, exactly as if it were the very next input.* call
+        -- issued after the earlier one gave up.
+        withFakeInputThread env $ do
+            result ← injectAndSettle env ls stateRef settleTimeoutMicros
+                (clickSequence (200, 60) GLFW.MouseButton'1 ([], noMods))
+            result `shouldBe` SettleOk
+
+            -- The plain action's REAL callbacks must observe shift
+            -- already released — the pre-flush must have resolved the
+            -- stale fence before this action's own messages were even
+            -- pushed, not merely swept it up alongside them.
+            readFixtureBool ls fixtureRef "mouseDownShift"
+                `shouldReturn` Just False
+            readFixtureBool ls fixtureRef "mouseUpShift"
+                `shouldReturn` Just False
+            st ← readIORef (inputStateRef env)
+            shiftState st `shouldBe` Just False
