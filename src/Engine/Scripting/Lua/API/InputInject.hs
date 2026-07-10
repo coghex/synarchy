@@ -27,11 +27,11 @@
 --   action that just acked. Modifiers intentionally held across an ack
 --   by 'mouseDownSequence'/'keyDownSequence' (no deferred release)
 --   stay held; only the matching mouseUp/keyUp resolves them. The
---   waits driving this settle count fully-processed events
---   ('Engine.Input.Inject.waitEventsProcessed'), not input-queue
---   emptiness — the latter can be observed a moment before an event's
---   own Lua-side effects have actually landed, which would silently
---   reopen this exact race.
+--   waits driving this settle are barrier-based
+--   ('Engine.Input.Inject.waitForBarrier'), not input-queue emptiness
+--   (observable a moment before an event's own Lua-side effects have
+--   landed) and not a blind count of every processed event (real GLFW
+--   input could satisfy that early) — see that function's haddock.
 --
 --   Surface:
 --     input.moveMouse(x, y)
@@ -67,6 +67,7 @@ import qualified HsLua as Lua
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl)
 import Engine.Core.Types (EngineConfig(..))
+import qualified Engine.Core.Queue as Q
 import Engine.Input.Inject
 import Engine.Input.Types (InputEvent(..))
 import Engine.Scripting.Lua.Types (LuaBackendState)
@@ -90,20 +91,20 @@ consumeTimeoutMicros = 2 * 1000 * 1000
 --        (onKeyDown/onMouseDown/onMouseUp/…), run synchronously right
 --        here rather than on the Lua thread's next loop tick;
 --     3. if the sequence carried a deferred modifier release (a
---        trailing 'InputFollowup', #697 — 'followupCount' below counts
---        its carried release events), step 2's dispatch just
---        re-injected it into the input queue (Dispatch.hs's
---        'LuaInjectFollowup' case) — wait for THOSE to be fully
---        processed too, then dispatch once more (its own onKeyUp
---        broadcast).
+--        trailing 'InputFollowup', #697), step 2's dispatch just
+--        re-injected its carried release events into the input queue
+--        (Dispatch.hs's 'LuaInjectFollowup' case) — push one more
+--        'InputBarrier' behind them and wait for THAT to be fully
+--        processed, then dispatch once more (the release's own
+--        onKeyUp broadcast).
 --
 --   'processLuaMsgs' is safe to call directly from the Lua thread: it
 --   only ever *polls* ('Engine.Core.Queue.tryReadQueue'), never blocks
 --   waiting for another thread to write — draining a queue nobody else
 --   ever will (the forbidden self-deadlock shape) doesn't arise. Only
---   step 1/3's 'waitEventsProcessed' genuinely blocks, and that targets
---   'Engine.Core.State.inputProcessedRef', which only the SEPARATE
---   input thread ever advances.
+--   step 1/3's 'waitForBarrier' genuinely blocks, and that targets
+--   'Engine.Core.State.inputBarrierRef', which only the SEPARATE input
+--   thread ever advances.
 --
 --   Reentrancy: 'luaQueue' has no per-caller partitioning, so if a
 --   dispatched callback itself calls another input.* verb (a script
@@ -118,29 +119,33 @@ consumeTimeoutMicros = 2 * 1000 * 1000
 injectAndSettle ∷ EngineEnv → LuaBackendState → IORef ThreadControl
                 → Int → [InputEvent] → IO SettleResult
 injectAndSettle env ls stateRef timeoutMicros evs = do
-    primaryOk ← injectEvents (inputProcessedRef env) (inputQueue env)
+    primaryOk ← injectEvents (inputBarrierRef env) (inputQueue env)
                               timeoutMicros evs
     if not primaryOk
         then pure SettlePrimaryTimedOut
-        else case followupCount evs of
-            0 → do
-                processLuaMsgs env ls stateRef
-                pure SettleOk
-            n → do
-                -- Baseline BEFORE dispatching the fence: the release
-                -- events don't exist to be counted until
-                -- processLuaMsgs re-injects them below, so there's no
-                -- window for them to be missed by reading this late.
-                afterPrimary ← readTVarIO (inputProcessedRef env)
-                processLuaMsgs env ls stateRef
-                released ← waitEventsProcessed (inputProcessedRef env)
-                                (afterPrimary + n) timeoutMicros
-                processLuaMsgs env ls stateRef
-                pure $ if released then SettleOk else SettleFenceTimedOut
+        else do
+            processLuaMsgs env ls stateRef
+            if any isFollowup evs
+                then do
+                    -- The drain above already dispatched the fence,
+                    -- re-injecting its release events into inputQueue.
+                    -- Our own trailing barrier — pushed AFTER that
+                    -- re-injection, so it's positioned strictly behind
+                    -- those release events in the FIFO queue — gives an
+                    -- unambiguous "that release is fully processed"
+                    -- signal even under concurrent real input (unlike
+                    -- counting processed events generically, #727
+                    -- review).
+                    before ← readTVarIO (inputBarrierRef env)
+                    Q.writeQueue (inputQueue env) InputBarrier
+                    released ← waitForBarrier (inputBarrierRef env)
+                                    (before + 1) timeoutMicros
+                    processLuaMsgs env ls stateRef
+                    pure $ if released then SettleOk else SettleFenceTimedOut
+                else pure SettleOk
   where
-    followupCount = sum . map countFollowup
-    countFollowup (InputFollowup subevs) = length subevs
-    countFollowup _                      = 0
+    isFollowup (InputFollowup _) = True
+    isFollowup _                 = False
 
 -- | 'injectAndSettle's outcome — kept distinct from a plain 'Bool' so
 --   'ackInject' can tell "nothing happened, safe to retry" apart from

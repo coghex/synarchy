@@ -91,15 +91,6 @@ processInputs env inpSt = do
             -- callback can never observe a state older than the events
             -- that preceded its own.
             writeIORef (inputStateRef env) newState
-            -- #727: mark this event FULLY processed (state published,
-            -- and — inside processInput above — any resulting luaQueue
-            -- write already committed) only now, strictly after both.
-            -- 'inputQueue' merely becoming empty is a separate, earlier
-            -- STM fact (the dequeue above) that races this — synthetic
-            -- injection's completion wait counts THIS increment, not
-            -- queue emptiness, so it can't observe "done" before an
-            -- event's Lua-side effects have actually landed.
-            atomically $ modifyTVar' (inputProcessedRef env) (+ 1)
             processInputs env newState
         Nothing → return inpSt
 
@@ -476,6 +467,13 @@ processInput env inpSt event = case event of
     -- afterwards (no stuck keys).
     InputFollowup evs → do
         Q.writeQueue (luaQueue env) (LuaInjectFollowup evs)
+        return inpSt
+    -- Completion marker for synthetic injection (#727): everything
+    -- queued ahead of this barrier (FIFO, this is the only consumer)
+    -- has already been fully processed, side effects included, by the
+    -- time this increment happens — see 'inputBarrierRef's haddock.
+    InputBarrier → do
+        atomically $ modifyTVar' (inputBarrierRef env) (+ 1)
         return inpSt
     InputScrollEvent x y → do
         logger ← readIORef (loggerRef env)

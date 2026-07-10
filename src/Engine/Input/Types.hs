@@ -65,6 +65,17 @@ data InputEvent
       --   after the callbacks that must still observe the pre-fence
       --   state. Never produced by GLFW callbacks.
     | InputFollowup [InputEvent]
+      -- | Completion marker for synthetic injection (#727). Carries
+      --   no data — processing it only increments
+      --   'Engine.Core.State.inputBarrierRef'. Appended after a
+      --   pushed batch so 'Engine.Input.Inject.waitForBarrier' has a
+      --   race-free "my events are done" signal: FIFO ordering
+      --   guarantees a barrier is only ever processed after
+      --   everything queued ahead of it, and — unlike counting every
+      --   processed event — real GLFW input never produces one, so
+      --   unrelated concurrent activity can never satisfy someone
+      --   else's wait early. Never produced by GLFW callbacks.
+    | InputBarrier
     deriving (Show, Eq)
 
 -- * Window events

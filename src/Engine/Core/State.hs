@@ -78,15 +78,18 @@ data EngineEnv = EngineEnv
   , pixelSnapRef        ∷ IORef Bool
   , textureFilterRef    ∷ IORef TextureFilter
   , inputQueue          ∷ Q.Queue InputEvent
-  , inputProcessedRef   ∷ TVar Int
-    -- ^ Monotonic count of 'InputEvent's the input thread has FULLY
-    --   processed — incremented by 'Engine.Input.Thread.processInputs'
-    --   strictly after an event's side effects (incl. its 'luaQueue'
-    --   write) complete, not merely dequeued. 'inputQueue' becoming
-    --   empty (a separate STM transaction from that write) is NOT the
-    --   same fact and races it (#727) — synthetic injection's
-    --   'Engine.Input.Inject.waitEventsProcessed' waits on this
-    --   counter instead for a race-free completion signal.
+  , inputBarrierRef     ∷ TVar Int
+    -- ^ Monotonic count of 'InputBarrier' events the input thread has
+    --   FULLY processed — incremented by 'Engine.Input.Thread.processInput'
+    --   strictly after the barrier's turn in 'inputQueue' comes up,
+    --   which (FIFO, single consumer) is only after every event
+    --   pushed ahead of it — including its side effects, e.g. any
+    --   'luaQueue' write — has completed. 'inputQueue' becoming empty
+    --   (a separate STM transaction from those writes) is NOT the same
+    --   fact and races it (#727). Deliberately counts ONLY barriers,
+    --   not every processed event: real GLFW input never produces one,
+    --   so unrelated concurrent activity can't satisfy someone else's
+    --   wait early — see 'Engine.Input.Inject.waitForBarrier'.
   , loggerRef           ∷ IORef LoggerState
   , luaToEngineQueue    ∷ Q.Queue LuaToEngineMsg
   , luaQueue            ∷ Q.Queue LuaMsg

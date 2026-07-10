@@ -38,22 +38,29 @@
 module Test.Headless.Input.Followup (spec) where
 
 import UPrelude
+import qualified Data.ByteString.Char8 as BS
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
+import qualified HsLua as Lua
 import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM.TVar (modifyTVar', readTVarIO)
 import Control.Exception (finally)
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Data.List (findIndex)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
-import Engine.Input.Inject (clickSequence, noMods)
+import Engine.Input.Inject (clickSequence, noMods, waitForBarrier)
 import Engine.Input.Thread (processInputs)
 import Engine.Input.Types
+import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.InputInject (injectAndSettle, SettleResult(..))
+import Engine.Scripting.Lua.Script (loadModuleRef)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
-import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState)
+import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..), LuaScript(..))
 import Test.Hspec
 
 shiftMod ∷ ([GLFW.Key], GLFW.ModifierKeys)
@@ -111,18 +118,60 @@ withFakeInputThread env act = do
     tid ← forkIO pump
     act `finally` (writeIORef stopRef True ≫ killThread tid)
 
--- | A real, script-less Lua backend + thread-control ref — everything
---   'injectAndSettle' needs to drain and dispatch 'luaQueue' (#727).
---   Broadcasting to zero registered scripts is a safe no-op, so this
---   exercises the REAL dispatch path headless with no Lua script
---   loaded.
-newTestLuaBackend ∷ EngineEnv → IO (LuaBackendState, IORef ThreadControl)
+-- | A real Lua backend + thread-control ref, with the FULL Lua API
+--   registered (so @engine.isKeyDown@ etc. exist) and
+--   scripts/input_followup_fixture.lua loaded as its one script — the
+--   REAL 'broadcastToModules' dispatch path (#727 review: a
+--   script-less backend proves the queue/timing mechanics but can
+--   never show a real callback observing callback-time state, since
+--   broadcasting to zero scripts is a no-op). Returns the fixture's
+--   module ref so callers can read back what its callbacks captured
+--   via 'readFixtureBool'.
+newTestLuaBackend ∷ EngineEnv → IO (LuaBackendState, IORef ThreadControl, Lua.Reference)
 newTestLuaBackend env = do
     ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
                                 (assetPoolRef env) (nextObjectIdRef env)
                                 (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
-    pure (ls, stateRef)
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    eRef ← Lua.runWith (lbsLuaState ls) $
+        loadModuleRef "scripts/input_followup_fixture.lua"
+    ref ← case eRef of
+        Right r → pure r
+        Left err → error $
+            "failed to load scripts/input_followup_fixture.lua: "
+            ⧺ T.unpack err
+    atomically $ modifyTVar' (lbsScripts ls) $ Map.insert 1 LuaScript
+        { scriptId        = 1
+        , scriptPath      = "scripts/input_followup_fixture.lua"
+        , scriptTickRate  = 1000000  -- never auto-ticks during the test
+        , scriptNextTick  = 1000000
+        , scriptModuleRef = ref
+        , scriptPaused    = False
+        }
+    pure (ls, stateRef, ref)
+
+-- | Read a boolean field off the fixture's @M.state@ table — what
+--   scripts/input_followup_fixture.lua's callbacks captured via
+--   @engine.isKeyDown@ at THEIR call time, i.e. what a real Lua
+--   callback actually observed (#727 review), not a proxy.
+--   'Nothing' if the field is absent/not a boolean (e.g. the callback
+--   hasn't fired yet — the fixture leaves it @nil@).
+readFixtureBool ∷ LuaBackendState → Lua.Reference → BS.ByteString → IO (Maybe Bool)
+readFixtureBool ls ref field = Lua.runWith (lbsLuaState ls) $ do
+    _ ← Lua.getref Lua.registryindex ref ∷ Lua.LuaE Lua.Exception Lua.Type
+    tyState ← Lua.getfield (-1) (Lua.Name "state")
+    result ← if tyState ≡ Lua.TypeTable
+        then do
+            tyField ← Lua.getfield (-1) (Lua.Name field)
+            r ← if tyField ≡ Lua.TypeBoolean
+                    then Just ⊚ Lua.toboolean (-1)
+                    else pure Nothing
+            Lua.pop 1
+            pure r
+        else pure Nothing
+    Lua.pop 2
+    pure result
 
 -- | Timeout for the #727 specs' 'injectAndSettle' calls — generous
 --   relative to the 500us fake-pump poll interval above.
@@ -191,19 +240,30 @@ spec = do
     -- #727: sequential input.* acks must be a real modifier-lifetime
     -- boundary — drives the REAL 'injectAndSettle' (what every input.*
     -- verb's ack now runs through) back to back, the same way a debug
-    -- console command / a script's own consecutive calls would. No
-    -- 'threadDelay' needed around the assertions below: 'injectAndSettle'
-    -- waits on 'inputProcessedRef' (a count of FULLY processed events,
-    -- not queue emptiness), so by the time it returns, everything it
+    -- console command / a script's own consecutive calls would, with a
+    -- REAL loaded script (scripts/input_followup_fixture.lua) so the
+    -- assertions cover an ACTUAL Lua callback's engine.isKeyDown
+    -- reading, not just the published input state a callback-less
+    -- backend can observe (#727 review). No 'threadDelay' needed
+    -- around the assertions below: 'injectAndSettle' waits on
+    -- 'inputBarrierRef' (a barrier only synthetic injection can
+    -- advance, #727 review), so by the time it returns, everything it
     -- claims is genuinely settled — no eventual-consistency window to
     -- paper over.
     it "a shift-click settles before a later plain action can inherit its modifier (#727)" $ \env → do
         resetInput env
-        (ls, stateRef) ← newTestLuaBackend env
+        (ls, stateRef, fixtureRef) ← newTestLuaBackend env
         withFakeInputThread env $ do
             result1 ← injectAndSettle env ls stateRef settleTimeoutMicros
                 (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
             result1 `shouldBe` SettleOk
+
+            -- The first action's OWN callbacks — dispatched via the
+            -- REAL broadcastToModules path — observed shift held.
+            readFixtureBool ls fixtureRef "mouseDownShift"
+                `shouldReturn` Just True
+            readFixtureBool ls fixtureRef "mouseUpShift"
+                `shouldReturn` Just True
 
             -- The ack IS the boundary now: nothing left pending on
             -- either queue, and shift already reads released — a
@@ -214,10 +274,16 @@ spec = do
             shiftState st1 `shouldBe` Just False
 
             -- A plain action issued right after the first ack must
-            -- not inherit the prior verb's temporary modifier.
+            -- not inherit the prior verb's temporary modifier — proved
+            -- through the SAME fixture's REAL callback, now re-fired
+            -- for this second click and reading released.
             result2 ← injectAndSettle env ls stateRef settleTimeoutMicros
                 (clickSequence (200, 60) GLFW.MouseButton'1 ([], noMods))
             result2 `shouldBe` SettleOk
+            readFixtureBool ls fixtureRef "mouseDownShift"
+                `shouldReturn` Just False
+            readFixtureBool ls fixtureRef "mouseUpShift"
+                `shouldReturn` Just False
             afterSecond ← drainLua env
             afterSecond `shouldSatisfy` null
             st2 ← readIORef (inputStateRef env)
@@ -226,24 +292,59 @@ spec = do
 
     it "a shift-click settles before a later shift-click can be clipped by its cleanup (#727)" $ \env → do
         resetInput env
-        (ls, stateRef) ← newTestLuaBackend env
+        (ls, stateRef, fixtureRef) ← newTestLuaBackend env
         withFakeInputThread env $ do
             result1 ← injectAndSettle env ls stateRef settleTimeoutMicros
                 (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
             result1 `shouldBe` SettleOk
+            readFixtureBool ls fixtureRef "mouseDownShift"
+                `shouldReturn` Just True
+            readFixtureBool ls fixtureRef "mouseUpShift"
+                `shouldReturn` Just True
             st1 ← readIORef (inputStateRef env)
             shiftState st1 `shouldBe` Just False
 
             -- The second shift-click re-presses and independently
             -- releases the SAME modifier key: the first action's
             -- already-completed cleanup must not clip this one's own
-            -- lifetime (it re-establishes "held" itself), and this
+            -- lifetime — its REAL callbacks must still observe shift
+            -- held (not clipped by verb1's earlier release) — and this
             -- one's own release must land exactly once — not stuck,
             -- not silently dropped.
             result2 ← injectAndSettle env ls stateRef settleTimeoutMicros
                 (clickSequence (200, 60) GLFW.MouseButton'1 shiftMod)
             result2 `shouldBe` SettleOk
+            readFixtureBool ls fixtureRef "mouseDownShift"
+                `shouldReturn` Just True
+            readFixtureBool ls fixtureRef "mouseUpShift"
+                `shouldReturn` Just True
             afterSecond ← drainLua env
             afterSecond `shouldSatisfy` null
             st2 ← readIORef (inputStateRef env)
             shiftState st2 `shouldBe` Just False
+
+    -- #727 review: the completion signal must be immune to unrelated
+    -- concurrent input activity sharing the same queue (real GLFW
+    -- events land here too) — a blind count of every processed event
+    -- would let such activity satisfy someone else's pending wait
+    -- early. Proved directly at the primitive level (deterministic,
+    -- not timing-dependent): a pile of ordinary events fully drained
+    -- through the REAL input pipeline must NOT move the barrier
+    -- counter at all; only an actual 'InputBarrier' does.
+    it "unrelated processed events cannot advance the barrier counter (#727 review)" $ \env → do
+        resetInput env
+        withFakeInputThread env $ do
+            before ← readTVarIO (inputBarrierRef env)
+            mapM_ (Q.writeQueue (inputQueue env))
+                  (replicate 50 (InputCursorMove 0 0))
+            -- Generous margin for the fake pump (500us/tick) to fully
+            -- drain all 50 ordinary events.
+            threadDelay 50000
+            stillBefore ← readTVarIO (inputBarrierRef env)
+            stillBefore `shouldBe` before
+
+            -- Only pushing the barrier itself satisfies a wait on it.
+            Q.writeQueue (inputQueue env) InputBarrier
+            reached ← waitForBarrier (inputBarrierRef env) (before + 1)
+                          settleTimeoutMicros
+            reached `shouldBe` True
