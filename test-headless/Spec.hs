@@ -34,6 +34,7 @@ import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
+import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.Combat.Damage as CombatDamage
 import qualified Test.Headless.Combat.Severing as CombatSevering
@@ -79,6 +80,7 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         describe "World Generation" WorldGen.spec
         describe "World.SelectTileZ" SelectTileZ.spec
+        describe "World.ActionOutcome" ActionOutcome.spec
         describe "Geology" Geology.spec
         describe "Chunk/Fast Parity" Parity.spec
         describe "Biome Flatness" Flatness.spec

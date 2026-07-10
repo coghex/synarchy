@@ -18,6 +18,7 @@ import Engine.Core.Types
 import Engine.Core.Queue as Q
 import Engine.PlayerEvent (PlayerEvent, NotificationCfg)
 import qualified Combat.Types
+import Engine.ActionOutcome (ActionOutcome)
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Config
@@ -192,6 +193,14 @@ data EngineEnv = EngineEnv
     --   into scripts/thought_log.lua, which unit_log.lua's Thought tab
     --   reads. Reuses the CombatEvent shape, same as injuryEventsRef.
     --   Runtime only, not persisted.
+  , actionOutcomeRef    ∷ IORef (Seq ActionOutcome)
+    -- ^ F4 (#646) action-outcome oracle tap: what actually happened to a
+    --   player action, even when nothing user-facing fired. Producers:
+    --   Lua `debug.recordOutcome` (Layer A input routing, Layer B
+    --   Lua-owned commit boundaries) and the engine-side designation
+    --   handlers in World.Thread.Command.Cursor (partial-drop counts).
+    --   Drained via `debug.drainActionOutcomes` by the playtest harness's
+    --   critic; never surfaced to the player. Runtime only, not persisted.
   , buildingGhostRef    ∷ IORef (Maybe BuildingGhost)
     -- ^ Single-slot ghost preview during placement mode. Lua sets and
     --   clears via the build_tool module; the render path picks it up
