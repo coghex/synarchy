@@ -55,12 +55,20 @@ screenshotOrderOf _                     = Nothing
 
 -- | Allocate the staging buffer for one capture and resolve the
 --   swapchain image the frame renders into. On an uncapturable
---   swapchain format the request is answered with a clear error and
---   'Nothing' comes back — the frame then proceeds as if no capture
---   was pending.
+--   swapchain — the surface lacks transfer-source usage (#700), or
+--   the format can't be decoded — the request is answered with a
+--   clear error and 'Nothing' comes back; the frame then proceeds as
+--   if no capture was pending.
 prepareCapture ∷ Device → PhysicalDevice → SwapchainInfo → Word32
                → ScreenshotRequest → EngineM ε σ (Maybe PendingCapture)
-prepareCapture device pDevice si imageIndex req =
+prepareCapture device pDevice si imageIndex req
+  | not (siSupportsCapture si) = do
+        liftIO $ Q.writeQueue (srReply req) $ Left
+            ("captureScreenshot: unavailable on this system — the "
+             <> "surface does not support transfer-source swapchain "
+             <> "usage, so the presented image cannot be copied")
+        pure Nothing
+  | otherwise =
     case screenshotOrderOf (siSwapImgFormat si) of
         Nothing → do
             liftIO $ Q.writeQueue (srReply req) $ Left $

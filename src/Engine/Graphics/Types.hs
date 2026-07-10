@@ -33,6 +33,12 @@ data SwapchainInfo = SwapchainInfo
   , siSwapImgViews  ∷ V.Vector ImageView
   , siSwapImgFormat ∷ Format
   , siSwapExtent    ∷ Extent2D
+  , siSupportsCapture ∷ Bool
+    -- ^ The swapchain was created with TRANSFER_SRC usage (the surface
+    --   supports it), so debug.captureScreenshot (#643) can copy the
+    --   presented image. False on surfaces without transfer-source
+    --   support (#700) — the capture verb reports itself unavailable
+    --   instead of the swapchain request failing.
   }
 
 -- | Swapchain Support Details

@@ -152,6 +152,60 @@ with byte-identical frames `--stuck-k` times in a row. A
 repeat-with-no-change loop is itself a strong missing-feedback signal —
 it is recorded on the turn (`stuck: true`) before the session ends.
 
+## The critic (H2, #648)
+
+`critic.py` is the analysis half: it consumes a session trace
+**offline** (never drives the game) and emits `report.md` +
+`findings.json` into the trace directory.
+
+```bash
+python3 tools/playtest/critic.py tools/playtest/sessions/<dir>
+python3 tools/playtest/critic.py <dir> --model claude-opus-4-8 --effort high
+python3 tools/playtest/critic.py --selftest   # offline, no API key
+python3 tools/playtest/critic.py --eval       # REAL model vs the canned
+                                              # planted-issue trace (needs a key)
+```
+
+Mechanism: a deterministic pre-analysis derives per-turn signals and
+the canonical cross-source joins (action-outcome `rejected`/`noop`/
+`deadclick` + no event + no frame change ⇒ silent-failure candidate;
+click-hit-no-widget ⇒ phantom-affordance; player-claims-nothing-
+happened while the oracle shows feedback ⇒ feedback-was-shown; stuck
+loops; crash) and enumerates **friction candidates** with stable ids.
+Adjudication (default `claude-opus-4-8`, high effort — cost is
+per-session, not per-turn) is **batched** so that every candidate's
+own screenshot is actually shown in the call that judges it:
+`--max-frames` is a per-call budget, and a tight budget means more
+calls, never an unseen candidate frame. The critic judges against the
+player manual as the intended mental model. Validation enforces the
+enums and **evidence-disciplined coverage**: a finding only counts for
+a candidate if it cites real trace turns including that candidate's
+turn, an oracle record, the player's own words when the friction came
+from a note, and only frames its call was actually shown (a bounded
+repair pass re-adjudicates anything stripped, then honest warnings).
+Findings attach only screenshots their call saw; `findings.json`
+embeds the full candidate list and a per-call audit
+(`adjudication_calls`: which candidates, which frames) so nothing is
+silently dropped or overstated.
+
+Testing: `canned_trace.py` builds a synthetic trace with planted
+issues — a genuine silent failure (outcome rejected, no event, no
+visual change), a working-as-designed case the player merely missed
+(event fired + frame changed), and a phantom affordance. `--selftest`
+(offline) asserts the joins land on the planted turns and runs the
+whole pipeline against a deterministic fake critic; `--eval` runs the
+REAL model against the same trace and asserts the planted silent
+failure comes back a missing-feedback **defect** and the missed-
+feedback case comes back **intended**/minor-discoverability — that is
+the acceptance run for a key-holder. The F4-shaped `outcomes` records
+in the fixture prove the (still-unshipped, #646) outcome-tap path;
+live traces without them lower the critic's grounding confidence
+rather than breaking it.
+
+Cross-session aggregation (same spot tripping N personas) is a
+deliberate follow-up, not built here — the single-session path stays
+clean and additive.
+
 ## Testing
 
 - `python3 tools/playtest/run.py --selftest` — offline, CI-safe check
@@ -163,3 +217,6 @@ it is recorded on the turn (`stuck: true`) before the session ends.
   wiring end to end).
 - A real LLM session is the acceptance run; needs GPU + focus and an
   API key.
+- `python3 tools/playtest/critic.py --selftest` — offline critic
+  pipeline check (canned trace, fake critic, no key);
+  `--eval` is the real-model acceptance run against the planted trace.

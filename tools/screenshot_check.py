@@ -153,6 +153,15 @@ def main() -> int:
               "instances refuse this verb by design)")
         return 1
     if "error" in reply:
+        if "transfer-source" in str(reply["error"]):
+            # #700: the surface genuinely can't provide transferable
+            # swapchain images — capture is unavailable BY DESIGN here
+            # while the renderer keeps working. Not a capture-path
+            # failure; nothing further to check on this system.
+            print(f"  [skip] {reply['error']}")
+            print("screenshot_check: capture unavailable on this surface "
+                  "(no transfer-source swapchain usage) — skipping")
+            return 0
         print(f"  [FAIL] capture refused: {reply['error']}")
         return 1
 
