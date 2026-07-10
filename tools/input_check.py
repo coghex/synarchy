@@ -22,7 +22,9 @@ asserts, end to end through the real pipeline:
   2. a click at a framebuffer pixel activates the element drawn there
      (fixture button's onClick fires exactly once per click);
   3. a mods click really holds the modifier: the fixture samples
-     engine.isKeyDown("Shift") inside its click callback;
+     engine.isKeyDown("Shift") inside its click callback (#697 — the
+     release is fenced behind those callbacks, then lands on the input
+     thread's next tick, so the released check polls briefly);
   4. key/keyDown/keyUp: broadcast routing, held state visible to
      engine.isKeyDown between down and up, released after;
   5. text entry: with the fixture's text element focused, input.type
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 from probelib import send, send_json
 
@@ -67,6 +70,17 @@ def state():
     return lua('return require("scripts.input_check_fixture").getState()')
 
 
+def poll_until(pred, timeout: float = 1.0, interval: float = 0.02) -> bool:
+    """Poll pred until true or timeout — for effects that land a tick
+    later by design (the #697 deferred modifier release)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(interval)
+    return pred()
+
+
 def main() -> int:
     global PORT
     ap = argparse.ArgumentParser(description=__doc__)
@@ -91,10 +105,12 @@ def main() -> int:
 
     # Load once per engine lifetime: a second loadScript would create a
     # second broadcast-receiving instance sharing the same singleton
-    # state table, double-counting every event.
+    # state table, double-counting every event. The tick rate is
+    # REQUIRED — without it loadScript silently no-ops and the fixture
+    # never registers for broadcasts (require() alone doesn't).
     send(PORT,
          'if not package.loaded["scripts.input_check_fixture"] then '
-         'engine.loadScript("scripts/input_check_fixture.lua") end',
+         'engine.loadScript("scripts/input_check_fixture.lua", 0.0) end',
          expect_result=False)
     geom = lua('return require("scripts.input_check_fixture").setup()')
     if not (isinstance(geom, dict) and "btnX" in geom):
@@ -134,8 +150,12 @@ def main() -> int:
         check("shift-click observed shift held in the callback",
               st["clicks"] == 2 and st["shiftAtClick"] is True,
               f"clicks={st['clicks']} shift={st['shiftAtClick']}")
+        # The release is deliberately asynchronous (#697): it rides the
+        # fence behind the click's callbacks, then the input thread
+        # consumes it on its next ~16 ms tick — poll, don't race it.
         check("shift released after the click",
-              lua('return engine.isKeyDown("Shift")') is False)
+              poll_until(lambda:
+                  lua('return engine.isKeyDown("Shift")') is False))
 
         # 4. key hold: down → visible to pollers + broadcast; up → released
         expect_ok("keyDown acks", lua('return input.keyDown("W")'))

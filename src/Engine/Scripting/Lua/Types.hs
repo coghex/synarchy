@@ -102,6 +102,14 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             --   side of a modifier was pressed without racing input state.
             | LuaKeyDownEvent Key GLFW.Key
             | LuaKeyUpEvent Key
+              -- | Fence follow-up for synthetic input (#697): queued by
+              --   the input thread when it processes an 'InputFollowup',
+              --   so it sits in this queue BEHIND every broadcast the
+              --   fenced sequence produced. Handling it re-injects the
+              --   carried events (modifier releases) into the input
+              --   queue — strictly after those broadcasts have run, so a
+              --   shift-click's callback still observes shift held.
+            | LuaInjectFollowup [InputEvent]
             | LuaShellToggle
             | LuaWindowResize Int Int
             | LuaFramebufferResize Int Int

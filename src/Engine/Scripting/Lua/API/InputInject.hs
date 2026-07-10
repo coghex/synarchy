@@ -14,6 +14,13 @@
 --   @{ error = \"...\" }@ on failure (unknown key/button/modifier name,
 --   headless engine, degenerate window, or consumption timeout).
 --
+--   Modifier timing (#697): the ack covers the PRIMARY action; a mods
+--   tap's modifier release is deliberately deferred behind the
+--   action's own Lua callbacks (so they observe the modifier held)
+--   and lands on the input thread's next tick — callers asserting
+--   \"modifier released\" right after a tap should poll briefly
+--   rather than expect it inside the ack.
+--
 --   Surface:
 --     input.moveMouse(x, y)
 --     input.click(x, y[, button[, mods]])      button: left|right|middle

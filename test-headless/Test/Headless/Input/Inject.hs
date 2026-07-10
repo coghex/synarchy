@@ -4,7 +4,9 @@
 --   coordinate conversion (the retina/DPI trap that silently poisons
 --   every harness click if wrong), and the synthesized event
 --   sequences' shape (every click carries its cursor move, every
---   press pairs with a release, modifiers bracket the action).
+--   press pairs with a release, modifiers bracket the action — with
+--   the releases riding an 'InputFollowup' fence (#697) so they are
+--   processed only after the action's Lua callbacks have run).
 module Test.Headless.Input.Inject (spec) where
 
 import UPrelude
@@ -78,18 +80,20 @@ spec = do
                     GLFW.MouseButtonState'Released
                 ]
 
-        it "modifiers bracket a click (down before move, up after release)" $ do
+        it "modifiers bracket a click (down before move, fenced up after release)" $ do
             let evs = clickSequence pos GLFW.MouseButton'1 shiftMod
             case (evs, reverse evs) of
-                (InputKeyEvent k1 s1 _ : _, InputKeyEvent k2 s2 _ : _) → do
+                (InputKeyEvent k1 s1 _ : _, InputFollowup ups : _) → do
                     (k1, s1) `shouldBe`
                         (GLFW.Key'LeftShift, GLFW.KeyState'Pressed)
-                    (k2, s2) `shouldBe`
-                        (GLFW.Key'LeftShift, GLFW.KeyState'Released)
-                _ → expectationFailure "expected modifier key events at both ends"
+                    ups `shouldBe`
+                        [ InputKeyEvent GLFW.Key'LeftShift
+                            GLFW.KeyState'Released noMods ]
+                _ → expectationFailure
+                    "expected modifier press first and a followup fence last"
             length evs `shouldBe` 5
 
-        it "mouseDown holds its modifiers; mouseUp releases them after" $ do
+        it "mouseDown holds its modifiers; mouseUp fences their release after" $ do
             let downs = mouseDownSequence pos GLFW.MouseButton'2 shiftMod
                 ups   = mouseUpSequence pos GLFW.MouseButton'2 shiftMod
             downs `shouldBe`
@@ -103,14 +107,90 @@ spec = do
                 [ InputCursorMove 100 50
                 , InputMouseEvent GLFW.MouseButton'2 pos
                     GLFW.MouseButtonState'Released
-                , InputKeyEvent GLFW.Key'LeftShift GLFW.KeyState'Released
-                    noMods
+                , InputFollowup
+                    [ InputKeyEvent GLFW.Key'LeftShift
+                        GLFW.KeyState'Released noMods ]
                 ]
+
+        it "no inline modifier release outside the fence (#697)" $ do
+            -- The whole point of the fence: a release drained in the
+            -- same batch as the action is already the published state
+            -- by the time the Lua callbacks run, so a synthetic
+            -- shift-click reads as a plain click. Every mod-bearing
+            -- sequence must carry its releases ONLY inside the fence.
+            let inlineRelease ev = case ev of
+                    InputKeyEvent _ GLFW.KeyState'Released _ → True
+                    _                                        → False
+                sequences =
+                    [ clickSequence pos GLFW.MouseButton'1 shiftMod
+                    , mouseUpSequence pos GLFW.MouseButton'1 shiftMod
+                    , keyUpSequence GLFW.Key'W shiftMod
+                    ]
+            forM_ sequences $ \evs → case reverse evs of
+                (InputFollowup ups : rest) → do
+                    -- keyUpSequence's own key release is legitimate
+                    -- inline; only MODIFIER releases must be fenced.
+                    filter inlineRelease
+                        [ e | e ← reverse rest
+                        , case e of
+                            InputKeyEvent k _ _ → k ≡ GLFW.Key'LeftShift
+                            _                   → False ]
+                        `shouldBe` []
+                    ups `shouldSatisfy` all inlineRelease
+                _ → expectationFailure "expected a trailing followup fence"
+
+        it "multiple modifiers release in reverse order inside one fence" $ do
+            let mm = ( [GLFW.Key'LeftShift, GLFW.Key'LeftControl]
+                     , noMods { GLFW.modifierKeysShift = True
+                              , GLFW.modifierKeysControl = True } )
+                evs = clickSequence pos GLFW.MouseButton'1 mm
+            take 2 evs `shouldBe`
+                [ InputKeyEvent GLFW.Key'LeftShift
+                    GLFW.KeyState'Pressed (snd mm)
+                , InputKeyEvent GLFW.Key'LeftControl
+                    GLFW.KeyState'Pressed (snd mm)
+                ]
+            case reverse evs of
+                (InputFollowup ups : _) → ups `shouldBe`
+                    [ InputKeyEvent GLFW.Key'LeftControl
+                        GLFW.KeyState'Released noMods
+                    , InputKeyEvent GLFW.Key'LeftShift
+                        GLFW.KeyState'Released noMods
+                    ]
+                _ → expectationFailure "expected a trailing followup fence"
+
+        it "plain (modifier-free) sequences carry no fence" $ do
+            let plainSeqs =
+                    [ clickSequence pos GLFW.MouseButton'1 ([], noMods)
+                    , mouseDownSequence pos GLFW.MouseButton'1 ([], noMods)
+                    , mouseUpSequence pos GLFW.MouseButton'1 ([], noMods)
+                    , keyTapSequence GLFW.Key'A ([], noMods)
+                    , keyDownSequence GLFW.Key'A ([], noMods)
+                    , keyUpSequence GLFW.Key'A ([], noMods)
+                    ]
+                isFence ev = case ev of
+                    InputFollowup _ → True
+                    _               → False
+            forM_ plainSeqs $ \evs →
+                filter isFence evs `shouldBe` []
 
         it "key tap = press then release carrying the modifier flags" $
             keyTapSequence GLFW.Key'L ([], noMods) `shouldBe`
                 [ InputKeyEvent GLFW.Key'L GLFW.KeyState'Pressed noMods
                 , InputKeyEvent GLFW.Key'L GLFW.KeyState'Released noMods
+                ]
+
+        it "modded key tap holds the modifier and fences its release" $
+            keyTapSequence GLFW.Key'L shiftMod `shouldBe`
+                [ InputKeyEvent GLFW.Key'LeftShift GLFW.KeyState'Pressed
+                    (snd shiftMod)
+                , InputKeyEvent GLFW.Key'L GLFW.KeyState'Pressed
+                    (snd shiftMod)
+                , InputKeyEvent GLFW.Key'L GLFW.KeyState'Released
+                    (snd shiftMod)
+                , InputFollowup
+                    [ InputKeyEvent GLFW.Key'LeftShift
+                        GLFW.KeyState'Released noMods ]
                 ]
 
         it "keyDown/keyUp split a hold into matching halves" $ do

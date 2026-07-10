@@ -129,6 +129,15 @@ processLuaMsg env ls stateRef msg = case msg of
     writeIORef (currentKeyDownRef env) Nothing
   LuaKeyUpEvent key →
     broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
+  LuaInjectFollowup evs →
+    -- Fence follow-up (#697): this queue is FIFO, so every broadcast
+    -- the fenced sequence queued ahead of this message has already
+    -- been dispatched — its callbacks saw the modifiers still held.
+    -- Re-inject the carried releases now; the input thread processes
+    -- them like any other event, so nothing is left stuck down. Plain
+    -- enqueue, no drain-wait: ordering is the contract, and the Lua
+    -- thread must not stall on the input thread's tick.
+    mapM_ (Q.writeQueue (inputQueue env)) evs
   LuaShellToggle →
     broadcastToModules ls "onShellToggle" []
   LuaArenaReady pageId →

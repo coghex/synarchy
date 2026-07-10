@@ -60,10 +60,10 @@ runInputLoop env stateRef = do
         -- frame that never pops (unbounded stack growth).
         ok ← catch
           (do
-            let sharedInputRef = inputStateRef env
-            inpSt ← readIORef sharedInputRef
-            newInpSt ← processInputs env inpSt
-            writeIORef sharedInputRef newInpSt
+            inpSt ← readIORef (inputStateRef env)
+            -- processInputs publishes to inputStateRef after each
+            -- event it processes (#697) — no batch write here.
+            _ ← processInputs env inpSt
             threadDelay 16666  -- ~60 FPS
             pure True
           )
@@ -81,6 +81,14 @@ processInputs env inpSt = do
     case mEvent of
         Just event → do
             newState ← processInput env inpSt event
+            -- Publish after EVERY event, not once per drained batch: a
+            -- synthetic modifier press (#697) must be visible to Lua
+            -- pollers (engine.isKeyDown) before the following click/key
+            -- event's Lua broadcast is dispatched — this write
+            -- happens-before that broadcast's STM enqueue below, so a
+            -- callback can never observe a state older than the events
+            -- that preceded its own.
+            writeIORef (inputStateRef env) newState
             processInputs env newState
         Nothing → return inpSt
 
@@ -446,8 +454,18 @@ processInput env inpSt event = case event of
                 { inpMousePos  = pos
                 , inpMouseBtns = Map.insert btn False (inpMouseBtns inpSt)
                 }
-    InputCursorMove x y → 
+    InputCursorMove x y →
         return $ inpSt { inpMousePos = (x, y) }
+    -- Synthetic-sequence fence (#697): hand the carried events (the
+    -- tap's modifier releases) to the Lua thread. This message enters
+    -- the Lua queue AFTER every broadcast the preceding events of the
+    -- same sequence queued above, so the Lua thread re-injects the
+    -- releases only once those callbacks have run — a shift-click's
+    -- handler polls shift as held, and the release still lands
+    -- afterwards (no stuck keys).
+    InputFollowup evs → do
+        Q.writeQueue (luaQueue env) (LuaInjectFollowup evs)
+        return inpSt
     InputScrollEvent x y → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)

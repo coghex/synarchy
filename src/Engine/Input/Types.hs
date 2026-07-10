@@ -56,6 +56,15 @@ data InputEvent
         { iseScrollX   ∷ Double         -- ^ Scroll X offset
         , iseScrollY    ∷ Double         -- ^ Scroll Y offset
         }
+      -- | Fence for synthetic sequences (#697): the input thread
+      --   forwards the carried events to the Lua thread
+      --   (LuaInjectFollowup), which re-injects them into the input
+      --   queue only after dispatching every Lua broadcast the
+      --   preceding events produced. Both queues are FIFO, so the
+      --   carried events (modifier releases) are processed strictly
+      --   after the callbacks that must still observe the pre-fence
+      --   state. Never produced by GLFW callbacks.
+    | InputFollowup [InputEvent]
     deriving (Show, Eq)
 
 -- * Window events
