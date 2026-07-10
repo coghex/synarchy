@@ -475,6 +475,9 @@ library
                      LootTable.Roll
                      Engine.Asset.YamlLootTables
                      Engine.Scripting.Lua.API.LootTables
+                     Language.Semantic.Types
+                     Language.Semantic.Catalogue
+                     Language.Semantic.English
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
@@ -945,6 +948,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types
                    Test.Headless.Power.Network
+                   Test.Headless.Language.Semantic
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact
