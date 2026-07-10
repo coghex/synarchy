@@ -233,44 +233,96 @@ def generate_persona(seed: int, data: dict | None = None) -> dict:
     return _assemble(seed, chosen, goal, rng, data, sampling={"mode": "random"})
 
 
+def _row_key(row) -> tuple:
+    return tuple(v["value"] for v in row)
+
+
+def _grid(dims) -> list[tuple]:
+    return list(itertools.product(*[vals for _, vals in dims]))
+
+
+def _swap_repair_rows(dims, count: int, rng: random.Random,
+                      passes: int = 500) -> list[tuple] | None:
+    """One balanced Latin-hypercube draw with in-place duplicate repair:
+    per-axis columns each cycle every value equally often, then get an
+    independent seeded shuffle. Duplicate rows are broken by swapping
+    two rows' entries WITHIN one column — a swap preserves the column's
+    value counts exactly, so per-axis balance (max-min <= 1) survives
+    the repair by construction (the #715 review finding: patching a row
+    with fresh uniform draws skews the marginals). Returns None if the
+    repair doesn't converge within `passes` (retried by the caller)."""
+    cols = []
+    for _, vals in dims:
+        col = [vals[i % len(vals)] for i in range(count)]
+        rng.shuffle(col)
+        cols.append(col)
+    for _ in range(passes):
+        seen, dups = {}, []
+        for i in range(count):
+            key = tuple(col[i]["value"] for col in cols)
+            if key in seen:
+                dups.append(i)
+            else:
+                seen[key] = i
+        if not dups:
+            return [tuple(col[i] for col in cols) for i in range(count)]
+        for i in dups:
+            c = rng.randrange(len(cols))
+            j = rng.randrange(count)
+            cols[c][i], cols[c][j] = cols[c][j], cols[c][i]
+    return None
+
+
+def _coverage_rows(dims, count: int, rng: random.Random) -> list[tuple]:
+    """`count` axis-value rows with per-axis value counts always within
+    1 of count/len (exact balance) for ANY count, and no duplicate rows
+    below the full grid size. Three regimes:
+    - count >= grid: full shuffled-grid cycles + a balanced remainder
+      (recursive — a raw grid prefix would stack the leading axis).
+    - dense (count > grid/2): the complement construction — build a
+      balanced UNIQUE removal set of size grid-count with the sparse
+      machinery (always sparse, it's < grid/2) and subtract it from the
+      full grid; the survivors inherit balance within 1 exactly.
+    - sparse: swap-repaired Latin-hypercube draw (measured to converge
+      well inside the pass budget across the whole sparse range; fresh
+      redraws on top make a failure effectively unreachable)."""
+    total = math.prod(len(vals) for _, vals in dims)
+    if count == 0:
+        return []
+    if count >= total:
+        grid = _grid(dims)
+        rng.shuffle(grid)
+        return grid * (count // total) \
+            + _coverage_rows(dims, count % total, rng)
+    if count * 2 > total:
+        removal = {_row_key(row)
+                   for row in _coverage_rows(dims, total - count, rng)}
+        rows = [row for row in _grid(dims) if _row_key(row) not in removal]
+        rng.shuffle(rows)
+        return rows
+    for _ in range(50):
+        rows = _swap_repair_rows(dims, count, rng)
+        if rows is not None:
+            return rows
+    raise RuntimeError(  # unreachable in practice; honest > imbalanced
+        f"could not build a balanced collision-free coverage draw for "
+        f"count={count} over a {total}-combo axis space")
+
+
 def coverage_personas(count: int, seed: int = 0,
                       data: dict | None = None) -> list[dict]:
     """A balanced spread of `count` personas across the axis space:
-    per-axis columns each cycle every value equally often, then get an
-    independent seeded shuffle (Latin-hypercube style), so marginals are
-    exactly balanced (per-axis value counts differ by at most 1) and
-    axes are decorrelated. A draw whose rows collide is retried WHOLE —
-    never patched row-by-row, which would skew the columns — so balance
-    survives deduplication. Only when `count` is so close to the full
-    grid that balanced draws keep colliding does it fall back to a
-    seeded-shuffled grid prefix (unique by construction, near-balanced
-    at that size). Reproducible from (seed, count). count >= the full
-    grid size just cycles the grid enumeration."""
+    for EVERY count, each axis's value counts differ by at most 1, and
+    combos never repeat until the full grid is exhausted (see
+    _coverage_rows for the per-regime construction). Reproducible from
+    (seed, count)."""
+    if count < 1:
+        raise ValueError(f"count must be >= 1, got {count}")
     data = data or load_axes()
     dims = [(a["name"], a["values"]) for a in data["axes"]] \
         + [("goal", data["goals"])]
-    total = math.prod(len(vals) for _, vals in dims)
     rng = random.Random(seed)
-    if count >= total:
-        grid = list(itertools.product(*[vals for _, vals in dims]))
-        rows = [grid[i % total] for i in range(count)]
-    else:
-        rows = None
-        for _ in range(200):
-            cols = []
-            for _, vals in dims:
-                col = [vals[i % len(vals)] for i in range(count)]
-                rng.shuffle(col)
-                cols.append(col)
-            candidate = [tuple(col[i] for col in cols) for i in range(count)]
-            if len({tuple(v["value"] for v in row) for row in candidate}) \
-                    == count:
-                rows = candidate
-                break
-        if rows is None:
-            grid = list(itertools.product(*[vals for _, vals in dims]))
-            rng.shuffle(grid)
-            rows = grid[:count]
+    rows = _coverage_rows(dims, count, rng)
     specs = []
     for i, row in enumerate(rows):
         chosen = {dims[j][0]: row[j] for j in range(len(dims) - 1)}
@@ -439,31 +491,34 @@ def selftest() -> int:
     check("every goal appears across 200 seeds",
           len(seen_goals) == len(data["goals"]))
 
-    # 4. coverage mode: count, uniqueness, EXACT balance, and
-    # reproducibility. Balance and uniqueness are asserted across many
-    # seeds — the original row-by-row duplicate repair skewed the
-    # columns (seed 4 was the #715 review reproducer) and could even
-    # keep a duplicate; the whole-draw retry must never do either.
+    # 4. coverage mode: count, uniqueness, EXACT balance (per-axis and
+    # per-goal value counts within 1 — the #715 review findings: the
+    # original row repair skewed marginals at count 12/seed 4, then the
+    # grid-prefix fallback skewed them at count 200/seed 0), invalid
+    # counts, and reproducibility across every count regime
     def _combo(s):
         return tuple(sorted(s["axes"].items())) + (s["goal"],)
 
-    cov = coverage_personas(12, seed=7, data=data)
-    check("coverage returns the requested count", len(cov) == 12)
-    unique_ok, balance_ok = True, True
-    for cseed in range(20):  # includes seed 4, the review reproducer
-        batch = coverage_personas(12, seed=cseed, data=data)
-        if len({_combo(s) for s in batch}) != 12:
-            unique_ok = False
+    def _span(batch):
+        spans = []
         for axis in data["axes"]:
             counts = [sum(1 for s in batch
                           if s["axes"][axis["name"]] == v["value"])
                       for v in axis["values"]]
-            if max(counts) - min(counts) > 1:
-                balance_ok = False
-        goals = [sum(1 for s in batch if s["goal"] == g["goal"].strip())
-                 for g in data["goals"]]
-        if max(goals) - min(goals) > 1:
-            balance_ok = False
+            spans.append(max(counts) - min(counts))
+        goal_counts = [sum(1 for s in batch
+                           if s["goal"] == g["goal"].strip())
+                       for g in data["goals"]]
+        spans.append(max(goal_counts) - min(goal_counts))
+        return max(spans)
+
+    cov = coverage_personas(12, seed=7, data=data)
+    check("coverage returns the requested count", len(cov) == 12)
+    unique_ok, balance_ok = True, True
+    for cseed in range(20):  # includes seed 4, the first reproducer
+        batch = coverage_personas(12, seed=cseed, data=data)
+        unique_ok = unique_ok and len({_combo(s) for s in batch}) == 12
+        balance_ok = balance_ok and _span(batch) <= 1
     check("coverage combos unique across seeds 0..19", unique_ok)
     check("coverage exactly balanced across seeds 0..19", balance_ok)
     check("coverage reproducible from (seed, count)",
@@ -473,14 +528,39 @@ def selftest() -> int:
     check("coverage specs record provenance",
           all(s["sampling"] == {"mode": "coverage", "count": 12, "index": i}
               for i, s in enumerate(cov)))
-    # near-full-grid counts can't produce a balanced collision-free
-    # draw — the shuffled-grid-prefix fallback must stay unique
+    # every count regime stays unique + balanced: sparse mid-range
+    # (200/seed 0 was the second reproducer), dense complement,
+    # near-grid, the exact grid, and beyond-grid cycling
     total = math.prod(len(a["values"]) for a in data["axes"]) \
         * len(data["goals"])
-    big = coverage_personas(total - 2, seed=1, data=data)
-    check("near-grid coverage stays unique via the fallback",
-          len(big) == total - 2
-          and len({_combo(s) for s in big}) == total - 2)
+    regimes_ok = True
+    for rcount in (200, total // 2 + 40, total - 2, total, total + 8):
+        batch = coverage_personas(rcount, seed=0, data=data)
+        distinct = len({_combo(s) for s in batch})
+        if len(batch) != rcount or _span(batch) > 1 \
+                or distinct != min(rcount, total):
+            regimes_ok = False
+    check("all count regimes stay unique and balanced", regimes_ok)
+    # invalid counts must be rejected, never silently served — a
+    # negative count reaching a slice returned 971 personas (#715
+    # review: 971 paid --llm calls)
+    invalid_ok = True
+    for bad in (0, -1):
+        try:
+            coverage_personas(bad, 0, data=data)
+            invalid_ok = False
+        except ValueError:
+            pass
+    check("coverage rejects count < 1", invalid_ok)
+    import contextlib
+    import io
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            main(["--coverage", "--count", "-1"])
+        cli_rejects = False
+    except SystemExit as e:
+        cli_rejects = e.code == 2
+    check("CLI rejects --count < 1", cli_rejects)
 
     # 5. LLM flavor freeze: prose lands in the spec once; axes/goal/
     # tendencies untouched; the saved file replays the stored prose
@@ -560,6 +640,8 @@ def main(argv=None) -> int:
 
     if args.selftest:
         return selftest()
+    if args.count is not None and args.count < 1:
+        ap.error("--count must be >= 1")
 
     data = load_axes()
     if args.coverage:
