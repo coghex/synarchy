@@ -62,6 +62,7 @@ import World.Till.Types (newTillDesignation)
 import World.Plant.Types (newPlantDesignation)
 import World.Vegetation (isTilledSoil)
 import World.Thread.Helpers (unWorldPageId)
+import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 
 handleWorldSetZoomCursorHoverCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -226,6 +227,39 @@ handleWorldClearMineAnchorCommand env _logger pageId = do
 maxDesignateSide ∷ Int
 maxDesignateSide = 128
 
+-- | F4 (#646) action-outcome oracle tap for a rectangle-sweep
+--   designation commit: "accepted" if every requested tile/tree landed,
+--   "partial" (with drop counts) if the filter dropped some but not all,
+--   "rejected" if nothing landed at all (anchor ineligible/unloaded, or
+--   the whole sweep got filtered out). Shared by till/chop/mine, whose
+--   commit handlers all fire-and-forget from Lua — only the world thread
+--   that actually runs the filter knows requested vs applied.
+recordDesignationOutcome ∷ EngineEnv → Text → Int → Int → Int → Int → IO ()
+recordDesignationOutcome env kind gx1 gy1 requested applied = do
+    gt ← readIORef (gameTimeRef env)
+    let dropped = requested - applied
+        (outcome, reason)
+            | requested ≡ 0 =
+                ("noop", Just "nothing in the swept rectangle to designate")
+            | applied ≡ 0 =
+                ("rejected", Just "anchor tile ineligible or unloaded")
+            | dropped > 0 =
+                ("partial", Just "designation filter dropped tiles in the swept rectangle")
+            | otherwise = ("accepted", Nothing)
+    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+        { aoTs        = gt
+        , aoKind      = kind
+        , aoOutcome   = outcome
+        , aoWhereX    = Just gx1
+        , aoWhereY    = Just gy1
+        , aoTarget    = Nothing
+        , aoRequested = Just requested
+        , aoApplied   = Just applied
+        , aoDropped   = Just dropped
+        , aoReason    = reason
+        , aoHandler   = Nothing
+        }
+
 -- | Commit a designation rectangle. DF-style: designations are
 --   PER-Z-LEVEL — (gx1, gy1) is the anchor corner, and only tiles
 --   whose surface z equals the anchor tile's surface z are taken, so
@@ -277,6 +311,8 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
                 (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { mineAnchor = Nothing }, ())
+            recordDesignationOutcome env "world.designateMine" xLo yLo
+                ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)
             logDebug logger CatWorld $
                 "Mine designation: +" <> T.pack (show (length entries))
                 <> " tiles (" <> T.pack (show xLo) <> ","
@@ -536,6 +572,19 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                     , HM.lookupDefault 0 (tgx, tgy) harvests ≤ 0
                     , let z = lcSurfaceMap lc VU.! columnIndex lx ly
                     ]
+                -- F4 (#646): every flora instance in the swept rect,
+                -- BEFORE the tag/harvestable filter — the "requested"
+                -- count a naive player would see as "trees in my box".
+                candidates =
+                    [ ()
+                    | cx ← [cx0 .. cx1], cy ← [cy0 .. cy1]
+                    , Just lc ← [lookupChunk (ChunkCoord cx cy) tileData]
+                    , i ← fcdInstances (lcFlora lc)
+                    , let lx = fromIntegral (fiTileX i)
+                          ly = fromIntegral (fiTileY i)
+                          (tgx, tgy) = chunkToGlobal (ChunkCoord cx cy) lx ly
+                    , tgx ≥ xLo, tgx ≤ xHi, tgy ≥ yLo, tgy ≤ yHi
+                    ]
             atomicModifyIORef' (wsChopDesignationsRef worldState) $ \m →
                 (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
@@ -545,6 +594,8 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                 <> " trees (" <> T.pack (show xLo) <> ","
                 <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
                 <> "," <> T.pack (show yHi) <> ")"
+            recordDesignationOutcome env "chop.designate" xLo yLo
+                (length candidates) (length entries)
 
 handleWorldCancelChopCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -648,6 +699,8 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
                 <> " tiles (" <> T.pack (show xLo) <> ","
                 <> T.pack (show yLo) <> ")–(" <> T.pack (show xHi)
                 <> "," <> T.pack (show yHi) <> ")"
+            recordDesignationOutcome env "till.designate" xLo yLo
+                ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)
 
 handleWorldCancelTillCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -724,6 +777,7 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     if isTilledSoil vg ∧ not hasExistingFlora
                        ∧ not hasExistingPlot
                     then Just z else Nothing
+            gt ← readIORef (gameTimeRef env)
             case (tileZ, resolvedCrop) of
                 (Just z, Just fid) → do
                     atomicModifyIORef' (wsPlantDesignationsRef worldState) $
@@ -731,9 +785,29 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     logDebug logger CatWorld $
                         "Plant designation: (" <> T.pack (show gx) <> ","
                         <> T.pack (show gy) <> ") crop=" <> cropName
-                _ → logDebug logger CatWorld $
+                    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                        { aoTs = gt, aoKind = "plant.designate"
+                        , aoOutcome = "accepted"
+                        , aoWhereX = Just gx, aoWhereY = Just gy, aoTarget = Nothing
+                        , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                        , aoReason = Nothing, aoHandler = Nothing
+                        }
+                _ → do
+                    logDebug logger CatWorld $
                         "Plant designation refused at (" <> T.pack (show gx)
                         <> "," <> T.pack (show gy) <> ") crop=" <> cropName
+                    let reason
+                            | isNothing resolvedCrop =
+                                "unknown or non-plantable crop: " <> cropName
+                            | otherwise =
+                                "tile not tilled soil, or already occupied"
+                    pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                        { aoTs = gt, aoKind = "plant.designate"
+                        , aoOutcome = "rejected"
+                        , aoWhereX = Just gx, aoWhereY = Just gy, aoTarget = Nothing
+                        , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                        , aoReason = Just reason, aoHandler = Nothing
+                        }
 
 handleWorldCancelPlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()

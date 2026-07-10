@@ -680,16 +680,41 @@ end
 -- rules (starting building spawn vs. construction designation).
 --
 -- Returns the placed building id, or nil + a reason on failure.
+-- F4 (#646): every exit records its outcome so a silent placement
+-- rejection (no carrying unit, item exhausted) is visible to the
+-- playtest oracle even though the player only ever sees the
+-- engine.logInfo line at the handleMouseDown call site below.
 function buildTool.commitPlacement(defName, gx, gy)
     if not power.isPlaceable(defName) then
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement", outcome = "rejected",
+            where = { x = gx, y = gy },
+            reason = "not a placeable power item: " .. tostring(defName),
+        }
         return nil, "not a placeable power item"
     end
     local uid = carryingSelectedUnit(defName)
     if not uid then
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement", outcome = "rejected",
+            where = { x = gx, y = gy },
+            reason = "no selected unit carries " .. tostring(defName),
+        }
         return nil, "no selected unit carries " .. defName
     end
     local nodeId, buildingIdOrErr = power.placeNode(uid, defName, gx, gy)
-    if not nodeId then return nil, buildingIdOrErr end
+    if not nodeId then
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement", outcome = "rejected",
+            where = { x = gx, y = gy }, target = uid,
+            reason = tostring(buildingIdOrErr),
+        }
+        return nil, buildingIdOrErr
+    end
+    debug.recordOutcome{
+        kind = "buildTool.commitPlacement", outcome = "accepted",
+        where = { x = gx, y = gy }, target = uid,
+    }
     return buildingIdOrErr
 end
 
