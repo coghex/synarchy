@@ -1,0 +1,92 @@
+# Semantic concept catalogue (#709) — the vocabulary proper-name
+# meanings are built from (see Language.Semantic.Types for the name
+# forms, Language.Semantic.English for the gloss renderer).
+#
+# LOAD-BEARING: each `id` is the stable identity of a concept. #710's
+# generated languages derive every native root deterministically from
+# the id string, so renaming or reusing an id silently re-roots every
+# generated language that mentions it. Ids may be ADDED, never renamed,
+# removed, or repurposed. English wording, by contrast, is free to
+# improve — it is display data, not identity.
+#
+# Every lexical form is AUTHORED, never derived from spelling:
+#   singular    the citation noun ("memory")
+#   plural      explicit, including irregulars ("memories", "wolves")
+#               and zero plurals for mass nouns ("ice", "gold")
+#   modifier    the attributive form; a real adjective where English
+#               has one ("ashen", "sworn", "divine"), the noun adjunct
+#               where it doesn't ("iron", "storm")
+#   possessive  the owner form, apostrophe included ("wolf's")
+# Forms are single words (the renderer owns spacing/capitalization).
+#
+# The starter set intentionally authors ALL FOUR forms for every
+# concept so #710 can sample any name form over any concepts without
+# hitting a missing-form error at generation time; a test pins this.
+# Domains: place, element, celestial, creature, emotion, mythic.
+version: 1
+concepts:
+  # ---- World / place heads --------------------------------------------
+  - { id: LAND,    domain: place, singular: land,   plural: lands,   modifier: land,    possessive: "land's" }
+  - { id: ISLE,    domain: place, singular: isle,   plural: isles,   modifier: isle,    possessive: "isle's" }
+  - { id: VALE,    domain: place, singular: vale,   plural: vales,   modifier: vale,    possessive: "vale's" }
+  - { id: PEAK,    domain: place, singular: peak,   plural: peaks,   modifier: peak,    possessive: "peak's" }
+  - { id: REALM,   domain: place, singular: realm,  plural: realms,  modifier: realm,   possessive: "realm's" }
+  - { id: HAVEN,   domain: place, singular: haven,  plural: havens,  modifier: haven,   possessive: "haven's" }
+  - { id: GATE,    domain: place, singular: gate,   plural: gates,   modifier: gate,    possessive: "gate's" }
+  - { id: THRONE,  domain: place, singular: throne, plural: thrones, modifier: throne,  possessive: "throne's" }
+  - { id: SPIRE,   domain: place, singular: spire,  plural: spires,  modifier: spire,   possessive: "spire's" }
+
+  # ---- Elements and materials -----------------------------------------
+  - { id: ASH,     domain: element, singular: ash,   plural: ashes,  modifier: ashen,   possessive: "ash's" }
+  - { id: FIRE,    domain: element, singular: fire,  plural: fires,  modifier: fiery,   possessive: "fire's" }
+  - { id: ICE,     domain: element, singular: ice,   plural: ice,    modifier: icy,     possessive: "ice's" }
+  - { id: STONE,   domain: element, singular: stone, plural: stones, modifier: stone,   possessive: "stone's" }
+  - { id: IRON,    domain: element, singular: iron,  plural: iron,   modifier: iron,    possessive: "iron's" }
+  - { id: SALT,    domain: element, singular: salt,  plural: salt,   modifier: salt,    possessive: "salt's" }
+  - { id: EMBER,   domain: element, singular: ember, plural: embers, modifier: ember,   possessive: "ember's" }
+  - { id: FROST,   domain: element, singular: frost, plural: frost,  modifier: frozen,  possessive: "frost's" }
+  - { id: GOLD,    domain: element, singular: gold,  plural: gold,   modifier: golden,  possessive: "gold's" }
+
+  # ---- Celestial and temporal -----------------------------------------
+  - { id: SUN,     domain: celestial, singular: sun,    plural: suns,    modifier: sun,    possessive: "sun's" }
+  - { id: MOON,    domain: celestial, singular: moon,   plural: moons,   modifier: moon,   possessive: "moon's" }
+  - { id: STAR,    domain: celestial, singular: star,   plural: stars,   modifier: starry, possessive: "star's" }
+  - { id: DAWN,    domain: celestial, singular: dawn,   plural: dawns,   modifier: dawn,   possessive: "dawn's" }
+  - { id: DUSK,    domain: celestial, singular: dusk,   plural: dusks,   modifier: dusk,   possessive: "dusk's" }
+  - { id: NIGHT,   domain: celestial, singular: night,  plural: nights,  modifier: night,  possessive: "night's" }
+  - { id: WINTER,  domain: celestial, singular: winter, plural: winters, modifier: winter, possessive: "winter's" }
+  - { id: STORM,   domain: celestial, singular: storm,  plural: storms,  modifier: storm,  possessive: "storm's" }
+  - { id: SKY,     domain: celestial, singular: sky,    plural: skies,   modifier: sky,    possessive: "sky's" }
+
+  # ---- Animals, body parts, symbols -----------------------------------
+  - { id: WOLF,    domain: creature, singular: wolf,    plural: wolves,   modifier: wolf,    possessive: "wolf's" }
+  - { id: RAVEN,   domain: creature, singular: raven,   plural: ravens,   modifier: raven,   possessive: "raven's" }
+  - { id: SERPENT, domain: creature, singular: serpent, plural: serpents, modifier: serpent, possessive: "serpent's" }
+  - { id: EYE,     domain: creature, singular: eye,     plural: eyes,     modifier: eye,     possessive: "eye's" }
+  - { id: HEART,   domain: creature, singular: heart,   plural: hearts,   modifier: heart,   possessive: "heart's" }
+  - { id: BONE,    domain: creature, singular: bone,    plural: bones,    modifier: bone,    possessive: "bone's" }
+  - { id: CROWN,   domain: creature, singular: crown,   plural: crowns,   modifier: crowned, possessive: "crown's" }
+  - { id: BLADE,   domain: creature, singular: blade,   plural: blades,   modifier: blade,   possessive: "blade's" }
+  - { id: FANG,    domain: creature, singular: fang,    plural: fangs,    modifier: fanged,  possessive: "fang's" }
+
+  # ---- Emotions, virtues, calamities ----------------------------------
+  - { id: SILENCE, domain: emotion, singular: silence, plural: silence,  modifier: silent,    possessive: "silence's" }
+  - { id: SORROW,  domain: emotion, singular: sorrow,  plural: sorrows,  modifier: sorrowful, possessive: "sorrow's" }
+  - { id: GLORY,   domain: emotion, singular: glory,   plural: glories,  modifier: glorious,  possessive: "glory's" }
+  - { id: RUIN,    domain: emotion, singular: ruin,    plural: ruins,    modifier: ruined,    possessive: "ruin's" }
+  - { id: PLAGUE,  domain: emotion, singular: plague,  plural: plagues,  modifier: plague,    possessive: "plague's" }
+  - { id: HOPE,    domain: emotion, singular: hope,    plural: hopes,    modifier: hopeful,   possessive: "hope's" }
+  - { id: WRATH,   domain: emotion, singular: wrath,   plural: wrath,    modifier: wrathful,  possessive: "wrath's" }
+  - { id: MERCY,   domain: emotion, singular: mercy,   plural: mercies,  modifier: merciful,  possessive: "mercy's" }
+  - { id: FAMINE,  domain: emotion, singular: famine,  plural: famines,  modifier: famine,    possessive: "famine's" }
+
+  # ---- Mythic and social abstractions ---------------------------------
+  - { id: GOD,     domain: mythic, singular: god,    plural: gods,     modifier: divine,     possessive: "god's" }
+  - { id: KING,    domain: mythic, singular: king,   plural: kings,    modifier: royal,      possessive: "king's" }
+  - { id: GHOST,   domain: mythic, singular: ghost,  plural: ghosts,   modifier: ghostly,    possessive: "ghost's" }
+  - { id: DREAM,   domain: mythic, singular: dream,  plural: dreams,   modifier: dream,      possessive: "dream's" }
+  - { id: OATH,    domain: mythic, singular: oath,   plural: oaths,    modifier: sworn,      possessive: "oath's" }
+  - { id: EXILE,   domain: mythic, singular: exile,  plural: exiles,   modifier: exiled,     possessive: "exile's" }
+  - { id: MEMORY,  domain: mythic, singular: memory, plural: memories, modifier: remembered, possessive: "memory's" }
+  - { id: TITAN,   domain: mythic, singular: titan,  plural: titans,   modifier: titan,      possessive: "titan's" }
+  - { id: WITCH,   domain: mythic, singular: witch,  plural: witches,  modifier: witch,      possessive: "witch's" }

@@ -51,6 +51,7 @@ import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Network as PowerNetwork
+import qualified Test.Headless.Language.Semantic as LanguageSemantic
 import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.Blood.Texture as BloodTexture
 import qualified Test.Headless.Blood.Impact as BloodImpact
@@ -125,6 +126,7 @@ main = hspec $ do
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
     describe "Power.Network" PowerNetwork.spec
+    describe "Language.Semantic" LanguageSemantic.spec
     describe "Blood.Types" BloodTypes.spec
     describe "Blood.Texture" BloodTexture.spec
     describe "Blood.Impact" BloodImpact.spec
