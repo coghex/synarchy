@@ -97,6 +97,17 @@ any budgeted file grows back past its limit.
 python3 tools/lua_module_budget.py
 ```
 
+### `action_outcome_coverage.py`
+Self-audit (#646) for the F4 action-outcome oracle: greps each registered
+commit-boundary verb's own source for its `debug.recordOutcome` /
+`pushActionOutcome` call site and reports instrumented yes/no, mirroring
+`ci_probes.py --status`'s "make the gap visible" style. Not a blocking
+gate — Tier 2/3 verbs are deliberate fast-follows, not regressions.
+
+```bash
+python3 tools/action_outcome_coverage.py
+```
+
 ### Workflow
 
 Before committing a change:
@@ -363,6 +374,7 @@ tools/
 ├── world_check.py          (regression suite runner)
 ├── test_audit.py           (unit tests)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
+├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── playtest/               (naive-player UX playtest harness — see above)
