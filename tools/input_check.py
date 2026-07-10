@@ -23,8 +23,10 @@ asserts, end to end through the real pipeline:
      (fixture button's onClick fires exactly once per click);
   3. a mods click really holds the modifier: the fixture samples
      engine.isKeyDown("Shift") inside its click callback (#697 — the
-     release is fenced behind those callbacks, then lands on the input
-     thread's next tick, so the released check polls briefly);
+     release is fenced behind those callbacks; #727 made the click's
+     own ack synchronously resolve that fence too, so the released
+     check below normally sees it on the FIRST poll — it still polls
+     briefly rather than asserting that timing exactly);
   4. key/keyDown/keyUp: broadcast routing, held state visible to
      engine.isKeyDown between down and up, released after;
   5. text entry: with the fixture's text element focused, input.type
@@ -150,9 +152,10 @@ def main() -> int:
         check("shift-click observed shift held in the callback",
               st["clicks"] == 2 and st["shiftAtClick"] is True,
               f"clicks={st['clicks']} shift={st['shiftAtClick']}")
-        # The release is deliberately asynchronous (#697): it rides the
-        # fence behind the click's callbacks, then the input thread
-        # consumes it on its next ~16 ms tick — poll, don't race it.
+        # The release rides the fence behind the click's callbacks
+        # (#697); since #727 the click's own ack resolves that fence
+        # synchronously, so this normally reads released immediately —
+        # poll_until tolerates it landing a beat later regardless.
         check("shift released after the click",
               poll_until(lambda:
                   lua('return engine.isKeyDown("Shift")') is False))

@@ -8,6 +8,8 @@ import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
+import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM.TVar (modifyTVar')
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
 import Engine.Core.State
@@ -89,6 +91,15 @@ processInputs env inpSt = do
             -- callback can never observe a state older than the events
             -- that preceded its own.
             writeIORef (inputStateRef env) newState
+            -- #727: mark this event FULLY processed (state published,
+            -- and — inside processInput above — any resulting luaQueue
+            -- write already committed) only now, strictly after both.
+            -- 'inputQueue' merely becoming empty is a separate, earlier
+            -- STM fact (the dequeue above) that races this — synthetic
+            -- injection's completion wait counts THIS increment, not
+            -- queue emptiness, so it can't observe "done" before an
+            -- event's Lua-side effects have actually landed.
+            atomically $ modifyTVar' (inputProcessedRef env) (+ 1)
             processInputs env newState
         Nothing → return inpSt
 

@@ -83,6 +83,7 @@ initializeEngine = initializeEngineWith (LogToHandle stdout)
 initializeEngineWith ∷ LogBackend → IO EngineInitResult
 initializeEngineWith logBackend = do
   inputQueue ← Q.newQueue
+  inputProcessedRef ← newTVarIO (0 ∷ Int)
   worldQueue ← Q.newQueue
   simQueue ← Q.newQueue
   luaToEngineQueue ← Q.newQueue
@@ -195,6 +196,7 @@ initializeEngineWith logBackend = do
         , pixelSnapRef       = pixelSnapRef
         , textureFilterRef   = textureFilterRef
         , inputQueue         = inputQueue
+        , inputProcessedRef  = inputProcessedRef
         , loggerRef          = loggerRef
         , luaToEngineQueue   = luaToEngineQueue
         , luaQueue           = engineToLuaQueue

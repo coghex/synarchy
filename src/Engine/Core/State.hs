@@ -78,6 +78,15 @@ data EngineEnv = EngineEnv
   , pixelSnapRef        ∷ IORef Bool
   , textureFilterRef    ∷ IORef TextureFilter
   , inputQueue          ∷ Q.Queue InputEvent
+  , inputProcessedRef   ∷ TVar Int
+    -- ^ Monotonic count of 'InputEvent's the input thread has FULLY
+    --   processed — incremented by 'Engine.Input.Thread.processInputs'
+    --   strictly after an event's side effects (incl. its 'luaQueue'
+    --   write) complete, not merely dequeued. 'inputQueue' becoming
+    --   empty (a separate STM transaction from that write) is NOT the
+    --   same fact and races it (#727) — synthetic injection's
+    --   'Engine.Input.Inject.waitEventsProcessed' waits on this
+    --   counter instead for a race-free completion signal.
   , loggerRef           ∷ IORef LoggerState
   , luaToEngineQueue    ∷ Q.Queue LuaToEngineMsg
   , luaQueue            ∷ Q.Queue LuaMsg

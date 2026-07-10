@@ -37,19 +37,3 @@ readQueueTimeout micros q = do
 
 flushQueue ∷ Queue α → IO [α]
 flushQueue q = STM.atomically $ flushTQueue (queueTQueue q)
-
--- | Block until the queue is empty (its consumer has drained it) or
---   the timeout (microseconds) elapses; True = drained. Same
---   single-transaction race-free shape as 'readQueueTimeout'. Used by
---   the input.* injection verbs (#644) to ack that the input thread
---   has consumed the synthesized events.
-waitQueueEmpty ∷ Int → Queue α → IO Bool
-waitQueueEmpty micros q = do
-    delayVar ← STM.registerDelay micros
-    STM.atomically $ STM.orElse
-        (do empty ← isEmptyTQueue (queueTQueue q)
-            STM.check empty
-            return True)
-        (do timedOut ← STM.readTVar delayVar
-            STM.check timedOut
-            return False)

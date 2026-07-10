@@ -31,11 +31,24 @@
 --   'LuaInjectFollowup' → Lua thread → back into the input queue. Both
 --   queues are FIFO, so the releases re-enter strictly after the
 --   action's callbacks have run, and are then processed like any other
---   key events (no stuck state). Caveat: two mod-bearing sequences
---   racing through this pipeline concurrently (second verb issued
---   before the first's fence completes) can release a shared modifier
---   under the second action's callbacks — the lockstep harness (#647)
---   acks each verb before the next, so overlap doesn't arise there.
+--   key events (no stuck state).
+--
+--   Sequential ack boundary (#727): the fence relay above only orders
+--   messages WITHIN one sequence — the public ack (see
+--   'Engine.Scripting.Lua.API.InputInject.injectAndSettle') used to
+--   fire as soon as the primary batch drained, before the fence had
+--   even reached the Lua queue, let alone been dispatched. A second
+--   verb issued right after that ack — the very next debug-console
+--   command, or the next line of a script calling input.* twice in a
+--   row — could then run while the first verb's modifier was still
+--   published held (a plain second action inheriting it) or get its
+--   own hold clipped by the first verb's still-pending release. Fixed
+--   by making the ack synchronously resolve the whole lifetime: it now
+--   drains and dispatches every Lua message the sequence produced,
+--   and — if that included a fence — waits for the re-injected release
+--   to drain too and dispatches its broadcast, all before returning.
+--   So by the time one input.* call acks, nothing belonging to it is
+--   left pending on either queue for the next call to race.
 module Engine.Input.Inject
   ( resolveButton
   , resolveMods
@@ -52,12 +65,15 @@ module Engine.Input.Inject
   , keyUpSequence
   , typeSequence
   , injectEvents
+  , waitEventsProcessed
   ) where
 
 import UPrelude
 import Control.Monad (foldM)
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
+import qualified Control.Concurrent.STM as STM
+import Control.Concurrent.STM.TVar (TVar, readTVarIO)
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Bindings (parseKeyName)
 import Engine.Input.Types (InputEvent(..))
@@ -212,14 +228,39 @@ keyUpSequence k mm@(_, m) =
 typeSequence ∷ Text → [InputEvent]
 typeSequence = map InputCharEvent . T.unpack
 
+-- | Block until 'Engine.Core.State.inputProcessedRef' has counted at
+--   least 'target' fully-processed events (or the timeout, in
+--   microseconds, elapses; True = reached). Deliberately NOT a wait on
+--   the input queue becoming empty (#727): the input thread dequeues
+--   an event in one STM transaction and only afterwards, in IO, runs
+--   its side effects (state publish + any 'luaQueue' write) — "queue
+--   empty" can be observed in the gap between those two, before the
+--   LAST event's effects have actually landed. The counter increments
+--   only once those effects are done
+--   (see 'Engine.Input.Thread.processInputs'), so waiting on it is a
+--   genuine completion signal instead of a proxy that can race ahead.
+waitEventsProcessed ∷ TVar Int → Int → Int → IO Bool
+waitEventsProcessed counterRef target timeoutMicros = do
+    delayVar ← STM.registerDelay timeoutMicros
+    STM.atomically $ STM.orElse
+        (do n ← STM.readTVar counterRef
+            STM.check (n ≥ target)
+            return True)
+        (do timedOut ← STM.readTVar delayVar
+            STM.check timedOut
+            return False)
+
 -- | Push a synthesized sequence into the input queue and block until
---   the input thread has drained it (or the timeout, in microseconds,
---   elapses; True = consumed). Draining means the events entered the
+--   the input thread has fully PROCESSED it (or the timeout, in
+--   microseconds, elapses; True = processed) — see
+--   'waitEventsProcessed' for why this counts events rather than
+--   checking queue emptiness. Processed means the events entered the
 --   normal processing path — downstream Lua broadcasts they trigger
 --   are dispatched on the Lua thread afterwards, exactly like real
 --   input (and cannot be awaited from a console verb, which runs on
 --   that same thread).
-injectEvents ∷ Q.Queue InputEvent → Int → [InputEvent] → IO Bool
-injectEvents q timeoutMicros evs = do
+injectEvents ∷ TVar Int → Q.Queue InputEvent → Int → [InputEvent] → IO Bool
+injectEvents counterRef q timeoutMicros evs = do
+    before ← readTVarIO counterRef
     mapM_ (Q.writeQueue q) evs
-    Q.waitQueueEmpty timeoutMicros q
+    waitEventsProcessed counterRef (before + length evs) timeoutMicros

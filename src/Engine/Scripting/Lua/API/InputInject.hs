@@ -14,12 +14,24 @@
 --   @{ error = \"...\" }@ on failure (unknown key/button/modifier name,
 --   headless engine, degenerate window, or consumption timeout).
 --
---   Modifier timing (#697): the ack covers the PRIMARY action; a mods
---   tap's modifier release is deliberately deferred behind the
---   action's own Lua callbacks (so they observe the modifier held)
---   and lands on the input thread's next tick — callers asserting
---   \"modifier released\" right after a tap should poll briefly
---   rather than expect it inside the ack.
+--   Modifier lifetime boundary (#697, #727): the ack covers the
+--   PRIMARY action AND, when the sequence carries a deferred modifier
+--   release (see 'Engine.Input.Inject.deferModUps'), that release too
+--   — 'ackInject' synchronously drains and dispatches every Lua
+--   broadcast the sequence produced (via 'processLuaMsgs', called
+--   directly rather than awaited — see its haddock for why that is
+--   deadlock-safe here) before returning, so a caller's very next
+--   input.* call — whether the next debug-console command or the next
+--   line of a script issuing two verbs back to back on this same
+--   thread — can never observe or clip a temporary modifier from the
+--   action that just acked. Modifiers intentionally held across an ack
+--   by 'mouseDownSequence'/'keyDownSequence' (no deferred release)
+--   stay held; only the matching mouseUp/keyUp resolves them. The
+--   waits driving this settle count fully-processed events
+--   ('Engine.Input.Inject.waitEventsProcessed'), not input-queue
+--   emptiness — the latter can be observed a moment before an event's
+--   own Lua-side effects have actually landed, which would silently
+--   reopen this exact race.
 --
 --   Surface:
 --     input.moveMouse(x, y)
@@ -41,18 +53,24 @@ module Engine.Scripting.Lua.API.InputInject
   , inputKeyDownFn
   , inputKeyUpFn
   , inputTypeFn
+  , injectAndSettle
+  , SettleResult(..)
   ) where
 
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.IORef (readIORef)
+import Data.IORef (IORef, readIORef)
+import Control.Concurrent.STM.TVar (readTVarIO)
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Thread (ThreadControl)
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Input.Inject
-import Engine.Input.Types (InputEvent)
+import Engine.Input.Types (InputEvent(..))
+import Engine.Scripting.Lua.Types (LuaBackendState)
+import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsgs)
 
 -- | How long a verb waits for the input thread to drain the queue.
 --   The thread ticks every ~16 ms, so a live one answers in one tick;
@@ -60,17 +78,96 @@ import Engine.Input.Types (InputEvent)
 consumeTimeoutMicros ∷ Int
 consumeTimeoutMicros = 2 * 1000 * 1000
 
+-- | Push a synthesized sequence, wait for the input thread to fully
+--   PROCESS it, then settle its modifier lifetime (#727) before
+--   returning:
+--
+--     1. wait for the primary events to be fully processed
+--        ('injectEvents' — same as before #727, this alone used to be
+--        the whole ack);
+--     2. drain + dispatch every Lua broadcast that primary processing
+--        produced ('processLuaMsgs') — the action's own callbacks
+--        (onKeyDown/onMouseDown/onMouseUp/…), run synchronously right
+--        here rather than on the Lua thread's next loop tick;
+--     3. if the sequence carried a deferred modifier release (a
+--        trailing 'InputFollowup', #697 — 'followupCount' below counts
+--        its carried release events), step 2's dispatch just
+--        re-injected it into the input queue (Dispatch.hs's
+--        'LuaInjectFollowup' case) — wait for THOSE to be fully
+--        processed too, then dispatch once more (its own onKeyUp
+--        broadcast).
+--
+--   'processLuaMsgs' is safe to call directly from the Lua thread: it
+--   only ever *polls* ('Engine.Core.Queue.tryReadQueue'), never blocks
+--   waiting for another thread to write — draining a queue nobody else
+--   ever will (the forbidden self-deadlock shape) doesn't arise. Only
+--   step 1/3's 'waitEventsProcessed' genuinely blocks, and that targets
+--   'Engine.Core.State.inputProcessedRef', which only the SEPARATE
+--   input thread ever advances.
+--
+--   Reentrancy: 'luaQueue' has no per-caller partitioning, so if a
+--   dispatched callback itself calls another input.* verb (a script
+--   chaining synthetic actions from a handler — no shipped script does
+--   this today), the nested call's own step 2 drain can also dispatch
+--   the OUTER action's still-pending messages, nested inside the
+--   outer callback rather than after it returns. That's a real
+--   ordering change from pre-#727 (dispatch used to always happen
+--   outside the injecting call frame); it's accepted here as an
+--   unexercised corner case rather than solved, since #727 concerns
+--   SEQUENTIAL verbs, not verbs nested inside one another's callbacks.
+injectAndSettle ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+                → Int → [InputEvent] → IO SettleResult
+injectAndSettle env ls stateRef timeoutMicros evs = do
+    primaryOk ← injectEvents (inputProcessedRef env) (inputQueue env)
+                              timeoutMicros evs
+    if not primaryOk
+        then pure SettlePrimaryTimedOut
+        else case followupCount evs of
+            0 → do
+                processLuaMsgs env ls stateRef
+                pure SettleOk
+            n → do
+                -- Baseline BEFORE dispatching the fence: the release
+                -- events don't exist to be counted until
+                -- processLuaMsgs re-injects them below, so there's no
+                -- window for them to be missed by reading this late.
+                afterPrimary ← readTVarIO (inputProcessedRef env)
+                processLuaMsgs env ls stateRef
+                released ← waitEventsProcessed (inputProcessedRef env)
+                                (afterPrimary + n) timeoutMicros
+                processLuaMsgs env ls stateRef
+                pure $ if released then SettleOk else SettleFenceTimedOut
+  where
+    followupCount = sum . map countFollowup
+    countFollowup (InputFollowup subevs) = length subevs
+    countFollowup _                      = 0
+
+-- | 'injectAndSettle's outcome — kept distinct from a plain 'Bool' so
+--   'ackInject' can tell "nothing happened, safe to retry" apart from
+--   "the action DID execute, only its trailing cleanup didn't settle
+--   in time" (#727 review): folding both into one failure would let a
+--   caller that retries on error double-fire an already-executed
+--   click/key.
+data SettleResult = SettleOk | SettlePrimaryTimedOut | SettleFenceTimedOut
+    deriving (Eq, Show)
+
 -- | Inject a prebuilt sequence and push the ack table.
-ackInject ∷ EngineEnv → [InputEvent] → Lua.LuaE Lua.Exception Lua.NumResults
-ackInject env evs = do
-    consumed ← Lua.liftIO $
-        injectEvents (inputQueue env) consumeTimeoutMicros evs
-    if consumed
-        then pushOk
-        else pushError $
+ackInject ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+          → [InputEvent] → Lua.LuaE Lua.Exception Lua.NumResults
+ackInject env ls stateRef evs = do
+    result ← Lua.liftIO $
+        injectAndSettle env ls stateRef consumeTimeoutMicros evs
+    case result of
+        SettleOk → pushOk
+        SettlePrimaryTimedOut → pushError $
             "input: timed out waiting for the input thread to consume "
             <> "the synthesized events — is the engine's input thread "
             <> "running?"
+        SettleFenceTimedOut → pushError $
+            "input: the action itself completed, but its deferred "
+            <> "modifier release did not settle in time — do NOT retry "
+            <> "this action (it already ran); the modifier key may "
+            <> "still read held until the input thread catches up"
 
 -- | Shared guard + framebuffer→window conversion for the mouse verbs.
 --   Runs the continuation with the WINDOW-space position.
@@ -158,20 +255,22 @@ readStringList idx = do
 
 -- | input.moveMouse(x, y) — set the cursor position (updates
 --   hover/pick/tooltip state like a real move).
-inputMoveMouseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-inputMoveMouseFn env = headlessGuard env $ do
+inputMoveMouseFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+                 → Lua.LuaE Lua.Exception Lua.NumResults
+inputMoveMouseFn env ls stateRef = headlessGuard env $ do
     mx ← Lua.tonumber 1
     my ← Lua.tonumber 2
     case (mx, my) of
         (Just x, Just y) → withWindowCoords env (realToFrac x) (realToFrac y) $
-            \pos → ackInject env (moveSequence pos)
+            \pos → ackInject env ls stateRef (moveSequence pos)
         _ → pushError "input.moveMouse: x and y (numbers) required"
 
 -- | Common body for click / mouseDown / mouseUp.
 mouseVerb ∷ ((Double, Double) → GLFW.MouseButton
              → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent])
-          → Text → EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-mouseVerb buildSeq verbName env = headlessGuard env $ do
+          → Text → EngineEnv → LuaBackendState → IORef ThreadControl
+          → Lua.LuaE Lua.Exception Lua.NumResults
+mouseVerb buildSeq verbName env ls stateRef = headlessGuard env $ do
     mx ← Lua.tonumber 1
     my ← Lua.tonumber 2
     eBtn ← readButtonArg 3
@@ -180,36 +279,41 @@ mouseVerb buildSeq verbName env = headlessGuard env $ do
         (Just x, Just y) → case (eBtn, eMods) of
             (Right btn, Right mm) →
                 withWindowCoords env (realToFrac x) (realToFrac y) $
-                    \pos → ackInject env (buildSeq pos btn mm)
+                    \pos → ackInject env ls stateRef (buildSeq pos btn mm)
             (Left err, _) → pushError err
             (_, Left err) → pushError err
         _ → pushError $ "input." <> verbName
                 <> ": x and y (numbers) required"
 
-inputClickFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+inputClickFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+             → Lua.LuaE Lua.Exception Lua.NumResults
 inputClickFn = mouseVerb clickSequence "click"
 
-inputMouseDownFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+inputMouseDownFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+                 → Lua.LuaE Lua.Exception Lua.NumResults
 inputMouseDownFn = mouseVerb mouseDownSequence "mouseDown"
 
-inputMouseUpFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+inputMouseUpFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+               → Lua.LuaE Lua.Exception Lua.NumResults
 inputMouseUpFn = mouseVerb mouseUpSequence "mouseUp"
 
 -- | input.scroll(dx, dy) — wheel scroll at the current cursor position
 --   (moveMouse first to target a specific element).
-inputScrollFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-inputScrollFn env = headlessGuard env $ do
+inputScrollFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+             → Lua.LuaE Lua.Exception Lua.NumResults
+inputScrollFn env ls stateRef = headlessGuard env $ do
     mdx ← Lua.tonumber 1
     mdy ← Lua.tonumber 2
     case (mdx, mdy) of
-        (Just dx, Just dy) → ackInject env
+        (Just dx, Just dy) → ackInject env ls stateRef
             (scrollSequence (realToFrac dx) (realToFrac dy))
         _ → pushError "input.scroll: dx and dy (numbers) required"
 
 -- | Common body for key / keyDown / keyUp.
 keyVerb ∷ (GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent])
-        → Text → EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-keyVerb buildSeq verbName env = headlessGuard env $ do
+        → Text → EngineEnv → LuaBackendState → IORef ThreadControl
+        → Lua.LuaE Lua.Exception Lua.NumResults
+keyVerb buildSeq verbName env ls stateRef = headlessGuard env $ do
     mName ← Lua.tostring 1
     eMods ← readModsArg 2
     case mName of
@@ -218,31 +322,35 @@ keyVerb buildSeq verbName env = headlessGuard env $ do
         Just nameBS → do
             let name = TE.decodeUtf8 nameBS
             case (resolveKeyName name, eMods) of
-                (Just k, Right mm) → ackInject env (buildSeq k mm)
+                (Just k, Right mm) → ackInject env ls stateRef (buildSeq k mm)
                 (Nothing, _) → pushError $
                     "input." <> verbName <> ": unknown key name \""
                     <> name <> "\" (use the keybind vocabulary, e.g. "
                     <> "\"A\", \"Space\", \"Enter\", \"LeftShift\")"
                 (_, Left err) → pushError err
 
-inputKeyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+inputKeyFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+           → Lua.LuaE Lua.Exception Lua.NumResults
 inputKeyFn = keyVerb keyTapSequence "key"
 
-inputKeyDownFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+inputKeyDownFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+               → Lua.LuaE Lua.Exception Lua.NumResults
 inputKeyDownFn = keyVerb keyDownSequence "keyDown"
 
-inputKeyUpFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+inputKeyUpFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+             → Lua.LuaE Lua.Exception Lua.NumResults
 inputKeyUpFn = keyVerb keyUpSequence "keyUp"
 
 -- | input.type(text) — character events through the text-input path
 --   (needs a focused text field, like real typing). Non-char editing
 --   keys (Enter/Backspace/Tab/Escape) go through input.key instead.
-inputTypeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-inputTypeFn env = headlessGuard env $ do
+inputTypeFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+           → Lua.LuaE Lua.Exception Lua.NumResults
+inputTypeFn env ls stateRef = headlessGuard env $ do
     mText ← Lua.tostring 1
     case mText of
         Nothing → pushError "input.type: text (string) required"
-        Just bs → ackInject env (typeSequence (TE.decodeUtf8 bs))
+        Just bs → ackInject env ls stateRef (typeSequence (TE.decodeUtf8 bs))
 
 pushOk ∷ Lua.LuaE Lua.Exception Lua.NumResults
 pushOk = do
