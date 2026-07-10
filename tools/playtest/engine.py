@@ -41,6 +41,33 @@ ACTION_KINDS = ("click", "drag", "scroll", "key", "hold", "type", "wait", "done"
 RENDER_MODES = ("windowed", "offscreen")
 
 
+def _event_log_delta(previous: list | None, current: list) -> list:
+    """Return rows that were appended or updated since ``previous``.
+
+    The event store preserves the order of unchanged rows. New rows are
+    appended, while a coalesced row is removed, updated, and appended; ring
+    rollover only removes rows from the front. Thus the unchanged part of the
+    current snapshot is its longest prefix that is also a subsequence of the
+    previous snapshot, and everything after that prefix is new or updated.
+
+    There is no preceding snapshot on the first observation, so its explicit
+    baseline behaviour is to report the full current log (matching the old
+    length-cursor implementation).
+    """
+    if previous is None:
+        return current[:]
+
+    previous_index = 0
+    for current_index, event in enumerate(current):
+        while (previous_index < len(previous)
+               and previous[previous_index] != event):
+            previous_index += 1
+        if previous_index == len(previous):
+            return current[current_index:]
+        previous_index += 1
+    return []
+
+
 def _lua_str(text: str) -> str:
     """Quote a string for a single-line debug-console Lua call."""
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') \
@@ -143,7 +170,7 @@ class PlaytestEngine:
         self.render_mode = render_mode
         self.proc = None
         self.fb_size: tuple[int, int] | None = None
-        self._event_log_seen = 0
+        self._event_log_snapshot: list | None = None
 
     # -- lifecycle ---------------------------------------------------
 
@@ -235,8 +262,9 @@ class PlaytestEngine:
         snap["paused"] = self.lua("return engine.isPaused()") is True
         log = self.lua("return engine.getEventLog()")
         if isinstance(log, list):
-            snap["event_log_new"] = log[self._event_log_seen:]
-            self._event_log_seen = len(log)
+            snap["event_log_new"] = _event_log_delta(
+                self._event_log_snapshot, log)
+            self._event_log_snapshot = log
         else:
             snap["event_log_new"] = []
         # The active world's generation seed (world.getSeed, added for
