@@ -66,6 +66,7 @@ module Engine.Input.Inject
   , typeSequence
   , injectEvents
   , waitForBarrier
+  , newBarrierToken
   ) where
 
 import UPrelude
@@ -73,7 +74,7 @@ import Control.Monad (foldM)
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Control.Concurrent.STM as STM
-import Control.Concurrent.STM.TVar (TVar, readTVarIO)
+import Control.Concurrent.STM.TVar (TVar)
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Bindings (parseKeyName)
 import Engine.Input.Types (InputEvent(..))
@@ -228,44 +229,63 @@ keyUpSequence k mm@(_, m) =
 typeSequence ∷ Text → [InputEvent]
 typeSequence = map InputCharEvent . T.unpack
 
--- | Block until 'Engine.Core.State.inputBarrierRef' has counted at
---   least 'target' fully-processed 'InputBarrier's (or the timeout, in
+-- | Allocate a fresh, monotonically increasing, never-reused
+--   'InputBarrier' token from 'Engine.Core.State.inputBarrierNextRef'.
+newBarrierToken ∷ TVar Int → IO Int
+newBarrierToken nextRef = STM.atomically $ do
+    n ← STM.readTVar nextRef
+    let tok = n + 1
+    STM.writeTVar nextRef tok
+    return tok
+
+-- | Block until 'Engine.Core.State.inputBarrierRef' has reached (at
+--   least) 'token' — i.e. the input thread has fully processed the
+--   'InputBarrier' carrying that specific token (or the timeout, in
 --   microseconds, elapses; True = reached). Deliberately NOT a wait on
 --   the input queue becoming empty (#727): the input thread dequeues
 --   an event in one STM transaction and only afterwards, in IO, runs
 --   its side effects (state publish + any 'luaQueue' write) — "queue
 --   empty" can be observed in the gap between those two, before the
 --   LAST event's effects have actually landed. And deliberately NOT a
---   count of every processed event either: real GLFW input shares
---   'inputQueue' and would advance a generic counter too, letting
---   unrelated concurrent activity satisfy someone else's wait early —
---   only a barrier this module pushes can advance THIS counter (see
---   'Engine.Input.Thread.processInput's 'InputBarrier' case), and FIFO
---   ordering guarantees a barrier is only processed after everything
---   pushed ahead of it, so waiting on it is a genuine, unambiguous
---   completion signal for exactly this caller's own events.
+--   shared count of every processed barrier either (#727 review):
+--   real GLFW input never produces a barrier at all, so unrelated
+--   concurrent activity can't satisfy someone else's wait — but a
+--   BARE counter, shared across calls, still has a gap: a caller that
+--   TIMED OUT and gave up leaves its own barrier pending in the
+--   queue, and that stale barrier finally processing later could tick
+--   a shared counter to the value a LATER, unrelated caller happens
+--   to be waiting for, before that later caller's own events (or
+--   barrier) have been processed at all. A per-call TOKEN closes this:
+--   'inputBarrierRef' only ever holds the highest token actually
+--   processed, and FIFO + single-producer-thread allocation order
+--   guarantees a caller's own (numerically higher) token can only be
+--   reached once every event — including any earlier stale barrier —
+--   queued ahead of it, genuinely including this caller's own, has
+--   been processed.
 waitForBarrier ∷ TVar Int → Int → Int → IO Bool
-waitForBarrier counterRef target timeoutMicros = do
+waitForBarrier barrierRef token timeoutMicros = do
     delayVar ← STM.registerDelay timeoutMicros
     STM.atomically $ STM.orElse
-        (do n ← STM.readTVar counterRef
-            STM.check (n ≥ target)
+        (do n ← STM.readTVar barrierRef
+            STM.check (n ≥ token)
             return True)
         (do timedOut ← STM.readTVar delayVar
             STM.check timedOut
             return False)
 
--- | Push a synthesized sequence — followed by one 'InputBarrier' — into
---   the input queue and block until the input thread has fully
---   PROCESSED all of it (or the timeout, in microseconds, elapses;
---   True = processed) — see 'waitForBarrier' for why a barrier rather
---   than counting events or checking queue emptiness. Processed means
---   the events entered the normal processing path — downstream Lua
---   broadcasts they trigger are dispatched on the Lua thread
---   afterwards, exactly like real input (and cannot be awaited from a
---   console verb, which runs on that same thread).
-injectEvents ∷ TVar Int → Q.Queue InputEvent → Int → [InputEvent] → IO Bool
-injectEvents barrierRef q timeoutMicros evs = do
-    before ← readTVarIO barrierRef
-    mapM_ (Q.writeQueue q) (evs ⧺ [InputBarrier])
-    waitForBarrier barrierRef (before + 1) timeoutMicros
+-- | Push a synthesized sequence — followed by one freshly-tokened
+--   'InputBarrier' — into the input queue and block until the input
+--   thread has fully PROCESSED all of it (or the timeout, in
+--   microseconds, elapses; True = processed) — see 'waitForBarrier'
+--   for why a per-call token rather than a shared counter, counting
+--   events, or checking queue emptiness. Processed means the events
+--   entered the normal processing path — downstream Lua broadcasts
+--   they trigger are dispatched on the Lua thread afterwards, exactly
+--   like real input (and cannot be awaited from a console verb, which
+--   runs on that same thread).
+injectEvents ∷ TVar Int → TVar Int → Q.Queue InputEvent → Int → [InputEvent]
+             → IO Bool
+injectEvents nextRef barrierRef q timeoutMicros evs = do
+    tok ← newBarrierToken nextRef
+    mapM_ (Q.writeQueue q) (evs ⧺ [InputBarrier tok])
+    waitForBarrier barrierRef tok timeoutMicros

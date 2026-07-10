@@ -78,18 +78,29 @@ data EngineEnv = EngineEnv
   , pixelSnapRef        ∷ IORef Bool
   , textureFilterRef    ∷ IORef TextureFilter
   , inputQueue          ∷ Q.Queue InputEvent
+  , inputBarrierNextRef ∷ TVar Int
+    -- ^ Monotonic allocator for 'InputBarrier' tokens
+    --   ('Engine.Input.Inject.newBarrierToken') — each synthetic
+    --   injection call gets its OWN, numerically higher token, never
+    --   reused.
   , inputBarrierRef     ∷ TVar Int
-    -- ^ Monotonic count of 'InputBarrier' events the input thread has
-    --   FULLY processed — incremented by 'Engine.Input.Thread.processInput'
-    --   strictly after the barrier's turn in 'inputQueue' comes up,
-    --   which (FIFO, single consumer) is only after every event
-    --   pushed ahead of it — including its side effects, e.g. any
-    --   'luaQueue' write — has completed. 'inputQueue' becoming empty
-    --   (a separate STM transaction from those writes) is NOT the same
-    --   fact and races it (#727). Deliberately counts ONLY barriers,
-    --   not every processed event: real GLFW input never produces one,
-    --   so unrelated concurrent activity can't satisfy someone else's
-    --   wait early — see 'Engine.Input.Inject.waitForBarrier'.
+    -- ^ The highest 'InputBarrier' token the input thread has FULLY
+    --   processed — advanced by 'Engine.Input.Thread.processInput'
+    --   strictly after that barrier's turn in 'inputQueue' comes up,
+    --   which (FIFO, single consumer, single producer thread — tokens
+    --   are allocated and pushed in the same order) is only after
+    --   every event pushed ahead of it — including its side effects,
+    --   e.g. any 'luaQueue' write — has completed. 'inputQueue'
+    --   becoming empty (a separate STM transaction from those writes)
+    --   is NOT the same fact and races it (#727). Deliberately a
+    --   per-call TOKEN, not a shared count of every processed
+    --   barrier: real GLFW input never produces a barrier at all (so
+    --   unrelated concurrent activity can't satisfy someone else's
+    --   wait), and a stale barrier left behind by an earlier caller
+    --   that already gave up waiting (timeout) can't satisfy a LATER
+    --   caller's wait for its own, numerically higher token either —
+    --   a bare shared counter could (#727 review) — see
+    --   'Engine.Input.Inject.waitForBarrier'.
   , loggerRef           ∷ IORef LoggerState
   , luaToEngineQueue    ∷ Q.Queue LuaToEngineMsg
   , luaQueue            ∷ Q.Queue LuaMsg

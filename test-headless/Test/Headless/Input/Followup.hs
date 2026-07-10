@@ -52,7 +52,7 @@ import Data.List (findIndex)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
-import Engine.Input.Inject (clickSequence, noMods, waitForBarrier)
+import Engine.Input.Inject (clickSequence, noMods, waitForBarrier, newBarrierToken)
 import Engine.Input.Thread (processInputs)
 import Engine.Input.Types
 import Engine.Scripting.Lua.API (registerLuaAPI)
@@ -329,9 +329,10 @@ spec = do
     -- would let such activity satisfy someone else's pending wait
     -- early. Proved directly at the primitive level (deterministic,
     -- not timing-dependent): a pile of ordinary events fully drained
-    -- through the REAL input pipeline must NOT move the barrier
-    -- counter at all; only an actual 'InputBarrier' does.
-    it "unrelated processed events cannot advance the barrier counter (#727 review)" $ \env → do
+    -- through the REAL input pipeline must NOT move the watermark at
+    -- all; only an actual 'InputBarrier' carrying the awaited token
+    -- does.
+    it "unrelated processed events cannot advance the barrier watermark (#727 review)" $ \env → do
         resetInput env
         withFakeInputThread env $ do
             before ← readTVarIO (inputBarrierRef env)
@@ -343,8 +344,53 @@ spec = do
             stillBefore ← readTVarIO (inputBarrierRef env)
             stillBefore `shouldBe` before
 
-            -- Only pushing the barrier itself satisfies a wait on it.
-            Q.writeQueue (inputQueue env) InputBarrier
-            reached ← waitForBarrier (inputBarrierRef env) (before + 1)
+            -- Only pushing an actual barrier satisfies a wait on it.
+            tok ← newBarrierToken (inputBarrierNextRef env)
+            Q.writeQueue (inputQueue env) (InputBarrier tok)
+            reached ← waitForBarrier (inputBarrierRef env) tok
                           settleTimeoutMicros
             reached `shouldBe` True
+
+    -- #727 review: a caller that TIMES OUT (gives up waiting) leaves
+    -- its own barrier still sitting in the queue — it can't be
+    -- retracted. A shared "before+1" counter would let that STALE
+    -- barrier, once it finally does process, satisfy a completely
+    -- unrelated LATER caller's wait — reporting that later caller
+    -- "done" before even ITS OWN barrier (let alone its events) has
+    -- been processed. Per-call tokens close this: 'waitForBarrier'
+    -- only succeeds once the watermark reaches THIS call's own,
+    -- numerically higher token, so an earlier stale one resolving
+    -- first can't satisfy it.
+    it "a stale barrier from an earlier timed-out call cannot satisfy a later call's wait (#727 review)" $ \env → do
+        resetInput env
+        -- Simulate call A: allocate + push a barrier, but nothing
+        -- drains the queue yet — as if the input thread had stalled
+        -- long enough for A to give up and move on.
+        tok1 ← newBarrierToken (inputBarrierNextRef env)
+        Q.writeQueue (inputQueue env) (InputBarrier tok1)
+
+        -- Call B allocates its OWN, numerically higher token before
+        -- either barrier has been processed.
+        tok2 ← newBarrierToken (inputBarrierNextRef env)
+
+        -- A's stale barrier finally processes on its own (one manual
+        -- input-thread tick), independent of and before B pushes
+        -- anything.
+        inputTick env
+        afterStale ← readTVarIO (inputBarrierRef env)
+        afterStale `shouldBe` tok1
+
+        -- B's wait for its OWN token must NOT be satisfied by A's
+        -- stale completion alone — the pre-review "before+1" design
+        -- would have wrongly reported B done here (one barrier
+        -- processed since B's snapshot), even though B's own barrier
+        -- hasn't even been pushed to the queue in this ordering yet.
+        reachedEarly ← waitForBarrier (inputBarrierRef env) tok2 (100 * 1000)
+        reachedEarly `shouldBe` False
+
+        -- Only once B's OWN barrier is actually pushed and processed
+        -- does its wait succeed.
+        Q.writeQueue (inputQueue env) (InputBarrier tok2)
+        inputTick env
+        reached ← waitForBarrier (inputBarrierRef env) tok2 settleTimeoutMicros
+        reached `shouldBe` True

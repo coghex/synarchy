@@ -61,7 +61,6 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (IORef, readIORef)
-import Control.Concurrent.STM.TVar (readTVarIO)
 import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
 import Engine.Core.State (EngineEnv(..))
@@ -119,8 +118,8 @@ consumeTimeoutMicros = 2 * 1000 * 1000
 injectAndSettle ∷ EngineEnv → LuaBackendState → IORef ThreadControl
                 → Int → [InputEvent] → IO SettleResult
 injectAndSettle env ls stateRef timeoutMicros evs = do
-    primaryOk ← injectEvents (inputBarrierRef env) (inputQueue env)
-                              timeoutMicros evs
+    primaryOk ← injectEvents (inputBarrierNextRef env) (inputBarrierRef env)
+                              (inputQueue env) timeoutMicros evs
     if not primaryOk
         then pure SettlePrimaryTimedOut
         else do
@@ -129,17 +128,18 @@ injectAndSettle env ls stateRef timeoutMicros evs = do
                 then do
                     -- The drain above already dispatched the fence,
                     -- re-injecting its release events into inputQueue.
-                    -- Our own trailing barrier — pushed AFTER that
-                    -- re-injection, so it's positioned strictly behind
-                    -- those release events in the FIFO queue — gives an
-                    -- unambiguous "that release is fully processed"
-                    -- signal even under concurrent real input (unlike
-                    -- counting processed events generically, #727
-                    -- review).
-                    before ← readTVarIO (inputBarrierRef env)
-                    Q.writeQueue (inputQueue env) InputBarrier
+                    -- Our own trailing barrier — a FRESH token, pushed
+                    -- AFTER that re-injection so it's positioned
+                    -- strictly behind those release events in the
+                    -- FIFO queue — gives an unambiguous "that release
+                    -- is fully processed" signal even under concurrent
+                    -- real input or a stale barrier some earlier,
+                    -- timed-out call left behind (#727 review; see
+                    -- 'Engine.Input.Inject.waitForBarrier').
+                    tok ← newBarrierToken (inputBarrierNextRef env)
+                    Q.writeQueue (inputQueue env) (InputBarrier tok)
                     released ← waitForBarrier (inputBarrierRef env)
-                                    (before + 1) timeoutMicros
+                                    tok timeoutMicros
                     processLuaMsgs env ls stateRef
                     pure $ if released then SettleOk else SettleFenceTimedOut
                 else pure SettleOk
