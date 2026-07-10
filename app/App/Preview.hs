@@ -64,8 +64,8 @@ runPreview target mPort = do
         _ ← initializeVulkan window
         mainLoop
 
-        shutdownEngine window Nothing Nothing
-                              inputThreadState luaThreadState
+        shutdownEngine (Just window) Nothing Nothing
+                       inputThreadState luaThreadState
         logDebugM CatSystem "Preview engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus

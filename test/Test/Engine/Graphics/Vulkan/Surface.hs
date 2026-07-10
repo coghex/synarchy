@@ -27,7 +27,7 @@ spec env state = do
                     Nothing → liftIO $ expectationFailure "No window found in state"
                     Just win → do
                         -- Create a test instance
-                        (inst, _) ← createVulkanInstance defaultGraphicsConfig
+                        (inst, _) ← createVulkanInstance defaultGraphicsConfig InstanceForWindow
                         -- Create surface
                         surface <- GLFW.createWindowSurface win inst
                         -- The surface creation should succeed (if it fails, it will throw an exception)
@@ -55,7 +55,7 @@ spec env state = do
                 case glfwWindow (graphicsState state) of
                     Nothing → liftIO $ expectationFailure "No window found in state"
                     Just win → do
-                        (inst, _) ← createVulkanInstance defaultGraphicsConfig
+                        (inst, _) ← createVulkanInstance defaultGraphicsConfig InstanceForWindow
                         let createAndDestroySurface = do
                               surface <- GLFW.createWindowSurface win inst
                               liftIO $ surface `shouldSatisfy` (/= zero)

@@ -4,6 +4,7 @@ module Engine.Graphics.Vulkan.Instance
   ( createVulkanInstance
   , destroyVulkanInstance
   , getAvailableExtensions
+  , InstanceSurfaceUse(..)
   ) where
 
 import UPrelude
@@ -28,17 +29,29 @@ import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 import Vulkan.Utils.Debug (debugCallbackPtr)
 import Vulkan.Zero
 
+-- | Whether the instance must be able to present to a window surface.
+--   Windowed modes carry the GLFW surface extensions as hard
+--   requirements; the offscreen mode (#650) renders to plain images —
+--   no surface support, and GLFW may not even be initialized, so it
+--   must not be asked for extensions.
+data InstanceSurfaceUse = InstanceForWindow | InstanceOffscreen
+  deriving (Eq, Show)
+
 -- | Create and initialize Vulkan instance with optional debug messenger.
 --   Optional extensions (portability enumeration, layer settings, debug
 --   utils) and the validation layer are enabled only when the platform
 --   actually offers them — enabling an absent extension fails instance
 --   creation with EXTENSION_NOT_PRESENT (e.g. the MoltenVK-only ones on
---   Linux). Only the GLFW surface extensions are hard requirements.
-createVulkanInstance ∷ GraphicsConfig → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
-createVulkanInstance config = do
+--   Linux). Only the GLFW surface extensions are hard requirements, and
+--   only for 'InstanceForWindow'.
+createVulkanInstance ∷ GraphicsConfig → InstanceSurfaceUse
+                     → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
+createVulkanInstance config surfaceUse = do
   logDebugM CatVulkan "Initializing Vulkan instance"
 
-  glfwExts ← GLFW.getRequiredInstanceExtensions
+  glfwExts ← case surfaceUse of
+    InstanceForWindow → GLFW.getRequiredInstanceExtensions
+    InstanceOffscreen → pure []
   (_, exts) ← liftIO $ enumerateInstanceExtensionProperties Nothing
   let availableExts = map extensionName $ V.toList exts
   (_, layers) ← liftIO enumerateInstanceLayerProperties

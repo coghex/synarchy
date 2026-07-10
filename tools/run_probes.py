@@ -109,6 +109,8 @@ PROBES = [
      "obstacle-course movement: pathing/climbs/falls/ramps"),
     ("multiworld_save", "multiworld_save_probe.py", True,
      "multi-world save -> quit -> restart -> load; cross-page survival (#214, #219)"),
+    ("offscreen", "offscreen_probe.py", True,
+     "--offscreen render mode: windowless Vulkan boot, UI flow, screenshots, input injection, parallel instances (#650; needs a GPU)"),
     ("physiology", "physiology_probe.py", True,
      "thermoregulation/circulation sanity across controlled environments"),
     ("power_workshop", "power_workshop_probe.py", True,

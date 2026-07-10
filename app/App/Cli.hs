@@ -8,6 +8,7 @@ module App.Cli
   , parseArg
   , parseStrArg
   , parseRegion
+  , parseSize
   , parsePreview
   , PreviewCategoryKind(..)
   , classifyPreviewCategory
@@ -82,6 +83,18 @@ parseRegion ("--region":s:_) =
             (cx1, cy1, cx2, cy2)
         _ → (-8, -8, 8, 8)
 parseRegion (_:rest) = parseRegion rest
+
+-- | Parse --size WxH from args (offscreen render size, #650).
+--   Nothing on absence or malformed/non-positive values — the caller
+--   falls back to the video-config resolution.
+parseSize ∷ [String] → Maybe (Int, Int)
+parseSize args = do
+    s ← parseStrArg "--size" args
+    case splitOn 'x' (map toLower s) of
+        [ws, hs] → case (reads ws, reads hs) of
+            ([(w, "")], [(h, "")]) | w > 0 ∧ h > 0 → Just (w, h)
+            _ → Nothing
+        _ → Nothing
 
 -- | Parse --preview category[/item] from args.
 --   Nothing = --preview not present at all (normal dispatch continues).

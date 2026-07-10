@@ -122,7 +122,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   
   (_, swapImgs) ← getSwapchainImagesKHR dev swapchain
   pure $ SwapchainInfo
-    { siSwapchain = swapchain
+    { siTarget = TargetSwapchain swapchain
     , siSwapImgs = swapImgs
     , siSwapImgViews = V.empty
     , siSwapImgFormat = form

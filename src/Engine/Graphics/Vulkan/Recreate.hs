@@ -127,6 +127,7 @@ recreateAllResources pDevice device queues surface window = do
             pure Nothing
     
     renderPass ← createVulkanRenderPass device imgFormat sampleCount
+                     (renderedImageLayout (siTarget swapInfo))
     modify $ \s → s { graphicsState = (graphicsState s) {
         vulkanRenderPass = Just renderPass
     }}

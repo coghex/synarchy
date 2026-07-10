@@ -44,7 +44,7 @@ spec env state = do
     describe "Vulkan Device" $ do
         it "can create a Vulkan device" $ do
             runEngineTest env state $ do
-                (inst, _) ← createVulkanInstance defaultGraphicsConfig
+                (inst, _) ← createVulkanInstance defaultGraphicsConfig InstanceForWindow
                 (_, physDevs) ← enumeratePhysicalDevices inst
                 liftIO $ V.length physDevs `shouldSatisfy` (> 0)
                 
@@ -56,5 +56,5 @@ spec env state = do
                         Nothing → error "Device spec: no GLFW window in state"
                 surface ← GLFW.createWindowSurface (Window win) inst
                 
-                (device, _) ← createVulkanDevice inst physDev surface
+                (device, _) ← createVulkanDevice inst physDev (Just surface)
                 liftIO $ device `shouldSatisfy` (/= zero)

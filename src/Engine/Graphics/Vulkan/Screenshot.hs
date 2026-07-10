@@ -94,13 +94,15 @@ prepareCapture device pDevice si imageIndex req
                 }
 
 -- | Record the copy-out into the frame's command buffer, after
---   'cmdEndRenderPass' (both render-pass variants leave the swapchain
---   image in PRESENT_SRC_KHR — under MSAA it's the resolve target).
---   The image is transitioned to TRANSFER_SRC for the copy and back to
---   PRESENT_SRC so the subsequent present is untouched.
+--   'cmdEndRenderPass'. @steadyLayout@ is the layout both render-pass
+--   variants leave the (resolved) image in — PRESENT_SRC_KHR windowed,
+--   TRANSFER_SRC offscreen ('renderedImageLayout'). The image is
+--   transitioned to TRANSFER_SRC for the copy and back to
+--   @steadyLayout@ so a subsequent present is untouched (offscreen the
+--   two coincide and the barriers act as plain memory barriers).
 recordScreenshotCopy ∷ CommandBuffer → Image → Buffer
-                     → Extent2D → IO ()
-recordScreenshotCopy cmdBuf img buf (Extent2D w h) = do
+                     → Extent2D → ImageLayout → IO ()
+recordScreenshotCopy cmdBuf img buf (Extent2D w h) steadyLayout = do
     let colorRange = zero
             { aspectMask = IMAGE_ASPECT_COLOR_BIT
             , baseMipLevel = 0
@@ -109,7 +111,7 @@ recordScreenshotCopy cmdBuf img buf (Extent2D w h) = do
             , layerCount = 1
             }
         toTransfer = zero
-            { oldLayout = IMAGE_LAYOUT_PRESENT_SRC_KHR
+            { oldLayout = steadyLayout
             , newLayout = IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
             , srcQueueFamilyIndex = QUEUE_FAMILY_IGNORED
             , dstQueueFamilyIndex = QUEUE_FAMILY_IGNORED
@@ -120,7 +122,7 @@ recordScreenshotCopy cmdBuf img buf (Extent2D w h) = do
             }
         toPresent = zero
             { oldLayout = IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-            , newLayout = IMAGE_LAYOUT_PRESENT_SRC_KHR
+            , newLayout = steadyLayout
             , srcQueueFamilyIndex = QUEUE_FAMILY_IGNORED
             , dstQueueFamilyIndex = QUEUE_FAMILY_IGNORED
             , image = img
