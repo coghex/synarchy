@@ -953,6 +953,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact
+                   Test.Headless.UI.CreateWorldControls
                    Test.Headless.UI.Tooltip
                    Test.Headless.World.Calendar
                    Test.Headless.World.TimeLocal

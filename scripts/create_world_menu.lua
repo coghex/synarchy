@@ -15,7 +15,6 @@ local sprite         = require("scripts.ui.sprite")
 local settingsTab    = require("scripts.create_world.settings_tab")
 local advancedTab    = require("scripts.create_world.advanced_tab")
 local generalTab     = require("scripts.create_world.general_tab")
-local climateTab     = require("scripts.create_world.climate_tab")
 local timelineTab    = require("scripts.create_world.timeline_tab")
 local logPanelMod    = require("scripts.create_world.log_panel")
 local bottomButtons  = require("scripts.create_world.bottom_buttons")
@@ -235,7 +234,6 @@ createWorldMenu.btnLayout = nil
 local tabDefs = {
     { key = "settings", name = "General" },
     { key = "advanced", name = "Geology" },
-    { key = "climate",  name = "Climate" },
     { key = "timeline", name = "Timeline" },
 }
 
@@ -547,7 +545,7 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
         trackTextBox  = createWorldMenu.trackTextBox,
     }
 
-    -- General tab: settings (name/seed/size) + calendar + astronomy
+    -- General tab: name/seed/size plus the active calendar settings.
     local settingsElems = settingsTab.create(tabParams)
     -- Offset the general tab content below the settings rows
     local generalParams = {}
@@ -561,7 +559,6 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
     createWorldMenu.tabElements["settings"] = combinedSettings
 
     createWorldMenu.tabElements["advanced"] = advancedTab.create(tabParams)
-    createWorldMenu.tabElements["climate"]  = climateTab.create(tabParams)
     createWorldMenu.tabElements["timeline"] = timelineTab.create(tabParams)
 
     createWorldMenu.showTab(createWorldMenu.activeTab)
