@@ -701,6 +701,59 @@ def selftest() -> int:
               "curious_carl" in prompt and "MANUAL" in prompt
               and "1280x720" in prompt)
 
+        # 7. event-log snapshots (#699): the engine-side store appends,
+        # moves coalesced updates to the tail, and drops from the head at
+        # capacity. Exercise those transitions through the real oracle state
+        # tracker rather than only testing the pure diff helper.
+        class EventLogEngine(RealEngine):
+            def __init__(self, logs):
+                super().__init__(0, os.devnull)
+                self.logs = iter(logs)
+
+            def lua(self, code, timeout=0):
+                if code == "return engine.getEventLog()":
+                    return next(self.logs)
+                if code == "return world.getSeed()":
+                    return None
+                if code == "return debug.drainActionOutcomes()":
+                    return []
+                if code == "return engine.isPaused()":
+                    return False
+                if "dumpWidgets" in code:
+                    return []
+                if "currentMenu" in code:
+                    return "main"
+                raise AssertionError(f"unexpected oracle call: {code}")
+
+        repeat = {"text": "repeat", "gameTime": 1, "count": 1}
+        stable = {"text": "stable", "gameTime": 2, "count": 1}
+        appended = {"text": "appended", "gameTime": 3, "count": 1}
+        coalesced = {"text": "repeat", "gameTime": 4, "count": 2}
+        rollover = {"text": "rollover", "gameTime": 5, "count": 1}
+        logs = [
+            [repeat, stable],
+            [repeat, stable, appended],
+            [repeat, stable, appended],
+            [stable, appended, coalesced],
+            [appended, coalesced, rollover],
+            [coalesced, rollover, appended],
+        ]
+        event_eng = EventLogEngine(logs)
+        deltas = [event_eng.oracle_snapshot()["event_log_new"]
+                  for _ in logs]
+        check("event-log first snapshot explicitly reports its full baseline",
+              deltas[0] == [repeat, stable], str(deltas[0]))
+        check("event-log append reports only the appended row",
+              deltas[1] == [appended], str(deltas[1]))
+        check("event-log unchanged snapshot reports no duplicate rows",
+              deltas[2] == [], str(deltas[2]))
+        check("event-log coalesce reports only the updated row",
+              deltas[3] == [coalesced], str(deltas[3]))
+        check("event-log rollover reports the new tail row",
+              deltas[4] == [rollover], str(deltas[4]))
+        check("event-log rollover detects a new row matching an evicted row",
+              deltas[5] == [appended], str(deltas[5]))
+
     if failures:
         print(f"selftest: FAILED ({len(failures)}): {', '.join(failures)}")
         return 1
