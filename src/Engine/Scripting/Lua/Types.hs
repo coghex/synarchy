@@ -129,8 +129,13 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaCursorEnd Word32
             | LuaTextDelete Word32
             | LuaInterrupt Word32
-            | LuaUIClickEvent ElementHandle Text
-            | LuaUIRightClickEvent ElementHandle Text
+            | LuaUIClickEvent ElementHandle Text Double Double
+              -- ^ Element, callback name, and the click's raw window
+              --   coordinates (#646 review round 9) — carried purely so
+              --   Dispatch.hs's F4 action-outcome record for this route
+              --   isn't stuck reporting no location, same convention as
+              --   LuaMouseDownEvent's own trailing x/y.
+            | LuaUIRightClickEvent ElementHandle Text Double Double
             | LuaUIScrollEvent ElementHandle Double Double
             | LuaUICharInput Char
             | LuaUIBackspace

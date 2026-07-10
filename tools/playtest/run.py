@@ -103,6 +103,14 @@ def _promote_seed(trace: SessionTrace, oracle: dict) -> None:
         trace.meta["world_seed"] = oracle["world_seed"]
 
 
+def _count_f4_outcomes(trace: SessionTrace, oracle: dict) -> None:
+    """Running total of F4 (#646) action-outcome records seen this
+    session — a quick session-level summary; the per-turn records
+    themselves live in each turn's oracle.action_outcomes."""
+    trace.meta["f4_outcomes_total"] = (
+        trace.meta.get("f4_outcomes_total", 0) + len(oracle.get("action_outcomes") or []))
+
+
 def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 turns: int, dt: float, max_seconds: float | None,
                 memory_turns: int, stuck_k: int, settle: float = 0.3) -> str:
@@ -143,6 +151,7 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         # 5. oracle snapshot — recorded, never shown to the player
         oracle = eng.oracle_snapshot()
         _promote_seed(trace, oracle)
+        _count_f4_outcomes(trace, oracle)
 
         # stuck-loop detection: same action, same pixels, K times in a
         # row. A repeat-with-no-change loop is itself a strong
@@ -239,6 +248,7 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
             time.sleep(settle)
         oracle = eng.oracle_snapshot()
         _promote_seed(trace, oracle)
+        _count_f4_outcomes(trace, oracle)
         trace.record_turn({
             "turn": turn, "ts": time.time(),
             "screenshot": os.path.relpath(frame, trace.dir),
@@ -474,7 +484,7 @@ def main() -> int:
         "world_seed": None,  # promoted from the oracle's world.getSeed()
                              # the first turn a world exists — the seed the
                              # player actually got, randomized or typed
-        "f4_outcomes": "unavailable (issue #646 open)",
+        "f4_outcomes_total": 0,  # running count; see _count_f4_outcomes
         "replay_of": os.path.abspath(args.replay) if replaying else None,
     }
     if not replaying and args.agent == "llm":

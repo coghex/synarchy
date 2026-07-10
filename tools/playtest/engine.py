@@ -245,8 +245,13 @@ class PlaytestEngine:
         # randomized-seed session is still reproducible/diagnosable.
         seed = self.lua("return world.getSeed()")
         snap["world_seed"] = seed if isinstance(seed, int) else None
-        # F4 (#646, action-outcome tap) hasn't landed; when it does,
-        # its per-turn outcomes belong here alongside the widget dump.
+        # F4 (#646): drains the action-outcome ring — a destructive read,
+        # like combat.drainEvents/injury.drainEvents, so no "_seen" index
+        # is needed the way event_log_new above needs one; whatever
+        # accumulated since the last snapshot comes back once and the
+        # engine-side buffer is empty again immediately after.
+        outcomes = self.lua("return debug.drainActionOutcomes()")
+        snap["action_outcomes"] = outcomes if isinstance(outcomes, list) else []
         return snap
 
 

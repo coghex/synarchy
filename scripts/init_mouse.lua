@@ -8,6 +8,25 @@ local M = {}
 local MOUSE_LEFT  = 1
 local MOUSE_RIGHT = 2
 
+-- F4 (#646) Layer A: one action-outcome record per click that reaches
+-- this chain (a UI-consumed click never gets here at all — that half is
+-- recorded earlier, at the engine dispatch level, see
+-- Engine.Scripting.Lua.Thread.Dispatch's LuaUIClickEvent case). `handler`
+-- names the tool/selection domain that consumed the click; `outcome`
+-- defaults to "accepted" (routed to something real) unless overridden
+-- (e.g. "deadclick"/"noop"). Debug-only armed-spawn/item/fluid/terrain/
+-- location/structure branches below are deliberately NOT instrumented —
+-- they're developer tooling the naive playtest persona never drives.
+local function recordClick(handler, outcome, x, y, reason)
+    debug.recordOutcome{
+        kind = "input.click",
+        outcome = outcome or "accepted",
+        where = { x = x, y = y },
+        handler = handler,
+        reason = reason,
+    }
+end
+
 function M.onMouseDown(button, x, y)
     -- Only handle clicks that reach us — UI hit-tests run earlier in
     -- the input thread; if a UI element ate the click, this never fires.
@@ -32,6 +51,7 @@ function M.onMouseDown(button, x, y)
     -- (UI hit-test on a self-hiding overlay — safe to run ungated; it
     -- returns false whenever the overlay isn't shown.)
     if debugOverlay.tryClaimClick(button, x, y) then
+        recordClick("debug_overlay", nil, x, y)
         return
     end
 
@@ -41,6 +61,7 @@ function M.onMouseDown(button, x, y)
     -- don't fall through into deselect-on-empty.
     local debugAnimPanel = require("scripts.debug_anim_panel")
     if debugAnimPanel.tryClaimClick(button, x, y) then
+        recordClick("debug_anim_panel", nil, x, y)
         return
     end
 
@@ -53,6 +74,7 @@ function M.onMouseDown(button, x, y)
     if gameplayActive or button == MOUSE_RIGHT then
         local buildTool = require("scripts.build_tool")
         if buildTool.handleMouseDown(button, x, y) then
+            recordClick("build_tool", nil, x, y)
             return
         end
 
@@ -62,6 +84,7 @@ function M.onMouseDown(button, x, y)
         -- #154 gate as the build tool above.
         local mineTool = require("scripts.mine_tool")
         if mineTool.handleMouseDown(button, x, y) then
+            recordClick("mine_tool", nil, x, y)
             return
         end
 
@@ -70,6 +93,7 @@ function M.onMouseDown(button, x, y)
         -- and #154 gate.
         local chopTool = require("scripts.chop_tool")
         if chopTool.handleMouseDown(button, x, y) then
+            recordClick("chop_tool", nil, x, y)
             return
         end
 
@@ -78,6 +102,7 @@ function M.onMouseDown(button, x, y)
         -- and #154 gate.
         local tillTool = require("scripts.till_tool")
         if tillTool.handleMouseDown(button, x, y) then
+            recordClick("till_tool", nil, x, y)
             return
         end
 
@@ -86,6 +111,7 @@ function M.onMouseDown(button, x, y)
         -- left=act / right=cancel split and #154 gate.
         local plantTool = require("scripts.plant_tool")
         if plantTool.handleMouseDown(button, x, y) then
+            recordClick("plant_tool", nil, x, y)
             return
         end
     end
@@ -99,6 +125,13 @@ function M.onMouseDown(button, x, y)
         -- world must do nothing. (Right-click cancels live in the
         -- MOUSE_RIGHT branch and stay reachable below.)
         if not gameplayActive then
+            -- F4 (#646): the "clicked where a control used to be" case —
+            -- e.g. the create-world screen's progress bar sits where the
+            -- Generate/Continue button was, but isn't itself clickable,
+            -- so the press falls all the way through to here and does
+            -- nothing. Genuinely a deadclick, not a recognized no-op.
+            recordClick(nil, "deadclick", x, y,
+                "gameplay input inactive (menu/paused/hidden world)")
             return
         end
 
@@ -264,6 +297,7 @@ function M.onMouseDown(button, x, y)
             -- schemas.
             building.deselect()
             item.deselect()
+            recordClick("unit_select", nil, x, y)
         else
             -- No unit hit. Try a ground item (click priority:
             -- units > items > buildings — moving things win).
@@ -276,6 +310,7 @@ function M.onMouseDown(button, x, y)
                 -- here — always clear the other domains, even on Shift.
                 unit.deselectAll()
                 building.deselect()
+                recordClick("item_select", nil, x, y)
             else
                 -- No item. Try a building.
                 local bid = building.hitTestAt(x, y)
@@ -286,15 +321,22 @@ function M.onMouseDown(button, x, y)
                     -- unconditionally (Shift adds units, not buildings).
                     item.deselect()
                     unit.deselectAll()
+                    recordClick("building_select", nil, x, y)
                 else
                     -- Click missed everything. With Shift held, keep
                     -- the current selection (so shift-dragging from
                     -- empty terrain can extend it). Otherwise deselect.
+                    -- Not a "deadclick" — an empty-terrain click is a
+                    -- recognized deselect gesture the player understands,
+                    -- not a phantom affordance; "noop" reflects that
+                    -- nothing was there to act on, without flagging it as
+                    -- a UX defect.
                     if not shift then
                         unit.deselectAll()
                         building.deselect()
                         item.deselect()
                     end
+                    recordClick("deselect", "noop", x, y)
                 end
             end
         end
@@ -335,6 +377,8 @@ function M.onMouseDown(button, x, y)
         -- dismisses a leaked mode (#138/#140/#148); past here we need an
         -- active, visible world. Same gate as the MOUSE_LEFT branch / #182.
         if not gameplayActive then
+            recordClick(nil, "deadclick", x, y,
+                "gameplay input inactive (menu/paused/hidden world)")
             return
         end
 
@@ -345,12 +389,15 @@ function M.onMouseDown(button, x, y)
         -- ordering.
         local contextMenus = require("scripts.init_context_menu")
         if contextMenus.tryBuildingMenu(x, y) then
+            recordClick("context_menu_building", nil, x, y)
             return
         end
         if contextMenus.tryUnitMenu(x, y) then
+            recordClick("context_menu_unit", nil, x, y)
             return
         end
         if contextMenus.tryItemMenu(x, y) then
+            recordClick("context_menu_item", nil, x, y)
             return
         end
 
@@ -376,10 +423,24 @@ function M.onMouseDown(button, x, y)
                     -- collapses it mid-move.
                     unitAi.commandMove(uid, tx, ty)
                 end
+                recordClick("move_order", nil, x, y)
+            else
+                -- Off-world right-click with a selection: no tile to
+                -- order to, and no tile menu either (that branch is the
+                -- `else` below, gated on no-selection).
+                recordClick("move_order", "noop", x, y, "no tile under cursor")
             end
         else
-            -- No selection → open the tile context menu.
-            contextMenus.tryTileMenu(x, y)
+            -- No selection → open the tile context menu. tryTileMenu
+            -- returns false on an off-world click (world.pickTile
+            -- misses) without opening anything — that's a genuine
+            -- deadclick, not an accepted context-menu open (review
+            -- round 5 found this recorded unconditionally as accepted).
+            if contextMenus.tryTileMenu(x, y) then
+                recordClick("context_menu_tile", nil, x, y)
+            else
+                recordClick(nil, "deadclick", x, y, "no tile under cursor")
+            end
         end
     end
 end

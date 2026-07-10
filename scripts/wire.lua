@@ -94,21 +94,46 @@ end
 
 -- (Re)place the wire piece at (gx,gy) with the shape its CURRENT
 -- neighbours dictate. Does not touch neighbours — M.place re-caps those
--- separately below.
+-- separately below. Returns true/false (+ a reason on false) so
+-- M.place can report the outcome of the tile the player actually
+-- committed (a re-cap of an already-wired neighbour is incidental, not
+-- the commit itself). Propagates structure.place's own result — it
+-- returns false without placing anything when there's no active world
+-- or the target chunk is unloaded (review round 7: this was previously
+-- discarded, so a failed placement still recorded "accepted").
 local function placeSelf(gx, gy)
     local h = handles()
     local shape = shapeFor(neighborsAt(gx, gy))
     local tex, path = h.conn[shape], h.connPath[shape]
-    if not tex or not path then return end
+    if not tex or not path then
+        return false, "wire connection texture pack failed to load"
+    end
     local z = (world.getTerrainAt(gx, gy) or 0) + 1
-    structure.place(gx, gy, "wire", tex, h.face, z, path, h.facePath)
+    local placed = structure.place(gx, gy, "wire", tex, h.face, z, path, h.facePath)
+    if not placed then
+        return false, "no active world or unloaded target chunk"
+    end
+    return true
 end
 
 -- Place wire at (gx,gy), deriving its shape from current neighbours, and
 -- re-cap any wired neighbours whose own shape now includes this tile.
 -- Order-independent, like structures.lua's wall/post placement.
 function M.place(gx, gy)
-    placeSelf(gx, gy)
+    -- placeSelf's success path returns a single value (true, no second
+    -- return), so failReason is already nil whenever ok is true —
+    -- `reason = failReason` is correct as-is. Do NOT write this as
+    -- `ok and nil or failReason`/`ok and nil or "some constant"`: with a
+    -- non-nil constant fallback that idiom always selects the constant
+    -- regardless of ok, because `ok and nil` collapses to a falsy value
+    -- either way (review round 7 — a successful placement recorded a
+    -- failure reason).
+    local ok, failReason = placeSelf(gx, gy)
+    debug.recordOutcome{
+        kind = "wire.place", outcome = ok and "accepted" or "rejected",
+        where = { x = gx, y = gy },
+        reason = failReason,
+    }
     for _, o in ipairs(NEIGHBOR_OFFSETS) do
         local nx, ny = gx + o[1], gy + o[2]
         if structure.hasAt(nx, ny, "wire") then

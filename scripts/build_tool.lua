@@ -680,16 +680,41 @@ end
 -- rules (starting building spawn vs. construction designation).
 --
 -- Returns the placed building id, or nil + a reason on failure.
+-- F4 (#646): every exit records its outcome so a silent placement
+-- rejection (no carrying unit, item exhausted) is visible to the
+-- playtest oracle even though the player only ever sees the
+-- engine.logInfo line at the handleMouseDown call site below.
 function buildTool.commitPlacement(defName, gx, gy)
     if not power.isPlaceable(defName) then
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement", outcome = "rejected",
+            where = { x = gx, y = gy },
+            reason = "not a placeable power item: " .. tostring(defName),
+        }
         return nil, "not a placeable power item"
     end
     local uid = carryingSelectedUnit(defName)
     if not uid then
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement", outcome = "rejected",
+            where = { x = gx, y = gy },
+            reason = "no selected unit carries " .. tostring(defName),
+        }
         return nil, "no selected unit carries " .. defName
     end
     local nodeId, buildingIdOrErr = power.placeNode(uid, defName, gx, gy)
-    if not nodeId then return nil, buildingIdOrErr end
+    if not nodeId then
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement", outcome = "rejected",
+            where = { x = gx, y = gy }, target = uid,
+            reason = tostring(buildingIdOrErr),
+        }
+        return nil, buildingIdOrErr
+    end
+    debug.recordOutcome{
+        kind = "buildTool.commitPlacement", outcome = "accepted",
+        where = { x = gx, y = gy }, target = uid,
+    }
     return buildingIdOrErr
 end
 
@@ -720,6 +745,14 @@ function buildTool.handleMouseDown(button, x, y)
         local gx, gy = world.pickTile(x, y)
         if not gx or not gy then
             buildTool.state.lastHoverTile = nil
+            -- F4 (#646): the routing chain (init_mouse.lua) already
+            -- records "build_tool" consumed this click; without this,
+            -- an off-world click during placement looks accepted with
+            -- no corresponding Layer B rejection (review round 1).
+            debug.recordOutcome{
+                kind = "buildTool.commitPlacement", outcome = "rejected",
+                reason = "off-world click during placement",
+            }
             return true
         end
         local igx = math.floor(gx)
@@ -746,12 +779,31 @@ function buildTool.handleMouseDown(button, x, y)
                             target.def .. (err and (": " .. tostring(err)) or ""))
                     end
                 elseif target.isStarting then
-                    -- The portal: bootstrap building, still instant.
+                    -- The portal: bootstrap building, still instant. Two
+                    -- separate outcome calls below (not one shared call
+                    -- with `id and nil or "building.spawn failed"`-style
+                    -- reason): that idiom always selects the constant
+                    -- fallback regardless of id, because `id and nil`
+                    -- collapses to a falsy value either way (review
+                    -- round 7 — a successful spawn recorded a failure
+                    -- reason).
                     local id = building.spawn(target.def, igx, igy)
                     if id then
                         engine.logInfo("BuildTool: placed " .. target.def ..
                             " (id=" .. tostring(id) ..
                             ") at " .. igx .. "," .. igy)
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "accepted",
+                            where = { x = igx, y = igy },
+                        }
+                    else
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "rejected",
+                            where = { x = igx, y = igy },
+                            reason = "building.spawn failed",
+                        }
                     end
                     buildTool.exitPlacement()
                     if buildTool.hud and buildTool.hud.selectDefaultTool then
@@ -766,8 +818,28 @@ function buildTool.handleMouseDown(button, x, y)
                     if wid then
                         construction.designate(wid, igx, igy, igx, igy,
                             "building", target.def)
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "accepted", where = { x = igx, y = igy },
+                            reason = "routed to construction.designate",
+                        }
+                    else
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement",
+                            outcome = "rejected", where = { x = igx, y = igy },
+                            reason = "no active world id",
+                        }
                     end
                 end
+            else
+                -- F4 (#646): building.canPlaceAt refused the tile —
+                -- previously silent beyond the placement mode simply
+                -- staying open (review round 1).
+                debug.recordOutcome{
+                    kind = "buildTool.commitPlacement", outcome = "rejected",
+                    where = { x = igx, y = igy },
+                    reason = "invalid placement tile",
+                }
             end
         else -- "structure": DF-style two-click rectangle (or, for wire, a
              -- two-click straight PATH — see isWirePath/setLineMode above)
@@ -785,7 +857,18 @@ function buildTool.handleMouseDown(button, x, y)
                     construction.designate(wid, a[1], a[2], x2, y2,
                         "structure", target.pack, target.piece, target.edge)
                     buildTool.state.anchor = nil
+                    debug.recordOutcome{
+                        kind = "buildTool.commitPlacement", outcome = "accepted",
+                        where = { x = x2, y = y2 },
+                        reason = "routed to construction.designate",
+                    }
                 end
+            else
+                debug.recordOutcome{
+                    kind = "buildTool.commitPlacement", outcome = "rejected",
+                    where = { x = igx, y = igy },
+                    reason = "no active world id",
+                }
             end
         end
         return true
