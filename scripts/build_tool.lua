@@ -779,15 +779,15 @@ function buildTool.handleMouseDown(button, x, y)
                             target.def .. (err and (": " .. tostring(err)) or ""))
                     end
                 elseif target.isStarting then
-                    -- The portal: bootstrap building, still instant.
-                    local id = building.spawn(target.def, igx, igy)
-                    -- Two separate calls (not one shared call with
-                    -- `id and nil or "building.spawn failed"`-style
+                    -- The portal: bootstrap building, still instant. Two
+                    -- separate outcome calls below (not one shared call
+                    -- with `id and nil or "building.spawn failed"`-style
                     -- reason): that idiom always selects the constant
                     -- fallback regardless of id, because `id and nil`
                     -- collapses to a falsy value either way (review
                     -- round 7 — a successful spawn recorded a failure
                     -- reason).
+                    local id = building.spawn(target.def, igx, igy)
                     if id then
                         engine.logInfo("BuildTool: placed " .. target.def ..
                             " (id=" .. tostring(id) ..
