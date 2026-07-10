@@ -387,7 +387,11 @@ Injects a click on the fixture button and asserts
 `debug.drainActionOutcomes()` drains EXACTLY ONE `"accepted"` record
 with `handler == "onInputCheckClick"` — the fixture's actual registered
 callback, not just any non-empty handler (a wrong consumer would
-otherwise still pass). Then forces the instance to the main menu
+otherwise still pass) — then a RIGHT-click on that same left-click-only
+button (deterministic: it never registers a right-click handler) and
+asserts the same exact callback, proving the no-right-click-handler
+route preserves the real consumer's identity instead of a generic
+placeholder. Then forces the instance to the main menu
 (`uiManager.showMenu("main")` — switches away from whatever the
 instance was doing, so run it when that's fine) so an empty-space click
 is unambiguously a phantom affordance rather than a legitimate

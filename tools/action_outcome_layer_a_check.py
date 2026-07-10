@@ -20,6 +20,11 @@ checks, end to end through the real input pipeline:
      debug.drainActionOutcomes() record, with outcome "accepted" and
      handler == "onInputCheckClick" — the fixture's actual registered
      callback, not just any non-empty handler;
+  1b. a RIGHT-click on that same left-click-only button (it never
+      registers a right-click handler) also drains handler ==
+      "onInputCheckClick" — proves the no-right-click-handler route
+      preserves the actual consumer's identity rather than a generic
+      placeholder;
   2. a click on empty framebuffer space (well clear of any widget)
      drains EXACTLY ONE "deadclick" record. The check forces this
      deterministically by calling
@@ -37,7 +42,7 @@ checks, end to end through the real input pipeline:
      corner, which this script doesn't control), so a miss here is
      reported as informational, not a failure.
 
-Exit code 0 = all REQUIRED checks (1-2) passed.
+Exit code 0 = all REQUIRED checks (1, 1b, 2) passed.
 """
 from __future__ import annotations
 
@@ -112,6 +117,26 @@ def main() -> int:
                and widget_rec.get("outcome") == "accepted"
                and widget_rec.get("handler") == "onInputCheckClick"),
           str(recs))
+
+    # 1b. A right-click on that SAME left-click-only fixture button (it
+    # never registers UI.setOnRightClick) takes the no-right-click-
+    # handler route — Engine.Input.Thread must still record the exact
+    # consuming widget's callback, not a generic placeholder (review
+    # round 8: it previously recorded a fixed "ui_widget_no_
+    # rightclick_handler" string regardless of which control ate the
+    # click). Deterministic — this fixture's shape doesn't depend on
+    # camera/world state.
+    lua(f'return input.click({bx}, {by}, "right")')
+    recs_rc = drain()
+    check("right-click on the left-click-only button drains EXACTLY ONE record",
+          len(recs_rc) == 1, str(recs_rc))
+    rc_rec = recs_rc[0] if len(recs_rc) == 1 else next(iter(recs_rc), {})
+    check('that record is accepted with handler == "onInputCheckClick" '
+          "(the control's own identity, not a generic placeholder)",
+          bool(rc_rec.get("kind") == "input.click"
+               and rc_rec.get("outcome") == "accepted"
+               and rc_rec.get("handler") == "onInputCheckClick"),
+          str(recs_rc))
 
     # 3 (best-effort, gameplay must already be active on attach — this
     # script doesn't create a world). The off-world tile-menu-miss

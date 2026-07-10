@@ -173,6 +173,29 @@ def main():
         print(f"  [{'PASS' if ok4 else 'FAIL'}] second drain is empty "
               f"(destructive read): {second}")
 
+        # wire.place, rejected path: no active world exists yet at this
+        # point in the script, so structure.place must refuse and
+        # wire.place must propagate that (review round 7 — it previously
+        # discarded structure.place's own result and always reported
+        # "accepted"; round 8 asked for an automated regression, not just
+        # a live check).
+        send(port, 'engine.loadScript("scripts/wire.lua", 0.0); return "ok"')
+        send(port, "return debug.drainActionOutcomes()")  # clear noise
+        send(port, 'require("scripts.wire").place(0, 0); return "ok"')
+        drained_wire_reject = jget(port, "return debug.drainActionOutcomes()")
+        wire_reject_rec = (drained_wire_reject[0]
+                            if isinstance(drained_wire_reject, list) and drained_wire_reject
+                            else {})
+        no_world_hasat = jget(port, 'return structure.hasAt(0, 0, "wire")')
+        ok4b = bool(wire_reject_rec.get("kind") == "wire.place"
+                    and wire_reject_rec.get("outcome") == "rejected"
+                    and wire_reject_rec.get("reason")
+                    and no_world_hasat is False)
+        passed &= ok4b
+        print(f"  [{'PASS' if ok4b else 'FAIL'}] wire.place with no active "
+              f"world reports rejected and places nothing: "
+              f"{drained_wire_reject}, hasAt={no_world_hasat}")
+
         # --- 4/5: the real till.designate partial + rejected paths ---
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
                    f"{args.plates}); return 'ok'")
@@ -180,6 +203,28 @@ def main():
         send(port, "world.show('probe'); return 'ok'")
         send(port, "return world.loadChunksInRegion(-8, -8, 8, 8)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
+
+        # wire.place, accepted path: with a real active world and a
+        # loaded tile, structure.place should actually succeed this
+        # time, and the outcome record must carry NO reason (review
+        # round 7's `ok and nil or "..."` bug always attached a failure
+        # reason even on success).
+        send(port, "return debug.drainActionOutcomes()")  # clear noise
+        send(port, 'require("scripts.wire").place(0, 0); return "ok"')
+        drained_wire_accept = jget(port, "return debug.drainActionOutcomes()")
+        wire_accept_rec = (drained_wire_accept[0]
+                            if isinstance(drained_wire_accept, list) and drained_wire_accept
+                            else {})
+        placed_hasat = jget(port, 'return structure.hasAt(0, 0, "wire")')
+        ok4c = bool(wire_accept_rec.get("kind") == "wire.place"
+                    and wire_accept_rec.get("outcome") == "accepted"
+                    and wire_accept_rec.get("reason") is None
+                    and placed_hasat is True)
+        passed &= ok4c
+        print(f"  [{'PASS' if ok4c else 'FAIL'}] wire.place on a real "
+              f"active world reports accepted with no reason and "
+              f"actually places the wire: {drained_wire_accept}, "
+              f"hasAt={placed_hasat}")
 
         box = find_mixed_box(port)
         if not box:
