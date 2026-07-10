@@ -69,7 +69,7 @@ sharedWorld env seed size plateCount = do
     case mWs of
         Just _ → waitForWorldInit env pid 300
         Nothing → do
-            sendWorldCommand env (WorldInit pid seed size plateCount)
+            sendWorldCommand env (WorldInit pid seed size plateCount Nothing)
             waitForWorldInit env pid 300
 
 -- | Send a command to the world thread

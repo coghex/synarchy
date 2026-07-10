@@ -23,7 +23,7 @@ import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import Structure.Palette (TexPalette)
 import World.Generate.Types (WorldGenParams(..))
-import World.Page.Types (WorldPageId(..))
+import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits)
@@ -124,7 +124,17 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 81  -- v81: Pose (Unit.Sim.Types) gains a new
+currentSaveVersion = 82  -- v82: player-facing world identity (#707).
+                         --      WorldPageSave gains a trailing
+                         --      'wpsIdentity' (Maybe WorldIdentity:
+                         --      display name + optional gloss) and
+                         --      SaveMetadata gains trailing
+                         --      'smWorldName' / 'smWorldGloss' (the
+                         --      ACTIVE page's identity, for save
+                         --      listing). Both records are positional
+                         --      Generic Serialize, so the appended
+                         --      fields shift the layout.
+                         -- v81: Pose (Unit.Sim.Types) gains a new
                          --      trailing 'Sleeping' constructor (#612)
                          --      for the circadian sleep-goal AI.
                          --      Appended at the end, per Pose's own
@@ -286,10 +296,20 @@ data SaveHeader = SaveHeader
 -- | Human-readable metadata for save listing
 data SaveMetadata = SaveMetadata
     { smName       ∷ !Text
+        -- ^ The save-slot/file identity (validated by sanitizeSaveName)
+        --   — NOT the world's player-facing name, see smWorldName.
     , smSeed       ∷ !Word64
     , smWorldSize  ∷ !Int
     , smPlateCount ∷ !Int
     , smTimestamp  ∷ !Text        -- ^ ISO 8601 string
+    , smWorldName  ∷ !(Maybe Text)
+        -- ^ v82 (#707): the ACTIVE page's player-facing display name at
+        --   save time (its 'wpsIdentity'), so save listings can show it
+        --   without decoding sdWorlds. Nothing for an unnamed world.
+    , smWorldGloss ∷ !(Maybe Text)
+        -- ^ v82 (#707): that identity's optional English gloss. Always
+        --   Nothing when smWorldName is Nothing (a gloss cannot exist
+        --   without a display name).
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Per-world-page save payload. Everything scoped to a single world
@@ -395,6 +415,13 @@ data WorldPageSave = WorldPageSave
         --   Like the other designation layers, restored straight into
         --   wsPlantDesignationsRef; markers re-render from the stored
         --   z. Appended for save v78.
+    , wpsIdentity ∷ !(Maybe WorldIdentity)
+        -- ^ Player-facing identity (#707): display name + optional
+        --   gloss. Lives HERE — on the page's saved state — rather than
+        --   deriving from any id, because load remaps ids (the active
+        --   page → main_world, collisions → "<id>#N") while the
+        --   identity must follow the page itself. Restored straight
+        --   into wsIdentityRef. Appended for save v82.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

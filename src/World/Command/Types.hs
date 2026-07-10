@@ -14,7 +14,7 @@ import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
-import World.Page.Types (WorldPageId(..))
+import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
@@ -47,7 +47,11 @@ instance Show FluidWritebackBatch where
         "FluidWritebackBatch(" <> show pid <> ", " <> show (length ws) <> ")"
 
 data WorldCommand
-    = WorldInit WorldPageId Word64 Int Int
+    = WorldInit WorldPageId Word64 Int Int (Maybe WorldIdentity)
+        -- ^ pageId, seed, worldSize (chunks), plateCount, and the
+        --   page's optional player-facing identity (#707) — display
+        --   name + gloss, already normalized via 'mkWorldIdentity'.
+        --   'Nothing' creates an unnamed page (every pre-#707 caller).
     | WorldInitArena WorldPageId
     | WorldInitArenaDone WorldPageId
     | WorldShow WorldPageId

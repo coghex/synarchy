@@ -18,6 +18,7 @@ registerWorldAPI env = do
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn env)
   registerLuaFunction "init" (worldInitFn env)
+  registerLuaFunction "getIdentity" (worldGetIdentityFn env)
   registerLuaFunction "initArena" (worldInitArenaFn env)
   registerLuaFunction "initArenaDone" (worldInitArenaDoneFn env)
   registerLuaFunction "openArena" (worldOpenArenaFn env)

@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.World.Lifecycle
     ( worldInitFn
+    , worldGetIdentityFn
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -27,18 +28,29 @@ import World.Generate.Config
     (minimumWorldSize, normalizePlateCount, normalizeWorldSize)
 import World.Plate (defaultPlatesFor)
 
--- | world.init(pageId, seed, worldSizeInChunks)
+-- | world.init(pageId, seed, worldSizeInChunks, plateCount
+--             [, displayName[, gloss]])
+--   The optional trailing arguments (#707) give the page a player-facing
+--   identity: a display name plus an optional English gloss. They are
+--   display TEXT (spaces/punctuation welcome, no save-name rules); each
+--   is trimmed of leading/trailing whitespace and an omitted, nil, or
+--   whitespace-only display name creates an unnamed page (discarding any
+--   gloss). Read it back with world.getIdentity(pageId).
 worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitFn env = do
     pageIdArg ← Lua.tostring 1
     seedArg   ← Lua.tointeger 2
     sizeArg   ← Lua.tointeger 3
     platesArg ← Lua.tointeger 4
+    nameArg   ← Lua.tostring 5
+    glossArg  ← Lua.tostring 6
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
+                identity = mkWorldIdentity (TE.decodeUtf8 ⊚ nameArg)
+                                           (TE.decodeUtf8 ⊚ glossArg)
                 rawSize = maybe 64 fromIntegral sizeArg
                 size = normalizeWorldSize rawSize
                 -- Plate count scales with worldSize when caller
@@ -58,10 +70,39 @@ worldInitFn env = do
                     <> " (worldSize minimum/multiple "
                     <> T.pack (show minimumWorldSize)
                     <> ", plateCount min 1)."
-            Q.writeQueue (worldQueue env) (WorldInit pageId seed size plates)
+            Q.writeQueue (worldQueue env)
+                (WorldInit pageId seed size plates identity)
         Nothing → pure ()
 
     return 0
+
+-- | world.getIdentity(pageId) → { name, gloss? } | nil
+--   Read-only query for a page's player-facing identity (#707). Returns
+--   a table with the display name (and the gloss when one was stored)
+--   for a named page; nil when the page does not exist or has no
+--   identity (unnamed 4-argument world.init pages, arenas). There is
+--   deliberately no setter — identity changes only by loading saved
+--   state.
+worldGetIdentityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetIdentityFn env = do
+    pageIdArg ← Lua.tostring 1
+    mIdentity ← Lua.liftIO $ case pageIdArg of
+        Just pageIdBS → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup (WorldPageId (TE.decodeUtf8 pageIdBS)) (wmWorlds mgr) of
+                Just ws → readIORef (wsIdentityRef ws)
+                Nothing → pure Nothing
+        Nothing → pure Nothing
+    case mIdentity of
+        Just ident → do
+            Lua.newtable
+            Lua.pushstring (TE.encodeUtf8 (wiName ident))
+            Lua.setfield (-2) "name"
+            forM_ (wiGloss ident) $ \g → do
+                Lua.pushstring (TE.encodeUtf8 g)
+                Lua.setfield (-2) "gloss"
+        Nothing → Lua.pushnil
+    return 1
 
 -- | world.initArena(pageId) — create flat test arena, no geology
 worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

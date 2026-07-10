@@ -117,6 +117,10 @@ restoreSavedPage env logger registry palette catalog currentBm currentUm
         when isActive $ writeIORef phaseRef (LoadPhase1 1 totalSteps)
         when isActive $ sendGenLog env "Loading saved world state..."
         writeIORef (wsGenParamsRef worldState) (Just params)
+        -- Player-facing identity (#707): follows the PAGE, not its id —
+        -- an active page restoring as main_world (or a collision-renamed
+        -- "<id>#N" page) keeps the identity it was saved with.
+        writeIORef (wsIdentityRef worldState) (wpsIdentity wps)
         writeIORef (wsCameraRef worldState)
             (WorldCamera (wpsCameraX wps) (wpsCameraY wps))
         writeIORef (wsTimeRef worldState)

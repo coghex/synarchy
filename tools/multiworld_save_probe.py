@@ -39,6 +39,18 @@ arena as the secondary page — it additionally asserts a pre-save
 world.addTile edit is replayed onto the rebuilt arena. The default run
 keeps two real generated worlds (the #219 gate) unchanged.
 
+World identity (#707): the probe also gates the player-facing identity
+layer end to end. Both pages are created through the extended Lua
+contract — world.init(pageId, seed, size, plates, displayName[, gloss])
+— with a whitespace-padded name (proving trim) and a whitespace-only
+gloss (proving gloss omission); world.getIdentity is checked on engine A
+(named pages, missing page -> nil), and after the fresh-restart load the
+primary identity must follow its page to main_world, the secondary
+identity must stay on second_world, engine.listSaves() must report the
+save-slot name SEPARATELY from worldName/worldGloss, and a 4-argument
+world.init page must come up unnamed. In --arena mode the secondary page
+is an arena and must be unnamed instead.
+
 Note on visibility ordering: world.show does not promote an
 ALREADY-visible page to the head of the visible stack (a documented
 world-thread quirk), so the probe leaves only main_world visible at save
@@ -56,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import shutil
 import socket
@@ -63,9 +76,27 @@ import subprocess
 import sys
 import time
 import uuid
-from probelib import quit_engine, boot, send
+from probelib import quit_engine, boot, send, send_json
 
 SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
+
+# Player-facing identities (#707). The primary name is passed to
+# world.init with whitespace padding to prove the trim rule; these are
+# the values that must come back from world.getIdentity / listSaves.
+MW_NAME = "Aldermoor Deep"
+MW_GLOSS = "the deep home"
+SW_NAME = "Squally Isles"
+
+
+def get_identity(port: int, page: str):
+    """world.getIdentity(page) -> dict | None (Lua nil)."""
+    raw = send(port, f"return world.getIdentity('{page}')")
+    if not raw or raw in ("nil", "null"):
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
 
 
 def bootstrap_defs(port: int) -> None:
@@ -144,13 +175,22 @@ def id_list(port: int, expr: str) -> list[int]:
     return out
 
 
-def populate_world(port: int, page: str, seed: int, size: int, plates: int
+def populate_world(port: int, page: str, seed: int, size: int, plates: int,
+                   name: str | None = None, gloss: str | None = None,
                    ) -> tuple[int, int]:
     """Generate `page`, show it, and spawn a unit + cargo-hold building on
     a flat dry strip. Returns (unitId, buildingId). Exits the probe on a
     setup failure (no flat ground / spawn rejected) — setup must be solid
-    for the post-load assertions to mean anything."""
-    send(port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
+    for the post-load assertions to mean anything.
+
+    `name`/`gloss` ride as world.init's optional 5th/6th arguments — the
+    page's player-facing identity (#707)."""
+    init_args = f"'{page}', {seed}, {size}, {plates}"
+    if name is not None:
+        init_args += f", '{name}'"
+        if gloss is not None:
+            init_args += f", '{gloss}'"
+    send(port, f"world.init({init_args}); return 'ok'")
     send(port, "return world.waitForInit(180)", timeout=190)
     # Must SHOW (not just init): building.spawn/canPlaceAt read
     # snapshotVisibleWorldTiles, which needs the page in wmVisible.
@@ -264,14 +304,36 @@ def main() -> int:
         procA = boot(args.port, log=logA, label="engine A")
         bootstrap_defs(args.port)
 
+        # Identity args (#707): padded name proves the trim rule; the
+        # whitespace-only gloss on second_world proves gloss omission.
         u_mw, b_mw = populate_world(args.port, "main_world",
-                                    args.seed, args.size, args.plates)
+                                    args.seed, args.size, args.plates,
+                                    name=f"  {MW_NAME}  ", gloss=MW_GLOSS)
         arena_z = None
         if args.arena:
             u_sw, b_sw, arena_z = populate_arena(args.port, "second_world")
         else:
             u_sw, b_sw = populate_world(args.port, "second_world",
-                                        args.seed2, args.size, args.plates)
+                                        args.seed2, args.size, args.plates,
+                                        name=SW_NAME, gloss="   ")
+
+        print("\n--- world identity checks (engine A, #707) ---")
+        ident = get_identity(args.port, "main_world")
+        chk.ok(isinstance(ident, dict) and ident.get("name") == MW_NAME,
+               f"main_world display name stored trimmed ({ident})")
+        chk.ok(isinstance(ident, dict) and ident.get("gloss") == MW_GLOSS,
+               f"main_world gloss stored ({ident})")
+        if args.arena:
+            chk.ok(get_identity(args.port, "second_world") is None,
+                   "arena second_world is unnamed (getIdentity nil)")
+        else:
+            ident2 = get_identity(args.port, "second_world")
+            chk.ok(isinstance(ident2, dict) and ident2.get("name") == SW_NAME,
+                   f"second_world display name stored ({ident2})")
+            chk.ok(isinstance(ident2, dict) and "gloss" not in ident2,
+                   f"whitespace-only gloss omitted on second_world ({ident2})")
+        chk.ok(get_identity(args.port, "no_such_page") is None,
+               "getIdentity of a missing page is nil")
 
         # Leave only main_world visible so the post-load show toggles are
         # clean (see module docstring). Then save with main_world primary.
@@ -360,6 +422,54 @@ def main() -> int:
             chk.ok(got == arena_z,
                    f"arena edit at ({ex},{ey}) replayed on load "
                    f"(z={got}, expected {arena_z})")
+
+        print("\n--- world identity restore checks (#707) ---")
+        ident = get_identity(args.port, "main_world")
+        chk.ok(isinstance(ident, dict) and ident.get("name") == MW_NAME
+               and ident.get("gloss") == MW_GLOSS,
+               f"primary identity followed its page to main_world ({ident})")
+        if args.arena:
+            chk.ok(get_identity(args.port, "second_world") is None,
+                   "arena second_world restored unnamed")
+        else:
+            ident2 = get_identity(args.port, "second_world")
+            chk.ok(isinstance(ident2, dict) and ident2.get("name") == SW_NAME
+                   and "gloss" not in ident2,
+                   f"secondary identity stayed on second_world ({ident2})")
+
+        # Save-slot name vs world name vs gloss: three distinct values in
+        # the save listing. `name` stays the slot id; the identity rides
+        # in the optional worldName/worldGloss fields.
+        saves = send_json(args.port, "return engine.listSaves()")
+        entry = None
+        if isinstance(saves, list):
+            entry = next((s for s in saves if isinstance(s, dict)
+                          and s.get("name") == save_name), None)
+        chk.ok(entry is not None,
+               f"listSaves has an entry for slot '{save_name}'")
+        if entry is not None:
+            chk.ok(entry.get("worldName") == MW_NAME,
+                   f"listSaves worldName is the display name "
+                   f"({entry.get('worldName')!r})")
+            chk.ok(entry.get("worldGloss") == MW_GLOSS,
+                   f"listSaves worldGloss is the gloss "
+                   f"({entry.get('worldGloss')!r})")
+            chk.ok(entry.get("name") != entry.get("worldName"),
+                   "save-slot name and world name are distinct")
+
+        # A 4-argument world.init page stays unnamed end to end. Tiny w8
+        # world; poll registration via getDate (nil until the page
+        # exists) rather than waitForInit, which tracks the ACTIVE page.
+        send(args.port, "world.init('unnamed_w8', 5, 8, 3); return 'ok'")
+        for _ in range(150):
+            if send(args.port,
+                    "return world.getDate('unnamed_w8')") not in ("nil", "null", ""):
+                break
+            time.sleep(0.2)
+        else:
+            sys.exit("FAIL: unnamed_w8 page never registered")
+        chk.ok(get_identity(args.port, "unnamed_w8") is None,
+               "4-argument world.init page is unnamed (getIdentity nil)")
 
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "
               f"{chk.failed} check(s) failed")

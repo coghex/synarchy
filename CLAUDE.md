@@ -347,8 +347,18 @@ echo 'return world.getInitProgress()' | nc -w 2 localhost 9008
 ### World generation workflow
 
 ```bash
-# Create a world (name, seed, worldSize, plateCount)
+# Create a world (pageId, seed, worldSize, plateCount). Optional 5th/6th
+# args (#707) attach a player-facing identity — displayName + English
+# gloss: display TEXT (trimmed; no save-name rules; omitted/whitespace-
+# only name = unnamed page), immutable per page (no setter), persisted
+# per page in saves, and independent of both the internal pageId (load
+# remaps active → main_world, collisions → "<id>#2") and the save-slot
+# name. Named saves also expose worldName/worldGloss in engine.listSaves().
 echo 'world.init("test", 42, 256, 5)' | nc -w 2 localhost 8008
+echo 'world.init("t2", 42, 256, 5, "Aldermoor Deep", "the deep home")' | nc -w 2 localhost 8008
+
+# Read a page's identity — {name, gloss?}, or nil (missing/unnamed/arena)
+echo 'return world.getIdentity("t2")' | nc -w 2 localhost 8008
 
 # Option A: Block until done (preferred — timeout in seconds)
 echo 'return world.waitForInit(300)' | nc -w 300 localhost 8008
@@ -997,7 +1007,7 @@ Enum schema policy: `Direction`, `Pose`, and `UnitActivity` derive `Generic Seri
 
 Wait ~15 seconds after `loadSave` for a 128-world before querying — the center chunk gens synchronously but the rest queue progressively. Headless tests need to budget the wait.
 
-Multi-world save regression: **`python3 tools/multiworld_save_probe.py`** — the #214/#219 gate. Generates two real world pages (active→`main_world` + a `second_world`), spawns a unit + building on each, saves, then does the gold-standard **save → quit → fresh restart → load** and asserts both pages' entities survive on the right page (cross-page negative checks included). `--port`/`--seed`/`--seed2`/`--size`/`--plates`. NB: it uses two `world.init` pages, not `world.initArena` — loading a save that contains an arena page currently hangs the world thread (#365), so arenas can't be a save-test secondary page.
+Multi-world save regression: **`python3 tools/multiworld_save_probe.py`** — the #214/#219 gate, and since #707 also the world-identity gate. Generates two real world pages (active→`main_world` + a `second_world`) with distinct player-facing identities, spawns a unit + building on each, saves, then does the gold-standard **save → quit → fresh restart → load** and asserts both pages' entities survive on the right page (cross-page negative checks included), each identity follows its page through the load remap, and `engine.listSaves()` reports the save-slot name separately from `worldName`/`worldGloss`. `--port`/`--seed`/`--seed2`/`--size`/`--plates`. NB: it uses two `world.init` pages, not `world.initArena` — loading a save that contains an arena page currently hangs the world thread (#365), so arenas can't be a save-test secondary page.
 
 ## AI Asset Generation
 

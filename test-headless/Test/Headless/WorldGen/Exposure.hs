@@ -134,7 +134,7 @@ spec = do
         it "loads glacier-rim chunks straddling the v-edge without\
            \ heap-overflowing the world thread (#298)" $ \env → do
             let pid = WorldPageId (T.pack "rim_298_w8")
-            sendWorldCommand env (WorldInit pid 7 8 3)
+            sendWorldCommand env (WorldInit pid 7 8 3 Nothing)
             ws ← waitForWorldInit env pid 120
             -- Queue the whole (-4..0)² corner at once: interior, mixed
             -- (glacier-diagonal) and fully-beyond chunks together — the

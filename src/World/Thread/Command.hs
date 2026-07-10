@@ -83,8 +83,8 @@ import World.Thread.Command.Location
 -- * Command Handler
 
 handleWorldCommand ∷ EngineEnv → LoggerState → WorldCommand → IO ()
-handleWorldCommand env logger (WorldInit pageId seed worldSize placeCount)
-  = handleWorldInitCommand env logger pageId seed worldSize placeCount
+handleWorldCommand env logger (WorldInit pageId seed worldSize placeCount identity)
+  = handleWorldInitCommand env logger pageId seed worldSize placeCount identity
 handleWorldCommand env logger (WorldInitArena pageId)
   = handleWorldInitArenaCommand env logger pageId
 handleWorldCommand env logger (WorldInitArenaDone pageId)
