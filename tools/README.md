@@ -391,7 +391,11 @@ otherwise still pass). Then forces the instance to the main menu
 (`uiManager.showMenu("main")` — switches away from whatever the
 instance was doing, so run it when that's fine) so an empty-space click
 is unambiguously a phantom affordance rather than a legitimate
-gameplay deselect, and asserts exactly one `"deadclick"` record.
+gameplay deselect, and asserts exactly one `"deadclick"` record. If a
+gameplay world is already active on attach, also best-effort exercises
+the off-world no-selection right-click deadclick route (a miss here —
+the corner happened to show world geometry — is informational, not a
+failure, since this script doesn't control camera framing).
 
 ## Directory layout
 ```

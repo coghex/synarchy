@@ -29,8 +29,15 @@ checks, end to end through the real input pipeline:
      the one state where a truly empty click is guaranteed to be a
      genuine deadclick. This SWITCHES THE RUNNING INSTANCE TO THE MAIN
      MENU — run it when that's fine to do, not mid-session.
+  3. (best-effort, only if a gameplay world is ALREADY active on attach)
+     a no-selection right-click at the framebuffer's extreme corner —
+     the off-world tile-menu-miss deadclick route (#646 review round
+     6). This one can't be forced deterministically the way #2 can (it
+     needs camera framing that actually puts empty space at that
+     corner, which this script doesn't control), so a miss here is
+     reported as informational, not a failure.
 
-Exit code 0 = all checks passed.
+Exit code 0 = all REQUIRED checks (1-2) passed.
 """
 from __future__ import annotations
 
@@ -47,6 +54,10 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  [{'ok' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
     if not ok:
         failures.append(name)
+
+
+def info(name: str, detail: str = "") -> None:
+    print(f"  [info] {name}" + (f" — {detail}" if detail else ""))
 
 
 def lua(code: str, timeout: float = 10.0):
@@ -101,6 +112,36 @@ def main() -> int:
                and widget_rec.get("outcome") == "accepted"
                and widget_rec.get("handler") == "onInputCheckClick"),
           str(recs))
+
+    # 3 (best-effort, gameplay must already be active on attach — this
+    # script doesn't create a world). The off-world tile-menu-miss
+    # deadclick route (scripts/init_mouse.lua's no-selection right-click
+    # branch, review round 6): deselect everything, then a right-click
+    # at the extreme corner MIGHT land off-world depending on camera
+    # framing this script doesn't control. A confirmed deadclick is a
+    # pass; anything else (the corner happened to show world) is
+    # informational, not a failure — check #2 below is what forces a
+    # deterministic deadclick.
+    gameplay_active = lua(
+        'return require("scripts.ui_manager").isGameplayInputActive()')
+    if gameplay_active is True:
+        lua("unit.deselectAll(); return true")
+        drain()
+        cx, cy = fb_w * 0.02, fb_h * 0.02
+        lua(f'return input.click({cx}, {cy}, "right")')
+        recs3 = drain()
+        tile_menu_rec = next((r for r in recs3 if r.get("kind") == "input.click"), {})
+        if tile_menu_rec.get("outcome") == "deadclick":
+            check("off-world no-selection right-click drains a deadclick "
+                  "(#646 review round 6 route)", True, str(recs3))
+        else:
+            info("off-world no-selection right-click landed on world "
+                 "geometry at this camera framing — route not exercised "
+                 "this run (not a failure; see the deterministic check below)",
+                 str(recs3))
+    else:
+        info("no gameplay world active on attach — off-world tile-menu-miss "
+             "route not exercised this run (not a failure)")
 
     # 2. Force main-menu state so an empty-space click is unambiguously a
     # deadclick (gameplay-active would legitimately read "noop" instead —
