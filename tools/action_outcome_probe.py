@@ -91,6 +91,33 @@ def find_mixed_box(port, span=6):
     return None
 
 
+def find_chop_mixed_box(port, span=8):
+    """Scan for a tile carrying flora, then confirm designating a 5x5 box
+    around it reports a genuine partial (>=1 tree designated, >=1 tile
+    dropped) — proves chop's requested/applied/dropped is based on the
+    full swept-TILE count, not the flora-INSTANCE count (the exact
+    5x5-one-tree miscount review round 1 found: a naive count of flora
+    instances reported 1/1/0 accepted instead of 25/1/24 partial)."""
+    for sx in range(-span * 8, span * 8 + 1, 4):
+        for sy in range(-span * 8, span * 8 + 1, 4):
+            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
+            if not isinstance(flora, dict):
+                continue
+            send(port, "return debug.drainActionOutcomes()")  # clear noise
+            send(port, f"chop.designate('probe',{sx-2},{sy-2},{sx+2},{sy+2},"
+                       f"'wood'); return 'ok'")
+            drained = jget(port, "return debug.drainActionOutcomes()")
+            rec = drained[0] if isinstance(drained, list) and drained else {}
+            if (rec.get("kind") == "chop.designate"
+                    and rec.get("outcome") == "partial"
+                    and isinstance(rec.get("applied"), (int, float))
+                    and rec["applied"] >= 1
+                    and isinstance(rec.get("dropped"), (int, float))
+                    and rec["dropped"] > 0):
+                return sx, sy, rec
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9179)
@@ -156,8 +183,12 @@ def main():
 
         box = find_mixed_box(port)
         if not box:
-            print("  [SKIP] no mixed tillable/non-tillable 5x5 box found in "
-                  "the loaded region (try another seed) — partial path unverified")
+            # A missing fixture means the partial path went UNVERIFIED,
+            # not that it passed — fail loudly rather than silently
+            # skip (review round 2).
+            passed = False
+            print("  [FAIL] no mixed tillable/non-tillable 5x5 box found in "
+                  "the loaded region (try another seed) — till partial path unverified")
         else:
             sx, sy = box
             send(port, "return debug.drainActionOutcomes()")  # clear noise
@@ -175,8 +206,29 @@ def main():
                    and isinstance(applied, (int, float))
                    and requested == applied + dropped)
             passed &= ok5
-            print(f"  [{'PASS' if ok5 else 'FAIL'}] mixed sweep at "
+            print(f"  [{'PASS' if ok5 else 'FAIL'}] mixed till sweep at "
                   f"({sx},{sy}) reports partial: {drained2}")
+
+        # The exact 5x5-one-tree regression review round 1 flagged: chop's
+        # requested must be the full swept-tile count (25), not the
+        # flora-instance count (1) — a naive count previously reported
+        # 1/1/0 accepted instead of 25/1/24 partial.
+        chop_box = find_chop_mixed_box(port)
+        if not chop_box:
+            passed = False
+            print("  [FAIL] no tree found in the loaded region to designate "
+                  "a mixed chop box against (try another seed) — chop "
+                  "partial path unverified")
+        else:
+            cx, cy, chop_rec = chop_box
+            requested = chop_rec.get("requested")
+            applied = chop_rec.get("applied")
+            dropped = chop_rec.get("dropped")
+            ok5b = bool(requested == 25 and requested == applied + dropped)
+            passed &= ok5b
+            print(f"  [{'PASS' if ok5b else 'FAIL'}] mixed chop sweep at "
+                  f"({cx},{cy}) reports the full 5x5=25 tile count as "
+                  f"requested: {chop_rec}")
 
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, "till.designate('probe',5000000,5000000,5000005,5000005); "
