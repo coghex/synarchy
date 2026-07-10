@@ -50,10 +50,10 @@ instance FromJSON RawConcept where
         ⊛ v .:? "modifier"
         ⊛ v .:? "possessive"
 
-data RawCatalogue = RawCatalogue
-    { rawVersion  ∷ !Int
-    , rawConcepts ∷ ![RawConcept]
-    }
+-- Positional on purpose: the only consumer is validateCatalogue's
+-- pattern match, so named selectors would be unused top-level binds
+-- (a -Werror failure).
+data RawCatalogue = RawCatalogue !Int ![RawConcept]
 
 instance FromJSON RawCatalogue where
     parseJSON = withObject "concept catalogue" $ \v → RawCatalogue
