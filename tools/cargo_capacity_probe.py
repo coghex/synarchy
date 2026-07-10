@@ -12,7 +12,7 @@ PASS  = final stored weight <= capacity (fix).
 FAIL  = final stored weight  > capacity (bug overfilled the cargo).
 """
 from __future__ import annotations
-import glob, json, socket, subprocess, sys, time
+import argparse, glob, json, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send
 
 PORT = 9009
@@ -45,6 +45,12 @@ def bootstrap():
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=9009)
+    args = ap.parse_args()
+    global PORT
+    PORT = args.port
+
     proc = boot(PORT, log=LOG)
     try:
         bootstrap()

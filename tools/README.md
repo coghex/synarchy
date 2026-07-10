@@ -156,14 +156,16 @@ default test tiers; run the ones relevant to what you changed.
 
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
-plus `sys.exit(0 or 1)`. Most take `--port` to avoid colliding with another
-running instance; one (`cargo_capacity_probe.py`) takes no flags at all and
-hardcodes its port.
+plus `sys.exit(0 or 1)`. Every probe registered in `run_probes.py` (the
+table below) takes `--port` to avoid colliding with another running
+instance, defaulting to its own historical fixed port when unset (#723).
 
-**Gotcha:** not every probe uses `argparse` — the flagless one above has no
-`--help` handling either, so passing `--help` doesn't print usage and exit,
-it silently runs the *actual probe* (which boots a real engine and can hang
-for minutes if you weren't expecting that). Check the header docstring
+**Gotcha:** not every `tools/*_probe.py` script uses `argparse` — a few
+standalone scripts outside the `run_probes.py` registry (e.g.
+`blood_decal_probe.py`) are still flagless and have no `--help` handling
+either, so passing `--help` doesn't print usage and exit, it silently
+runs the *actual probe* (which boots a real engine and can hang for
+minutes if you weren't expecting that). Check the header docstring
 instead of reaching for `--help` when in doubt.
 
 "Boot" below is `arena` (flat synthetic terrain via
@@ -247,8 +249,7 @@ python3 tools/run_probes.py --only craft --exact
 # List known probes and exit
 python3 tools/run_probes.py --list
 
-# Override --port on probes that support it (the one flagless probe keeps
-# its own hardcoded port regardless)
+# Override --port uniformly across every registered probe
 python3 tools/run_probes.py --port 9500
 ```
 
