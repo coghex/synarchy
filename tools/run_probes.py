@@ -42,8 +42,10 @@ import time
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Base for the unique per-probe ports handed out in parallel mode (--jobs).
-# Clear of the GUI port 8008 and of every registered probe's own fixed
-# default port, so a concurrent batch never double-binds a port.
+# Clear of the GUI port 8008. Each probe in a concurrent batch is launched
+# with an explicit --port = PARALLEL_PORT_BASE + index override, so this
+# range never needs to be clear of any probe's own default port — the
+# override always wins over it.
 PARALLEL_PORT_BASE = 9400
 
 # (key, script filename, one-line purpose for --list). Every registered
