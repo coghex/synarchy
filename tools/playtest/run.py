@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Naive-player UX playtest harness — lockstep runner (H1, #647/#641).
 
-⚠️  LAUNCHES A WINDOWED GAME INSTANCE THAT TAKES OVER YOUR SCREEN AND
-STEALS FOCUS (F1 screenshots + F2 input need a real render pipeline —
-GPU-less --headless cannot host a playtest). Run it while away from the
-machine or on a second display/machine. Offscreen unattended mode is
-P1 (#650). This is the one sanctioned exception to the never-launch-
-graphical rule: the graphical instance IS the system under test.
+⚠️  BY DEFAULT LAUNCHES A WINDOWED GAME INSTANCE THAT TAKES OVER YOUR
+SCREEN AND STEALS FOCUS (F1 screenshots + F2 input need a real render
+pipeline — GPU-less --headless cannot host a playtest). Run it while
+away from the machine, on a second display/machine — or pass
+`--render-mode offscreen` (#650): the same full render + input
+pipeline into offscreen images, no window, no focus steal, safe to run
+unattended and in parallel on distinct ports. The windowed default is
+the one sanctioned exception to the never-launch-graphical rule: the
+graphical instance IS the system under test.
 
 The lockstep loop per turn: pause -> screenshot (F1) -> player agent
 decides from pixels alone -> inject its action (F2) -> record the
@@ -19,6 +22,7 @@ re-pause. Everything lands in a session-trace directory H2 consumes
 Usage:
   python3 tools/playtest/run.py                       # LLM player, defaults
   python3 tools/playtest/run.py --persona impatient_imogen --turns 60
+  python3 tools/playtest/run.py --render-mode offscreen  # no window (#650)
   python3 tools/playtest/run.py --smoke               # 3 scripted turns, no LLM
   python3 tools/playtest/run.py --replay <trace_dir>  # re-inject a session
   python3 tools/playtest/run.py --selftest            # offline loop/trace check
@@ -325,7 +329,22 @@ def selftest() -> int:
               sreason == "stuck_loop" and sturns[-1]["stuck"] is True,
               f"{sreason} after {len(sturns)} turns")
 
-        # 4. persona + prompt assembly stays oracle-blind by shape:
+        # 4. render-mode threading (#650): the launcher maps each mode
+        # to the right boot flags, rejects unknown modes, and the fake
+        # engine (which never boots) stays mode-agnostic.
+        from engine import PlaytestEngine as RealEngine
+        check("windowed render mode boots with no mode flags",
+              RealEngine(0, os.devnull).boot_mode() == ())
+        check("offscreen render mode boots with --offscreen",
+              RealEngine(0, os.devnull,
+                         render_mode="offscreen").boot_mode() == ("--offscreen",))
+        try:
+            RealEngine(0, os.devnull, render_mode="fullscreen")
+            check("unknown render mode rejected", False)
+        except ValueError:
+            check("unknown render mode rejected", True)
+
+        # 5. persona + prompt assembly stays oracle-blind by shape:
         # build_system_prompt takes persona/manual/fb only
         import inspect
         params = list(inspect.signature(agent_mod.build_system_prompt).parameters)
@@ -348,6 +367,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--render-mode", choices=["windowed", "offscreen"],
+                    default="windowed",
+                    help="windowed = real window (steals focus, the default "
+                         "system-under-test substrate); offscreen = #650's "
+                         "windowless render for unattended/parallel runs")
     ap.add_argument("--persona", default="curious_carl",
                     help="bundled persona name or a path to a persona file")
     ap.add_argument("--goal", default=None, help="override the persona's goal")
@@ -400,6 +424,7 @@ def main() -> int:
     meta = {
         "harness_version": HARNESS_VERSION,
         "mode": "replay" if replaying else args.agent,
+        "render_mode": args.render_mode,
         "port": args.port,
         "dt": args.dt,
         "turn_budget": args.turns,
@@ -432,11 +457,18 @@ def main() -> int:
                                        effort=args.effort,
                                        max_tokens=args.max_tokens)
 
-    print("playtest: this launches a WINDOWED instance that will take over "
-          "the screen and steal focus.")
+    if args.render_mode == "windowed":
+        print("playtest: this launches a WINDOWED instance that will take "
+              "over the screen and steal focus (--render-mode offscreen "
+              "runs windowless).")
+    else:
+        print("playtest: offscreen instance (#650) — no window, no focus "
+              "steal; needs a GPU.")
     print(f"playtest: trace -> {trace_dir}")
     trace = SessionTrace(trace_dir, meta)
-    eng = PlaytestEngine(args.port, log_path=os.path.join(trace_dir, "engine.raw.log"))
+    eng = PlaytestEngine(args.port,
+                         log_path=os.path.join(trace_dir, "engine.raw.log"),
+                         render_mode=args.render_mode)
     stop_reason = "error"
     try:
         eng.launch()
