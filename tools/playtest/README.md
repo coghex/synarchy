@@ -133,9 +133,12 @@ Notes on trace contents:
   randomized-seed sessions rebuild the same world. `replay_seed_match`
   is recorded as a verification backstop, with a warning if the replay
   diverged before world creation.
-- **F4 outcomes** (#646) haven't landed; `meta.f4_outcomes` says so.
-  When the outcome tap ships, its per-turn records join the oracle
-  snapshot in `engine.py:oracle_snapshot`.
+- **F4 outcomes** (#646): each turn's oracle snapshot includes
+  `action_outcomes` — the result of draining `debug.drainActionOutcomes()`
+  since the last turn (a destructive read, like `combat.drainEvents`; no
+  "_seen" index needed). `meta.f4_outcomes_total` is a running count
+  across the whole session, for a quick session-level glance without
+  walking every turn's oracle.
 - **Scenario-jump** (pre-set mid-game state) is explicitly out of
   scope for H1 — cold-boot only. The trace/runner leave room for it
   (a future mode would only add setup calls before turn 1 and a

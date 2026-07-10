@@ -6,9 +6,11 @@ import UPrelude
 import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Screenshot (captureScreenshotFn)
+import Engine.Scripting.Lua.API.ActionOutcome
+    (debugRecordOutcomeFn, debugDrainActionOutcomesFn)
 import qualified HsLua as Lua
 
--- | Populate the @debug@ global with engine debug verbs (#643).
+-- | Populate the @debug@ global with engine debug verbs (#643, #646).
 --   openlibs already installed Lua's stock @debug@ stdlib table, so we
 --   add fields to it rather than replacing it — the stock functions
 --   (traceback etc.) stay available. Falls back to creating the table
@@ -22,6 +24,8 @@ registerDebugAPI env = do
     Lua.newtable
 
   registerLuaFunction "captureScreenshot" (captureScreenshotFn env)
+  registerLuaFunction "recordOutcome" (debugRecordOutcomeFn env)
+  registerLuaFunction "drainActionOutcomes" (debugDrainActionOutcomesFn env)
 
   if isTbl
     then Lua.pop 1

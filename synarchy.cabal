@@ -152,6 +152,7 @@ library
     -- Expose the modules you want to test
     exposed-modules: UPrelude
                      Math
+                     Engine.ActionOutcome
                      Engine.Asset.Base
                      Engine.Asset.Types
                      Engine.Asset.Handle
@@ -256,6 +257,7 @@ library
                      Engine.Scripting.Lua.API.Core
                      Engine.Scripting.Lua.API.Camera
                      Engine.Scripting.Lua.API.Debug
+                     Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.Screenshot
                      Engine.Scripting.Lua.API.Log
@@ -926,6 +928,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.SelectTileZ
+                   Test.Headless.World.ActionOutcome
                    Test.Headless.World.Spoil
                    Test.Headless.Combat.Damage
                    Test.Headless.Combat.Severing
