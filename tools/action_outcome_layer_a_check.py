@@ -17,8 +17,9 @@ framebuffer coordinates — rather than building a second fixture, and
 checks, end to end through the real input pipeline:
 
   1. a UI-consumed click (on the fixture button) drains EXACTLY ONE
-     debug.drainActionOutcomes() record, with outcome "accepted" and a
-     handler naming the button's callback;
+     debug.drainActionOutcomes() record, with outcome "accepted" and
+     handler == "onInputCheckClick" — the fixture's actual registered
+     callback, not just any non-empty handler;
   2. a click on empty framebuffer space (well clear of any widget)
      drains EXACTLY ONE "deadclick" record. The check forces this
      deterministically by calling
@@ -87,13 +88,18 @@ def main() -> int:
 
     drain()  # clear anything already buffered before this run
 
-    # 1. UI-consumed click -> exactly one "accepted" record with a handler.
+    # 1. UI-consumed click -> exactly one "accepted" record naming the
+    # fixture's actual registered callback (input_check_fixture.lua wires
+    # the button's onClick to "onInputCheckClick") — not just ANY handler,
+    # which would still pass if the wrong consumer recorded the click.
     lua(f"return input.click({bx}, {by})")
     recs = drain()
     check("widget click drains EXACTLY ONE record", len(recs) == 1, str(recs))
     widget_rec = recs[0] if len(recs) == 1 else next(iter(recs), {})
-    check("that record is accepted with a handler naming the callback",
-          bool(widget_rec.get("outcome") == "accepted" and widget_rec.get("handler")),
+    check('that record is accepted with handler == "onInputCheckClick"',
+          bool(widget_rec.get("kind") == "input.click"
+               and widget_rec.get("outcome") == "accepted"
+               and widget_rec.get("handler") == "onInputCheckClick"),
           str(recs))
 
     # 2. Force main-menu state so an empty-space click is unambiguously a

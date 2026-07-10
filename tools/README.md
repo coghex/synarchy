@@ -385,7 +385,9 @@ python3 tools/action_outcome_layer_a_check.py --port 9008
 
 Injects a click on the fixture button and asserts
 `debug.drainActionOutcomes()` drains EXACTLY ONE `"accepted"` record
-naming the consuming handler. Then forces the instance to the main menu
+with `handler == "onInputCheckClick"` — the fixture's actual registered
+callback, not just any non-empty handler (a wrong consumer would
+otherwise still pass). Then forces the instance to the main menu
 (`uiManager.showMenu("main")` — switches away from whatever the
 instance was doing, so run it when that's fine) so an empty-space click
 is unambiguously a phantom affordance rather than a legitimate
