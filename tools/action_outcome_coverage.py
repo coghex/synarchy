@@ -116,7 +116,11 @@ LAYER_A_SWALLOWED_ROUTES = [
     _ROC_ROUTE + r'"degenerate_viewport"', _ROC_ROUTE + r'"tooltip_lock_toggle"',
     _ROC_ROUTE + r'"ui_surface_block"', _ROC_ROUTE + r'"camera_drag"',
     _ROC_ROUTE + r'"tooltip_lock_dismiss"',
-    _ROC_ROUTE + r'"ui_widget_no_rightclick_handler"',
+    # The no-right-click-handler route records the control's OWN
+    # left-click callback (its real identity, review round 8), not a
+    # fixed literal — so this checks the SOURCE STRUCTURE that wires it
+    # through, not a runtime string.
+    _ROC_ROUTE + r'"accepted"\s*\(Just leftClickCallback\)',
     _ROC_ROUTE + r'"unmapped_button"',  # GLFW buttons 4-8, mapped to Lua button 0
 ]
 LAYER_A_GAME_CHAIN_HANDLERS = [
@@ -173,6 +177,26 @@ def _game_chain_check(text: str) -> bool:
             _ROC_CLICK + r'"deadclick"[\s\S]{0,40}?"no tile under cursor"'])
 
 
+#   The portal-accepted hook has no distinguishing reason text (success
+#   carries no reason at all), so it's anchored to `building.spawn(...)`
+#   — unique to the portal branch — rather than a reason literal
+#   (review round 8: neither the plain outcome="accepted" text nor the
+#   "building.spawn failed" reject reason alone proved this specific
+#   hook, since other accepted/rejected calls in the same function
+#   already satisfy those).
+#   Bounded by a negative lookahead on `else` rather than a fixed
+#   character window: a window wide enough to survive real source's
+#   comment placement also bridges past the `if id then ... else` block
+#   boundary in more tightly-packed text (a prior attempt at this
+#   pattern's window did exactly that, matching the NEXT unrelated
+#   accepted call instead) — `(?:(?!else)[\s\S])*?` can consume any text
+#   EXCEPT a run starting with the literal "else", so the search is
+#   structurally confined to the `if id then` branch itself, regardless
+#   of how much (or how little) sits in between.
+_PORTAL_ACCEPTED = (r"building\.spawn\(target\.def, igx, igy\)"
+                    r"(?:(?!else)[\s\S])*?" + _ROC + r'outcome\s*=\s*"accepted"')
+
+
 def _build_tool_check(text: str) -> bool:
     if not text:
         return False
@@ -184,6 +208,7 @@ def _build_tool_check(text: str) -> bool:
         return False
     return (_all_present(commit_scope, COMMIT_PLACEMENT_REQUIRED)
             and _all_present(handle_scope, HANDLE_MOUSE_DOWN_REQUIRED)
+            and _all_present(handle_scope, [_PORTAL_ACCEPTED])
             and _count_at_least(
                 handle_scope, _ROC + r'reason\s*=[^\n]*"routed to construction\.designate"', 2)
             and _count_at_least(
@@ -196,9 +221,13 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
     return [
         # --- Layer A: input routing, "complete" per the issue's scope note ---
         ("A", "input click -> UI widget consumption (real event queued)",
-         lambda: _filewide_check(
+         # Both the left- and right-click producer calls are required —
+         # a single "does recordWidgetClickOutcome appear anywhere"
+         # check reads DONE with either one deleted (review round 8).
+         lambda: _all_present_check(
              "src/Engine/Scripting/Lua/Thread/Dispatch.hs",
-             r'recordWidgetClickOutcome env "')),  # call sites only, not the def
+             [r'recordWidgetClickOutcome env "input\.click"',
+              r'recordWidgetClickOutcome env "input\.rightClick"'])),
         ("A", "input click -> swallowed/no-handler routes (no event ever queued)",
          # Every distinct ClickSwallowed/no-handler-ClickUI route this
          # module knows about — ALL must be present, not just one, or a
@@ -249,9 +278,15 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
              [r'recordDesignationOutcome env "world\.designateMine"',
               r'recordMissingWorldOutcome env "world\.designateMine"'])),
         ("B1", "plant.designate (accept/reject + missing-world)",
+         # Both branches share the same aoKind literal (only aoOutcome
+         # differs), so a single aoKind presence check reads DONE with
+         # either branch's push deleted (review round 8) — require both
+         # aoOutcome values specifically, not just the shared aoKind.
          lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Plant.hs",
              [r'aoKind\s*=\s*"plant\.designate"',
+              r'aoOutcome\s*=\s*"accepted"',
+              r'aoOutcome\s*=\s*"rejected"',
               r'recordMissingWorldOutcome env "plant\.designate"'])),
 
         # --- Layer B Tier 2: common mid-game — fast-follow, not this PR.
@@ -437,9 +472,11 @@ def _self_test() -> list[str]:
     #    call-renaming mutation (review round 5) is provably caught too.
     _ROUTE_NAMES = [
         "degenerate_viewport", "tooltip_lock_toggle", "ui_surface_block",
-        "camera_drag", "tooltip_lock_dismiss",
-        "ui_widget_no_rightclick_handler", "unmapped_button",
+        "camera_drag", "tooltip_lock_dismiss", "unmapped_button",
     ]
+    # The no-right-click-handler route (review round 8): NOT a quoted
+    # literal, since it records the control's own callback variable.
+    _LEFT_CLICK_CALLBACK_ROUTE = "leftClickCallback"
     _HANDLER_NAMES = [
         "debug_overlay", "debug_anim_panel", "build_tool", "mine_tool",
         "chop_tool", "till_tool", "plant_tool", "unit_select", "item_select",
@@ -448,22 +485,29 @@ def _self_test() -> list[str]:
         "context_menu_tile",
     ]
 
-    def swallowed_routes_fixture(include: set[str], call_name: str = "recordRouteOutcome") -> str:
+    def swallowed_routes_fixture(include: set[str], with_left_click_route: bool,
+                                  call_name: str = "recordRouteOutcome") -> str:
         lines = [f"{call_name} ∷ Text → Maybe Text → IO ()",
                   f"{call_name} outcome handler = do pure ()"]
         for name in _ROUTE_NAMES:
             if name in include:
                 lines.append(f'{call_name} "accepted" (Just "{name}")')
+        if with_left_click_route:
+            lines.append(f'{call_name} "accepted" (Just {_LEFT_CLICK_CALLBACK_ROUTE})')
         return "\n".join(lines)
 
-    swallowed_full = swallowed_routes_fixture(set(_ROUTE_NAMES))
+    swallowed_full = swallowed_routes_fixture(set(_ROUTE_NAMES), True)
     expect("Layer A swallowed routes: all present reads DONE",
            _all_present(swallowed_full, LAYER_A_SWALLOWED_ROUTES), True)
     for name in _ROUTE_NAMES:
-        missing_one = swallowed_routes_fixture(set(_ROUTE_NAMES) - {name})
+        missing_one = swallowed_routes_fixture(set(_ROUTE_NAMES) - {name}, True)
         expect(f"Layer A swallowed routes: missing {name!r} reads gap",
                _all_present(missing_one, LAYER_A_SWALLOWED_ROUTES), False)
-    renamed_call = swallowed_routes_fixture(set(_ROUTE_NAMES), call_name="someOtherHelper")
+    missing_left_click_route = swallowed_routes_fixture(set(_ROUTE_NAMES), False)
+    expect("Layer A swallowed routes: missing the no-right-click-handler "
+           "route (review round 8) reads gap",
+           _all_present(missing_left_click_route, LAYER_A_SWALLOWED_ROUTES), False)
+    renamed_call = swallowed_routes_fixture(set(_ROUTE_NAMES), True, call_name="someOtherHelper")
     expect("Layer A swallowed routes: recordRouteOutcome renamed away "
            "(literals kept) reads as a gap (review round 5)",
            _all_present(renamed_call, LAYER_A_SWALLOWED_ROUTES), False)
@@ -541,9 +585,23 @@ def _self_test() -> list[str]:
         if "invalid" in include:
             lines.append('    debug.recordOutcome{outcome = "rejected", '
                           'reason = "invalid placement tile"}')
-        if "spawn" in include:
-            lines.append('    debug.recordOutcome{outcome = "rejected", '
-                          'reason = "building.spawn failed"}')
+        if "spawn" in include or "portal_accepted" in include:
+            # Real if/else/end shape (not a flat sequence) — the
+            # portal-accepted anchor pattern is bounded by a negative
+            # lookahead on "else", so the fixture needs the same
+            # structure the real code has for that bound to mean
+            # anything (review round 8's window-based predecessor
+            # bridged past "building.spawn failed" into the NEXT
+            # unrelated accepted call in a flatter fixture).
+            lines.append('    local id = building.spawn(target.def, igx, igy)')
+            lines.append('    if id then')
+            if "portal_accepted" in include:
+                lines.append('        debug.recordOutcome{outcome = "accepted"}')
+            lines.append('    else')
+            if "spawn" in include:
+                lines.append('        debug.recordOutcome{outcome = "rejected", '
+                              'reason = "building.spawn failed"}')
+            lines.append('    end')
         for _ in range(designate_sites):
             lines.append('    debug.recordOutcome{outcome = "accepted", '
                           'reason = "routed to construction.designate"}')
@@ -554,11 +612,17 @@ def _self_test() -> list[str]:
         return "\n".join(lines)
 
     all_commit_parts = {"power", "carrier", "node", "accepted"}
-    all_handle_parts = {"offworld", "invalid", "spawn"}
+    all_handle_parts = {"offworld", "invalid", "spawn", "portal_accepted"}
     full_fixture = (commit_placement_fn(all_commit_parts) + "\n"
                     + handle_mouse_down_fn(all_handle_parts, 2, 2))
     expect("buildTool.commitPlacement: all hooks present reads DONE",
            _build_tool_check(full_fixture), True)
+    missing_portal_accepted = (
+        commit_placement_fn(all_commit_parts) + "\n"
+        + handle_mouse_down_fn(all_handle_parts - {"portal_accepted"}, 2, 2))
+    expect("buildTool.commitPlacement: missing the portal-accepted hook "
+           "reads gap (review round 8)",
+           _build_tool_check(missing_portal_accepted), False)
 
     # The exact review-round-3 counter-example: the function bodies keep
     # their ordinary `return nil, "..."` values but EVERY
