@@ -238,9 +238,14 @@ def coverage_personas(count: int, seed: int = 0,
     """A balanced spread of `count` personas across the axis space:
     per-axis columns each cycle every value equally often, then get an
     independent seeded shuffle (Latin-hypercube style), so marginals are
-    balanced and axes are decorrelated; duplicate combos are re-rolled.
-    Reproducible from (seed, count). count >= the full grid size just
-    cycles the grid enumeration."""
+    exactly balanced (per-axis value counts differ by at most 1) and
+    axes are decorrelated. A draw whose rows collide is retried WHOLE —
+    never patched row-by-row, which would skew the columns — so balance
+    survives deduplication. Only when `count` is so close to the full
+    grid that balanced draws keep colliding does it fall back to a
+    seeded-shuffled grid prefix (unique by construction, near-balanced
+    at that size). Reproducible from (seed, count). count >= the full
+    grid size just cycles the grid enumeration."""
     data = data or load_axes()
     dims = [(a["name"], a["values"]) for a in data["axes"]] \
         + [("goal", data["goals"])]
@@ -250,22 +255,22 @@ def coverage_personas(count: int, seed: int = 0,
         grid = list(itertools.product(*[vals for _, vals in dims]))
         rows = [grid[i % total] for i in range(count)]
     else:
-        cols = []
-        for _, vals in dims:
-            col = [vals[i % len(vals)] for i in range(count)]
-            rng.shuffle(col)
-            cols.append(col)
-        rows = [tuple(col[i] for col in cols) for i in range(count)]
-        seen = set()
-        for i, row in enumerate(rows):
-            key = tuple(v["value"] for v in row)
-            tries = 0
-            while key in seen and tries < 1000:  # rare: birthday collision
-                row = tuple(rng.choice(vals) for _, vals in dims)
-                key = tuple(v["value"] for v in row)
-                tries += 1
-            seen.add(key)
-            rows[i] = row
+        rows = None
+        for _ in range(200):
+            cols = []
+            for _, vals in dims:
+                col = [vals[i % len(vals)] for i in range(count)]
+                rng.shuffle(col)
+                cols.append(col)
+            candidate = [tuple(col[i] for col in cols) for i in range(count)]
+            if len({tuple(v["value"] for v in row) for row in candidate}) \
+                    == count:
+                rows = candidate
+                break
+        if rows is None:
+            grid = list(itertools.product(*[vals for _, vals in dims]))
+            rng.shuffle(grid)
+            rows = grid[:count]
     specs = []
     for i, row in enumerate(rows):
         chosen = {dims[j][0]: row[j] for j in range(len(dims) - 1)}
@@ -434,20 +439,33 @@ def selftest() -> int:
     check("every goal appears across 200 seeds",
           len(seen_goals) == len(data["goals"]))
 
-    # 4. coverage mode: count, uniqueness, balance, reproducibility
+    # 4. coverage mode: count, uniqueness, EXACT balance, and
+    # reproducibility. Balance and uniqueness are asserted across many
+    # seeds — the original row-by-row duplicate repair skewed the
+    # columns (seed 4 was the #715 review reproducer) and could even
+    # keep a duplicate; the whole-draw retry must never do either.
+    def _combo(s):
+        return tuple(sorted(s["axes"].items())) + (s["goal"],)
+
     cov = coverage_personas(12, seed=7, data=data)
-    combos = [tuple(sorted(s["axes"].items())) + (s["goal"],) for s in cov]
     check("coverage returns the requested count", len(cov) == 12)
-    check("coverage combos are unique", len(set(combos)) == 12)
-    balanced = True
-    for axis in data["axes"]:
-        counts = {v["value"]: 0 for v in axis["values"]}
-        for s in cov:
-            counts[s["axes"][axis["name"]]] += 1
-        floor = 12 // len(axis["values"])
-        if any(c < floor - 1 for c in counts.values()):
-            balanced = False
-    check("coverage batch is near-balanced per axis", balanced)
+    unique_ok, balance_ok = True, True
+    for cseed in range(20):  # includes seed 4, the review reproducer
+        batch = coverage_personas(12, seed=cseed, data=data)
+        if len({_combo(s) for s in batch}) != 12:
+            unique_ok = False
+        for axis in data["axes"]:
+            counts = [sum(1 for s in batch
+                          if s["axes"][axis["name"]] == v["value"])
+                      for v in axis["values"]]
+            if max(counts) - min(counts) > 1:
+                balance_ok = False
+        goals = [sum(1 for s in batch if s["goal"] == g["goal"].strip())
+                 for g in data["goals"]]
+        if max(goals) - min(goals) > 1:
+            balance_ok = False
+    check("coverage combos unique across seeds 0..19", unique_ok)
+    check("coverage exactly balanced across seeds 0..19", balance_ok)
     check("coverage reproducible from (seed, count)",
           cov == coverage_personas(12, seed=7, data=data))
     check("coverage varies with seed",
@@ -455,6 +473,14 @@ def selftest() -> int:
     check("coverage specs record provenance",
           all(s["sampling"] == {"mode": "coverage", "count": 12, "index": i}
               for i, s in enumerate(cov)))
+    # near-full-grid counts can't produce a balanced collision-free
+    # draw — the shuffled-grid-prefix fallback must stay unique
+    total = math.prod(len(a["values"]) for a in data["axes"]) \
+        * len(data["goals"])
+    big = coverage_personas(total - 2, seed=1, data=data)
+    check("near-grid coverage stays unique via the fallback",
+          len(big) == total - 2
+          and len({_combo(s) for s in big}) == total - 2)
 
     # 5. LLM flavor freeze: prose lands in the spec once; axes/goal/
     # tendencies untouched; the saved file replays the stored prose
@@ -486,6 +512,21 @@ def selftest() -> int:
     bundled = list_personas()
     check("axes.yaml hidden from persona listing",
           "axes" not in bundled and "curious_carl" in bundled)
+
+    # 7. axis orthogonality lint (#715 review): reading/guidance
+    # vocabulary belongs to the reads_guidance axis alone — a tendency
+    # on another axis that also dictates reading behavior can
+    # contradict the reads_guidance value sampled next to it (the old
+    # impatient "doesn't read tooltips" vs reads-carefully; seed 15
+    # sampled both)
+    read_words = re.compile(
+        r"\b(reads?|reading|tooltips?|manual|instructions?)\b", re.I)
+    clashes = [f"{axis['name']}:{v['value']}"
+               for axis in data["axes"] if axis["name"] != "reads_guidance"
+               for v in axis["values"]
+               if read_words.search(v["tendency"] + " " + v["blurb"])]
+    check("reading vocabulary confined to reads_guidance", not clashes,
+          ", ".join(clashes))
 
     if failures:
         print(f"selftest: FAILED ({len(failures)}): {', '.join(failures)}")

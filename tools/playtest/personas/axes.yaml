@@ -8,7 +8,11 @@
 # data-editing in this file, not code.
 #
 # Each axis measures ONE independent trait (orthogonality is what makes
-# every combination coherent), and each value carries:
+# every combination coherent) — keep each behavior on its own axis:
+# reading/manual/tooltip behavior belongs to reads_guidance ONLY (the
+# selftest lints this), action pacing to patience, retry-on-failure to
+# persistence. A tendency that straddles axes can contradict a value
+# sampled beside it (#715 review). Each value carries:
 #   value:     the sampled slug, recorded in the spec's `axes` map
 #   adjective: name-building word (one sampled value's adjective is
 #              picked for the `adjective_firstname` persona name)
@@ -40,8 +44,8 @@ axes:
     values:
       - value: impatient
         adjective: hasty
-        tendency: doesn't read tooltips; if nothing obviously happens, clicks again quickly
-        blurb: act in quick bursts and hate waiting
+        tendency: wants results now — when nothing obviously happens, tries again immediately instead of waiting
+        blurb: hate waiting for anything to happen
       - value: average
         adjective: steady
         tendency: gives each action a moment to do something before trying anything else
@@ -78,7 +82,7 @@ axes:
         blurb: wander into every menu just to see what is there
       - value: limit-tester
         adjective: mischievous
-        tendency: tries unexpected things on purpose — huge numbers, empty fields, clicking the same thing many times — to see what the game does
+        tendency: tries unexpected things on purpose — huge numbers, empty fields, doing what the game clearly doesn't intend — to see what happens
         blurb: poke at the edges of what the game allows
 
   - name: persistence
@@ -93,7 +97,7 @@ axes:
         blurb: give things a fair second try before moving on
       - value: stubborn
         adjective: dogged
-        tendency: keeps hammering at a blocked path long past the point most people would quit
+        tendency: keeps working at a blocked path long past the point most people would quit
         blurb: refuse to let a dead end win
 
 # The session goal — sampled like an axis but emitted as H1's `goal`
