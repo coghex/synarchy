@@ -10,11 +10,12 @@ import World.Generate.Config (minimumWorldSize, normalizeWorldSize
                              , normalizePlateCount)
 import Engine.Core.Types (BootProfile(..))
 import World.Plate (defaultPlatesFor)
-import App.Cli (parseDump, parseArg, parseRegion, parsePreview
+import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
                , PreviewCategoryKind(..), classifyPreviewCategory)
 import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
+import App.Offscreen (runOffscreen)
 import App.Dump (runDump)
 import App.Preview (runPreview)
 
@@ -34,6 +35,7 @@ main = do
   -- cwd-relative paths from here on.
   applyResourceRoot args
   let headless = "--headless" `elem` args
+      offscreen = "--offscreen" `elem` args
       bootProfile = if "--arena" `elem` args then BootArena else BootNormal
       mDump    = parseDump args
       mPreview = parsePreview args
@@ -87,5 +89,9 @@ main = do
         _ → runPreview (T.pack cat, T.pack ⊚ mItem)
                         (Just (fromMaybe 8008 port))
       Nothing
+        -- Offscreen (#650) wins over --headless if both are given:
+        -- it is the strictly more capable mode (GPU on, window off).
+        | offscreen → runOffscreen bootProfile (Just (fromMaybe 8008 port))
+                                   (parseSize args)
         | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
         | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))

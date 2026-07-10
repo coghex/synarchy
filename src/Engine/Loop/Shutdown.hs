@@ -24,10 +24,12 @@ import Vulkan.Core10 (deviceWaitIdle, destroyBuffer, freeMemory)
 -- | Shutdown the engine. 'unitThreadState'/'worldThreadState' are
 --   'Nothing' for a boot profile that never started them (preview mode
 --   — see 'App.Preview' — has no world/unit/sim/combat threads at all).
-shutdownEngine ∷ Window → Maybe ThreadState → Maybe ThreadState
+--   The window is 'Nothing' for the offscreen mode (#650), which has
+--   no GLFW state to tear down.
+shutdownEngine ∷ Maybe Window → Maybe ThreadState → Maybe ThreadState
   → ThreadState → ThreadState → EngineM ε σ ()
-shutdownEngine (Window win) mUnitThreadState mWorldThreadState
-                            inputThreadState luaThreadState = do
+shutdownEngine mWindow mUnitThreadState mWorldThreadState
+                       inputThreadState luaThreadState = do
     logInfoM CatSystem "Starting engine shutdown..."
     state ← gets graphicsState
     let device = vulkanDevice state
@@ -84,12 +86,13 @@ shutdownEngine (Window win) mUnitThreadState mWorldThreadState
                 Nothing → pure ()
         Nothing → logDebugM CatSystem "No Vulkan device found, skipping buffer cleanup"
     
-    -- GLFW cleanup
-    logDebugM CatSystem "Cleaning up GLFW..."
-    liftIO $ GLFW.postEmptyEvent
-    GLFW.setWindowShouldClose win True
-    liftIO $ clearGLFWCallbacks win
-    
+    -- GLFW cleanup (windowed modes only)
+    forM_ mWindow $ \(Window win) → do
+        logDebugM CatSystem "Cleaning up GLFW..."
+        liftIO $ GLFW.postEmptyEvent
+        GLFW.setWindowShouldClose win True
+        liftIO $ clearGLFWCallbacks win
+
     -- Shutdown threads
     env ← ask
 
