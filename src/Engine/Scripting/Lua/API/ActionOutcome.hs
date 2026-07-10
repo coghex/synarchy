@@ -49,24 +49,31 @@ debugRecordOutcomeFn env = do
             mi ← Lua.tointeger Lua.top
             Lua.pop 1
             pure (fromIntegral <$> mi)
-        getSubInt ∷ Lua.Name → Lua.Name → Lua.LuaE Lua.Exception (Maybe Int)
-        getSubInt tbl name = do
+        -- `where.x`/`where.y` use tonumber, not tointeger (contrast
+        -- getInt above): Layer A's screen-space clicks are frequently
+        -- fractional, and Lua's tointeger flatly refuses any non-integral
+        -- number (returns nil), which previously dropped the WHOLE
+        -- `where` field on every such click (review round 9).
+        getSubDouble ∷ Lua.Name → Lua.Name → Lua.LuaE Lua.Exception (Maybe Double)
+        getSubDouble tbl name = do
             _ ← Lua.getfield (Lua.nth 1) tbl
             isT ← Lua.istable Lua.top
             r ← if isT
                 then do
                     _ ← Lua.getfield (Lua.nth 1) name
-                    mi ← Lua.tointeger Lua.top
+                    mn ← Lua.tonumber Lua.top
                     Lua.pop 1
-                    pure (fromIntegral <$> mi)
+                    pure $ case mn of
+                        Just (Lua.Number n) → Just (realToFrac n)
+                        _                   → Nothing
                 else pure Nothing
             Lua.pop 1
             pure r
 
     mKind     ← getStr "kind"
     mOutcome  ← getStr "outcome"
-    whereX    ← getSubInt "where" "x"
-    whereY    ← getSubInt "where" "y"
+    whereX    ← getSubDouble "where" "x"
+    whereY    ← getSubDouble "where" "y"
     mTarget   ← getInt "target"
     requested ← getInt "requested"
     applied   ← getInt "applied"
@@ -110,9 +117,9 @@ pushActionOutcomeLua ev = do
     case (aoWhereX ev, aoWhereY ev) of
         (Just wx, Just wy) → do
             Lua.newtable
-            Lua.pushinteger (fromIntegral wx)
+            Lua.pushnumber (Lua.Number (realToFrac wx))
             Lua.setfield (-2) "x"
-            Lua.pushinteger (fromIntegral wy)
+            Lua.pushnumber (Lua.Number (realToFrac wy))
             Lua.setfield (-2) "y"
         _ → Lua.pushnil
     Lua.setfield (-2) "where"

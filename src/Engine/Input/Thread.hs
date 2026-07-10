@@ -239,7 +239,13 @@ processInput env inpSt event = case event of
                 gt ← readIORef (gameTimeRef env)
                 pushActionOutcome (actionOutcomeRef env) ActionOutcome
                     { aoTs = gt, aoKind = "input.click", aoOutcome = outcome
-                    , aoWhereX = Nothing, aoWhereY = Nothing, aoTarget = Nothing
+                    -- The real click position (review round 9 — these
+                    -- routes previously hard-coded Nothing/Nothing,
+                    -- losing the location entirely; the critic needs it
+                    -- to identify a phantom affordance). Window coords,
+                    -- matching what scripts/init_mouse.lua's recordClick
+                    -- records for the game-chain routes.
+                    , aoWhereX = Just x, aoWhereY = Just y, aoTarget = Nothing
                     , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
                     , aoReason = Nothing, aoHandler = handler
                     }
@@ -345,7 +351,7 @@ processInput env inpSt event = case event of
                         case findClickableElementAt mousePos uiMgr' of
                             Just (elemHandle, callback) → do
                                 Q.writeQueue lq
-                                    (LuaUIClickEvent elemHandle callback)
+                                    (LuaUIClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
                                     "UI element left-clicked: " <> callback
                                 return ClickUI
@@ -358,7 +364,7 @@ processInput env inpSt event = case event of
                         case findRightClickableElementAt mousePos uiMgr' of
                             Just (elemHandle, callback) → do
                                 Q.writeQueue lq
-                                    (LuaUIRightClickEvent elemHandle callback)
+                                    (LuaUIRightClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
                                     "UI element right-clicked: " <> callback
                                 return ClickUI

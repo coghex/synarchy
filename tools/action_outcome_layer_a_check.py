@@ -19,14 +19,19 @@ checks, end to end through the real input pipeline:
   1. a UI-consumed click (on the fixture button) drains EXACTLY ONE
      debug.drainActionOutcomes() record, with outcome "accepted" and
      handler == "onInputCheckClick" — the fixture's actual registered
-     callback, not just any non-empty handler;
+     callback, not just any non-empty handler — AND a `where` matching
+     the click's own coordinates (review round 9: the widget route
+     used to hard-code `where` to nil regardless of where the click
+     actually landed);
   1b. a RIGHT-click on that same left-click-only button (it never
       registers a right-click handler) also drains handler ==
-      "onInputCheckClick" — proves the no-right-click-handler route
-      preserves the actual consumer's identity rather than a generic
+      "onInputCheckClick" with a matching `where`  — proves the
+      no-right-click-handler route preserves both the actual
+      consumer's identity and its coordinates rather than a generic
       placeholder;
   2. a click on empty framebuffer space (well clear of any widget)
-     drains EXACTLY ONE "deadclick" record. The check forces this
+     drains EXACTLY ONE "deadclick" record, also with a matching
+     `where`. The check forces this
      deterministically by calling
      `require("scripts.ui_manager").showMenu("main")` first — a
      gameplay-active click on empty ground is a legitimate "noop"
@@ -92,6 +97,22 @@ def main() -> int:
         return 1
     fb_w, fb_h = sizes
 
+    win_sizes = lua("return {engine.getWindowSize()}")
+    win_w, win_h = win_sizes if isinstance(win_sizes, list) else (fb_w, fb_h)
+    scale_x, scale_y = win_w / fb_w, win_h / fb_h
+
+    def where_matches(rec: dict, fx: float, fy: float, tol: float = 2.0) -> bool:
+        """`where` is recorded in WINDOW-space coordinates (review round
+        9), while every click this script issues is specified in
+        FRAMEBUFFER pixels (input.click's own contract) — convert
+        before comparing, since the two spaces differ under HiDPI."""
+        w = rec.get("where")
+        if not isinstance(w, dict):
+            return False
+        ex, ey = fx * scale_x, fy * scale_y
+        return (abs(w.get("x", float("inf")) - ex) <= tol
+                and abs(w.get("y", float("inf")) - ey) <= tol)
+
     send(PORT,
          'if not package.loaded["scripts.input_check_fixture"] then '
          'engine.loadScript("scripts/input_check_fixture.lua") end',
@@ -117,6 +138,9 @@ def main() -> int:
                and widget_rec.get("outcome") == "accepted"
                and widget_rec.get("handler") == "onInputCheckClick"),
           str(recs))
+    check("that record's where matches the actual click position "
+          "(review round 9 — the widget route used to hard-code nil)",
+          where_matches(widget_rec, bx, by), str(recs))
 
     # 1b. A right-click on that SAME left-click-only fixture button (it
     # never registers UI.setOnRightClick) takes the no-right-click-
@@ -137,6 +161,8 @@ def main() -> int:
                and rc_rec.get("outcome") == "accepted"
                and rc_rec.get("handler") == "onInputCheckClick"),
           str(recs_rc))
+    check("that record's where matches the actual click position",
+          where_matches(rc_rec, bx, by), str(recs_rc))
 
     # 3 (best-effort, gameplay must already be active on attach — this
     # script doesn't create a world). The off-world tile-menu-miss
@@ -159,6 +185,8 @@ def main() -> int:
         if tile_menu_rec.get("outcome") == "deadclick":
             check("off-world no-selection right-click drains a deadclick "
                   "(#646 review round 6 route)", True, str(recs3))
+            check("that record's where matches the actual click position",
+                  where_matches(tile_menu_rec, cx, cy), str(recs3))
         else:
             info("off-world no-selection right-click landed on world "
                  "geometry at this camera framing — route not exercised "
@@ -184,6 +212,9 @@ def main() -> int:
           deadclick_rec.get("kind") == "input.click"
           and deadclick_rec.get("outcome") == "deadclick",
           str(recs2))
+    check("that record's where matches the actual click position "
+          "(the game-chain route, scripts/init_mouse.lua)",
+          where_matches(deadclick_rec, ex, ey), str(recs2))
 
     print(f"\n{'ALL LAYER A CHECKS PASSED' if not failures else f'{len(failures)} FAILURE(S)'}")
     return 1 if failures else 0

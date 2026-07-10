@@ -87,7 +87,8 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     pushActionOutcome (actionOutcomeRef env) ActionOutcome
                         { aoTs = gt, aoKind = "plant.designate"
                         , aoOutcome = "accepted"
-                        , aoWhereX = Just gx, aoWhereY = Just gy, aoTarget = Nothing
+                        , aoWhereX = Just (fromIntegral gx), aoWhereY = Just (fromIntegral gy)
+                        , aoTarget = Nothing
                         , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
                         , aoReason = Nothing, aoHandler = Nothing
                         }
@@ -103,7 +104,8 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                     pushActionOutcome (actionOutcomeRef env) ActionOutcome
                         { aoTs = gt, aoKind = "plant.designate"
                         , aoOutcome = "rejected"
-                        , aoWhereX = Just gx, aoWhereY = Just gy, aoTarget = Nothing
+                        , aoWhereX = Just (fromIntegral gx), aoWhereY = Just (fromIntegral gy)
+                        , aoTarget = Nothing
                         , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
                         , aoReason = Just reason, aoHandler = Nothing
                         }

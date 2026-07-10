@@ -85,13 +85,13 @@ processLuaMsg env ls stateRef msg = case msg of
       [ ScriptNumber (realToFrac dx)
       , ScriptNumber (realToFrac dy)
       ]
-  LuaUIClickEvent elemHandle callbackName → do
+  LuaUIClickEvent elemHandle callbackName x y → do
     let (ElementHandle h) = elemHandle
-    recordWidgetClickOutcome env "input.click" callbackName
+    recordWidgetClickOutcome env "input.click" callbackName x y
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
-  LuaUIRightClickEvent elemHandle callbackName → do
+  LuaUIRightClickEvent elemHandle callbackName x y → do
     let (ElementHandle h) = elemHandle
-    recordWidgetClickOutcome env "input.rightClick" callbackName
+    recordWidgetClickOutcome env "input.rightClick" callbackName x y
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
   LuaUIScrollEvent elemHandle dx dy → do
     let (ElementHandle h) = elemHandle
@@ -252,15 +252,15 @@ processLuaMsg env ls stateRef msg = case msg of
 --   consolidation (deadclick / tool / world are the Lua-side
 --   scripts/init_mouse.lua chain's job, since only it knows whether the
 --   ClickGame route it's handed ultimately hit nothing).
-recordWidgetClickOutcome ∷ EngineEnv → Text → Text → IO ()
-recordWidgetClickOutcome env kind callbackName = do
+recordWidgetClickOutcome ∷ EngineEnv → Text → Text → Double → Double → IO ()
+recordWidgetClickOutcome env kind callbackName x y = do
     gt ← readIORef (gameTimeRef env)
     pushActionOutcome (actionOutcomeRef env) ActionOutcome
         { aoTs        = gt
         , aoKind      = kind
         , aoOutcome   = "accepted"
-        , aoWhereX    = Nothing
-        , aoWhereY    = Nothing
+        , aoWhereX    = Just x
+        , aoWhereY    = Just y
         , aoTarget    = Nothing
         , aoRequested = Nothing
         , aoApplied   = Nothing

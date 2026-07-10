@@ -173,6 +173,26 @@ def main():
         print(f"  [{'PASS' if ok4 else 'FAIL'}] second drain is empty "
               f"(destructive read): {second}")
 
+        # Fractional `where` coordinates (review round 9): Lua's
+        # tointeger refuses any non-integral number, which previously
+        # dropped the WHOLE `where` field rather than just truncating
+        # it. debug.recordOutcome now reads where.x/y with tonumber, so
+        # a fractional click position (Layer A screen-space clicks, or
+        # the playtest harness's deliberately non-integral injections)
+        # must round-trip exactly.
+        ok_float = jget(port, 'return debug.recordOutcome{kind="float.where", '
+                               'outcome="accepted", where={x=1.5,y=2.25}}')
+        drained_float = jget(port, "return debug.drainActionOutcomes()")
+        rec_float = (drained_float[0]
+                     if isinstance(drained_float, list) and drained_float
+                     else {})
+        ok4d = bool(ok_float is True
+                    and rec_float.get("kind") == "float.where"
+                    and rec_float.get("where") == {"x": 1.5, "y": 2.25})
+        passed &= ok4d
+        print(f"  [{'PASS' if ok4d else 'FAIL'}] fractional where "
+              f"coordinates round-trip intact: {drained_float}")
+
         # wire.place, rejected path: no active world exists yet at this
         # point in the script, so structure.place must refuse and
         # wire.place must propagate that (review round 7 — it previously

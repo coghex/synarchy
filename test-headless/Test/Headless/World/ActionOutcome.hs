@@ -53,8 +53,8 @@ spec = describe "action-outcome oracle (#646)" $
             (ev : _) → do
                 aoKind ev `shouldBe` "till.designate"
                 aoOutcome ev `shouldBe` "rejected"
-                aoWhereX ev `shouldBe` Just gx1
-                aoWhereY ev `shouldBe` Just gy1
+                aoWhereX ev `shouldBe` Just (fromIntegral gx1)
+                aoWhereY ev `shouldBe` Just (fromIntegral gy1)
                 aoRequested ev `shouldBe` Just 36  -- (5+1) * (5+1)
                 aoApplied ev `shouldBe` Just 0
                 aoDropped ev `shouldBe` Just 36
