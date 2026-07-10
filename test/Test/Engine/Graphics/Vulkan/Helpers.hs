@@ -12,4 +12,4 @@ createTestInstance withDebug = do
     let config = defaultGraphicsConfig 
             { gcDebugMode = withDebug
             , gcAppName = "VulkanTest" }
-    createVulkanInstance config
+    createVulkanInstance config InstanceForWindow

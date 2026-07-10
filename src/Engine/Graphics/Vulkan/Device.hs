@@ -34,15 +34,19 @@ data QueueFamilyIndices = QueueFamilyIndices
   , presentFamily  ∷ Word32  -- ^ Index of present queue family
   } deriving (Show, Eq)
 
+-- | @mSurface@ is the presentation surface for windowed modes;
+--   'Nothing' for the offscreen mode (#650), which needs no present
+--   queue (the present slots alias the graphics ones) and no
+--   VK_KHR_swapchain.
 createVulkanDevice ∷ Instance 
                    → PhysicalDevice 
-                   → SurfaceKHR     
+                   → Maybe SurfaceKHR
                    → EngineM ε σ (Device, DevQueues)
-createVulkanDevice _inst physicalDevice surface = do
+createVulkanDevice _inst physicalDevice mSurface = do
   logDebugM CatVulkan "Finding queue families"
   -- pickPhysicalDevice only selects devices whose probe succeeded, so
   -- Nothing here is an invariant violation, not a selection failure.
-  indices ← findQueueFamilies physicalDevice surface ⌦ \case
+  indices ← findQueueFamilies physicalDevice mSurface ⌦ \case
     Just ix → pure ix
     Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
                 "Selected device has no graphics/present queue family"
@@ -70,7 +74,9 @@ createVulkanDevice _inst physicalDevice surface = do
   (_, availableDevExts) ← liftIO $
     enumerateDeviceExtensionProperties physicalDevice Nothing
   let availableDevExtNames = map extensionName $ V.toList availableDevExts
-      deviceExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME]
+      -- Swapchain only when there is a surface to present to; the
+      -- offscreen mode renders to plain images and must not require it.
+      deviceExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME | isJust mSurface]
         <> [KHR_PORTABILITY_SUBSET_EXTENSION_NAME
            | KHR_PORTABILITY_SUBSET_EXTENSION_NAME `elem` availableDevExtNames]
 
@@ -119,17 +125,19 @@ createVulkanDevice _inst physicalDevice surface = do
 destroyVulkanDevice ∷ Device → EngineM ε σ ()
 destroyVulkanDevice device = liftIO $ destroyDevice device Nothing
 
--- | Pick a suitable physical device (GPU)
+-- | Pick a suitable physical device (GPU). The surface is 'Nothing'
+--   offscreen (#650): devices are then rated on graphics capability
+--   alone, with no present-support or swapchain-extension demands.
 pickPhysicalDevice ∷ Instance 
-                   → SurfaceKHR  -- ^ Window surface for checking present support
+                   → Maybe SurfaceKHR  -- ^ Window surface for checking present support
                    → EngineM ε σ PhysicalDevice
-pickPhysicalDevice inst surface = do
+pickPhysicalDevice inst mSurface = do
   (_, devices) ← liftIO $ enumeratePhysicalDevices inst
   when (V.null devices) $
     logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find GPUs with Vulkan support"
   
-  scores ← V.mapM (rateDevice surface) devices
+  scores ← V.mapM (rateDevice mSurface) devices
   let ratedDevices = V.zip scores devices
       bestDevice = V.maximumBy (\a b → compare (fst a) (fst b)) ratedDevices
   
@@ -145,11 +153,11 @@ pickPhysicalDevice inst surface = do
       return $ snd bestDevice
 
 -- | Rate a physical device's suitability (higher is better, 0 = unusable)
-rateDevice ∷ SurfaceKHR → PhysicalDevice → EngineM ε σ Int
-rateDevice surface device = do
+rateDevice ∷ Maybe SurfaceKHR → PhysicalDevice → EngineM ε σ Int
+rateDevice mSurface device = do
   props ← liftIO $ getPhysicalDeviceProperties device
-  queueFamilies ← findQueueFamilies device surface
-  extensionsSupported ← checkDeviceExtensionSupport device
+  queueFamilies ← findQueueFamilies device mSurface
+  extensionsSupported ← checkDeviceExtensionSupport device (isJust mSurface)
 
   let baseScore = case deviceType props of
         PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → 1000
@@ -169,20 +177,26 @@ rateDevice surface device = do
 --   has no graphics queue family or no family that can present to the
 --   surface — rateDevice scores such devices 0 so pickPhysicalDevice can
 --   skip them instead of aborting startup (hybrid-GPU laptops routinely
---   expose a device with no present support on any family).
-findQueueFamilies ∷ PhysicalDevice → SurfaceKHR
+--   expose a device with no present support on any family). With no
+--   surface (offscreen, #650) nothing ever presents, so the present
+--   family aliases the graphics family to keep 'QueueFamilyIndices'
+--   (and DevQueues built from it) total.
+findQueueFamilies ∷ PhysicalDevice → Maybe SurfaceKHR
   → EngineM ε σ (Maybe QueueFamilyIndices)
-findQueueFamilies device surface = do
+findQueueFamilies device mSurface = do
   props ← liftIO $ getPhysicalDeviceQueueFamilyProperties device
-
-  presentSupport ← V.generateM (V.length props) $ \i →
-    liftIO $ getPhysicalDeviceSurfaceSupportKHR device
-      (fromIntegral i) surface
 
   let graphicsIdx = V.findIndex
         (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT ≢ zeroBits)
         props
-      presentIdx = V.findIndex id presentSupport
+
+  presentIdx ← case mSurface of
+    Nothing → pure graphicsIdx
+    Just surface → do
+      presentSupport ← V.generateM (V.length props) $ \i →
+        liftIO $ getPhysicalDeviceSurfaceSupportKHR device
+          (fromIntegral i) surface
+      pure $ V.findIndex id presentSupport
 
   pure $ case (graphicsIdx, presentIdx) of
     (Just gIdx, Just pIdx) → Just $ QueueFamilyIndices
@@ -191,13 +205,14 @@ findQueueFamilies device surface = do
       }
     _ → Nothing
 
--- | Check if device supports required extensions
-checkDeviceExtensionSupport ∷ PhysicalDevice → EngineM ε σ Bool
-checkDeviceExtensionSupport device = do
+-- | Check if device supports required extensions. Swapchain support is
+--   only demanded when the device must present (windowed modes).
+checkDeviceExtensionSupport ∷ PhysicalDevice → Bool → EngineM ε σ Bool
+checkDeviceExtensionSupport device needsPresent = do
   (_, availableExtensions) ← liftIO $
     enumerateDeviceExtensionProperties device Nothing
 
-  let requiredExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME]
+  let requiredExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME | needsPresent]
       availableExtNames = map extensionName $ V.toList availableExtensions
 
   return $ all (`elem` availableExtNames) requiredExtensions

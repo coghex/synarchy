@@ -21,7 +21,7 @@ import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , EngineException(..), SystemError(..)
                                    , mkErrorContext)
 import Engine.Graphics.Window.Types (Window(..))
-import Engine.Graphics.Types (DevQueues(..), SwapchainInfo(..))
+import Engine.Graphics.Types (DevQueues(..), RenderTarget(..), SwapchainInfo(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Vulkan.Core10 (Device, CommandBuffer)
@@ -59,11 +59,14 @@ getDevice state = case vulkanDevice state of
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No device"
     Just d  → pure d
 
--- | Get swapchain
+-- | Get swapchain. Only the windowed acquire/present path calls this;
+--   an offscreen target (#650) reaching it is a mode-dispatch bug.
 getSwapchain ∷ GraphicsState → EngineM ε σ SwapchainKHR
-getSwapchain state = case swapchainInfo state of
+getSwapchain state = case siTarget ⊚ swapchainInfo state of
     Nothing → logAndThrowM CatGraphics (ExGraphics SwapchainError) "No swapchain"
-    Just si → pure $ siSwapchain si
+    Just (TargetSwapchain sc) → pure sc
+    Just (TargetOffscreen _)  → logAndThrowM CatGraphics (ExGraphics SwapchainError)
+        "getSwapchain: offscreen render target has no swapchain"
 
 -- | Get device queues
 getQueues ∷ GraphicsState → EngineM ε σ DevQueues

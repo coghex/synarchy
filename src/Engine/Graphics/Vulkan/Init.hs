@@ -2,13 +2,13 @@
 {-# LANGUAGE DataKinds, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Init
   ( initializeVulkan
+  , initializeVulkanCommon
   , createUniformBuffersForFrames
   ) where
 
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Text as T
-import qualified Graphics.UI.GLFW as GLFWRaw
 import Data.IORef (readIORef, writeIORef)
 import Linear (identity)
 import Engine.Core.Defaults
@@ -32,7 +32,8 @@ import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Framebuffer (createVulkanFramebuffers)
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance
-                                        , destroyVulkanInstance)
+                                        , destroyVulkanInstance
+                                        , InstanceSurfaceUse(..))
 import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
@@ -52,35 +53,33 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends (SomeStruct(..))
 
--- | Initialize all Vulkan resources
+-- | Initialize all Vulkan resources for the windowed (swapchain) path.
 initializeVulkan ∷ Window → EngineM ε σ CommandPool
 initializeVulkan window = do
   let Window glfwWin = window
-  
+
   logDebugM CatVulkan "Creating Vulkan instance"
   -- Registered for destruction at engine unwind: the messenger and
   -- instance are destroyed after the device and surface (LIFO).
   (vkInstance, _debugMessenger) ← allocResource destroyVulkanInstance $
-    createVulkanInstance defaultGraphicsConfig
+    createVulkanInstance defaultGraphicsConfig InstanceForWindow
   logDebugM CatVulkan "Vulkan instance created successfully"
-  
+
   logDebugM CatVulkan "Creating window surface"
   surface ← GLFW.createWindowSurface window vkInstance
   logDebugM CatVulkan "Window surface created successfully"
-  
+
   logDebugM CatVulkan "Selecting physical device"
-  physicalDevice ← pickPhysicalDevice vkInstance surface
-  
-  props ← liftIO $ getPhysicalDeviceProperties physicalDevice
- 
+  physicalDevice ← pickPhysicalDevice vkInstance (Just surface)
+
   logDebugM CatVulkan "Creating logical device"
-  (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
+  (device, queues) ← createVulkanDevice vkInstance physicalDevice (Just surface)
   logDebugM CatVulkan "Logical device created successfully"
-  
+
   logDebugSM CatVulkan "Queue family indices selected"
     [("graphics_family", T.pack $ show $ graphicsFamIdx queues)
     ,("present_family", T.pack $ show $ presentFamIdx queues)]
-  
+
   modify $ \s → s { graphicsState = (graphicsState s)
                     { vulkanInstance = Just vkInstance
                     , vulkanPDevice  = Just physicalDevice
@@ -88,19 +87,39 @@ initializeVulkan window = do
                     , vulkanSurface  = Just surface
                     , deviceQueues   = Just queues
                     } }
-  
+
   env ← ask
   videoConfig ← liftIO $ readIORef (videoConfigRef env)
   let vsyncEnabled = vcVSync videoConfig
-  
+
   logDebugSM CatVulkan "Creating swapchain"
     [("vsync", if vsyncEnabled then "enabled" else "disabled")]
   logDebugM CatGraphics "Creating swapchain"
   fbSize ← GLFW.getFramebufferSize glfwWin
-  swapInfo ← createVulkanSwapchain physicalDevice device queues surface
+  swapInfo0 ← createVulkanSwapchain physicalDevice device queues surface
                vsyncEnabled fbSize
+  imageViews ← createSwapchainImageViews device swapInfo0
+  let swapInfo = swapInfo0 { siSwapImgViews = imageViews }
+
+  initializeVulkanCommon physicalDevice device queues swapInfo fbSize
+
+-- | Everything after the render target exists — frame resources,
+--   descriptors, texture system, pipelines, framebuffers, sync —
+--   shared verbatim by the windowed and offscreen (#650) paths. The
+--   target's kind only shows through 'renderedImageLayout' (render
+--   pass final layout) and the extent/format/views carried in
+--   @swapInfo@ (which must arrive with its image views populated).
+--   @fbSize@ is the initial framebuffer size for the UBO/UI camera
+--   (windowed: the GLFW framebuffer; offscreen: the target extent).
+initializeVulkanCommon ∷ PhysicalDevice → Device → DevQueues
+                       → SwapchainInfo → (Int, Int) → EngineM ε σ CommandPool
+initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
+
+  env ← ask
+  videoConfig ← liftIO $ readIORef (videoConfigRef env)
+  props ← liftIO $ getPhysicalDeviceProperties physicalDevice
 
   let msaaInt = vcMSAA videoConfig
       requestedSamples = msaaToSampleCount msaaInt
@@ -109,7 +128,7 @@ initializeVulkan window = do
   logDebugSM CatVulkan "MSAA configuration"
     [("requested", T.pack $ show msaaInt)
     ,("actual_samples", T.pack $ show sampleCount)]
-  
+
   let numFrames = gcMaxFrames defaultGraphicsConfig
   frameRes ← V.generateM (fromIntegral numFrames) $ \_ →
       createFrameResources device queues
@@ -165,9 +184,10 @@ initializeVulkan window = do
       activeScene = setActiveScene defaultSceneId sceneWithDefault
   modify $ \s → s { sceneManager = activeScene }
   
-  createUniformBuffersForFrames device physicalDevice glfwWin descSets
-  
+  createUniformBuffersForFrames device physicalDevice fbSize descSets
+
   renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo) sampleCount
+                   (renderedImageLayout (siTarget swapInfo))
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vulkanRenderPass = Just renderPass } }
   
@@ -209,12 +229,8 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontQuadBuffer = Just quadBuf } }
   
-  imageViews ← createSwapchainImageViews device swapInfo
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      swapchainInfo = case swapchainInfo (graphicsState s) of
-                        Just si → Just si { siSwapImgViews = imageViews }
-                        Nothing → Nothing } }
-  
+  let imageViews = siSwapImgViews swapInfo
+
   mMsaaImageView ← if sampleCount ≢ SAMPLE_COUNT_1_BIT
     then do
       (img, mem, view) ← createMSAAColorImage physicalDevice device
@@ -244,10 +260,9 @@ initializeVulkan window = do
   pure cmdPool
 
 
-createUniformBuffersForFrames ∷ Device → PhysicalDevice 
-  → GLFWRaw.Window → V.Vector DescriptorSet → EngineM ε σ ()
-createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
-  (width, height) ← GLFW.getFramebufferSize glfwWin
+createUniformBuffersForFrames ∷ Device → PhysicalDevice
+  → (Int, Int) → V.Vector DescriptorSet → EngineM ε σ ()
+createUniformBuffersForFrames device physicalDevice (width, height) descSets = do
   env ← ask
   let cRef   = cameraRef env
       uiCRef = uiCameraRef env

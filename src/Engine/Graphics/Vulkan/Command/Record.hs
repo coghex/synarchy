@@ -17,7 +17,7 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (EngineConfig(..), BootProfile(..))
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
-import Engine.Graphics.Types (SwapchainInfo(..))
+import Engine.Graphics.Types (SwapchainInfo(..), renderedImageLayout)
 import Engine.Graphics.Vulkan.Screenshot (recordScreenshotCopy)
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Command.Sprite (renderSpritesBindless, renderSpritesBindlessUI)
@@ -57,10 +57,11 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
                               else logAndThrowM CatVulkan (ExGraphics FramebufferError)
                                                        "Image index out of bounds")
                        (framebuffers state)
-    swapchainExtent ← maybe (logAndThrowM CatVulkan (ExGraphics SwapchainError)
-                                         "Swapchain info not initialized")
-                           (pure . siSwapExtent)
-                           (swapchainInfo state)
+    swapInfo ← maybe (logAndThrowM CatVulkan (ExGraphics SwapchainError)
+                                   "Swapchain info not initialized")
+                     pure
+                     (swapchainInfo state)
+    let swapchainExtent = siSwapExtent swapInfo
     device ← maybe (logAndThrowM CatVulkan (ExGraphics VulkanDeviceLost)
                                    "No device")
                    pure
@@ -169,6 +170,7 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
     -- closes so the capture rides this frame's submission and fence.
     forM_ mCapture $ \(capImg, capBuf) →
         liftIO $ recordScreenshotCopy cmdBuf capImg capBuf swapchainExtent
+                     (renderedImageLayout (siTarget swapInfo))
     liftIO $ endCommandBuffer cmdBuf
 
 -- | Render items in a single layer
