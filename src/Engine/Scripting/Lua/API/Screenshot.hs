@@ -49,9 +49,9 @@ captureScreenshotFn env = do
         Nothing → pushError "captureScreenshot: path argument required"
         Just pathBS
             | ecHeadless (engineConfig env) → pushError $
-                "captureScreenshot: no swapchain — this engine is "
+                "captureScreenshot: no render target — this engine is "
                 <> "running --headless (GPU-less); screenshots need a "
-                <> "windowed instance"
+                <> "rendering instance (windowed or --offscreen)"
             | otherwise → do
                 let path = T.unpack (TE.decodeUtf8 pathBS)
                 result ← Lua.liftIO $ requestCapture env path

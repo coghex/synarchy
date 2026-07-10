@@ -88,7 +88,8 @@ headlessGuard ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 headlessGuard env k
     | ecHeadless (engineConfig env) = pushError $
         "input: no input pipeline — this engine is running --headless; "
-        <> "input injection needs a windowed instance"
+        <> "input injection needs a rendering instance (windowed or "
+        <> "--offscreen)"
     | otherwise = k
 
 -- | Optional button argument (default left).

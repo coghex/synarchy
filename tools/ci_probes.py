@@ -60,6 +60,7 @@ BASE_FAILING = "base-failing"
 SLOW_WORLDGEN = "slow/worldgen-heavy"
 SCENARIO_HEAVY = "scenario-heavy"
 TARGETED = "targeted"
+NEEDS_GPU = "needs-gpu"
 UNCLASSIFIED = "unclassified"
 
 # Every registered probe (ALL_KEYS) NOT in CI_ELIGIBLE must have an entry
@@ -104,6 +105,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "repair_ai": (BASE_FAILING, "fails on master for content reasons (#489)"),
     "lua_orphan_prune": (BASE_FAILING, "fails on master for content reasons"),
     "physiology": (BASE_FAILING, "fails on master for content reasons"),
+    # --- needs-gpu: requires a real Vulkan device, which the CI runner
+    # does not have. First candidate for a future GPU-equipped CI lane. ---
+    "offscreen": (NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "flora_growth": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),
@@ -211,6 +215,7 @@ KNOWN_REASON_CATEGORIES = {
     BASE_FAILING,
     SLOW_WORLDGEN,
     SCENARIO_HEAVY,
+    NEEDS_GPU,
     TARGETED,
     UNCLASSIFIED,
 }
