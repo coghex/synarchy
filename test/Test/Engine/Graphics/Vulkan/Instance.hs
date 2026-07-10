@@ -32,7 +32,7 @@ spec env state = do
                 let config = defaultGraphicsConfig 
                         { gcDebugMode = False
                         , gcAppName = "VulkanTest" }
-                (inst, dbgMessenger) <- createVulkanInstance config
+                (inst, dbgMessenger) <- createVulkanInstance config InstanceForWindow
                 liftIO $ do
                     instanceHandle inst `shouldNotBe` nullPtr
                     dbgMessenger `shouldBe` Nothing
@@ -42,7 +42,7 @@ spec env state = do
                 let config = defaultGraphicsConfig 
                         { gcDebugMode = True
                         , gcAppName = "VulkanTest" }
-                (inst, dbgMessenger) <- createVulkanInstance config
+                (inst, dbgMessenger) <- createVulkanInstance config InstanceForWindow
                 liftIO $ do
                     instanceHandle inst `shouldNotBe` nullPtr
                     dbgMessenger `shouldSatisfy` isJust
@@ -62,10 +62,10 @@ spec env state = do
                         { gcDebugMode = False
                         , gcAppName = "VulkanTest" }
                 -- First creation
-                (inst1, _dbg1) <- createVulkanInstance config
+                (inst1, _dbg1) <- createVulkanInstance config InstanceForWindow
                 liftIO $ instanceHandle inst1 `shouldNotBe` nullPtr
                 -- Second creation
-                (inst2, _dbg2) <- createVulkanInstance config
+                (inst2, _dbg2) <- createVulkanInstance config InstanceForWindow
                 liftIO $ instanceHandle inst2 `shouldNotBe` nullPtr
                 pure ()
 

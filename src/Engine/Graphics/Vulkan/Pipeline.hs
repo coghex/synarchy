@@ -11,13 +11,17 @@ import Engine.Graphics.Vulkan.Types.Cleanup
 import Vulkan.Core10
 import Vulkan.Zero
 
--- | Creates a render pass for the swapchain.
+-- | Creates a render pass for the render target.
 -- When sampleCount > 1, uses a multisampled color attachment with resolve.
-createVulkanRenderPass ∷ Device → Format → SampleCountFlagBits → EngineM ε σ RenderPass
-createVulkanRenderPass device swapchainImageFormat sampleCount = do
+-- @finalLayout@ is where the (resolved) color image ends up: PRESENT_SRC
+-- for a swapchain, TRANSFER_SRC for an offscreen capture target (#650)
+-- — see 'Engine.Graphics.Types.renderedImageLayout'.
+createVulkanRenderPass ∷ Device → Format → SampleCountFlagBits → ImageLayout
+                       → EngineM ε σ RenderPass
+createVulkanRenderPass device swapchainImageFormat sampleCount targetLayout = do
     renderPass ← if sampleCount ≡ SAMPLE_COUNT_1_BIT
-        then createRenderPassNoMSAA device swapchainImageFormat
-        else createRenderPassMSAA device swapchainImageFormat sampleCount
+        then createRenderPassNoMSAA device swapchainImageFormat targetLayout
+        else createRenderPassMSAA device swapchainImageFormat sampleCount targetLayout
 
     let cleanupAction = destroyRenderPass device renderPass Nothing
     modify $ \s → s { graphicsState = (graphicsState s) {
@@ -26,8 +30,8 @@ createVulkanRenderPass device swapchainImageFormat sampleCount = do
     pure renderPass
 
 -- | Single-sample render pass (no MSAA) — original behavior
-createRenderPassNoMSAA ∷ Device → Format → EngineM ε σ RenderPass
-createRenderPassNoMSAA device swapchainImageFormat = do
+createRenderPassNoMSAA ∷ Device → Format → ImageLayout → EngineM ε σ RenderPass
+createRenderPassNoMSAA device swapchainImageFormat targetLayout = do
     let attachmentDesc = zero
           { format         = swapchainImageFormat
           , samples        = SAMPLE_COUNT_1_BIT
@@ -36,7 +40,7 @@ createRenderPassNoMSAA device swapchainImageFormat = do
           , stencilLoadOp  = ATTACHMENT_LOAD_OP_DONT_CARE
           , stencilStoreOp = ATTACHMENT_STORE_OP_DONT_CARE
           , initialLayout  = IMAGE_LAYOUT_UNDEFINED
-          , finalLayout    = IMAGE_LAYOUT_PRESENT_SRC_KHR
+          , finalLayout    = targetLayout
           }
 
         subpass = zero
@@ -67,9 +71,10 @@ createRenderPassNoMSAA device swapchainImageFormat = do
 
 -- | Multisampled render pass (MSAA enabled)
 -- Attachment 0: multisampled color (rendered to, then discarded)
--- Attachment 1: resolve target (swapchain image, presented)
-createRenderPassMSAA ∷ Device → Format → SampleCountFlagBits → EngineM ε σ RenderPass
-createRenderPassMSAA device swapchainImageFormat sampleCount = do
+-- Attachment 1: resolve target (swapchain/offscreen image, consumed)
+createRenderPassMSAA ∷ Device → Format → SampleCountFlagBits → ImageLayout
+                     → EngineM ε σ RenderPass
+createRenderPassMSAA device swapchainImageFormat sampleCount targetLayout = do
     let -- Attachment 0: Multisampled color attachment
         msaaColorAttachment = zero
           { format         = swapchainImageFormat
@@ -91,7 +96,7 @@ createRenderPassMSAA device swapchainImageFormat sampleCount = do
           , stencilLoadOp  = ATTACHMENT_LOAD_OP_DONT_CARE
           , stencilStoreOp = ATTACHMENT_STORE_OP_DONT_CARE
           , initialLayout  = IMAGE_LAYOUT_UNDEFINED
-          , finalLayout    = IMAGE_LAYOUT_PRESENT_SRC_KHR
+          , finalLayout    = targetLayout
           }
 
         subpass = zero

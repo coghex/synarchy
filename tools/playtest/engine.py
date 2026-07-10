@@ -1,10 +1,13 @@
 """Engine connection for the playtest harness (#647).
 
-Owns the windowed instance lifecycle and every debug-console
-interaction the lockstep loop needs: pause control, F1 screenshots,
-F2 input injection, and the oracle snapshot (F3 widgets, event-log
-delta, menu state) that is recorded in the trace but NEVER shown to
-the player agent.
+Owns the game-instance lifecycle — windowed (the original substrate,
+steals focus) or offscreen (#650: GPU on, window off, unattended /
+parallel-safe) — and every debug-console interaction the lockstep
+loop needs: pause control, F1 screenshots, F2 input injection, and the
+oracle snapshot (F3 widgets, event-log delta, menu state) that is
+recorded in the trace but NEVER shown to the player agent. Both modes
+serve the identical render + input pipeline, so everything below the
+launch flags is mode-blind.
 
 Also owns the action->input.* translation: the player acts in
 screenshot pixel space (F1's framebuffer pixels), which is exactly the
@@ -31,6 +34,11 @@ class ActionError(ValueError):
 # The action vocabulary the harness accepts from agents. Mirrors F2's
 # verbs; documented for the player in the agent prompt and in README.md.
 ACTION_KINDS = ("click", "drag", "scroll", "key", "hold", "type", "wait", "done")
+
+# How the instance renders: "windowed" opens (and focuses) a real game
+# window; "offscreen" (#650) runs the same full render pipeline into
+# offscreen images — no window, no focus steal, parallel-safe.
+RENDER_MODES = ("windowed", "offscreen")
 
 
 def _lua_str(text: str) -> str:
@@ -123,23 +131,35 @@ def translate_action(action: dict, fb_size: tuple[int, int]):
 
 
 class PlaytestEngine:
-    """A launched windowed instance driven over the debug console."""
+    """A launched game instance driven over the debug console."""
 
-    def __init__(self, port: int, log_path: str):
+    def __init__(self, port: int, log_path: str,
+                 render_mode: str = "windowed"):
+        if render_mode not in RENDER_MODES:
+            raise ValueError(f"render_mode {render_mode!r} "
+                             f"(expected one of {RENDER_MODES})")
         self.port = port
         self.log_path = log_path
+        self.render_mode = render_mode
         self.proc = None
         self.fb_size: tuple[int, int] | None = None
         self._event_log_seen = 0
 
     # -- lifecycle ---------------------------------------------------
 
+    def boot_mode(self) -> tuple[str, ...]:
+        """The probelib.boot mode flags this render mode maps to."""
+        return () if self.render_mode == "windowed" else ("--offscreen",)
+
     def launch(self, ready_timeout: float = 180.0) -> None:
-        """Boot a WINDOWED instance (mode=()) — F1/F2 need a real
-        render + input pipeline; this deliberately opens (and focuses)
-        a game window. probelib.boot blocks until READY."""
-        self.proc = boot(self.port, log=self.log_path, mode=(),
-                         ready_timeout=ready_timeout, label="playtest engine")
+        """Boot the instance — F1/F2 need a real render + input
+        pipeline, which both modes provide: windowed (mode=())
+        deliberately opens and focuses a game window; offscreen
+        (--offscreen, #650) renders windowless so sessions can run
+        unattended and in parallel. probelib.boot blocks until READY."""
+        self.proc = boot(self.port, log=self.log_path, mode=self.boot_mode(),
+                         ready_timeout=ready_timeout,
+                         label=f"playtest engine ({self.render_mode})")
 
     def quit(self) -> None:
         if self.proc is not None and self.proc.poll() is None:

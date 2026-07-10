@@ -250,6 +250,37 @@ repo.
 
 The engine supports a headless mode for automated testing, scripted world generation, and agent workflows. No GPU, no window, no focus stealing.
 
+### Offscreen render mode (#650)
+
+`--offscreen` is the third boot mode: **GPU on, window off** — the full
+Vulkan render pipeline drawing to offscreen images with no GLFW window,
+no swapchain, no focus steal. Unlike GPU-less `--headless`, the REAL UI
+flow runs (loading screen → menus → in-game HUD), `debug.captureScreenshot`
+works (always — the image usage is ours to choose, none of #700's surface
+negotiation), and `input.*` injection (#644) drives the UI. This is the
+unattended/parallel substrate for the playtest harness (#641): multiple
+instances run concurrently on distinct ports.
+
+```bash
+# Boot offscreen (render size defaults to the video-config resolution;
+# --size WxH pins it for deterministic parallel runs)
+cabal run exe:synarchy -- --offscreen --port 9018 --size 1280x720 > /tmp/off.log 2>&1 &
+until grep -q "READY" /tmp/off.log 2>/dev/null; do sleep 0.2; done
+echo "return debug.captureScreenshot('/tmp/shot.png')" | nc -w 10 localhost 9018
+echo "return input.click(640, 260)" | nc -w 5 localhost 9018
+echo 'engine.quit()' | nc -w 2 localhost 9018
+```
+
+Frames pace on a fixed ~60 fps sleep (no vsync exists offscreen). Video
+settings that need a window — resolution / window-mode / vsync / MSAA
+changes — log a warning and no-op, same as they always have with no
+window. Requires a GPU, so the gate is manual-only (`needs-gpu` in
+`ci_probes.py --status`): **`python3 tools/offscreen_probe.py`** —
+windowless boot → main menu → create-world → real worldgen → in-game
+HUD, all verified through screenshots + injected clicks located via the
+`ui.dumpWidgets` oracle (never hardcoded coordinates), plus a second
+concurrent instance on another port.
+
 ### Starting headless
 
 ```bash
@@ -927,7 +958,7 @@ echo 'engine.quit()' | nc -w 2 localhost 8008
 
 ### Tips for agents
 
-- **NEVER launch `cabal run synarchy` or `cabal run exe:synarchy` without `--dump` or `--headless`** — this opens a graphical window that steals focus from the user
+- **NEVER launch `cabal run synarchy` or `cabal run exe:synarchy` without `--dump`, `--headless`, or `--offscreen`** — otherwise it opens a graphical window that steals focus from the user (`--offscreen` renders with the GPU but creates no window, so it is safe)
 - **Prefer `--dump` for testing** — it's self-contained, no TCP needed, outputs JSON to stdout. It already implies headless (no window, no GPU).
 - If you must use `--headless`, use `--port 9008` (or another non-8008 port) so you don't conflict with the user's graphical instance
 - **NEVER use `pkill -f synarchy`** — this kills the user's GUI window. Instead:

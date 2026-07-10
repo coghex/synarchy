@@ -186,6 +186,7 @@ library
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.MSAA
                      Engine.Graphics.Vulkan.Pipeline
+                     Engine.Graphics.Vulkan.Offscreen
                      Engine.Graphics.Vulkan.Pipeline.Bindless
                      Engine.Graphics.Vulkan.Recreate
                      Engine.Graphics.Vulkan.Sampler.Types
@@ -796,6 +797,7 @@ executable synarchy
     other-modules: App.Cli
                  , App.Exception
                  , App.Graphical
+                 , App.Offscreen
                  , App.Headless
                  , App.Dump
                  , App.Preview

@@ -1,39 +1,47 @@
--- | Full-graphics boot path: GLFW window + Vulkan, the normal player-facing
---   run mode.
-module App.Graphical
-  ( runGraphical
+-- | Offscreen boot path (#650): full Vulkan render with no window —
+--   no GLFW at all. The complete engine runs (every worker thread,
+--   the real Lua UI stack, the debug console), frames render to
+--   offscreen images, debug.captureScreenshot reads them back, and
+--   input arrives only through the inject verbs (#644). No focus is
+--   stolen and no window appears, so playtest-harness campaigns can
+--   run unattended and several instances can run in parallel on
+--   distinct ports.
+module App.Offscreen
+  ( runOffscreen
   ) where
 
 import UPrelude
 import Control.Exception (displayException)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import System.Exit (exitFailure)
+import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
-import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
-import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
+import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Types (EngineConfig(..), BootProfile(..))
 import Engine.Core.Thread (shutdownThread)
 import Engine.Core.Log (LogCategory(..), shutdownLogger)
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
-import Engine.Graphics.Vulkan.Init (initializeVulkan)
-import Engine.Graphics.Window.Types (Window(..))
-import qualified Engine.Graphics.Window.GLFW as GLFW
-import Engine.Input.Callback (setupCallbacks)
+import Engine.Graphics.Config (VideoConfig(..))
+import Engine.Graphics.Vulkan.Init (initializeVulkanOffscreen)
 import Engine.Input.Thread (startInputThread)
-import Engine.Loop (mainLoop)
+import Engine.Loop (mainLoopOffscreen)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Thread (startLuaThread)
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import App.Exception (guardNativeExceptions)
 
--- | Run engine with full graphics (GLFW window + Vulkan)
-runGraphical ∷ BootProfile → Maybe Int → IO ()
-runGraphical bootProfile mPort = do
-  -- Initialize engine
+-- | Run the engine offscreen: GPU on, window off. The render size
+--   defaults to the video-config resolution (matching what a windowed
+--   run of the same machine would show) and can be pinned with
+--   @--size WxH@ so parallel harness runs are deterministic regardless
+--   of local config.
+runOffscreen ∷ BootProfile → Maybe Int → Maybe (Int, Int) → IO ()
+runOffscreen bootProfile mPort mSize = do
   EngineInitResult env ← initializeEngine
 
   let env' = case mPort of
@@ -55,28 +63,30 @@ runGraphical bootProfile mPort = do
   combatThreadState ← startCombatThread env'
 
   videoConfig ← readIORef (videoConfigRef env')
+  let (w, h) = fromMaybe (vcWidth videoConfig, vcHeight videoConfig) mSize
+
+  -- What GLFW.createWindow does for windowed boots: seed the size refs
+  -- and tell the Lua UI its (fixed) framebuffer geometry so layout
+  -- runs against the real render size.
+  writeIORef (windowSizeRef env') (w, h)
+  writeIORef (framebufferSizeRef env') (w, h)
+  Q.writeQueue (luaQueue env') (LuaWindowResize w h)
+  Q.writeQueue (luaQueue env') (LuaFramebufferResize w h)
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
-        logInfoM CatSystem "Starting engine..."
-        window ← GLFW.createWindow $ defaultWindowConfig videoConfig
-        modify $ \s → s { graphicsState = (graphicsState s) {
-                            glfwWindow = Just window } }
-
-        let Window glfwWin = window
-        liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')
-
-        _ ← initializeVulkan window
-        mainLoop
+        logInfoM CatSystem "Starting engine (offscreen)..."
+        _ ← initializeVulkanOffscreen (w, h)
+        mainLoopOffscreen
 
         -- Combat first: wound ticks enqueue UnitKill/UnitCollapse onto
         -- the unit queue, so the producer has to stop before the
         -- consumer (unit thread) is torn down inside shutdownEngine.
         liftIO $ shutdownThread combatThreadState
         liftIO $ shutdownThread simThreadState
-        shutdownEngine (Just window) (Just unitThreadState)
+        shutdownEngine Nothing (Just unitThreadState)
                        (Just worldThreadState) inputThreadState luaThreadState
-        logDebugM CatSystem "Engine shutdown complete."
+        logDebugM CatSystem "Offscreen engine shutdown complete."
 
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
   case result of

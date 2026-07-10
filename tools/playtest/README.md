@@ -5,13 +5,16 @@ perceiving only screenshots, acting only through injected input — and
 records everything into a replayable **session trace** for the critic
 (H2, #648) to analyze. H1 records; it never analyzes or judges.
 
-> ⚠️ **This launches a windowed game instance that takes over your
-> screen and steals focus** (F1 screenshots and F2 input need a real
-> render pipeline; GPU-less `--headless` cannot host a playtest). Run
-> it while away from the machine or on a second display/machine. This
-> is the one sanctioned exception to the repo's never-launch-graphical
-> rule: the graphical instance *is* the system under test. Offscreen
-> unattended mode is P1 (#650).
+> ⚠️ **By default this launches a windowed game instance that takes
+> over your screen and steals focus** (F1 screenshots and F2 input
+> need a real render pipeline; GPU-less `--headless` cannot host a
+> playtest). Run it while away from the machine, on a second
+> display/machine — or pass **`--render-mode offscreen`** (P1, #650):
+> the same full render + input pipeline drawing to offscreen images,
+> no window, no focus steal, safe to run unattended and in parallel
+> on distinct ports. The windowed default is the one sanctioned
+> exception to the repo's never-launch-graphical rule: the graphical
+> instance *is* the system under test.
 
 ## Usage
 
@@ -20,6 +23,11 @@ records everything into a replayable **session trace** for the critic
 # `ant auth login` profile, and `pip install anthropic`)
 python3 tools/playtest/run.py
 python3 tools/playtest/run.py --persona impatient_imogen --turns 60 --dt 3
+
+# Same session, but unattended: windowless offscreen render (#650) —
+# no focus steal, and several sessions can run in parallel on
+# distinct --port values
+python3 tools/playtest/run.py --render-mode offscreen
 
 # Tiny scripted session — exercises the loop/trace/replay plumbing on a
 # real windowed instance with no LLM call
@@ -213,10 +221,11 @@ clean and additive.
   oracle-blind prompt shape (FakeEngine + scripted agent; no window,
   no build, no API key).
 - `python3 tools/playtest/run.py --smoke` — few-turn scripted session
-  against a real **windowed** instance (human-run; verifies F1/F2/F3
-  wiring end to end).
-- A real LLM session is the acceptance run; needs GPU + focus and an
-  API key.
+  against a real instance (windowed by default; add
+  `--render-mode offscreen` for the windowless #650 substrate —
+  verifies F1/F2/F3 wiring end to end either way).
+- A real LLM session is the acceptance run; needs a GPU and an API
+  key (plus focus only in windowed mode).
 - `python3 tools/playtest/critic.py --selftest` — offline critic
   pipeline check (canned trace, fake critic, no key);
   `--eval` is the real-model acceptance run against the planted trace.
