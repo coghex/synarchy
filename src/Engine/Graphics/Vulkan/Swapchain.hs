@@ -3,6 +3,7 @@ module Engine.Graphics.Vulkan.Swapchain
   ( createVulkanSwapchain
   , createSwapchainImageViews
   , querySwapchainSupport
+  , swapchainImageUsage
   ) where
 
 import UPrelude
@@ -38,6 +39,24 @@ querySwapchainSupport pdev surface = do
   
   pure $ SwapchainSupportDetails caps fmts modes
 
+-- | The image-usage flags to request for the swapchain, given the
+--   surface's supportedUsageFlags, plus whether screenshot capture is
+--   available. COLOR_ATTACHMENT is guaranteed by the Vulkan spec on
+--   every presentable surface; TRANSFER_SRC — what
+--   debug.captureScreenshot (#643) needs to copy the presented image —
+--   is only requested when the surface actually reports it (#700):
+--   requesting an unsupported usage is invalid and can fail swapchain
+--   creation/recreation outright, so screenshot support must never
+--   change the base swapchain contract. Pure, so the selection is
+--   testable against synthetic capability flags.
+swapchainImageUsage ∷ ImageUsageFlags → (ImageUsageFlags, Bool)
+swapchainImageUsage supported =
+    let capture = (supported ⌃ IMAGE_USAGE_TRANSFER_SRC_BIT) ≠ zero
+    in ( if capture
+           then IMAGE_USAGE_COLOR_ATTACHMENT_BIT ⌄ IMAGE_USAGE_TRANSFER_SRC_BIT
+           else IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+       , capture )
+
 -- | Creates a new swapchain. The framebuffer size is only consulted
 --   when the surface reports the 0xFFFFFFFF "application chooses"
 --   extent sentinel (e.g. Wayland).
@@ -52,6 +71,11 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
       maxImg     = Surf.maxImageCount capabilities
       imageCount = if maxImg > 0 then min desired maxImg else desired
   spMode ← chooseSwapPresentMode ssd vsyncEnabled
+  let (usage, captureOK) =
+        swapchainImageUsage (Surf.supportedUsageFlags capabilities)
+  unless captureOK $ logDebugM CatSwapchain $
+    "surface lacks TRANSFER_SRC swapchain usage — "
+    <> "debug.captureScreenshot will report itself unavailable"
   let sExtent = chooseSwapExtent ssd fbSize
       -- Sharing is decided by queue FAMILY, not queue handle — two
       -- distinct queues from the same family still allow EXCLUSIVE,
@@ -68,10 +92,10 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
         , imageColorSpace = cs
         , imageExtent = sExtent
         , imageArrayLayers = 1
-          -- TRANSFER_SRC lets debug.captureScreenshot (#643) copy the
-          -- presented image into a host-visible staging buffer.
-        , imageUsage = IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                     ⌄ IMAGE_USAGE_TRANSFER_SRC_BIT
+          -- capability-checked: COLOR_ATTACHMENT always, TRANSFER_SRC
+          -- (for debug.captureScreenshot, #643) only when the surface
+          -- supports it — see swapchainImageUsage (#700).
+        , imageUsage = usage
         , imageSharingMode = sharing
         , queueFamilyIndices = qfi
         , preTransform = currentTransform capabilities
@@ -103,6 +127,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
     , siSwapImgViews = V.empty
     , siSwapImgFormat = form
     , siSwapExtent = sExtent
+    , siSupportsCapture = captureOK
     }
 
 -- | Creates image views for swapchain images

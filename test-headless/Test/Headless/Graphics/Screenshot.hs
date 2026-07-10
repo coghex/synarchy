@@ -13,8 +13,14 @@ import qualified Data.ByteString.Lazy as BSL
 import Engine.Graphics.Screenshot (grabToImage, grabToPngBytes)
 import Engine.Graphics.Types (ScreenshotGrab(..), ScreenshotOrder(..))
 import Engine.Graphics.Vulkan.Screenshot (screenshotOrderOf)
+import Engine.Graphics.Vulkan.Swapchain (swapchainImageUsage)
 import Test.Hspec
-import Vulkan.Core10 (Format(..))
+import Vulkan.Core10 (Format(..), ImageUsageFlags,
+                      pattern IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                      pattern IMAGE_USAGE_TRANSFER_SRC_BIT,
+                      pattern IMAGE_USAGE_TRANSFER_DST_BIT,
+                      pattern IMAGE_USAGE_SAMPLED_BIT)
+import Vulkan.Zero (zero)
 
 -- | Build a grab from a list of 4-byte pixels (given in the grab's
 --   native channel order), rows left-to-right, top row first.
@@ -34,6 +40,36 @@ decodeRGBA bytes = case JP.decodePng (BSL.toStrict bytes) of
 
 spec ∷ Spec
 spec = do
+    describe "swapchainImageUsage (#700)" $ do
+        let color = IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+            tsrc  = IMAGE_USAGE_TRANSFER_SRC_BIT
+            subsetOf a b = (a ⌃ complement b) ≡ (zero ∷ ImageUsageFlags)
+        it "requests TRANSFER_SRC (capture available) when the surface supports it" $ do
+            let supported = color ⌄ tsrc ⌄ IMAGE_USAGE_TRANSFER_DST_BIT
+                (usage, capture) = swapchainImageUsage supported
+            capture `shouldBe` True
+            (usage ⌃ tsrc) `shouldNotBe` (zero ∷ ImageUsageFlags)
+        it "falls back to COLOR_ATTACHMENT only (capture unavailable) without it" $ do
+            let (usage, capture) = swapchainImageUsage
+                    (color ⌄ IMAGE_USAGE_SAMPLED_BIT)
+            capture `shouldBe` False
+            usage `shouldBe` color
+        it "never requests a usage flag the surface didn't report (beyond the spec-guaranteed COLOR_ATTACHMENT)" $ do
+            let cases = [ color
+                        , color ⌄ tsrc
+                        , color ⌄ IMAGE_USAGE_SAMPLED_BIT
+                        , color ⌄ tsrc ⌄ IMAGE_USAGE_TRANSFER_DST_BIT
+                        ]
+            forM_ cases $ \supported → do
+                let (usage, _) = swapchainImageUsage supported
+                usage `shouldSatisfy` (`subsetOf` (supported ⌄ color))
+        it "capture availability equals TRANSFER_SRC being requested" $ do
+            let both = [ swapchainImageUsage s
+                       | s ← [color, color ⌄ tsrc, tsrc, zero] ]
+            forM_ both $ \(usage, capture) →
+                ((usage ⌃ tsrc) ≠ (zero ∷ ImageUsageFlags))
+                    `shouldBe` capture
+
     describe "screenshotOrderOf" $ do
         it "maps the preferred swapchain format (B8G8R8A8_UNORM) to BGRA" $
             screenshotOrderOf FORMAT_B8G8R8A8_UNORM `shouldBe` Just ScreenshotBGRA
