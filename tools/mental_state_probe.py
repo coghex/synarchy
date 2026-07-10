@@ -261,6 +261,44 @@ def main():
         send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, uid) != "break")
 
+        # ---- 4c. Entering a break PREEMPTS active work (onExit fires).
+        # Plant a real in-progress construct_job phase machine and force
+        # the break in the SAME console line — the Lua thread serialises
+        # console commands against script updates, so no AI tick can
+        # interleave, and once the break is set every subsequent tick
+        # short-circuits before scoring. The ONLY path that can demote
+        # the planted "building" phase is the short-circuit's preempt
+        # calling constructOnExit (building -> walking, the accumulator
+        # reset that stops a 60-120 s break landing as instant progress).
+        send(P, f"local ai=require('scripts.unit_ai') "
+                f"local s=ai.getState({uid}) "
+                f"s.currentAction='construct_job' "
+                f"s.constructJob={{phase='building', work=10, progress=0}} "
+                f"require('scripts.mental_state').forceBreak({uid},'wander'); "
+                f"return 'ok'")
+
+        def preempted():
+            d = json.loads(send(
+                P, f"local s=require('scripts.unit_ai').getState({uid}) "
+                   f"return {{ca=s.currentAction, "
+                   f"ph=s.constructJob and s.constructJob.phase}}"))
+            return d if (d.get("ca") == "mental_break"
+                         and d.get("ph") == "walking") else None
+        if poll_until(8, preempted):
+            print("  [pass] break preempts active work: constructOnExit fired "
+                  "(phase building -> walking)")
+        else:
+            d = json.loads(send(
+                P, f"local s=require('scripts.unit_ai').getState({uid}) "
+                   f"return {{ca=s.currentAction, "
+                   f"ph=s.constructJob and s.constructJob.phase}}"))
+            ok = False
+            print(f"  [FAIL] break didn't preempt the running action: {d}")
+        send(P, f"local s=require('scripts.unit_ai').getState({uid}) "
+                f"s.constructJob=nil unit.setStat({uid},'mental_until',0); "
+                f"return 'ok'")
+        poll_until(5, lambda: mstate(P, uid) != "break")
+
         # ---- 5. Euphoria: entry, concentration bonus, exit band. ----
         tune(P, EUPHORIA_CHANCE=1.0, BREAK_CHANCE_MAX=0.0)
         # Drain stamina so the concentration base sits well below the

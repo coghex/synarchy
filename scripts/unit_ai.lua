@@ -207,9 +207,10 @@ local function tickOne(uid, defName)
     core.maintainTask(uid, s)
 
     -- Delirium (physiological) and mental break (psychological, #352):
-    -- a unit in either can't act purposefully — no goals/work/combat.
-    -- The behaviours live in scripts/unit_ai_mental.lua.
-    if mentalAi.shortCircuit(uid, s, params, activity) then return end
+    -- a unit in either can't act purposefully — no goals/work/combat,
+    -- and entry preempts the running action (its onExit fires). The
+    -- behaviours live in scripts/unit_ai_mental.lua.
+    if mentalAi.shortCircuit(uid, s, params, activity, actList) then return end
 
     -- Stuck-walk watchdog. A unit stuck in walking/running with no
     -- position progress never returns to idle, and the execute gate

@@ -3,8 +3,9 @@
 --
 --   * Delirium (physiological): consciousness in the delirious band
 --     (heat stroke / hypoxia / salt imbalance — not yet unconscious,
---     which collapses the unit instead). Moved here verbatim from
---     unit_ai.lua's tickOne; semantics unchanged.
+--     which collapses the unit instead). Moved here from unit_ai.lua's
+--     tickOne, plus one fix: entry now fires the running action's
+--     onExit (see preempt below) — the old inline block skipped it.
 --   * Mental break (psychological, scripts/mental_state.lua): the
 --     state-of-mind episode. Behaviour was rolled once at episode
 --     entry and held: aimless wander (the same stumble delirium uses)
@@ -63,23 +64,43 @@ local function fleeExecute(uid, s, params)
                 mv.ordered(uid))
 end
 
+-- Entering a short-circuit state PREEMPTS whatever action was running:
+-- fire its onExit exactly like the dispatcher's switch path does, so
+-- work phase machines reset their elapsed-time accumulators (construct's
+-- building→walking, craft's setBillWorking) — without this, an episode
+-- keeps a craft bill drawing power throughout and lands the entire
+-- 60–120 s interruption as instant progress on resume. Persistent
+-- state (claims, consumed materials) stays, same as any preemption.
+local function preempt(uid, s, params, actList, newName)
+    if s.currentAction == newName then return end
+    if s.currentAction then
+        for _, a in ipairs(actList or {}) do
+            if a.name == s.currentAction then
+                if a.onExit then a.onExit(uid, s, params) end
+                break
+            end
+        end
+    end
+    s.currentAction   = newName
+    s.actionStartedAt = engine.gameTime()
+end
+
 -- Returns true when it handled the tick — the unit can't act
 -- purposefully and the dispatch loop must not score actions.
-function M.shortCircuit(uid, s, params, activity)
+function M.shortCircuit(uid, s, params, activity, actList)
     -- Delirium: the unit stumbles — aimless slow wander, no goals/
     -- work/combat. Only re-issue when not already moving (no spam).
     if brain.isDelirious(uid) then
+        preempt(uid, s, params, actList, "delirious")
         if activity ~= "walking" and activity ~= "running" then
             needs.wanderExecute(uid, s, params)
         end
-        s.currentAction = "delirious"
         return true
     end
 
     -- Mental break: same short-circuit, psychologically driven.
-    -- Persistent state (claims, phase machines) stays, exactly like
-    -- delirium — preempted work resumes once the episode passes.
     if mental.isBreaking(uid) then
+        preempt(uid, s, params, actList, "mental_break")
         if activity ~= "walking" and activity ~= "running" then
             if mental.breakBehavior(uid) == "flee" then
                 fleeExecute(uid, s, params)
@@ -87,7 +108,6 @@ function M.shortCircuit(uid, s, params, activity)
                 needs.wanderExecute(uid, s, params)
             end
         end
-        s.currentAction = "mental_break"
         return true
     end
 
