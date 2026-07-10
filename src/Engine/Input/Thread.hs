@@ -399,7 +399,15 @@ processInput env inpSt event = case event of
                                     return ClickGame
 
                       _ → do
+                        -- GLFW mouse buttons 4-8 (side/extra buttons):
+                        -- Dispatch.hs maps anything past MouseButton'3 to
+                        -- Lua button 0, and init_mouse.lua's onMouseDown
+                        -- only branches on MOUSE_LEFT/MOUSE_RIGHT, so this
+                        -- reaches the end of that chain with no defined
+                        -- behavior anywhere and no recordClick call
+                        -- (review round 3) — record it here instead.
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                        recordRouteOutcome "noop" (Just "unmapped_button")
                         return ClickGame
 
         -- The release ALWAYS goes to Lua — UI widget drags (slider
