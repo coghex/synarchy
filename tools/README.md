@@ -103,9 +103,14 @@ commit-boundary verb's own source for its `debug.recordOutcome` /
 `pushActionOutcome` call site and reports instrumented yes/no, mirroring
 `ci_probes.py --status`'s "make the gap visible" style. Not a blocking
 gate — Tier 2/3 verbs are deliberate fast-follows, not regressions.
+Verbs that share a file (e.g. `unitAi.commandMove`/`commandAttack`,
+`craft.execute`/`executeAt`) are checked within their OWN function body,
+not file-wide, so instrumenting one sibling can't false-positive the
+other. `--self-test` proves that scoping actually discriminates.
 
 ```bash
 python3 tools/action_outcome_coverage.py
+python3 tools/action_outcome_coverage.py --self-test
 ```
 
 ### Workflow
@@ -167,6 +172,7 @@ instead of reaching for `--help` when in doubt.
 
 | Probe | Gates | Boot | Purpose |
 |-------|-------|------|---------|
+| `action_outcome_probe.py` | #646 | worldgen | F4 action-outcome oracle through the real Lua contract: `debug.recordOutcome` requires kind+outcome, a full record round-trips through `debug.drainActionOutcomes` with every field intact, the ring drains destructively (second drain empty), a mixed tillable/non-tillable sweep reports `partial` with `requested == applied + dropped`, and an unloaded-anchor sweep reports `rejected`. |
 | `cargo_capacity_probe.py` | #189 | arena | `depositToCargo` weighs the actual `ItemInstance` (fill + nested contents), not the item def's base weight. |
 | `chop_probe.py` | #97 | worldgen | Chop-designation layer + chop AI + `wood_log` yield, end to end. |
 | `collapse_crawl_probe.py` | #304 | arena | Collapse↔crawl pose hysteresis in `tickInjuries`. |
@@ -364,6 +370,27 @@ a focused text field with Backspace/Enter editing, UI-vs-game scroll
 routing, and a full drag with `"game"` down/up route pairing. The
 fixture tears itself down afterwards.
 
+### `action_outcome_layer_a_check.py`
+
+The F4 (#646) Layer A gate: `Engine.Input.Thread`'s `ClickRoute`
+decision and `scripts/init_mouse.lua`'s tool/selection/deadclick chain
+only run on a real GLFW-backed instance, same reason `input_check.py`
+is GUI-attached. Reuses `input_check_fixture.lua`'s button rather than
+building a second fixture:
+
+```bash
+python3 tools/action_outcome_layer_a_check.py             # attach to port 8008
+python3 tools/action_outcome_layer_a_check.py --port 9008
+```
+
+Injects a click on the fixture button and asserts
+`debug.drainActionOutcomes()` drains an `"accepted"` record naming the
+consuming handler, then a click well clear of any widget and asserts
+exactly one more record — `"deadclick"` if the instance isn't currently
+driving a visible gameplay world, else whatever the world-selection
+chain produced (both are a pass; the point is that every click
+produces exactly one record, not a specific outcome value).
+
 ## Directory layout
 ```
 tools/
@@ -379,7 +406,8 @@ tools/
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── playtest/               (naive-player UX playtest harness — see above)
 ├── input_check.py          (GUI-attached input.* injection check — see above)
-├── *_probe.py              (headless behavior probes — see above)
+├── action_outcome_layer_a_check.py (GUI-attached F4 Layer A check — see above)
+├── *_probe.py              (headless behavior probes — see above; includes action_outcome_probe.py, #646)
 └── baselines/
     ├── _seeds.json         (seed list config)
     └── seed*.json          (per-seed baseline data)

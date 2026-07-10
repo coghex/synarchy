@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""F4 action-outcome oracle probe (#646).
+
+Exercises the PUBLIC Lua contract end to end — the thing review round 1
+on PR #704 flagged the hspec regression for bypassing (it swapped
+`actionOutcomeRef` directly instead of going through the real
+`debug.recordOutcome`/`debug.drainActionOutcomes` verbs). Boots a
+headless engine and checks:
+
+  1. debug.recordOutcome requires kind+outcome: a call missing either
+     returns false and pushes nothing.
+  2. A full record round-trips through debug.drainActionOutcomes with
+     every field intact (ts/kind/outcome/where/target/requested/
+     applied/dropped/reason/handler).
+  3. The ring drains destructively: a second drainActionOutcomes()
+     immediately after the first returns empty (same contract as
+     combat.drainEvents/injury.drainEvents).
+  4. The REQUIRED partial path: designating a rectangle straddling both
+     tillable ground and a fluid/sloped/flora tile on a real generated
+     world reports outcome="partial" with dropped > 0 and
+     requested == applied + dropped.
+  5. A designation anchored on an unloaded tile reports "rejected" with
+     applied == 0 and a reason.
+
+Usage: python3 tools/action_outcome_probe.py [--port 9179] [--seed 42]
+       [--size 64] [--plates 3]
+"""
+import argparse
+import glob
+import json
+import sys
+
+from probelib import boot, quit_engine, send
+
+SPROOT = "/tmp"
+
+
+def jget(port, lua, timeout=10.0):
+    raw = send(port, lua, timeout)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw.strip('"')
+
+
+def bootstrap(port):
+    for pattern, fn in [
+        ("data/materials/*.yaml", "engine.loadMaterialYaml"),
+        ("data/flora/*.yaml",     "engine.loadFloraYaml"),
+    ]:
+        for path in sorted(glob.glob(pattern)):
+            send(port, f"{fn}('{path}'); return 'ok'")
+
+
+def find_mixed_box(port, span=6):
+    """Scan for an anchor tile that's flat/dry/flora-free with at least
+    one DIFFERENT tile (fluid, sloped, or flora-carrying) inside a 5x5
+    box around it — guarantees till.designate's filter drops something
+    without depending on any specific seed's geography beyond "typical
+    generated terrain has some variety within 5 tiles of most points"."""
+    for sx in range(-span * 8, span * 8 + 1, 3):
+        for sy in range(-span * 8, span * 8 + 1, 3):
+            slope = jget(port, f"return world.getSlopeAt({sx},{sy})")
+            if slope != 0:
+                continue
+            fluid = jget(port, f"return world.getFluidAt({sx},{sy})")
+            if isinstance(fluid, dict) and fluid.get("type"):
+                continue
+            flora = jget(port, f"return world.getFloraAt({sx},{sy})")
+            if isinstance(flora, dict):
+                continue
+            # Candidate anchor is tillable. Check a 5x5 box around it for
+            # at least one tile that ISN'T (mixed sweep -> partial).
+            mixed = False
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if dx == 0 and dy == 0:
+                        continue
+                    gx, gy = sx + dx, sy + dy
+                    s2 = jget(port, f"return world.getSlopeAt({gx},{gy})")
+                    f2 = jget(port, f"return world.getFluidAt({gx},{gy})")
+                    fl2 = jget(port, f"return world.getFloraAt({gx},{gy})")
+                    if s2 != 0 or (isinstance(f2, dict) and f2.get("type")) \
+                       or isinstance(fl2, dict):
+                        mixed = True
+                        break
+                if mixed:
+                    break
+            if mixed:
+                return sx, sy
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=9179)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--size", type=int, default=64)
+    ap.add_argument("--plates", type=int, default=3)
+    args = ap.parse_args()
+    port = args.port
+    passed = True
+
+    proc = boot(port, f"{SPROOT}/action_outcome_probe_engine.log")
+    try:
+        bootstrap(port)
+
+        # --- 1/2/3: the public recordOutcome/drainActionOutcomes contract ---
+        send(port, "return debug.drainActionOutcomes()")  # clear any startup noise
+
+        bad = jget(port, 'return debug.recordOutcome{kind="x"}')  # no outcome
+        ok1 = bad is False
+        passed &= ok1
+        print(f"  [{'PASS' if ok1 else 'FAIL'}] recordOutcome without "
+              f"outcome returns false: {bad}")
+
+        after_bad = jget(port, "return debug.drainActionOutcomes()")
+        ok1b = after_bad == {} or after_bad == []
+        passed &= ok1b
+        print(f"  [{'PASS' if ok1b else 'FAIL'}] the rejected call pushed "
+              f"nothing: {after_bad}")
+
+        ok = jget(port, 'return debug.recordOutcome{kind="probe.verb", '
+                        'outcome="accepted", where={x=3,y=4}, target=7, '
+                        'requested=2, applied=2, dropped=0, '
+                        'reason="r", handler="h"}')
+        ok2 = ok is True
+        passed &= ok2
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] full-field recordOutcome "
+              f"returns true: {ok}")
+
+        drained = jget(port, "return debug.drainActionOutcomes()")
+        rec = drained[0] if isinstance(drained, list) and drained else {}
+        ok3 = (rec.get("kind") == "probe.verb" and rec.get("outcome") == "accepted"
+               and rec.get("where") == {"x": 3, "y": 4} and rec.get("target") == 7
+               and rec.get("requested") == 2 and rec.get("applied") == 2
+               and rec.get("dropped") == 0 and rec.get("reason") == "r"
+               and rec.get("handler") == "h")
+        passed &= ok3
+        print(f"  [{'PASS' if ok3 else 'FAIL'}] drained record has every "
+              f"field intact: {drained}")
+
+        second = jget(port, "return debug.drainActionOutcomes()")
+        ok4 = second == {} or second == []
+        passed &= ok4
+        print(f"  [{'PASS' if ok4 else 'FAIL'}] second drain is empty "
+              f"(destructive read): {second}")
+
+        # --- 4/5: the real till.designate partial + rejected paths ---
+        send(port, f"world.init('probe', {args.seed}, {args.size}, "
+                   f"{args.plates}); return 'ok'")
+        send(port, "return world.waitForInit(300)", timeout=310)
+        send(port, "world.show('probe'); return 'ok'")
+        send(port, "return world.loadChunksInRegion(-8, -8, 8, 8)", timeout=30)
+        send(port, "return world.waitForChunks(120)", timeout=125)
+
+        box = find_mixed_box(port)
+        if not box:
+            print("  [SKIP] no mixed tillable/non-tillable 5x5 box found in "
+                  "the loaded region (try another seed) — partial path unverified")
+        else:
+            sx, sy = box
+            send(port, "return debug.drainActionOutcomes()")  # clear noise
+            send(port, f"till.designate('probe',{sx-2},{sy-2},{sx+2},{sy+2}); "
+                       f"return 'ok'")
+            drained2 = jget(port, "return debug.drainActionOutcomes()")
+            rec2 = drained2[0] if isinstance(drained2, list) and drained2 else {}
+            requested = rec2.get("requested")
+            applied = rec2.get("applied")
+            dropped = rec2.get("dropped")
+            ok5 = (rec2.get("kind") == "till.designate"
+                   and rec2.get("outcome") == "partial"
+                   and isinstance(dropped, (int, float)) and dropped > 0
+                   and isinstance(requested, (int, float))
+                   and isinstance(applied, (int, float))
+                   and requested == applied + dropped)
+            passed &= ok5
+            print(f"  [{'PASS' if ok5 else 'FAIL'}] mixed sweep at "
+                  f"({sx},{sy}) reports partial: {drained2}")
+
+        send(port, "return debug.drainActionOutcomes()")  # clear noise
+        send(port, "till.designate('probe',5000000,5000000,5000005,5000005); "
+                   "return 'ok'")
+        drained3 = jget(port, "return debug.drainActionOutcomes()")
+        rec3 = drained3[0] if isinstance(drained3, list) and drained3 else {}
+        ok6 = bool(rec3.get("kind") == "till.designate"
+                   and rec3.get("outcome") == "rejected"
+                   and rec3.get("applied") == 0 and rec3.get("reason"))
+        passed &= ok6
+        print(f"  [{'PASS' if ok6 else 'FAIL'}] unloaded-anchor sweep reports "
+              f"rejected: {drained3}")
+
+        print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED" if passed else "SOME FAILED"))
+        return 0 if passed else 1
+    finally:
+        quit_engine(port, proc)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

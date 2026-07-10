@@ -9,80 +9,157 @@ own source for its instrumentation call site and reports yes/no per verb —
 mirrors `tools/ci_probes.py --status`'s "make the gap visible" self-audit,
 in the no-engine-needed style of `tools/lua_module_budget.py`.
 
+A file-wide substring search is not precise enough on its own: several
+verbs share a file (e.g. unitAi.commandMove/commandAttack both live in
+scripts/unit_ai_core.lua; craft.execute/executeAt share
+Craft/Execute.hs), so a naive per-file pattern would mark BOTH complete
+the moment either one is instrumented. Each verb below is checked within
+its OWN function body — the span from its definition to the next
+top-level definition in the same file — using a pattern that only
+matches a real call site, not the instrumentation helper's own
+definition line. `--self-test` proves this discriminates (see below).
+
 Growing coverage is a two-step: add the real `debug.recordOutcome` /
 `pushActionOutcome` call at the commit boundary, then register the verb
-here (file + pattern) so the audit stops flagging it as a gap.
+here (or extend its function-scope patterns) so the audit stops
+flagging it as a gap.
 
 Usage:
   python3 tools/action_outcome_coverage.py
-Exit code is always 0 — this is a visibility report, not a blocking gate.
-Tier 2/3 gaps are deliberate fast-follows (see issue #646), not
-regressions; only Tier 1 (this PR's scope) is expected to read 100%.
+  python3 tools/action_outcome_coverage.py --self-test
+Exit code is always 0 for the coverage report — this is a visibility
+report, not a blocking gate. Tier 2/3 gaps are deliberate fast-follows
+(see issue #646), not regressions; only Tier 1 (this PR's scope) is
+expected to read 100%. --self-test exits 1 on a self-test failure.
 """
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# (tier, verb, file relative to repo root, regex confirming instrumentation)
-VERBS: list[tuple[str, str, str, str]] = [
-    # --- Layer A: input routing, "complete" per the issue's scope note ---
-    ("A", "input click -> UI widget consumption",
-     "src/Engine/Scripting/Lua/Thread/Dispatch.hs", r"recordWidgetClickOutcome"),
-    ("A", "input click -> game-world tool/select/deadclick chain",
-     "scripts/init_mouse.lua", r"recordClick\("),
-
-    # --- Layer B Tier 1: onboarding + highest naive-frequency (this PR) ---
-    ("B1", "createWorld.generate (proceed commit)",
-     "scripts/create_world/generation.lua", r"debug\.recordOutcome"),
-    ("B1", "buildTool.commitPlacement",
-     "scripts/build_tool.lua", r"debug\.recordOutcome"),
-    ("B1", "wire.place",
-     "scripts/wire.lua", r"debug\.recordOutcome"),
-    ("B1", "till.designate (partial-drop counts)",
-     "src/World/Thread/Command/Cursor.hs",
-     r'recordDesignationOutcome env "till\.designate"'),
-    ("B1", "chop.designate (partial-drop counts)",
-     "src/World/Thread/Command/Cursor.hs",
-     r'recordDesignationOutcome env "chop\.designate"'),
-    ("B1", "world.designateMine (partial-drop counts)",
-     "src/World/Thread/Command/Cursor.hs",
-     r'recordDesignationOutcome env "world\.designateMine"'),
-    ("B1", "plant.designate (accept/reject)",
-     "src/World/Thread/Command/Cursor.hs",
-     r'aoKind\s*=\s*"plant\.designate"'),
-
-    # --- Layer B Tier 2: common mid-game — fast-follow, not this PR ---
-    ("B2", "unitAi.commandMove",
-     "scripts/unit_ai_core.lua", r"debug\.recordOutcome"),
-    ("B2", "unitAi.commandAttack",
-     "scripts/unit_ai_core.lua", r"debug\.recordOutcome"),
-    ("B2", "craft.execute",
-     "src/Engine/Scripting/Lua/API/Craft/Execute.hs", r"pushActionOutcome"),
-    ("B2", "craft.executeAt",
-     "src/Engine/Scripting/Lua/API/Craft/Execute.hs", r"pushActionOutcome"),
-    ("B2", "craft.addBill",
-     "src/Engine/Scripting/Lua/API/Craft/Bill.hs", r"pushActionOutcome"),
-
-    # --- Layer B Tier 3: everything else, added as those paths get
-    # touched. construction.designate is structurally identical to
-    # till/chop/mine but wasn't named in the issue's Tier 1 list. ---
-    ("B3", "construction.designate (building/structure)",
-     "src/World/Thread/Command/Cursor.hs",
-     r'recordDesignationOutcome env "construction\.designate"'),
-]
+LUA_FUNCTION_BOUNDARY = r"^function "
+HASKELL_TOPLEVEL_BOUNDARY = "^\\w+\\s*∷"  # '∷' marks a top-level type signature
 
 
-def check() -> list[tuple[str, str, str, bool]]:
-    results = []
-    for tier, verb, relpath, pattern in VERBS:
-        path = REPO_ROOT / relpath
-        instrumented = path.exists() and re.search(pattern, path.read_text(
-            encoding="utf-8")) is not None
-        results.append((tier, verb, relpath, instrumented))
-    return results
+def _function_scope(text: str, start_pattern: str, boundary_pattern: str) -> str | None:
+    """The slice of `text` from the first match of `start_pattern` up to
+    (not including) the next match of `boundary_pattern` after it — i.e.
+    one definition's own body, not the whole file. `None` if
+    `start_pattern` doesn't match at all."""
+    m = re.search(start_pattern, text, re.MULTILINE)
+    if m is None:
+        return None
+    rest = text[m.end():]
+    b = re.search(boundary_pattern, rest, re.MULTILINE)
+    return rest[:b.start()] if b else rest
+
+
+def _scoped_check(relpath: str, start_pattern: str, boundary_pattern: str,
+                   instrument_pattern: str) -> bool:
+    path = REPO_ROOT / relpath
+    if not path.exists():
+        return False
+    scope = _function_scope(path.read_text(encoding="utf-8"),
+                             start_pattern, boundary_pattern)
+    return scope is not None and re.search(instrument_pattern, scope) is not None
+
+
+def _filewide_check(relpath: str, pattern: str) -> bool:
+    path = REPO_ROOT / relpath
+    return path.exists() and re.search(
+        pattern, path.read_text(encoding="utf-8")) is not None
+
+
+# Each entry: (tier, verb, check) where check() -> bool. Built below so
+# each verb's own check can pick file-wide vs function-scoped as needed.
+def _build_verbs() -> list[tuple[str, str, callable]]:
+    return [
+        # --- Layer A: input routing, "complete" per the issue's scope note ---
+        ("A", "input click -> UI widget consumption (real event queued)",
+         lambda: _filewide_check(
+             "src/Engine/Scripting/Lua/Thread/Dispatch.hs",
+             r'recordWidgetClickOutcome env "')),  # call sites only, not the def
+        ("A", "input click -> swallowed/no-handler routes (no event ever queued)",
+         lambda: _filewide_check(
+             "src/Engine/Input/Thread.hs", r'recordRouteOutcome "')),
+        ("A", "input click -> game-world tool/select/deadclick chain",
+         lambda: len(re.findall(
+             r"recordClick\((?:\"|nil)",
+             (REPO_ROOT / "scripts/init_mouse.lua").read_text(encoding="utf-8"))) > 0
+         if (REPO_ROOT / "scripts/init_mouse.lua").exists() else False),
+
+        # --- Layer B Tier 1: onboarding + highest naive-frequency (this PR) ---
+        ("B1", "createWorld.generate (proceed commit)",
+         lambda: _filewide_check(
+             "scripts/create_world/generation.lua", r"debug\.recordOutcome")),
+        ("B1", "buildTool.commitPlacement",
+         lambda: _filewide_check(
+             "scripts/build_tool.lua", r"debug\.recordOutcome")),
+        ("B1", "wire.place",
+         lambda: _filewide_check(
+             "scripts/wire.lua", r"debug\.recordOutcome")),
+        ("B1", "till.designate (partial-drop counts)",
+         lambda: _filewide_check(
+             "src/World/Thread/Command/Cursor/Till.hs",
+             r'recordDesignationOutcome env "till\.designate"')),
+        ("B1", "chop.designate (partial-drop counts)",
+         lambda: _filewide_check(
+             "src/World/Thread/Command/Cursor/Chop.hs",
+             r'recordDesignationOutcome env "chop\.designate"')),
+        ("B1", "world.designateMine (partial-drop counts)",
+         lambda: _filewide_check(
+             "src/World/Thread/Command/Cursor/Mine.hs",
+             r'recordDesignationOutcome env "world\.designateMine"')),
+        ("B1", "plant.designate (accept/reject)",
+         lambda: _filewide_check(
+             "src/World/Thread/Command/Cursor/Plant.hs",
+             r'aoKind\s*=\s*"plant\.designate"')),
+
+        # --- Layer B Tier 2: common mid-game — fast-follow, not this PR.
+        # Function-scoped: commandMove/commandAttack share a file, as do
+        # execute/executeAt, so a file-wide pattern would false-positive
+        # the moment either sibling is instrumented. ---
+        ("B2", "unitAi.commandMove",
+         lambda: _scoped_check(
+             "scripts/unit_ai_core.lua",
+             r"^function unitAi\.commandMove", LUA_FUNCTION_BOUNDARY,
+             r"debug\.recordOutcome")),
+        ("B2", "unitAi.commandAttack",
+         lambda: _scoped_check(
+             "scripts/unit_ai_core.lua",
+             r"^function unitAi\.commandAttack", LUA_FUNCTION_BOUNDARY,
+             r"debug\.recordOutcome")),
+        ("B2", "craft.execute",
+         lambda: _scoped_check(
+             "src/Engine/Scripting/Lua/API/Craft/Execute.hs",
+             r"^craftExecuteFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY,
+             r"pushActionOutcome")),
+        ("B2", "craft.executeAt",
+         lambda: _scoped_check(
+             "src/Engine/Scripting/Lua/API/Craft/Execute.hs",
+             r"^craftExecuteAtFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY,
+             r"pushActionOutcome")),
+        ("B2", "craft.addBill",
+         lambda: _scoped_check(
+             "src/Engine/Scripting/Lua/API/Craft/Bill.hs",
+             r"^craftAddBillFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY,
+             r"pushActionOutcome")),
+
+        # --- Layer B Tier 3: everything else, added as those paths get
+        # touched. construction.designate is structurally identical to
+        # till/chop/mine but wasn't named in the issue's Tier 1 list. ---
+        ("B3", "construction.designate (building/structure)",
+         lambda: _filewide_check(
+             "src/World/Thread/Command/Cursor/Construct.hs",
+             r'recordDesignationOutcome env "construction\.designate"')),
+    ]
+
+
+def check() -> list[tuple[str, str, bool]]:
+    return [(tier, verb, fn()) for tier, verb, fn in _build_verbs()]
 
 
 def main() -> int:
@@ -90,11 +167,11 @@ def main() -> int:
     done = sum(1 for *_r, ok in results if ok)
     print(f"F4 action-outcome coverage: {done}/{len(results)} registered "
           f"commit-boundary verbs instrumented\n")
-    for tier, verb, relpath, ok in results:
+    for tier, verb, ok in results:
         mark = "DONE" if ok else "gap "
-        print(f"  [{mark}] tier {tier:<2}  {verb:<45} ({relpath})")
+        print(f"  [{mark}] tier {tier:<2}  {verb:<58}")
 
-    gaps = [(tier, verb) for tier, verb, _r, ok in results if not ok]
+    gaps = [(tier, verb) for tier, verb, ok in results if not ok]
     if gaps:
         print(f"\n{len(gaps)} gap(s) — expected for Tier 2/3 fast-follows, "
               f"not for Tier 1:")
@@ -103,5 +180,135 @@ def main() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Self-test: proves the function-scoping actually discriminates between two
+# sibling definitions in the same file, rather than false-positiving the
+# moment EITHER one is instrumented (the exact bug review round 1 found).
+# ---------------------------------------------------------------------------
+
+_LUA_SIBLINGS = """\
+function unitAi.commandMove(uid, tx, ty, speed)
+    if not tx then return end
+    s.commandedTask = {tx, ty}
+end
+
+function unitAi.commandAttack(uid, targetUid, committed)
+    if not targetUid then return end
+end
+"""
+
+_LUA_SIBLINGS_ONE_INSTRUMENTED = """\
+function unitAi.commandMove(uid, tx, ty, speed)
+    if not tx then return end
+    debug.recordOutcome{kind = "unitAi.commandMove", outcome = "accepted"}
+    s.commandedTask = {tx, ty}
+end
+
+function unitAi.commandAttack(uid, targetUid, committed)
+    if not targetUid then return end
+end
+"""
+
+_HS_SIBLINGS_ONE_INSTRUMENTED = """\
+craftExecuteFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftExecuteFn env = do
+    pushActionOutcome (actionOutcomeRef env) ev
+    pure ()
+
+craftExecuteAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+craftExecuteAtFn env = do
+    pure ()
+"""
+
+
+def _self_test() -> list[str]:
+    failures = []
+
+    def expect(label: str, got: bool, want: bool) -> None:
+        if got != want:
+            failures.append(f"{label}: expected {want}, got {got}")
+
+    # 1. Neither sibling instrumented -> both scopes report False.
+    move_scope = _function_scope(_LUA_SIBLINGS, r"^function unitAi\.commandMove",
+                                  LUA_FUNCTION_BOUNDARY)
+    attack_scope = _function_scope(_LUA_SIBLINGS, r"^function unitAi\.commandAttack",
+                                    LUA_FUNCTION_BOUNDARY)
+    expect("neither instrumented: commandMove",
+           bool(move_scope and re.search(r"debug\.recordOutcome", move_scope)), False)
+    expect("neither instrumented: commandAttack",
+           bool(attack_scope and re.search(r"debug\.recordOutcome", attack_scope)), False)
+
+    # 2. Only commandMove instrumented -> commandMove True, commandAttack
+    #    STILL False. A naive file-wide `debug\.recordOutcome` search
+    #    would incorrectly mark commandAttack True too — this is exactly
+    #    what review round 1 flagged.
+    move_scope2 = _function_scope(_LUA_SIBLINGS_ONE_INSTRUMENTED,
+                                   r"^function unitAi\.commandMove", LUA_FUNCTION_BOUNDARY)
+    attack_scope2 = _function_scope(_LUA_SIBLINGS_ONE_INSTRUMENTED,
+                                     r"^function unitAi\.commandAttack", LUA_FUNCTION_BOUNDARY)
+    expect("one instrumented: commandMove detected",
+           bool(move_scope2 and re.search(r"debug\.recordOutcome", move_scope2)), True)
+    expect("one instrumented: commandAttack NOT falsely detected",
+           bool(attack_scope2 and re.search(r"debug\.recordOutcome", attack_scope2)), False)
+    filewide_would_be_wrong = bool(
+        re.search(r"debug\.recordOutcome", _LUA_SIBLINGS_ONE_INSTRUMENTED))
+    expect("file-wide search WOULD have false-positived (sanity check on the fixture)",
+           filewide_would_be_wrong, True)
+
+    # 3. Same proof for the Haskell function-scope boundary
+    #    (craftExecuteFn vs craftExecuteAtFn sharing a file).
+    exec_scope = _function_scope(_HS_SIBLINGS_ONE_INSTRUMENTED,
+                                  r"^craftExecuteFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY)
+    exec_at_scope = _function_scope(_HS_SIBLINGS_ONE_INSTRUMENTED,
+                                     r"^craftExecuteAtFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY)
+    expect("one instrumented: craftExecuteFn detected",
+           bool(exec_scope and re.search(r"pushActionOutcome", exec_scope)), True)
+    expect("one instrumented: craftExecuteAtFn NOT falsely detected",
+           bool(exec_at_scope and re.search(r"pushActionOutcome", exec_at_scope)), False)
+
+    # 4. The definition-vs-call distinction for recordClick/
+    #    recordWidgetClickOutcome: a lone definition (no calls) must not
+    #    read as instrumented.
+    def_only = 'local function recordClick(handler, outcome, x, y, reason)\n    debug.recordOutcome{kind="input.click"}\nend\n'
+    expect("recordClick definition alone is not a call site",
+           len(re.findall(r"recordClick\((?:\"|nil)", def_only)) > 0, False)
+    with_call = def_only + '\nrecordClick("build_tool", nil, x, y)\n'
+    expect("recordClick with a real call site is detected",
+           len(re.findall(r"recordClick\((?:\"|nil)", with_call)) > 0, True)
+
+    # 5. Same def-vs-call distinction for the Haskell/Lua helper-wrapper
+    #    patterns used by the two Layer A "A" entries above.
+    hs_def_only = ('recordWidgetClickOutcome ∷ EngineEnv → Text → Text → IO ()\n'
+                   'recordWidgetClickOutcome env kind callbackName = do\n    pure ()\n')
+    expect("recordWidgetClickOutcome definition alone is not a call site",
+           bool(re.search(r'recordWidgetClickOutcome env "', hs_def_only)), False)
+    hs_with_call = hs_def_only + '\nrecordWidgetClickOutcome env "input.click" callback\n'
+    expect("recordWidgetClickOutcome with a real call site is detected",
+           bool(re.search(r'recordWidgetClickOutcome env "', hs_with_call)), True)
+
+    route_def_only = ('recordRouteOutcome ∷ Text → Maybe Text → IO ()\n'
+                       'recordRouteOutcome outcome handler = do\n    pure ()\n')
+    expect("recordRouteOutcome definition alone is not a call site",
+           bool(re.search(r'recordRouteOutcome "', route_def_only)), False)
+    route_with_call = route_def_only + '\nrecordRouteOutcome "accepted" (Just "x")\n'
+    expect("recordRouteOutcome with a real call site is detected",
+           bool(re.search(r'recordRouteOutcome "', route_with_call)), True)
+
+    return failures
+
+
+def main_self_test() -> int:
+    failures = _self_test()
+    if failures:
+        print(f"{len(failures)} self-test failure(s):")
+        for f in failures:
+            print(f"  FAIL: {f}")
+        return 1
+    print("action_outcome_coverage.py self-test: all checks passed")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        raise SystemExit(main_self_test())
     raise SystemExit(main())
