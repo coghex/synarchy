@@ -384,12 +384,12 @@ python3 tools/action_outcome_layer_a_check.py --port 9008
 ```
 
 Injects a click on the fixture button and asserts
-`debug.drainActionOutcomes()` drains an `"accepted"` record naming the
-consuming handler, then a click well clear of any widget and asserts
-exactly one more record — `"deadclick"` if the instance isn't currently
-driving a visible gameplay world, else whatever the world-selection
-chain produced (both are a pass; the point is that every click
-produces exactly one record, not a specific outcome value).
+`debug.drainActionOutcomes()` drains EXACTLY ONE `"accepted"` record
+naming the consuming handler. Then forces the instance to the main menu
+(`uiManager.showMenu("main")` — switches away from whatever the
+instance was doing, so run it when that's fine) so an empty-space click
+is unambiguously a phantom affordance rather than a legitimate
+gameplay deselect, and asserts exactly one `"deadclick"` record.
 
 ## Directory layout
 ```

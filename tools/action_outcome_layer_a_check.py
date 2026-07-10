@@ -16,15 +16,18 @@ Reuses `scripts/input_check_fixture.lua` (#644) — a button at known
 framebuffer coordinates — rather than building a second fixture, and
 checks, end to end through the real input pipeline:
 
-  1. a UI-consumed click (on the fixture button) drains a
-     debug.drainActionOutcomes() record with outcome "accepted" and a
+  1. a UI-consumed click (on the fixture button) drains EXACTLY ONE
+     debug.drainActionOutcomes() record, with outcome "accepted" and a
      handler naming the button's callback;
-  2. a click on empty framebuffer space (well clear of any widget) also
-     drains exactly one record — "deadclick" if the instance isn't
-     currently driving a visible gameplay world (e.g. sitting at a
-     menu), or "noop"/a world-selection outcome if it is. Either is a
-     pass; the point is that every click, not just the widget one,
-     produces exactly one record.
+  2. a click on empty framebuffer space (well clear of any widget)
+     drains EXACTLY ONE "deadclick" record. The check forces this
+     deterministically by calling
+     `require("scripts.ui_manager").showMenu("main")` first — a
+     gameplay-active click on empty ground is a legitimate "noop"
+     deselect instead (see scripts/init_mouse.lua), so the main menu is
+     the one state where a truly empty click is guaranteed to be a
+     genuine deadclick. This SWITCHES THE RUNNING INSTANCE TO THE MAIN
+     MENU — run it when that's fine to do, not mid-session.
 
 Exit code 0 = all checks passed.
 """
@@ -84,32 +87,31 @@ def main() -> int:
 
     drain()  # clear anything already buffered before this run
 
-    # 1. UI-consumed click -> "accepted", handler names the callback.
+    # 1. UI-consumed click -> exactly one "accepted" record with a handler.
     lua(f"return input.click({bx}, {by})")
     recs = drain()
-    widget_rec = next((r for r in recs if r.get("handler")), None)
-    check("widget click drains an accepted record with a handler",
-          bool(widget_rec and widget_rec.get("outcome") == "accepted"),
+    check("widget click drains EXACTLY ONE record", len(recs) == 1, str(recs))
+    widget_rec = recs[0] if len(recs) == 1 else next(iter(recs), {})
+    check("that record is accepted with a handler naming the callback",
+          bool(widget_rec.get("outcome") == "accepted" and widget_rec.get("handler")),
           str(recs))
 
-    # 2. Click well clear of the fixture (top-right corner) — always
-    # produces exactly one record, whatever the current game state.
-    gameplay_active = lua(
-        'return require("scripts.ui_manager").isGameplayInputActive()')
+    # 2. Force main-menu state so an empty-space click is unambiguously a
+    # deadclick (gameplay-active would legitimately read "noop" instead —
+    # see scripts/init_mouse.lua's deselect branch), then click well clear
+    # of the fixture (top-right corner) and require exactly one record.
+    lua('require("scripts.ui_manager").showMenu("main"); return true')
+    drain()  # the menu transition itself is not part of what we're testing
     ex, ey = fb_w * 0.95, fb_h * 0.05
     lua(f"return input.click({ex}, {ey})")
     recs2 = drain()
-    click_recs = [r for r in recs2 if r.get("kind") == "input.click"]
-    if gameplay_active is True:
-        check("empty-space click while gameplay-active drains one record "
-              "(deadclick if genuinely nothing was there, otherwise the "
-              "world's own selection/noop outcome)",
-              len(click_recs) >= 1, str(recs2))
-    else:
-        check("empty-space click while NOT gameplay-active drains a "
-              "deadclick record",
-              any(r.get("outcome") == "deadclick" for r in click_recs),
-              str(recs2))
+    check("empty-space click at the main menu drains EXACTLY ONE record",
+          len(recs2) == 1, str(recs2))
+    deadclick_rec = recs2[0] if len(recs2) == 1 else next(iter(recs2), {})
+    check("that record is a deadclick",
+          deadclick_rec.get("kind") == "input.click"
+          and deadclick_rec.get("outcome") == "deadclick",
+          str(recs2))
 
     print(f"\n{'ALL LAYER A CHECKS PASSED' if not failures else f'{len(failures)} FAILURE(S)'}")
     return 1 if failures else 0
