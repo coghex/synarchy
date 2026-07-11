@@ -55,10 +55,18 @@ PROBES = [
     ("action_outcome", "action_outcome_probe.py",
      "F4 action-outcome oracle: recordOutcome/drainActionOutcomes public "
      "contract, destructive drain, till/chop mixed-sweep partial paths (#646)"),
+    ("blood_decal", "blood_decal_probe.py",
+     "blood decal model: texture reuse/eviction, render quads, wetness-tint aging (#604, #606)"),
+    ("blood_impact", "blood_impact_probe.py",
+     "wound-kind/severity -> impact-blood style/volume mapping (#607)"),
     ("cargo_capacity", "cargo_capacity_probe.py",
      "depositToCargo weighs the actual ItemInstance, not the def base weight (#189)"),
     ("chop", "chop_probe.py",
      "chop-designation layer + chop AI + wood_log yield (#97)"),
+    ("circadian", "circadian_probe.py",
+     "circadian urge signal + sleep_pressure drain-only resource wiring (#611)"),
+    ("circadian_species", "circadian_species_probe.py",
+     "species-specific circadian phase (bear dawn vs acolyte dusk) through the real go_to_sleep AI + pose chain (#613)"),
     ("collapse_crawl", "collapse_crawl_probe.py",
      "collapse<->crawl pose hysteresis in tickInjuries (#304)"),
     ("combat_anim", "combat_anim_probe.py",
@@ -78,8 +86,12 @@ PROBES = [
      "craft.* API: catalogue, execute, stations, quality, smelting (#325/#326/#343/#327)"),
     ("craft_bill", "craft_bill_probe.py",
      "craft-bill backend + craft_job AI: queue/claim/progress, source (ground+cargo) -> work -> produce loop (#329)"),
+    ("crop", "crop_probe.py",
+     "row-crop natural placement + groundcover world.plantCropAt into a CropPlot, growth/harvest/save-load (#334)"),
     ("disarm", "disarm_probe.py",
      "disabled-hand auto-drop must re-fire (#193)"),
+    ("farm_ai", "farm_ai_probe.py",
+     "farm AI: world.plantRowCropAt + CropPlot auto-harvest scan + rot/occupancy gating (#336)"),
     ("flora_growth", "flora_growth_probe.py",
      "derived flora growth/age/phase under the advancing calendar (#332)"),
     ("follow_command_priority", "follow_command_priority_probe.py",
@@ -118,6 +130,10 @@ PROBES = [
      "--offscreen render mode: windowless Vulkan boot, UI flow, screenshots, input injection, parallel instances (#650; needs a GPU)"),
     ("physiology", "physiology_probe.py",
      "thermoregulation/circulation sanity across controlled environments"),
+    ("plant", "plant_probe.py",
+     "plant-designation layer + world.getPlantSuitability soil/factor gating (#335)"),
+    ("power", "power_probe.py",
+     "build-tool-routed power-node placement + wire connectivity + energy balance, save/load reconnect (#358, #360)"),
     ("power_workshop", "power_workshop_probe.py",
      "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
     ("preview", "preview_probe.py",
@@ -136,13 +152,24 @@ PROBES = [
      "save/load pause-semantics regression (#42)"),
     ("sleep", "sleep_probe.py",
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
+    ("state_of_mind", "state_of_mind_probe.py",
+     "unified consciousness/mood model: pain/awareness drift, no-hunger-config fallback, locomotor-collapse regression guard (#350)"),
     ("text_encoding", "text_encoding_probe.py",
      "TE.decodeUtf8Lenient in the Lua text API: malformed UTF-8 through engine.setText no longer errors, and round-trips through engine.getText (#618)"),
     ("thermo_altitude", "thermo_altitude_probe.py",
      "altitude-lapse thermal effect (#308)"),
+    ("thought", "thought_probe.py",
+     "thought event stream, state-of-mind-biased selection, thought-log data path (#351)"),
+    ("till", "till_probe.py",
+     "till-designation layer + till AI end to end, plantable contract (#333)"),
+    ("wire", "wire_probe.py",
+     "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]
 
-DEFAULT_TIMEOUT = 600.0
+# farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
+# slowest registered probe at ~11.5 min solo on a warm dev machine (#721) —
+# the default needs real margin above that for CI's slower runner.
+DEFAULT_TIMEOUT = 900.0
 
 
 def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:

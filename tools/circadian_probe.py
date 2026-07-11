@@ -18,6 +18,7 @@ FAIL  = any check violated (bug in the circadian bump or the
         drain-only resource wiring).
 """
 from __future__ import annotations
+import argparse
 import glob
 import sys
 import time
@@ -91,6 +92,12 @@ def urge_at(uid: int, hour: int, minute: int, target_angle: float) -> float:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=9013)
+    args = ap.parse_args()
+    global PORT
+    PORT = args.port
+
     proc = boot(PORT, log=LOG)
     try:
         bootstrap_defs(PORT)

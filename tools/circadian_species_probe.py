@@ -32,6 +32,7 @@ Three layers, cheapest/most isolated first:
 PASS = every check holds. FAIL = a concrete mismatch.
 """
 from __future__ import annotations
+import argparse
 import glob
 import sys
 from probelib import boot, quit_engine, send, init_arena, spawn_acolyte, poll_until, load_ai_stack
@@ -137,6 +138,12 @@ def wait_for_ai_state(uid: int, timeout: float = 10.0) -> bool:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=9016)
+    args = ap.parse_args()
+    global PORT
+    PORT = args.port
+
     proc = boot(PORT, log=LOG)
     try:
         bootstrap_defs(PORT)
