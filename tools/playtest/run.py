@@ -111,24 +111,51 @@ def _count_f4_outcomes(trace: SessionTrace, oracle: dict) -> None:
         trace.meta.get("f4_outcomes_total", 0) + len(oracle.get("action_outcomes") or []))
 
 
-def _finish_step(eng: PlaytestEngine, dt: float) -> None:
-    """The second half of the step contract (#728), called only after
-    eng.set_paused(False) has already returned successfully — the step
-    has begun. Sleeps dt, then repauses. On any interruption
-    (BaseException, so Ctrl-C is covered) makes a best-effort recovery
-    repause — swallowing its own failure — so the engine's pause state
-    is left defined for outer cleanup instead of running unattended
-    until shutdown, then re-raises the ORIGINAL interruption unchanged
-    (never masked by a recovery failure). Shared by run_session and
-    run_replay so both follow the identical phase-accounting contract."""
+def _run_step(eng: PlaytestEngine, dt: float, began: list) -> None:
+    """The whole step contract (#728): unpause, sleep dt, repause.
+    Shared by run_session and run_replay so both follow the identical
+    phase-accounting contract. `began` is a one-element list the
+    caller passes in as `[False]`; `began[0]` is flipped to True the
+    instant eng.set_paused(False) returns, before anything else runs —
+    so the caller can tell a step that genuinely started from one that
+    never did even when this raises (a #728-review fix: an
+    interruption landing between a successful unpause and the
+    surrounding try block used to be misrecorded as "not_started" and
+    skipped recovery entirely).
+
+    `began[0] = True` is the very next bytecode after the unpause call
+    returns — the tightest window achievable with an ordinary
+    statement. A sub-bytecode async signal landing in that single
+    instruction is not something any pure-Python restructuring can
+    close (moving the assignment, or classifying by which of two
+    sibling try/except blocks catches the exception instead of using a
+    flag, both just relocate the same irreducible gap — verified by
+    hand while fixing this). Real Ctrl-C timing has no realistic
+    chance of landing there; a human developer running this offline
+    test harness is an accepted, rough-edges audience (unlike the
+    fire-and-forget engine-acknowledgement gap this same issue already
+    accepts as unrecoverable, see engine.py). Closing it for real would
+    need OS-level signal masking (signal.pthread_sigmask around the
+    critical section) — POSIX-only machinery not used anywhere else in
+    this codebase, disproportionate for this gap.
+
+    Once the step has begun, any interruption (BaseException, so
+    Ctrl-C is covered) makes a best-effort recovery repause —
+    swallowing its own failure — so the engine's pause state is left
+    defined for outer cleanup instead of running unattended until
+    shutdown, then re-raises the ORIGINAL interruption unchanged
+    (never masked by a recovery failure)."""
     try:
+        eng.set_paused(False)
+        began[0] = True
         time.sleep(dt)
         eng.set_paused(True)
     except BaseException:
-        try:
-            eng.set_paused(True)
-        except BaseException:
-            pass
+        if began[0]:
+            try:
+                eng.set_paused(True)
+            except BaseException:
+                pass
         raise
 
 
@@ -220,18 +247,18 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
 
             # 6. step the sim by wall-clock dt, then the post-step
             # calls (a held key releases after riding through the
-            # step). Once set_paused(False) returns, the step has
-            # begun — an interruption anywhere past this point is
-            # "interrupted", never "not_started" (#728); _finish_step
-            # makes a best-effort recovery repause so the engine isn't
-            # left running into outer cleanup, without masking the
-            # original interruption.
+            # step). Once eng.set_paused(False) returns inside
+            # _run_step, the step has begun — an interruption anywhere
+            # past that point is "interrupted", never "not_started"
+            # (#728); _run_step makes a best-effort recovery repause so
+            # the engine isn't left running into outer cleanup, without
+            # masking the original interruption.
             if not terminal:
-                eng.set_paused(False)
+                began = [False]
                 try:
-                    _finish_step(eng, dt)
+                    _run_step(eng, dt, began)
                 except BaseException:
-                    step_phase = "interrupted"
+                    step_phase = "interrupted" if began[0] else "not_started"
                     raise
                 step_phase = "completed"
                 for call in post_calls:
@@ -343,11 +370,11 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
             if entry["step_phase"] != "not_started":
-                eng.set_paused(False)
+                began = [False]
                 try:
-                    _finish_step(eng, dt)
+                    _run_step(eng, dt, began)
                 except BaseException:
-                    step_phase = "interrupted"
+                    step_phase = "interrupted" if began[0] else "not_started"
                     raise
                 step_phase = "completed"
                 if entry["step_phase"] == "completed":
@@ -388,6 +415,7 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
 def selftest() -> int:
     """Offline check of the loop, trace write, stuck detection, and
     replay — FakeEngine, ScriptedAgent, no window, no API, no build."""
+    import inspect
     import tempfile
     failures = []
 
@@ -921,7 +949,6 @@ def selftest() -> int:
 
         # 6. persona + prompt assembly stays oracle-blind by shape:
         # build_system_prompt takes persona/manual/fb only
-        import inspect
         params = list(inspect.signature(agent_mod.build_system_prompt).parameters)
         check("prompt assembly accepts no oracle inputs",
               params == ["persona", "manual", "fb_size"], str(params))
