@@ -11,10 +11,12 @@
 --   break     — a mental-break EPISODE: rolled while stressed (chance
 --               per roll scales with how far below the threshold the
 --               state of mind sits), fixed duration drawn at entry,
---               behaviour (aimless wander or fleeing other units)
---               drawn once at entry and held throughout. The unit AI
+--               behaviour (aimless wander, fleeing other units,
+--               catatonia, or lashing out at whoever's nearby) drawn
+--               once at entry and held throughout. The unit AI
 --               short-circuits on it exactly like delirium — no goals,
---               no work, no combat (scripts/unit_ai_mental.lua).
+--               no work, no combat outside the episode's own behaviour
+--               (scripts/unit_ai_mental.lua).
 --   euphoric  — the high-end mirror: sustained near-content state of
 --               mind can tip into a euphoria episode. Mostly narrative
 --               (thoughts + event log) plus a small concentration
@@ -35,12 +37,14 @@
 --   mental_next_roll_at    — episode-roll cadence deadline
 --   mental_high_since      — how long state_of_mind has held the
 --                            euphoria band (0 = not in band)
---   mental_break_behavior  — 0 wander / 1 flee, rolled at break entry
+--   mental_break_behavior  — 0 wander / 1 flee / 2 catatonia /
+--                            3 lash-out, rolled at break entry
 --
 -- Ticked from unit_resources.update right after thoughts.tick, so it
--- reads the tick's freshly-computed state_of_mind. Deferred to a
--- follow-up (per the #352 design session): mania/psychosis states,
--- catatonia/lash-out behaviours, environmental one-shot triggers.
+-- reads the tick's freshly-computed state_of_mind. Catatonia and
+-- lash-out shipped in #717; still deferred to a follow-up (per the
+-- #352 design session): mania/psychosis states, environmental
+-- one-shot triggers.
 
 local brain = require("scripts.brain")
 
@@ -53,7 +57,10 @@ local STATE_NAMES = { [0] = "stable", [1] = "stressed",
                       [2] = "break",  [3] = "euphoric" }
 
 -- Break-behaviour codes (the "mental_break_behavior" stat's values).
-mental.WANDER, mental.FLEE = 0, 1
+-- Append-only (#717): existing 0/1 meanings never change.
+mental.WANDER, mental.FLEE, mental.CATATONIA, mental.LASHOUT = 0, 1, 2, 3
+local BEHAVIOR_NAMES = { [0] = "wander", [1] = "flee",
+                         [2] = "catatonia", [3] = "lash_out" }
 
 -- Exposed (not local) so the probe / debug console can pin the rolls
 -- deterministic (BREAK_CHANCE_MAX = 1.0) or shrink the timers — same
@@ -71,6 +78,12 @@ mental.TUNE = {
     EPISODE_MAX       = 120.0,
     COOLDOWN          = 240.0, -- after an episode ends
     EUPHORIA_CONCENTRATION_BONUS = 0.10,
+    -- Break-behaviour roll weights (#717). Sum to 1.0; wander/flee stay
+    -- dominant so existing saved units' expectations hold.
+    WANDER_WEIGHT     = 0.35,
+    FLEE_WEIGHT       = 0.35,
+    CATATONIA_WEIGHT  = 0.15,
+    LASHOUT_WEIGHT    = 0.15,
 }
 
 local function clamp(x, lo, hi) return math.max(lo, math.min(hi, x)) end
@@ -89,7 +102,7 @@ function mental.isStressed(uid) return stateCode(uid) == mental.STRESSED end
 
 function mental.breakBehavior(uid)
     local b = unit.getStat(uid, "mental_break_behavior") or mental.WANDER
-    return b == mental.FLEE and "flee" or "wander"
+    return BEHAVIOR_NAMES[b] or "wander"
 end
 
 local function setState(uid, st, now)
@@ -119,9 +132,24 @@ local function rollDuration()
          + math.random() * (mental.TUNE.EPISODE_MAX - mental.TUNE.EPISODE_MIN)
 end
 
+-- Weighted 4-way break-behaviour draw (#717). Exposed (not local) with an
+-- optional `draw` (0..1) so the probe can pin exact boundary values
+-- deterministically instead of relying on statistical sampling of
+-- math.random(); omitted, it rolls for real.
+function mental.rollBehavior(draw)
+    local r = draw or math.random()
+    local t = mental.TUNE
+    if r < t.WANDER_WEIGHT then return mental.WANDER end
+    r = r - t.WANDER_WEIGHT
+    if r < t.FLEE_WEIGHT then return mental.FLEE end
+    r = r - t.FLEE_WEIGHT
+    if r < t.CATATONIA_WEIGHT then return mental.CATATONIA end
+    return mental.LASHOUT
+end
+
 local function enterBreak(uid, now, behavior)
     if behavior == nil then
-        behavior = math.random() < 0.5 and mental.WANDER or mental.FLEE
+        behavior = mental.rollBehavior()
     end
     unit.setStat(uid, "mental_break_behavior", behavior)
     unit.setStat(uid, "mental_until", now + rollDuration())
@@ -151,11 +179,14 @@ end
 
 -- Probe / debug-console hook: start a break episode right now,
 -- bypassing the stress ladder and the rolls. behavior is optional
--- ("wander" | "flee"; absent = random, like a rolled break).
+-- ("wander" | "flee" | "catatonia" | "lash_out"; absent = random,
+-- like a rolled break).
 function mental.forceBreak(uid, behavior)
     local b = nil
     if behavior == "flee" then b = mental.FLEE
-    elseif behavior == "wander" then b = mental.WANDER end
+    elseif behavior == "wander" then b = mental.WANDER
+    elseif behavior == "catatonia" then b = mental.CATATONIA
+    elseif behavior == "lash_out" then b = mental.LASHOUT end
     enterBreak(uid, engine.gameTime(), b)
 end
 

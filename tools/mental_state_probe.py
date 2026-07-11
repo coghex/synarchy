@@ -27,6 +27,23 @@ short-circuit (scripts/unit_ai_mental.lua) to confirm:
      mid-break the unit is standing, and brain.isUnconscious/
      isDelirious/isConfused stay false (they key on consciousness
      alone).
+  7. Deterministic break-behaviour roll (#717): mental.rollBehavior(draw)
+     hits the exact 35/35/15/15 boundaries without statistical sampling.
+  8. Forced catatonia (#717): stops an already-moving unit in place,
+     produces no displacement or replacement action for the whole
+     episode, leaves it standing and physiologically lucid, and exits
+     through the normal cooldown path.
+  9. Forced lash-out (#717): prefers a recent eligible attacker (staged
+     via a real landed hit — there's no Lua setter for the last-attacker
+     memory, so this uses combat_anim_probe.py's spawn-adjacent +
+     commandAttack + wait-for-a-swing-to-land pattern) over a closer
+     decoy; falls back to the nearest eligible unit (an ally — every
+     spawned acolyte shares one faction) when there's no eligible
+     attacker; excludes dead, collapsed, self, and the technomule;
+     replaces a lost target (dies mid-episode) with another eligible
+     unit; wanders and keeps searching when nothing is eligible;
+     produces a real landed attack through the short-circuit; and
+     clears every lash-out-owned goal/target once the episode ends.
 
 Usage: python3 tools/mental_state_probe.py [--port 9352]
 Exit 0 = pass.
@@ -85,6 +102,24 @@ def unit_pos(port, uid):
                      f"return {{x = i.gridX, y = i.gridY}}")
     p = json.loads(raw)
     return p["x"], p["y"]
+
+
+def lash_target(port, uid):
+    """Lash-out's episode-owned attack target, or 'nil'. The 'x or nil'
+    idiom (see e.g. follow_command_priority_probe.py) round-trips a Lua
+    nil through the console reliably; a bare nil return doesn't."""
+    return send(port, f"local s=require('scripts.unit_ai').getState({uid}); "
+                      f"return s and s.attackTargetUid or 'nil'")
+
+
+def lash_ai_flags(port, uid):
+    """{tgt, goal, committed} off unit_ai's per-unit state — used to prove
+    lash-out's episode-owned combat state is fully cleared at episode end."""
+    return json.loads(send(port,
+        f"local s=require('scripts.unit_ai').getState({uid}); "
+        f"return {{tgt = (s and s.attackTargetUid) or false, "
+        f"goal = (s and s.activeGoal) or false, "
+        f"committed = (s and s.committed) or false}}"))
 
 
 def main():
@@ -355,6 +390,281 @@ def main():
         else:
             ok = False
             print(f"  [FAIL] euphoria never exited: {msummary(P, uid)}")
+
+        # ---- 7. Deterministic break-behaviour roll (#717): exact
+        # 35/35/15/15 boundaries, no statistical sampling. ----
+        def roll(draw):
+            return send(P, f"return require('scripts.mental_state')"
+                           f".rollBehavior({draw})")
+
+        draws  = [0.0, 0.349999, 0.35, 0.699999, 0.70, 0.849999, 0.85, 0.999999]
+        expect = ["0", "0",      "1",  "1",      "2",  "2",      "3",  "3"]
+        got = [roll(d) for d in draws]
+        if got == expect:
+            print(f"  [pass] break-behaviour roll hits the 35/35/15/15 "
+                  f"boundaries: {list(zip(draws, got))}")
+        else:
+            ok = False
+            print(f"  [FAIL] roll boundaries wrong: draws={draws} got={got} "
+                  f"want={expect}")
+
+        # ---- 8. Forced catatonia (#717): stops an already-moving unit,
+        # no displacement/replacement action for the episode, standing +
+        # lucid throughout, exits through the normal cooldown path. ----
+        set_wellbeing(P, uid, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, uid) == "stable")
+        cx, cy = unit_pos(P, uid)
+        send(P, f"require('scripts.unit_ai').commandMove({uid}, {cx + 20}, {cy}); "
+                f"return 'ok'")
+        if not poll_until(5, lambda: send(P, f"return unit.getActivity({uid})")
+                          in ("walking", "running")):
+            ok = False
+            print("  [FAIL] setup: unit never started moving before the catatonia check")
+
+        send(P, f"require('scripts.mental_state').forceBreak({uid},'catatonia'); "
+                f"return 'ok'")
+        s = msummary(P, uid)
+        stopped = poll_until(5, lambda: send(P, f"return unit.getActivity({uid})")
+                             not in ("walking", "running"))
+        if s.get("state") == "break" and s.get("behavior") == "catatonia" and stopped:
+            print("  [pass] forced catatonia stops the moving unit")
+        else:
+            ok = False
+            print(f"  [FAIL] catatonia didn't stop the unit: state={s} stopped={bool(stopped)}")
+
+        x0, y0 = unit_pos(P, uid)
+        time.sleep(3.0)
+        x1, y1 = unit_pos(P, uid)
+        no_disp = (x1 - x0) ** 2 + (y1 - y0) ** 2 < 0.05
+        gate = json.loads(send(P,
+            f"local u={uid} local b=require('scripts.brain') "
+            f"return {{pose=unit.getPose(u), activity=unit.getActivity(u), "
+            f"uncon=b.isUnconscious(u), delir=b.isDelirious(u)}}"))
+        if (no_disp and gate["pose"] == "standing"
+                and gate["activity"] not in ("walking", "running")
+                and not gate["uncon"] and not gate["delir"]):
+            print(f"  [pass] catatonia holds position, standing, physiologically "
+                  f"lucid: {gate}")
+        else:
+            ok = False
+            print(f"  [FAIL] catatonia leaked movement or physiological state: "
+                  f"disp=({x1 - x0:.2f},{y1 - y0:.2f}) gate={gate}")
+
+        send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
+        if poll_until(5, lambda: mstate(P, uid) != "break"):
+            print("  [pass] catatonia exits through the normal cooldown path")
+        else:
+            ok = False
+            print("  [FAIL] catatonia episode never ended")
+
+        # ---- 9. Lash-out (#717): target policy, exclusions, target
+        # loss/replacement, no-target wander, real attack behavior, and
+        # episode-end cleanup. Each scenario uses a fresh, isolated unit
+        # cluster (>8 tiles from every other cluster) so LASHOUT_RANGE
+        # never bridges them.
+
+        # 9a. Prefers a recent eligible attacker over a closer decoy.
+        # There's no Lua setter for the last-attacker memory (only
+        # unit.getLastAttacker), so stage a REAL landed hit —
+        # combat_anim_probe.py's spawn-adjacent + commandAttack +
+        # wait-for-a-swing-to-land pattern.
+        lash = spawn_acolyte(P, -30, -25)
+        set_wellbeing(P, lash, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, lash) == "stable")
+        attacker = spawn_acolyte(P, -29, -25)
+        send(P, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
+                f"return 'ok'")
+        hit = poll_until(20, lambda: send(
+            P, f"local a=unit.getLastAttacker({lash}); return a and a.uid or 'nil'"
+        ) == str(attacker))
+        if hit:
+            print(f"  [pass] staged a real hit: attacker {attacker} landed on "
+                  f"lash-out subject {lash}")
+        else:
+            ok = False
+            print(f"  [FAIL] attacker {attacker} never landed a hit on {lash} "
+                  f"— can't test attacker preference")
+
+        # Deliberately leave attacker's own commandAttack(lash) running —
+        # it keeps both units engaged (no ambient-wander drift risk
+        # between here and forcing the episode below) and doesn't affect
+        # lash's own state, which is all the checks below assert on.
+        lx, ly = unit_pos(P, lash)
+        ax, ay = unit_pos(P, attacker)
+        d_att = ((lx - ax) ** 2 + (ly - ay) ** 2) ** 0.5
+        # Place the decoy at HALF the current attacker distance (rather
+        # than a fixed offset) — attacker is still actively fighting lash
+        # (see above), so its distance from lash varies run to run;
+        # halving guarantees the decoy is strictly closer whenever
+        # d_att > 0, regardless of how close combat has already drawn them.
+        decoy_dist = max(0.02, d_att / 2)
+        decoy = spawn_acolyte(P, lx + decoy_dist, ly)
+        if decoy_dist >= d_att:
+            ok = False
+            print(f"  [FAIL] setup: decoy ({decoy_dist:.2f} away) not closer "
+                  f"than attacker (d_att={d_att:.2f})")
+
+        send(P, f"require('scripts.mental_state').forceBreak({lash},'lash_out'); "
+                f"return 'ok'")
+
+        def first_target():
+            t = lash_target(P, lash)
+            return t if t != "nil" else None
+        target = poll_until(10, first_target)
+        if target == str(attacker):
+            print(f"  [pass] lash-out prefers the recent attacker {attacker} "
+                  f"over the closer decoy {decoy}")
+        else:
+            ok = False
+            print(f"  [FAIL] lash-out target={target}, expected attacker="
+                  f"{attacker} (decoy={decoy})")
+
+        # 9b. Produces real attack behavior through the short-circuit —
+        # confirm lash actually lands a swing on its chosen target.
+        landed = poll_until(20, lambda: send(
+            P, f"local a=unit.getLastAttacker({attacker}); "
+               f"return a and a.uid or 'nil'"
+        ) == str(lash))
+        if landed:
+            print(f"  [pass] lash-out produced a real landed attack on {attacker}")
+        else:
+            ok = False
+            print(f"  [FAIL] lash-out never landed an attack on {attacker}")
+
+        # 9c. Episode end clears every lash-out-owned goal/target.
+        send(P, f"unit.setStat({lash},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, lash) != "break")
+
+        def cleaned():
+            f = lash_ai_flags(P, lash)
+            return f if (not f["tgt"] and f["goal"] != "attack"
+                         and not f["committed"]) else None
+        cleared = poll_until(5, cleaned)
+        if cleared:
+            print(f"  [pass] episode end cleared lash-out combat state: {cleared}")
+        else:
+            ok = False
+            print(f"  [FAIL] lash-out combat state leaked past episode end: "
+                  f"{lash_ai_flags(P, lash)}")
+
+        # 9d. No eligible attacker: nearest eligible unit (an ally — every
+        # spawned acolyte shares one faction, so this doubles as the
+        # ally-targeting check).
+        subj2 = spawn_acolyte(P, -15, -25)
+        set_wellbeing(P, subj2, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subj2) == "stable")
+        near_ally = spawn_acolyte(P, -14, -25)
+        far_ally  = spawn_acolyte(P, -10, -25)
+        send(P, f"require('scripts.mental_state').forceBreak({subj2},'lash_out'); "
+                f"return 'ok'")
+
+        def t2_target():
+            t = lash_target(P, subj2)
+            return t if t != "nil" else None
+        target2 = poll_until(10, t2_target)
+        if target2 == str(near_ally):
+            print(f"  [pass] no eligible attacker -> nearest eligible ally "
+                  f"{near_ally} (over farther {far_ally})")
+        else:
+            ok = False
+            print(f"  [FAIL] expected nearest ally {near_ally}, got "
+                  f"target={target2} (far_ally={far_ally})")
+
+        # 9e. Dead, collapsed, self, and the technomule are excluded —
+        # all placed CLOSER than the one live unit, which must still win.
+        subj3 = spawn_acolyte(P, 0, -25)
+        set_wellbeing(P, subj3, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subj3) == "stable")
+        mule3 = spawn_acolyte(P, 0.2, -25, unit="technomule", clear_water=False)
+        dead3 = spawn_acolyte(P, 0.3, -25)
+        send(P, f"unit.kill({dead3}); return 'ok'")
+        poll_until(5, lambda: send(P, f"return unit.getPose({dead3})") == "dead")
+        collapsed3 = spawn_acolyte(P, 0.4, -25)
+        # unit.collapse() only holds while every gating resource sits below
+        # its own revive threshold (Test.Headless / unit_resource_tick.lua
+        # checkRevive) — a healthy fresh spawn auto-revives within a tick
+        # or two, well before the target-policy check below runs. Pin
+        # unit.getPose's report for this one uid instead, so the exclusion
+        # is exercised deterministically regardless of the physiology sim's
+        # timing — the same wrap-and-delegate technique movement_probe.py
+        # uses to neutralise unit_ai's wander tick.
+        send(P, f"if not _G.__probe_orig_getPose then "
+                f"_G.__probe_orig_getPose = unit.getPose end; "
+                f"unit.getPose = function(u) "
+                f"if u == {collapsed3} then return 'collapsed' end "
+                f"return _G.__probe_orig_getPose(u) end; return 'ok'")
+        live3 = spawn_acolyte(P, 4, -25)
+        send(P, f"require('scripts.mental_state').forceBreak({subj3},'lash_out'); "
+                f"return 'ok'")
+
+        def t3_target():
+            t = lash_target(P, subj3)
+            return t if t != "nil" else None
+        target3 = poll_until(10, t3_target)
+        send(P, "if _G.__probe_orig_getPose then "
+                "unit.getPose = _G.__probe_orig_getPose; "
+                "_G.__probe_orig_getPose = nil end; return 'ok'")
+        if target3 == str(live3):
+            print(f"  [pass] dead/collapsed/technomule excluded -> live unit "
+                  f"{live3} chosen (mule={mule3} dead={dead3} "
+                  f"collapsed={collapsed3})")
+        else:
+            ok = False
+            print(f"  [FAIL] expected live unit {live3}, got target={target3}")
+
+        # 9f. A lost target (dies mid-episode) is replaced with another
+        # eligible unit.
+        subj4 = spawn_acolyte(P, 15, -25)
+        set_wellbeing(P, subj4, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subj4) == "stable")
+        t1 = spawn_acolyte(P, 16, -25)
+        t2 = spawn_acolyte(P, 20, -25)
+        send(P, f"require('scripts.mental_state').forceBreak({subj4},'lash_out'); "
+                f"return 'ok'")
+
+        def t4_first():
+            t = lash_target(P, subj4)
+            return t if t != "nil" else None
+        first = poll_until(10, t4_first)
+        if first == str(t1):
+            print(f"  [pass] lash-out picked the nearest target {t1} first")
+        else:
+            ok = False
+            print(f"  [FAIL] lash-out never targeted {t1} first (got {first})")
+
+        send(P, f"unit.kill({t1}); return 'ok'")
+
+        def t4_replaced():
+            t = lash_target(P, subj4)
+            return t if t == str(t2) else None
+        replaced = poll_until(10, t4_replaced)
+        if replaced:
+            print(f"  [pass] lost target {t1} replaced with remaining eligible "
+                  f"unit {t2}")
+        else:
+            ok = False
+            print(f"  [FAIL] lash-out never replaced lost target {t1} with "
+                  f"{t2} (current={lash_target(P, subj4)})")
+
+        # 9g. No eligible target: agitated wander, keep searching.
+        subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles
+        set_wellbeing(P, subj5, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subj5) == "stable")
+        wx0, wy0 = unit_pos(P, subj5)
+        send(P, f"require('scripts.mental_state').forceBreak({subj5},'lash_out'); "
+                f"return 'ok'")
+        moved = poll_until(15, lambda: (lambda x, y:
+                (x - wx0) ** 2 + (y - wy0) ** 2 > 0.8)(*unit_pos(P, subj5)))
+        target5 = lash_target(P, subj5)
+        if moved and target5 == "nil":
+            print(f"  [pass] no eligible target -> agitated wander, no attack "
+                  f"goal (from {wx0:.1f},{wy0:.1f})")
+        else:
+            ok = False
+            print(f"  [FAIL] expected wander w/ no target: moved={bool(moved)} "
+                  f"target={target5!r}")
+        send(P, f"unit.setStat({subj5},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, subj5) != "break")
 
         # Contamination guard: every check above assumed a live unit —
         # a dead one freezes its stats and passes exit checks vacuously.
