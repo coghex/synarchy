@@ -58,7 +58,7 @@ startLuaThread env = do
             let lteq = luaToEngineQueue env
                 etlq = luaQueue env
             backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef (loggerRef env)
-            registerLuaAPI (lbsLuaState backendState) env backendState
+            registerLuaAPI (lbsLuaState backendState) env backendState stateRef
             logDebug logger CatLua "Lua API registered."
             setupShellSandbox (lbsLuaState backendState)
             logDebug logger CatLua "Shell sandbox set up."

@@ -8,6 +8,8 @@ module Engine.Scripting.Lua.API
   ) where
 
 import UPrelude
+import Data.IORef (IORef)
+import Engine.Core.Thread (ThreadControl)
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Register.Debug (registerDebugAPI)
@@ -25,11 +27,11 @@ import Engine.Scripting.Lua.API.Register.Camera (registerCameraAPI)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
-registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IO ()
-registerLuaAPI lst env backendState = Lua.runWith lst $ do
+registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
+registerLuaAPI lst env backendState stateRef = Lua.runWith lst $ do
   registerEngineAPI lst env backendState
   registerDebugAPI env
-  registerInputAPI env
+  registerInputAPI env backendState stateRef
   registerUIAPI env
   registerUnitAPI env
   registerBuildingAPI env
