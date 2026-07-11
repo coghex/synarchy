@@ -111,6 +111,27 @@ def _count_f4_outcomes(trace: SessionTrace, oracle: dict) -> None:
         trace.meta.get("f4_outcomes_total", 0) + len(oracle.get("action_outcomes") or []))
 
 
+def _finish_step(eng: PlaytestEngine, dt: float) -> None:
+    """The second half of the step contract (#728), called only after
+    eng.set_paused(False) has already returned successfully — the step
+    has begun. Sleeps dt, then repauses. On any interruption
+    (BaseException, so Ctrl-C is covered) makes a best-effort recovery
+    repause — swallowing its own failure — so the engine's pause state
+    is left defined for outer cleanup instead of running unattended
+    until shutdown, then re-raises the ORIGINAL interruption unchanged
+    (never masked by a recovery failure). Shared by run_session and
+    run_replay so both follow the identical phase-accounting contract."""
+    try:
+        time.sleep(dt)
+        eng.set_paused(True)
+    except BaseException:
+        try:
+            eng.set_paused(True)
+        except Exception:
+            pass
+        raise
+
+
 def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 turns: int, dt: float, max_seconds: float | None,
                 memory_turns: int, stuck_k: int, settle: float = 0.3) -> str:
@@ -151,17 +172,19 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         # turn ends — normally, done/stuck, or a crash/Ctrl-C anywhere
         # in between — the record holds exactly the acknowledged calls
         # (a multi-call action that dies mid-way keeps its successful
-        # prefix), every ack received, and whether the dt step
-        # completed. Replay keys off exactly these fields. oracle stays
-        # None when the snapshot never completed (the critic treats a
-        # null oracle as absent).
+        # prefix), every ack received, and a step_phase distinguishing
+        # a step that never began from one that began but was
+        # interrupted from one that fully completed (#728). Replay
+        # keys off exactly these fields. oracle stays None when the
+        # snapshot never completed (the critic treats a null oracle as
+        # absent).
         sent: list[str] = []       # acknowledged prefix of calls
         post_sent: list[str] = []  # acknowledged prefix of post_calls
         acks: list = []
         post_acks: list = []
         oracle = None
         stuck = False
-        stepped = False
+        step_phase = "not_started"
         try:
             # inject one call at a time so a mid-action crash still
             # records the acknowledged prefix
@@ -196,12 +219,21 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             terminal = action.get("do") == "done" or stuck
 
             # 6. step the sim by wall-clock dt, then the post-step
-            # calls (a held key releases after riding through the step)
+            # calls (a held key releases after riding through the
+            # step). Once set_paused(False) returns, the step has
+            # begun — an interruption anywhere past this point is
+            # "interrupted", never "not_started" (#728); _finish_step
+            # makes a best-effort recovery repause so the engine isn't
+            # left running into outer cleanup, without masking the
+            # original interruption.
             if not terminal:
                 eng.set_paused(False)
-                time.sleep(dt)
-                eng.set_paused(True)
-                stepped = True
+                try:
+                    _finish_step(eng, dt)
+                except BaseException:
+                    step_phase = "interrupted"
+                    raise
+                step_phase = "completed"
                 for call in post_calls:
                     post_acks.extend(eng.inject([call]))
                     post_sent.append(call)
@@ -217,11 +249,11 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 "injected": sent + post_sent,
                 "acks": acks + post_acks,
                 "post_injected": len(post_sent),
-                "stepped": stepped,
+                "step_phase": step_phase,
                 "oracle": oracle,
                 "stuck": stuck,
             })
-            trace.record_replay(turn, sent, post_sent, stepped=stepped)
+            trace.record_replay(turn, sent, post_sent, step_phase=step_phase)
 
         if action.get("do") == "done":
             stop_reason = "goal_reached_claimed"
@@ -247,10 +279,16 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
     session's structure: every recorded turn is replayed (including
     no-input ones, so pacing matches), pre-step calls land before the
     dt step and post-step calls (a held key's keyUp) after it, exactly
-    as they did live — and a turn whose original execution never
-    stepped (done/stuck/interrupted, #698) is replayed without the
-    step or its post calls too. Wall-clock dt means it is still NOT
-    guaranteed bit-identical (accepted tradeoff — see README)."""
+    as they did live. A turn recorded step_phase "not_started"
+    (done/stuck, or interrupted before a successful unpause, #698) is
+    replayed without a step or post calls. A turn recorded
+    "interrupted" (unpause succeeded live but the step didn't finish
+    cleanly, #728) still replays one full unpause->dt->repause step —
+    the truncated original duration isn't reproduced, an existing
+    wall-clock-dt tradeoff — but its post calls never ran live either,
+    so replay doesn't invent them; only a "completed" turn replays its
+    post calls too. Wall-clock dt means it is still NOT guaranteed
+    bit-identical (accepted tradeoff — see README)."""
     entries = load_replay(source_dir)
     if not entries:
         print(f"  [warn] {source_dir} has no replay.jsonl entries")
@@ -277,19 +315,24 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
         frame = trace.frame_path(turn)
         fb_size = eng.screenshot(frame)
         ts = time.time()
-        # Step + post-inject only when the ORIGINAL turn did (#698): a
-        # done/stuck/interrupted turn never stepped and never landed
-        # its post calls, so replaying one must not invent them. The
-        # whole pre-to-post span runs under the same record-in-finally
-        # shape as run_session, so an interrupted replay leaves a
-        # truthful trace of its own — acknowledged calls only,
-        # successful prefixes of multi-call turns preserved.
+        # Step only when the ORIGINAL turn actually began one (#728):
+        # step_phase "not_started" (done/stuck, or interrupted before a
+        # successful unpause) skips the step entirely; "interrupted"
+        # and "completed" both replay one full unpause->dt->repause
+        # step, but post-step calls only ever ran live on a
+        # "completed" turn, so only that state replays them. The whole
+        # pre-to-post span runs under the same record-in-finally shape
+        # as run_session, so an interrupted replay leaves a truthful
+        # trace of its own — acknowledged calls only, successful
+        # prefixes of multi-call turns preserved, and its own
+        # step_phase reflecting THIS execution's outcome, not the
+        # source's.
         sent: list[str] = []
         post_sent: list[str] = []
         acks: list = []
         post_acks: list = []
         oracle = None
-        stepped = False
+        step_phase = "not_started"
         try:
             for call in entry["pre"]:
                 acks.extend(eng.inject([call]))
@@ -299,14 +342,18 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
             oracle = eng.oracle_snapshot()
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
-            if entry["stepped"]:
+            if entry["step_phase"] != "not_started":
                 eng.set_paused(False)
-                time.sleep(dt)
-                eng.set_paused(True)
-                stepped = True
-                for call in entry["post"]:
-                    post_acks.extend(eng.inject([call]))
-                    post_sent.append(call)
+                try:
+                    _finish_step(eng, dt)
+                except BaseException:
+                    step_phase = "interrupted"
+                    raise
+                step_phase = "completed"
+                if entry["step_phase"] == "completed":
+                    for call in entry["post"]:
+                        post_acks.extend(eng.inject([call]))
+                        post_sent.append(call)
         finally:
             trace.record_turn({
                 "turn": turn, "ts": ts,
@@ -316,11 +363,14 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                 "injected": sent + post_sent,
                 "acks": acks + post_acks,
                 "post_injected": len(post_sent),
-                "stepped": stepped,
+                "step_phase": step_phase,
                 "oracle": oracle, "stuck": False,
             })
         print(f"  replay turn {turn:3d}: {len(sent)}+{len(post_sent)} call(s)"
-              + ("" if entry["stepped"] else " — no step (terminal turn)"))
+              + {"not_started": " — no step (terminal turn)",
+                 "interrupted": " — step replayed, no post calls "
+                                "(source was interrupted)",
+                 "completed": ""}[entry["step_phase"]])
     # Seed verification backstop: pinning should make these match; a
     # mismatch means the replayed run diverged (e.g. different menu
     # path) and world-dependent turns can't be trusted.
@@ -382,9 +432,9 @@ def selftest() -> int:
               and any("keyUp" in c for e in replay_entries for c in e["post"]))
         check("every executed call has its ack retained (post included)",
               all(len(t["acks"]) == len(t["injected"]) for t in turns))
-        check("normal turns record stepped=True in trace and replay",
-              all(t.get("stepped") is True for t in turns)
-              and all(e["stepped"] is True for e in replay_entries))
+        check("normal turns record step_phase=completed in trace and replay",
+              all(t.get("step_phase") == "completed" for t in turns)
+              and all(e["step_phase"] == "completed" for e in replay_entries))
         hold = [t for t in turns if any("keyUp" in c for c in t["injected"])]
         check("held-input turn marks its trailing keyUp as post-step",
               bool(hold) and all(t.get("post_injected") == 1 for t in hold),
@@ -429,7 +479,7 @@ def selftest() -> int:
               sreason == "stuck_loop" and sturns[-1]["stuck"] is True,
               f"{sreason} after {len(sturns)} turns")
         check("stuck turn records that it never stepped",
-              sturns[-1].get("stepped") is False)
+              sturns[-1].get("step_phase") == "not_started")
 
         # 3b. terminal turn (#698): 'done' ends the session before the
         # sim step — its trace/replay entry must say so, and replaying
@@ -446,9 +496,9 @@ def selftest() -> int:
         dreplay = load_replay(ddir)
         check("done turn records no step and no inputs",
               dreason == "goal_reached_claimed" and len(dturns) == 2
-              and dturns[-1].get("stepped") is False
+              and dturns[-1].get("step_phase") == "not_started"
               and dturns[-1]["injected"] == []
-              and dreplay[-1]["stepped"] is False
+              and dreplay[-1]["step_phase"] == "not_started"
               and dreplay[-1]["post"] == [])
         rdeng = FakeEngine()
         rdt = SessionTrace(os.path.join(tmp, "done_replay"), {})
@@ -473,10 +523,10 @@ def selftest() -> int:
         hreplay = load_replay(hdir)
         check("stuck held-key turn records only the keyDown that ran",
               hreason == "stuck_loop"
-              and hturns[-1].get("stepped") is False
+              and hturns[-1].get("step_phase") == "not_started"
               and hturns[-1]["injected"] == ['return input.keyDown("W")']
               and len(hturns[-1]["acks"]) == 1
-              and hreplay[-1]["stepped"] is False
+              and hreplay[-1]["step_phase"] == "not_started"
               and hreplay[-1]["post"] == [])
         rheng = FakeEngine()
         rht = SessionTrace(os.path.join(tmp, "stuck_replay"), {})
@@ -487,10 +537,9 @@ def selftest() -> int:
               f"{rheng.injected} vs {heng.injected}; "
               f"steps {rheng.unpauses} vs {heng.unpauses}")
 
-        # 3d. interruption before the post phase (#698): a crash at
-        # post-inject (step done) or mid-step (step not done) still
-        # writes a truthful record before propagating, and replaying
-        # the partial trace re-executes exactly the phases that ran.
+        # 3d. interruption at post-inject (#698): the step itself
+        # already completed cleanly — only the post phase dies — so
+        # this must record step_phase "completed", not "interrupted".
         class CrashOnPost(FakeEngine):
             def inject(self, calls):
                 if any("keyUp" in c for c in calls):
@@ -511,12 +560,13 @@ def selftest() -> int:
         ctrace.finish("engine_crash")
         cturns = load_turns(cdir)
         creplay = load_replay(cdir)
-        check("crash at post-inject records stepped, unposted turn",
+        check("crash at post-inject records a completed, unposted turn",
               crashed and len(cturns) == 1
-              and cturns[0].get("stepped") is True
+              and cturns[0].get("step_phase") == "completed"
               and cturns[0]["injected"] == ['return input.keyDown("W")']
               and len(cturns[0]["acks"]) == 1
-              and creplay[0]["stepped"] is True and creplay[0]["post"] == [])
+              and creplay[0]["step_phase"] == "completed"
+              and creplay[0]["post"] == [])
         rceng = FakeEngine()
         rct = SessionTrace(os.path.join(tmp, "crash_post_replay"), {})
         rct.finish(run_replay(rceng, cdir, rct, dt=0.0, settle=0.0))
@@ -524,10 +574,14 @@ def selftest() -> int:
               rceng.injected == ceng.injected and rceng.unpauses == 1,
               f"{rceng.injected}; steps {rceng.unpauses}")
 
+        # 3e. crash BEFORE the step begins (#698; relabeled by #728 — the
+        # prior comment here mischaracterized this as "mid-step", but
+        # set_paused(False) itself is what fails, so the step never
+        # advances at all). Must record step_phase "not_started".
         class CrashOnUnpause(FakeEngine):
             def set_paused(self, paused):
                 if not paused:
-                    raise EngineCrash("console died mid-step")
+                    raise EngineCrash("console died before the step began")
                 super().set_paused(paused)
 
         udir = os.path.join(tmp, "crash_step")
@@ -544,19 +598,121 @@ def selftest() -> int:
         utrace.finish("engine_crash")
         uturns = load_turns(udir)
         ureplay = load_replay(udir)
-        check("crash mid-step records stepped=False and no post call",
+        check("crash before the step begins records not_started, no post call",
               ucrashed and len(uturns) == 1
-              and uturns[0].get("stepped") is False
+              and uturns[0].get("step_phase") == "not_started"
               and uturns[0].get("post_injected") == 0
-              and ureplay[0]["stepped"] is False and ureplay[0]["post"] == [])
+              and ureplay[0]["step_phase"] == "not_started"
+              and ureplay[0]["post"] == [])
         rueng = FakeEngine()
         rut = SessionTrace(os.path.join(tmp, "crash_step_replay"), {})
         rut.finish(run_replay(rueng, udir, rut, dt=0.0, settle=0.0))
-        check("step-interrupted replay invents no step",
+        check("never-began-step replay invents no step",
               rueng.injected == ueng.injected and rueng.unpauses == 0,
               f"steps {rueng.unpauses}")
 
-        # 3e. crash AFTER an acknowledged pre-input (#698 review): the
+        # 3f. crash DURING the pacing interval (#728, the issue's core
+        # gap): set_paused(False) returns successfully — the step has
+        # genuinely begun (proven below via unpauses>0, checked before
+        # the trace) — then Ctrl-C/a crash arrives before repause is
+        # even attempted. This must record step_phase "interrupted",
+        # never "not_started", and the best-effort recovery must leave
+        # the (still-reachable) fake engine paused without masking the
+        # original KeyboardInterrupt.
+        pdir = os.path.join(tmp, "crash_pacing")
+        ptrace = SessionTrace(pdir, {"mode": "selftest-crash-pacing"})
+        peng = FakeEngine()
+        real_sleep = time.sleep
+
+        def _raise_kbi(_seconds):
+            raise KeyboardInterrupt()
+
+        time.sleep = _raise_kbi
+        try:
+            try:
+                run_session(peng, agent_mod.ScriptedAgent([{"do": "wait"}]),
+                            ptrace, turns=1, dt=0.0, max_seconds=None,
+                            memory_turns=4, stuck_k=99, settle=0.0)
+                pcrashed = False
+            except KeyboardInterrupt:
+                pcrashed = True
+        finally:
+            time.sleep = real_sleep
+        ptrace.finish("interrupted")
+        check("pacing interruption: the fake engine actually advanced "
+              "before the trace was checked",
+              pcrashed and peng.unpauses == 1)
+        pturns = load_turns(pdir)
+        preplay = load_replay(pdir)
+        check("pacing interruption is recorded interrupted, not never-started, "
+              "and leaves the engine paused",
+              pturns[0].get("step_phase") == "interrupted"
+              and preplay[0]["step_phase"] == "interrupted"
+              and peng.paused is True)
+        rpeng = FakeEngine()
+        rpt = SessionTrace(os.path.join(tmp, "crash_pacing_replay"), {})
+        rpt.finish(run_replay(rpeng, pdir, rpt, dt=0.0, settle=0.0))
+        rpturns = load_turns(os.path.join(tmp, "crash_pacing_replay"))
+        check("replay of an interrupted-pacing turn performs one step",
+              rpeng.unpauses == 1 and rpeng.injected == []
+              and rpturns[0].get("step_phase") == "completed")
+
+        # 3g. the repause call itself fails after a successful unpause
+        # (#728, "repause failure after advancement"): the step
+        # advanced and even finished its pacing wait — the failure is
+        # in set_paused(True) alone. Same "interrupted" contract as
+        # 3f; a best-effort recovery retries the repause and this time
+        # it succeeds, proving the engine still ends paused and the
+        # original EngineCrash is not masked or replaced.
+        class CrashOnRepauseOnce(FakeEngine):
+            def __init__(self):
+                super().__init__()
+                self._armed = False
+
+            def set_paused(self, paused):
+                if paused and self._armed:
+                    self._armed = False
+                    raise EngineCrash("console died at repause")
+                if not paused:
+                    self._armed = True
+                super().set_paused(paused)
+
+        qdir = os.path.join(tmp, "crash_repause")
+        qtrace = SessionTrace(qdir, {"mode": "selftest-crash-repause"})
+        qeng = CrashOnRepauseOnce()
+        try:
+            run_session(qeng, agent_mod.ScriptedAgent(
+                [{"do": "hold", "name": "W"}]), qtrace,
+                turns=1, dt=0.0, max_seconds=None, memory_turns=4,
+                stuck_k=99, settle=0.0)
+            qcrashed = False
+        except EngineCrash:
+            qcrashed = True
+        qtrace.finish("engine_crash")
+        check("repause failure: the fake engine actually advanced "
+              "before the trace was checked",
+              qcrashed and qeng.unpauses == 1)
+        qturns = load_turns(qdir)
+        qreplay = load_replay(qdir)
+        check("repause failure is recorded interrupted (not never-started), "
+              "no post call, and the recovery retry leaves it paused",
+              qturns[0].get("step_phase") == "interrupted"
+              and qturns[0]["injected"] == ['return input.keyDown("W")']
+              and qturns[0].get("post_injected") == 0
+              and qreplay[0]["step_phase"] == "interrupted"
+              and qreplay[0]["post"] == []
+              and qeng.paused is True)
+        rqeng = FakeEngine()
+        rqt = SessionTrace(os.path.join(tmp, "crash_repause_replay"), {})
+        rqt.finish(run_replay(rqeng, qdir, rqt, dt=0.0, settle=0.0))
+        rqturns = load_turns(os.path.join(tmp, "crash_repause_replay"))
+        check("replay of a repause-interrupted turn steps but skips the "
+              "unexecuted keyUp",
+              rqeng.injected == ['return input.keyDown("W")']
+              and rqeng.unpauses == 1
+              and rqturns[0].get("step_phase") == "completed")
+
+        # 3h. crash AFTER an acknowledged pre-input (#698 review): the
         # oracle snapshot dies before the record used to be written —
         # the acked keyDown must still land in both trace and replay,
         # with no step and a null oracle.
@@ -582,10 +738,10 @@ def selftest() -> int:
               ocrashed and len(oturns) == 1
               and oturns[0]["injected"] == ['return input.keyDown("W")']
               and len(oturns[0]["acks"]) == 1
-              and oturns[0].get("stepped") is False
+              and oturns[0].get("step_phase") == "not_started"
               and oturns[0].get("oracle") is None
               and oreplay[0]["pre"] == ['return input.keyDown("W")']
-              and oreplay[0]["stepped"] is False
+              and oreplay[0]["step_phase"] == "not_started"
               and oreplay[0]["post"] == [])
         roeng = FakeEngine()
         rot = SessionTrace(os.path.join(tmp, "crash_oracle_replay"), {})
@@ -609,9 +765,9 @@ def selftest() -> int:
         check("replay records its acked pre calls when its oracle crashes",
               r2crashed and len(r2turns) == 1
               and r2turns[0]["injected"] == ['return input.keyDown("W")']
-              and r2turns[0].get("stepped") is False)
+              and r2turns[0].get("step_phase") == "not_started")
 
-        # 3f. crash mid multi-call action: the acknowledged prefix of a
+        # 3i. crash mid multi-call action: the acknowledged prefix of a
         # drag survives in trace + replay; the unacked remainder is
         # never claimed.
         class CrashOnCall(FakeEngine):
@@ -639,10 +795,10 @@ def selftest() -> int:
               and len(mturns[0]["injected"]) == 3
               and all("mouseUp" not in c for c in mturns[0]["injected"])
               and len(mturns[0]["acks"]) == 3
-              and mturns[0].get("stepped") is False
+              and mturns[0].get("step_phase") == "not_started"
               and mreplay[0]["pre"] == mturns[0]["injected"]
               and mreplay[0]["post"] == []
-              and mreplay[0]["stepped"] is False,
+              and mreplay[0]["step_phase"] == "not_started",
               f"{len(mturns[0]['injected']) if mturns else 0} call(s) kept")
         rmeng = FakeEngine()
         rmt = SessionTrace(os.path.join(tmp, "crash_mid_replay"), {})
@@ -651,14 +807,45 @@ def selftest() -> int:
               rmeng.injected == meng.injected and rmeng.unpauses == 0,
               f"{rmeng.injected}")
 
-        # 3g. pre-#698 replay entries carry no "stepped" field; they
-        # only ever recorded stepped turns, so the legacy default is True.
-        ldir = os.path.join(tmp, "legacy")
+        # 3j. legacy replay-entry compatibility (#728): pre-#698 entries
+        # carry no "stepped" field at all (those traces only ever
+        # recorded a step on every turn); #718-era entries carry a
+        # boolean "stepped". Both must keep loading with their
+        # historical mapping — missing/True as a completed step, False
+        # as never-started (its true start state, never-began vs.
+        # began-but-interrupted, is unrecoverable, so it conservatively
+        # keeps the old no-step replay behavior) — and a real
+        # "step_phase" entry must pass through unchanged.
+        ldir = os.path.join(tmp, "legacy_missing")
         os.makedirs(ldir)
         with open(os.path.join(ldir, "replay.jsonl"), "w") as f:
             f.write(json.dumps({"turn": 1, "pre": [], "post": []}) + "\n")
-        check("legacy replay entry defaults to stepped=True",
-              load_replay(ldir)[0]["stepped"] is True)
+        check("legacy replay entry with no stepped field maps to completed",
+              load_replay(ldir)[0]["step_phase"] == "completed")
+
+        ltdir = os.path.join(tmp, "legacy_true")
+        os.makedirs(ltdir)
+        with open(os.path.join(ltdir, "replay.jsonl"), "w") as f:
+            f.write(json.dumps({"turn": 1, "pre": [], "post": [],
+                                "stepped": True}) + "\n")
+        check("legacy boolean stepped=True maps to completed",
+              load_replay(ltdir)[0]["step_phase"] == "completed")
+
+        lfdir = os.path.join(tmp, "legacy_false")
+        os.makedirs(lfdir)
+        with open(os.path.join(lfdir, "replay.jsonl"), "w") as f:
+            f.write(json.dumps({"turn": 1, "pre": [], "post": [],
+                                "stepped": False}) + "\n")
+        check("legacy boolean stepped=False maps to not_started",
+              load_replay(lfdir)[0]["step_phase"] == "not_started")
+
+        ndir = os.path.join(tmp, "new_format")
+        os.makedirs(ndir)
+        with open(os.path.join(ndir, "replay.jsonl"), "w") as f:
+            f.write(json.dumps({"turn": 1, "pre": [], "post": [],
+                                "step_phase": "interrupted"}) + "\n")
+        check("new-format step_phase entry passes through unchanged",
+              load_replay(ndir)[0]["step_phase"] == "interrupted")
 
         # 4. render-mode threading (#650): the launcher maps each mode
         # to the right boot flags, rejects unknown modes, and the fake

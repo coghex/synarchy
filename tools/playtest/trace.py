@@ -10,13 +10,27 @@ consumes. H1 records; it never analyzes.
     ├── replay.jsonl     one line PER TURN (no-input turns included, so
     │                    replay pacing is faithful):
     │                    {"turn": N, "pre": [lua...], "post": [lua...],
-    │                     "stepped": bool}
+    │                     "step_phase": "not_started"|"interrupted"|"completed"}
     │                    pre = injected before the sim step; post = after
     │                    it (a held key's keyUp rides post). Only calls
-    │                    that actually ran are recorded, and stepped says
-    │                    whether the dt step completed — False for a
-    │                    done/stuck/interrupted turn, which replay must
-    │                    not step or post-inject (#698)
+    │                    that actually ran are recorded. step_phase
+    │                    distinguishes a step that never began
+    │                    (done/stuck, or interrupted before a successful
+    │                    unpause) from one that began but didn't finish
+    │                    cleanly (interrupted during pacing or repause)
+    │                    from one that fully completed (#728, superseding
+    │                    #698's boolean "stepped"). Replay performs the
+    │                    unpause->dt->repause step for both "interrupted"
+    │                    and "completed" source turns — only
+    │                    "not_started" skips it — but only replays the
+    │                    post calls for a "completed" turn, since a
+    │                    began-but-interrupted turn's post calls never
+    │                    ran live either. Legacy traces (a missing or
+    │                    boolean "stepped" field) load with their
+    │                    historical mapping: missing/True -> "completed",
+    │                    False -> "not_started" (its true start state is
+    │                    unrecoverable, so it conservatively keeps the
+    │                    old no-step replay behavior)
     ├── frames/          turn_0001.png ... (F1 captures)
     └── engine.log       engine stdout/stderr copied at session end
 
@@ -35,8 +49,10 @@ Per-turn record (turns.jsonl):
     post_injected   int   (how many trailing injected entries were
                     post-step calls; 0 on a turn whose post phase
                     never ran)
-    stepped         bool  (the unpause-dt-repause sim step completed;
-                    False for done/stuck/interrupted turns)
+    step_phase      "not_started"|"interrupted"|"completed" — whether
+                    the unpause-dt-repause sim step never began, began
+                    but was interrupted before repause confirmed, or
+                    fully completed (#728)
     oracle          {..., "player_invisible": true}  — captured for the
                     critic, NEVER shown to the player; null when the
                     turn was interrupted before the snapshot completed
@@ -48,6 +64,8 @@ import json
 import os
 import shutil
 import time
+
+STEP_PHASES = ("not_started", "interrupted", "completed")
 
 
 class SessionTrace:
@@ -73,16 +91,18 @@ class SessionTrace:
             f.write(json.dumps(record, sort_keys=True) + "\n")
 
     def record_replay(self, turn: int, pre: list[str], post: list[str],
-                      stepped: bool) -> None:
+                      step_phase: str) -> None:
         """One line per turn — ALWAYS, even with no calls, so replay
         reproduces the turn count and pacing of the session (a run of
         'wait' turns is real elapsed game time, not dead trace). pre and
-        post must contain only calls that actually ran, and stepped
-        whether the sim step completed — replay executes exactly these
-        phases, nothing more (#698)."""
+        post must contain only calls that actually ran, and step_phase
+        one of "not_started"/"interrupted"/"completed" — replay executes
+        exactly the phases that state implies, nothing more (#698, #728)."""
+        if step_phase not in STEP_PHASES:
+            raise ValueError(f"unknown step_phase {step_phase!r}")
         with open(os.path.join(self.dir, "replay.jsonl"), "a") as f:
             f.write(json.dumps({"turn": turn, "pre": pre, "post": post,
-                                "stepped": stepped}) + "\n")
+                                "step_phase": step_phase}) + "\n")
 
     def attach_engine_log(self, log_path: str) -> None:
         try:
@@ -105,10 +125,14 @@ def load_meta(trace_dir: str) -> dict:
 
 def load_replay(trace_dir: str) -> list[dict]:
     """The recorded session's turns, in order: each entry is
-    {"turn": N, "pre": [lua...], "post": [lua...], "stepped": bool} —
-    no-input turns included. A pre-#698 entry has no "stepped" field;
-    those traces only ever replayed with a step on every turn, so the
-    legacy default is True."""
+    {"turn": N, "pre": [lua...], "post": [lua...], "step_phase":
+    "not_started"|"interrupted"|"completed"} — no-input turns included.
+    A pre-#728 entry carries a boolean (or missing) "stepped" field
+    instead: missing or True maps to "completed" (those traces only
+    ever recorded a step on every turn); False maps to "not_started" —
+    its actual start state (never began vs. began-but-interrupted) is
+    unrecoverable, so it conservatively keeps its historical no-step
+    replay behavior."""
     path = os.path.join(trace_dir, "replay.jsonl")
     entries: list[dict] = []
     if not os.path.isfile(path):
@@ -118,10 +142,13 @@ def load_replay(trace_dir: str) -> list[dict]:
             line = line.strip()
             if line:
                 obj = json.loads(line)
+                phase = obj.get("step_phase")
+                if phase not in STEP_PHASES:
+                    phase = "completed" if bool(obj.get("stepped", True)) else "not_started"
                 entries.append({"turn": int(obj["turn"]),
                                 "pre": list(obj.get("pre") or []),
                                 "post": list(obj.get("post") or []),
-                                "stepped": bool(obj.get("stepped", True))})
+                                "step_phase": phase})
     entries.sort(key=lambda e: e["turn"])
     return entries
 
