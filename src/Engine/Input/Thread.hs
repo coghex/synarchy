@@ -8,6 +8,8 @@ import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
+import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM.TVar (modifyTVar')
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
 import Engine.Core.State
@@ -465,6 +467,16 @@ processInput env inpSt event = case event of
     -- afterwards (no stuck keys).
     InputFollowup evs → do
         Q.writeQueue (luaQueue env) (LuaInjectFollowup evs)
+        return inpSt
+    -- Completion marker for synthetic injection (#727): everything
+    -- queued ahead of this barrier (FIFO, this is the only consumer)
+    -- has already been fully processed, side effects included, by the
+    -- time this token lands — see 'inputBarrierRef's haddock. 'max'
+    -- (not overwrite) so an out-of-order arrival can't ever move the
+    -- watermark backwards, even though allocation+push order already
+    -- guarantees monotonic processing order here.
+    InputBarrier tok → do
+        atomically $ modifyTVar' (inputBarrierRef env) (max tok)
         return inpSt
     InputScrollEvent x y → do
         logger ← readIORef (loggerRef env)

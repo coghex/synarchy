@@ -31,11 +31,24 @@
 --   'LuaInjectFollowup' → Lua thread → back into the input queue. Both
 --   queues are FIFO, so the releases re-enter strictly after the
 --   action's callbacks have run, and are then processed like any other
---   key events (no stuck state). Caveat: two mod-bearing sequences
---   racing through this pipeline concurrently (second verb issued
---   before the first's fence completes) can release a shared modifier
---   under the second action's callbacks — the lockstep harness (#647)
---   acks each verb before the next, so overlap doesn't arise there.
+--   key events (no stuck state).
+--
+--   Sequential ack boundary (#727): the fence relay above only orders
+--   messages WITHIN one sequence — the public ack (see
+--   'Engine.Scripting.Lua.API.InputInject.injectAndSettle') used to
+--   fire as soon as the primary batch drained, before the fence had
+--   even reached the Lua queue, let alone been dispatched. A second
+--   verb issued right after that ack — the very next debug-console
+--   command, or the next line of a script calling input.* twice in a
+--   row — could then run while the first verb's modifier was still
+--   published held (a plain second action inheriting it) or get its
+--   own hold clipped by the first verb's still-pending release. Fixed
+--   by making the ack synchronously resolve the whole lifetime: it now
+--   drains and dispatches every Lua message the sequence produced,
+--   and — if that included a fence — waits for the re-injected release
+--   to drain too and dispatches its broadcast, all before returning.
+--   So by the time one input.* call acks, nothing belonging to it is
+--   left pending on either queue for the next call to race.
 module Engine.Input.Inject
   ( resolveButton
   , resolveMods
@@ -52,12 +65,16 @@ module Engine.Input.Inject
   , keyUpSequence
   , typeSequence
   , injectEvents
+  , waitForBarrier
+  , newBarrierToken
   ) where
 
 import UPrelude
 import Control.Monad (foldM)
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
+import qualified Control.Concurrent.STM as STM
+import Control.Concurrent.STM.TVar (TVar)
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Bindings (parseKeyName)
 import Engine.Input.Types (InputEvent(..))
@@ -212,14 +229,63 @@ keyUpSequence k mm@(_, m) =
 typeSequence ∷ Text → [InputEvent]
 typeSequence = map InputCharEvent . T.unpack
 
--- | Push a synthesized sequence into the input queue and block until
---   the input thread has drained it (or the timeout, in microseconds,
---   elapses; True = consumed). Draining means the events entered the
---   normal processing path — downstream Lua broadcasts they trigger
---   are dispatched on the Lua thread afterwards, exactly like real
---   input (and cannot be awaited from a console verb, which runs on
---   that same thread).
-injectEvents ∷ Q.Queue InputEvent → Int → [InputEvent] → IO Bool
-injectEvents q timeoutMicros evs = do
-    mapM_ (Q.writeQueue q) evs
-    Q.waitQueueEmpty timeoutMicros q
+-- | Allocate a fresh, monotonically increasing, never-reused
+--   'InputBarrier' token from 'Engine.Core.State.inputBarrierNextRef'.
+newBarrierToken ∷ TVar Int → IO Int
+newBarrierToken nextRef = STM.atomically $ do
+    n ← STM.readTVar nextRef
+    let tok = n + 1
+    STM.writeTVar nextRef tok
+    return tok
+
+-- | Block until 'Engine.Core.State.inputBarrierRef' has reached (at
+--   least) 'token' — i.e. the input thread has fully processed the
+--   'InputBarrier' carrying that specific token (or the timeout, in
+--   microseconds, elapses; True = reached). Deliberately NOT a wait on
+--   the input queue becoming empty (#727): the input thread dequeues
+--   an event in one STM transaction and only afterwards, in IO, runs
+--   its side effects (state publish + any 'luaQueue' write) — "queue
+--   empty" can be observed in the gap between those two, before the
+--   LAST event's effects have actually landed. And deliberately NOT a
+--   shared count of every processed barrier either (#727 review):
+--   real GLFW input never produces a barrier at all, so unrelated
+--   concurrent activity can't satisfy someone else's wait — but a
+--   BARE counter, shared across calls, still has a gap: a caller that
+--   TIMED OUT and gave up leaves its own barrier pending in the
+--   queue, and that stale barrier finally processing later could tick
+--   a shared counter to the value a LATER, unrelated caller happens
+--   to be waiting for, before that later caller's own events (or
+--   barrier) have been processed at all. A per-call TOKEN closes this:
+--   'inputBarrierRef' only ever holds the highest token actually
+--   processed, and FIFO + single-producer-thread allocation order
+--   guarantees a caller's own (numerically higher) token can only be
+--   reached once every event — including any earlier stale barrier —
+--   queued ahead of it, genuinely including this caller's own, has
+--   been processed.
+waitForBarrier ∷ TVar Int → Int → Int → IO Bool
+waitForBarrier barrierRef token timeoutMicros = do
+    delayVar ← STM.registerDelay timeoutMicros
+    STM.atomically $ STM.orElse
+        (do n ← STM.readTVar barrierRef
+            STM.check (n ≥ token)
+            return True)
+        (do timedOut ← STM.readTVar delayVar
+            STM.check timedOut
+            return False)
+
+-- | Push a synthesized sequence — followed by one freshly-tokened
+--   'InputBarrier' — into the input queue and block until the input
+--   thread has fully PROCESSED all of it (or the timeout, in
+--   microseconds, elapses; True = processed) — see 'waitForBarrier'
+--   for why a per-call token rather than a shared counter, counting
+--   events, or checking queue emptiness. Processed means the events
+--   entered the normal processing path — downstream Lua broadcasts
+--   they trigger are dispatched on the Lua thread afterwards, exactly
+--   like real input (and cannot be awaited from a console verb, which
+--   runs on that same thread).
+injectEvents ∷ TVar Int → TVar Int → Q.Queue InputEvent → Int → [InputEvent]
+             → IO Bool
+injectEvents nextRef barrierRef q timeoutMicros evs = do
+    tok ← newBarrierToken nextRef
+    mapM_ (Q.writeQueue q) (evs ⧺ [InputBarrier tok])
+    waitForBarrier barrierRef tok timeoutMicros
