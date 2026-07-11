@@ -111,33 +111,42 @@ def _count_f4_outcomes(trace: SessionTrace, oracle: dict) -> None:
         trace.meta.get("f4_outcomes_total", 0) + len(oracle.get("action_outcomes") or []))
 
 
-def _run_step(eng: PlaytestEngine, dt: float, began: list) -> None:
+def _run_step(eng: PlaytestEngine, dt: float, phase: list) -> None:
     """The whole step contract (#728): unpause, sleep dt, repause.
     Shared by run_session and run_replay so both follow the identical
-    phase-accounting contract. `began` is a one-element list the
-    caller passes in as `[False]`; `began[0]` is flipped to True the
-    instant eng.set_paused(False) returns, before anything else runs —
-    so the caller can tell a step that genuinely started from one that
-    never did even when this raises (a #728-review fix: an
-    interruption landing between a successful unpause and the
-    surrounding try block used to be misrecorded as "not_started" and
-    skipped recovery entirely).
+    phase-accounting contract. `phase` is a one-element list the
+    caller passes in as `["not_started"]`; this function is the ONLY
+    writer of phase[0], always from within its own protected try, so
+    there is no separate caller-side bookkeeping statement for an
+    interruption landing after eng.set_paused(...) returns (either
+    call, successful or not) to slip through — the caller reads
+    phase[0] directly in its own `finally`, never assigns to a local
+    "step_phase" of its own from a value handed back after this
+    function returns (a #728-review fix: a caller-side assignment
+    after a successful call — either "the step began" after unpause or
+    "the step completed" after repause — used to be its own statement,
+    and an interruption landing between the call returning and that
+    statement running was misrecorded as "not_started", the former
+    skipping recovery, the latter making replay skip a step that had
+    genuinely fully completed).
 
-    `began[0] = True` is the very next bytecode after the unpause call
-    returns — the tightest window achievable with an ordinary
-    statement. A sub-bytecode async signal landing in that single
-    instruction is not something any pure-Python restructuring can
-    close (moving the assignment, or classifying by which of two
-    sibling try/except blocks catches the exception instead of using a
-    flag, both just relocate the same irreducible gap — verified by
-    hand while fixing this). Real Ctrl-C timing has no realistic
-    chance of landing there; a human developer running this offline
-    test harness is an accepted, rough-edges audience (unlike the
-    fire-and-forget engine-acknowledgement gap this same issue already
-    accepts as unrecoverable, see engine.py). Closing it for real would
-    need OS-level signal masking (signal.pthread_sigmask around the
-    critical section) — POSIX-only machinery not used anywhere else in
-    this codebase, disproportionate for this gap.
+    phase[0] becomes "interrupted" the instant eng.set_paused(False)
+    returns — the very next bytecode, the tightest window achievable
+    with an ordinary statement. A sub-bytecode async signal landing in
+    that single instruction (before recording "interrupted" but after
+    the unpause call has genuinely returned) is not something any pure-
+    Python restructuring can close (moving the assignment, or
+    classifying by which of two sibling try/except blocks catches the
+    exception instead of using a flag, both just relocate the same
+    irreducible gap — verified by hand while fixing this). Real Ctrl-C
+    timing has no realistic chance of landing there; a human developer
+    running this offline test harness is an accepted, rough-edges
+    audience (unlike the fire-and-forget engine-acknowledgement gap
+    this same issue already accepts as unrecoverable, see engine.py).
+    Closing it for real would need OS-level signal masking
+    (signal.pthread_sigmask around the critical section) — POSIX-only
+    machinery not used anywhere else in this codebase, disproportionate
+    for this single-bytecode gap.
 
     Once the step has begun, any interruption (BaseException, so
     Ctrl-C is covered) makes a best-effort recovery repause —
@@ -147,11 +156,12 @@ def _run_step(eng: PlaytestEngine, dt: float, began: list) -> None:
     (never masked by a recovery failure)."""
     try:
         eng.set_paused(False)
-        began[0] = True
+        phase[0] = "interrupted"
         time.sleep(dt)
         eng.set_paused(True)
+        phase[0] = "completed"
     except BaseException:
-        if began[0]:
+        if phase[0] != "not_started":
             try:
                 eng.set_paused(True)
             except BaseException:
@@ -211,7 +221,10 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         post_acks: list = []
         oracle = None
         stuck = False
-        step_phase = "not_started"
+        # phase[0] is read directly in `finally` below, never copied
+        # into a separate local first — see _run_step's docstring for
+        # why that matters (#728 review).
+        phase = ["not_started"]
         try:
             # inject one call at a time so a mid-action crash still
             # records the acknowledged prefix
@@ -247,20 +260,11 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
 
             # 6. step the sim by wall-clock dt, then the post-step
             # calls (a held key releases after riding through the
-            # step). Once eng.set_paused(False) returns inside
-            # _run_step, the step has begun — an interruption anywhere
-            # past that point is "interrupted", never "not_started"
-            # (#728); _run_step makes a best-effort recovery repause so
-            # the engine isn't left running into outer cleanup, without
-            # masking the original interruption.
+            # step). _run_step writes phase[0] itself throughout — the
+            # code here never assigns its own "step_phase" from a
+            # value handed back after a call returns (#728 review).
             if not terminal:
-                began = [False]
-                try:
-                    _run_step(eng, dt, began)
-                except BaseException:
-                    step_phase = "interrupted" if began[0] else "not_started"
-                    raise
-                step_phase = "completed"
+                _run_step(eng, dt, phase)
                 for call in post_calls:
                     post_acks.extend(eng.inject([call]))
                     post_sent.append(call)
@@ -276,11 +280,11 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 "injected": sent + post_sent,
                 "acks": acks + post_acks,
                 "post_injected": len(post_sent),
-                "step_phase": step_phase,
+                "step_phase": phase[0],
                 "oracle": oracle,
                 "stuck": stuck,
             })
-            trace.record_replay(turn, sent, post_sent, step_phase=step_phase)
+            trace.record_replay(turn, sent, post_sent, step_phase=phase[0])
 
         if action.get("do") == "done":
             stop_reason = "goal_reached_claimed"
@@ -359,7 +363,10 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
         acks: list = []
         post_acks: list = []
         oracle = None
-        step_phase = "not_started"
+        # phase[0] is read directly in `finally` below, never copied
+        # into a separate local first — see _run_step's docstring for
+        # why that matters (#728 review).
+        phase = ["not_started"]
         try:
             for call in entry["pre"]:
                 acks.extend(eng.inject([call]))
@@ -370,13 +377,7 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
             if entry["step_phase"] != "not_started":
-                began = [False]
-                try:
-                    _run_step(eng, dt, began)
-                except BaseException:
-                    step_phase = "interrupted" if began[0] else "not_started"
-                    raise
-                step_phase = "completed"
+                _run_step(eng, dt, phase)
                 if entry["step_phase"] == "completed":
                     for call in entry["post"]:
                         post_acks.extend(eng.inject([call]))
@@ -390,7 +391,7 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                 "injected": sent + post_sent,
                 "acks": acks + post_acks,
                 "post_injected": len(post_sent),
-                "step_phase": step_phase,
+                "step_phase": phase[0],
                 "oracle": oracle, "stuck": False,
             })
         print(f"  replay turn {turn:3d}: {len(sent)}+{len(post_sent)} call(s)"
@@ -917,6 +918,72 @@ def selftest() -> int:
                                 "step_phase": "interrupted"}) + "\n")
         check("new-format step_phase entry passes through unchanged",
               load_replay(ndir)[0]["step_phase"] == "interrupted")
+
+        # 3l. the post-repause boundary (#728 review): a step that
+        # genuinely fully completed (unpause, sleep, and repause all
+        # returned) must not be misrecorded as never-started just
+        # because the caller happened to get interrupted on its way
+        # back out. Unlike the post-unpause boundary (an accepted,
+        # documented single-bytecode rough edge — see _run_step's
+        # docstring), this one is now structurally closed: phase[0] is
+        # written to "completed" by _run_step itself, from inside its
+        # own protected try, before the caller ever regains control —
+        # there is no separate caller-side "step_phase = completed"
+        # statement left for an interruption to land after. A
+        # line-level trace hook proves it by firing the instant control
+        # returns to the caller right after _run_step(...), in both
+        # run_session and run_replay.
+        def _raise_after_return(func, snippet):
+            src, start = inspect.getsourcelines(func)
+            idx = next(i for i, line in enumerate(src) if snippet in line)
+            target = start + idx + 1
+            filename = func.__code__.co_filename
+
+            def tracer(frame, event, _arg):
+                if (event == "line" and frame.f_code.co_filename == filename
+                        and frame.f_lineno == target):
+                    raise KeyboardInterrupt()
+                return tracer
+            return tracer
+
+        def _run_under_post_repause_interrupt(func, fn):
+            old_trace = sys.gettrace()
+            sys.settrace(_raise_after_return(func, "_run_step(eng, dt, phase)"))
+            try:
+                fn()
+                return None
+            except BaseException as e:
+                return e
+            finally:
+                sys.settrace(old_trace)
+
+        bdir = os.path.join(tmp, "post_repause_boundary")
+        btrace = SessionTrace(bdir, {"mode": "selftest-post-repause-boundary"})
+        beng = FakeEngine()
+        b_exc = _run_under_post_repause_interrupt(run_session, lambda: run_session(
+            beng, agent_mod.ScriptedAgent([{"do": "wait"}]), btrace,
+            turns=1, dt=0.0, max_seconds=None, memory_turns=4,
+            stuck_k=99, settle=0.0))
+        btrace.finish("interrupted")
+        bturns = load_turns(bdir)
+        check("session: a fully completed step interrupted on the way out "
+              "is still recorded completed, not never-started",
+              isinstance(b_exc, KeyboardInterrupt)
+              and bool(bturns) and bturns[0].get("step_phase") == "completed"
+              and beng.paused is True)
+
+        rbdir = os.path.join(tmp, "post_repause_boundary_replay")
+        rbtrace = SessionTrace(rbdir, {"mode": "selftest-post-repause-boundary-replay"})
+        rbeng = FakeEngine()
+        rb_exc = _run_under_post_repause_interrupt(run_replay, lambda: run_replay(
+            rbeng, tdir, rbtrace, dt=0.0, settle=0.0))
+        rbtrace.finish("interrupted")
+        rbturns = load_turns(rbdir)
+        check("replay: a fully completed step interrupted on the way out "
+              "is still recorded completed, not never-started",
+              isinstance(rb_exc, KeyboardInterrupt)
+              and bool(rbturns) and rbturns[0].get("step_phase") == "completed"
+              and rbeng.paused is True)
 
         # 4. render-mode threading (#650): the launcher maps each mode
         # to the right boot flags, rejects unknown modes, and the fake
