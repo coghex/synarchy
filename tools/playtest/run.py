@@ -127,7 +127,7 @@ def _finish_step(eng: PlaytestEngine, dt: float) -> None:
     except BaseException:
         try:
             eng.set_paused(True)
-        except Exception:
+        except BaseException:
             pass
         raise
 
@@ -712,7 +712,50 @@ def selftest() -> int:
               and rqeng.unpauses == 1
               and rqturns[0].get("step_phase") == "completed")
 
-        # 3h. crash AFTER an acknowledged pre-input (#698 review): the
+        # 3h. a SECOND failure during the best-effort recovery repause
+        # itself must never replace the original interruption (#728
+        # review): Ctrl-C interrupts the pacing sleep, and the recovery
+        # repause this triggers also raises (a different exception).
+        # The recovery attempt's own failure must be swallowed — the
+        # ORIGINAL KeyboardInterrupt must still be what propagates.
+        class CrashOnEveryRepause(FakeEngine):
+            """Repause always fails after an unpause — including the
+            recovery attempt itself — but the routine per-turn "ensure
+            paused" call (no preceding unpause) still succeeds."""
+            def __init__(self):
+                super().__init__()
+                self._armed = False
+
+            def set_paused(self, paused):
+                if paused and self._armed:
+                    raise EngineCrash("console died at repause (recovery too)")
+                if not paused:
+                    self._armed = True
+                super().set_paused(paused)
+
+        sdir2 = os.path.join(tmp, "crash_recovery_masks")
+        strace2 = SessionTrace(sdir2, {"mode": "selftest-crash-recovery-masks"})
+        seng2 = CrashOnEveryRepause()
+        real_sleep2 = time.sleep
+        time.sleep = _raise_kbi
+        try:
+            try:
+                run_session(seng2, agent_mod.ScriptedAgent([{"do": "wait"}]),
+                            strace2, turns=1, dt=0.0, max_seconds=None,
+                            memory_turns=4, stuck_k=99, settle=0.0)
+                s2_exc = None
+            except BaseException as e:
+                s2_exc = e
+        finally:
+            time.sleep = real_sleep2
+        strace2.finish("interrupted")
+        s2turns = load_turns(sdir2)
+        check("a failing recovery repause never replaces the original "
+              "interruption",
+              isinstance(s2_exc, KeyboardInterrupt)
+              and s2turns[0].get("step_phase") == "interrupted")
+
+        # 3i. crash AFTER an acknowledged pre-input (#698 review): the
         # oracle snapshot dies before the record used to be written —
         # the acked keyDown must still land in both trace and replay,
         # with no step and a null oracle.
@@ -767,7 +810,7 @@ def selftest() -> int:
               and r2turns[0]["injected"] == ['return input.keyDown("W")']
               and r2turns[0].get("step_phase") == "not_started")
 
-        # 3i. crash mid multi-call action: the acknowledged prefix of a
+        # 3j. crash mid multi-call action: the acknowledged prefix of a
         # drag survives in trace + replay; the unacked remainder is
         # never claimed.
         class CrashOnCall(FakeEngine):
@@ -807,7 +850,7 @@ def selftest() -> int:
               rmeng.injected == meng.injected and rmeng.unpauses == 0,
               f"{rmeng.injected}")
 
-        # 3j. legacy replay-entry compatibility (#728): pre-#698 entries
+        # 3k. legacy replay-entry compatibility (#728): pre-#698 entries
         # carry no "stepped" field at all (those traces only ever
         # recorded a step on every turn); #718-era entries carry a
         # boolean "stepped". Both must keep loading with their
