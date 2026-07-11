@@ -220,7 +220,19 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
         action = player.get("action") or {}
         oracle = t.get("oracle") or {}
         events = oracle.get("event_log_new") or []
-        outcomes = oracle.get("outcomes") or []
+        # F4 (#646) action outcomes. The live producer
+        # (PlaytestEngine.oracle_snapshot) writes them under
+        # `action_outcomes`; only the pre-live canned fixture ever used
+        # the legacy `outcomes` spelling. Treat `action_outcomes` as
+        # authoritative whenever the key is present — even when it is an
+        # intentionally empty list — and fall back to legacy `outcomes`
+        # only when the canonical key is absent. This reads a live trace
+        # correctly, keeps an empty canonical list empty, and makes a
+        # dual-key trace yield exactly one (non-duplicated) record list.
+        if "action_outcomes" in oracle:
+            outcomes = oracle.get("action_outcomes") or []
+        else:
+            outcomes = oracle.get("outcomes") or []
         acks = t.get("acks") or []
         ack_errors = [a for a in acks
                       if isinstance(a, dict) and "error" in a]
@@ -601,7 +613,7 @@ def _anchor_strings(cand: dict) -> set[str]:
     finding's oracle prose must contain at least one of these, so
     fabricated 'evidence' the trace never recorded can't pass
     coverage. Only recorded data qualifies (outcome values/reasons/
-    verbs, event texts/cats, the clicked widget's label/id, crash
+    kinds, event texts/cats, the clicked widget's label/id, crash
     details) — harness-derived join tags are NOT anchors, since
     parroting a tag proves nothing about the record. A candidate with
     no recorded atoms at all (e.g. a pure stuck-loop) has an empty set
@@ -610,7 +622,11 @@ def _anchor_strings(cand: dict) -> set[str]:
     o = cand.get("oracle") or {}
     for rec in o.get("outcomes") or []:
         if isinstance(rec, dict):
-            for k in ("outcome", "reason", "verb"):
+            # `kind` is the F4 record's action identifier (the live
+            # engine + canned fixture spelling); outcome/reason are its
+            # verdict and cause. All three are recorded, so all three
+            # ground a finding.
+            for k in ("outcome", "reason", "kind"):
                 if isinstance(rec.get(k), str):
                     atoms.append(rec[k])
     for e in o.get("events") or []:
@@ -1042,11 +1058,52 @@ def selftest() -> int:
             "stuck": False,
         }
         accepted_click = dict(base_click,
-                              outcomes=[{"verb": "move", "outcome": "accepted"}])
+                              outcomes=[{"kind": "move", "outcome": "accepted"}])
         check("world click with accepted outcome is no phantom candidate",
               friction_candidates({}, [accepted_click]) == [])
         check("outcome-less world click with visible effect is no candidate",
               friction_candidates({}, [base_click]) == [])
+
+        # F4 oracle-key regression (#726): the live producer
+        # (PlaytestEngine.oracle_snapshot) writes action outcomes under
+        # `action_outcomes`; a stale critic read of `outcomes` dropped
+        # every real F4 record before candidate generation. Drive the
+        # issue's own repro through the real build_signals +
+        # friction_candidates path (no engine, no key) for each oracle
+        # shape a trace can carry.
+        rec = {"kind": "marker.place", "outcome": "rejected",
+               "reason": "insufficient materials"}
+
+        def _f4_turn(oracle):
+            return {"turn": 1, "screenshot": "missing.png",
+                    "player": {"action": {"do": "wait"}, "note": "",
+                               "observation": "", "expectation": ""},
+                    "oracle": oracle}
+
+        for label, oracle in (
+                ("canonical action_outcomes", {"action_outcomes": [rec]}),
+                ("legacy outcomes fallback", {"outcomes": [rec]}),
+                ("both keys (same record)",
+                 {"action_outcomes": [rec], "outcomes": [rec]})):
+            f4_sig = build_signals(tmp, [_f4_turn(oracle)])
+            f4_cands = friction_candidates({}, f4_sig)
+            check(f"F4 {label}: exactly one outcome record reaches the signal",
+                  len(f4_sig[0]["outcomes"]) == 1, str(f4_sig[0]["outcomes"]))
+            check(f"F4 {label}: rejected outcome yields one friction candidate",
+                  len(f4_cands) == 1
+                  and any(r.startswith("silent-failure-join")
+                          or r.startswith("bad-outcome-join")
+                          for r in f4_cands[0]["reasons"]),
+                  str(f4_cands and f4_cands[0]["reasons"]))
+        # an intentionally-empty canonical list wins over a legacy list:
+        # records the live producer drained to nothing must not be
+        # resurrected by the both-present fallback.
+        empty_sig = build_signals(tmp, [_f4_turn(
+            {"action_outcomes": [], "outcomes": [rec]})])
+        check("F4 empty canonical action_outcomes suppresses legacy fallback",
+              empty_sig[0]["outcomes"] == []
+              and friction_candidates({}, empty_sig) == [],
+              str(empty_sig[0]["outcomes"]))
 
         # widget STATE changes must not dedupe as \"unchanged\"
         s_a = dict(base_click, widgets=[{"id": "toggle:x", "value": False}])

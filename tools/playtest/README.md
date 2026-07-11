@@ -248,9 +248,11 @@ whole pipeline against a deterministic fake critic; `--eval` runs the
 REAL model against the same trace and asserts the planted silent
 failure comes back a missing-feedback **defect** and the missed-
 feedback case comes back **intended**/minor-discoverability — that is
-the acceptance run for a key-holder. The F4-shaped `outcomes` records
-in the fixture prove the (still-unshipped, #646) outcome-tap path;
-live traces without them lower the critic's grounding confidence
+the acceptance run for a key-holder. The fixture's oracle snapshots
+carry live-shaped F4 records under `action_outcomes` (#646, shipped —
+see the per-turn field above), so the same rejected-outcome candidate
+assertion protects the real critic read path; a live trace whose
+`action_outcomes` is empty lowers the critic's grounding confidence
 rather than breaking it.
 
 Cross-session aggregation (same spot tripping N personas) is a
