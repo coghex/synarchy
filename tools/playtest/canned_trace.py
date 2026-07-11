@@ -32,9 +32,11 @@ offline against known ground truth:
             ABSENCE fragments (events=[], outcomes=[], ...) — a critic
             asserting invented oracle facts for it must be rejected.
 
-The oracle snapshots carry F4-shaped `outcomes` records (the tap
-itself, #646, hasn't landed in live traces yet — the critic reads them
-when present, and this fixture proves that path).
+The oracle snapshots carry live-shaped F4 action-outcome records under
+`action_outcomes` (#646) — the same key and record fields
+(`kind`, `outcome`, optional `reason`) PlaytestEngine.oracle_snapshot
+writes from `debug.drainActionOutcomes()` — so this fixture protects
+the real critic read path, not a critic-only spelling.
 """
 from __future__ import annotations
 
@@ -64,7 +66,7 @@ SAVE_NOTES = {
 WIDGETS = [PLACE_MARKER, SAVE_NOTES]
 
 
-def _oracle(events=None, outcomes=None):
+def _oracle(events=None, action_outcomes=None):
     return {
         "player_invisible": True,
         "widgets": WIDGETS,
@@ -72,7 +74,7 @@ def _oracle(events=None, outcomes=None):
         "paused": True,
         "event_log_new": events or [],
         "world_seed": 123,
-        "outcomes": outcomes or [],
+        "action_outcomes": action_outcomes or [],
     }
 
 
@@ -102,8 +104,8 @@ def build_canned_trace(trace_dir: str) -> str:
                "note": "Clicked Place Marker. Pretty sure that worked.",
                "raw": "", "usage": None},
               ['return input.click(200.0, 130.0)'],
-              _oracle(outcomes=[{"verb": "marker.place", "outcome": "rejected",
-                                 "reason": "insufficient materials"}])),
+              _oracle(action_outcomes=[{"kind": "marker.place", "outcome": "rejected",
+                                        "reason": "insufficient materials"}])),
         _turn(2, PNG_BLACK,
               {"observation": "Same screen. I don't see a marker anywhere.",
                "action": {"do": "click", "x": 200, "y": 130},
@@ -111,8 +113,8 @@ def build_canned_trace(trace_dir: str) -> str:
                "note": "Did it work? Nothing looks different. Clicking again.",
                "raw": "", "usage": None},
               ['return input.click(200.0, 130.0)'],
-              _oracle(outcomes=[{"verb": "marker.place", "outcome": "rejected",
-                                 "reason": "insufficient materials"}])),
+              _oracle(action_outcomes=[{"kind": "marker.place", "outcome": "rejected",
+                                        "reason": "insufficient materials"}])),
         _turn(3, PNG_BLACK,
               {"observation": "Trying the Save Notes button now.",
                "action": {"do": "click", "x": 200, "y": 230},
@@ -121,7 +123,7 @@ def build_canned_trace(trace_dir: str) -> str:
                "raw": "", "usage": None},
               ['return input.click(200.0, 230.0)'],
               _oracle(events=[{"cat": "ui", "text": "Notes saved"}],
-                      outcomes=[{"verb": "notes.save", "outcome": "accepted"}])),
+                      action_outcomes=[{"kind": "notes.save", "outcome": "accepted"}])),
         _turn(4, PNG_WHITE,
               {"observation": "There is a bag-looking shape in the corner.",
                "action": {"do": "click", "x": 600, "y": 400},
@@ -129,7 +131,7 @@ def build_canned_trace(trace_dir: str) -> str:
                "note": "I clicked what looked like a bag but nothing opened.",
                "raw": "", "usage": None},
               ['return input.click(600.0, 400.0)'],
-              _oracle(outcomes=[{"verb": "click", "outcome": "deadclick"}])),
+              _oracle(action_outcomes=[{"kind": "click", "outcome": "deadclick"}])),
         _turn(5, PNG_WHITE,
               {"observation": "Just watching the screen for a moment.",
                "action": {"do": "wait"},
@@ -147,8 +149,8 @@ def build_canned_trace(trace_dir: str) -> str:
               ['return input.click(200.0, 130.0)'],
               _oracle(events=[{"cat": "survival_warning",
                                "text": "Acolyte Renn is thirsty"}],
-                      outcomes=[{"verb": "marker.place", "outcome": "rejected",
-                                 "reason": "insufficient materials"}])),
+                      action_outcomes=[{"kind": "marker.place", "outcome": "rejected",
+                                        "reason": "insufficient materials"}])),
         _turn(7, PNG_BLACK,
               {"observation": "Same screen as before, as far as I can tell.",
                "action": {"do": "wait"},
@@ -188,7 +190,7 @@ def build_canned_trace(trace_dir: str) -> str:
         "player_model": {"model": "fixture", "effort": "low"},
         "world_seed": 123,
         "started_at": 1000.0, "ended_at": 1010.0,
-        "f4_outcomes": "synthetic outcome records planted in oracle.outcomes",
+        "f4_outcomes": "synthetic outcome records planted in oracle.action_outcomes",
     }
     with open(os.path.join(trace_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2, sort_keys=True)
