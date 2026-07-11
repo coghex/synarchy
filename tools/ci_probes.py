@@ -81,6 +81,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
     "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
     "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),
+    "power": (SCENARIO_HEAVY, "long build-tool power-node placement + wire network + "
+                              "day/night balance + save/restart/load round-trip scenario"),
     "save_pause": (SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),
     # --- targeted: useful regression probes, but too narrow for the default
     # PR gate. Run them when touching the named feature. ---
@@ -97,6 +99,13 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "resource_root": (TARGETED, "narrow #636 resource-root launch-contract regression "
                                 "(also runs its own small worldgen dump)"),
     "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression"),
+    "blood_decal": (TARGETED, "narrow #604/#606 blood decal texture reuse/eviction/render regression"),
+    "blood_impact": (TARGETED, "narrow #607 wound-to-impact-blood mapping regression"),
+    "circadian": (TARGETED, "narrow #611 circadian urge + sleep_pressure drain regression"),
+    "circadian_species": (TARGETED, "narrow #613 species-specific circadian phase regression"),
+    "thought": (TARGETED, "thought event/log backend plumbing, narrower than the full "
+                          "psychology arc (mirrors injury_log_probe.py)"),
+    "wire": (TARGETED, "narrow #359 wire connection/path-builder/build-AI regression"),
     # --- base-failing: fails today on master for content reasons unrelated
     # to CI infrastructure; gating it would redden every PR. ---
     "construction": (BASE_FAILING, "fails on master for content reasons"),
@@ -106,6 +115,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "repair_ai": (BASE_FAILING, "fails on master for content reasons (#489)"),
     "lua_orphan_prune": (BASE_FAILING, "fails on master for content reasons"),
     "physiology": (BASE_FAILING, "fails on master for content reasons"),
+    "state_of_mind": (BASE_FAILING, "fails on master: the awareness/perception term doesn't "
+                                    "measurably drag mood over the probed ticks (#350)"),
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),
@@ -117,6 +128,15 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
     "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
+    "crop": (SLOW_WORLDGEN, "needs a real generated world for natural row-crop placement + "
+                            "groundcover planting, plus a save/load round-trip"),
+    "plant": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover + "
+                             "real climate/slope suitability data"),
+    "till": (SLOW_WORLDGEN, "needs a real generated world for natural ground cover to "
+                            "exercise the tillable-tile filter; slow AI loop (~7 min observed)"),
+    "farm_ai": (SLOW_WORLDGEN, "needs a real generated world for the till->plant->harvest AI "
+                               "loop across 5 distinct tillable sites; slowest registered "
+                               "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),
     # --- unclassified: arena-based (fast), no known flakiness/base-failure
     # on file -- just never reviewed for CI promotion yet. Not meant to be a
     # permanent home: promote (with evidence) or assign a real category.

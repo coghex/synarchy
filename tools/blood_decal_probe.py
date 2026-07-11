@@ -29,10 +29,11 @@ PASS  = all checks hold.
 FAIL  = any check violated (bug in the model/debug surface).
 """
 from __future__ import annotations
+import argparse
 import sys
 from probelib import quit_engine, boot, init_arena, send, send_json
 
-PORT = 9009
+PORT = 9011
 LOG = "/tmp/blood_decal_probe_engine.log"
 
 
@@ -77,6 +78,12 @@ def get_render_quads() -> list:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=9011)
+    args = ap.parse_args()
+    global PORT
+    PORT = args.port
+
     proc = boot(PORT, log=LOG)
     try:
         init_arena(PORT)

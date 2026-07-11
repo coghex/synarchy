@@ -151,22 +151,17 @@ a specific system or bug, referenced from `CLAUDE.md` and PR descriptions —
 but because they boot a full engine (and some generate a real world on top
 of that), they're **much slower** than the dump-only tools above: a few
 seconds of engine boot at minimum, tens of seconds to a couple of minutes
-when a scenario needs actual world generation. They are not part of the
-default test tiers; run the ones relevant to what you changed.
+for most world-generation scenarios, and up to ten-plus minutes for the
+heaviest AI-driven ones (`till_probe.py` ~7 min, `farm_ai_probe.py`
+~11.5 min — both do many synchronous TCP round-trips per site over real
+terrain). They are not part of the default test tiers; run the ones
+relevant to what you changed.
 
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
 plus `sys.exit(0 or 1)`. Every probe registered in `run_probes.py` (the
 table below) takes `--port` to avoid colliding with another running
 instance, defaulting to its own historical fixed port when unset (#723).
-
-**Gotcha:** not every `tools/*_probe.py` script uses `argparse` — a few
-standalone scripts outside the `run_probes.py` registry (e.g.
-`blood_decal_probe.py`) are still flagless and have no `--help` handling
-either, so passing `--help` doesn't print usage and exit, it silently
-runs the *actual probe* (which boots a real engine and can hang for
-minutes if you weren't expecting that). Check the header docstring
-instead of reaching for `--help` when in doubt.
 
 "Boot" below is `arena` (flat synthetic terrain via
 `scripts/movement_arena.lua`, no world generation — fast) or `worldgen`
@@ -175,8 +170,12 @@ instead of reaching for `--help` when in doubt.
 | Probe | Gates | Boot | Purpose |
 |-------|-------|------|---------|
 | `action_outcome_probe.py` | #646 | worldgen | F4 action-outcome oracle through the real Lua contract: `debug.recordOutcome` requires kind+outcome, a full record round-trips through `debug.drainActionOutcomes` with every field intact, the ring drains destructively (second drain empty), a mixed tillable/non-tillable sweep reports `partial` with `requested == applied + dropped`, and an unloaded-anchor sweep reports `rejected`. |
+| `blood_decal_probe.py` | #604, #606 | arena | Blood decal model + procedural texture generation: descriptor reuse/eviction, `blood.getRenderQuads()` render records, wetness-tint aging. |
+| `blood_impact_probe.py` | #607 | arena | Wound-kind/severity -> impact-blood mapping (`Blood.Impact`) driven through the debug `unit.injure` path. |
 | `cargo_capacity_probe.py` | #189 | arena | `depositToCargo` weighs the actual `ItemInstance` (fill + nested contents), not the item def's base weight. |
 | `chop_probe.py` | #97 | worldgen | Chop-designation layer + chop AI + `wood_log` yield, end to end. |
+| `circadian_probe.py` | #611 | arena | Sleep pressure + circadian urge signals: `getCircadianUrge` peaks near dusk, `sleep_pressure` drains monotonically and never regens idle. |
+| `circadian_species_probe.py` | #613 | arena | Species-specific circadian phase (bear_brown dawn-peak vs acolyte dusk-peak) from the raw urge signal through `sleepUtility` to the real `go_to_sleep` AI and pose chain. |
 | `collapse_crawl_probe.py` | #304 | arena | Collapse↔crawl pose hysteresis in `tickInjuries`. |
 | `combat_anim_probe.py` | general combat/animation guard | worldgen | Drives a real fight headless; samples `currentAnim` to verify swing and death animations actually play. |
 | `concussion_revive_probe.py` | #304 | arena (shares boot helpers with `collapse_crawl_probe.py`) | `checkRevive` concussion-band hysteresis (companion to `collapse_crawl_probe.py`). |
@@ -188,6 +187,7 @@ instead of reaching for `--help` when in doubt.
 | `craft_bill_probe.py` | #329 | arena | Craft-bill backend (`craft.addBill`/claim/progress/complete verbs) + `craft_job` AI: claim a bill, source inputs from the ground and from cargo storage, work the built station, the fresh output instances laid down at the station (a carried same-def item stays carried), knowledge gate. |
 | `crop_probe.py` | #334 | worldgen | Row-crop natural placement (`tomato_plant`) + groundcover `world.plantCropAt` (`wheat`) into a `CropPlot`, growth under the real clock, harvest, refusal for a row_crop species, save/load round-trip. |
 | `disarm_probe.py` | #193 | arena | Disabled-hand auto-drop must re-fire. |
+| `farm_ai_probe.py` | #336 | worldgen | Farm AI capstone: till -> plant -> grow -> auto-harvest end to end through the real acolyte AI stack, plus `world.plantRowCropAt` and the `findHarvestableFlora` CropPlot scan. |
 | `flora_growth_probe.py` | #332 | worldgen | Derived flora growth/age/phase under the advancing calendar; fruiting-window gating; survives save/load. |
 | `follow_command_priority_probe.py` | #306 | arena | Follow-command priority against other AI goals. |
 | `foraging_probe.py` | #94 | worldgen | Foraging AI + harvestable-flora gating. |
@@ -200,9 +200,12 @@ instead of reaching for `--help` when in doubt.
 | `location_stamp_idempotent_probe.py` | #424 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load. |
 | `lua_orphan_prune_probe.py` | #195 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load. |
 | `lua_strict_msg_probe.py` | #622 | none (no world/scripts needed) | A Haskell exception embedded, unevaluated, in a `LuaToEngineMsg`/`LuaMsg` field must not escape to the consuming thread and crash the whole engine — `engine.setText` with malformed UTF-8 must degrade to a caught Lua error instead. |
+| `machine_shop_probe.py` | #591 | arena | Electric furnace `smelt_steel_electric` recipe + the new `machine_shop` building's `machine_wiring`/`machine_electric_motor` recipes, real shipped content built on #590's power-draw mechanism. |
 | `medic_coord_probe.py` | squad-medic coordination (general) | arena | `bestMedicFor`/`medicAvailable` distance-discounted selection fix. |
+| `mental_state_probe.py` | #352 | arena | Mental-state threshold ladder over `state_of_mind`: stable/stressed hysteresis, deterministic break episodes (wander/flee forced behaviours), cooldown. |
 | `movement_probe.py` | movement arc (general, closed) | arena | Obstacle-course movement (pathing/climbs/falls/ramps) via `movement_arena.lua` courses; `--list` shows courses. |
 | `multiworld_save_probe.py` | #214, #219 | worldgen + arena | Multi-world save → quit → restart → load; cross-page entity survival. |
+| `offscreen_probe.py` | #650 | offscreen (needs a GPU) | `--offscreen` render mode end to end: windowless Vulkan boot + real UI flow, non-blank screenshot capture, F2 input injection driving the UI, parallel instances on separate ports, and (unless `--skip-worldgen`) a full click-to-generate-world path to the in-game HUD. |
 | `physiology_probe.py` | homeostasis (general) | arena | Thermoregulation/circulation sanity across controlled environments (temperate/arctic/humid-heat). |
 | `plant_probe.py` | #335 | worldgen | Plant-designation layer: `world.getPlantSuitability` lists both shipped crops sorted best-first, designation refused on an untilled tile / for an unregistered crop name, succeeds on a tilled tile (row_crop and groundcover_crop names both accepted), replace-on-redesignate semantics, save/load. |
 | `power_probe.py` | #358 | arena | Build-tool-routed power-node placement: `buildTool.commitPlacement` consumes an item off the selected unit for `power.*`-placeable defs, role/parameter reporting, save → quit → restart → load reconnects nodes to buildings. |
@@ -214,8 +217,11 @@ instead of reaching for `--help` when in doubt.
 | `resource_root_probe.py` | #636 | worldgen (size 64, one dump) | Resource-root launch contract: the built binary run from a temp directory OUTSIDE the repo fails with an actionable error when no root is given, and works (`--dump` JSON via `--resource-root`, `--headless` READY/console/clean quit via `SYNARCHY_ROOT`) when pointed at the checkout. |
 | `role_probe.py` | #265 | worldgen | Derived unit-role hysteresis/demotion/work-XP growth. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
+| `sleep_probe.py` | #612 | arena | The "go to sleep" AI goal + Sleeping pose end to end: multi-hop lie-down/wake pose chain, `go_to_sleep` goal selection, sleep-pressure regen while asleep, and all three wake conditions. |
+| `state_of_mind_probe.py` | #350 | arena | Unified consciousness/mood model (`brain.lua`): fresh-unit baseline, pain-driven concentration/mood/emotional_pain drift, no-hunger-config species fallback, the locomotor-collapse regression guard, and the awareness/perception drift input. |
 | `text_encoding_probe.py` | #618 | none (no world/scripts needed) | `TE.decodeUtf8Lenient` in the Lua text API: `engine.setText` with a truncated multi-byte UTF-8 sequence (`"caf\195"`) no longer raises a Lua error and the malformed text round-trips through `engine.getText`, plus the well-formed control case and a liveness/responsiveness check. |
 | `thermo_altitude_probe.py` | #308 | worldgen (size 128) | Altitude-lapse thermal effect. |
+| `thought_probe.py` | #351 | arena | Thought event stream (`thought.emit`/`drainEvents`), STATE/ENVIRONMENTAL thought triggers, state-of-mind-biased selection (mood-weighted valence), and the thought-log data path. |
 | `till_probe.py` | #333 | worldgen | Till-designation layer + till AI end to end: designate/cancel, fluid-tile exclusion, save/load, autonomous tilling (`world.getVegAt` confirms the flip), idempotent re-sweep. |
 | `wire_probe.py` | #359 | arena | Wire structure piece: connection-aware autotile shape derivation (adjacency → isolated/end/straight/corner/tee/cross) and the `construct_job` AI placing a real wire tile from a designation. |
 
@@ -229,7 +235,7 @@ script's header docstring for its exact flag set.
 Runs a selection of the probes above and prints a per-probe PASS/FAIL
 summary, exiting non-zero if any failed. `python3 tools/run_probes.py
 --list` is the authoritative count and listing of registered probes — it's
-grown over time (currently in the low 30s) and this doc doesn't try to
+grown over time (currently in the mid-50s) and this doc doesn't try to
 track the exact number.
 
 ```bash
