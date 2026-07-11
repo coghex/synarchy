@@ -166,7 +166,10 @@ PROBES = [
      "wire autotile shape derivation + path-builder UX + construct_job wire AI (#359)"),
 ]
 
-DEFAULT_TIMEOUT = 600.0
+# farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
+# slowest registered probe at ~11.5 min solo on a warm dev machine (#721) —
+# the default needs real margin above that for CI's slower runner.
+DEFAULT_TIMEOUT = 900.0
 
 
 def select(only: str | None, exact: bool = False) -> list[tuple[str, str, str]]:

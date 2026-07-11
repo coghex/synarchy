@@ -151,8 +151,11 @@ a specific system or bug, referenced from `CLAUDE.md` and PR descriptions —
 but because they boot a full engine (and some generate a real world on top
 of that), they're **much slower** than the dump-only tools above: a few
 seconds of engine boot at minimum, tens of seconds to a couple of minutes
-when a scenario needs actual world generation. They are not part of the
-default test tiers; run the ones relevant to what you changed.
+for most world-generation scenarios, and up to ten-plus minutes for the
+heaviest AI-driven ones (`till_probe.py` ~7 min, `farm_ai_probe.py`
+~11.5 min — both do many synchronous TCP round-trips per site over real
+terrain). They are not part of the default test tiers; run the ones
+relevant to what you changed.
 
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
