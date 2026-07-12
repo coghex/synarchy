@@ -12,6 +12,7 @@
 module Test.Headless.Input.LayerA (spec) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 import qualified Graphics.UI.GLFW as GLFW
 import Data.Foldable (toList)
@@ -331,4 +332,104 @@ spec = do
                     aoKind r `shouldBe` "input.scroll"
                     aoOutcome r `shouldBe` "accepted"
                     aoHandler r `shouldBe` Just "game_scroll"
+                _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+    -- #730 review rounds 2-3: a ClickUI-routed press (or a
+    -- middle-button camera-drag press) defers its F4 record to the
+    -- matching release — exactly one "input.click" or "input.drag",
+    -- classified by movement against a 4px window-pixel threshold, and
+    -- an interrupted-release resolution (focus loss / minimize) so a
+    -- pending classification is never silently lost.
+    describe "click/drag routing (deferred UI/camera-drag classification)" $ do
+        it "a UI click with no movement drains one accepted input.click record" $ \env → do
+            resetAll env
+            _ ← focusedUIElement env
+            push env [InputMouseEvent GLFW.MouseButton'1 (150, 65) GLFW.MouseButtonState'Pressed]
+            push env [InputMouseEvent GLFW.MouseButton'1 (150, 65) GLFW.MouseButtonState'Released]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.click"
+                    aoOutcome r `shouldBe` "accepted"
+                    aoHandler r `shouldBe` Just "onFieldClick"
+                    aoTarget r `shouldBe` Nothing
+                _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+        it "a UI press dragged past the threshold before release drains one accepted input.drag record instead" $ \env → do
+            resetAll env
+            _ ← focusedUIElement env
+            push env [InputMouseEvent GLFW.MouseButton'1 (150, 65) GLFW.MouseButtonState'Pressed]
+            push env [InputMouseEvent GLFW.MouseButton'1 (250, 165) GLFW.MouseButtonState'Released]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.drag"
+                    aoOutcome r `shouldBe` "accepted"
+                    aoHandler r `shouldBe` Just "onFieldClick"
+                _ → expectationFailure ("expected exactly one record (never both click and drag), got " ⧺ show recs)
+
+        it "a middle-button press with no movement drains one accepted camera_drag input.click record" $ \env → do
+            resetAll env
+            push env [InputMouseEvent GLFW.MouseButton'3 (900, 600) GLFW.MouseButtonState'Pressed]
+            push env [InputMouseEvent GLFW.MouseButton'3 (900, 600) GLFW.MouseButtonState'Released]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.click"
+                    aoOutcome r `shouldBe` "accepted"
+                    aoHandler r `shouldBe` Just "camera_drag"
+                _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+        it "a middle-button press dragged past the threshold drains one accepted camera_drag input.drag record" $ \env → do
+            resetAll env
+            push env [InputMouseEvent GLFW.MouseButton'3 (900, 600) GLFW.MouseButtonState'Pressed]
+            push env [InputMouseEvent GLFW.MouseButton'3 (1000, 700) GLFW.MouseButtonState'Released]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.drag"
+                    aoOutcome r `shouldBe` "accepted"
+                    aoHandler r `shouldBe` Just "camera_drag"
+                _ → expectationFailure ("expected exactly one record, got " ⧺ show recs)
+
+        it "a focus-loss transition mid-press resolves the pending UI click as an interrupted noop instead of losing it (#730 review round 3)" $ \env → do
+            resetAll env
+            _ ← focusedUIElement env
+            push env [InputMouseEvent GLFW.MouseButton'1 (150, 65) GLFW.MouseButtonState'Pressed]
+            inputTick env
+            _ ← drainOutcomes env  -- the press alone defers; nothing recorded yet
+            push env [InputWindowEvent (WindowFocus False)]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.click"
+                    aoOutcome r `shouldBe` "noop"
+                    aoHandler r `shouldBe` Just "onFieldClick"
+                    aoReason r `shouldBe` Just "release swallowed (focus loss / minimize)"
+                _ → expectationFailure ("expected one record, got " ⧺ show recs)
+            -- The pending-click state itself is cleared too (not just
+            -- recorded) — a later, unrelated press on the same button
+            -- must not inherit a stale press position.
+            afterState ← readIORef (inputStateRef env)
+            inpPendingUIClick afterState `shouldBe` Map.empty
+
+        it "a window-minimize transition mid-press resolves a pending middle-button camera-drag the same way" $ \env → do
+            resetAll env
+            push env [InputMouseEvent GLFW.MouseButton'3 (900, 600) GLFW.MouseButtonState'Pressed]
+            inputTick env
+            _ ← drainOutcomes env
+            push env [InputWindowEvent (WindowMinimize True)]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.click"
+                    aoOutcome r `shouldBe` "noop"
+                    aoHandler r `shouldBe` Just "camera_drag"
+                    aoReason r `shouldBe` Just "release swallowed (focus loss / minimize)"
                 _ → expectationFailure ("expected one record, got " ⧺ show recs)

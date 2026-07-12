@@ -543,8 +543,17 @@ dispatchInput env inpSt event = case event of
                         -- drives camera-drag polling instead, not the
                         -- click-dispatch chain) — record it here or it's
                         -- invisible to F4 entirely (review round 2).
+                        -- Deferred to release (#730 review round 3), same
+                        -- as the UI routes below: an H1 `drag` action can
+                        -- specify button="middle" just as easily as
+                        -- "left", and a middle-button press+hold+release
+                        -- IS the camera-drag gesture, not a discrete
+                        -- click — recording immediately at press would
+                        -- leave it permanently misclassified as
+                        -- "input.click" even when the camera actually panned.
                         Q.writeQueue lq (LuaMouseDownEvent btn x y)
-                        recordRouteOutcome "accepted" (Just "camera_drag")
+                        writeIORef pendingUIClickRef
+                            (Just ("input.click", "camera_drag", x, y))
                         return ClickGame
 
               -- All other buttons: if a tooltip is locked, intercept the
@@ -664,18 +673,21 @@ dispatchInput env inpSt event = case event of
             let downRoute = Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt)
             Q.writeQueue lq (LuaMouseUpEvent btn x y downRoute)
 
-            -- F4 (#730 review round 2): resolve a deferred ClickUI
-            -- press's ONE outcome now that the whole gesture is known —
-            -- "input.click" if the release landed close to the press
-            -- (a plain click, or a below-threshold H1 `drag`), else
-            -- "input.drag" (a real UI-widget drag gesture, e.g. a
-            -- slider knob or scrollbar tab dragged past the same
+            -- F4 (#730 review rounds 2 & 3): resolve a deferred
+            -- ClickUI/middle-button-camera-drag press's ONE outcome
+            -- now that the whole gesture is known — the original click
+            -- kind if the release landed close to the press (a plain
+            -- click, or a below-threshold H1 `drag`), else "input.drag"
+            -- (a real widget/camera drag gesture, past the same
             -- threshold scripts/unit_drag_select.lua uses for the
             -- game-world case). Never both — this IS the press-time
-            -- record that PR #704 used to fire unconditionally in
-            -- Dispatch.hs.
-            when (downRoute ≡ ClickUI) $
-                case Map.lookup btn (inpPendingUIClick inpSt) of
+            -- record that PR #704 used to fire unconditionally (UI) or
+            -- 'recordRouteOutcome' fired immediately (camera_drag).
+            -- Keyed on 'inpPendingUIClick' presence alone, not
+            -- 'downRoute' — the only two producers (the ClickUI
+            -- branches and the middle-button camera_drag branch above)
+            -- are the only routes that ever populate it.
+            case Map.lookup btn (inpPendingUIClick inpSt) of
                     Nothing → return ()
                     Just (clickKind, callback, px, py) → do
                         gt ← readIORef (gameTimeRef env)
