@@ -624,6 +624,38 @@ package.loaded["scripts.lib.save_modules"] = saveModules
     end
 """
 
+# The canonical name hidden as a TABLE CONSTRUCTOR field's value with an
+# explicit bracket key -- `{ [1] = saveMods }` -- rather than the RHS
+# of a subsequent assignment statement.
+SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_BRACKET_KEY = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = { [1] = saveMods }
+holder[1].register("untracked_via_table_constructor", nil, nil)
+"""
+
+# The named-key sibling of the bracket-key case above.
+SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_NAMED_KEY = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = { registry = saveMods }
+holder.registry.register("untracked_named_key", nil, nil)
+"""
+
+# The POSITIONAL sibling -- no explicit key at all, an implicit integer
+# key (Lua's array-constructor convention).
+SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_POSITIONAL = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = { saveMods }
+holder[1].register("untracked_positional", nil, nil)
+"""
+
+# The canonical name used as a table constructor's KEY (not its value)
+# -- `{ saveMods = require(...) }` -- an entirely different, unrelated
+# entry that must NOT be mistaken for the value-aliasing case above.
+SYNTHETIC_LUA_TABLE_CONSTRUCTOR_KEY_NAME_ONLY = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = { saveMods = require("some.other.module") }
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -1166,6 +1198,44 @@ def test_find_untracked_registry_aliases_ignores_package_loaded_definition_round
     expect(offenders == [],
            f"the registry's own package.loaded fetch-into-sanctioned-"
            f"local-then-write-back idiom is not flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_table_constructor_bracket_key():
+    # Regression: hiding the registry table as a table CONSTRUCTOR
+    # field's value (`{ [1] = saveMods }`) is structurally different
+    # from a subsequent assignment statement and bypassed every earlier
+    # check, which all assumed a `TARGET = value` statement shape.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_BRACKET_KEY})
+    expect(offenders == ["scripts/fake.lua"],
+           f"hiding saveMods as a table constructor's bracket-keyed "
+           f"value is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_table_constructor_named_key():
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_NAMED_KEY})
+    expect(offenders == ["scripts/fake.lua"],
+           f"hiding saveMods as a table constructor's named-key value "
+           f"is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_table_constructor_positional():
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_POSITIONAL})
+    expect(offenders == ["scripts/fake.lua"],
+           f"hiding saveMods as a table constructor's positional "
+           f"(implicit-key) value is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_ignores_table_constructor_key_name():
+    # saveMods used as a table constructor's KEY (not its value) is an
+    # entirely unrelated entry and must not be mistaken for aliasing.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_TABLE_CONSTRUCTOR_KEY_NAME_ONLY})
+    expect(offenders == [],
+           f"saveMods used as a table constructor KEY (not a value) is "
+           f"not flagged, got {offenders}")
 
 
 def test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard():
@@ -1740,6 +1810,51 @@ def test_audit_does_not_flag_indented_definition_as_dynamic_name():
            f"reported as a dynamic-name violation, got {violations}")
 
 
+def test_audit_detects_registration_via_table_constructor_bracket_key():
+    """The req-10 acceptance test's table-constructor variant: the
+    canonical saveMods local hidden as a table constructor's
+    bracket-keyed value is a real, live registration path this audit
+    must fail on."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_BRACKET_KEY},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"hiding saveMods as a table constructor's bracket-keyed "
+           f"value is reported as an untracked-alias violation, "
+           f"got {violations}")
+
+
+def test_audit_detects_registration_via_table_constructor_positional():
+    """The positional (implicit-key) sibling of the bracket-key case
+    above."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_POSITIONAL},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"hiding saveMods as a table constructor's positional value "
+           f"is reported as an untracked-alias violation, got {violations}")
+
+
+def test_audit_does_not_flag_table_constructor_key_name_as_an_alias():
+    """saveMods used as a table constructor's KEY (not its value) is an
+    unrelated entry and must not be flagged."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_TABLE_CONSTRUCTOR_KEY_NAME_ONLY},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("alias" in v for v in violations),
+           f"saveMods used as a table constructor KEY (not a value) is "
+           f"not reported as an aliasing violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name():
     """Regression: the registry's own `function saveModules.register(name,
     ...)` definition must not be misread as a dynamic-name call."""
@@ -2045,6 +2160,10 @@ def main() -> int:
         test_find_untracked_registry_aliases_detects_dot_field_realias,
         test_find_untracked_registry_aliases_detects_package_loaded_table_escape,
         test_find_untracked_registry_aliases_ignores_package_loaded_definition_roundtrip,
+        test_find_untracked_registry_aliases_detects_table_constructor_bracket_key,
+        test_find_untracked_registry_aliases_detects_table_constructor_named_key,
+        test_find_untracked_registry_aliases_detects_table_constructor_positional,
+        test_find_untracked_registry_aliases_ignores_table_constructor_key_name,
         test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
@@ -2079,6 +2198,9 @@ def main() -> int:
         test_audit_detects_unclassified_parenthesized_receiver_registration,
         test_audit_detects_unclassified_deeply_parenthesized_receiver_registration,
         test_audit_does_not_flag_indented_definition_as_dynamic_name,
+        test_audit_detects_registration_via_table_constructor_bracket_key,
+        test_audit_detects_registration_via_table_constructor_positional,
+        test_audit_does_not_flag_table_constructor_key_name_as_an_alias,
         test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,

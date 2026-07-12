@@ -756,6 +756,22 @@ _BARE_REGISTRY_ALIAS_RE = re.compile(
     r"(?!package\s*\.\s*loaded\b)"
     + _ASSIGNMENT_TARGET_RE_FRAGMENT
     + r"\s*=\s*save(?:Mods|Modules)\b(?!\s*[.\[])")
+# The canonical name hidden as a TABLE CONSTRUCTOR field's value --
+# `{ [1] = saveMods }` (explicit key), `{ saveMods }` (positional, an
+# implicit integer key), or `{ registry = saveMods }` (named key) --
+# rather than the RHS of a subsequent `=` statement. Structurally
+# different from _BARE_REGISTRY_ALIAS_RE's grammar (a `{`/`,`-delimited
+# entry inside a table literal, not a standalone assignment statement),
+# so it needs its own pattern: a value position starts right after `{`
+# or `,` (optionally preceded by a `[expr] =` or `name =` key), and the
+# canonical name must be the COMPLETE entry -- bare, with nothing
+# chained after it, immediately followed by the next `,` or the
+# constructor's closing `}` -- so `{ saveMods = require(...) }` (the
+# canonical name used as a KEY whose value is something else entirely)
+# is correctly NOT matched.
+_TABLE_CONSTRUCTOR_ALIAS_RE = re.compile(
+    r"[{,]\s*(?:\[[^\]]*\]\s*=\s*|[A-Za-z_]\w*\s*=\s*)?"
+    r"save(?:Mods|Modules)\b(?!\s*[.\[])\s*[,}]")
 
 
 def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:
@@ -772,11 +788,13 @@ def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> lis
     `find_lua_register_aliases`/REGISTER_RE only ever look for the
     FIXED receiver spellings `saveMods`/`saveModules`/a direct
     `require(...)` or `package.loaded[...]` chain -- binding the
-    registry table to an ARBITRARY local name is a data-flow problem no
-    amount of regex matching on fixed names can trace (Lua allows any
-    identifier, and allows aliasing an alias). Rather than trying to
-    enumerate every possible name or chase arbitrary aliasing depth,
-    this flags the ESCAPE itself: every `require("scripts.lib.save_modules")`
+    registry table to an ARBITRARY local name (or hiding it as a table
+    CONSTRUCTOR field's value, `{ [1] = saveMods }`/`{ saveMods }`/
+    `{ registry = saveMods }`) is a data-flow problem no amount of
+    regex matching on fixed names can trace (Lua allows any identifier,
+    and allows aliasing an alias). Rather than trying to enumerate
+    every possible name or chase arbitrary aliasing depth, this flags
+    the ESCAPE itself: every `require("scripts.lib.save_modules")`
     occurrence, every `package.loaded["scripts.lib.save_modules"]`
     occurrence, and every bare `saveMods`/`saveModules` occurrence, must
     be either (a) chained straight into `.register`/`["register"]`
@@ -787,11 +805,16 @@ def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> lis
     TARGET of the require()-caching write idiom
     (`package.loaded[...] = saveModules`) rather than a value being
     read. Anything else -- bound to another name, passed as an
-    argument, stored in a table under an arbitrary key -- means the
-    registry table is now reachable only through something this audit
-    cannot trace, so it's a hard failure on its own. A THIRD level of
-    aliasing (re-aliasing the SECOND local yet again) is a known,
-    accepted limitation of this static, non-interpreting approach.
+    argument, stored in a table under an arbitrary key OR as a table
+    constructor's field value -- means the registry table is now
+    reachable only through something this audit cannot trace, so it's a
+    hard failure on its own. A THIRD level of aliasing (re-aliasing the
+    SECOND local yet again), or hiding the canonical name behind
+    OTHER Lua binding constructs this audit doesn't specifically
+    pattern-match (multiple assignment, a function-call argument, a
+    for-loop variable, a closure, a coroutine, a metatable proxy), is a
+    known, accepted limitation of this static, non-interpreting
+    approach -- see docs/persistence_contract.md SS7 item 6 / SS8.
     """
     offenders: list[str] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
@@ -827,6 +850,11 @@ def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> lis
                 break
         if not untracked:
             for m in _BARE_REGISTRY_ALIAS_RE.finditer(cleaned):
+                if not any(start <= m.start() < end for start, end in string_spans):
+                    untracked = True
+                    break
+        if not untracked:
+            for m in _TABLE_CONSTRUCTOR_ALIAS_RE.finditer(cleaned):
                 if not any(start <= m.start() < end for start, end in string_spans):
                     untracked = True
                     break

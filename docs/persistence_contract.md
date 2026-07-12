@@ -419,6 +419,19 @@ serialization-correctness proof. It:
    OWN reload-safety idiom, `saveModules.registry = saveModules.registry
    or {}`, would be misread as "bare `saveModules` aliased into
    `registry`" when it's really a sub-table field assigned to itself.)
+   Also fails on the canonical name hidden as a TABLE CONSTRUCTOR
+   field's value — `{ [1] = saveMods }` (explicit bracket key),
+   `{ saveMods }` (positional, Lua's implicit-integer-key array-
+   constructor form), or `{ registry = saveMods }` (named key) —
+   structurally different from a `TARGET = value` assignment statement
+   (a `{`/`,`-delimited entry inside a table literal, not a standalone
+   statement), so it needs its own pattern keyed off the `{`/`,` that
+   opens a value position rather than an `=` that closes an assignment
+   target. The canonical name must be the COMPLETE entry (bare, nothing
+   chained after it, immediately followed by the next `,` or the
+   constructor's closing `}`) — so `{ saveMods = require(...) }`, where
+   the canonical name is used as a KEY whose VALUE is something else
+   entirely, is correctly not mistaken for aliasing.
    Binding the registry table to an arbitrarily-named variable is a
    genuine data-flow problem no fixed-name regex can trace (Lua allows
    any identifier, and allows aliasing an alias), so rather than trying
@@ -433,9 +446,8 @@ serialization-correctness proof. It:
    serialization-correctness proof (see the opening of this section).
    The same limitation covers every OTHER Lua construct capable of
    binding the registry table to a name/location this audit doesn't
-   specifically pattern-match: a table CONSTRUCTOR field
-   (`{ [1] = saveMods }` or `{ registry = saveMods }`), multiple
-   assignment (`local a, b = 1, saveMods`), a function-call argument
+   specifically pattern-match: multiple assignment
+   (`local a, b = 1, saveMods`), a function-call argument
    (`store(saveMods)`, where `store` does the aliasing internally), a
    for-loop iteration variable (`for _, v in ipairs({saveMods}) do
    v.register(...) end`), a closure upvalue, a coroutine, or a
@@ -520,15 +532,18 @@ in this PR touches them:
   replace"; this issue documents the target and the gap, A2 implements
   it.
 - Exhaustively pattern-matching every Lua construct capable of aliasing
-  the save-modules registry table — table constructors, multiple
-  assignment, function-call arguments, for-loop variables, closures,
-  coroutines, and metatable proxying are all real gaps in the audit's
-  Lua scanner (§7 item 6), left unaddressed by design past the point
-  where closing them would mean interpreting Lua rather than pattern-
-  matching it. The scanner covers the codebase's actual registration
-  convention (a direct call or the one sanctioned local name); a
-  code-review norm, not further regex, is the intended backstop for
-  anything cleverer.
+  the save-modules registry table — multiple assignment, function-call
+  arguments, for-loop variables, closures, coroutines, and metatable
+  proxying are all real gaps in the audit's Lua scanner (§7 item 6),
+  left unaddressed by design past the point where closing them would
+  mean interpreting Lua rather than pattern-matching it. (Table
+  constructor fields — `{ [1] = saveMods }`, `{ saveMods }`,
+  `{ registry = saveMods }` — WERE closed, since that specific escape
+  route was concretely demonstrated in review; it's listed here only as
+  a boundary marker for what's covered vs. not.) The scanner covers the
+  codebase's actual registration convention (a direct call or the one
+  sanctioned local name); a code-review norm, not further regex, is the
+  intended backstop for anything cleverer.
 
 ## Related
 
