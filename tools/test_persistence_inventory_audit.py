@@ -738,6 +738,38 @@ local saveMods = require("scripts.lib.save_modules")
 saveMods.registerFoo = 5
 """
 
+# The module-path string `"scripts.lib.save_modules"` reached via a
+# Lua LONG-BRACKET string instead of a quoted one --
+# `package.loaded[ [[scripts.lib.save_modules]] ]` -- direct call form.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_PACKAGE_LOADED_PATH_CALL = """\
+package.loaded[ [[scripts.lib.save_modules]] ].register("longbracket_pkg_path_module", nil, nil)
+"""
+
+# The long-bracket-path form escaping to an untracked local -- the
+# long-bracket-path sibling of SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_TABLE_ESCAPE.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_PACKAGE_LOADED_PATH_TABLE_ESCAPE = """\
+local registry = package.loaded[ [[scripts.lib.save_modules]] ]
+registry.register("untracked_longbracket_pkg_path", nil, nil)
+"""
+
+# The require()-argument sibling of the long-bracket module-path case
+# above -- `require([[scripts.lib.save_modules]])` -- not itself
+# reported by a review round, but the same missing long-bracket
+# tolerance for the module-path STRING, closed preemptively by sharing
+# one fragment between require()'s argument and package.loaded[...]'s
+# index.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_REQUIRE_PATH_CALL = """\
+local saveMods = require([[scripts.lib.save_modules]])
+
+saveMods.register("longbracket_require_path_module", nil, nil)
+"""
+
+# The require()-chained sibling of the case above -- no local binding
+# at all, the module path reached via long brackets directly.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_REQUIRE_PATH_CHAINED_CALL = """\
+require([[scripts.lib.save_modules]]).register("longbracket_require_path_chained_module", nil, nil)
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -1144,6 +1176,42 @@ def test_find_lua_register_aliases_ignores_unrelated_register_prefixed_field():
            f"not flagged as an alias, got {offenders}")
 
 
+def test_extract_lua_registered_modules_finds_longbracket_package_loaded_path_call():
+    # Regression: the module-path string `"scripts.lib.save_modules"`
+    # reached via a Lua long-bracket string inside package.loaded[...]'s
+    # index -- must be recognized as an equally direct call.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_PACKAGE_LOADED_PATH_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["longbracket_pkg_path_module"],
+           f"a register() call through a long-bracket-string "
+           f"package.loaded PATH is extracted, got {names}")
+
+
+def test_extract_lua_registered_modules_finds_longbracket_require_path_call():
+    # The require()-argument sibling: `require([[scripts.lib.save_modules]])`
+    # bound to a local, not itself reported but the same missing
+    # tolerance, closed preemptively.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_REQUIRE_PATH_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["longbracket_require_path_module"],
+           f"a register() call reached through a require() call whose "
+           f"argument is a long-bracket string is extracted, "
+           f"got {names}")
+
+
+def test_extract_lua_registered_modules_finds_longbracket_require_path_chained_call():
+    # The require()-chained sibling -- no local binding, module path in
+    # long brackets directly.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_REQUIRE_PATH_CHAINED_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["longbracket_require_path_chained_module"],
+           f"a require([[...]]).register(...) chained direct call is "
+           f"extracted, got {names}")
+
+
 def test_extract_lua_registered_modules_ignores_concatenated_name():
     # Regression: a module-name argument built via concatenation is NOT
     # a complete literal -- extraction must not silently capture just
@@ -1362,6 +1430,18 @@ def test_find_untracked_registry_aliases_detects_bracket_package_loaded_table_es
            f"the registry table fetched via bracket-indexed "
            f"package[\"loaded\"][...] and stored in an arbitrary local "
            f"is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_longbracket_package_loaded_path_table_escape():
+    # The long-bracket-path sibling of the package.loaded table escape
+    # -- the module-path STRING (not the `loaded` field access) reached
+    # via a long-bracket string, stored in an arbitrary local.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_PACKAGE_LOADED_PATH_TABLE_ESCAPE})
+    expect(offenders == ["scripts/fake.lua"],
+           f"the registry table fetched via a long-bracket-string "
+           f"package.loaded PATH and stored in an arbitrary local is "
+           f"flagged, got {offenders}")
 
 
 def test_find_untracked_registry_aliases_ignores_bracket_package_loaded_definition_roundtrip():
@@ -2350,6 +2430,55 @@ def test_audit_does_not_flag_unrelated_register_prefixed_field_as_an_alias():
            f"not reported as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_unclassified_longbracket_package_loaded_path_registration():
+    """Round 23's finding: the module-path string reached via a Lua
+    long-bracket string inside package.loaded[...]'s index is ordinary,
+    fully traceable Lua -- an unclassified module registered that way
+    must still be reported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_PACKAGE_LOADED_PATH_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for longbracket_pkg_path_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("longbracket_pkg_path_module" in v for v in violations),
+           f"a module registered via a long-bracket-string "
+           f"package.loaded PATH is reported when unclassified, "
+           f"got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a long-bracket-path-form DIRECT call is not ALSO reported "
+           f"as an aliasing violation, got {violations}")
+
+
+def test_audit_detects_registration_via_longbracket_package_loaded_path_table_escape():
+    """The long-bracket-path sibling of the package.loaded table-escape
+    gap."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_PACKAGE_LOADED_PATH_TABLE_ESCAPE},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"the registry table fetched via a long-bracket-string "
+           f"package.loaded PATH and stored in an arbitrary local is "
+           f"reported as an untracked-alias violation, got {violations}")
+
+
+def test_audit_detects_unclassified_longbracket_require_path_registration():
+    """The require()-argument sibling of the round-23 fix, closed
+    preemptively (not itself reported)."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_REQUIRE_PATH_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for longbracket_require_path_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("longbracket_require_path_module" in v for v in violations),
+           f"a module registered via require() with a long-bracket "
+           f"string path is reported when unclassified, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -2455,6 +2584,9 @@ def main() -> int:
         test_find_lua_register_aliases_ignores_longbracket_key_direct_call,
         test_find_lua_register_aliases_detects_longbracket_key_stored_reference,
         test_find_lua_register_aliases_ignores_unrelated_register_prefixed_field,
+        test_extract_lua_registered_modules_finds_longbracket_package_loaded_path_call,
+        test_extract_lua_registered_modules_finds_longbracket_require_path_call,
+        test_extract_lua_registered_modules_finds_longbracket_require_path_chained_call,
         test_extract_lua_registered_modules_ignores_concatenated_name,
         test_find_lua_register_dynamic_names_detects_concatenated_name,
         test_extract_lua_registered_modules_finds_parenthesized_receiver,
@@ -2477,6 +2609,7 @@ def main() -> int:
         test_find_untracked_registry_aliases_detects_package_loaded_table_escape,
         test_find_untracked_registry_aliases_ignores_package_loaded_definition_roundtrip,
         test_find_untracked_registry_aliases_detects_bracket_package_loaded_table_escape,
+        test_find_untracked_registry_aliases_detects_longbracket_package_loaded_path_table_escape,
         test_find_untracked_registry_aliases_ignores_bracket_package_loaded_definition_roundtrip,
         test_find_untracked_registry_aliases_detects_table_constructor_bracket_key,
         test_find_untracked_registry_aliases_detects_table_constructor_named_key,
@@ -2539,6 +2672,9 @@ def main() -> int:
         test_audit_does_not_flag_bracket_package_loaded_definition_roundtrip_as_an_alias,
         test_audit_detects_unclassified_longbracket_key_module_registration,
         test_audit_does_not_flag_unrelated_register_prefixed_field_as_an_alias,
+        test_audit_detects_unclassified_longbracket_package_loaded_path_registration,
+        test_audit_detects_registration_via_longbracket_package_loaded_path_table_escape,
+        test_audit_detects_unclassified_longbracket_require_path_registration,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,

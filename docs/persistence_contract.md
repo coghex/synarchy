@@ -327,9 +327,20 @@ serialization-correctness proof. It:
    .register(...)`, since `loaded` is itself just an ordinary field on
    `package` reachable the same dot-vs-bracket way as `.register`) chained
    directly off the exact cache slot `require()` itself reads/writes —
-   all ordinary, fully traceable Lua) and all three Lua string-literal
-   forms for the module name (`'...'`, `"..."`, and long brackets `[[...]]`/
-   `[=[...]=]`/...), fully string-literal-aware in both directions — a
+   all ordinary, fully traceable Lua). The module-PATH string itself
+   (`"scripts.lib.save_modules"`, `require()`'s argument and
+   `package.loaded[...]`'s index) accepts a long-bracket form too —
+   `require([[scripts.lib.save_modules]])`,
+   `package.loaded[ [[scripts.lib.save_modules]] ]` — one shared
+   fragment used by BOTH `require(...)` and `package.loaded[...]`
+   everywhere this literal string appears, so the two can't drift apart
+   the way `package.loaded`'s own dot-vs-bracket spellings did before
+   they shared a fragment (round 21).
+
+   Extraction also covers all three Lua string-literal forms for the
+   module NAME (the argument to `.register(...)`) — `'...'`, `"..."`,
+   and long brackets `[[...]]`/`[=[...]=]`/... — fully
+   string-literal-aware in both directions: a
    `--` embedded in a quoted OR long-bracket string is never mistaken
    for a comment start (which would otherwise truncate the line and
    hide a real call after it), and a bare (non-`--`-prefixed)

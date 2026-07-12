@@ -88,6 +88,42 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 _PACKAGE_LOADED_ACCESS_RE_FRAGMENT = (
     r"package\s*(?:\.\s*loaded\b|\[\s*(?:'loaded'|\"loaded\")\s*\])"
 )
+# The module-path string `"scripts.lib.save_modules"` itself, in every
+# Lua string-literal form this scanner recognizes elsewhere (single-
+# quoted, double-quoted, or a long-bracket string) -- `require()` and
+# `package.loaded[...]`'s bracket index both take this as a plain
+# string ARGUMENT, so both accept a long-bracket string
+# (`require([[scripts.lib.save_modules]])`,
+# `package.loaded[ [[scripts.lib.save_modules]] ]`) exactly as validly
+# as either quote form; only the quoted forms were originally
+# recognized. Ungrouped `=*` on each side, same reasoning as the
+# `.register`-access-key fix (round 22): a new capturing group here
+# would renumber every group after it in the several patterns that
+# already depend on positional `\1`/`\2` backreferences elsewhere for
+# unrelated matching (the module NAME argument, the `.register`-key
+# `=`-run), silently breaking them; an actual open/close `=`-run
+# mismatch is a Lua syntax error regardless, so this can't be
+# exploited. Shared by every occurrence of this literal string
+# throughout the file, closing require() and package.loaded[...]
+# together in one place rather than leaving one fixed and one not (the
+# exact shape of gap rounds 20/21 both found).
+_SAVE_MODULES_PATH_STRING_RE_FRAGMENT = (
+    r"(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\""
+    r"|\[=*\[scripts\.lib\.save_modules\]=*\])"
+)
+# `require("scripts.lib.save_modules")` (or any recognized string form
+# of its argument), as a complete call expression -- shared by every
+# place that needs to match the CALL, not just the bare path string.
+_REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT = (
+    r"require\s*\(\s*" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r"\s*\)"
+)
+# `[...]` bracket-indexing the module path string -- shared by every
+# place that indexes `package.loaded` (or, historically, anything else)
+# with this literal path, so a long-bracket-string index isn't
+# recognized in some call sites and not others.
+_SAVE_MODULES_PATH_INDEX_RE_FRAGMENT = (
+    r"\[\s*" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r"\s*\]"
+)
 # The registry table is called `saveMods` at every real require site
 # (`local saveMods = require("scripts.lib.save_modules")`) but is
 # `saveModules` inside its OWN definition file -- match either local
@@ -136,9 +172,9 @@ _PACKAGE_LOADED_ACCESS_RE_FRAGMENT = (
 _REGISTER_TABLE_REF = (
     r"(?:\(+\s*save(?:Mods|Modules)\s*\)+"
     r"|save(?:Mods|Modules)"
-    r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)"
-    r"|" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
+    r"|" + _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT
+    + r"|" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
+    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT + r")"
 )
 # The `.register` access itself, in every form this scanner
 # recognizes: dot access, bracket-indexed with either quote style, or
@@ -175,14 +211,13 @@ _REGISTER_ACCESS = (
 # `require("scripts.lib.save_modules")` itself, standalone -- used to
 # find every occurrence of the registry table being fetched, so each
 # one can be checked against the sanctioned patterns below.
-REQUIRE_SAVE_MODULES_RE = re.compile(
-    r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)")
+REQUIRE_SAVE_MODULES_RE = re.compile(_REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT)
 # Sanctioned continuation #1: the require() result is chained straight
 # into `.register`/`["register"]` access (a direct call, or the
 # require-chained alias form -- both already handled by REGISTER_RE/
 # REGISTER_RE_LONGBRACKET/ALIAS_RE via _REGISTER_ACCESS).
 _REQUIRE_CHAINED_ACCESS_RE = re.compile(
-    r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)\s*"
+    _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT + r"\s*"
     + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT)
 # Sanctioned continuation #2: the require() result is bound to a local
 # named EXACTLY `saveMods`/`saveModules`, the codebase's own
@@ -190,7 +225,7 @@ _REQUIRE_CHAINED_ACCESS_RE = re.compile(
 # name already (REGISTER_RE etc. above).
 _REQUIRE_SANCTIONED_LOCAL_RE = re.compile(
     r"local\s+(?:saveMods|saveModules)\s*=\s*"
-    r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)")
+    + _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT)
 # `package.loaded["scripts.lib.save_modules"]` itself, standalone --
 # the FETCH-side sibling of REQUIRE_SAVE_MODULES_RE, since it's the
 # exact same singleton table under a second legitimate spelling. Every
@@ -204,14 +239,14 @@ _REQUIRE_SANCTIONED_LOCAL_RE = re.compile(
 # chain, not a table reference stored in a local first).
 _PACKAGE_LOADED_SAVE_MODULES_RE = re.compile(
     _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]")
+    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT)
 # Sanctioned continuation #1: chained straight into `.register`/
 # `["register"]` access -- a direct call, or the package.loaded-chained
 # alias form (both already handled by REGISTER_RE/REGISTER_RE_LONGBRACKET/
 # ALIAS_RE via _REGISTER_ACCESS, which now includes this receiver).
 _PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
     _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]\s*"
+    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT + r"\s*"
     + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT)
 # Sanctioned continuation #2: bound to a local named EXACTLY
 # `saveMods`/`saveModules` -- the real registry's OWN definition-file
@@ -221,8 +256,8 @@ _PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
 _PACKAGE_LOADED_SANCTIONED_LOCAL_RE = re.compile(
     r"local\s+(?:saveMods|saveModules)\s*=\s*"
     + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
-    r"(?:\s*or\s*\{\s*\})?")
+    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT
+    + r"(?:\s*or\s*\{\s*\})?")
 # Sanctioned continuation #3: it's the ASSIGNMENT TARGET, not a fetch at
 # all -- `package.loaded["scripts.lib.save_modules"] = saveModules` is
 # the require()-caching WRITE half of the same real-file idiom (the
@@ -231,8 +266,8 @@ _PACKAGE_LOADED_SANCTIONED_LOCAL_RE = re.compile(
 # here, so it cannot itself be the source of a new alias.
 _PACKAGE_LOADED_ASSIGNMENT_TARGET_RE = re.compile(
     _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
-    r"\s*=(?!=)")
+    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT
+    + r"\s*=(?!=)")
 # Tolerates whitespace/newlines before the opening paren/string (a call
 # split across lines, `saveMods . register(...)` with a spaced dot, or
 # `saveMods[ "register" ](...)` with spaced brackets), and either Lua
