@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Weather.Generate
-    ( -- * Initialization (post-bombardment, early-Earth-like)
+    ( -- * Final climate refinement (see haddock below re: the misleading name)
       initEarlyClimate
       -- * Timeline-internal climate update from ElevGrid
     , updateClimateFromGrid
@@ -19,8 +19,17 @@ import World.Weather.Generate.ClimateBuilder (buildClimateFromOceanSet)
 
 -- * Public: init from chunk-resolution OceanMap (used in Init.hs)
 
--- | Initialize climate state with early-Earth-like conditions.
---   Called after tectonic plates and primordial bombardment are done.
+-- | Build the final regional climate grid. Despite the "early" name
+--   (a holdover from before the timeline co-evolved climate), this is
+--   the LAST climate pass: Init.hs calls it once the timeline, ocean
+--   map, and freshwater features are all final, to rebuild the
+--   regional grid at full (chunk-resolution ocean, completed
+--   freshwater) precision. The caller supplies the timeline's own
+--   final CO2 and solar constant so that pass and this one agree on
+--   forcing — the regional grid, csGlobalCO2, and csSolarConst all
+--   come out of the SAME buildClimateFromOceanSet call, and
+--   csGlobalTemp emerges as that grid's own mean rather than being
+--   patched in afterward from a different grid (#785).
 --
 --   Climate regions are indexed in (u, v) space where:
 --     u = cx - cy   (east-west, wraps cylindrically)
@@ -35,8 +44,10 @@ import World.Weather.Generate.ClimateBuilder (buildClimateFromOceanSet)
 initEarlyClimate ∷ Int          -- ^ worldSize (in chunks)
                  → OceanMap     -- ^ which chunks are ocean
                  → GeoTimeline  -- ^ completed timeline (for lake/river moisture)
+                 → Float        -- ^ final CO2 (from completed timeline evolution)
+                 → Float        -- ^ final solar constant (from completed timeline)
                  → ClimateState
-initEarlyClimate worldSize oceanMap timeline =
+initEarlyClimate worldSize oceanMap timeline finalCO2 finalSolarConst =
     let oceanSet = oceanRegionsFromChunkMap worldSize oceanMap
 
         -- Extract freshwater moisture sources (lakes, rivers) from the
@@ -44,7 +55,13 @@ initEarlyClimate worldSize oceanMap timeline =
         -- that create green corridors through dry continental interiors.
         freshwater = extractFreshwaterSources worldSize (gtFeatures timeline)
 
-    in buildClimateFromOceanSet worldSize oceanSet freshwater 1.0 0.0 1.0
+    -- globalTempOffset is 0.0 for the same reason updateClimateFromGrid
+    -- below passes 0.0: csGlobalTemp is a computed *mean*, not an
+    -- offset, so reapplying a previously-derived mean here would
+    -- double-count it instead of letting it emerge fresh from this
+    -- grid.
+    in buildClimateFromOceanSet worldSize oceanSet freshwater
+        finalCO2 0.0 finalSolarConst
 
 -- * Public: lightweight climate update during timeline
 

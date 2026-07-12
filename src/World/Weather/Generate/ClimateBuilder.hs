@@ -14,8 +14,9 @@ import World.Constants (seaLevel)
 
 -- | Build a complete ClimateState from a set of ocean ClimateCoords.
 --   This is the core climate model, parameterized by global state
---   so it can be called both from initEarlyClimate (with defaults)
---   and from updateClimateFromGrid (with carried-forward values).
+--   so it can be called both from initEarlyClimate (with the
+--   timeline's final CO2/solar forcing) and from updateClimateFromGrid
+--   (with carried-forward values).
 buildClimateFromOceanSet ∷ Int                       -- ^ worldSize
                          → HS.HashSet ClimateCoord   -- ^ which regions are ocean
                          → HM.HashMap ClimateCoord Float -- ^ freshwater moisture weights

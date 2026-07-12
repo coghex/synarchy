@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.World.TimeLocal as TimeLocal
+import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -94,6 +95,7 @@ main = hspec $ do
         describe "Column Exposure" Exposure.spec
         describe "Zoom/Detail Parity" ZoomParity.spec
         describe "Border Probe" BorderProbe.spec
+        Climate.spec
         describe "Asset.TextureFallback" TextureFallback.spec
         -- Not worldgen — needs the live EngineEnv's queues/refs to
         -- drive the #697 fence relay by hand (harness runs neither
