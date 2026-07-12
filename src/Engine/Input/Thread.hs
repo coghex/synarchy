@@ -21,12 +21,12 @@ import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
-import UI.Manager (findClickableElementAt, findRightClickableElementAt
-                  , findElementAt, validateFocus)
+import UI.Manager (findElementAt, validateFocus)
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
 import UI.Types (ElementHandle(..))
 import UI.Focus (getInputMode, InputMode(..), FocusId(..), fmCurrentFocus)
+import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer)
 
 -- | F4 (#730 review round 2): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
@@ -580,9 +580,16 @@ dispatchInput env inpSt event = case event of
                                 then readIORef (uiManagerRef env)
                                 else return uiMgr
                     case btn of
+                      -- #742: routePointer scopes the underlying element
+                      -- search to pages at-or-above the topmost visible
+                      -- input-exclusive modal page (if any), so a miss on
+                      -- the modal can no longer fall through to a lower
+                      -- page's owned control. With no modal boundary the
+                      -- scope is every visible page, so behaviour here is
+                      -- unchanged from the pre-#742 global search.
                       GLFW.MouseButton'1 →
-                        case findClickableElementAt mousePos uiMgr' of
-                            Just (elemHandle, callback) → do
+                        case routePointer PointerLeftClick mousePos uiMgr' of
+                            RouteElement elemHandle callback → do
                                 Q.writeQueue lq
                                     (LuaUIClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
@@ -590,14 +597,25 @@ dispatchInput env inpSt event = case event of
                                 writeIORef pendingUIClickRef
                                     (Just ("input.click", callback, x, y))
                                 return ClickUI
-                            Nothing → do
+                            -- RouteConsumedNoHandler never arises for
+                            -- left-click (only PointerRightClick's
+                            -- left-click fallback produces it) — a plain
+                            -- miss, whether genuinely empty or stopped at
+                            -- a modal boundary, is forwarded to Lua
+                            -- exactly as before #742: the debug overlay's
+                            -- parallel hit-test and the shell still get
+                            -- first refusal on it regardless of any
+                            -- boundary, and gameplay's own handlers
+                            -- additionally consult isGameplayBlocked
+                            -- before acting.
+                            _ → do
                                 Q.writeQueue lq LuaUIFocusLost
                                 Q.writeQueue lq (LuaMouseDownEvent btn x y)
                                 return ClickGame
 
                       GLFW.MouseButton'2 →
-                        case findRightClickableElementAt mousePos uiMgr' of
-                            Just (elemHandle, callback) → do
+                        case routePointer PointerRightClick mousePos uiMgr' of
+                            RouteElement elemHandle callback → do
                                 Q.writeQueue lq
                                     (LuaUIRightClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
@@ -605,50 +623,51 @@ dispatchInput env inpSt event = case event of
                                 writeIORef pendingUIClickRef
                                     (Just ("input.rightClick", callback, x, y))
                                 return ClickUI
-                            -- No right-click handler under the cursor. If
-                            -- an ordinary clickable control is still there,
-                            -- consume the click so it can't fall through to
-                            -- gameplay (mirrors the left-click blocking
-                            -- semantics); only truly empty UI space routes
-                            -- the right-click to the world.
-                            Nothing → case findClickableElementAt mousePos uiMgr' of
-                                Just (_leftCallbackHandle, leftClickCallback) → do
-                                    -- Consumed by a clickable control with no
-                                    -- right-click handler (e.g. an ordinary
-                                    -- button). Left-clicking such a control
-                                    -- clears textbox/dropdown focus via the
-                                    -- dispatched click event; the right-click
-                                    -- has no event to ride, so clear focus
-                                    -- explicitly here, otherwise a focused
-                                    -- widget stays captured.
-                                    Q.writeQueue lq LuaUIFocusLost
-                                    logDebug logger CatUI
-                                        "Right-click consumed by clickable UI element (no handler)"
-                                    -- No LuaUIRightClickEvent gets queued for
-                                    -- this route, so nothing else sees it
-                                    -- either — deferred to release (like the
-                                    -- other two ClickUI routes above) rather
-                                    -- than recorded here, or it's invisible
-                                    -- to F4 entirely (review #1). The
-                                    -- recorded handler is the control's OWN
-                                    -- left-click callback name (its identity),
-                                    -- not a generic placeholder (review round
-                                    -- 8 — the acceptance criterion is
-                                    -- "records the consuming handler", which
-                                    -- a constant string can't satisfy for
-                                    -- more than one control).
-                                    writeIORef pendingUIClickRef
-                                        (Just ("input.click", leftClickCallback, x, y))
-                                    return ClickUI
-                                Nothing → do
-                                    -- A right-click that misses all UI clears
-                                    -- focus before reaching gameplay, exactly
-                                    -- like the left-click miss path above —
-                                    -- otherwise a focused textbox/dropdown
-                                    -- keeps capturing the keyboard.
-                                    Q.writeQueue lq LuaUIFocusLost
-                                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
-                                    return ClickGame
+                            -- No right-click handler under the cursor
+                            -- (within the modal-scoped search), but an
+                            -- ordinary clickable control is still there:
+                            -- consume the click so it can't fall through
+                            -- to gameplay (mirrors the left-click blocking
+                            -- semantics); only truly empty (or
+                            -- modal-blocked) UI space routes the
+                            -- right-click to the world.
+                            RouteConsumedNoHandler _elemHandle leftClickCallback → do
+                                -- Consumed by a clickable control with no
+                                -- right-click handler (e.g. an ordinary
+                                -- button). Left-clicking such a control
+                                -- clears textbox/dropdown focus via the
+                                -- dispatched click event; the right-click
+                                -- has no event to ride, so clear focus
+                                -- explicitly here, otherwise a focused
+                                -- widget stays captured.
+                                Q.writeQueue lq LuaUIFocusLost
+                                logDebug logger CatUI
+                                    "Right-click consumed by clickable UI element (no handler)"
+                                -- No LuaUIRightClickEvent gets queued for
+                                -- this route, so nothing else sees it
+                                -- either — deferred to release (like the
+                                -- other two ClickUI routes above) rather
+                                -- than recorded here, or it's invisible
+                                -- to F4 entirely (review #1). The
+                                -- recorded handler is the control's OWN
+                                -- left-click callback name (its identity),
+                                -- not a generic placeholder (review round
+                                -- 8 — the acceptance criterion is
+                                -- "records the consuming handler", which
+                                -- a constant string can't satisfy for
+                                -- more than one control).
+                                writeIORef pendingUIClickRef
+                                    (Just ("input.click", leftClickCallback, x, y))
+                                return ClickUI
+                            RouteMiss → do
+                                -- A right-click that misses all UI clears
+                                -- focus before reaching gameplay, exactly
+                                -- like the left-click miss path above —
+                                -- otherwise a focused textbox/dropdown
+                                -- keeps capturing the keyboard.
+                                Q.writeQueue lq LuaUIFocusLost
+                                Q.writeQueue lq (LuaMouseDownEvent btn x y)
+                                return ClickGame
 
                       _ → do
                         -- GLFW mouse buttons 4-8 (side/extra buttons):
@@ -798,12 +817,17 @@ dispatchInput env inpSt event = case event of
             -- recording must not alter that routing).
             if viewportDegenerate winW winH fbW fbH
               then recordScrollOutcome "noop" "degenerate_viewport" Nothing
-              else case findClickableElementAt (mouseX, mouseY) uiMgr of
-                Just (elemHandle@(ElementHandle eh), _callback) → do
+              -- #742: same modal-scoped search as click routing — a wheel
+              -- miss stopped at a modal boundary is forwarded as a game
+              -- scroll exactly like a genuine miss (Lua's isGameplayBlocked
+              -- gate is what actually stops camera zoom behind a modal;
+              -- see scripts/ui_manager_scroll.lua's onScroll).
+              else case routePointer PointerWheel (mouseX, mouseY) uiMgr of
+                RouteElement elemHandle@(ElementHandle eh) _callback → do
                     logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
                     Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)
                     recordScrollOutcome "accepted" "ui_scroll" (Just eh)
-                Nothing → do
+                _ → do
                     logDebug logger CatInput "Scroll: game scroll (camera zoom)"
                     Q.writeQueue (luaQueue env) (LuaScrollEvent x y)
                     recordScrollOutcome "accepted" "game_scroll" Nothing

@@ -41,6 +41,12 @@ M.resetState()
 function M.setup()
     if not M.page then
         M.page = UI.newPage("input_check_fixture", "modal")
+        -- #742: this fixture probes raw input ROUTING (incl. the miss
+        -- paths — gameScrolls/mouseDowns below only fire on a miss),
+        -- not modal-dialog semantics, so it must stay pass-through — a
+        -- LayerModal page defaults input-exclusive, which would swallow
+        -- the very misses tools/input_check.py asserts on.
+        UI.setPageInputExclusive(M.page, false)
         M.btn = UI.newElement("input_check_btn", BTN_W, BTN_H, M.page)
         UI.addToPage(M.page, M.btn, BTN_X, BTN_Y)
         -- setOnClick alone doesn't make the element hit-testable; an

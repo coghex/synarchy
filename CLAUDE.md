@@ -203,6 +203,38 @@ registry.
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering. UI layout and behavior is driven from Lua scripts.
 
+Pages (`UI.Manager.Page`) live on one of six `UILayer`s (`UI.Types`),
+paint bottom-to-top: `LayerHUD < LayerOverlay < LayerMenu < LayerModal
+< LayerTooltip < LayerDebug` (`uiLayerBand` is the single paint-order
+source of truth both hit-testing and rendering share). Layer alone only
+decides paint/hit-test order; whether a page actually **blocks** pointer
+input from reaching whatever paints below it is the separate per-page
+`upInputExclusive` flag (#742, `UI.InputOwnership`). A `LayerModal` page
+is input-exclusive by default; every other layer defaults pass-through.
+When a visible exclusive page exists, it's the topmost one that owns
+the **modal boundary**: pointer input (left/right-click, wheel) that
+misses every owned control on or above that page is consumed rather
+than falling through to a lower page or the game world — empty modal
+space blocks a control several layers down exactly like a real control
+would. A page that's `LayerModal` for stacking only, not a real dialog
+(e.g. `scripts/popup.lua`'s notification cards), opts out via
+`UI.setPageInputExclusive(page, false)`. `LayerDebug` (the shell) and
+the F8 debug overlay (`scripts/debug.lua`, which hit-tests itself in
+Lua via a parallel `tryClaimClick` rather than through `UI.Manager` at
+all) are pass-through by design and always paint above any modal, so
+their owned controls keep receiving input regardless of what modal is
+open; a miss on them keeps searching downward until it either hits a
+lower control or reaches the modal boundary.
+
+`UI.isInputBlocked()` is true while any visible page holds the modal
+boundary; `scripts/ui_manager.lua`'s `isGameplayInputActive()` folds
+this in (alongside the pre-existing `currentMenu`/pause-menu checks) so
+ordinary gameplay key handlers, click-selection/tool-claim handling,
+and camera-zoom scroll all go inert behind a modal uniformly. Escape's
+own dismiss cascade (`scripts/init_keys.lua`, closing popups/context
+menu/logs) deliberately runs before that gate — the thing that
+dismisses the block can't itself be blocked by it.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

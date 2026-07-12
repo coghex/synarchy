@@ -79,12 +79,29 @@ require("scripts.ui_manager_events")
 -- world_view/test_arena_view, so it has to be checked explicitly.
 -- Menu-level keys (e.g. Escape closing a menu) are unaffected: they go
 -- through uiManager.onUIEscape, a separate broadcast.
+--
+-- #742: UI.isInputBlocked() folds in EVERY visible input-exclusive
+-- modal page (settings/save-browser/create-world/event-combat-injury-
+-- unit logs/context menu/... — see UI.Manager.Page's default
+-- upInputExclusive classification), not just the pause menu — a modal
+-- page makes gameplay input inactive the same way pause always has.
+-- The pauseMenu.visible check stays as a redundant belt-and-suspenders
+-- (pause's own page is already exclusive) rather than being removed,
+-- since it costs nothing and this function predates the page-based
+-- mechanism. Click routing (init_mouse.lua) and camera scroll
+-- (ui_manager_scroll.lua) share this SAME gate, so all three input
+-- kinds go inert behind a modal uniformly. Escape's own dismiss
+-- cascade (init_keys.lua) deliberately runs BEFORE this gate — closing
+-- the very modal that's blocking gameplay can't itself be blocked.
 function uiManager.isGameplayInputActive()
     if uiManager.currentMenu ~= "world_view" and uiManager.currentMenu ~= "test_arena_view" then
         return false
     end
     local pauseMenu = require("scripts.pause_menu")
     if pauseMenu.visible then
+        return false
+    end
+    if UI.isInputBlocked() then
         return false
     end
     return true

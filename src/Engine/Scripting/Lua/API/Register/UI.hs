@@ -15,6 +15,9 @@ registerUIAPI env = do
   registerLuaFunction "deletePage" (uiDeletePageFn env)
   registerLuaFunction "showPage"   (uiShowPageFn env)
   registerLuaFunction "hidePage"   (uiHidePageFn env)
+  registerLuaFunction "setPageInputExclusive" (uiSetPageInputExclusiveFn env)
+  registerLuaFunction "isPageInputExclusive"  (uiIsPageInputExclusiveFn env)
+  registerLuaFunction "isInputBlocked"        (uiIsInputBlockedFn env)
 
   registerLuaFunction "newElement" (uiNewElementFn env)
   registerLuaFunction "newBox"     (uiNewBoxFn env)

@@ -7,6 +7,8 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiSetSizeFn
   , uiSetVisibleFn
   , uiIsPageVisibleFn
+  , uiIsPageInputExclusiveFn
+  , uiIsInputBlockedFn
   , uiGetElementInfoFn
   , uiGetVisibleElementsFn
   , uiSetClickableFn
@@ -29,6 +31,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
 import UI.Manager
+import UI.InputOwnership (isGameplayBlocked)
 
 -- | UI.setPosition(elementHandle, x, y)
 uiSetPositionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -82,6 +85,29 @@ uiIsPageVisibleFn env = do
                 Just page → Lua.pushboolean (upVisible page)
                 Nothing   → Lua.pushboolean False
         Nothing → Lua.pushboolean False
+    return 1
+
+-- | UI.isPageInputExclusive(pageHandle) -> boolean (#742)
+uiIsPageInputExclusiveFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsPageInputExclusiveFn env = do
+    handleArg ← Lua.tointeger 1
+    case handleArg of
+        Just n → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            case getPage (PageHandle $ fromIntegral n) mgr of
+                Just page → Lua.pushboolean (upInputExclusive page)
+                Nothing   → Lua.pushboolean False
+        Nothing → Lua.pushboolean False
+    return 1
+
+-- | UI.isInputBlocked() -> boolean (#742) — true while any visible
+--   page establishes an input-exclusive modal boundary. Backs
+--   scripts/ui_manager.lua's isGameplayInputActive() and the camera
+--   scroll gate in scripts/ui_manager_scroll.lua.
+uiIsInputBlockedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsInputBlockedFn env = do
+    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    Lua.pushboolean (isGameplayBlocked mgr)
     return 1
 
 -- | Push a table with one element's info fields onto the Lua stack:
