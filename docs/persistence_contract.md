@@ -260,23 +260,30 @@ serialization-correctness proof. It:
 
 1. Extracts the current field list of every root-owner record (§2) from
    its source file, via a Haskell record-field parser that strips
-   (possibly nested) `{- -}` and `--` comments first so prose in a
-   Haddock comment can never desync the brace-depth tracking that finds
-   a record's boundary; splits the record's brace block on top-level
-   commas only (so a comma inside a field's own type — a tuple, a
-   list-of-tuples — is never mistaken for a field separator); understands
-   the codebase's `UnicodeSyntax` (`∷`) field separators with the field
-   name and its arrow allowed on different physical lines; and handles
-   grouped declarations (`{ name1, name2 ∷ Type }`, several names sharing
-   one trailing type signature).
+   (possibly nested) `{- -}` and `--` comments first (both string-aware,
+   so a `DataKinds`/`GHC.TypeLits` promoted string literal in a field's
+   own type — e.g. `Proxy "}"` or `Proxy "--"` — can never be mistaken
+   for a structural brace or a comment start) so prose in a Haddock
+   comment can never desync the brace-depth tracking that finds a
+   record's boundary either; splits the record's brace block on
+   top-level commas only, likewise string-aware, so a comma inside a
+   field's own type — a tuple, a list-of-tuples — is never mistaken for
+   a field separator; understands the codebase's `UnicodeSyntax` (`∷`)
+   field separators with the field name and its arrow allowed on
+   different physical lines; and handles grouped declarations
+   (`{ name1, name2 ∷ Type }`, several names sharing one trailing type
+   signature).
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
-   covering all three Lua string-literal forms for the module name
-   (`'...'`, `"..."`, and long brackets `[[...]]`/`[=[...]=]`/...), fully
-   string-literal-aware in both directions — a `--` embedded in a quoted
-   OR long-bracket string is never mistaken for a comment start (which
-   would otherwise truncate the line and hide a real call after it), and
-   a bare (non-`--`-prefixed) long-bracket span is recognized as a
-   string, not code.
+   covering both Lua access forms (dot `saveMods.register(...)` and
+   bracket-indexed `saveMods["register"](...)`/`saveMods['register'](...)`
+   — ordinary, fully traceable Lua either way) and all three Lua
+   string-literal forms for the module name (`'...'`, `"..."`, and long
+   brackets `[[...]]`/`[=[...]=]`/...), fully string-literal-aware in
+   both directions — a `--` embedded in a quoted OR long-bracket string
+   is never mistaken for a comment start (which would otherwise
+   truncate the line and hide a real call after it), and a bare
+   (non-`--`-prefixed) long-bracket span is recognized as a string, not
+   code.
 3. Parses `persistence_state_inventory.md`'s classification tables for
    the set of item names that have a recorded classification AND that
    classification's own cell text, scoped to the exact `### OwnerName`
@@ -296,13 +303,16 @@ serialization-correctness proof. It:
    (mixed)" would; the contract requires exactly one label per item, not
    zero and not several.
 5. Separately fails on any `saveMods.register`/`saveModules.register`
-   reference that is NOT itself a direct call (e.g. stored in a local
-   or table field and invoked through that alias later) — extraction
-   can only trace direct calls, so an alias would otherwise register a
-   module invisibly to the audit. Rather than attempting to trace what
-   an alias eventually gets called with, this makes the alias itself
-   the failure: the codebase's registration convention is direct calls
-   only.
+   reference (dot or bracket form) that is NOT itself a direct call
+   (e.g. stored in a local or table field and invoked through that
+   alias later) — extraction can only trace direct calls, so an alias
+   would otherwise register a module invisibly to the audit. Rather
+   than attempting to trace what an alias eventually gets called with,
+   this makes the alias itself the failure: the codebase's registration
+   convention is direct calls only. String-literal-aware so a string
+   literal's own text (e.g. the registry's own validation error message,
+   which happens to contain "saveModules.register") is never mistaken
+   for a reference to the function.
 
 Run it directly:
 

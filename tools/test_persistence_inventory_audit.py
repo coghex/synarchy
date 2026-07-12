@@ -364,6 +364,49 @@ function saveModules.register(name, serializeFn, deserializeFn)
 end
 """
 
+# A direct call reached via BRACKET indexing instead of dot access --
+# ordinary, fully traceable Lua, not an alias.
+SYNTHETIC_LUA_REGISTER_BRACKET_CALL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods["register"]("bracket_module", nil, nil)
+"""
+
+# saveMods["register"] is stored in a local and called THROUGH the
+# alias -- the bracket-indexed sibling of SYNTHETIC_LUA_REGISTER_ALIASED.
+SYNTHETIC_LUA_REGISTER_BRACKET_ALIASED = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local register = saveMods["register"]
+register("aliased_bracket_module", nil, nil)
+"""
+
+# A record field typed with a DataKinds/GHC.TypeLits promoted string
+# literal containing a `}` -- legal Haskell. A brace-counter that isn't
+# string-aware treats this as the record's OWN closing brace, hiding
+# `unclassified` (and every field after it) from extraction entirely.
+SYNTHETIC_ENGINE_ENV_STRING_LITERAL_BRACE = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne ∷ IORef Int
+  , classified ∷ Proxy "}"
+  , unclassified ∷ Int
+  } deriving (Eq)
+"""
+
+# Same hazard, but with `--` inside the promoted string literal instead
+# of `}` -- must not be mistaken for a line-comment start either.
+SYNTHETIC_ENGINE_ENV_STRING_LITERAL_DASH = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne ∷ IORef Int
+  , classified ∷ Proxy "--"
+  , unclassified ∷ Int
+  } deriving (Eq)
+"""
+
 # Two names sharing one classification, joined with "+" -- looks
 # plausible but is not a single taxonomy label.
 SYNTHETIC_INVENTORY_COMPOUND_CLASSIFICATION = """\
@@ -436,6 +479,24 @@ def test_extract_fields_grouped_declaration():
     expect(fields == ["fieldOne", "unclassified", "fieldTwo", "fieldThree"],
            f"a grouped declaration (`unclassified, fieldTwo ∷ IORef Text`) "
            f"extracts BOTH names sharing the trailing type, got {fields}")
+
+
+def test_extract_fields_survives_brace_in_string_literal_type():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_STRING_LITERAL_BRACE,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "classified", "unclassified"],
+           f"a DataKinds promoted string literal type containing '}}' "
+           f"(`Proxy \"}}\"`) does not prematurely close the record and "
+           f"drop later fields, got {fields}")
+
+
+def test_extract_fields_survives_dash_in_string_literal_type():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_STRING_LITERAL_DASH,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "classified", "unclassified"],
+           f"a DataKinds promoted string literal type containing '--' "
+           f"(`Proxy \"--\"`) is not mistaken for a line comment, "
+           f"got {fields}")
 
 
 def test_extract_fields_ignores_other_records():
@@ -565,6 +626,31 @@ def test_find_lua_register_aliases_ignores_the_definition_and_its_error_string()
     expect(offenders == [],
            f"the registry's own definition + error message are not "
            f"flagged as an alias, got {offenders}")
+
+
+def test_extract_lua_registered_modules_bracket_form_call():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["bracket_module"],
+           f"a saveMods[\"register\"](...) direct call (bracket indexing "
+           f"instead of dot access) is extracted, got {names}")
+
+
+def test_find_lua_register_aliases_ignores_bracket_form_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_CALL})
+    expect(offenders == [],
+           f"a bracket-form DIRECT call is not flagged as an alias, "
+           f"got {offenders}")
+
+
+def test_find_lua_register_aliases_detects_bracket_form_stored_reference():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_ALIASED})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a saveMods[\"register\"] reference stored in a local (not "
+           f"called directly) is flagged, got {offenders}")
 
 
 def test_parse_classified_names_scoped_by_owner_heading():
@@ -704,6 +790,21 @@ def test_audit_detects_grouped_field_declaration():
     expect(any("EngineEnv.fieldTwo" in v for v in violations),
            f"the arrow-bearing second field in the group is also reported "
            f"when unclassified, got {violations}")
+
+
+def test_audit_detects_field_hidden_behind_brace_in_string_literal():
+    """Regression: a DataKinds promoted string literal containing '}'
+    in a field's own type used to prematurely close the record,
+    hiding every field after it from the audit entirely."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV_STRING_LITERAL_BRACE},
+        {},
+        SYNTHETIC_INVENTORY_MISSING_ONE,  # classifies fieldOne/fieldThree; classified/unclassified aren't real names here
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("unclassified" in v for v in violations),
+           f"the field after the brace-containing string literal type is "
+           f"still extracted and reported when unclassified, got {violations}")
 
 
 def test_audit_detects_module_registered_across_multiple_lines():
@@ -894,6 +995,37 @@ def test_audit_detects_aliased_lua_registration():
            f"as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_unclassified_bracket_form_module_registration():
+    """Regression for the bracket-indexing bypass: saveMods["register"]
+    is an ordinary direct call, not an alias -- an unclassified module
+    registered that way must still be reported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for bracket_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("bracket_module" in v for v in violations),
+           f"a module registered via bracket indexing is reported when "
+           f"unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a bracket-form DIRECT call is not ALSO reported as an "
+           f"aliasing violation, got {violations}")
+
+
+def test_audit_detects_aliased_bracket_form_registration():
+    """The alias-bypass gap's bracket-indexed sibling."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_ALIASED},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"a saveMods[\"register\"] reference stored in a local is "
+           f"reported as an aliasing violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -963,6 +1095,8 @@ def main() -> int:
         test_extract_fields_nested_block_comment_does_not_truncate,
         test_extract_fields_name_and_arrow_on_different_lines,
         test_extract_fields_grouped_declaration,
+        test_extract_fields_survives_brace_in_string_literal_type,
+        test_extract_fields_survives_dash_in_string_literal_type,
         test_extract_fields_ignores_other_records,
         test_extract_fields_missing_record_raises,
         test_extract_lua_registered_modules,
@@ -975,9 +1109,12 @@ def main() -> int:
         test_extract_lua_registered_modules_longbracket_leveled,
         test_extract_lua_registered_modules_survives_dash_in_longbracket_string,
         test_extract_lua_registered_modules_does_not_see_through_alias,
+        test_extract_lua_registered_modules_bracket_form_call,
         test_find_lua_register_aliases_detects_stored_reference,
         test_find_lua_register_aliases_ignores_direct_calls,
         test_find_lua_register_aliases_ignores_the_definition_and_its_error_string,
+        test_find_lua_register_aliases_ignores_bracket_form_direct_call,
+        test_find_lua_register_aliases_detects_bracket_form_stored_reference,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
@@ -987,6 +1124,7 @@ def main() -> int:
         test_audit_detects_field_hidden_behind_nested_comment,
         test_audit_detects_field_with_name_and_arrow_on_different_lines,
         test_audit_detects_grouped_field_declaration,
+        test_audit_detects_field_hidden_behind_brace_in_string_literal,
         test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_module_registered_after_dash_string,
         test_audit_detects_single_quoted_module_registration,
@@ -998,6 +1136,8 @@ def main() -> int:
         test_audit_accepts_a_decorated_valid_classification,
         test_audit_rejects_a_compound_classification,
         test_audit_detects_aliased_lua_registration,
+        test_audit_detects_unclassified_bracket_form_module_registration,
+        test_audit_detects_aliased_bracket_form_registration,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,

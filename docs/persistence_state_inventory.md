@@ -330,14 +330,14 @@ Not in `ROOT_RECORDS` either (these are individual fields WITHIN
 `UnitInstance`, which is itself reached only via `umInstances` above,
 already covered):
 
-| Field | Classification | Validation | Test oracle |
-|---|---|---|---|
-| `uiLastAttackerUid` | Reset to default | always `Nothing` post-load | none yet |
-| `uiLastAttackerAt` | Reset to default | always `Nothing` post-load | none yet |
-| `uiAnimOverride` | Reset to default | always cleared post-load | `tools/combat_anim_probe.py` (behavior, not persistence) |
-| `uiFrozen` | Reset to default | always `False` post-load | none yet |
-| `uiForceLoop` | Reset to default | always `False` post-load | none yet |
-| `uiClimbDest` | Reset to default | always `Nothing` post-load | `tools/movement_probe.py` (behavior, not persistence) |
+| Field | Owner | Scope | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|---|---|
+| `uiLastAttackerUid` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `Nothing` post-load | none yet |
+| `uiLastAttackerAt` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `Nothing` post-load | none yet |
+| `uiAnimOverride` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always cleared post-load | `tools/combat_anim_probe.py` (behavior, not persistence) |
+| `uiFrozen` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `False` post-load | none yet |
+| `uiForceLoop` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `False` post-load | none yet |
+| `uiClimbDest` | `src/World/Save/Types.hs:756` | per-unit | Reset to default | — | always `Nothing` post-load | `tools/movement_probe.py` (behavior, not persistence) |
 
 Other gameplay managers (item defs, ground items, and every per-page
 designation/job manager) are already classified in §3/§4 by their
@@ -376,7 +376,7 @@ one for documentation's sake.
 | `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | Rebuild | boot-time `loadScript` sequence, then §7's `saveModules.deserializeAll` | the VM CONTAINER itself is rebuilt fresh by re-running `loadScript` at boot — this single "Rebuild" classification is for that container, not a blanket claim about everything inside it. The specific durable SLICES of its global tables are separately classified, one label each: §7's four `saveModules`-registered modules are `Persist exactly`/`Reset to default` in their own right; everything else in the VM's global state is `Exclude` by omission (never touched by save/load). | `tools/lua_orphan_prune_probe.py` |
 | `Lua.Thread`'s `lbsScripts` (registered scripts + tick schedule) | `src/Engine/Scripting/Lua/Types.hs:22` | Exclude | — | rebuilt by the boot-time `loadScript` sequence | none yet |
 | `Lua.Thread`'s `lbsNextScriptId` | `src/Engine/Scripting/Lua/Types.hs` | Exclude | — | rebuilt at boot | none yet |
-| `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | — | — | no persistent thread-local state; local IORefs are recreated per-event inside handler scope | — |
+| `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | Exclude | — | no persistent thread-local state at all — local IORefs are recreated per-event inside handler scope, so "Exclude" here documents the absence rather than a specific field | none yet |
 
 ## 7. Lua persistence registry (`scripts/lib/save_modules.lua`)
 
@@ -427,19 +427,19 @@ definition a persisted instance refers to fails loading per contract §4.
 
 ### Content-definition registries
 
-| Registry | Owner | Loader | Test oracle |
-|---|---|---|---|
-| `UnitDef` (via `UnitManager.umDefs`) | `src/Unit/Types.hs:357` | `src/Engine/Asset/YamlUnits.hs` | `tools/role_probe.py` and others (content behavior, not persistence) |
-| `BuildingDef` (via `BuildingManager.bmDefs`) | `src/Building/Types.hs:47` | `src/Engine/Asset/YamlBuildings.hs` | `tools/construction_probe.py` |
-| `ItemDef` / `ItemManager.imDefs` | `src/Item/Types.hs:136`, `:372` | `src/Engine/Asset/YamlItems.hs` | `tools/item_instance_probe.py` |
-| `EquipmentClassManager.ecmDefs` | `src/Equipment/Types.hs:43` | `src/Engine/Asset/YamlEquipment.hs` | `tools/repair_item_probe.py` |
-| `SubstanceManager.sbmDefs` | `src/Substance/Types.hs:43` | `src/Engine/Asset/YamlSubstance.hs` | none yet |
-| `InfectionManager.infmDefs` | `src/Infection/Types.hs:46` | `src/Engine/Asset/YamlInfection.hs` | `tools/infection_probe.py` |
-| `RecipeManager.rmDefs` | `src/Craft/Types.hs:119` | `src/Engine/Asset/YamlRecipes.hs` | `tools/craft_probe.py` |
-| `LocationRegistry.lrDefs` | `src/Location/Types.hs:68` | `src/Engine/Asset/YamlLocations.hs` | `tools/location_content_probe.py` |
-| `LootTableRegistry.ltrDefs` | `src/LootTable/Types.hs:34` | `src/Engine/Asset/YamlLootTables.hs` | none yet |
-| `MaterialRegistry` | `src/World/Material.hs:233` | built-in, boot-time (fixed 256-slot table) | `tools/world_check.py` |
-| `FloraCatalog` (`fcSpecies`, `fcWorldGen`, `fcNextId`) | `src/World/Flora/Types.hs:244` | `src/Engine/Asset/YamlFlora.hs` | `tools/flora_growth_probe.py` — note: this type derives `Serialize`/`Generic` unlike its sibling content registries, but nothing in `SaveData` embeds it; species are referenced by numeric id from world state instead. Flagged here, not changed — no code changes in this issue. |
+| Registry | Owner | Scope | Classification | Restoration dependency (Loader) | Validation | Test oracle |
+|---|---|---|---|---|---|---|
+| `UnitDef` (via `UnitManager.umDefs`) | `src/Unit/Types.hs:357` | global | Rebuild | `src/Engine/Asset/YamlUnits.hs` | none beyond type-correctness | `tools/role_probe.py` and others (content behavior, not persistence) |
+| `BuildingDef` (via `BuildingManager.bmDefs`) | `src/Building/Types.hs:47` | global | Rebuild | `src/Engine/Asset/YamlBuildings.hs` | none beyond type-correctness | `tools/construction_probe.py` |
+| `ItemDef` / `ItemManager.imDefs` | `src/Item/Types.hs:136`, `:372` | global | Rebuild | `src/Engine/Asset/YamlItems.hs` | none beyond type-correctness | `tools/item_instance_probe.py` |
+| `EquipmentClassManager.ecmDefs` | `src/Equipment/Types.hs:43` | global | Rebuild | `src/Engine/Asset/YamlEquipment.hs` | none beyond type-correctness | `tools/repair_item_probe.py` |
+| `SubstanceManager.sbmDefs` | `src/Substance/Types.hs:43` | global | Rebuild | `src/Engine/Asset/YamlSubstance.hs` | none beyond type-correctness | none yet |
+| `InfectionManager.infmDefs` | `src/Infection/Types.hs:46` | global | Rebuild | `src/Engine/Asset/YamlInfection.hs` | none beyond type-correctness | `tools/infection_probe.py` |
+| `RecipeManager.rmDefs` | `src/Craft/Types.hs:119` | global | Rebuild | `src/Engine/Asset/YamlRecipes.hs` | none beyond type-correctness | `tools/craft_probe.py` |
+| `LocationRegistry.lrDefs` | `src/Location/Types.hs:68` | global | Rebuild | `src/Engine/Asset/YamlLocations.hs` | none beyond type-correctness | `tools/location_content_probe.py` |
+| `LootTableRegistry.ltrDefs` | `src/LootTable/Types.hs:34` | global | Rebuild | `src/Engine/Asset/YamlLootTables.hs` | none beyond type-correctness | none yet |
+| `MaterialRegistry` | `src/World/Material.hs:233` | global | Rebuild | built-in, boot-time (fixed 256-slot table) | none beyond type-correctness | `tools/world_check.py` |
+| `FloraCatalog` (`fcSpecies`, `fcWorldGen`, `fcNextId`) | `src/World/Flora/Types.hs:244` | global | Rebuild | `src/Engine/Asset/YamlFlora.hs` | this type derives `Serialize`/`Generic` unlike its sibling content registries, but nothing in `SaveData` embeds it; species are referenced by numeric id from world state instead. Flagged here, not changed — no code changes in this issue. | `tools/flora_growth_probe.py` |
 
 ---
 

@@ -74,30 +74,39 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # The registry table is called `saveMods` at every real require site
 # (`local saveMods = require("scripts.lib.save_modules")`) but is
 # `saveModules` inside its OWN definition file -- match either local
-# name everywhere a call/reference is recognized.
-# Tolerates whitespace/newlines around the dot and before the opening
-# paren/string (a call split across lines, or `saveMods . register(...)`
-# with spaced dots), and either Lua quote style -- `(['"])` captures the
-# opening quote and `\1` backreferences it as the closing delimiter, so
+# name everywhere a call/reference is recognized. Lua also lets a
+# table field be reached by BRACKET indexing instead of dot access
+# (`saveMods["register"](...)`/`saveMods['register'](...)`) -- a
+# perfectly ordinary direct call, not an alias, so it's recognized as
+# an alternate spelling of the same access rather than flagged.
+_REGISTER_ACCESS = (
+    r"save(?:Mods|Modules)\s*"
+    r"(?:\.\s*register|\[\s*(?:'register'|\"register\")\s*\])"
+)
+# Tolerates whitespace/newlines before the opening paren/string (a call
+# split across lines, `saveMods . register(...)` with a spaced dot, or
+# `saveMods[ "register" ](...)` with spaced brackets), and either Lua
+# quote style for the module name -- `(['"])` captures the opening
+# quote and `\1` backreferences it as the closing delimiter, so
 # `'name'` and `"name"` both match and neither is truncated by the
 # OTHER quote character appearing inside it.
-REGISTER_RE = re.compile(
-    r"save(?:Mods|Modules)\s*\.\s*register\s*\(\s*(['\"])((?:(?!\1).)*)\1")
+REGISTER_RE = re.compile(_REGISTER_ACCESS + r"\s*\(\s*(['\"])((?:(?!\1).)*)\1")
 # Lua long-bracket strings: `[[name]]`, `[=[name]=]`, `[==[name]==]`, ...
 # -- the `=` run's LENGTH must match on both sides (Lua's own rule),
 # enforced here via backreference `\1` same as the quote form above.
 REGISTER_RE_LONGBRACKET = re.compile(
-    r"save(?:Mods|Modules)\s*\.\s*register\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
-# A reference to `saveMods.register`/`saveModules.register` NOT
-# immediately followed by a call `(` -- i.e. the function is being
-# ALIASED into a variable/table field rather than called directly
-# (`local register = saveMods.register; register(...)`). REGISTER_RE/
+    _REGISTER_ACCESS + r"\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
+# A reference to `saveMods.register`/`saveModules.register` (dot OR
+# bracket form) NOT immediately followed by a call `(` -- i.e. the
+# function is being ALIASED into a variable/table field rather than
+# called directly (`local register = saveMods.register; register(...)`
+# or `local register = saveMods["register"]`). REGISTER_RE/
 # REGISTER_RE_LONGBRACKET only recognize direct calls, so a stored
 # alias would silently bypass req 10's audit; rather than trying to
 # trace what an alias eventually gets called with (real interpretation
 # territory), any such reference is treated as a hard failure on its
 # own -- see find_lua_register_aliases.
-ALIAS_RE = re.compile(r"save(?:Mods|Modules)\s*\.\s*register\b(?!\s*\()")
+ALIAS_RE = re.compile(_REGISTER_ACCESS + r"(?!\s*\()")
 # A Lua long-bracket opener `[`, zero-or-more `=`, `[` -- shared by the
 # comment stripper (both long comments and long strings) and the
 # register-call matcher above.
@@ -116,10 +125,11 @@ def _strip_haskell_comments(source: str) -> str:
     tracking nesting depth explicitly, so arbitrarily nested block
     comments are fully removed regardless of what they contain.
 
-    Record field declarations in this codebase never contain string
-    literals, so a plain `--`-to-end-of-line strip for line comments is
-    safe (no risk of treating an in-string `--` as a comment start) --
-    unlike the Lua stripper below, which does need to be string-aware.
+    Line-comment stripping is string-aware: `DataKinds`/`GHC.TypeLits`
+    promoted string literals (`Proxy "--"`, `Proxy "}"`) are legal even
+    in a field's own type signature, so a `--` (or a `{`/`}`, handled
+    separately by _find_matching_brace/_split_top_level_fields) inside
+    a string must not be mistaken for a comment start.
     """
     out: list[str] = []
     i = 0
@@ -142,8 +152,38 @@ def _strip_haskell_comments(source: str) -> str:
         out.append(source[i])
         i += 1
     no_block = "".join(out)
-    return "\n".join(line[:idx] if (idx := line.find("--")) != -1 else line
-                      for line in no_block.splitlines())
+    return _strip_haskell_line_comments(no_block)
+
+
+def _strip_haskell_line_comments(text: str) -> str:
+    """String-aware `--`-to-end-of-line comment strip (see caller)."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            out.append(ch)
+            i += 1
+            while i < n and text[i] != '"':
+                if text[i] == "\\" and i + 1 < n:
+                    out.append(text[i])
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                out.append(text[i])
+                i += 1
+            if i < n:
+                out.append(text[i])
+                i += 1
+            continue
+        if text[i:i + 2] == "--":
+            nl = text.find("\n", i)
+            i = n if nl == -1 else nl
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _strip_lua_comments(text: str, *, keep_strings: bool = True) -> str:
@@ -219,15 +259,32 @@ def _strip_lua_comments(text: str, *, keep_strings: bool = True) -> str:
 
 
 def _find_matching_brace(text: str, open_index: int) -> int:
-    """Index of the `}` that closes the `{` at `open_index` in `text`."""
+    """Index of the `}` that closes the `{` at `open_index` in `text`.
+
+    String-aware: a Haskell string literal (`DataKinds`/`GHC.TypeLits`
+    promoted strings make these legal even in a field's own TYPE, e.g.
+    `classified :: Proxy "}"`) can contain a `{`/`}` character that must
+    not be mistaken for a structural brace -- its content is skipped
+    over whole, not scanned character-by-character.
+    """
     depth = 0
-    for i in range(open_index, len(text)):
-        if text[i] == "{":
+    i = open_index
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" and i + 1 < n else 1
+            i += 1
+            continue
+        if ch == "{":
             depth += 1
-        elif text[i] == "}":
+        elif ch == "}":
             depth -= 1
             if depth == 0:
                 return i
+        i += 1
     raise ValueError("no matching closing brace found")
 
 
@@ -238,13 +295,33 @@ def _split_top_level_fields(block: str) -> list[str]:
     depth 0 relative to the block's own content (tracking `(`/`[`/`{`
     vs `)`/`]`/`}` generically), so a comma inside a field's own type --
     a tuple `(WorldPageId, WorldState)`, a list-of-tuples, etc. -- is
-    never mistaken for a field separator.
+    never mistaken for a field separator. String-aware for the same
+    reason as _find_matching_brace: a string literal's structural-
+    looking characters (braces, brackets, commas) are never counted.
     """
     inner = block[1:-1]
     depth = 0
     current: list[str] = []
     segments: list[str] = []
-    for ch in inner:
+    i = 0
+    n = len(inner)
+    while i < n:
+        ch = inner[i]
+        if ch == '"':
+            current.append(ch)
+            i += 1
+            while i < n and inner[i] != '"':
+                if inner[i] == "\\" and i + 1 < n:
+                    current.append(inner[i])
+                    current.append(inner[i + 1])
+                    i += 2
+                    continue
+                current.append(inner[i])
+                i += 1
+            if i < n:
+                current.append(inner[i])
+                i += 1
+            continue
         if ch in "([{":
             depth += 1
         elif ch in ")]}":
@@ -254,6 +331,7 @@ def _split_top_level_fields(block: str) -> list[str]:
             current = []
         else:
             current.append(ch)
+        i += 1
     segments.append("".join(current))
     return segments
 
@@ -323,9 +401,36 @@ def extract_lua_registered_modules(
     return found
 
 
+def _string_literal_spans(text: str) -> list[tuple[int, int]]:
+    """[start, end) ranges of quoted ('...'/"...") string literals
+    (delimiters included) in comment-stripped Lua text. Long-bracket
+    strings aren't tracked here -- they can't be confused with a
+    prose mention of "saveModules.register" the way a quoted string
+    like an error message can.
+    """
+    spans: list[tuple[int, int]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in ("'", '"'):
+            quote = ch
+            start = i
+            i += 1
+            while i < n and text[i] != quote:
+                i += 2 if text[i] == "\\" and i + 1 < n else 1
+            if i < n:
+                i += 1
+            spans.append((start, i))
+            continue
+        i += 1
+    return spans
+
+
 def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:
     """Files that reference saveMods.register/saveModules.register
-    WITHOUT calling it directly (e.g. `local r = saveMods.register`).
+    WITHOUT calling it directly (e.g. `local r = saveMods.register`, or
+    the bracket form `local r = saveMods["register"]`).
 
     extract_lua_registered_modules can only trace DIRECT calls; an
     alias stored in a variable or table field and invoked later would
@@ -334,15 +439,21 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
     direct-call-only registration convention: any such reference is
     itself reported, regardless of whether it's ever actually called.
 
-    Uses keep_strings=False: this is a code-SHAPE check, so a string
-    literal's text (e.g. `error("saveModules.register: name must be a
-    string")`, the real registry's own validation message) must not be
-    mistaken for a reference to the function.
+    Runs against string-PRESERVING stripped text (comments removed,
+    string content intact) -- unlike a blanket keep_strings=False,
+    which would also destroy the legitimate `["register"]` bracket
+    form's own quoted key -- and then discards any match whose START
+    falls inside a string literal's span, so a string literal's TEXT
+    (e.g. `error("saveModules.register: name must be a string")`, the
+    real registry's own validation message) is never mistaken for a
+    reference to the function.
     """
     offenders: list[str] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
-        cleaned = _strip_lua_comments(text, keep_strings=False)
-        if ALIAS_RE.search(cleaned):
+        cleaned = _strip_lua_comments(text)
+        spans = _string_literal_spans(cleaned)
+        if any(not any(start <= m.start() < end for start, end in spans)
+               for m in ALIAS_RE.finditer(cleaned)):
             offenders.append(relpath)
     return offenders
 
