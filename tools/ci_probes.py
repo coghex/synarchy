@@ -81,9 +81,34 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                      "timing flakes run-to-run on CI (#722; the disarm lesson — "
                      "local greenness isn't sufficient evidence for an "
                      "AI-reaction/arbitration-timing probe)"),
+    "combat_anim": (FLAKY, "the attacker occasionally falls to its death approaching "
+                           "the target and never swings, failing 'a swing animation "
+                           "appeared' (1/3 solo runs, #724)"),
+    "follow_command_priority": (FLAKY, "a struck goal-bound unit occasionally treats "
+                                       "an ally instead of engaging combat, failing "
+                                       "'combat reached over a pending move' "
+                                       "(1/3 solo runs, #724)"),
+    "location_content": (FLAKY, "quinoa_sack (data/loot_tables/ruin_common.yaml, "
+                                "weight 2/12) is a real loot roll the probe's "
+                                "hardcoded loot_names allowlist omits, failing 'all "
+                                "spawned ground items resolve to known ids' whenever "
+                                "it rolls (2/3 solo runs, #724)"),
+    "repair_ai": (FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
+                         "failing-check set each run (3/3 solo runs failed, no two "
+                         "alike, #724) — not #489 (whetstone), which is long fixed "
+                         "and never implicated"),
+    "physiology": (FLAKY, "'temperate (22C/0.5): circ min' sits right at its 0.75 "
+                          "pass threshold and failed both failing runs (0.74, 0.75); "
+                          "the combat-vs-idle calorie-drain-ratio check also flaked "
+                          "once, alongside it (2/3 solo runs failed, #724)"),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
+    "construction": (SCENARIO_HEAVY, "long construct_job AI end-to-end scenario: "
+                                     "inventory + ground sourcing, dead-claimant "
+                                     "release, blueprint staking (4 phases, "
+                                     "~123-168s solo); 14/14 checks passed all 3 "
+                                     "solo runs (#724)"),
     "infection": (SCENARIO_HEAVY, "timed infection/sepsis scenario with deliberate sleeps"),
     "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
     "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
@@ -113,15 +138,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "thought": (TARGETED, "thought event/log backend plumbing, narrower than the full "
                           "psychology arc (mirrors injury_log_probe.py)"),
     "wire": (TARGETED, "narrow #359 wire connection/path-builder/build-AI regression"),
+    "lua_orphan_prune": (TARGETED, "narrow #195 Lua per-id AI-state-pruning save/load "
+                                   "regression; ~40s solo, passed all 3 solo runs (#724)"),
     # --- base-failing: fails today on master for content reasons unrelated
     # to CI infrastructure; gating it would redden every PR. ---
-    "construction": (BASE_FAILING, "fails on master for content reasons"),
-    "combat_anim": (BASE_FAILING, "fails on master for content reasons"),
-    "follow_command_priority": (BASE_FAILING, "fails on master for content reasons"),
-    "location_content": (BASE_FAILING, "fails on master for content reasons"),
-    "repair_ai": (BASE_FAILING, "fails on master for content reasons (#489)"),
-    "lua_orphan_prune": (BASE_FAILING, "fails on master for content reasons"),
-    "physiology": (BASE_FAILING, "fails on master for content reasons"),
     "state_of_mind": (BASE_FAILING, "fails on master: the awareness/perception term doesn't "
                                     "measurably drag mood over the probed ticks (#350)"),
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
