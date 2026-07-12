@@ -249,16 +249,31 @@ persistence envelope itself:
 
 **Secondary probes** — domain probes whose own gate happens to include
 a save→quit→restart→load round trip as one assertion among several
-(chop, crop, foraging, flora growth, item instance/temperature,
-location overlay/stamp-idempotency/content, farm AI, power, plant,
-till — the full list is `grep -l "saveWorld\|loadSave" tools/*.py`
-minus the three primary probes above). These are **retained as-is** and
-out of this contract's inventory scope: each one gates its own domain's
-persistence classification (e.g. `till_probe.py` gates till
-designations, already inventoried under `wpsTillDesignations`), not the
-save envelope itself. A future envelope change that breaks one of them
-is a signal that domain's classification needs re-checking, not a sign
-this contract's inventory is wrong.
+(`grep -l "saveWorld\|loadSave" tools/*.py` minus the three primary
+probes above — 13 as of this writing). Every one of these is
+**retained as-is**: none needs rewriting by THIS issue, and each gates
+its own domain's persistence classification, not the save envelope
+itself. A future envelope/format change breaking one is a signal that
+domain's classification needs re-checking, not a sign this contract's
+inventory is wrong — the responsible child there is whichever child
+changes that field's representation (the domain's own row in
+`persistence_state_inventory.md` names it), not a new party.
+
+| Probe | Domain gated (inventory row) | Disposition |
+|---|---|---|
+| `tools/chop_probe.py` | `wsChopDesignationsRef`/`wpsChopDesignations` (§3/§4) | Retain — the save round-trip assertion here is "a chop designation survives save→load", unaffected by envelope-level decisions. |
+| `tools/crop_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` (§3/§4) | Retain — same reasoning, crop plots. |
+| `tools/foraging_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` (§3/§4) | Retain — same reasoning, foraged-flora harvest state. |
+| `tools/item_instance_probe.py` | `wsGroundItemsRef`/`wpsGroundItems` + `sdNextItemInstanceId` (§1/§3/§4) | Retain — asserts item-instance identity survives save→load; the allocator max-not-lowered rule (#67) it also covers is independent of envelope format. |
+| `tools/flora_growth_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` + the world date (`wpsDateYear`/`Month`/`Day`, §4) | Retain — asserts the growth clock survives save→load. |
+| `tools/farm_ai_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` + `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, farm-AI-driven plot/designation state. |
+| `tools/location_overlay_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure overlay rides the edit log) | Retain — asserts a placed structure's overlay survives save→load. |
+| `tools/location_stamp_idempotent_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure stamps) | Retain — asserts re-stamping is idempotent across a save→load boundary. |
+| `tools/location_content_probe.py` | `LocationRegistry.lrDefs` (§9, content) + `wsEditsRef`/`wpsEdits` for any spawned structure | Retain — mostly a content-loading gate; its save/load touch is incidental (spawned-structure persistence), unaffected by envelope decisions. |
+| `tools/item_temp_probe.py` | item-instance temperature, riding the same `wsGroundItemsRef`/`wpsGroundItems`/unit-inventory item data as `item_instance_probe.py` | Retain — same reasoning. |
+| `tools/power_probe.py` | `wsPowerNodesRef`/`wpsPowerNodes` (§3/§4) | Retain — asserts power-node state (incl. battery charge, #360) survives save→load. |
+| `tools/plant_probe.py` | `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, planting designations. |
+| `tools/till_probe.py` | `wsTillDesignationsRef`/`wpsTillDesignations` (§3/§4) | Retain — same reasoning, till designations. |
 
 ## 7. The persistence-inventory audit
 
@@ -267,21 +282,25 @@ serialization-correctness proof. It:
 
 1. Extracts the current field list of every root-owner record (§2) from
    its source file, via a Haskell record-field parser that strips
-   (possibly nested) `{- -}` and `--` comments first (string/char-
-   literal-aware, so a `DataKinds`/`GHC.TypeLits` promoted string OR
-   char literal in a field's own type — e.g. `Proxy "}"`, `Proxy '}'`,
-   or `Proxy "--"` — can never be mistaken for a structural brace or a
-   comment start; a trailing "prime" on an ordinary identifier, e.g.
-   `field'`, is correctly distinguished from a char-literal opener by
-   context) so prose in a Haddock comment can never desync the
-   brace-depth tracking that finds a record's boundary either; splits
-   the record's brace block on top-level commas only, likewise
-   literal-aware, so a comma inside a field's own type — a tuple, a
-   list-of-tuples — is never mistaken for a field separator; understands
-   the codebase's `UnicodeSyntax` (`∷`) field separators with the field
-   name and its arrow allowed on different physical lines; and handles
-   grouped declarations (`{ name1, name2 ∷ Type }`, several names
-   sharing one trailing type signature).
+   (possibly nested) `{- -}` and `--` comments first — literal-aware in
+   BOTH the block-comment pass and the line-comment pass, so a
+   `DataKinds`/`GHC.TypeLits` promoted string OR char literal in a
+   field's own type (`Proxy "}"`, `Proxy '}'`, `Proxy "--"`, or even
+   `Proxy "{-"`/`Proxy "-}"` in two DIFFERENT fields, which would
+   otherwise look like a comment opening in one field and closing in a
+   LATER one, silently swallowing everything between) can never be
+   mistaken for a structural brace or a comment marker; a trailing
+   "prime" on an ordinary identifier, e.g. `field'`, is correctly
+   distinguished from a char-literal opener by context — so prose in a
+   Haddock comment can never desync the brace-depth tracking that finds
+   a record's boundary either; splits the record's brace block on
+   top-level commas only, likewise literal-aware, so a comma inside a
+   field's own type — a tuple, a list-of-tuples — is never mistaken for
+   a field separator; understands the codebase's `UnicodeSyntax` (`∷`)
+   field separators with the field name and its arrow allowed on
+   different physical lines; and handles grouped declarations
+   (`{ name1, name2 ∷ Type }`, several names sharing one trailing type
+   signature).
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
    covering three Lua access-expression forms for the registry table
    itself (a local named `saveMods`/`saveModules`, bracket-indexed
@@ -294,7 +313,13 @@ serialization-correctness proof. It:
    `--` embedded in a quoted OR long-bracket string is never mistaken
    for a comment start (which would otherwise truncate the line and
    hide a real call after it), and a bare (non-`--`-prefixed)
-   long-bracket span is recognized as a string, not code.
+   long-bracket span is recognized as a string, not code. The extractor
+   ALSO discards any call-shaped match whose start falls inside an
+   unrelated string-literal span, so a doc string whose text merely
+   LOOKS like a registration (`[[example: saveMods.register("x", nil,
+   nil)]]`) is never extracted as a live one — only a real call's own
+   receiver, which is never itself inside a string, is ever excluded
+   from that filter.
 3. Parses `persistence_state_inventory.md`'s classification tables for
    the set of item names that have a recorded classification AND that
    classification's own cell text, scoped to the exact `### OwnerName`

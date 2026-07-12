@@ -132,17 +132,29 @@ def _strip_haskell_comments(source: str) -> str:
     tracking nesting depth explicitly, so arbitrarily nested block
     comments are fully removed regardless of what they contain.
 
-    Line-comment stripping is string-aware: `DataKinds`/`GHC.TypeLits`
-    promoted string literals (`Proxy "--"`, `Proxy "}"`) are legal even
-    in a field's own type signature, so a `--` (or a `{`/`}`, handled
-    separately by _find_matching_brace/_split_top_level_fields) inside
-    a string must not be mistaken for a comment start.
+    Literal-aware in BOTH passes: `DataKinds`/`GHC.TypeLits` promoted
+    string/char literals (`Proxy "--"`, `Proxy "{-"`, `Proxy '}'`) are
+    legal even in a field's own type signature, and a literal's content
+    must never be scanned for `{-`/`-}`/`--` markers -- outside a
+    literal a `"{-"`-shaped substring is real code, but the equivalent
+    substring INSIDE a string literal is just three ordinary characters.
+    Skipping literals whole (rather than character-by-character) before
+    the block-comment nesting check is what prevents one field's
+    literal accidentally "opening" a comment that a LATER field's
+    literal then appears to "close", silently swallowing everything
+    (including real field declarations) in between.
     """
     out: list[str] = []
     i = 0
     n = len(source)
     depth = 0
     while i < n:
+        if depth == 0 and source[i] in ('"', "'"):
+            lit_end = _haskell_literal_end(source, i)
+            if lit_end is not None:
+                out.append(source[i:lit_end])
+                i = lit_end
+                continue
         if source[i:i + 2] == "{-":
             depth += 1
             i += 2
@@ -416,20 +428,32 @@ def extract_lua_registered_modules(
         scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
     """(module name, file) for every saveMods.register("name", ...) call site.
 
-    Scans the whole (comment/string-aware-stripped) file as one string
-    rather than line-by-line, so a call whose arguments span multiple
-    lines is still found. Covers both Lua quoting forms for the module
-    name: `'...'`/`"..."` (REGISTER_RE) and long brackets `[[...]]`/
-    `[=[...]=]`/... (REGISTER_RE_LONGBRACKET) -- a single call site uses
-    exactly one form, so the two never double-match.
+    Scans the whole (comment-stripped, string-PRESERVING) file as one
+    string rather than line-by-line, so a call whose arguments span
+    multiple lines is still found. Covers both Lua quoting forms for
+    the module name: `'...'`/`"..."` (REGISTER_RE) and long brackets
+    `[[...]]`/`[=[...]=]`/... (REGISTER_RE_LONGBRACKET) -- a single
+    call site uses exactly one form, so the two never double-match.
+
+    Filters out any match whose START falls inside an (unrelated)
+    string-literal span -- otherwise a call-SHAPED mention inside prose
+    (a doc string like `[[example: saveMods.register("x", nil, nil)]]`)
+    reads as a real, live registration and produces a false CI failure
+    for a module that never actually gets registered. A real call's OWN
+    argument literal is never itself "unrelated": the match starts at
+    the receiver (`saveMods`/`require(...)`), before that literal
+    begins, so this never rejects a genuine call.
     """
     found: list[tuple[str, str]] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
         cleaned = _strip_lua_comments(text)
+        spans = _string_literal_spans(cleaned)
         for m in REGISTER_RE.finditer(cleaned):
-            found.append((m.group(2), relpath))
+            if not any(start <= m.start() < end for start, end in spans):
+                found.append((m.group(2), relpath))
         for m in REGISTER_RE_LONGBRACKET.finditer(cleaned):
-            found.append((m.group(2), relpath))
+            if not any(start <= m.start() < end for start, end in spans):
+                found.append((m.group(2), relpath))
     return found
 
 

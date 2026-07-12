@@ -431,6 +431,34 @@ data EngineEnv = EngineEnv
   } deriving (Eq)
 """
 
+# Two DIFFERENT fields whose promoted string-literal TYPES happen to
+# spell out `{-`/`-}` -- a block-comment stripper that isn't
+# literal-aware sees the first as "opening" a comment and the second
+# (in a LATER field) as "closing" it, silently swallowing everything
+# (including real field declarations) in between, including
+# `unclassified` itself.
+SYNTHETIC_ENGINE_ENV_FAKE_BLOCK_COMMENT_STRINGS = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne ∷ IORef Int
+  , documented ∷ Proxy "{-"
+  , unclassified ∷ Proxy "-}"
+  } deriving (Eq)
+"""
+
+# A long-bracket STRING (not a comment) whose CONTENT is shaped exactly
+# like a real registration call. A scanner that doesn't exclude string
+# spans from the DIRECT-CALL matcher (not just the alias matcher) reads
+# this as a live, unclassified registration and fails CI even though
+# nothing here actually executes.
+SYNTHETIC_LUA_REGISTER_PROSE_LOOKS_LIKE_CALL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local doc = [[example: saveMods.register("not_a_module", nil, nil)]]
+saveMods.register("real_module_2", nil, nil)
+"""
+
 # A direct call reached off require(...)'s return value with no local
 # binding at all -- fully traceable (the module path is a literal
 # string), not an alias.
@@ -563,6 +591,16 @@ def test_extract_fields_trailing_primes_are_not_char_literals():
     expect(fields == ["fieldOne'", "fieldTwo''"],
            f"ordinary identifiers ending in trailing primes are not "
            f"mistaken for char-literal openers, got {fields}")
+
+
+def test_extract_fields_survives_fake_block_comment_delimiters_in_strings():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_FAKE_BLOCK_COMMENT_STRINGS,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "documented", "unclassified"],
+           f"two string literals spelling out '{{-' and '-}}' in "
+           f"DIFFERENT fields' types do not get mistaken for a block "
+           f"comment's open/close, swallowing the field between them, "
+           f"got {fields}")
 
 
 def test_extract_fields_ignores_other_records():
@@ -753,6 +791,20 @@ def test_find_lua_register_aliases_ignores_longbracket_string_prose():
            f"got {offenders}")
 
 
+def test_extract_lua_registered_modules_ignores_call_shaped_prose_in_string():
+    # Regression: the DIRECT-CALL extractor (not just the alias check)
+    # must also exclude matches inside string literals -- a doc string
+    # whose content is shaped exactly like a real register() call must
+    # not be extracted as one.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PROSE_LOOKS_LIKE_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["real_module_2"],
+           f"a call-shaped mention inside a long-bracket string is not "
+           f"extracted as a real registration; only the genuine call "
+           f"on the next line is, got {names}")
+
+
 def test_parse_classified_names_scoped_by_owner_heading():
     by_owner = parse_classified_names(SYNTHETIC_INVENTORY_COMPLETE)
     expect(set(by_owner.get("EngineEnv", {})) == {"fieldOne", "fieldTwo", "fieldThree"},
@@ -920,6 +972,24 @@ def test_audit_detects_field_hidden_behind_brace_in_char_literal():
     expect(any("unclassified" in v for v in violations),
            f"the field after the brace-containing char literal type is "
            f"still extracted and reported when unclassified, got {violations}")
+
+
+def test_audit_detects_field_hidden_behind_fake_block_comment_strings():
+    """Regression: two DIFFERENT fields' string-literal types spelling
+    out '{-' and '-}' used to be read as a real block comment's
+    open/close (block-comment stripping ran BEFORE string-awareness),
+    silently swallowing the field between them from the audit
+    entirely."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV_FAKE_BLOCK_COMMENT_STRINGS},
+        {},
+        SYNTHETIC_INVENTORY_MISSING_ONE,  # missing fieldTwo; documented/unclassified aren't real names here
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("unclassified" in v for v in violations),
+           f"the field after the fake block-comment-shaped string "
+           f"literals is still extracted and reported when "
+           f"unclassified, got {violations}")
 
 
 def test_audit_detects_module_registered_across_multiple_lines():
@@ -1189,6 +1259,26 @@ def test_audit_does_not_flag_longbracket_string_prose_as_an_alias():
            f"as an aliasing violation, got {violations}")
 
 
+def test_audit_does_not_flag_call_shaped_prose_as_unclassified_module():
+    """Regression: a call-SHAPED mention inside a long-bracket string
+    (e.g. a doc string) used to be extracted by the direct-call matcher
+    itself as a live registration, failing CI for a module that never
+    actually gets registered -- only the genuine call must be reported,
+    and only because it's genuinely unclassified in this fixture."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PROSE_LOOKS_LIKE_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for either name
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("not_a_module" in v for v in violations),
+           f"the call-shaped PROSE inside the string is not reported "
+           f"as an unclassified module, got {violations}")
+    expect(any("real_module_2" in v for v in violations),
+           f"the genuine call on the next line IS reported when "
+           f"unclassified, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -1262,6 +1352,7 @@ def main() -> int:
         test_extract_fields_survives_dash_in_string_literal_type,
         test_extract_fields_survives_brace_in_char_literal_type,
         test_extract_fields_trailing_primes_are_not_char_literals,
+        test_extract_fields_survives_fake_block_comment_delimiters_in_strings,
         test_extract_fields_ignores_other_records,
         test_extract_fields_missing_record_raises,
         test_extract_lua_registered_modules,
@@ -1276,6 +1367,7 @@ def main() -> int:
         test_extract_lua_registered_modules_does_not_see_through_alias,
         test_extract_lua_registered_modules_bracket_form_call,
         test_extract_lua_registered_modules_require_chained_call,
+        test_extract_lua_registered_modules_ignores_call_shaped_prose_in_string,
         test_find_lua_register_aliases_detects_stored_reference,
         test_find_lua_register_aliases_ignores_direct_calls,
         test_find_lua_register_aliases_ignores_the_definition_and_its_error_string,
@@ -1295,6 +1387,7 @@ def main() -> int:
         test_audit_detects_grouped_field_declaration,
         test_audit_detects_field_hidden_behind_brace_in_string_literal,
         test_audit_detects_field_hidden_behind_brace_in_char_literal,
+        test_audit_detects_field_hidden_behind_fake_block_comment_strings,
         test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_module_registered_after_dash_string,
         test_audit_detects_single_quoted_module_registration,
@@ -1311,6 +1404,7 @@ def main() -> int:
         test_audit_detects_unclassified_require_chained_module_registration,
         test_audit_detects_aliased_require_chained_registration,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
+        test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
