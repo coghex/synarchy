@@ -305,14 +305,23 @@ local function attackTargetExecute(uid, s, params)
     -- already handles first contact; this is the in-combat target swap.)
     do
         local att = unit.getLastAttacker(uid)
+        -- A collapsed attacker is disqualified alongside dead — equally
+        -- incapable of being a live threat worth swapping onto — and
+        -- the technomule is never a valid combat target at all (#717:
+        -- this also closes the gap where lash-out's own collapsed/
+        -- technomule exclusions could otherwise be bypassed via this
+        -- shared retaliation path, since attack_target is the same
+        -- execute function lash-out drives).
+        local attPose = att and unit.getPose(att.uid)
+        local attInfo = att and unit.getInfo(att.uid)
         if att and att.uid ~= target and unit.exists(att.uid)
-           and unit.getPose(att.uid) ~= "dead"
+           and attPose ~= "dead" and attPose ~= "collapsed"
+           and attInfo and attInfo.defName ~= "technomule"
            and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC then
             local m = unit.getInfo(uid)
-            local a = unit.getInfo(att.uid)
-            if m and a then
-                local d = math.max(math.abs(m.gridX - a.gridX),
-                                   math.abs(m.gridY - a.gridY))
+            if m then
+                local d = math.max(math.abs(m.gridX - attInfo.gridX),
+                                   math.abs(m.gridY - attInfo.gridY))
                 if d <= (unit.getAttackRange(uid) or 1.0) + 0.5 then
                     s.attackTargetUid = att.uid
                     target = att.uid
