@@ -324,7 +324,10 @@ data ClimateState = ClimateState
     , csAtmo      ∷ !AtmoGrid        -- ^ Atmospheric circulation
     , csSurface   ∷ !(HM.HashMap ClimateCoord SurfaceBudget) -- ^ Surface budgets
     , csGlobalCO2 ∷ !Float           -- ^ Global CO2 level (from GeoState)
-    , csGlobalTemp ∷ !Float          -- ^ Global mean temperature offset
+    , csGlobalTemp ∷ !Float          -- ^ Global mean temp (°C), the mean
+                                      --   of csClimate's own regions —
+                                      --   NOT an offset (see
+                                      --   World.Weather.Generate)
     , csSolarConst ∷ !Float          -- ^ Solar constant (can vary over deep time)
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
