@@ -98,6 +98,56 @@ SYNTHETIC_INVENTORY_MISSING_ONE = """\
 | `unit_ai` | Persist exactly (opaque blob) |
 """
 
+# fieldTwo HAS a row and is present by name, but its classification cell
+# is a bare em-dash placeholder -- not one of the five taxonomy values.
+# This is the "accepts no classification as a classification" gap:
+# name-presence alone must not be enough.
+SYNTHETIC_INVENTORY_INVALID_CLASSIFICATION = """\
+# Fake inventory
+
+## 1. EngineEnv fields
+
+### EngineEnv
+
+| Field | Classification |
+|---|---|
+| `fieldOne` | Persist exactly |
+| `fieldTwo` | — |
+| `fieldThree` | Exclude |
+
+## 7. Lua persistence registry
+
+### Lua persistence registry
+
+| Field | Classification |
+|---|---|
+| `unit_ai` | Persist exactly (opaque blob) |
+"""
+
+# fieldTwo's classification uses a valid taxonomy label wrapped in bold
+# markup with a parenthetical suffix -- must still count as valid.
+SYNTHETIC_INVENTORY_DECORATED_VALID_CLASSIFICATION = """\
+# Fake inventory
+
+## 1. EngineEnv fields
+
+### EngineEnv
+
+| Field | Classification |
+|---|---|
+| `fieldOne` | Persist exactly |
+| `fieldTwo` | **Exclude (new-format target differs)** |
+| `fieldThree` | Exclude |
+
+## 7. Lua persistence registry
+
+### Lua persistence registry
+
+| Field | Classification |
+|---|---|
+| `unit_ai` | Persist exactly (opaque blob) |
+"""
+
 # fieldTwo is only classified under the Lua registry heading (as if it
 # were a Lua module name), NOT under `### EngineEnv` where the real
 # EngineEnv.fieldTwo lives -- this must NOT satisfy EngineEnv.fieldTwo's
@@ -267,6 +317,29 @@ local saveMods = require("scripts.lib.save_modules")
 saveMods.register([==[leveled_longbracket_module]==], nil, nil)
 """
 
+# A GROUPED field declaration -- several names sharing one trailing
+# type signature (`name1, name2 :: Type`), legal Haskell. `unclassified`
+# has no arrow of its own; it borrows `classified`'s.
+SYNTHETIC_ENGINE_ENV_GROUPED_FIELD = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne ∷ IORef Int
+  , unclassified, fieldTwo ∷ IORef Text
+  , fieldThree ∷ Q.Queue Int
+  } deriving (Eq)
+"""
+
+# A long-bracket Lua STRING (not a comment) whose CONTENT contains `--`.
+# A comment stripper that isn't long-bracket-aware treats that embedded
+# `--` as a real comment start and discards the real register() call
+# that follows it on the same line.
+SYNTHETIC_LUA_REGISTER_AFTER_LONGBRACKET_DASH_STRING = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local dash = [[--]]; saveMods.register([[longbracket_dash_module]], nil, nil)
+"""
+
 
 # ----- Tests -------------------------------------------------------------
 
@@ -307,6 +380,14 @@ def test_extract_fields_name_and_arrow_on_different_lines():
     expect(fields == ["fieldOne", "fieldTwo", "fieldThree"],
            f"a field whose name and `∷`/type are on DIFFERENT physical "
            f"lines is still extracted, got {fields}")
+
+
+def test_extract_fields_grouped_declaration():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_GROUPED_FIELD,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "unclassified", "fieldTwo", "fieldThree"],
+           f"a grouped declaration (`unclassified, fieldTwo ∷ IORef Text`) "
+           f"extracts BOTH names sharing the trailing type, got {fields}")
 
 
 def test_extract_fields_ignores_other_records():
@@ -389,33 +470,74 @@ def test_extract_lua_registered_modules_longbracket_leveled():
            f"string, got {names}")
 
 
+def test_extract_lua_registered_modules_survives_dash_in_longbracket_string():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_AFTER_LONGBRACKET_DASH_STRING})
+    names = [n for n, _ in found]
+    expect(names == ["longbracket_dash_module"],
+           f"a `--` embedded in an earlier LONG-BRACKET string literal on "
+           f"the same line does not swallow a real register() call after "
+           f"it, got {names}")
+
+
 def test_parse_classified_names_scoped_by_owner_heading():
     by_owner = parse_classified_names(SYNTHETIC_INVENTORY_COMPLETE)
-    expect(by_owner.get("EngineEnv") == {"fieldOne", "fieldTwo", "fieldThree"},
+    expect(set(by_owner.get("EngineEnv", {})) == {"fieldOne", "fieldTwo", "fieldThree"},
            f"the '### EngineEnv' heading gets exactly its own backtick-quoted "
            f"first-column names, got {by_owner.get('EngineEnv')}")
-    expect(by_owner.get("Lua persistence registry") == {"unit_ai"},
+    expect(by_owner.get("EngineEnv", {}).get("fieldOne") == "Persist exactly",
+           f"captures each name's own classification cell text, got "
+           f"{by_owner.get('EngineEnv')}")
+    expect(set(by_owner.get("Lua persistence registry", {})) == {"unit_ai"},
            f"the Lua registry heading gets exactly its own names, got "
            f"{by_owner.get('Lua persistence registry')}")
 
 
 def test_parse_classified_names_ignores_other_columns():
     # A name that only appears in a NON-first column (e.g. a cross-
-    # reference in "Restoration dependency") must not count as classified.
-    text = "### Fake\n\n| `realField` | depends on `otherField` |\n"
+    # reference in "Restoration dependency") must not count as classified,
+    # and it's the CLASSIFICATION column's own text that's captured, not
+    # some other column's.
+    text = ("### Fake\n\n"
+            "| Field | Classification | Restoration dependency |\n"
+            "|---|---|---|\n"
+            "| `realField` | Exclude | depends on `otherField` |\n")
     by_owner = parse_classified_names(text)
-    expect(by_owner.get("Fake") == {"realField"},
-           f"only the first column counts as a classification, got {by_owner.get('Fake')}")
+    expect(set(by_owner.get("Fake", {})) == {"realField"},
+           f"only the first column's names count as classified, got {by_owner.get('Fake')}")
+    expect(by_owner.get("Fake", {}).get("realField") == "Exclude",
+           f"the Classification column's text is captured, not a later "
+           f"column's, got {by_owner.get('Fake')}")
 
 
 def test_parse_classified_names_does_not_merge_across_owners():
-    text = ("### OwnerX\n\n| `shared` | x |\n\n"
-            "### OwnerY\n\n| `shared` | y |\n| `only_in_y` | z |\n")
+    text = ("### OwnerX\n\n"
+            "| Field | Classification |\n|---|---|\n"
+            "| `shared` | Persist exactly |\n\n"
+            "### OwnerY\n\n"
+            "| Field | Classification |\n|---|---|\n"
+            "| `shared` | Exclude |\n"
+            "| `only_in_y` | Rebuild |\n")
     by_owner = parse_classified_names(text)
-    expect(by_owner.get("OwnerX") == {"shared"},
-           f"OwnerX keeps only its own copy of a shared name, got {by_owner.get('OwnerX')}")
-    expect(by_owner.get("OwnerY") == {"shared", "only_in_y"},
-           f"OwnerY keeps its own names independently, got {by_owner.get('OwnerY')}")
+    expect(by_owner.get("OwnerX") == {"shared": "Persist exactly"},
+           f"OwnerX keeps only its own copy of a shared name (with its own "
+           f"classification text), got {by_owner.get('OwnerX')}")
+    expect(by_owner.get("OwnerY") == {"shared": "Exclude", "only_in_y": "Rebuild"},
+           f"OwnerY keeps its own names and classifications independently, "
+           f"got {by_owner.get('OwnerY')}")
+
+
+def test_parse_classified_names_finds_classification_column_at_any_index():
+    # The Lua registry table's real header puts Classification 4th
+    # (Module | Owner | Scope | Classification | ...), not 2nd -- the
+    # parser must locate it by name, not assume a fixed position.
+    text = ("### Fake\n\n"
+            "| Module | Owner | Scope | Classification | Test oracle |\n"
+            "|---|---|---|---|---|\n"
+            "| `mod_a` | some/file.lua | global | Persist exactly | none yet |\n")
+    by_owner = parse_classified_names(text)
+    expect(by_owner.get("Fake") == {"mod_a": "Persist exactly"},
+           f"finds Classification wherever it sits in the header, got {by_owner.get('Fake')}")
 
 
 FAKE_ROOT_RECORDS = [("EngineEnv", "Fake.hs", r"^data EngineEnv = EngineEnv\b")]
@@ -477,6 +599,24 @@ def test_audit_detects_field_with_name_and_arrow_on_different_lines():
     expect(any("fieldTwo" in v for v in violations),
            f"fieldTwo (whose name and arrow are on different lines in this "
            f"fixture) is still reported when unclassified, got {violations}")
+
+
+def test_audit_detects_grouped_field_declaration():
+    """Regression for the grouped-declaration false-negative: only the
+    LAST name in `name1, name2 :: Type` used to be extracted, so an
+    unclassified name earlier in the group went unreported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV_GROUPED_FIELD},
+        {},
+        SYNTHETIC_INVENTORY_MISSING_ONE,  # missing fieldTwo; unclassified is never classified either
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("unclassified" in v for v in violations),
+           f"the bare-named first field in a grouped declaration is "
+           f"reported when unclassified, got {violations}")
+    expect(any("EngineEnv.fieldTwo" in v for v in violations),
+           f"the arrow-bearing second field in the group is also reported "
+           f"when unclassified, got {violations}")
 
 
 def test_audit_detects_module_registered_across_multiple_lines():
@@ -542,6 +682,22 @@ def test_audit_detects_longbracket_module_registration():
            f"reported when unclassified, got {violations}")
 
 
+def test_audit_detects_module_registered_after_longbracket_dash_string():
+    """Regression for the long-bracket string-awareness gap: a `--`
+    inside an earlier LONG-BRACKET string literal used to truncate the
+    line and hide a real register() call that followed it on the same
+    line."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_AFTER_LONGBRACKET_DASH_STRING},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for longbracket_dash_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("longbracket_dash_module" in v for v in violations),
+           f"a module registered after a same-line long-bracket string "
+           f"containing '--' is reported when unclassified, got {violations}")
+
+
 def test_audit_does_not_let_a_same_named_entry_under_another_owner_count():
     """Regression for the owner-scoping gap: a Lua-module row happening
     to be named `fieldTwo` must not satisfy the classification
@@ -578,6 +734,43 @@ def test_audit_does_not_let_a_sibling_record_in_the_same_numbered_section_count(
     expect(not any("OwnerB.shared" in v for v in violations),
            f"OwnerB.shared, which IS classified under its own heading, is "
            f"not falsely reported, got {violations}")
+
+
+def test_audit_rejects_a_blank_placeholder_as_a_classification():
+    """Regression for the "no classification counts as a classification"
+    gap: a row whose NAME is present but whose classification cell is a
+    bare '—' placeholder (none of the five taxonomy values) must still
+    be reported -- name-presence alone is not enough."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {},
+        SYNTHETIC_INVENTORY_INVALID_CLASSIFICATION,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("EngineEnv.fieldTwo" in v and "not one of" in v for v in violations),
+           f"fieldTwo's blank '—' classification is reported as invalid, "
+           f"got {violations}")
+    expect(not any("EngineEnv.fieldOne" in v or "EngineEnv.fieldThree" in v
+                    for v in violations),
+           f"fields with a real taxonomy classification are not falsely "
+           f"reported, got {violations}")
+
+
+def test_audit_accepts_a_decorated_valid_classification():
+    """A valid taxonomy label wrapped in bold markup with a parenthetical
+    suffix (e.g. the real inventory's '**Exclude (new-format target
+    differs)**' rows) must still count as valid -- the check is a
+    substring match against the five canonical labels, not exact
+    equality."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {},
+        SYNTHETIC_INVENTORY_DECORATED_VALID_CLASSIFICATION,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("EngineEnv.fieldTwo" in v for v in violations),
+           f"a bold-wrapped, parenthetical-suffixed but still-valid "
+           f"classification is accepted, got {violations}")
 
 
 def test_audit_detects_intentionally_unclassified_field():
@@ -633,6 +826,7 @@ def main() -> int:
         test_extract_fields_unbalanced_brace_in_comment_does_not_truncate,
         test_extract_fields_nested_block_comment_does_not_truncate,
         test_extract_fields_name_and_arrow_on_different_lines,
+        test_extract_fields_grouped_declaration,
         test_extract_fields_ignores_other_records,
         test_extract_fields_missing_record_raises,
         test_extract_lua_registered_modules,
@@ -643,19 +837,25 @@ def main() -> int:
         test_extract_lua_registered_modules_single_quoted,
         test_extract_lua_registered_modules_longbracket,
         test_extract_lua_registered_modules_longbracket_leveled,
+        test_extract_lua_registered_modules_survives_dash_in_longbracket_string,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
+        test_parse_classified_names_finds_classification_column_at_any_index,
         test_audit_clean_repo_state_has_no_violations,
         test_audit_detects_field_hidden_behind_unbalanced_comment_brace,
         test_audit_detects_field_hidden_behind_nested_comment,
         test_audit_detects_field_with_name_and_arrow_on_different_lines,
+        test_audit_detects_grouped_field_declaration,
         test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_module_registered_after_dash_string,
         test_audit_detects_single_quoted_module_registration,
         test_audit_detects_longbracket_module_registration,
+        test_audit_detects_module_registered_after_longbracket_dash_string,
         test_audit_does_not_let_a_same_named_entry_under_another_owner_count,
         test_audit_does_not_let_a_sibling_record_in_the_same_numbered_section_count,
+        test_audit_rejects_a_blank_placeholder_as_a_classification,
+        test_audit_accepts_a_decorated_valid_classification,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
         test_audit_against_the_real_repo,

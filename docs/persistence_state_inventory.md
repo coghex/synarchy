@@ -38,7 +38,7 @@ the affected fields as unclassified.
 | Field | Scope | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|---|
 | `engineConfig` | global | Exclude | — | boot flag, not session state | none yet |
-| `engineStateRef` | global | — | see §2 | pointer to `EngineState`, classified field-by-field there, not itself a persistence decision | — |
+| `engineStateRef` | global | Rebuild | see §2 (`EngineState` fields classified individually) | the IORef itself is always freshly allocated at boot; it is never the pointer that's restored, only the value it comes to hold, which is why the interesting classification decisions live on `EngineState`'s own fields (§2), not here | none yet |
 | `videoConfigRef` | global | Exclude | — | local runtime config (`config/video.yaml`, #638) | `tools/config_state_probe.py` |
 | `windowSizeRef` | global | Exclude | — | OS/window-owned | none yet |
 | `windowStateRef` | global | Exclude | — | OS/window-owned | none yet |
@@ -82,11 +82,11 @@ the affected fields as unclassified.
 | `defaultFaceMapSlotRef` | global | Exclude | — | GPU texture slot | none yet |
 | `floraCatalogRef` | global | Rebuild | `data/*.yaml` flora content | reloaded fresh from YAML at boot; species referenced by numeric id from world state (see §9 re: its unused `Serialize` instance) | `tools/flora_growth_probe.py` |
 | `materialRegistryRef` | global | Rebuild | built-in material table | boot-time, not YAML-driven | none yet |
-| `unitManagerRef` | global | — | see §5 (`UnitManager` fields classified individually) | — | — |
+| `unitManagerRef` | global | Rebuild | see §5 (`UnitManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `UnitManager`'s own fields (§5) | none yet |
 | `unitQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `utsRef` | global | Rebuild | `wpsUnits`/`wpsUnitSimStates` after load | sim-side per-unit pos/pose/target/path rebuilt from the restored `UnitInstance`/`UnitSimState` snapshot, not itself directly serialized | `tools/movement_probe.py` (post-load steering sanity) |
 | `statRNGRef` | global | Exclude | — | explicitly non-deterministic, not save-seeded (contract §1) | none yet |
-| `buildingManagerRef` | global | — | see §5 (`BuildingManager` fields classified individually) | — | — |
+| `buildingManagerRef` | global | Rebuild | see §5 (`BuildingManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `BuildingManager`'s own fields (§5) | none yet |
 | `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | none yet |
 | `texPaletteHandlesRef` | global | Exclude | `texPaletteRef` | runtime GPU translation table rebuilt from `texPaletteRef` | none yet |
 | `buildingQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |

@@ -16,18 +16,22 @@ with an unrelated Lua module or a field on a DIFFERENT record that
 happens to share the same `## N.` section (e.g. WorldManager and
 WorldState both live under "## 3.", but each gets its own "### " heading
 so a name collision between them still can't mask a missing decision).
+The row's own Classification cell must also contain one of the five
+taxonomy labels (VALID_CLASSIFICATIONS) -- a bare placeholder like "—"
+is name-presence without an actual decision, and is rejected too.
 
-This is a static presence check, not a serialization-correctness proof
-(it cannot verify a field classified "Persist exactly" is actually wired
-into the save/load path) -- see docs/persistence_contract.md SS7 for what
-it does and does not guarantee. Its job is narrower and mechanical:
-nothing gets ADDED to a root owner or the Lua save registry without an
-explicit classification decision landing alongside it.
+This is a static presence/well-formedness check, not a serialization-
+correctness proof (it cannot verify a field classified "Persist exactly"
+is actually wired into the save/load path) -- see
+docs/persistence_contract.md SS7 for what it does and does not
+guarantee. Its job is narrower and mechanical: nothing gets ADDED to a
+root owner or the Lua save registry without an explicit classification
+decision landing alongside it.
 
 Usage:
   python3 tools/persistence_inventory_audit.py
-Exit codes: 0 = every root-owner field and Lua module is classified,
-1 = one or more are missing from the inventory.
+Exit codes: 0 = every root-owner field and Lua module has a valid
+classification, 1 = one or more are missing or invalid.
 """
 from __future__ import annotations
 
@@ -63,6 +67,10 @@ ROOT_RECORDS: list[tuple[str, str, str]] = [
 # already spans newlines, so a field name and its `∷`/`::` written on
 # DIFFERENT physical lines still match.
 FIELD_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
+# A segment that is JUST a bare identifier (no arrow) -- part of a
+# grouped declaration `name1, name2 :: Type` where several names share
+# one trailing type signature. See extract_record_fields.
+BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # Tolerates whitespace/newlines around the dot and before the opening
 # paren/string (a call split across lines, or `saveMods . register(...)`
 # with spaced dots), and either Lua quote style -- `(['"])` captures the
@@ -75,7 +83,10 @@ REGISTER_RE = re.compile(r"saveMods\s*\.\s*register\s*\(\s*(['\"])((?:(?!\1).)*)
 # enforced here via backreference `\1` same as the quote form above.
 REGISTER_RE_LONGBRACKET = re.compile(
     r"saveMods\s*\.\s*register\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
-ROW_FIRST_CELL_RE = re.compile(r"^\|([^|]*)\|")
+# A Lua long-bracket opener `[`, zero-or-more `=`, `[` -- shared by the
+# comment stripper (both long comments and long strings) and the
+# register-call matcher above.
+LONG_BRACKET_OPEN_RE = re.compile(r"\[(=*)\[")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 OWNER_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 
@@ -123,13 +134,15 @@ def _strip_haskell_comments(source: str) -> str:
 def _strip_lua_comments(text: str) -> str:
     """Blank out Lua comments, preserving line structure.
 
-    String-aware: a `--` or `--[[` inside a quoted Lua string literal
-    (single or double quoted, with `\\`-escapes honored) is part of the
-    string, not a comment marker, and must not truncate the line --
-    otherwise a real `saveMods.register(...)` call following a string
-    containing `--` on the same line would be silently discarded along
-    with it. Lua `--[[ ... ]]` block comments do not nest (unlike
-    Haskell's `{- -}`), so a first-`]]`-wins scan is correct.
+    String-aware in the FULL sense: quoted (`'`/`"`, with `\\`-escapes
+    honored) AND long-bracket (`[[...]]`, `[=[...]=]`, ...) string
+    literals are recognized and their content is never treated as a
+    comment trigger -- a `--` embedded in EITHER string form must not
+    truncate the line, or a real `saveMods.register(...)` call
+    following it on the same line would be silently discarded. Lua long
+    COMMENTS (`--[[...]]`/`--[=[...]=]`/...) are likewise recognized
+    with their `=`-run level matched on both delimiters, and (per Lua's
+    own rule) don't nest.
     """
     out: list[str] = []
     i = 0
@@ -153,12 +166,25 @@ def _strip_lua_comments(text: str) -> str:
                 i += 1
             continue
         if text[i:i + 2] == "--":
-            if text[i:i + 4] == "--[[":
-                end = text.find("]]", i + 4)
-                i = n if end == -1 else end + 2
+            long_open = LONG_BRACKET_OPEN_RE.match(text, i + 2)
+            if long_open:
+                close = "]" + long_open.group(1) + "]"
+                end = text.find(close, long_open.end())
+                i = n if end == -1 else end + len(close)
                 continue
             nl = text.find("\n", i)
             i = n if nl == -1 else nl
+            continue
+        # A bare long-bracket STRING (no leading `--`) must be copied
+        # through verbatim -- its content, which may itself contain
+        # `--`, is never a comment trigger.
+        long_open = LONG_BRACKET_OPEN_RE.match(text, i)
+        if long_open:
+            close = "]" + long_open.group(1) + "]"
+            end = text.find(close, long_open.end())
+            span_end = n if end == -1 else end + len(close)
+            out.append(text[i:span_end])
+            i = span_end
             continue
         out.append(ch)
         i += 1
@@ -214,6 +240,12 @@ def extract_record_fields(source: str, record_start_pattern: str) -> list[str]:
     _split_top_level_fields), not per PHYSICAL LINE, so a field whose
     name and `∷`/`::` are written on different lines -- legal Haskell,
     e.g. `, someField\n    ∷ Int` -- is still found.
+
+    Also handles GROUPED field declarations, where several names share
+    one trailing type signature: `{ name1, name2 ∷ Int }`. Each comma
+    still produces its own top-level segment, but only the LAST one
+    carries the arrow; a run of bare-identifier segments immediately
+    before an arrow-bearing one all belong to that same declaration.
     """
     cleaned = _strip_haskell_comments(source)
     pat = re.compile(record_start_pattern, re.MULTILINE)
@@ -227,10 +259,19 @@ def extract_record_fields(source: str, record_start_pattern: str) -> list[str]:
     brace_end = _find_matching_brace(cleaned, brace_start)
     block = cleaned[brace_start:brace_end + 1]
     fields: list[str] = []
+    pending: list[str] = []
     for segment in _split_top_level_fields(block):
         fm = FIELD_NAME_RE.match(segment)
         if fm:
+            fields.extend(pending)
             fields.append(fm.group(1))
+            pending = []
+            continue
+        bm = BARE_NAME_RE.match(segment)
+        if bm:
+            pending.append(bm.group(1))
+        else:
+            pending = []
     return fields
 
 
@@ -255,9 +296,31 @@ def extract_lua_registered_modules(
     return found
 
 
-def parse_classified_names(inventory_text: str) -> dict[str, set[str]]:
-    """Every backtick-quoted first-column name, keyed by the nearest
-    preceding `### OwnerName` heading.
+# The five classifications the contract defines (docs/persistence_contract.md
+# SS2). A table cell "counts" if it CONTAINS one of these as a substring, so
+# parenthetical/bold-wrapped variants ("Persist exactly (container)",
+# "**Exclude (new format)**", "Rebuild + Persist (mixed)") all still count --
+# but a bare "—"/blank placeholder, which contains none of them, does not.
+VALID_CLASSIFICATIONS = (
+    "Persist exactly",
+    "Persist as identity/reference",
+    "Rebuild",
+    "Reset to default",
+    "Exclude",
+)
+
+
+def _is_valid_classification(cell_text: str) -> bool:
+    return any(label in cell_text for label in VALID_CLASSIFICATIONS)
+
+
+_NO_CLASSIFICATION_COLUMN = -1
+
+
+def parse_classified_names(inventory_text: str) -> dict[str, dict[str, str]]:
+    """Every backtick-quoted first-column name and its classification
+    cell's raw text, keyed by the nearest preceding `### OwnerName`
+    heading: `{owner: {name: classification_text}}`.
 
     Classification is scoped PER OWNER, not globally and not merely per
     `## N.` section: several distinct owners can share one numbered
@@ -267,19 +330,39 @@ def parse_classified_names(inventory_text: str) -> dict[str, set[str]]:
     different owner (a sibling record under the same section, or the
     Lua registry) happening to share that name can't mask a missing
     decision.
+
+    The "Classification" column's INDEX varies by table (EngineEnv/
+    EngineState put it 3rd, after Field/Scope; WorldManager/WorldState/
+    the save-envelope records put it 2nd; the Lua registry puts it 4th),
+    so each table's own header row is parsed to find it, rather than
+    assuming a fixed position.
     """
-    by_owner: dict[str, set[str]] = {}
+    by_owner: dict[str, dict[str, str]] = {}
     current_owner: str | None = None
+    classification_idx: int | None = None
     for line in inventory_text.splitlines():
         heading = OWNER_HEADING_RE.match(line)
         if heading:
             current_owner = heading.group(1)
+            classification_idx = None
             continue
-        m = ROW_FIRST_CELL_RE.match(line)
-        if not m or current_owner is None:
+        if not line.startswith("|"):
             continue
-        for bt in BACKTICK_RE.findall(m.group(1)):
-            by_owner.setdefault(current_owner, set()).add(bt)
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if classification_idx is None:
+            classification_idx = (cells.index("Classification")
+                                   if "Classification" in cells
+                                   else _NO_CLASSIFICATION_COLUMN)
+            continue
+        if classification_idx == _NO_CLASSIFICATION_COLUMN or current_owner is None:
+            continue
+        names = BACKTICK_RE.findall(cells[0]) if cells else []
+        if not names:
+            continue  # e.g. the `|---|---|` separator row
+        classification_text = (cells[classification_idx]
+                                if classification_idx < len(cells) else "")
+        for bt in names:
+            by_owner.setdefault(current_owner, {})[bt] = classification_text
     return by_owner
 
 
@@ -307,20 +390,32 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
                 f"{label}: no fields extracted from {relpath} -- the parser "
                 f"may be out of sync with this record's layout")
             continue
-        classified_here = classified.get(label, set())
+        classified_here = classified.get(label, {})
         for field in fields:
             if field not in classified_here:
                 violations.append(
                     f"{label}.{field} ({relpath}) has no classification under "
                     f"the '### {label}' heading in {INVENTORY_PATH.name}")
+            elif not _is_valid_classification(classified_here[field]):
+                violations.append(
+                    f"{label}.{field} ({relpath})'s classification "
+                    f"{classified_here[field]!r} under the '### {label}' "
+                    f"heading in {INVENTORY_PATH.name} is not one of "
+                    f"{VALID_CLASSIFICATIONS}")
 
-    classified_lua = classified.get(LUA_OWNER_HEADING, set())
+    classified_lua = classified.get(LUA_OWNER_HEADING, {})
     for name, relpath in extract_lua_registered_modules(scripts_text_by_file):
         if name not in classified_lua:
             violations.append(
                 f'Lua save module "{name}" (registered in {relpath}) has no '
                 f"classification under the '### {LUA_OWNER_HEADING}' heading "
                 f"in {INVENTORY_PATH.name}")
+        elif not _is_valid_classification(classified_lua[name]):
+            violations.append(
+                f'Lua save module "{name}" (registered in {relpath})\'s '
+                f"classification {classified_lua[name]!r} under the "
+                f"'### {LUA_OWNER_HEADING}' heading in {INVENTORY_PATH.name} "
+                f"is not one of {VALID_CLASSIFICATIONS}")
 
     return violations
 

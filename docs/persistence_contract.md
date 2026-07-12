@@ -264,18 +264,24 @@ serialization-correctness proof. It:
    Haddock comment can never desync the brace-depth tracking that finds
    a record's boundary; splits the record's brace block on top-level
    commas only (so a comma inside a field's own type — a tuple, a
-   list-of-tuples — is never mistaken for a field separator); and
-   understands the codebase's `UnicodeSyntax` (`∷`) field separators
-   with the field name and its arrow allowed on different physical
-   lines.
+   list-of-tuples — is never mistaken for a field separator); understands
+   the codebase's `UnicodeSyntax` (`∷`) field separators with the field
+   name and its arrow allowed on different physical lines; and handles
+   grouped declarations (`{ name1, name2 ∷ Type }`, several names sharing
+   one trailing type signature).
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
    covering all three Lua string-literal forms for the module name
-   (`'...'`, `"..."`, and long brackets `[[...]]`/`[=[...]=]`/...) and
-   string-literal-aware so a `--` inside an unrelated string can't be
-   mistaken for a comment and swallow a real call after it.
+   (`'...'`, `"..."`, and long brackets `[[...]]`/`[=[...]=]`/...), fully
+   string-literal-aware in both directions — a `--` embedded in a quoted
+   OR long-bracket string is never mistaken for a comment start (which
+   would otherwise truncate the line and hide a real call after it), and
+   a bare (non-`--`-prefixed) long-bracket span is recognized as a
+   string, not code.
 3. Parses `persistence_state_inventory.md`'s classification tables for
-   the set of item names that have a recorded classification, scoped to
-   the exact `### OwnerName` heading each table sits under — not merely
+   the set of item names that have a recorded classification AND that
+   classification's own cell text, scoped to the exact `### OwnerName`
+   heading each table sits under (locating the "Classification" column
+   by its header text, since its position varies by table) — not merely
    the coarser `## N.` section a heading belongs to, since several
    distinct owners can share one numbered section (e.g. `WorldManager`/
    `WorldState` both under "## 3."). A name is only "classified" for the
@@ -283,7 +289,9 @@ serialization-correctness proof. It:
    under a DIFFERENT owner can never mask a missing decision.
 4. Fails, naming each offender, if any extracted field or registered
    module name has no matching inventory entry under its own owner
-   heading.
+   heading, OR if its classification cell doesn't contain one of the
+   five taxonomy labels (§2) — a bare placeholder like "—" does not
+   count as a classification decision.
 
 Run it directly:
 
