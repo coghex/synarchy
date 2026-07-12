@@ -671,22 +671,29 @@ dispatchInput env inpSt event = case event of
                                 Q.writeQueue lq LuaUIFocusLost
                                 logDebug logger CatUI
                                     "Right-click consumed by clickable UI element (no handler)"
-                                -- No LuaUIRightClickEvent gets queued for
-                                -- this route, so nothing else sees it
-                                -- either — deferred to release (like the
-                                -- other two ClickUI routes above) rather
-                                -- than recorded here, or it's invisible
-                                -- to F4 entirely (review #1). The
-                                -- recorded handler is the control's OWN
-                                -- left-click callback name (its identity),
-                                -- not a generic placeholder (review round
-                                -- 8 — the acceptance criterion is
-                                -- "records the consuming handler", which
-                                -- a constant string can't satisfy for
-                                -- more than one control).
-                                writeIORef pendingUIClickRef
-                                    (Just ("input.click", leftClickCallback, x, y))
-                                return ClickUI
+                                -- #743 review round 6: NO callback ever
+                                -- fires for this route — no
+                                -- LuaUIRightClickEvent, and the control's
+                                -- own left-click callback must not fire
+                                -- either (that's the whole point of this
+                                -- route) — so recording it as an
+                                -- "accepted" input.click (the pre-#743
+                                -- behavior, deferred to release like a
+                                -- real fired click) mislabeled a dead
+                                -- consumption as a real action, and its
+                                -- release read as downRoute "ui" despite
+                                -- nothing firing. Recorded immediately as
+                                -- a UI no-op instead — same "noop"
+                                -- classification #743's RouteBlocked case
+                                -- below uses — with the consuming
+                                -- control's OWN left-click callback name
+                                -- preserved as the handler for diagnostic
+                                -- identity (#730 review round 8's
+                                -- "records the consuming handler"
+                                -- acceptance still holds, just under
+                                -- outcome "noop" rather than "accepted").
+                                recordRouteOutcome "noop" (Just leftClickCallback)
+                                return ClickSwallowed
                             -- #743: a pointer-blocking element with
                             -- neither a right-click callback nor a
                             -- left-click one to fall back to (e.g. a

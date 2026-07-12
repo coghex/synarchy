@@ -366,17 +366,34 @@ spec = do
                 msgs ← drainLuaMsgs env
                 msgs `shouldSatisfy` any (≡ LuaMouseUpEvent GLFW.MouseButton'1 (realToFrac px) (realToFrac py) ClickSwallowed)
 
-            it "a right-click on an ordinary left-clickable control never invokes its left-click callback" $ \env → do
+            it "a right-click on an ordinary left-clickable control never invokes its left-click callback, and records a UI no-op (not an accepted click)" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                     (_eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
                 writeIORef (uiManagerRef env) m2
                 let (px, py) = pt
-                push env [InputMouseEvent GLFW.MouseButton'2 (realToFrac px, realToFrac py) GLFW.MouseButtonState'Pressed]
+                push env
+                    [ InputMouseEvent GLFW.MouseButton'2 (realToFrac px, realToFrac py) GLFW.MouseButtonState'Pressed
+                    , InputMouseEvent GLFW.MouseButton'2 (realToFrac px, realToFrac py) GLFW.MouseButtonState'Released
+                    ]
                 inputTick env
                 msgs ← drainLuaMsgs env
                 msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
                 msgs `shouldSatisfy` all (not ∘ isUIRightClickEvent)
+                -- #743 review round 6: no callback fired, so this must
+                -- record as a UI no-op (not "accepted") — recorded
+                -- immediately, not deferred to release — with the
+                -- consuming control's own left-click callback name kept
+                -- as the diagnostic handler identity.
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoOutcome r `shouldBe` "noop"
+                        aoHandler r `shouldBe` Just "btnClick"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+                -- The release must report the press as swallowed, not "ui"
+                -- (nothing fired for it to legitimately pair with).
+                msgs `shouldSatisfy` any (≡ LuaMouseUpEvent GLFW.MouseButton'2 (realToFrac px) (realToFrac py) ClickSwallowed)
 
             it "a middle-click over a pointer-blocking element is swallowed (no camera-drag routing) and clears stale UI focus" $ \env → do
                 resetAll env
