@@ -751,11 +751,25 @@ _ASSIGNMENT_TARGET_RE_FRAGMENT = (
 # just as effectively as starting mid-word did. Requiring "nothing
 # word-like AND no dot" immediately before the match start closes both
 # routes at once.
+# The canonical name as a "complete value" -- optionally wrapped in ANY
+# depth of redundant parens (same reasoning as _REGISTER_TABLE_REF's
+# parenthesized receiver: a FIXED, already-known token wrapped in
+# `\(+`/`\)+` is a regular pattern coverable for any depth in one shot,
+# unlike arbitrary-depth aliasing), with nothing chained after it at
+# all. Shared by every "is this RHS/value truly the bare canonical
+# name" check below -- `{ [1] = (saveMods) }` needs the exact same
+# parens tolerance a plain `registry = (saveMods)` assignment would,
+# and duplicating the fragment per call site is exactly how the two
+# diverged before (round 20's finding: the table-constructor check
+# alone got the parens fix, the assignment-statement check didn't).
+_BARE_CANONICAL_VALUE_RE_FRAGMENT = (
+    r"\(*\s*save(?:Mods|Modules)\b\s*\)*(?!\s*[.\[])"
+)
 _BARE_REGISTRY_ALIAS_RE = re.compile(
     r"(?<![.\w])(?:local\s+)?(?!saveMods\b|saveModules\b)"
     r"(?!package\s*\.\s*loaded\b)"
     + _ASSIGNMENT_TARGET_RE_FRAGMENT
-    + r"\s*=\s*save(?:Mods|Modules)\b(?!\s*[.\[])")
+    + r"\s*=\s*" + _BARE_CANONICAL_VALUE_RE_FRAGMENT)
 # The canonical name hidden as a TABLE CONSTRUCTOR field's value --
 # `{ [1] = saveMods }` (explicit key), `{ saveMods }` (positional, an
 # implicit integer key), or `{ registry = saveMods }` (named key) --
@@ -764,14 +778,14 @@ _BARE_REGISTRY_ALIAS_RE = re.compile(
 # entry inside a table literal, not a standalone assignment statement),
 # so it needs its own pattern: a value position starts right after `{`
 # or `,` (optionally preceded by a `[expr] =` or `name =` key), and the
-# canonical name must be the COMPLETE entry -- bare, with nothing
-# chained after it, immediately followed by the next `,` or the
-# constructor's closing `}` -- so `{ saveMods = require(...) }` (the
-# canonical name used as a KEY whose value is something else entirely)
-# is correctly NOT matched.
+# canonical name must be the COMPLETE entry -- bare (or parenthesized,
+# per the shared fragment above), with nothing chained after it,
+# immediately followed by the next `,` or the constructor's closing
+# `}` -- so `{ saveMods = require(...) }` (the canonical name used as a
+# KEY whose value is something else entirely) is correctly NOT matched.
 _TABLE_CONSTRUCTOR_ALIAS_RE = re.compile(
     r"[{,]\s*(?:\[[^\]]*\]\s*=\s*|[A-Za-z_]\w*\s*=\s*)?"
-    r"save(?:Mods|Modules)\b(?!\s*[.\[])\s*[,}]")
+    + _BARE_CANONICAL_VALUE_RE_FRAGMENT + r"\s*[,}]")
 
 
 def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:

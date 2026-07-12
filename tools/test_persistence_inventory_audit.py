@@ -656,6 +656,27 @@ local saveMods = require("scripts.lib.save_modules")
 local holder = { saveMods = require("some.other.module") }
 """
 
+# The canonical name PARENTHESIZED inside a table constructor's value
+# position -- `{ [1] = (saveMods) }` -- combining round 17's
+# parenthesized-receiver support with round 19's table-constructor
+# detection, which hadn't been composed together.
+SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_PARENTHESIZED_VALUE = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = { [1] = (saveMods) }
+holder[1].register("untracked_paren_constructor", nil, nil)
+"""
+
+# The symmetric sibling gap: a parenthesized RHS in a plain bare-alias
+# ASSIGNMENT statement (not a table constructor) -- `local registry =
+# (saveMods)`. Not itself reported by a review round, but the same
+# missing parens tolerance as the table-constructor case, closed
+# preemptively by sharing one fragment between both checks.
+SYNTHETIC_LUA_REGISTER_BARE_NAME_PARENTHESIZED_REALIAS = """\
+local saveMods = require("scripts.lib.save_modules")
+local registry = (saveMods)
+registry.register("untracked_paren_bare_realias", nil, nil)
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -1236,6 +1257,27 @@ def test_find_untracked_registry_aliases_ignores_table_constructor_key_name():
     expect(offenders == [],
            f"saveMods used as a table constructor KEY (not a value) is "
            f"not flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_parenthesized_table_constructor_value():
+    # Regression: round 17's parenthesized-receiver support and round
+    # 19's table-constructor detection hadn't been composed -- a
+    # parenthesized value inside a table constructor bypassed both.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_PARENTHESIZED_VALUE})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a parenthesized value inside a table constructor is "
+           f"flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_parenthesized_bare_realias():
+    # The symmetric sibling gap in a plain assignment statement (not a
+    # table constructor), closed preemptively via the shared fragment.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BARE_NAME_PARENTHESIZED_REALIAS})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a parenthesized RHS in a bare-alias assignment statement "
+           f"is flagged, got {offenders}")
 
 
 def test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard():
@@ -1855,6 +1897,35 @@ def test_audit_does_not_flag_table_constructor_key_name_as_an_alias():
            f"not reported as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_registration_via_parenthesized_table_constructor_value():
+    """Round 20's finding: a parenthesized value inside a table
+    constructor combines two previously-separate fixes (round 17's
+    parens, round 19's table constructors) that hadn't been composed."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_CONSTRUCTOR_PARENTHESIZED_VALUE},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"a parenthesized value inside a table constructor is "
+           f"reported as an untracked-alias violation, got {violations}")
+
+
+def test_audit_detects_registration_via_parenthesized_bare_realias():
+    """The symmetric sibling gap in a plain assignment statement,
+    closed preemptively via the shared canonical-value fragment."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BARE_NAME_PARENTHESIZED_REALIAS},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"a parenthesized RHS in a bare-alias assignment statement "
+           f"is reported as an untracked-alias violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name():
     """Regression: the registry's own `function saveModules.register(name,
     ...)` definition must not be misread as a dynamic-name call."""
@@ -2164,6 +2235,8 @@ def main() -> int:
         test_find_untracked_registry_aliases_detects_table_constructor_named_key,
         test_find_untracked_registry_aliases_detects_table_constructor_positional,
         test_find_untracked_registry_aliases_ignores_table_constructor_key_name,
+        test_find_untracked_registry_aliases_detects_parenthesized_table_constructor_value,
+        test_find_untracked_registry_aliases_detects_parenthesized_bare_realias,
         test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
@@ -2201,6 +2274,8 @@ def main() -> int:
         test_audit_detects_registration_via_table_constructor_bracket_key,
         test_audit_detects_registration_via_table_constructor_positional,
         test_audit_does_not_flag_table_constructor_key_name_as_an_alias,
+        test_audit_detects_registration_via_parenthesized_table_constructor_value,
+        test_audit_detects_registration_via_parenthesized_bare_realias,
         test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,

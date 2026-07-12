@@ -413,8 +413,10 @@ serialization-correctness proof. It:
    by `=` is being written to, not read from, so it can't itself be the
    source of a new alias) — anything else is a hard failure, same as
    the `require(...)` case. (The RHS check requires the canonical name
-   to be truly BARE, with nothing chained after it at all — not just
-   `.register`/`["register"]` — since Haskell/Lua's `\b` word-boundary
+   to be a COMPLETE value — bare or wrapped in redundant parens per the
+   table-constructor case below, but with nothing CHAINED after it at
+   all — not just `.register`/`["register"]` — since Haskell/Lua's `\b`
+   word-boundary
    is satisfied by a following `.` too: without this, the registry's
    OWN reload-safety idiom, `saveModules.registry = saveModules.registry
    or {}`, would be misread as "bare `saveModules` aliased into
@@ -427,11 +429,15 @@ serialization-correctness proof. It:
    (a `{`/`,`-delimited entry inside a table literal, not a standalone
    statement), so it needs its own pattern keyed off the `{`/`,` that
    opens a value position rather than an `=` that closes an assignment
-   target. The canonical name must be the COMPLETE entry (bare, nothing
-   chained after it, immediately followed by the next `,` or the
-   constructor's closing `}`) — so `{ saveMods = require(...) }`, where
-   the canonical name is used as a KEY whose VALUE is something else
-   entirely, is correctly not mistaken for aliasing.
+   target. The canonical name must be the COMPLETE entry (bare or
+   parenthesized to any depth — `{ [1] = (saveMods) }` is exactly as
+   live as the unparenthesized form, and shares one fragment with the
+   plain-assignment RHS check so the two can't drift apart the way they
+   initially did — with nothing chained after it, immediately followed
+   by the next `,` or the constructor's closing `}`) — so
+   `{ saveMods = require(...) }`, where the canonical name is used as a
+   KEY whose VALUE is something else entirely, is correctly not
+   mistaken for aliasing.
    Binding the registry table to an arbitrarily-named variable is a
    genuine data-flow problem no fixed-name regex can trace (Lua allows
    any identifier, and allows aliasing an alias), so rather than trying
