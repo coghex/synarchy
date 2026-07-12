@@ -363,22 +363,33 @@ serialization-correctness proof. It:
 6. Separately fails on any `require("scripts.lib.save_modules")`
    result — OR the already-canonical bare `saveMods`/`saveModules`
    name — that escapes to something other than the two sanctioned
-   patterns above (chained straight into `.register` access, or bound
-   to a local literally named `saveMods`/`saveModules`) — e.g.
+   patterns above (chained straight into `.register` access, or (re-)
+   bound to a variable literally named `saveMods`/`saveModules`) — e.g.
    `local registry = require("scripts.lib.save_modules");
-   registry.register(...)`, or one hop further,
+   registry.register(...)`; one hop further,
    `local saveMods = require(...); local registry = saveMods;
    registry.register(...)` (re-aliasing the ALREADY-sanctioned name
-   into a second local). Binding the registry table to an
-   arbitrarily-named local is a genuine data-flow problem no
-   fixed-name regex can trace (Lua allows any identifier, and allows
-   aliasing an alias), so rather than trying to enumerate every
-   possible name or chase arbitrary aliasing depth, the escape itself
-   — the registry table reaching anything other than the two
-   sanctioned patterns — is the failure. A THIRD level of aliasing
-   (re-aliasing the second local yet again) is a known, accepted
-   limitation of this static, non-interpreting approach — at some
-   point, tracing arbitrary-depth data flow through regex matching
+   into a second local); or without even a `local` keyword at all —
+   `registry = saveMods; registry.register(...)` — since Lua's `=` is
+   unambiguously assignment (never comparison — Lua has no C-style
+   `if (x = y)` confusion, assignment is a statement, not an
+   expression), so a bare/global re-assignment is just as live a bypass
+   as the `local` form. (The RHS check requires the canonical name to
+   be truly BARE, with nothing chained after it at all — not just
+   `.register`/`["register"]` — since Haskell/Lua's `\b` word-boundary
+   is satisfied by a following `.` too: without this, the registry's
+   OWN reload-safety idiom, `saveModules.registry = saveModules.registry
+   or {}`, would be misread as "bare `saveModules` aliased into
+   `registry`" when it's really a sub-table field assigned to itself.)
+   Binding the registry table to an arbitrarily-named variable is a
+   genuine data-flow problem no fixed-name regex can trace (Lua allows
+   any identifier, and allows aliasing an alias), so rather than trying
+   to enumerate every possible name or chase arbitrary aliasing depth,
+   the escape itself — the registry table reaching anything other than
+   the two sanctioned patterns — is the failure. A THIRD level of
+   aliasing (re-aliasing the second variable yet again) is a known,
+   accepted limitation of this static, non-interpreting approach — at
+   some point, tracing arbitrary-depth data flow through regex matching
    stops being a tractable improvement and starts being a hand-rolled
    Lua interpreter; this audit deliberately stays a static guard, not a
    serialization-correctness proof (see the opening of this section).

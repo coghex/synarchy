@@ -546,16 +546,32 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
     return offenders
 
 
-# `local X = saveMods`/`local X = saveModules` where X is a DIFFERENT
-# name -- re-aliasing the already-canonical table into a second local,
-# the same violation class as an untracked require() binding (see
-# find_untracked_registry_aliases), just one hop later. Not followed by
-# `.register`/`["register"]` access, which would just be an ordinary
-# (already-covered) call/alias-of-the-FUNCTION through the canonical
-# name.
+# `X = saveMods`/`X = saveModules` (with or without a leading `local`)
+# where X is a DIFFERENT name -- re-aliasing the already-canonical
+# table into a second variable, the same violation class as an
+# untracked require() binding (see find_untracked_registry_aliases),
+# just one hop later. `local` is OPTIONAL: Lua's `=` is unambiguously
+# assignment (unlike C-style languages, Lua has no `==`-vs-`=`
+# confusion inside an `if`, since assignment is a statement, never an
+# expression), so a bare `registry = saveMods` re-assigning an
+# already-declared (or even implicitly global) variable is just as
+# live a bypass as the `local` form.
+#
+# The RHS must be the BARE name with NOTHING chained after it (no
+# `.field`/`[key]` at all -- not just `.register`/`["register"]`).
+# `\b` alone is satisfied by a following `.`, so without this the
+# regex would misread `saveModules.registry = saveModules.registry`
+# (the real registry's own reload-safety idiom, assigning its
+# `registry` SUB-TABLE to itself) as "bare saveModules aliased into
+# `registry`" -- `registry` there is a field access on the FIRST
+# `saveModules.registry`, not a plain variable, and the RHS is that
+# same sub-table, not the module table itself. Any `.register`/
+# `["register"]` access specifically is a different, already-covered
+# case (find_lua_register_aliases via ALIAS_RE) and is correctly
+# excluded here the same way any other field access is.
 _BARE_REGISTRY_ALIAS_RE = re.compile(
-    r"local\s+(?!saveMods\b|saveModules\b)\w+\s*=\s*save(?:Mods|Modules)\b"
-    r"(?!\s*\.\s*register|\s*\[\s*(?:'register'|\"register\")\s*\])")
+    r"(?:local\s+)?(?!saveMods\b|saveModules\b)\w+\s*=\s*save(?:Mods|Modules)\b"
+    r"(?!\s*[.\[])")
 
 
 def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:

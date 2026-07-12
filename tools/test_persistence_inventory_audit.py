@@ -356,6 +356,9 @@ register("aliased_module", nil, nil)
 # as an alias.
 SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING = """\
 local saveModules = package.loaded["scripts.lib.save_modules"] or {}
+package.loaded["scripts.lib.save_modules"] = saveModules
+
+saveModules.registry = saveModules.registry or {}
 
 function saveModules.register(name, serializeFn, deserializeFn)
     if type(name) ~= "string" then
@@ -363,6 +366,15 @@ function saveModules.register(name, serializeFn, deserializeFn)
     end
     saveModules.registry[name] = { serialize = serializeFn, deserialize = deserializeFn }
 end
+"""
+
+# The registry table escapes to a GLOBAL (no `local` keyword) variable
+# -- Lua's `=` is always assignment (never comparison), so this is just
+# as live a bypass as the `local` form.
+SYNTHETIC_LUA_REGISTER_GLOBAL_REALIAS = """\
+local saveMods = require("scripts.lib.save_modules")
+registry = saveMods
+registry.register("untracked_via_global_alias", nil, nil)
 """
 
 # A direct call reached via BRACKET indexing instead of dot access --
@@ -873,6 +885,30 @@ def test_find_untracked_registry_aliases_ignores_sanctioned_local_use():
     expect(offenders == [],
            f"using the canonical saveMods local directly is not "
            f"flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_global_realias():
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_GLOBAL_REALIAS})
+    expect(offenders == ["scripts/fake.lua"],
+           f"re-aliasing saveMods into a GLOBAL (non-local) variable is "
+           f"flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard():
+    # Regression: the real save_modules.lua's own reload-safety idiom
+    # (`saveModules.registry = saveModules.registry or {}`) assigns a
+    # SUB-TABLE field to itself, not the whole module table to a new
+    # name. A `\b`-only word boundary check let "registry" (the FIELD
+    # name in `saveModules.registry`) get matched as if it were a
+    # freestanding variable being aliased from bare `saveModules` --
+    # this is the exact false positive that broke the real repo.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING})
+    expect(offenders == [],
+           f"the registry's own `X.registry = X.registry or {{}}` "
+           f"reload guard is not flagged as an untracked alias, "
+           f"got {offenders}")
 
 
 def test_extract_lua_registered_modules_ignores_call_shaped_prose_in_string():
@@ -1421,6 +1457,21 @@ def test_audit_detects_registration_via_bare_name_realias():
            f"got {violations}")
 
 
+def test_audit_detects_registration_via_global_realias():
+    """The req-10 acceptance test's non-local variant: `registry =
+    saveMods` (no `local` keyword) is just as live a bypass as the
+    `local` form -- Lua's `=` is unambiguously assignment."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_GLOBAL_REALIAS},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"re-aliasing saveMods into a global (non-local) variable is "
+           f"reported as an untracked-alias violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -1524,6 +1575,8 @@ def main() -> int:
         test_find_untracked_registry_aliases_ignores_prose_mention,
         test_find_untracked_registry_aliases_detects_bare_name_realias,
         test_find_untracked_registry_aliases_ignores_sanctioned_local_use,
+        test_find_untracked_registry_aliases_detects_global_realias,
+        test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
@@ -1556,6 +1609,7 @@ def main() -> int:
         test_audit_detects_registration_via_untracked_require_local,
         test_audit_does_not_flag_sanctioned_require_local_as_untracked,
         test_audit_detects_registration_via_bare_name_realias,
+        test_audit_detects_registration_via_global_realias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
