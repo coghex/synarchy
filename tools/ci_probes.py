@@ -98,9 +98,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                          "alike, #724) — not #489 (whetstone), which is long fixed "
                          "and never implicated"),
     "physiology": (FLAKY, "'temperate (22C/0.5): circ min' sits right at its 0.75 "
-                          "pass threshold and dips under it in most runs, and the "
-                          "combat-vs-idle calorie-drain-ratio check flakes too "
-                          "(2/3 solo runs failed, each on a different check, #724)"),
+                          "pass threshold and failed both failing runs (0.74, 0.75); "
+                          "the combat-vs-idle calorie-drain-ratio check also flaked "
+                          "once, alongside it (2/3 solo runs failed, #724)"),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
