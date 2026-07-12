@@ -553,6 +553,32 @@ local register = package.loaded["scripts.lib.save_modules"].register
 register("aliased_pkg_loaded_module", nil, nil)
 """
 
+# The registry TABLE (not just its `.register` function) is fetched via
+# `package.loaded[...]` and stored in an arbitrary local, then called
+# through THAT -- the package.loaded sibling of
+# SYNTHETIC_LUA_REGISTER_UNTRACKED_REQUIRE_LOCAL. The direct-call
+# receiver support only recognizes an IMMEDIATE `package.loaded[...]
+# .register` chain, so this table-level escape needs its own tracking,
+# symmetric with the require()-result escape check.
+SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_TABLE_ESCAPE = """\
+local registry = package.loaded["scripts.lib.save_modules"]
+registry.register("untracked_via_package_loaded_alias", nil, nil)
+"""
+
+# The real registry definition file's own idiom, verbatim: fetch via
+# `package.loaded[...] or {}` into the sanctioned `saveModules` local,
+# then write it straight back to the same cache slot. Neither line is
+# an escape -- the fetch lands on the sanctioned name, and the write is
+# an assignment TARGET, not a value read. Must NOT be flagged.
+SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_DEFINITION_ROUNDTRIP = """\
+local saveModules = package.loaded["scripts.lib.save_modules"] or {}
+package.loaded["scripts.lib.save_modules"] = saveModules
+
+function saveModules.register(name, serializeFn, deserializeFn)
+    saveModules.registry[name] = { serialize = serializeFn, deserialize = deserializeFn }
+end
+"""
+
 # A long-bracket STRING (not a comment) whose content happens to
 # mention "saveMods.register" -- prose, not a live reference. Mirrors
 # SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING but for the
@@ -967,6 +993,31 @@ def test_find_untracked_registry_aliases_detects_dot_field_realias():
     expect(offenders == ["scripts/fake.lua"],
            f"re-aliasing saveMods into a dot-field table key is "
            f"flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_package_loaded_table_escape():
+    # Regression: the registry TABLE fetched via `package.loaded[...]`
+    # (not just its `.register` function) stored in an arbitrary local
+    # and called through that -- the direct-call receiver support only
+    # catches an IMMEDIATE `package.loaded[...].register` chain, so this
+    # needed its own escape tracking, symmetric with require()'s.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_TABLE_ESCAPE})
+    expect(offenders == ["scripts/fake.lua"],
+           f"the registry table fetched via package.loaded[...] and "
+           f"stored in an arbitrary local is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_ignores_package_loaded_definition_roundtrip():
+    # The real registry definition file's own idiom: fetch via
+    # `package.loaded[...] or {}` into the sanctioned `saveModules`
+    # local, then write it straight back to the same cache slot.
+    # Neither line is an escape.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_DEFINITION_ROUNDTRIP})
+    expect(offenders == [],
+           f"the registry's own package.loaded fetch-into-sanctioned-"
+           f"local-then-write-back idiom is not flagged, got {offenders}")
 
 
 def test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard():
@@ -1611,6 +1662,39 @@ def test_audit_detects_registration_via_dot_field_realias():
            f"reported as an untracked-alias violation, got {violations}")
 
 
+def test_audit_detects_registration_via_package_loaded_table_escape():
+    """The req-10 acceptance test's package.loaded-table variant: the
+    registry table itself (not just its .register function) fetched via
+    `package.loaded[...]` and stored in an arbitrary local is a real,
+    live registration path this audit must fail on -- the P1 gap a
+    canonical review round found in the direct-call-only receiver fix."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_TABLE_ESCAPE},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"the registry table fetched via package.loaded[...] and "
+           f"stored in an arbitrary local is reported as an "
+           f"untracked-alias violation, got {violations}")
+
+
+def test_audit_does_not_flag_package_loaded_definition_roundtrip_as_an_alias():
+    """The real registry definition file's own package.loaded
+    fetch-into-sanctioned-local-then-write-back idiom must not be
+    flagged."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_DEFINITION_ROUNDTRIP},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("alias" in v for v in violations),
+           f"the registry's own package.loaded fetch/write-back idiom "
+           f"is not reported as an aliasing violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -1719,6 +1803,8 @@ def main() -> int:
         test_find_untracked_registry_aliases_detects_global_realias,
         test_find_untracked_registry_aliases_detects_table_key_realias,
         test_find_untracked_registry_aliases_detects_dot_field_realias,
+        test_find_untracked_registry_aliases_detects_package_loaded_table_escape,
+        test_find_untracked_registry_aliases_ignores_package_loaded_definition_roundtrip,
         test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
@@ -1757,6 +1843,8 @@ def main() -> int:
         test_audit_detects_registration_via_global_realias,
         test_audit_detects_registration_via_table_key_realias,
         test_audit_detects_registration_via_dot_field_realias,
+        test_audit_detects_registration_via_package_loaded_table_escape,
+        test_audit_does_not_flag_package_loaded_definition_roundtrip_as_an_alias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,

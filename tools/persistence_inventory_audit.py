@@ -115,6 +115,44 @@ _REQUIRE_CHAINED_ACCESS_RE = re.compile(
 _REQUIRE_SANCTIONED_LOCAL_RE = re.compile(
     r"local\s+(?:saveMods|saveModules)\s*=\s*"
     r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)")
+# `package.loaded["scripts.lib.save_modules"]` itself, standalone --
+# the FETCH-side sibling of REQUIRE_SAVE_MODULES_RE, since it's the
+# exact same singleton table under a second legitimate spelling. Every
+# occurrence must be checked against its OWN three sanctioned
+# continuations below, the same way every require() occurrence is --
+# otherwise `local registry = package.loaded["scripts.lib.save_modules"];
+# registry.register(...)` re-aliases the table through a spelling the
+# original require()-only escape check never looked at, invisibly to
+# the audit (the register-access recognizer added alongside the direct-
+# call support only catches an IMMEDIATE `.register`/`["register"]`
+# chain, not a table reference stored in a local first).
+_PACKAGE_LOADED_SAVE_MODULES_RE = re.compile(
+    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]")
+# Sanctioned continuation #1: chained straight into `.register`/
+# `["register"]` access -- a direct call, or the package.loaded-chained
+# alias form (both already handled by REGISTER_RE/REGISTER_RE_LONGBRACKET/
+# ALIAS_RE via _REGISTER_ACCESS, which now includes this receiver).
+_PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
+    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]\s*"
+    r"(?:\.\s*register\b|\[\s*(?:'register'|\"register\")\s*\])")
+# Sanctioned continuation #2: bound to a local named EXACTLY
+# `saveMods`/`saveModules` -- the real registry's OWN definition-file
+# idiom, `local saveModules = package.loaded[...] or {}` (the trailing
+# `or {}` fallback, for the first-ever require(), is tolerated but not
+# required).
+_PACKAGE_LOADED_SANCTIONED_LOCAL_RE = re.compile(
+    r"local\s+(?:saveMods|saveModules)\s*=\s*"
+    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
+    r"(?:\s*or\s*\{\s*\})?")
+# Sanctioned continuation #3: it's the ASSIGNMENT TARGET, not a fetch at
+# all -- `package.loaded["scripts.lib.save_modules"] = saveModules` is
+# the require()-caching WRITE half of the same real-file idiom (the
+# read half is continuation #2 above); a `=` immediately after (not
+# `==`, a comparison) means this occurrence is never read as a value
+# here, so it cannot itself be the source of a new alias.
+_PACKAGE_LOADED_ASSIGNMENT_TARGET_RE = re.compile(
+    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
+    r"\s*=(?!=)")
 # Tolerates whitespace/newlines before the opening paren/string (a call
 # split across lines, `saveMods . register(...)` with a spaced dot, or
 # `saveMods[ "register" ](...)` with spaced brackets), and either Lua
@@ -618,30 +656,36 @@ def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> lis
     """Files where the registry table escapes to an untracked local
     name -- either `require("scripts.lib.save_modules")`'s result
     directly (`local registry = require("scripts.lib.save_modules")`),
-    or a SECOND-level alias of the already-canonical name
+    the same via `package.loaded["scripts.lib.save_modules"]` (the
+    identical singleton table under its second legitimate spelling), or
+    a SECOND-level alias of the already-canonical name
     (`local registry = saveMods`). Either way, a later
     `registry.register("untracked", ...)` is a real, live registration
     this audit's fixed-receiver-name matchers cannot trace.
 
     `find_lua_register_aliases`/REGISTER_RE only ever look for the
     FIXED receiver spellings `saveMods`/`saveModules`/a direct
-    `require(...)` chain -- binding the registry table to an ARBITRARY
-    local name is a data-flow problem no amount of regex matching on
-    fixed names can trace (Lua allows any identifier, and allows
-    aliasing an alias). Rather than trying to enumerate every possible
-    name or chase arbitrary aliasing depth, this flags the ESCAPE
-    itself: every `require("scripts.lib.save_modules")` occurrence, and
-    every bare `saveMods`/`saveModules` occurrence, must be either
-    (a) chained straight into `.register`/`["register"]` access (a
-    direct call, or the alias-of-the-function form -- both already
-    covered elsewhere), or (b) itself assigned to a local named EXACTLY
-    `saveMods`/`saveModules`, the codebase's own convention. Anything
-    else -- bound to another name, passed as an argument, stored in a
-    table under an arbitrary key -- means the registry table is now
-    reachable only through something this audit cannot trace, so it's a
-    hard failure on its own. A THIRD level of aliasing (re-aliasing the
-    SECOND local yet again) is a known, accepted limitation of this
-    static, non-interpreting approach.
+    `require(...)` or `package.loaded[...]` chain -- binding the
+    registry table to an ARBITRARY local name is a data-flow problem no
+    amount of regex matching on fixed names can trace (Lua allows any
+    identifier, and allows aliasing an alias). Rather than trying to
+    enumerate every possible name or chase arbitrary aliasing depth,
+    this flags the ESCAPE itself: every `require("scripts.lib.save_modules")`
+    occurrence, every `package.loaded["scripts.lib.save_modules"]`
+    occurrence, and every bare `saveMods`/`saveModules` occurrence, must
+    be either (a) chained straight into `.register`/`["register"]`
+    access (a direct call, or the alias-of-the-function form -- both
+    already covered elsewhere), (b) itself assigned to a local named
+    EXACTLY `saveMods`/`saveModules`, the codebase's own convention, or
+    (c) for `package.loaded[...]` specifically, itself the ASSIGNMENT
+    TARGET of the require()-caching write idiom
+    (`package.loaded[...] = saveModules`) rather than a value being
+    read. Anything else -- bound to another name, passed as an
+    argument, stored in a table under an arbitrary key -- means the
+    registry table is now reachable only through something this audit
+    cannot trace, so it's a hard failure on its own. A THIRD level of
+    aliasing (re-aliasing the SECOND local yet again) is a known,
+    accepted limitation of this static, non-interpreting approach.
     """
     offenders: list[str] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
@@ -649,6 +693,9 @@ def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> lis
         string_spans = _string_literal_spans(cleaned)
         sanctioned_local_spans = [
             (m.start(), m.end()) for m in _REQUIRE_SANCTIONED_LOCAL_RE.finditer(cleaned)]
+        package_loaded_sanctioned_local_spans = [
+            (m.start(), m.end())
+            for m in _PACKAGE_LOADED_SANCTIONED_LOCAL_RE.finditer(cleaned)]
         untracked = False
         for m in REQUIRE_SAVE_MODULES_RE.finditer(cleaned):
             if any(start <= m.start() < end for start, end in string_spans):
@@ -659,6 +706,19 @@ def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> lis
                 continue  # local saveMods/saveModules = require(...)
             untracked = True
             break
+        if not untracked:
+            for m in _PACKAGE_LOADED_SAVE_MODULES_RE.finditer(cleaned):
+                if any(start <= m.start() < end for start, end in string_spans):
+                    continue  # inside a string literal, not real code
+                if _PACKAGE_LOADED_CHAINED_ACCESS_RE.match(cleaned, m.start()):
+                    continue  # chained into .register/["register"] access
+                if _PACKAGE_LOADED_ASSIGNMENT_TARGET_RE.match(cleaned, m.start()):
+                    continue  # package.loaded[...] = saveModules cache write
+                if any(start <= m.start() < end
+                       for start, end in package_loaded_sanctioned_local_spans):
+                    continue  # local saveMods/saveModules = package.loaded(...)
+                untracked = True
+                break
         if not untracked:
             for m in _BARE_REGISTRY_ALIAS_RE.finditer(cleaned):
                 if not any(start <= m.start() < end for start, end in string_spans):

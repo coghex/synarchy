@@ -352,8 +352,7 @@ serialization-correctness proof. It:
    above (dot, bracket, `require(...)`-chained, or `package.loaded[...]`-
    chained) that is NOT itself a direct call (e.g. stored in a local or
    table field and invoked through that alias later) — extraction can
-   only trace direct calls,
-   so an alias would otherwise register a module invisibly to the
+   only trace direct calls, so an alias would otherwise register a module invisibly to the
    audit. Rather than attempting to trace what an alias eventually gets
    called with, this makes the alias itself the failure: the codebase's
    registration convention is direct calls only. String/long-bracket-
@@ -364,7 +363,9 @@ serialization-correctness proof. It:
    literal like `[[saveMods.register]]` — is never mistaken for a live
    reference to the function.
 6. Separately fails on any `require("scripts.lib.save_modules")`
-   result — OR the already-canonical bare `saveMods`/`saveModules`
+   result, any `package.loaded["scripts.lib.save_modules"]` result (the
+   identical singleton table under its second legitimate spelling — see
+   item 2) — OR the already-canonical bare `saveMods`/`saveModules`
    name — that escapes to something other than the two sanctioned
    patterns above (chained straight into `.register` access, or (re-)
    bound to a variable literally named `saveMods`/`saveModules`) — e.g.
@@ -389,9 +390,21 @@ serialization-correctness proof. It:
    own universal require()-caching idiom (used by `save_modules.lua`'s
    own definition, not a bypass attempt), so a target starting with
    `package.loaded` is excluded rather than letting the general
-   table-key case flag it. (The RHS
-   check requires the canonical name to
-   be truly BARE, with nothing chained after it at all — not just
+   table-key case flag it. Every `package.loaded["scripts.lib.save_modules"]`
+   occurrence gets the SAME escape tracking as `require(...)` (a direct-
+   call-only receiver isn't enough on its own — `local registry =
+   package.loaded[...]; registry.register(...)` re-aliases the table
+   itself, not just its `.register` function, through a spelling the
+   `require(...)`-only escape check never looked at): sanctioned if
+   chained straight into `.register`/`["register"]` access, bound to a
+   local named exactly `saveMods`/`saveModules` (tolerating the real
+   definition file's own `local saveModules = package.loaded[...] or
+   {}` fallback), or is itself the ASSIGNMENT TARGET of the cache-write
+   idiom above (a `package.loaded[...]` occurrence immediately followed
+   by `=` is being written to, not read from, so it can't itself be the
+   source of a new alias) — anything else is a hard failure, same as
+   the `require(...)` case. (The RHS check requires the canonical name
+   to be truly BARE, with nothing chained after it at all — not just
    `.register`/`["register"]` — since Haskell/Lua's `\b` word-boundary
    is satisfied by a following `.` too: without this, the registry's
    OWN reload-safety idiom, `saveModules.registry = saveModules.registry
