@@ -28,6 +28,15 @@ import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
 import UI.Types (ElementHandle(..))
 import UI.Focus (getInputMode, InputMode(..), FocusId(..), fmCurrentFocus)
 
+-- | F4 (#730 review round 2): window-pixel movement between a
+--   ClickUI-routed press and its release beyond which the gesture
+--   reads as a UI-widget drag rather than a plain click — matches
+--   scripts/unit_drag_select.lua's own DRAG_THRESHOLD for the
+--   game-world case (both operate in the same window-coordinate
+--   space).
+uiDragThresholdPx ∷ Double
+uiDragThresholdPx = 4
+
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
     let logRef        = loggerRef env
@@ -431,14 +440,24 @@ dispatchInput env inpSt event = case event of
             (x, y) = pos
         logger ← readIORef (loggerRef env)
 
-        -- F4 (#646) Layer A: routes that consume a press WITHOUT ever
-        -- queuing a Lua event (ClickSwallowed, and a ClickUI whose
-        -- widget has no handler for this button) are otherwise
-        -- invisible to the oracle — Dispatch.hs only sees the messages
-        -- that actually get queued. Record those routes right here,
-        -- where the decision is made; a route that DOES queue a
-        -- LuaUIClickEvent/LuaUIRightClickEvent is recorded once, in
-        -- Dispatch.hs, to avoid double-recording the same press.
+        -- F4 (#646, #730 review round 2) Layer A: routes that consume a
+        -- press WITHOUT ever queuing a Lua event (ClickSwallowed, and a
+        -- ClickUI whose widget has no handler for this button) are
+        -- otherwise invisible to the oracle. Record those routes right
+        -- here, where the decision is made. A ClickUI route (one that
+        -- DOES queue a LuaUIClickEvent/LuaUIRightClickEvent, or the
+        -- right-click-consumed-by-a-left-only-control fallback) is
+        -- deliberately NOT recorded here at press time any more —
+        -- H1's `drag` action can start on a UI control exactly as
+        -- easily as on game-world empty space, and whether the whole
+        -- gesture is really a plain click or a widget drag can only be
+        -- known once the matching release arrives. 'pendingUIClickRef'
+        -- carries that route's (callback, press-x, press-y) forward to
+        -- the release handling below, which records EXACTLY ONE
+        -- "input.click" or "input.drag" outcome for it — never both,
+        -- mirroring scripts/unit_drag_select.lua's own defer-to-release
+        -- fix for game-world drags.
+        pendingUIClickRef ← newIORef (Nothing ∷ Maybe (Text, Text, Double, Double))
         let recordRouteOutcome ∷ Text → Maybe Text → IO ()
             recordRouteOutcome outcome handler = do
                 gt ← readIORef (gameTimeRef env)
@@ -559,6 +578,8 @@ dispatchInput env inpSt event = case event of
                                     (LuaUIClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
                                     "UI element left-clicked: " <> callback
+                                writeIORef pendingUIClickRef
+                                    (Just ("input.click", callback, x, y))
                                 return ClickUI
                             Nothing → do
                                 Q.writeQueue lq LuaUIFocusLost
@@ -572,6 +593,8 @@ dispatchInput env inpSt event = case event of
                                     (LuaUIRightClickEvent elemHandle callback x y)
                                 logDebug logger CatUI $
                                     "UI element right-clicked: " <> callback
+                                writeIORef pendingUIClickRef
+                                    (Just ("input.rightClick", callback, x, y))
                                 return ClickUI
                             -- No right-click handler under the cursor. If
                             -- an ordinary clickable control is still there,
@@ -593,18 +616,20 @@ dispatchInput env inpSt event = case event of
                                     logDebug logger CatUI
                                         "Right-click consumed by clickable UI element (no handler)"
                                     -- No LuaUIRightClickEvent gets queued for
-                                    -- this route, so Dispatch.hs never sees
-                                    -- it either — record it here or it's
-                                    -- invisible to F4 entirely (review #1).
-                                    -- The recorded handler is the control's
-                                    -- OWN left-click callback name (its
-                                    -- identity), not a generic placeholder
-                                    -- (review round 8 — the acceptance
-                                    -- criterion is "records the consuming
-                                    -- handler", which a constant string
-                                    -- can't satisfy for more than one
-                                    -- control).
-                                    recordRouteOutcome "accepted" (Just leftClickCallback)
+                                    -- this route, so nothing else sees it
+                                    -- either — deferred to release (like the
+                                    -- other two ClickUI routes above) rather
+                                    -- than recorded here, or it's invisible
+                                    -- to F4 entirely (review #1). The
+                                    -- recorded handler is the control's OWN
+                                    -- left-click callback name (its identity),
+                                    -- not a generic placeholder (review round
+                                    -- 8 — the acceptance criterion is
+                                    -- "records the consuming handler", which
+                                    -- a constant string can't satisfy for
+                                    -- more than one control).
+                                    writeIORef pendingUIClickRef
+                                        (Just ("input.click", leftClickCallback, x, y))
                                     return ClickUI
                                 Nothing → do
                                     -- A right-click that misses all UI clears
@@ -639,6 +664,37 @@ dispatchInput env inpSt event = case event of
             let downRoute = Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt)
             Q.writeQueue lq (LuaMouseUpEvent btn x y downRoute)
 
+            -- F4 (#730 review round 2): resolve a deferred ClickUI
+            -- press's ONE outcome now that the whole gesture is known —
+            -- "input.click" if the release landed close to the press
+            -- (a plain click, or a below-threshold H1 `drag`), else
+            -- "input.drag" (a real UI-widget drag gesture, e.g. a
+            -- slider knob or scrollbar tab dragged past the same
+            -- threshold scripts/unit_drag_select.lua uses for the
+            -- game-world case). Never both — this IS the press-time
+            -- record that PR #704 used to fire unconditionally in
+            -- Dispatch.hs.
+            when (downRoute ≡ ClickUI) $
+                case Map.lookup btn (inpPendingUIClick inpSt) of
+                    Nothing → return ()
+                    Just (clickKind, callback, px, py) → do
+                        gt ← readIORef (gameTimeRef env)
+                        let dx = x - px
+                            dy = y - py
+                            movedPx = sqrt (dx * dx + dy * dy)
+                            (kind, whereX, whereY) =
+                                if movedPx ≥ uiDragThresholdPx
+                                    then ("input.drag", x, y)
+                                    else (clickKind, px, py)
+                        pushActionOutcome (actionOutcomeRef env) ActionOutcome
+                            { aoTs = gt, aoKind = kind, aoOutcome = "accepted"
+                            , aoWhereX = Just whereX, aoWhereY = Just whereY
+                            , aoTarget = Nothing
+                            , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+                            , aoReason = Nothing, aoHandler = Just callback
+                            }
+
+        mPendingUIClick ← readIORef pendingUIClickRef
         return $ case mRoute of
             Just route → inpSt
                 { inpMousePos    = pos
@@ -646,10 +702,16 @@ dispatchInput env inpSt event = case event of
                 , inpMouseBtns   = if route ≡ ClickSwallowed
                     then inpMouseBtns inpSt
                     else Map.insert btn True (inpMouseBtns inpSt)
+                , inpPendingUIClick = case mPendingUIClick of
+                    Just pc → Map.insert btn pc (inpPendingUIClick inpSt)
+                    Nothing → Map.delete btn (inpPendingUIClick inpSt)
                 }
             Nothing → inpSt
                 { inpMousePos  = pos
                 , inpMouseBtns = Map.insert btn False (inpMouseBtns inpSt)
+                -- Consumed above (if it was ever set) — a released
+                -- button carries no pending click into the next press.
+                , inpPendingUIClick = Map.delete btn (inpPendingUIClick inpSt)
                 }
     InputCursorMove x y →
         return $ inpSt { inpMousePos = (x, y) }

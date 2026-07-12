@@ -13,6 +13,16 @@ data InputState = InputState
       -- ^ Where each button's most recent press was routed, so the
       --   matching release can tell Lua what its down did
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
+    , inpPendingUIClick ∷ Map.Map GLFW.MouseButton (Text, Text, Double, Double)
+      -- ^ F4 (#730 review round 2): a ClickUI-routed press's (F4 kind
+      --   — "input.click"/"input.rightClick", callback name, press-x,
+      --   press-y), held until the matching release so
+      --   Engine.Input.Thread can classify the WHOLE gesture as a
+      --   plain click or a UI-widget drag exactly once — the same
+      --   defer-to-release pattern 'CharBatch' below uses for
+      --   synthetic text, and 'scripts/unit_drag_select.lua' uses for
+      --   game-world box-selection. Removed on release regardless of
+      --   outcome.
     , inpCharBatch ∷ Maybe CharBatch
       -- ^ F4 (#730) Layer A: running tally of 'InputCharEvent's seen
       --   since the last flush, so a synthetic multi-character
@@ -343,5 +353,6 @@ defaultInputState = InputState
     , inpMouseBtns = Map.empty
     , inpMouseRoutes = Map.empty
     , inpWindowFocused = True
+    , inpPendingUIClick = Map.empty
     , inpCharBatch = Nothing
     }
