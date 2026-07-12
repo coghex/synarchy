@@ -66,6 +66,15 @@ spec = describe "Semantic proper names" $ do
             let domains = nub $ sort $ map ceDomain $ M.elems (catConcepts prodCat)
             domains `shouldBe` [minBound .. maxBound]
 
+        it "keeps each domain within the 20-30 concept balance range" $ do
+            let counts = M.fromListWith (+)
+                    [ (ceDomain ce, 1 ∷ Int) | ce ← M.elems (catConcepts prodCat) ]
+                outOfRange = [ (d, c)
+                             | d ← [minBound .. maxBound]
+                             , let c = M.findWithDefault 0 d counts
+                             , c < 20 ∨ c > 30 ]
+            outOfRange `shouldBe` []
+
         it "authors all four forms for every concept (so #710 can sample any name form)" $ do
             let missing = [ (c, k)
                           | (c, ce) ← M.toList (catConcepts prodCat)
