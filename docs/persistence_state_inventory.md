@@ -192,73 +192,83 @@ idealized target) — the two rows marked **(new-format target differs)**
 are the only classifications in this document that diverge from what
 v82's field currently does.
 
+Fields with no non-trivial restoration dependency or validation rule
+beyond type-correct deserialization say so plainly (contract §2:
+validation is only interesting "where that's non-trivial") rather than
+inventing one.
+
 `SaveHeader` (`:291`) — global:
 
-| Field | Classification | Test oracle |
-|---|---|---|
-| `shMagic` | Persist exactly | none yet |
-| `shVersion` | Persist exactly | format-mismatch error path (manual) |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `shMagic` | Persist exactly | — (read first, before anything else) | must equal `saveMagic` (`0x53595241`) or the file is rejected as not a save at all | none yet |
+| `shVersion` | Persist exactly | — (read second) | must equal `currentSaveVersion` or load fails clearly with "expected vN, got vM" (contract §5) | format-mismatch error path (manual) |
 
 `SaveMetadata` (`:297`) — global:
 
-| Field | Classification | Test oracle |
-|---|---|---|
-| `smName` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `smSeed` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `smWorldSize` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `smPlateCount` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `smTimestamp` | Persist exactly | none yet |
-| `smWorldName` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `smWorldGloss` | Persist exactly | `tools/multiworld_save_probe.py` |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `smName` | Persist exactly | — | must satisfy `sanitizeSaveName` (it's the save-slot identity) | `tools/multiworld_save_probe.py` |
+| `smSeed` | Persist exactly | — | none beyond type-correctness (listing metadata only; the authoritative seed for a page is its own `wpsGenParams`) | `tools/multiworld_save_probe.py` |
+| `smWorldSize` | Persist exactly | — | none beyond type-correctness (listing metadata only) | `tools/multiworld_save_probe.py` |
+| `smPlateCount` | Persist exactly | — | none beyond type-correctness (listing metadata only) | `tools/multiworld_save_probe.py` |
+| `smTimestamp` | Persist exactly | — | none beyond type-correctness (display only) | none yet |
+| `smWorldName` | Persist exactly | the active page's `wpsIdentity` at save time | mirrors that page's identity; `Nothing` for an unnamed world | `tools/multiworld_save_probe.py` |
+| `smWorldGloss` | Persist exactly | `smWorldName` | must be `Nothing` whenever `smWorldName` is `Nothing` (a gloss cannot exist without a display name) | `tools/multiworld_save_probe.py` |
 
-`WorldPageSave` (`:325`) — per-page:
+`WorldPageSave` (`:325`) — per-page. Every field below whose
+restoration dependency isn't otherwise noted needs only its own page's
+prior fields (no cross-page ordering requirement):
 
-| Field | Classification | Test oracle |
-|---|---|---|
-| `wpsPageId` | Persist as identity/reference | `tools/multiworld_save_probe.py` |
-| `wpsGenParams` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `wpsCameraX` | Persist exactly | none yet |
-| `wpsCameraY` | Persist exactly | none yet |
-| `wpsCameraZoom` | Persist exactly | none yet |
-| `wpsCameraFacing` | Persist exactly | none yet |
-| `wpsTimeHour` | Persist exactly | `tools/save_pause_probe.py` |
-| `wpsTimeMinute` | Persist exactly | `tools/save_pause_probe.py` |
-| `wpsDateYear` | Persist exactly | `tools/flora_growth_probe.py` |
-| `wpsDateMonth` | Persist exactly | `tools/flora_growth_probe.py` |
-| `wpsDateDay` | Persist exactly | `tools/flora_growth_probe.py` |
-| `wpsTimeScale` | **Exclude (new-format target differs)** | v82 persists it; the contract retargets it to Exclude (contract §1, "the pre-save speed is not persisted") — a future runtime child's change, not this issue's. `tools/save_pause_probe.py` currently depends on the v82 behavior and must be updated alongside that change. |
-| `wpsMapMode` | Persist exactly | none yet |
-| `wpsToolMode` | **Reset to default (new-format target differs)** | v82 writes the field, but load already ignores it and resets to `DefaultTool` per #103 — so this is a currently-dead field being formally reclassified, not a behavior change. A future format could drop the field entirely; out of scope here. | none yet |
-| `wpsEdits` | Persist exactly | `tools/multiworld_save_probe.py`, `tools/world_check.py` |
-| `wpsMineDesignations` | Persist exactly | none yet |
-| `wpsConstructDesignations` | Persist exactly | `tools/construction_probe.py` |
-| `wpsGroundItems` | Persist exactly | `tools/item_instance_probe.py` |
-| `wpsSpoilPiles` | Persist exactly | none yet |
-| `wpsBuildings` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `wpsUnits` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `wpsUnitSimStates` | Persist exactly | `tools/movement_probe.py` (post-load) |
-| `wpsFloraHarvests` | Persist exactly | `tools/flora_growth_probe.py` |
-| `wpsChopDesignations` | Persist exactly | `tools/chop_probe.py` |
-| `wpsCraftBills` | Persist exactly | `tools/craft_bill_probe.py` |
-| `wpsPowerNodes` | Persist exactly | `tools/power_probe.py` |
-| `wpsTillDesignations` | Persist exactly | `tools/till_probe.py` |
-| `wpsCropPlots` | Persist exactly | `tools/crop_probe.py` |
-| `wpsPlantDesignations` | Persist exactly | `tools/plant_probe.py` |
-| `wpsIdentity` | Persist exactly | `tools/multiworld_save_probe.py` |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `wpsPageId` | Persist as identity/reference | live page ids already in the session (`assignRestoreIds`) | restore-target id must be unique within the session after collision-renaming | `tools/multiworld_save_probe.py` |
+| `wpsGenParams` | Persist exactly | — | none beyond type-correctness (chunk regen is not re-validated against it at load) | `tools/multiworld_save_probe.py` |
+| `wpsCameraX` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsCameraY` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsCameraZoom` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsCameraFacing` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsTimeHour` | Persist exactly | — | none beyond type-correctness (not range-checked against 0-23 at load) | `tools/save_pause_probe.py` |
+| `wpsTimeMinute` | Persist exactly | — | none beyond type-correctness (not range-checked against 0-59 at load) | `tools/save_pause_probe.py` |
+| `wpsDateYear` | Persist exactly | — | none beyond type-correctness | `tools/flora_growth_probe.py` |
+| `wpsDateMonth` | Persist exactly | — | none beyond type-correctness (not range-checked against the world's calendar at load) | `tools/flora_growth_probe.py` |
+| `wpsDateDay` | Persist exactly | — | none beyond type-correctness (not range-checked against the world's calendar at load) | `tools/flora_growth_probe.py` |
+| `wpsTimeScale` | **Exclude (new-format target differs)** | n/a (excluded) | n/a | v82 persists it; the contract retargets it to Exclude (contract §1, "the pre-save speed is not persisted") — a future runtime child's change, not this issue's. `tools/save_pause_probe.py` currently depends on the v82 behavior and must be updated alongside that change. |
+| `wpsMapMode` | Persist exactly | — | none beyond type-correctness | none yet |
+| `wpsToolMode` | **Reset to default (new-format target differs)** | n/a (reset, not restored) | always `DefaultTool` regardless of the stored value | v82 writes the field, but load already ignores it and resets to `DefaultTool` per #103 — a currently-dead field being formally reclassified, not a behavior change; a future format could drop it entirely. None yet as a dedicated test. |
+| `wpsEdits` | Persist exactly | `wpsGenParams` (edits replay onto regenerated terrain) | replayed edits must reproduce the pre-save surface exactly for every edited tile | `tools/multiworld_save_probe.py`, `tools/world_check.py` (determinism) |
+| `wpsMineDesignations` | Persist exactly | referenced tile coordinates must be within the page | a claimant referencing a unit that failed to restore is not currently detected/cleared | none yet |
+| `wpsConstructDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/construction_probe.py` |
+| `wpsGroundItems` | Persist exactly | — | instance ids must be below `sdNextItemInstanceId` (enforced by the max'd-never-lowered restore rule on the allocator, not by validating each item) | `tools/item_instance_probe.py` |
+| `wpsSpoilPiles` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | none yet |
+| `wpsBuildings` | Persist exactly | `bmDefs` must already have every referenced building def (contract §4: missing def fails load) | referenced def names must resolve | `tools/multiworld_save_probe.py` |
+| `wpsUnits` | Persist exactly | `umDefs` must already have every referenced unit def (contract §4: missing def fails load) | referenced def names must resolve | `tools/multiworld_save_probe.py` |
+| `wpsUnitSimStates` | Persist exactly | `wpsUnits` (sim state is keyed by `UnitId`, restored after unit instances) | every sim-state key should correspond to a restored unit id (an orphaned key is not currently detected) | `tools/movement_probe.py` (post-load) |
+| `wpsFloraHarvests` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | `tools/flora_growth_probe.py` |
+| `wpsChopDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/chop_probe.py` |
+| `wpsCraftBills` | Persist exactly | referenced station building must already be restored (`wpsBuildings`) | `cbClaimant`, if any, should reference a restored unit (not currently re-validated) | `tools/craft_bill_probe.py` |
+| `wpsPowerNodes` | Persist exactly | referenced host building must already be restored (`wpsBuildings`) | none beyond type-correctness | `tools/power_probe.py` |
+| `wpsTillDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/till_probe.py` |
+| `wpsCropPlots` | Persist exactly | referenced tile coordinates must be within the page | none beyond type-correctness | `tools/crop_probe.py` |
+| `wpsPlantDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/plant_probe.py` |
+| `wpsIdentity` | Persist exactly | — | none beyond type-correctness | `tools/multiworld_save_probe.py` |
 
-`SaveData` (`:438`) — global:
+`SaveData` (`:438`) — global. `sdMetadata`/`sdGameTime`/`sdEnginePaused`/
+`sdTexPalette`/`sdNextItemInstanceId` are restored first and unconditionally
+(step 0 of `handleWorldLoadSaveCommand`), before any page — every other
+field either has no cross-field dependency or is noted below:
 
-| Field | Classification | Test oracle |
-|---|---|---|
-| `sdMetadata` | Persist exactly | `tools/multiworld_save_probe.py` |
-| `sdGameTime` | Persist exactly | `tools/save_pause_probe.py` |
-| `sdEnginePaused` | Persist exactly | `tools/save_pause_probe.py` |
-| `sdLuaModules` | Persist exactly (opaque, Lua-owned) | see §7 |
-| `sdTexPalette` | Persist exactly | none yet |
-| `sdNextItemInstanceId` | Persist exactly | `tools/item_instance_probe.py` |
-| `sdActivePage` | Persist as identity/reference | `tools/multiworld_save_probe.py` |
-| `sdVisiblePages` | Persist as identity/reference | `tools/multiworld_save_probe.py` |
-| `sdWorlds` | Persist exactly (container) | `tools/multiworld_save_probe.py` |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `sdMetadata` | Persist exactly | — | none beyond type-correctness | `tools/multiworld_save_probe.py` |
+| `sdGameTime` | Persist exactly | — | none beyond type-correctness | `tools/save_pause_probe.py` |
+| `sdEnginePaused` | Persist exactly | — | authoritative over any Lua-side copy (contract, §7 `pause` module) | `tools/save_pause_probe.py` |
+| `sdLuaModules` | Persist exactly (opaque, Lua-owned) | restored engine-side (live unit/building ids) BEFORE Lua's `deserializeAll` reconciles per-id state against them | see §7 for per-module rules | see §7 |
+| `sdTexPalette` | Persist exactly | must restore before any page replays a `WeSetStructure` edit (palette-id → path resolution) | none beyond type-correctness | none yet |
+| `sdNextItemInstanceId` | Persist exactly | — | restored as `max(current, saved)`, never lowered (#67), so post-load item creation can't collide with a loaded id | `tools/item_instance_probe.py` |
+| `sdActivePage` | Persist as identity/reference | must name a page present in `sdWorlds` (falls back to the first page if not, per `activeWorldPage`) | resolves to a real restored page | `tools/multiworld_save_probe.py` |
+| `sdVisiblePages` | Persist as identity/reference | pages must exist post-restore | none beyond type-correctness | `tools/multiworld_save_probe.py` |
+| `sdWorlds` | Persist exactly (container) | — | each entry independently follows `WorldPageSave`'s rules above | `tools/multiworld_save_probe.py` |
 
 ## 5. Gameplay managers
 

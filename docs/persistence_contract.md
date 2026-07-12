@@ -322,11 +322,12 @@ in this PR touches them:
 
 ## Related
 
-- Parent persistence-overhaul epic: to be filed after this and its
-  sibling children are approved.
+- #768 — the parent persistence-overhaul epic this issue is Phase 1 of.
 - A2 (coordinated snapshot barrier) and B1 (new save envelope) both
   depend on this contract.
 - #569 (splitting `World.Save.Types`) is settled by the format/component
   work that follows this contract, not by this issue.
-- #214 — the completed multi-world persistence epic this contract
-  generalizes the session-replacement rule from.
+- #214/#191/#218 — the completed multi-world persistence work whose
+  merge-preserving load behavior this contract's session-replacement
+  target (§1) deliberately diverges from; see "Divergence: current
+  loading merges, it does not replace" above.
