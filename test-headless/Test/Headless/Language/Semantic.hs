@@ -59,8 +59,8 @@ spec = describe "Semantic proper names" $ do
         it "is version 1" $
             catVersion prodCat `shouldBe` 1
 
-        it "holds at least 48 unique concepts" $
-            conceptCount prodCat `shouldSatisfy` (≥ 48)
+        it "holds at least 150 unique concepts" $
+            conceptCount prodCat `shouldSatisfy` (≥ 150)
 
         it "spans all six naming domains" $ do
             let domains = nub $ sort $ map ceDomain $ M.elems (catConcepts prodCat)
@@ -204,6 +204,29 @@ spec = describe "Semantic proper names" $ do
             case r of
                 Left (CatalogueYamlError _) → pure ()
                 other → expectationFailure $ "expected CatalogueYamlError, got " ⧺ show other
+
+        it "rejects two concepts sharing an identical singular form" $ do
+            let r = parseCatalogue $ yamlOf
+                    [ "version: 1"
+                    , "concepts:"
+                    , "  - { id: WOLF, domain: creature, singular: wolf }"
+                    , "  - { id: HOUND, domain: creature, singular: wolf }"
+                    ]
+            r `shouldBe` Left (DuplicateSingularForm "wolf" (cid "WOLF") (cid "HOUND"))
+            case r of
+                Left err → do
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "WOLF"
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "HOUND"
+                Right _ → expectationFailure "catalogue should have been rejected"
+
+        it "rejects a duplicate singular form even when the case differs" $ do
+            let r = parseCatalogue $ yamlOf
+                    [ "version: 1"
+                    , "concepts:"
+                    , "  - { id: WOLF, domain: creature, singular: wolf }"
+                    , "  - { id: HOUND, domain: creature, singular: Wolf }"
+                    ]
+            r `shouldBe` Left (DuplicateSingularForm "Wolf" (cid "WOLF") (cid "HOUND"))
 
     describe "rendering failures (no silent fallback)" $ do
         it "an unknown concept id is a descriptive error, not raw-id text" $ do
