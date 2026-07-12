@@ -770,6 +770,54 @@ SYNTHETIC_LUA_REGISTER_LONGBRACKET_REQUIRE_PATH_CHAINED_CALL = """\
 require([[scripts.lib.save_modules]]).register("longbracket_require_path_chained_module", nil, nil)
 """
 
+# Lua's function-call sugar: a call's SOLE argument can be a bare
+# string literal with NO parens at all -- `require "path"` is exactly
+# as valid, and exactly as live, a call as `require("path")`.
+# Paren-free require, chained straight into `.register(...)`.
+SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_CHAINED_CALL = """\
+require "scripts.lib.save_modules".register("parenfree_require_module", nil, nil)
+"""
+
+# Paren-free require bound to the sanctioned local, then called normally.
+SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_SANCTIONED_LOCAL = """\
+local saveMods = require "scripts.lib.save_modules"
+
+saveMods.register("parenfree_require_local_module", nil, nil)
+"""
+
+# Paren-free require escaping to an UNTRACKED local -- the paren-free
+# sibling of SYNTHETIC_LUA_REGISTER_UNTRACKED_REQUIRE_LOCAL.
+SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_UNTRACKED_LOCAL = """\
+local registry = require "scripts.lib.save_modules"
+
+registry.register("untracked_parenfree_require", nil, nil)
+"""
+
+# The symmetric sibling gap in `.register` itself, closed preemptively:
+# `saveMods.register "modname"` -- a paren-free call with no parens at
+# all, the same Lua feature applied to a DIFFERENT call site.
+SYNTHETIC_LUA_REGISTER_PARENFREE_CALL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register "parenfree_register_module"
+"""
+
+# The long-bracket sibling of the paren-free `.register` call above.
+SYNTHETIC_LUA_REGISTER_PARENFREE_LONGBRACKET_CALL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register [[parenfree_longbracket_register_module]]
+"""
+
+# A paren-free-SHAPED reference stored in a local (NOT called) -- must
+# still be flagged as an alias, the same as the parenthesized form is.
+SYNTHETIC_LUA_REGISTER_PARENFREE_SHAPED_ALIAS = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local register = saveMods.register
+register "aliased_parenfree_module"
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -1210,6 +1258,73 @@ def test_extract_lua_registered_modules_finds_longbracket_require_path_chained_c
     expect(names == ["longbracket_require_path_chained_module"],
            f"a require([[...]]).register(...) chained direct call is "
            f"extracted, got {names}")
+
+
+def test_extract_lua_registered_modules_finds_parenfree_require_chained_call():
+    # Regression: Lua's function-call sugar (`require "path"`, no
+    # parens at all) chained straight into `.register(...)`.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_CHAINED_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["parenfree_require_module"],
+           f"a paren-free require \"path\".register(...) chained direct "
+           f"call is extracted, got {names}")
+
+
+def test_extract_lua_registered_modules_finds_parenfree_require_sanctioned_local():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_SANCTIONED_LOCAL})
+    names = [n for n, _ in found]
+    expect(names == ["parenfree_require_local_module"],
+           f"a paren-free require bound to the sanctioned local is "
+           f"extracted via the normal direct-call path, got {names}")
+
+
+def test_find_untracked_registry_aliases_detects_parenfree_require_untracked_local():
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_UNTRACKED_LOCAL})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a paren-free require bound to an untracked local is "
+           f"flagged, got {offenders}")
+
+
+def test_extract_lua_registered_modules_finds_parenfree_register_call():
+    # The symmetric sibling gap in `.register` itself:
+    # `saveMods.register "modname"` -- paren-free sugar applied to a
+    # DIFFERENT call site, closed preemptively.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["parenfree_register_module"],
+           f"a paren-free saveMods.register \"name\" call is extracted, "
+           f"got {names}")
+
+
+def test_extract_lua_registered_modules_finds_parenfree_longbracket_register_call():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_LONGBRACKET_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["parenfree_longbracket_register_module"],
+           f"a paren-free saveMods.register [[name]] call is extracted, "
+           f"got {names}")
+
+
+def test_find_lua_register_aliases_ignores_parenfree_register_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_CALL})
+    expect(offenders == [],
+           f"a paren-free saveMods.register \"name\" DIRECT call is not "
+           f"flagged as an alias, got {offenders}")
+
+
+def test_find_lua_register_aliases_detects_parenfree_shaped_alias():
+    # A paren-free-SHAPED reference stored in a local (NOT called) must
+    # still be flagged as an alias, the same as the parenthesized form.
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_SHAPED_ALIAS})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a register reference stored in a local, later called via "
+           f"paren-free sugar, is flagged, got {offenders}")
 
 
 def test_extract_lua_registered_modules_ignores_concatenated_name():
@@ -2479,6 +2594,58 @@ def test_audit_detects_unclassified_longbracket_require_path_registration():
            f"string path is reported when unclassified, got {violations}")
 
 
+def test_audit_detects_unclassified_parenfree_require_registration():
+    """Round 24's finding: `require "path".register(...)` (Lua's
+    function-call sugar, no parens) is ordinary, fully traceable Lua --
+    an unclassified module registered that way must still be
+    reported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_REQUIRE_CHAINED_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for parenfree_require_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("parenfree_require_module" in v for v in violations),
+           f"a module registered via paren-free require \"path\" is "
+           f"reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a paren-free require chained DIRECT call is not ALSO "
+           f"reported as an aliasing violation, got {violations}")
+
+
+def test_audit_detects_unclassified_parenfree_register_registration():
+    """The symmetric sibling gap in `.register` itself, closed
+    preemptively: `saveMods.register \"name\"` with no parens at all."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for parenfree_register_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("parenfree_register_module" in v for v in violations),
+           f"a module registered via paren-free saveMods.register "
+           f"\"name\" is reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a paren-free saveMods.register \"name\" DIRECT call is "
+           f"not ALSO reported as an aliasing violation, "
+           f"got {violations}")
+
+
+def test_audit_detects_parenfree_shaped_alias():
+    """A paren-free-SHAPED reference stored in a local (NOT called)
+    must still be flagged as an alias."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENFREE_SHAPED_ALIAS},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"a register reference stored in a local, later called via "
+           f"paren-free sugar, is reported as an aliasing violation, "
+           f"got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -2587,6 +2754,13 @@ def main() -> int:
         test_extract_lua_registered_modules_finds_longbracket_package_loaded_path_call,
         test_extract_lua_registered_modules_finds_longbracket_require_path_call,
         test_extract_lua_registered_modules_finds_longbracket_require_path_chained_call,
+        test_extract_lua_registered_modules_finds_parenfree_require_chained_call,
+        test_extract_lua_registered_modules_finds_parenfree_require_sanctioned_local,
+        test_find_untracked_registry_aliases_detects_parenfree_require_untracked_local,
+        test_extract_lua_registered_modules_finds_parenfree_register_call,
+        test_extract_lua_registered_modules_finds_parenfree_longbracket_register_call,
+        test_find_lua_register_aliases_ignores_parenfree_register_call,
+        test_find_lua_register_aliases_detects_parenfree_shaped_alias,
         test_extract_lua_registered_modules_ignores_concatenated_name,
         test_find_lua_register_dynamic_names_detects_concatenated_name,
         test_extract_lua_registered_modules_finds_parenthesized_receiver,
@@ -2675,6 +2849,9 @@ def main() -> int:
         test_audit_detects_unclassified_longbracket_package_loaded_path_registration,
         test_audit_detects_registration_via_longbracket_package_loaded_path_table_escape,
         test_audit_detects_unclassified_longbracket_require_path_registration,
+        test_audit_detects_unclassified_parenfree_require_registration,
+        test_audit_detects_unclassified_parenfree_register_registration,
+        test_audit_detects_parenfree_shaped_alias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,

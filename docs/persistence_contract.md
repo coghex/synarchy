@@ -337,6 +337,21 @@ serialization-correctness proof. It:
    the way `package.loaded`'s own dot-vs-bracket spellings did before
    they shared a fragment (round 21).
 
+   Both `require(...)` and `.register(...)` also recognize Lua's
+   function-call SUGAR: a call whose sole argument is a bare string
+   literal needs no parens at all — `require "scripts.lib.save_modules"`
+   and `saveMods.register "modname"` are exactly as valid, and exactly
+   as live, calls as their parenthesized equivalents (a real, common Lua
+   idiom, especially for `require`). Recognized as fully SEPARATE
+   compiled patterns from the parenthesized forms (not an optional `(`
+   folded into the existing ones) specifically to avoid shifting the
+   parenthesized patterns' own group numbering, which extraction
+   depends on positionally. No extra "complete argument" check is
+   needed for the sugar form the way the parenthesized module-NAME
+   argument needs one (item 7): sugar syntax syntactically permits ONLY
+   a single string (or table) literal as the entire argument list, so a
+   computed/concatenated name isn't even expressible this way.
+
    Extraction also covers all three Lua string-literal forms for the
    module NAME (the argument to `.register(...)`) — `'...'`, `"..."`,
    and long brackets `[[...]]`/`[=[...]=]`/... — fully
@@ -377,8 +392,9 @@ serialization-correctness proof. It:
    zero and not several.
 5. Separately fails on any of the four registry-table access forms
    above (dot, bracket, `require(...)`-chained, or `package.loaded[...]`-
-   chained) that is NOT itself a direct call (e.g. stored in a local or
-   table field and invoked through that alias later) — extraction can
+   chained) that is NOT itself a direct call — parenthesized OR
+   paren-free sugar, per item 2 (e.g. stored in a local or table field
+   and invoked through that alias later) — extraction can
    only trace direct calls, so an alias would otherwise register a module invisibly to the
    audit. Rather than attempting to trace what an alias eventually gets
    called with, this makes the alias itself the failure: the codebase's

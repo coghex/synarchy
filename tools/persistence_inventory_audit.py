@@ -114,8 +114,25 @@ _SAVE_MODULES_PATH_STRING_RE_FRAGMENT = (
 # `require("scripts.lib.save_modules")` (or any recognized string form
 # of its argument), as a complete call expression -- shared by every
 # place that needs to match the CALL, not just the bare path string.
+# Lua's function-call sugar lets a call's SOLE argument be a bare
+# string (or table) literal with NO parens at all --
+# `require "scripts.lib.save_modules"` is exactly as valid, and exactly
+# as live, a call as the parenthesized form (this is a real, common Lua
+# idiom for `require` specifically). The paren-free branch needs no
+# extra "complete argument" check the way REGISTER_RE's parenthesized
+# module-NAME argument does: sugar syntax syntactically permits ONLY a
+# single string/table literal as the entire argument list, so a
+# computed/concatenated name (`require "a" .. "b"`) isn't even
+# expressible this way -- there's nothing after the string to mistake
+# for a continuation of the SAME argument, only a chained access on the
+# call's RESULT (`.register(...)`), which the callers of this fragment
+# already handle. Every consumer of this fragment (REQUIRE_SAVE_MODULES_RE,
+# the chained-access/sanctioned-local escape checks) inherits paren-free
+# recognition automatically since they're all built from this one
+# shared fragment (round 23) rather than duplicating it.
 _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT = (
-    r"require\s*\(\s*" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r"\s*\)"
+    r"require\s*(?:\(\s*" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r"\s*\)"
+    r"|" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r")"
 )
 # `[...]` bracket-indexing the module path string -- shared by every
 # place that indexes `package.loaded` (or, historically, anything else)
@@ -292,6 +309,26 @@ REGISTER_RE = re.compile(
 # Same completeness lookahead as REGISTER_RE.
 REGISTER_RE_LONGBRACKET = re.compile(
     _REGISTER_ACCESS + r"\s*\(\s*\[(=*)\[(.*?)\]\1\](?=\s*[,)])", re.DOTALL)
+# The PAREN-FREE sibling of REGISTER_RE/REGISTER_RE_LONGBRACKET -- Lua's
+# function-call sugar lets a call's SOLE argument be a bare string
+# literal with NO parens at all (`saveMods.register "modname"` is
+# exactly as valid, and exactly as live, a call as
+# `saveMods.register("modname")` -- see _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT
+# for the identical Lua feature applied to `require`). No completeness
+# lookahead is needed here the way REGISTER_RE's parenthesized form
+# needs one: sugar syntax syntactically permits ONLY a single string/
+# table literal as the ENTIRE argument list, so a computed/concatenated
+# name isn't even expressible this way -- there's no "more argument
+# text" position for a concatenation to occupy. Kept as fully SEPARATE
+# compiled patterns (not an optional `\(?` folded into REGISTER_RE
+# itself) specifically to avoid shifting REGISTER_RE's own group
+# numbering, which extract_lua_registered_modules depends on via
+# positional `m.group(2)`; two clean, self-contained patterns is safer
+# than one pattern juggling a conditional completeness check.
+REGISTER_RE_PARENFREE = re.compile(
+    _REGISTER_ACCESS + r"\s*(['\"])((?:(?!\1).)*)\1")
+REGISTER_RE_PARENFREE_LONGBRACKET = re.compile(
+    _REGISTER_ACCESS + r"\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
 # Any direct call at all (register access immediately followed by an
 # opening paren), regardless of what the argument looks like -- used to
 # find calls whose module-name argument ISN'T a complete literal (see
@@ -311,16 +348,23 @@ _REGISTER_CALL_RE = re.compile(_REGISTER_ACCESS + r"\s*\(")
 # any _REGISTER_CALL_RE match that starts there.
 _REGISTER_DEFINITION_RE = re.compile(r"function\s+(" + _REGISTER_ACCESS + r")")
 # A reference to `saveMods.register`/`saveModules.register` (dot OR
-# bracket form) NOT immediately followed by a call `(` -- i.e. the
-# function is being ALIASED into a variable/table field rather than
-# called directly (`local register = saveMods.register; register(...)`
-# or `local register = saveMods["register"]`). REGISTER_RE/
-# REGISTER_RE_LONGBRACKET only recognize direct calls, so a stored
-# alias would silently bypass req 10's audit; rather than trying to
-# trace what an alias eventually gets called with (real interpretation
-# territory), any such reference is treated as a hard failure on its
-# own -- see find_lua_register_aliases.
-ALIAS_RE = re.compile(_REGISTER_ACCESS + r"(?!\s*\()")
+# bracket form) NOT immediately followed by a call -- either the
+# parenthesized form `(` or a paren-free-sugar argument start (a quote
+# character, or a long-bracket opener `[[`/`[=`) -- i.e. the function is
+# being ALIASED into a variable/table field rather than called directly
+# (`local register = saveMods.register; register(...)` or
+# `local register = saveMods["register"]`). Without the paren-free
+# branches here, a genuine paren-free CALL (`saveMods.register
+# "modname"`) would be misread as a stored alias reference instead of
+# recognized as the live registration REGISTER_RE_PARENFREE/
+# REGISTER_RE_PARENFREE_LONGBRACKET now extract. REGISTER_RE/
+# REGISTER_RE_LONGBRACKET/REGISTER_RE_PARENFREE/
+# REGISTER_RE_PARENFREE_LONGBRACKET only recognize direct calls, so a
+# stored alias would silently bypass req 10's audit; rather than trying
+# to trace what an alias eventually gets called with (real
+# interpretation territory), any such reference is treated as a hard
+# failure on its own -- see find_lua_register_aliases.
+ALIAS_RE = re.compile(_REGISTER_ACCESS + r"(?!\s*(?:\(|['\"]|\[(?:\[|=)))")
 # A Lua long-bracket opener `[`, zero-or-more `=`, `[` -- shared by the
 # comment stripper (both long comments and long strings) and the
 # register-call matcher above.
@@ -639,8 +683,11 @@ def extract_lua_registered_modules(
     string rather than line-by-line, so a call whose arguments span
     multiple lines is still found. Covers both Lua quoting forms for
     the module name: `'...'`/`"..."` (REGISTER_RE) and long brackets
-    `[[...]]`/`[=[...]=]`/... (REGISTER_RE_LONGBRACKET) -- a single
-    call site uses exactly one form, so the two never double-match.
+    `[[...]]`/`[=[...]=]`/... (REGISTER_RE_LONGBRACKET), each with a
+    PAREN-FREE sugar-call sibling (REGISTER_RE_PARENFREE/
+    REGISTER_RE_PARENFREE_LONGBRACKET, for `saveMods.register "name"`
+    with no parens at all) -- a single call site uses exactly one form,
+    so none of the four ever double-match the same call.
 
     Filters out any match whose START falls inside an (unrelated)
     string-literal span -- otherwise a call-SHAPED mention inside prose
@@ -655,12 +702,11 @@ def extract_lua_registered_modules(
     for relpath, text in sorted(scripts_text_by_file.items()):
         cleaned = _strip_lua_comments(text)
         spans = _string_literal_spans(cleaned)
-        for m in REGISTER_RE.finditer(cleaned):
-            if not any(start <= m.start() < end for start, end in spans):
-                found.append((m.group(2), relpath))
-        for m in REGISTER_RE_LONGBRACKET.finditer(cleaned):
-            if not any(start <= m.start() < end for start, end in spans):
-                found.append((m.group(2), relpath))
+        for pattern in (REGISTER_RE, REGISTER_RE_LONGBRACKET,
+                        REGISTER_RE_PARENFREE, REGISTER_RE_PARENFREE_LONGBRACKET):
+            for m in pattern.finditer(cleaned):
+                if not any(start <= m.start() < end for start, end in spans):
+                    found.append((m.group(2), relpath))
     return found
 
 
