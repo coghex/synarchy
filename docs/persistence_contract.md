@@ -315,7 +315,11 @@ serialization-correctness proof. It:
    ANY number of redundant parens — `(saveMods).register(...)`,
    `((saveMods)).register(...)`, arbitrarily deep, are all exactly as
    direct a call as the bare form —, bracket-indexed
-   `saveMods["register"](...)`/`saveMods['register'](...)`,
+   `saveMods["register"](...)`/`saveMods['register'](...)`/`saveMods[
+   [[register]] ](...)` (a QUOTED key OR a Lua long-bracket string key
+   — `[[register]]`/`[=[register]=]`/... — the same long-bracket string
+   form already tolerated for the module-NAME argument, applied to the
+   access KEY too),
    `require("scripts.lib.save_modules").register(...)` chained directly
    off its own `require()` with no local binding at all, and
    `package.loaded["scripts.lib.save_modules"].register(...)` (or its

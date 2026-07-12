@@ -703,6 +703,41 @@ function saveModules.register(name, serializeFn, deserializeFn)
 end
 """
 
+# The `.register` access reached via a Lua LONG-BRACKET string key
+# instead of a quoted one -- `saveMods[ [[register]] ](...)` -- direct
+# call form.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_KEY_CALL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods[ [[register]] ]("longbracket_key_module", nil, nil)
+"""
+
+# The `=`-padded sibling -- `[ [=[register]=] ]` -- of the long-bracket
+# key case above.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_EQ_KEY_CALL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods[ [=[register]=] ]("eq_longbracket_key_module", nil, nil)
+"""
+
+# The long-bracket-key form stored in a local and called THROUGH the
+# alias -- the long-bracket-key sibling of SYNTHETIC_LUA_REGISTER_ALIASED.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_KEY_ALIASED = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local register = saveMods[ [[register]] ]
+register("aliased_longbracket_key_module", nil, nil)
+"""
+
+# An UNRELATED field whose name merely starts with "register" --
+# `saveMods.registerFoo` -- must NOT be mistaken for `.register` access
+# (the latent `\b`-boundary gap the long-bracket-key fix also closed).
+SYNTHETIC_LUA_UNRELATED_REGISTER_PREFIXED_FIELD = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.registerFoo = 5
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -1057,6 +1092,56 @@ def test_find_lua_register_aliases_ignores_bracket_package_loaded_direct_call():
     expect(offenders == [],
            f"a bracket-indexed package[\"loaded\"][...].register(...) "
            f"DIRECT call is not flagged as an alias, got {offenders}")
+
+
+def test_extract_lua_registered_modules_finds_longbracket_key_call():
+    # Regression: `.register` reached via a Lua LONG-BRACKET string key
+    # (`saveMods[ [[register]] ]`) instead of a quoted one -- must be
+    # recognized as an equally direct call.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_KEY_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["longbracket_key_module"],
+           f"a register() call through a long-bracket-string KEY is "
+           f"extracted, got {names}")
+
+
+def test_extract_lua_registered_modules_finds_longbracket_eq_key_call():
+    # The `=`-padded sibling -- `[ [=[register]=] ]`.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_EQ_KEY_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["eq_longbracket_key_module"],
+           f"a register() call through an =-padded long-bracket-string "
+           f"KEY is extracted, got {names}")
+
+
+def test_find_lua_register_aliases_ignores_longbracket_key_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_KEY_CALL})
+    expect(offenders == [],
+           f"a long-bracket-key-form DIRECT call is not flagged as an "
+           f"alias, got {offenders}")
+
+
+def test_find_lua_register_aliases_detects_longbracket_key_stored_reference():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_KEY_ALIASED})
+    expect(offenders == ["scripts/fake.lua"],
+           f"the long-bracket-key form stored in a local (not called "
+           f"directly) is flagged, got {offenders}")
+
+
+def test_find_lua_register_aliases_ignores_unrelated_register_prefixed_field():
+    # Regression: the latent `\b`-boundary gap the long-bracket-key fix
+    # also closed -- `saveMods.registerFoo` (an unrelated field that
+    # merely starts with "register") must not be mistaken for
+    # `.register` access.
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_UNRELATED_REGISTER_PREFIXED_FIELD})
+    expect(offenders == [],
+           f"an unrelated field merely starting with \"register\" is "
+           f"not flagged as an alias, got {offenders}")
 
 
 def test_extract_lua_registered_modules_ignores_concatenated_name():
@@ -2231,6 +2316,40 @@ def test_audit_does_not_flag_bracket_package_loaded_definition_roundtrip_as_an_a
            f"violation, got {violations}")
 
 
+def test_audit_detects_unclassified_longbracket_key_module_registration():
+    """Round 22's finding: `.register` reached via a Lua long-bracket
+    string KEY (`saveMods[ [[register]] ]`) is ordinary, fully
+    traceable Lua -- an unclassified module registered that way must
+    still be reported (and NOT also as an alias)."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_KEY_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for longbracket_key_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("longbracket_key_module" in v for v in violations),
+           f"a module registered via a long-bracket-string KEY is "
+           f"reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a long-bracket-key-form DIRECT call is not ALSO reported "
+           f"as an aliasing violation, got {violations}")
+
+
+def test_audit_does_not_flag_unrelated_register_prefixed_field_as_an_alias():
+    """Regression: `saveMods.registerFoo` (an unrelated field merely
+    starting with "register") must not be mistaken for `.register`
+    access."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_UNRELATED_REGISTER_PREFIXED_FIELD},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("alias" in v for v in violations),
+           f"an unrelated field merely starting with \"register\" is "
+           f"not reported as an aliasing violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -2331,6 +2450,11 @@ def main() -> int:
         test_find_lua_register_aliases_detects_package_loaded_chained_stored_reference,
         test_extract_lua_registered_modules_finds_bracket_package_loaded_call,
         test_find_lua_register_aliases_ignores_bracket_package_loaded_direct_call,
+        test_extract_lua_registered_modules_finds_longbracket_key_call,
+        test_extract_lua_registered_modules_finds_longbracket_eq_key_call,
+        test_find_lua_register_aliases_ignores_longbracket_key_direct_call,
+        test_find_lua_register_aliases_detects_longbracket_key_stored_reference,
+        test_find_lua_register_aliases_ignores_unrelated_register_prefixed_field,
         test_extract_lua_registered_modules_ignores_concatenated_name,
         test_find_lua_register_dynamic_names_detects_concatenated_name,
         test_extract_lua_registered_modules_finds_parenthesized_receiver,
@@ -2413,6 +2537,8 @@ def main() -> int:
         test_audit_detects_unclassified_bracket_package_loaded_module_registration,
         test_audit_detects_registration_via_bracket_package_loaded_table_escape,
         test_audit_does_not_flag_bracket_package_loaded_definition_roundtrip_as_an_alias,
+        test_audit_detects_unclassified_longbracket_key_module_registration,
+        test_audit_does_not_flag_unrelated_register_prefixed_field_as_an_alias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,

@@ -140,9 +140,37 @@ _REGISTER_TABLE_REF = (
     r"|" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
     + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
 )
+# The `.register` access itself, in every form this scanner
+# recognizes: dot access, bracket-indexed with either quote style, or
+# bracket-indexed with a Lua LONG-BRACKET string
+# (`[ [[register]] ]`/`[ [=[register]=] ]`/...) -- the same
+# long-bracket string form REGISTER_RE_LONGBRACKET already tolerates
+# for the MODULE NAME argument, just not yet applied to the ACCESS KEY
+# itself. DELIBERATELY UNGROUPED (`=*` on each side, not a capturing
+# `(=*)` backreferenced for equality) -- this fragment gets embedded
+# into REGISTER_RE/REGISTER_RE_LONGBRACKET/ALIAS_RE, which each already
+# use their OWN positional `\1` backreference downstream (for the
+# MODULE NAME's quote/bracket matching); inserting a NEW capturing
+# group here would renumber every group after it, silently breaking
+# those unrelated backreferences (confirmed by testing group counts
+# before settling on this fix). Not requiring the open/close `=`-run
+# lengths to match is a deliberate, harmless over-acceptance: an
+# actual mismatch (`[=[register]==]`) is a Lua SYNTAX ERROR, so no real
+# or adversarial script could ever contain one for this to matter. A
+# trailing `\b` on the dot form (absent before this fix) also closes a
+# latent imprecision: without it, `saveMods.registerFoo` was matched as
+# if `.register` were a complete access with unrelated trailing text,
+# not as the (correctly unrelated) longer identifier it actually is.
+# Shared by every "is this a `.register` access" check in this file, so
+# a future new access spelling can't drift between call sites the way
+# `package.loaded`'s dot-vs-bracket spellings did before they shared a
+# fragment (round 21).
+_REGISTER_ACCESS_SUFFIX_RE_FRAGMENT = (
+    r"(?:\.\s*register\b"
+    r"|\[\s*(?:'register'|\"register\"|\[=*\[register\]=*\])\s*\])"
+)
 _REGISTER_ACCESS = (
-    _REGISTER_TABLE_REF + r"\s*"
-    r"(?:\.\s*register|\[\s*(?:'register'|\"register\")\s*\])"
+    _REGISTER_TABLE_REF + r"\s*" + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT
 )
 # `require("scripts.lib.save_modules")` itself, standalone -- used to
 # find every occurrence of the registry table being fetched, so each
@@ -155,7 +183,7 @@ REQUIRE_SAVE_MODULES_RE = re.compile(
 # REGISTER_RE_LONGBRACKET/ALIAS_RE via _REGISTER_ACCESS).
 _REQUIRE_CHAINED_ACCESS_RE = re.compile(
     r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)\s*"
-    r"(?:\.\s*register\b|\[\s*(?:'register'|\"register\")\s*\])")
+    + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT)
 # Sanctioned continuation #2: the require() result is bound to a local
 # named EXACTLY `saveMods`/`saveModules`, the codebase's own
 # convention -- a later `saveMods.register(...)` is tracked by that
@@ -184,7 +212,7 @@ _PACKAGE_LOADED_SAVE_MODULES_RE = re.compile(
 _PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
     _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
     + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]\s*"
-    r"(?:\.\s*register\b|\[\s*(?:'register'|\"register\")\s*\])")
+    + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT)
 # Sanctioned continuation #2: bound to a local named EXACTLY
 # `saveMods`/`saveModules` -- the real registry's OWN definition-file
 # idiom, `local saveModules = package.loaded[...] or {}` (the trailing
