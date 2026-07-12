@@ -167,6 +167,19 @@ jobs:
       - name: Lua module line budget
         run: python3 tools/lua_module_budget.py
 
+      # Cheap, no-engine guard (#756 req 10): fails if a field is added
+      # to a root state owner (EngineEnv, EngineState, WorldManager,
+      # WorldState, the World.Save.Types envelope) or a new Lua module
+      # is registered with scripts/lib/save_modules.lua without a
+      # matching classification landing in
+      # docs/persistence_state_inventory.md. See
+      # docs/persistence_contract.md SS7 for what this does and doesn't
+      # guarantee.
+      - name: Persistence inventory audit
+        run: |
+          python3 tools/test_persistence_inventory_audit.py
+          python3 tools/persistence_inventory_audit.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
