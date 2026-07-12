@@ -11,13 +11,15 @@ import World.Generate.Config (minimumWorldSize, normalizeWorldSize
 import Engine.Core.Types (BootProfile(..))
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, parseArg, parseRegion, parseSize, parsePreview
-               , PreviewCategoryKind(..), classifyPreviewCategory)
+               , PreviewCategoryKind(..), classifyPreviewCategory
+               , parseLanguageReport, parseSeeds)
 import App.ResourceRoot (applyResourceRoot)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
 import App.Offscreen (runOffscreen)
 import App.Dump (runDump)
 import App.Preview (runPreview)
+import App.LanguageReport (runLanguageReport)
 
 main ∷ IO ()
 main = do
@@ -65,33 +67,40 @@ main = do
         ⧺ " normalized to " ⧺ show plateCount
         ⧺ " (minimum 1)."
 
-  case mDump of
-    Just layers → runDump layers (fromMaybe 42 seed) worldSize
-                                 plateCount region
-    Nothing → case mPreview of
-      -- --preview wins over headless/graphical dispatch, same as --dump
-      -- above: a bare `--preview ...` shouldn't also stand up the normal
-      -- boot path.
-      Just Nothing → do
-          hPutStrLn stderr $ "--preview requires a target, e.g. "
-              ⧺ "--preview icons or --preview units/acolyte"
+  if parseLanguageReport args
+    then case parseSeeds args of
+      Just seeds → runLanguageReport seeds
+      Nothing → do
+          hPutStrLn stderr $ "--language-report requires --seeds LO:HI "
+              ⧺ "(an inclusive range within 0.." ⧺ show (maxBound ∷ Word64) ⧺ ")"
           exitWith (ExitFailure 1)
-      Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
-        UnknownPreviewCategory → do
-            hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
-                ⧺ " (expected one of: icons, equipment, hud, items, ui, "
-                ⧺ "world, units, flora, buildings)"
+    else case mDump of
+      Just layers → runDump layers (fromMaybe 42 seed) worldSize
+                                   plateCount region
+      Nothing → case mPreview of
+        -- --preview wins over headless/graphical dispatch, same as --dump
+        -- above: a bare `--preview ...` shouldn't also stand up the normal
+        -- boot path.
+        Just Nothing → do
+            hPutStrLn stderr $ "--preview requires a target, e.g. "
+                ⧺ "--preview icons or --preview units/acolyte"
             exitWith (ExitFailure 1)
-        GroupedPreviewCategory | isNothing mItem → do
-            putStrLn $ "select a specific " ⧺ cat
-                ⧺ ", e.g. --preview units/acolyte"
-            exitSuccess
-        _ → runPreview (T.pack cat, T.pack ⊚ mItem)
-                        (Just (fromMaybe 8008 port))
-      Nothing
-        -- Offscreen (#650) wins over --headless if both are given:
-        -- it is the strictly more capable mode (GPU on, window off).
-        | offscreen → runOffscreen bootProfile (Just (fromMaybe 8008 port))
-                                   (parseSize args)
-        | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
-        | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))
+        Just (Just (cat, mItem)) → case classifyPreviewCategory cat of
+          UnknownPreviewCategory → do
+              hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
+                  ⧺ " (expected one of: icons, equipment, hud, items, ui, "
+                  ⧺ "world, units, flora, buildings)"
+              exitWith (ExitFailure 1)
+          GroupedPreviewCategory | isNothing mItem → do
+              putStrLn $ "select a specific " ⧺ cat
+                  ⧺ ", e.g. --preview units/acolyte"
+              exitSuccess
+          _ → runPreview (T.pack cat, T.pack ⊚ mItem)
+                          (Just (fromMaybe 8008 port))
+        Nothing
+          -- Offscreen (#650) wins over --headless if both are given:
+          -- it is the strictly more capable mode (GPU on, window off).
+          | offscreen → runOffscreen bootProfile (Just (fromMaybe 8008 port))
+                                     (parseSize args)
+          | headless  → runHeadless bootProfile (Just (fromMaybe 8008 port))
+          | otherwise → runGraphical bootProfile (Just (fromMaybe 8008 port))

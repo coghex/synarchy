@@ -479,6 +479,13 @@ library
                      Language.Semantic.Types
                      Language.Semantic.Catalogue
                      Language.Semantic.English
+                     Language.Generated.Types
+                     Language.Generated.Hash
+                     Language.Generated.Profile
+                     Language.Generated.Root
+                     Language.Generated.Render
+                     Language.Generated.Signature
+                     Language.Generated.Report
                      Sim.Thread
                      Sim.Command.Types
                      Combat.Types
@@ -817,6 +824,7 @@ executable synarchy
                  , App.Headless
                  , App.Dump
                  , App.Preview
+                 , App.LanguageReport
                  , App.ResourceRoot
     default-extensions: FlexibleInstances
     other-extensions: Strict
@@ -965,6 +973,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Types
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
+                   Test.Headless.Language.Generated
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact

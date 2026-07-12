@@ -140,6 +140,31 @@ gate on every PR. Worldgen output is bit-identical across macOS/aarch64
 so there is one set of baselines for all platforms — a worldgen-output PR
 that forgets to rebaseline fails CI.
 
+## Language report
+
+### `language_report.py`
+Report/check tool (#710) for the generated-language native-name
+renderer (`Language.Generated.*`) — not a `*_probe.py`, so it needs no
+`tools/ci_probes.py` registration. Drives the production Haskell
+generator through the engine's `--language-report` boot mode (pure
+computation, no graphical engine, headless simulation, or world
+generation) over a seed range and reports profile diversity, canonical
+native-name renderings alongside their #709 English glosses, root
+collisions, duplicate-name counts, output-length distribution, and
+ASCII/length/capitalization/punctuation contract violations.
+
+```bash
+# Human-readable report
+python3 tools/language_report.py --seeds 0:255
+
+# Check mode: exits nonzero on any root collision, contract violation,
+# fewer than 240 distinct profile signatures across 256 seeds, or
+# fewer than 95% distinct native names across the canonical sample
+python3 tools/language_report.py --seeds 0:255 --check
+```
+
+Exit codes: 0 pass, 1 check failure, 2 bad invocation.
+
 ## Behavior probes (headless engine)
 
 Unlike the worldgen tools above (which shell out to `--dump`, no TCP), these
@@ -419,6 +444,7 @@ tools/
 ├── test_audit.py           (unit tests)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
+├── language_report.py      (generated-language native-name report/check, #710)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── playtest/               (naive-player UX playtest harness — see above)
