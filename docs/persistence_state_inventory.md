@@ -377,6 +377,7 @@ one for documentation's sake.
 | `Lua.Thread`'s `lbsScripts` (registered scripts + tick schedule) | `src/Engine/Scripting/Lua/Types.hs:22` | Exclude | — | rebuilt by the boot-time `loadScript` sequence | none yet |
 | `Lua.Thread`'s `lbsNextScriptId` | `src/Engine/Scripting/Lua/Types.hs` | Exclude | — | rebuilt at boot | none yet |
 | `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | Exclude | — | no persistent thread-local state at all — local IORefs are recreated per-event inside handler scope, so "Exclude" here documents the absence rather than a specific field | none yet |
+| `Lua.Thread`'s debug-console `debugQueue` (`TQueue DebugCommand`, `dcCommand`/`dcResponse`) | `src/Engine/Scripting/Lua/DebugServer.hs:24`, `src/Engine/Scripting/Lua/Thread.hs:107` | Exclude | — | queued-but-unprocessed debug-console commands (and their response `MVar`s) at a snapshot boundary are cancelled, not persisted or replayed — an open debug-shell session has no gameplay meaning (contract §1/§5: exclude open debug-shell contents); a client mid-command at that instant simply never gets a response, same as if the engine had been killed | none yet |
 
 ## 7. Lua persistence registry (`scripts/lib/save_modules.lua`)
 
@@ -418,6 +419,7 @@ referenced below rather than re-audited here).
 | `BuildingManager.bmSelected` | `src/Building/Types.hs:183` | global | Exclude | — | already covered in §5 | none yet |
 | `dragSelect` state (`state`, `startX/Y`, `currX/Y`, `page`) | `scripts/unit_drag_select.lua:20` | global (Lua module singleton) | Exclude | — | transient UI gesture FSM, not registered with `saveModules` — a drag in progress at save time is simply abandoned | none yet |
 | Tool-script anchor/preview state (`mine_tool.lua`, `build_tool.lua`, `chop_tool.lua`, `till_tool.lua`, `plant_tool.lua`) | `scripts/*_tool.lua` | per-page (mirrors engine-side anchor fields) | Exclude | — | transient designation-in-progress UI state, not registered with `saveModules` | none yet |
+| `debugOverlay` module state (per-mode `entries`/`listVisible`/`buttonId`, each mode's `armedField` selection, `modeOrder`, hit-test layout state) | `scripts/debug.lua:43-73` | global (Lua module singleton) | Exclude | — | transient debug-overlay UI state (open panel, armed spawn/edit selection, mode list) — not registered with `saveModules`; explicitly required Exclude by contract §5 ("debug overlays"). Already reset to fresh per-mode defaults at `require`/reload time (`scripts/debug.lua:69-73`), independent of save/load. | none yet |
 
 ## 9. Content-definition registries (current content, not persisted state)
 

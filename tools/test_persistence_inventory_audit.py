@@ -407,6 +407,55 @@ data EngineEnv = EngineEnv
   } deriving (Eq)
 """
 
+# A promoted Char literal (DataKinds `'}'`) containing a `}` in a
+# field's own type -- the char-literal sibling of the string-literal
+# brace hazard above.
+SYNTHETIC_ENGINE_ENV_CHAR_LITERAL_BRACE = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne ∷ IORef Int
+  , classified ∷ Proxy '}'
+  , unclassified ∷ Int
+  } deriving (Eq)
+"""
+
+# Ordinary Haskell identifiers ending in one or more trailing "primes"
+# (`foo'`, `bar''`) -- must NOT be mistaken for char-literal openers.
+SYNTHETIC_ENGINE_ENV_TRAILING_PRIMES = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne' ∷ IORef Int
+  , fieldTwo'' ∷ Int
+  } deriving (Eq)
+"""
+
+# A direct call reached off require(...)'s return value with no local
+# binding at all -- fully traceable (the module path is a literal
+# string), not an alias.
+SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_CALL = """\
+require("scripts.lib.save_modules").register("require_chained_module", nil, nil)
+"""
+
+# require(...).register is stored in a local and called THROUGH the
+# alias -- the require-chained sibling of SYNTHETIC_LUA_REGISTER_ALIASED.
+SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_ALIASED = """\
+local register = require("scripts.lib.save_modules").register
+register("aliased_require_module", nil, nil)
+"""
+
+# A long-bracket STRING (not a comment) whose content happens to
+# mention "saveMods.register" -- prose, not a live reference. Mirrors
+# SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING but for the
+# long-bracket string form instead of a quoted one.
+SYNTHETIC_LUA_LONGBRACKET_STRING_MENTIONING_REGISTER = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local doc = [[saveMods.register]]
+saveMods.register("real_module", nil, nil)
+"""
+
 # Two names sharing one classification, joined with "+" -- looks
 # plausible but is not a single taxonomy label.
 SYNTHETIC_INVENTORY_COMPOUND_CLASSIFICATION = """\
@@ -497,6 +546,23 @@ def test_extract_fields_survives_dash_in_string_literal_type():
            f"a DataKinds promoted string literal type containing '--' "
            f"(`Proxy \"--\"`) is not mistaken for a line comment, "
            f"got {fields}")
+
+
+def test_extract_fields_survives_brace_in_char_literal_type():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_CHAR_LITERAL_BRACE,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "classified", "unclassified"],
+           f"a DataKinds promoted CHAR literal type containing '}}' "
+           f"(`Proxy '}}'`) does not prematurely close the record and "
+           f"drop later fields, got {fields}")
+
+
+def test_extract_fields_trailing_primes_are_not_char_literals():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_TRAILING_PRIMES,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne'", "fieldTwo''"],
+           f"ordinary identifiers ending in trailing primes are not "
+           f"mistaken for char-literal openers, got {fields}")
 
 
 def test_extract_fields_ignores_other_records():
@@ -653,6 +719,40 @@ def test_find_lua_register_aliases_detects_bracket_form_stored_reference():
            f"called directly) is flagged, got {offenders}")
 
 
+def test_extract_lua_registered_modules_require_chained_call():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["require_chained_module"],
+           f"a require(...).register(...) direct call with no local "
+           f"binding is extracted, got {names}")
+
+
+def test_find_lua_register_aliases_ignores_require_chained_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_CALL})
+    expect(offenders == [],
+           f"a require(...).register(...) DIRECT call is not flagged as "
+           f"an alias, got {offenders}")
+
+
+def test_find_lua_register_aliases_detects_require_chained_stored_reference():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_ALIASED})
+    expect(offenders == ["scripts/fake.lua"],
+           f"require(...).register stored in a local (not called "
+           f"directly) is flagged, got {offenders}")
+
+
+def test_find_lua_register_aliases_ignores_longbracket_string_prose():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_LONGBRACKET_STRING_MENTIONING_REGISTER})
+    expect(offenders == [],
+           f"a long-bracket STRING literal mentioning \"saveMods.register\" "
+           f"in its text is not mistaken for a live reference, "
+           f"got {offenders}")
+
+
 def test_parse_classified_names_scoped_by_owner_heading():
     by_owner = parse_classified_names(SYNTHETIC_INVENTORY_COMPLETE)
     expect(set(by_owner.get("EngineEnv", {})) == {"fieldOne", "fieldTwo", "fieldThree"},
@@ -804,6 +904,21 @@ def test_audit_detects_field_hidden_behind_brace_in_string_literal():
     )
     expect(any("unclassified" in v for v in violations),
            f"the field after the brace-containing string literal type is "
+           f"still extracted and reported when unclassified, got {violations}")
+
+
+def test_audit_detects_field_hidden_behind_brace_in_char_literal():
+    """Regression: a DataKinds promoted CHAR literal containing '}'
+    used to prematurely close the record the same way a string literal
+    did (test above) -- the char-literal-specific code path."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV_CHAR_LITERAL_BRACE},
+        {},
+        SYNTHETIC_INVENTORY_MISSING_ONE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("unclassified" in v for v in violations),
+           f"the field after the brace-containing char literal type is "
            f"still extracted and reported when unclassified, got {violations}")
 
 
@@ -1026,6 +1141,54 @@ def test_audit_detects_aliased_bracket_form_registration():
            f"reported as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_unclassified_require_chained_module_registration():
+    """Regression for the require()-chained bypass: a module registered
+    via require(...).register(...) with no local binding at all is
+    ordinary, fully traceable Lua -- an unclassified module registered
+    that way must still be reported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for require_chained_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("require_chained_module" in v for v in violations),
+           f"a module registered via require(...).register(...) is "
+           f"reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a require(...).register(...) DIRECT call is not ALSO "
+           f"reported as an aliasing violation, got {violations}")
+
+
+def test_audit_detects_aliased_require_chained_registration():
+    """The alias-bypass gap's require()-chained sibling."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_ALIASED},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"require(...).register stored in a local is reported as an "
+           f"aliasing violation, got {violations}")
+
+
+def test_audit_does_not_flag_longbracket_string_prose_as_an_alias():
+    """Regression: a long-bracket STRING literal (not a comment) whose
+    content happens to mention "saveMods.register" used to be
+    misidentified as a live reference, falsely failing the audit even
+    though the real registration on the next line is fine."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_LONGBRACKET_STRING_MENTIONING_REGISTER},
+        SYNTHETIC_INVENTORY_COMPLETE,  # classifies unit_ai, the real registration here
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("alias" in v for v in violations),
+           f"a long-bracket string literal's prose text is not reported "
+           f"as an aliasing violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -1097,6 +1260,8 @@ def main() -> int:
         test_extract_fields_grouped_declaration,
         test_extract_fields_survives_brace_in_string_literal_type,
         test_extract_fields_survives_dash_in_string_literal_type,
+        test_extract_fields_survives_brace_in_char_literal_type,
+        test_extract_fields_trailing_primes_are_not_char_literals,
         test_extract_fields_ignores_other_records,
         test_extract_fields_missing_record_raises,
         test_extract_lua_registered_modules,
@@ -1110,11 +1275,15 @@ def main() -> int:
         test_extract_lua_registered_modules_survives_dash_in_longbracket_string,
         test_extract_lua_registered_modules_does_not_see_through_alias,
         test_extract_lua_registered_modules_bracket_form_call,
+        test_extract_lua_registered_modules_require_chained_call,
         test_find_lua_register_aliases_detects_stored_reference,
         test_find_lua_register_aliases_ignores_direct_calls,
         test_find_lua_register_aliases_ignores_the_definition_and_its_error_string,
         test_find_lua_register_aliases_ignores_bracket_form_direct_call,
         test_find_lua_register_aliases_detects_bracket_form_stored_reference,
+        test_find_lua_register_aliases_ignores_require_chained_direct_call,
+        test_find_lua_register_aliases_detects_require_chained_stored_reference,
+        test_find_lua_register_aliases_ignores_longbracket_string_prose,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
@@ -1125,6 +1294,7 @@ def main() -> int:
         test_audit_detects_field_with_name_and_arrow_on_different_lines,
         test_audit_detects_grouped_field_declaration,
         test_audit_detects_field_hidden_behind_brace_in_string_literal,
+        test_audit_detects_field_hidden_behind_brace_in_char_literal,
         test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_module_registered_after_dash_string,
         test_audit_detects_single_quoted_module_registration,
@@ -1138,6 +1308,9 @@ def main() -> int:
         test_audit_detects_aliased_lua_registration,
         test_audit_detects_unclassified_bracket_form_module_registration,
         test_audit_detects_aliased_bracket_form_registration,
+        test_audit_detects_unclassified_require_chained_module_registration,
+        test_audit_detects_aliased_require_chained_registration,
+        test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,

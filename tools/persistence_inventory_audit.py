@@ -74,13 +74,20 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # The registry table is called `saveMods` at every real require site
 # (`local saveMods = require("scripts.lib.save_modules")`) but is
 # `saveModules` inside its OWN definition file -- match either local
-# name everywhere a call/reference is recognized. Lua also lets a
-# table field be reached by BRACKET indexing instead of dot access
+# name, OR the table reached directly off its OWN require() call with
+# no local binding at all (`require("scripts.lib.save_modules")
+# .register(...)`, fully traceable since the module path is a literal
+# string identifying this exact registry). Lua also lets a table field
+# be reached by BRACKET indexing instead of dot access
 # (`saveMods["register"](...)`/`saveMods['register'](...)`) -- a
 # perfectly ordinary direct call, not an alias, so it's recognized as
 # an alternate spelling of the same access rather than flagged.
+_REGISTER_TABLE_REF = (
+    r"(?:save(?:Mods|Modules)"
+    r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\))"
+)
 _REGISTER_ACCESS = (
-    r"save(?:Mods|Modules)\s*"
+    _REGISTER_TABLE_REF + r"\s*"
     r"(?:\.\s*register|\[\s*(?:'register'|\"register\")\s*\])"
 )
 # Tolerates whitespace/newlines before the opening paren/string (a call
@@ -258,26 +265,60 @@ def _strip_lua_comments(text: str, *, keep_strings: bool = True) -> str:
     return "".join(out)
 
 
+# A promoted Char literal: `'` + one (possibly escaped) character + `'`.
+_CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^'\\])'")
+
+
+def _haskell_literal_end(text: str, i: int) -> int | None:
+    """If a Haskell string or char literal starts at text[i], return the
+    index just past its closing delimiter; otherwise None.
+
+    `DataKinds`/`GHC.TypeLits` promoted literals make BOTH string
+    (`Proxy "}"`) and char (`Proxy '}'`) literals legal even in a
+    field's own type, and either can contain a `{`/`}`/`,` that must
+    not be mistaken for a structural character.
+
+    A `'` is only treated as a literal opener when it's NOT a trailing
+    "prime" on the identifier just consumed (`foo'`, `bar''` are
+    ordinary Haskell identifiers) -- i.e. when the previous character
+    isn't itself an identifier character. A `'` that doesn't close
+    within one (possibly escaped) character is left alone too -- that's
+    a DataKinds promoted-constructor tick (`'Just`, `'[Int]`), which
+    contains no characters this scan needs to skip over.
+    """
+    ch = text[i]
+    if ch == '"':
+        j = i + 1
+        n = len(text)
+        while j < n and text[j] != '"':
+            j += 2 if text[j] == "\\" and j + 1 < n else 1
+        return min(j + 1, n)
+    if ch == "'":
+        if i > 0 and (text[i - 1].isalnum() or text[i - 1] in "_'"):
+            return None
+        m = _CHAR_LITERAL_RE.match(text, i)
+        return m.end() if m else None
+    return None
+
+
 def _find_matching_brace(text: str, open_index: int) -> int:
     """Index of the `}` that closes the `{` at `open_index` in `text`.
 
-    String-aware: a Haskell string literal (`DataKinds`/`GHC.TypeLits`
-    promoted strings make these legal even in a field's own TYPE, e.g.
-    `classified :: Proxy "}"`) can contain a `{`/`}` character that must
-    not be mistaken for a structural brace -- its content is skipped
-    over whole, not scanned character-by-character.
+    String/char-literal-aware (see _haskell_literal_end) -- a promoted
+    literal's content is skipped over whole, never scanned
+    character-by-character, so it can't be mistaken for a structural
+    brace.
     """
     depth = 0
     i = open_index
     n = len(text)
     while i < n:
         ch = text[i]
-        if ch == '"':
-            i += 1
-            while i < n and text[i] != '"':
-                i += 2 if text[i] == "\\" and i + 1 < n else 1
-            i += 1
-            continue
+        if ch in ('"', "'"):
+            end = _haskell_literal_end(text, i)
+            if end is not None:
+                i = end
+                continue
         if ch == "{":
             depth += 1
         elif ch == "}":
@@ -295,8 +336,8 @@ def _split_top_level_fields(block: str) -> list[str]:
     depth 0 relative to the block's own content (tracking `(`/`[`/`{`
     vs `)`/`]`/`}` generically), so a comma inside a field's own type --
     a tuple `(WorldPageId, WorldState)`, a list-of-tuples, etc. -- is
-    never mistaken for a field separator. String-aware for the same
-    reason as _find_matching_brace: a string literal's structural-
+    never mistaken for a field separator. String/char-literal-aware for
+    the same reason as _find_matching_brace: a literal's structural-
     looking characters (braces, brackets, commas) are never counted.
     """
     inner = block[1:-1]
@@ -307,21 +348,12 @@ def _split_top_level_fields(block: str) -> list[str]:
     n = len(inner)
     while i < n:
         ch = inner[i]
-        if ch == '"':
-            current.append(ch)
-            i += 1
-            while i < n and inner[i] != '"':
-                if inner[i] == "\\" and i + 1 < n:
-                    current.append(inner[i])
-                    current.append(inner[i + 1])
-                    i += 2
-                    continue
-                current.append(inner[i])
-                i += 1
-            if i < n:
-                current.append(inner[i])
-                i += 1
-            continue
+        if ch in ('"', "'"):
+            end = _haskell_literal_end(inner, i)
+            if end is not None:
+                current.append(inner[i:end])
+                i = end
+                continue
         if ch in "([{":
             depth += 1
         elif ch in ")]}":
@@ -402,11 +434,16 @@ def extract_lua_registered_modules(
 
 
 def _string_literal_spans(text: str) -> list[tuple[int, int]]:
-    """[start, end) ranges of quoted ('...'/"...") string literals
-    (delimiters included) in comment-stripped Lua text. Long-bracket
-    strings aren't tracked here -- they can't be confused with a
-    prose mention of "saveModules.register" the way a quoted string
-    like an error message can.
+    """[start, end) ranges of Lua string literals (delimiters included)
+    in comment-stripped Lua text: quoted ('...'/"...") AND long-bracket
+    ([[...]]/[=[...]=]/...). `text` has already had comments stripped
+    (see callers), so any remaining long-bracket-shaped span here IS a
+    string, never a long comment -- those are already gone.
+
+    A quoted OR long-bracket string can contain prose that happens to
+    mention "saveModules.register" (an error message, a doc string
+    literal like `[[saveMods.register]]`); a match whose start falls in
+    one of these spans is not a real reference to the function.
     """
     spans: list[tuple[int, int]] = []
     i = 0
@@ -421,6 +458,14 @@ def _string_literal_spans(text: str) -> list[tuple[int, int]]:
                 i += 2 if text[i] == "\\" and i + 1 < n else 1
             if i < n:
                 i += 1
+            spans.append((start, i))
+            continue
+        long_open = LONG_BRACKET_OPEN_RE.match(text, i)
+        if long_open:
+            start = i
+            close = "]" + long_open.group(1) + "]"
+            end = text.find(close, long_open.end())
+            i = n if end == -1 else end + len(close)
             spans.append((start, i))
             continue
         i += 1

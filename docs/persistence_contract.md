@@ -168,6 +168,13 @@ command type without extending this table.
 | `combatQueue` | `CombatCommand` (`CombatAttack`) | Drain before snapshot. Authoritative combat results (wounds, HP) already live in durable unit/injury state; an attack command not yet resolved must finish or be represented, not vanish leaving a "the attack was issued but never happened" gap. | A2 requirement. |
 | `simQueue` | `SimCommand` | Drain before snapshot; the terrain/fluid results these commands cause are durable (`wsEditsRef`, tile data), the queue is pure transport. | A2 requirement. |
 | `screenshotRequestQueue` | `ScreenshotRequest` | Cancel before boundary | A pending debug screenshot request has no gameplay meaning. |
+| `combatEventsRef` | `CombatEvent` (`TVar`, drained by the combat-log panel) | Cancel/reset — drop whatever's queued at the boundary | These are notification-only fan-out to the UI, not a source of gameplay truth: the wounds/HP/kill facts a combat event *describes* already live durably elsewhere (unit/injury state); the event itself is a one-shot "tell the log panel" message with no independent meaning once dropped. |
+| `injuryEventsRef` | `CombatEvent` (fall/injure/death kind, `TVar`) | Cancel/reset | Same reasoning as `combatEventsRef` — the wound/death it describes is durable via unit/injury state; the notification itself is not. |
+| `thoughtEventsRef` | thought/mood notification (`TVar`) | Cancel/reset | Notification-only; the mood/psychology state it describes (if any) is durable elsewhere, not in this stream. |
+| `actionOutcomeRef` | action-result notification (`TVar`) | Cancel/reset | Notification-only, same reasoning. |
+| `eventStoreRef` | player-event ring buffer (`TVar`, multi-writer) | Cancel/reset — the ring buffer starts empty on load | The event LOG panel's history is explicitly session-only (contract §5's "temporary popups" spirit extends to the notification log); nothing durable is derived from a *past* log entry, only from the state changes that produced it, all covered elsewhere. |
+| `popupQueueRef` | popup notification (`TVar`, multi-writer) | Cancel/reset | A pending popup has no gameplay meaning; a player who hasn't dismissed a toast by save time simply doesn't see it again after load, same as if they'd dismissed it. |
+| `debugQueue` (`TQueue DebugCommand`, `src/Engine/Scripting/Lua/DebugServer.hs`) | queued debug-console command + response channel | Cancel/reset | An open debug-shell session and any command mid-flight have no gameplay meaning (contract §5: exclude debug-shell contents); a client waiting on a response simply never gets one, same as if the engine had been killed. |
 
 `CraftBills` deserve a specific callout because they look queue-shaped
 but are not: `cbClaimant`, `cbWorking`, `cbPaused`, and progress accrual
@@ -260,30 +267,34 @@ serialization-correctness proof. It:
 
 1. Extracts the current field list of every root-owner record (§2) from
    its source file, via a Haskell record-field parser that strips
-   (possibly nested) `{- -}` and `--` comments first (both string-aware,
-   so a `DataKinds`/`GHC.TypeLits` promoted string literal in a field's
-   own type — e.g. `Proxy "}"` or `Proxy "--"` — can never be mistaken
-   for a structural brace or a comment start) so prose in a Haddock
-   comment can never desync the brace-depth tracking that finds a
-   record's boundary either; splits the record's brace block on
-   top-level commas only, likewise string-aware, so a comma inside a
-   field's own type — a tuple, a list-of-tuples — is never mistaken for
-   a field separator; understands the codebase's `UnicodeSyntax` (`∷`)
-   field separators with the field name and its arrow allowed on
-   different physical lines; and handles grouped declarations
-   (`{ name1, name2 ∷ Type }`, several names sharing one trailing type
-   signature).
+   (possibly nested) `{- -}` and `--` comments first (string/char-
+   literal-aware, so a `DataKinds`/`GHC.TypeLits` promoted string OR
+   char literal in a field's own type — e.g. `Proxy "}"`, `Proxy '}'`,
+   or `Proxy "--"` — can never be mistaken for a structural brace or a
+   comment start; a trailing "prime" on an ordinary identifier, e.g.
+   `field'`, is correctly distinguished from a char-literal opener by
+   context) so prose in a Haddock comment can never desync the
+   brace-depth tracking that finds a record's boundary either; splits
+   the record's brace block on top-level commas only, likewise
+   literal-aware, so a comma inside a field's own type — a tuple, a
+   list-of-tuples — is never mistaken for a field separator; understands
+   the codebase's `UnicodeSyntax` (`∷`) field separators with the field
+   name and its arrow allowed on different physical lines; and handles
+   grouped declarations (`{ name1, name2 ∷ Type }`, several names
+   sharing one trailing type signature).
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
-   covering both Lua access forms (dot `saveMods.register(...)` and
-   bracket-indexed `saveMods["register"](...)`/`saveMods['register'](...)`
-   — ordinary, fully traceable Lua either way) and all three Lua
-   string-literal forms for the module name (`'...'`, `"..."`, and long
-   brackets `[[...]]`/`[=[...]=]`/...), fully string-literal-aware in
-   both directions — a `--` embedded in a quoted OR long-bracket string
-   is never mistaken for a comment start (which would otherwise
-   truncate the line and hide a real call after it), and a bare
-   (non-`--`-prefixed) long-bracket span is recognized as a string, not
-   code.
+   covering three Lua access-expression forms for the registry table
+   itself (a local named `saveMods`/`saveModules`, bracket-indexed
+   `saveMods["register"](...)`/`saveMods['register'](...)`, and
+   `require("scripts.lib.save_modules").register(...)` chained directly
+   off its own `require()` with no local binding at all — all ordinary,
+   fully traceable Lua) and all three Lua string-literal forms for the
+   module name (`'...'`, `"..."`, and long brackets `[[...]]`/
+   `[=[...]=]`/...), fully string-literal-aware in both directions — a
+   `--` embedded in a quoted OR long-bracket string is never mistaken
+   for a comment start (which would otherwise truncate the line and
+   hide a real call after it), and a bare (non-`--`-prefixed)
+   long-bracket span is recognized as a string, not code.
 3. Parses `persistence_state_inventory.md`'s classification tables for
    the set of item names that have a recorded classification AND that
    classification's own cell text, scoped to the exact `### OwnerName`
@@ -302,17 +313,20 @@ serialization-correctness proof. It:
    fails this the same as a compound value like "Rebuild + Persist
    (mixed)" would; the contract requires exactly one label per item, not
    zero and not several.
-5. Separately fails on any `saveMods.register`/`saveModules.register`
-   reference (dot or bracket form) that is NOT itself a direct call
-   (e.g. stored in a local or table field and invoked through that
-   alias later) — extraction can only trace direct calls, so an alias
-   would otherwise register a module invisibly to the audit. Rather
-   than attempting to trace what an alias eventually gets called with,
-   this makes the alias itself the failure: the codebase's registration
-   convention is direct calls only. String-literal-aware so a string
-   literal's own text (e.g. the registry's own validation error message,
-   which happens to contain "saveModules.register") is never mistaken
-   for a reference to the function.
+5. Separately fails on any of the three registry-table access forms
+   above (dot, bracket, or `require(...)`-chained) that is NOT itself a
+   direct call (e.g. stored in a local or table field and invoked
+   through that alias later) — extraction can only trace direct calls,
+   so an alias would otherwise register a module invisibly to the
+   audit. Rather than attempting to trace what an alias eventually gets
+   called with, this makes the alias itself the failure: the codebase's
+   registration convention is direct calls only. String/long-bracket-
+   literal-SPAN-aware (not a blanket strip, which would also destroy
+   the legitimate `["register"]` bracket key) so a string's own text —
+   the registry's own validation error message, which happens to
+   contain "saveModules.register", or an unrelated long-bracket string
+   literal like `[[saveMods.register]]` — is never mistaken for a live
+   reference to the function.
 
 Run it directly:
 
