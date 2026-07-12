@@ -12,18 +12,25 @@ module Test.Headless.UI.InputOwnership (spec) where
 
 import UPrelude
 import qualified Graphics.UI.GLFW as GLFW
+import qualified HsLua as Lua
 import Test.Hspec
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef', newIORef)
 import qualified Data.Sequence as Seq
+import qualified Data.Text as T
 import Data.Foldable (toList)
 import Engine.ActionOutcome (ActionOutcome(..))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Thread (ThreadControl(..))
 import Engine.Input.Bindings (defaultKeyBindings)
 import Engine.Input.Inject (noMods)
 import Engine.Input.Thread (processInputs)
 import Engine.Input.Types
 import qualified Engine.Core.Queue as Q
-import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Script (loadModuleRef)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import UI.Focus (FocusId, createFocusManager, registerFocusTarget, setFocus, unFocusId)
 import UI.InputOwnership
@@ -322,6 +329,120 @@ spec = do
                         aoHandler r `shouldBe` Just "ui_surface_block"
                     _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
 
+    -- #742 review round 3: the pure/wire tests above prove the routing
+    -- PRIMITIVE and the Lua-side decoupling's Haskell half
+    -- (isGameplayBlocked); this block additionally boots a REAL Lua
+    -- backend and loads the ACTUAL scripts/debug.lua, driving its own
+    -- production tryClaimClick/inGameplayView functions directly
+    -- (executeDebugLua — the same loadstring+pcall primitive the TCP
+    -- debug console itself uses) against a REAL UIPageManager holding a
+    -- visible exclusive modal, rather than a synthetic Haskell stand-in.
+    -- It does not replay the full onMouseDown broadcast chain
+    -- (scripts/init.lua/init_mouse.lua and their ~30-script transitive
+    -- load, which needs a real generated+shown world to satisfy
+    -- hud.currentView=="zoomed_in" through the ordinary game flow) —
+    -- that's the scale of tools/combat_anim_probe.py's own manual-only
+    -- probe, not a headless Hspec addition, and the issue itself
+    -- doesn't require a graphical/offscreen probe from this PR.
+    -- scripts/debug_anim_panel.lua reuses debugOverlay.canShow() with
+    -- no logic of its own (see its header comment), so this exercises
+    -- both production surfaces' shared decision point.
+    around withHeadlessEngine $
+        describe "real Lua parallel hit-test path (scripts/debug.lua — #742 review round 3)" $ do
+            it "debugOverlay.tryClaimClick still fires above a visible exclusive modal" $ \env → do
+                resetAll env
+                let (_, mgr) = page "modal" LayerModal emptyUIPageManager
+                writeIORef (uiManagerRef env) mgr
+                ls ← newDebugLuaBackend env
+                setup ← evalDebug ls
+                    "local d = require('scripts.debug'); \
+                    \d.visible = true; \
+                    \d.clickableRects = {{x=10,y=10,w=50,h=50,action=function() _G.__f8_fired = true end}}; \
+                    \require('scripts.ui_manager').currentMenu = 'world_view'; \
+                    \require('scripts.hud').currentView = 'zoomed_in'"
+                setup `shouldNotSatisfy` isLuaError
+                claimed ← evalDebug ls "require('scripts.debug').tryClaimClick(1, 20, 20)"
+                claimed `shouldBe` "true"
+                fired ← evalDebug ls "_G.__f8_fired == true"
+                fired `shouldBe` "true"
+
+            it "debugOverlay.tryClaimClick still refuses outside the current view, modal or not (#147/#151 preserved)" $ \env → do
+                resetAll env
+                let (_, mgr) = page "modal" LayerModal emptyUIPageManager
+                writeIORef (uiManagerRef env) mgr
+                ls ← newDebugLuaBackend env
+                setup ← evalDebug ls
+                    "local d = require('scripts.debug'); \
+                    \d.visible = true; \
+                    \d.clickableRects = {{x=10,y=10,w=50,h=50,action=function() _G.__f8_fired = true end}}; \
+                    \require('scripts.ui_manager').currentMenu = 'settings'"
+                setup `shouldNotSatisfy` isLuaError
+                claimed ← evalDebug ls "require('scripts.debug').tryClaimClick(1, 20, 20)"
+                claimed `shouldBe` "false"
+
+            it "debug_anim_panel.tryClaimClick (the third parallel path the issue amendment names) also still fires above a visible exclusive modal" $ \env → do
+                resetAll env
+                let (_, mgr) = page "modal" LayerModal emptyUIPageManager
+                writeIORef (uiManagerRef env) mgr
+                ls ← newDebugAnimPanelLuaBackend env
+                setup ← evalDebug ls
+                    "local p = require('scripts.debug_anim_panel'); \
+                    \local d = require('scripts.debug'); \
+                    \d.visible = true; \
+                    \p.visible = true; \
+                    \p.clickableRects = {{x=10,y=10,w=50,h=50,action=function() _G.__anim_fired = true end}}; \
+                    \require('scripts.ui_manager').currentMenu = 'world_view'; \
+                    \require('scripts.hud').currentView = 'zoomed_in'"
+                setup `shouldNotSatisfy` isLuaError
+                claimed ← evalDebug ls "require('scripts.debug_anim_panel').tryClaimClick(1, 20, 20)"
+                claimed `shouldBe` "true"
+                fired ← evalDebug ls "_G.__anim_fired == true"
+                fired `shouldBe` "true"
+
+    -- #742 review round 3: a right-click behind a visible exclusive
+    -- modal must not reach the ordinary tool-handler fallback chain
+    -- either — scripts/init_mouse.lua deliberately lets right-click
+    -- through even when isGameplayInputActive() is false (so it can
+    -- CANCEL an in-progress placement), but build_tool.lua's own
+    -- right-click branch does more than cancel: with no pending
+    -- anchor, it ERASES whatever construction designation sits under
+    -- the cursor (scripts/build_tool.lua's MOUSE_RIGHT case) — a real
+    -- world mutation the modal boundary must stop. mine_tool/chop_tool/
+    -- till_tool/plant_tool share the identical left=mutate/right=cancel
+    -- gate, so this covers all five uniformly. Drives the REAL
+    -- scripts/init_mouse.lua (require, not loadModuleRef — the file has
+    -- no package.loaded self-registration to make loadModuleRef's
+    -- dofile-style load visible to a later `require`, unlike
+    -- scripts/debug.lua) with the five tool modules + unit_drag_select
+    -- STUBBED (via package.loaded) rather than genuinely loaded: this
+    -- test's only question is whether init_mouse.lua's gate calls into
+    -- them at all, not whether their own internal logic is correct
+    -- (build_tool.lua's real construction/world dependencies are far
+    -- outside this fix's scope).
+    around withHeadlessEngine $
+        describe "real Lua tool-handler gate (scripts/init_mouse.lua — #742 review round 3)" $
+            it "a right-click behind a visible exclusive modal never reaches build_tool/mine_tool/chop_tool/till_tool/plant_tool" $ \env → do
+                resetAll env
+                let (_, mgr) = page "modal" LayerModal emptyUIPageManager
+                writeIORef (uiManagerRef env) mgr
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls
+                    "_G.__tool_reached = false; \
+                    \local stub = { handleMouseDown = function() _G.__tool_reached = true; return false end }; \
+                    \package.loaded['scripts.build_tool'] = stub; \
+                    \package.loaded['scripts.mine_tool']  = stub; \
+                    \package.loaded['scripts.chop_tool']  = stub; \
+                    \package.loaded['scripts.till_tool']  = stub; \
+                    \package.loaded['scripts.plant_tool'] = stub; \
+                    \package.loaded['scripts.unit_drag_select'] = { \
+                    \    handleMouseDown = function() end, deferClick = function() end, \
+                    \    armBoxSelect = function() end, cancel = function() end }"
+                setup `shouldNotSatisfy` isLuaError
+                call ← evalDebug ls "require('scripts.init_mouse').onMouseDown(2, 20, 20)"
+                call `shouldNotSatisfy` isLuaError
+                reached ← evalDebug ls "_G.__tool_reached == true"
+                reached `shouldBe` "false"
+
 -- * Wire-integration helpers (mirrors Test.Headless.Input.LayerA)
 
 resetAll ∷ EngineEnv → IO ()
@@ -376,3 +497,58 @@ isMouseDownEvent _ = False
 isKeyDownEscape ∷ LuaMsg → Bool
 isKeyDownEscape (LuaKeyDownEvent KeyEscape _) = True
 isKeyDownEscape _ = False
+
+-- * Real-Lua-backend helpers (mirrors Test.Headless.Input.Followup's
+--   newTestLuaBackend, minus the broadcast-script registration this
+--   suite doesn't need — scripts/debug.lua's tryClaimClick isn't a
+--   broadcast target itself, see the describe block above).
+
+-- | A real Lua backend with the FULL Lua API registered and nothing
+--   else loaded — callers pull in whatever they need via 'evalDebug'
+--   snippets calling the real Lua @require@, exactly as any script
+--   would.
+newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
+newBareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                (assetPoolRef env) (nextObjectIdRef env)
+                                (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls
+
+-- | Like 'newBareLuaBackend', but additionally 'loadModuleRef's the
+--   given script path up front (for a module that self-registers into
+--   @package.loaded@ at its own top level, e.g. scripts/debug.lua —
+--   see its header comment — so a later 'evalDebug' @require@ resolves
+--   to the SAME loaded instance regardless of dofile-vs-require
+--   loading).
+newLuaBackendLoading ∷ EngineEnv → FilePath → IO LuaBackendState
+newLuaBackendLoading env modulePath = do
+    ls ← newBareLuaBackend env
+    eRef ← Lua.runWith (lbsLuaState ls) $ loadModuleRef modulePath
+    case eRef of
+        Right _  → pure ()
+        Left err → error $ "failed to load " ⧺ modulePath ⧺ ": " ⧺ T.unpack err
+    pure ls
+
+-- | scripts/debug.lua's own transitive requires — scripts/ui/scale.lua,
+--   scripts/ui/label.lua, scripts/debug/{mode,layout,modes}.lua — are
+--   all load-time-cheap, no font/asset blocking.
+newDebugLuaBackend ∷ EngineEnv → IO LuaBackendState
+newDebugLuaBackend env = newLuaBackendLoading env "scripts/debug.lua"
+
+-- | scripts/debug_anim_panel.lua 'require's scripts.debug itself at its
+--   own top level, so this also makes @require('scripts.debug')@
+--   resolve to the same loaded instance.
+newDebugAnimPanelLuaBackend ∷ EngineEnv → IO LuaBackendState
+newDebugAnimPanelLuaBackend env = newLuaBackendLoading env "scripts/debug_anim_panel.lua"
+
+-- | Run one command through the exact loadstring+pcall primitive the
+--   real TCP debug console itself uses ('executeDebugLua') — so test
+--   setup/assertions exercise production Lua exactly as a human poking
+--   the console would, not a bespoke test-only evaluator.
+evalDebug ∷ LuaBackendState → Text → IO Text
+evalDebug ls = executeDebugLua (lbsLuaState ls)
+
+isLuaError ∷ Text → Bool
+isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t

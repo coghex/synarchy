@@ -4,6 +4,7 @@
 module Engine.Scripting.Lua.Thread.Console
   ( processDebugCommands
   , debugBuiltin
+  , executeDebugLua
   ) where
 
 import UPrelude
