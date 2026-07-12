@@ -47,8 +47,11 @@ ALL_KEYS = {p[0] for p in PROBES}
 # --------------------------------------------------------------------------
 CI_ELIGIBLE = {
     "cargo_capacity",
+    "consumable_effects",
     "craft",
     "medic_coord",
+    "movement",
+    "repair",
     "repair_item",
 }
 
@@ -74,6 +77,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "role": (FLAKY, "role-hysteresis timing flakes run-to-run on CI"),
     "chop": (FLAKY, "chop AI claim/work timing flakes run-to-run on CI"),
     "foraging": (FLAKY, "foraging AI timing flakes run-to-run on CI"),
+    "sleep": (FLAKY, "go_to_sleep AI goal-arbitration + multi-hop pose-chain "
+                     "timing flakes run-to-run on CI (#722; the disarm lesson — "
+                     "local greenness isn't sufficient evidence for an "
+                     "AI-reaction/arbitration-timing probe)"),
     # --- scenario-heavy: deterministic enough to run manually, but either
     # long-running or broad end-to-end scenarios that make the blocking PR
     # gate too expensive. ---
@@ -120,6 +127,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),
+    "preview": (NEEDS_GPU, "real preview boot creates a GLFW window and calls "
+                           "initializeVulkan (app/App/Preview.hs), same as the "
+                           "graphical boot path — no GPU on the CI runner (#722)"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),
@@ -137,14 +147,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "farm_ai": (SLOW_WORLDGEN, "needs a real generated world for the till->plant->harvest AI "
                                "loop across 5 distinct tillable sites; slowest registered "
                                "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),
-    # --- unclassified: arena-based (fast), no known flakiness/base-failure
-    # on file -- just never reviewed for CI promotion yet. Not meant to be a
-    # permanent home: promote (with evidence) or assign a real category.
-    "movement": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
-    "repair": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
-    "consumable_effects": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
-    "sleep": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
-    "preview": (UNCLASSIFIED, "not yet reviewed for CI promotion"),
 }
 
 # Sentinels (distinct objects so `is` comparisons are unambiguous).
@@ -187,14 +189,21 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
      set()),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
-     {"craft"}),
+     # data/recipes/* also covers repair.yaml (repair-tagged recipes) and
+     # brew_coffee (consumable_effects' brew step) — both promoted probes
+     # (#722) load the full data/recipes/*.yaml glob at bootstrap.
+     {"craft", "consumable_effects", "repair"}),
     (["src/Power/*", "scripts/wire.lua", "scripts/power*.lua",
       "data/structure_packs/*"],
      set()),
     (["src/Item/*", "data/items/*", "src/Equipment/*", "data/equipment/*"],
-     {"cargo_capacity", "repair_item"}),
+     # consumable_effects exercises coffee_pot/coffee_grounds/water; repair
+     # exercises axe_steel/whetstone/lignite_chunk (#722).
+     {"cargo_capacity", "repair_item", "consumable_effects", "repair"}),
     (["src/Building/*", "data/buildings/*"],
-     {"craft"}),
+     # consumable_effects builds a kitchen; repair builds a furnace +
+     # workbench (#722).
+     {"craft", "consumable_effects", "repair"}),
 ]
 
 
@@ -277,8 +286,15 @@ def _self_test() -> int:
     cases = [
         (["README.md"], [], "docs only"),
         (["docs/foo.md", "assets/x.png"], [], "docs+assets"),
-        (["data/recipes/smelting.yaml"], sorted({"craft"}), "recipes -> craft"),
-        (["data/buildings/furnace.yaml"], sorted({"craft"}), "buildings -> craft"),
+        (["data/recipes/smelting.yaml"],
+         sorted({"craft", "consumable_effects", "repair"}),
+         "recipes -> craft + consumable_effects + repair"),
+        (["data/buildings/furnace.yaml"],
+         sorted({"craft", "consumable_effects", "repair"}),
+         "buildings -> craft + consumable_effects + repair"),
+        (["data/items/coffee_pot.yaml"],
+         sorted({"cargo_capacity", "repair_item", "consumable_effects", "repair"}),
+         "items -> cargo_capacity + repair_item + consumable_effects + repair"),
         (["src/Power/Network.hs"], [], "power probes are manual-only"),
         (["data/infections/staph.yaml"],
          [],

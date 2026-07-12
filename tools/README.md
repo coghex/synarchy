@@ -310,7 +310,7 @@ python3 tools/ci_probes.py --self-test
 
 # Every registered probe's CI status: CI-eligible, or manual-only with a
 # reason category (flaky / base-failing / slow/worldgen-heavy /
-# scenario-heavy / targeted / unclassified)
+# scenario-heavy / targeted / needs-gpu / unclassified)
 python3 tools/ci_probes.py --status
 ```
 

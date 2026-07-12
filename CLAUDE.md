@@ -87,8 +87,9 @@ probes, and probes that fail on master today for content reasons. Run
 authoritative, always-current list of every registered probe's CI
 eligibility — CI-eligible, or manual-only with its reason category
 (`flaky`, `base-failing`, `slow/worldgen-heavy`, `scenario-heavy`,
-`targeted`, or `unclassified` for a probe simply not yet reviewed for
-promotion — never trust a comment enumerating probe names, they drift).
+`targeted`, `needs-gpu`, or `unclassified` for a probe simply not yet
+reviewed for promotion — never trust a comment enumerating probe
+names, they drift).
 Growing the eligible set is a follow-up: prove a probe is deterministic,
 broad enough, and cheap enough for the blocking gate, then move its key
 from `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` in `tools/ci_probes.py`.
