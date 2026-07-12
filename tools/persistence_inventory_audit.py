@@ -546,16 +546,24 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
     return offenders
 
 
-# `X = saveMods`/`X = saveModules` (with or without a leading `local`)
-# where X is a DIFFERENT name -- re-aliasing the already-canonical
-# table into a second variable, the same violation class as an
-# untracked require() binding (see find_untracked_registry_aliases),
-# just one hop later. `local` is OPTIONAL: Lua's `=` is unambiguously
-# assignment (unlike C-style languages, Lua has no `==`-vs-`=`
-# confusion inside an `if`, since assignment is a statement, never an
-# expression), so a bare `registry = saveMods` re-assigning an
-# already-declared (or even implicitly global) variable is just as
-# live a bypass as the `local` form.
+# `TARGET = saveMods`/`TARGET = saveModules` (with or without a leading
+# `local`) where TARGET is anything other than the bare canonical name
+# -- re-aliasing the already-canonical table into a second variable OR
+# TABLE FIELD, the same violation class as an untracked require()
+# binding (see find_untracked_registry_aliases), just one hop later.
+# `local` is OPTIONAL: Lua's `=` is unambiguously assignment (unlike
+# C-style languages, Lua has no `==`-vs-`=` confusion inside an `if`,
+# since assignment is a statement, never an expression), so a bare
+# `registry = saveMods` re-assigning an already-declared (or even
+# implicitly global) variable is just as live a bypass as the `local`
+# form.
+#
+# TARGET covers Lua's full (finite, well-defined) assignment-target
+# grammar: a bare name, OR a name followed by one or more `.field`/
+# `[key]` accesses (`holder.registry`, `holder["registry"]`, chained
+# combinations) -- storing the registry table under a TABLE KEY, not
+# just a plain variable, is exactly as untraceable as a bare re-alias
+# once something later does `holder["registry"].register(...)`.
 #
 # The RHS must be the BARE name with NOTHING chained after it (no
 # `.field`/`[key]` at all -- not just `.register`/`["register"]`).
@@ -569,9 +577,35 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
 # `["register"]` access specifically is a different, already-covered
 # case (find_lua_register_aliases via ALIAS_RE) and is correctly
 # excluded here the same way any other field access is.
+_ASSIGNMENT_TARGET_RE_FRAGMENT = (
+    r"\w+(?:\s*\.\s*\w+|\s*\[\s*(?:'[^']*'|\"[^\"]*\"|\w+)\s*\])*"
+)
+# `package.loaded[modname] = <module table>` is Lua's own universal
+# require()-caching idiom (used by every Lua module in this codebase,
+# including save_modules.lua's own definition, per its header comment:
+# "Singleton via package.loaded so script reloads + multiple require()s
+# share the same registry") -- it is not a bypass attempt, it's how
+# require() itself expects a module to register its cache entry, and
+# nobody would realistically call `.register` through
+# `package.loaded["scripts.lib.save_modules"].register(...)` instead of
+# the local binding sitting right there. Excluded explicitly rather
+# than letting the general table-key case flag it.
+# A negative LOOKBEHIND for `.` or a word character is required so a
+# match can only start at a genuine, top-of-chain identifier boundary.
+# `\b` alone (tried first) is not enough: it blocks a match starting
+# mid-WORD (e.g. "ackage", a suffix of "package") but NOT one starting
+# right after a "." that continues a longer dotted chain -- since
+# ".loaded[...]" independently satisfies the target grammar as if
+# "loaded" were its own bare identifier, `finditer` happily starts a
+# match there instead, sidestepping the `package.loaded` exclusion
+# just as effectively as starting mid-word did. Requiring "nothing
+# word-like AND no dot" immediately before the match start closes both
+# routes at once.
 _BARE_REGISTRY_ALIAS_RE = re.compile(
-    r"(?:local\s+)?(?!saveMods\b|saveModules\b)\w+\s*=\s*save(?:Mods|Modules)\b"
-    r"(?!\s*[.\[])")
+    r"(?<![.\w])(?:local\s+)?(?!saveMods\b|saveModules\b)"
+    r"(?!package\s*\.\s*loaded\b)"
+    + _ASSIGNMENT_TARGET_RE_FRAGMENT
+    + r"\s*=\s*save(?:Mods|Modules)\b(?!\s*[.\[])")
 
 
 def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:

@@ -369,12 +369,25 @@ serialization-correctness proof. It:
    registry.register(...)`; one hop further,
    `local saveMods = require(...); local registry = saveMods;
    registry.register(...)` (re-aliasing the ALREADY-sanctioned name
-   into a second local); or without even a `local` keyword at all —
+   into a second local); without even a `local` keyword at all —
    `registry = saveMods; registry.register(...)` — since Lua's `=` is
    unambiguously assignment (never comparison — Lua has no C-style
    `if (x = y)` confusion, assignment is a statement, not an
    expression), so a bare/global re-assignment is just as live a bypass
-   as the `local` form. (The RHS check requires the canonical name to
+   as the `local` form; or re-aliased into a TABLE KEY rather than a
+   bare identifier at all — `holder["registry"] = saveMods;
+   holder["registry"].register(...)` or its dot-field sibling
+   `holder.registry = saveMods; holder.registry.register(...)` — the
+   assignment-target grammar covers Lua's full (finite) `name`/
+   `name.field`/`name["key"]` chain forms, not just bare identifiers,
+   so the escape is caught regardless of which one carries it. This
+   grammar broadening required one explicit carve-out:
+   `package.loaded["scripts.lib.save_modules"] = saveModules` is Lua's
+   own universal require()-caching idiom (used by `save_modules.lua`'s
+   own definition, not a bypass attempt), so a target starting with
+   `package.loaded` is excluded rather than letting the general
+   table-key case flag it. (The RHS
+   check requires the canonical name to
    be truly BARE, with nothing chained after it at all — not just
    `.register`/`["register"]` — since Haskell/Lua's `\b` word-boundary
    is satisfied by a following `.` too: without this, the registry's

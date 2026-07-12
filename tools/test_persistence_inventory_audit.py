@@ -501,6 +501,27 @@ local registry = saveMods
 registry.register("untracked_via_bare_alias", nil, nil)
 """
 
+# The already-canonical `saveMods` local is re-aliased into a TABLE KEY
+# (bracket-indexed) instead of a bare local/global name -- one further
+# hop past SYNTHETIC_LUA_REGISTER_BARE_NAME_REALIAS/GLOBAL_REALIAS that
+# neither of those catches, since the assignment target isn't a bare
+# identifier at all.
+SYNTHETIC_LUA_REGISTER_TABLE_KEY_REALIAS = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = {}
+holder["registry"] = saveMods
+holder["registry"].register("untracked_table_alias", nil, nil)
+"""
+
+# Dot-field sibling of the table-key case above -- `holder.registry =
+# saveMods` instead of `holder["registry"] = saveMods`.
+SYNTHETIC_LUA_REGISTER_DOT_FIELD_REALIAS = """\
+local saveMods = require("scripts.lib.save_modules")
+local holder = {}
+holder.registry = saveMods
+holder.registry.register("untracked_dot_field_alias", nil, nil)
+"""
+
 # A direct call reached off require(...)'s return value with no local
 # binding at all -- fully traceable (the module path is a literal
 # string), not an alias.
@@ -892,6 +913,26 @@ def test_find_untracked_registry_aliases_detects_global_realias():
         {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_GLOBAL_REALIAS})
     expect(offenders == ["scripts/fake.lua"],
            f"re-aliasing saveMods into a GLOBAL (non-local) variable is "
+           f"flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_table_key_realias():
+    # Regression: re-aliasing saveMods into a TABLE KEY
+    # (`holder["registry"] = saveMods`) bypassed every earlier check --
+    # those all assumed a bare identifier assignment target.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_KEY_REALIAS})
+    expect(offenders == ["scripts/fake.lua"],
+           f"re-aliasing saveMods into a table key (bracket-indexed "
+           f"field) is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_dot_field_realias():
+    # Dot-field sibling of the table-key case above.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_DOT_FIELD_REALIAS})
+    expect(offenders == ["scripts/fake.lua"],
+           f"re-aliasing saveMods into a dot-field table key is "
            f"flagged, got {offenders}")
 
 
@@ -1472,6 +1513,36 @@ def test_audit_detects_registration_via_global_realias():
            f"reported as an untracked-alias violation, got {violations}")
 
 
+def test_audit_detects_registration_via_table_key_realias():
+    """One hop further than the bare-name/global re-alias cases: the
+    canonical saveMods local re-aliased into a TABLE KEY
+    (`holder["registry"] = saveMods`) is still a real, live registration
+    path -- the assignment-target grammar must cover bracket/dot-field
+    chains, not just bare identifiers."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_TABLE_KEY_REALIAS},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"re-aliasing saveMods into a table key is reported as an "
+           f"untracked-alias violation, got {violations}")
+
+
+def test_audit_detects_registration_via_dot_field_realias():
+    """Dot-field sibling of the table-key case above."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_DOT_FIELD_REALIAS},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"re-aliasing saveMods into a dot-field table key is "
+           f"reported as an untracked-alias violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -1576,6 +1647,8 @@ def main() -> int:
         test_find_untracked_registry_aliases_detects_bare_name_realias,
         test_find_untracked_registry_aliases_ignores_sanctioned_local_use,
         test_find_untracked_registry_aliases_detects_global_realias,
+        test_find_untracked_registry_aliases_detects_table_key_realias,
+        test_find_untracked_registry_aliases_detects_dot_field_realias,
         test_find_untracked_registry_aliases_ignores_the_registry_own_reload_guard,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
@@ -1610,6 +1683,8 @@ def main() -> int:
         test_audit_does_not_flag_sanctioned_require_local_as_untracked,
         test_audit_detects_registration_via_bare_name_realias,
         test_audit_detects_registration_via_global_realias,
+        test_audit_detects_registration_via_table_key_realias,
+        test_audit_detects_registration_via_dot_field_realias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
