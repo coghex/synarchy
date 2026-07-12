@@ -15,6 +15,8 @@ import qualified Graphics.UI.GLFW as GLFW
 import Test.Hspec
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.Sequence as Seq
+import Data.Foldable (toList)
+import Engine.ActionOutcome (ActionOutcome(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Input.Bindings (defaultKeyBindings)
 import Engine.Input.Inject (noMods)
@@ -200,6 +202,38 @@ spec = do
                     RouteElement _ cb → cb `shouldBe` "hudClick"
                     other → expectationFailure ("expected the HUD control, got " ⧺ show other)
 
+    describe "isPointerSurfaceBlocked (middle-click — #742 review round 1)" $ do
+        it "is blocked by a modal boundary even where the modal has no element of its own" $
+            let (_, mgr) = page "modal" LayerModal emptyUIPageManager
+            in isPointerSurfaceBlocked pt mgr `shouldBe` True
+
+        it "is blocked by any visible sized element when no modal is present (pre-#742 parity)" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (eh, m2) = createElement "hudPanel" 100 100 hudH m1
+                (px, py) = pt
+                m3 = addElementToPage hudH eh px py m2
+            in isPointerSurfaceBlocked pt m3 `shouldBe` True
+
+        it "is not blocked over genuinely empty space with no modal present" $
+            isPointerSurfaceBlocked pt emptyUIPageManager `shouldBe` False
+
+    describe "isPageInScope (#742 review round 1)" $ do
+        it "is true for every page when no modal boundary exists" $
+            let (hudH, mgr) = page "hud" LayerHUD emptyUIPageManager
+            in isPageInScope hudH mgr `shouldBe` True
+
+        it "is false for a page below the modal boundary" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (_, mgr) = page "modal" LayerModal m1
+            in isPageInScope hudH mgr `shouldBe` False
+
+        it "is true for the boundary page itself and for a page above it" $
+            let (modalH, m1) = page "modal" LayerModal emptyUIPageManager
+                (debugH, mgr) = page "shell" LayerDebug m1
+            in do
+                isPageInScope modalH mgr `shouldBe` True
+                isPageInScope debugH mgr `shouldBe` True
+
     describe "isGameplayBlocked" $ do
         it "is true while a visible exclusive modal page exists" $
             let (_, mgr) = page "modal" LayerModal emptyUIPageManager
@@ -253,6 +287,22 @@ spec = do
                 msgs ← drainLuaMsgs env
                 msgs `shouldSatisfy` elem (LuaCharInput (unFocusId fid) 'a')
 
+            it "a middle-click over empty modal space is swallowed instead of starting camera drag (#742 review round 1)" $ \env → do
+                resetAll env
+                let (_, mgr) = page "modal" LayerModal emptyUIPageManager
+                writeIORef (uiManagerRef env) mgr
+                let (px, py) = pt
+                push env [InputMouseEvent GLFW.MouseButton'3 (realToFrac px, realToFrac py) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isMouseDownEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoOutcome r `shouldBe` "noop"
+                        aoHandler r `shouldBe` Just "ui_surface_block"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
 -- * Wire-integration helpers (mirrors Test.Headless.Input.LayerA)
 
 resetAll ∷ EngineEnv → IO ()
@@ -284,6 +334,10 @@ drainLuaMsgs env = go []
         case m of
             Just msg → go (msg : acc)
             Nothing  → pure (reverse acc)
+
+drainOutcomes ∷ EngineEnv → IO [ActionOutcome]
+drainOutcomes env = toList ⊚ atomicModifyIORef' (actionOutcomeRef env)
+    (\buf → (Seq.empty, buf))
 
 shellFocus ∷ EngineEnv → IO FocusId
 shellFocus env = do

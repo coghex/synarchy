@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiIsPageVisibleFn
   , uiIsPageInputExclusiveFn
   , uiIsInputBlockedFn
+  , uiIsPageInScopeFn
   , uiGetElementInfoFn
   , uiGetVisibleElementsFn
   , uiSetClickableFn
@@ -31,7 +32,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
 import UI.Manager
-import UI.InputOwnership (isGameplayBlocked)
+import UI.InputOwnership (isGameplayBlocked, isPageInScope)
 
 -- | UI.setPosition(elementHandle, x, y)
 uiSetPositionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -108,6 +109,23 @@ uiIsInputBlockedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiIsInputBlockedFn env = do
     mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
     Lua.pushboolean (isGameplayBlocked mgr)
+    return 1
+
+-- | UI.isPageInScope(pageHandle) -> boolean (#742 review round 1) —
+--   true when the page is at or above the modal boundary (or there is
+--   no boundary at all). Lets raw per-widget handlers that iterate
+--   every live instance regardless of page (dropdown/randbox
+--   "click outside" close/submit) skip instances on a page the
+--   boundary has excluded, without disturbing same-page instances.
+--   An unknown/deleted page handle is never in scope.
+uiIsPageInScopeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsPageInScopeFn env = do
+    handleArg ← Lua.tointeger 1
+    case handleArg of
+        Just n → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            Lua.pushboolean (isPageInScope (PageHandle $ fromIntegral n) mgr)
+        Nothing → Lua.pushboolean False
     return 1
 
 -- | Push a table with one element's info fields onto the Lua stack:

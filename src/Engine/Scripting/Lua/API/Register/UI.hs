@@ -18,6 +18,7 @@ registerUIAPI env = do
   registerLuaFunction "setPageInputExclusive" (uiSetPageInputExclusiveFn env)
   registerLuaFunction "isPageInputExclusive"  (uiIsPageInputExclusiveFn env)
   registerLuaFunction "isInputBlocked"        (uiIsInputBlockedFn env)
+  registerLuaFunction "isPageInScope"         (uiIsPageInScopeFn env)
 
   registerLuaFunction "newElement" (uiNewElementFn env)
   registerLuaFunction "newBox"     (uiNewBoxFn env)

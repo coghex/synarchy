@@ -21,18 +21,40 @@
 --   receiving input above any modal without this module treating debug
 --   as a special case. The F8 overlay's own click detection additionally
 --   runs a parallel Lua-side hit-test outside 'UI.Manager' entirely
---   (@scripts/debug.lua@'s @tryClaimClick@) — this module doesn't (and
+--   (@scripts/debug.lua@'s @tryClaimClick@, and @scripts/
+--   debug_anim_panel.lua@'s equivalent) — this module doesn't (and
 --   can't) see those rects, but it doesn't need to: 'RouteMiss' is
---   still forwarded to Lua exactly as a pre-#742 miss was, so that
---   parallel path keeps getting first refusal on it regardless of any
---   modal boundary computed here.
+--   still forwarded to Lua exactly as a pre-#742 miss was, so those
+--   parallel paths keep getting first refusal on it regardless of any
+--   modal boundary computed here. Their VALIDITY gate is decoupled from
+--   modal-blocking entirely on the Lua side (@scripts/ui_manager.lua@'s
+--   @isGameplayView@ vs @isGameplayInputActive@ — see
+--   @scripts/debug.lua@'s @inGameplayView@), which this module has no
+--   part in.
+--
+--   'isPointerSurfaceBlocked' extends the boundary to middle-click
+--   (camera drag), which has no owned handler and no page concept of
+--   its own in 'Engine.Input.Thread' — pre-#742 it swallowed on ANY
+--   visible sized element; here it additionally swallows whenever a
+--   modal boundary exists at all, so a gap in the modal's own layout
+--   can't leak a middle-click through to panning behind it.
+--
+--   'isPageInScope' is for the OTHER kind of raw Lua handler: one that
+--   iterates every live widget instance regardless of page, entirely
+--   outside 'routePointer'/'UI.Manager.Query' hit-testing (dropdown/
+--   randbox "click outside" close-or-submit, @scripts/ui/dropdown.lua@,
+--   @scripts/ui/randbox.lua@). Those still need every miss forwarded
+--   (same reason as debug/shell above), but must filter out instances
+--   belonging to an out-of-scope page themselves.
 module UI.InputOwnership
   ( PointerKind(..)
   , InputRoute(..)
   , inputBoundaryPage
   , pagesInScope
+  , isPageInScope
   , isGameplayBlocked
   , routePointer
+  , isPointerSurfaceBlocked
   ) where
 
 import UPrelude
@@ -40,7 +62,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import UI.Types
 import UI.Manager.Page (getVisiblePages)
-import UI.Manager.Query (topHitBy)
+import UI.Manager.Query (topHitBy, findElementAt)
 
 -- | Which pointer gesture is being routed — decides which callback
 --   field on an element counts as "owned" for this event. Wheel reuses
@@ -98,6 +120,20 @@ pagesInScope mgr = case inputBoundaryPage mgr of
     Just boundary →
         dropWhile ((≢ upHandle boundary) ∘ upHandle) (getVisiblePages mgr)
 
+-- | True when the given page is at or above the modal boundary (or
+--   there is no boundary at all) — still eligible to react to pointer
+--   input. #742 review round 1: a handful of raw Lua handlers
+--   (dropdown/randbox "click outside closes/submits me") iterate every
+--   LIVE instance regardless of which page it's on, entirely outside
+--   'routePointer'/'UI.Manager.Query' hit-testing — this lets them
+--   filter out instances belonging to a page the modal boundary has
+--   excluded, so a click the boundary already consumed can't still
+--   close a widget on a lower page while leaving same-page widgets
+--   (e.g. a dropdown on the modal itself, closed by clicking elsewhere
+--   on that same page) working exactly as before.
+isPageInScope ∷ PageHandle → UIPageManager → Bool
+isPageInScope h mgr = Set.member h (Set.fromList (map upHandle (pagesInScope mgr)))
+
 -- | True while any visible page establishes an input-exclusive
 --   boundary. Lua's gameplay-input gate
 --   (@scripts/ui_manager.lua@'s @isGameplayInputActive@) folds this in
@@ -141,3 +177,18 @@ routePointer kind pos mgr = case hitBy primaryCallback of
         pure (h, cb)
 
     clickOk callbackOf el = ueClickable el ∧ isJust (callbackOf el)
+
+-- | #742 review round 1: the middle-click "any visible UI surface
+--   blocks" check ('Engine.Input.Thread' — middle-click has no owned
+--   handler of its own and exists purely to pan the camera, so ANY
+--   sized element under the point already swallows it, pre-#742).
+--   Folds in the modal boundary: once one exists, the WHOLE screen is
+--   blocked for this purpose, not just the boundary page's own
+--   elements — otherwise a gap in the modal's own layout (no element
+--   at the exact point) would leak the middle-click through to
+--   camera-drag panning behind the modal. When there's no boundary
+--   this reduces to exactly the original (unscoped) surface check, so
+--   behaviour is unchanged from before #742 in the common case.
+isPointerSurfaceBlocked ∷ (Float, Float) → UIPageManager → Bool
+isPointerSurfaceBlocked pos mgr =
+    isGameplayBlocked mgr ∨ isJust (findElementAt pos mgr)

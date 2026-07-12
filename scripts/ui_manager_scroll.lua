@@ -199,7 +199,14 @@ end
 -- Z-Slice Scroll (shift+scroll)
 -----------------------------------------------------------
 
+-- #742 review round 1: shift+wheel bypasses UI hit-testing entirely on
+-- the engine side (Engine.Input.Thread routes it before ever touching
+-- routePointer, same as before #742 — see the issue's own out-of-scope
+-- carve-out), so this is the one place that must consult
+-- UI.isInputBlocked() itself, or a Shift-wheel over a visible modal's
+-- empty space would still change the gameplay z-slice behind it.
 function uiManager.onZSliceScroll(dx, dy)
+    if UI.isInputBlocked() then return end
     local currentMenu = uiManager.currentMenu
     if currentMenu == "world_view" then
         worldView.onZSliceScroll(dx, dy)

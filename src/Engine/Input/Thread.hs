@@ -21,12 +21,13 @@ import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
 import qualified Engine.Core.Queue as Q
-import UI.Manager (findElementAt, validateFocus)
+import UI.Manager (validateFocus)
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
 import UI.Types (ElementHandle(..))
 import UI.Focus (getInputMode, InputMode(..), FocusId(..), fmCurrentFocus)
-import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer)
+import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer
+                          , isPointerSurfaceBlocked)
 
 -- | F4 (#730 review round 2): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
@@ -515,13 +516,16 @@ dispatchInput env inpSt event = case event of
               -- block on clickable controls), middle-click has no UI
               -- handler to dispatch to and exists purely to pan the
               -- camera, so a passive panel under the cursor must block it
-              -- too — hence findElementAt (any sized element) rather than
-              -- findClickableElementAt. Any UI surface under the cursor
-              -- SWALLOWS the click: the camera middle-drag polls
-              -- inpMouseBtns directly (bypassing the route), so only
-              -- ClickSwallowed — which keeps the button out of
-              -- inpMouseBtns — actually stops the drag. Empty (non-UI)
-              -- space still routes the middle-click to the world.
+              -- too — hence isPointerSurfaceBlocked (any sized element,
+              -- OR a modal boundary exists at all — #742 review round 1:
+              -- a gap in the modal's own layout must not leak a
+              -- middle-click through to panning behind it) rather than
+              -- findClickableElementAt. A blocked point SWALLOWS the
+              -- click: the camera middle-drag polls inpMouseBtns
+              -- directly (bypassing the route), so only ClickSwallowed —
+              -- which keeps the button out of inpMouseBtns — actually
+              -- stops the drag. Empty (non-UI, no-modal) space still
+              -- routes the middle-click to the world.
               GLFW.MouseButton'3 →
                 if isTooltipVisible uiMgr
                   then do
@@ -529,13 +533,13 @@ dispatchInput env inpSt event = case event of
                         (toggleTooltipLock m, ())
                     recordRouteOutcome "accepted" (Just "tooltip_lock_toggle")
                     return ClickSwallowed
-                  else case findElementAt mousePos uiMgr of
-                    Just _ → do
+                  else if isPointerSurfaceBlocked mousePos uiMgr
+                    then do
                         logDebug logger CatUI
                             "Middle-click swallowed by UI surface"
                         recordRouteOutcome "noop" (Just "ui_surface_block")
                         return ClickSwallowed
-                    Nothing → do
+                    else do
                         -- scripts/init_mouse.lua's onMouseDown only
                         -- branches on MOUSE_LEFT/MOUSE_RIGHT, so a middle
                         -- press reaching "game" falls through the whole

@@ -230,10 +230,27 @@ lower control or reaches the modal boundary.
 boundary; `scripts/ui_manager.lua`'s `isGameplayInputActive()` folds
 this in (alongside the pre-existing `currentMenu`/pause-menu checks) so
 ordinary gameplay key handlers, click-selection/tool-claim handling,
-and camera-zoom scroll all go inert behind a modal uniformly. Escape's
-own dismiss cascade (`scripts/init_keys.lua`, closing popups/context
-menu/logs) deliberately runs before that gate — the thing that
-dismisses the block can't itself be blocked by it.
+camera-zoom scroll, and Shift-wheel z-slice paging all go inert behind
+a modal uniformly. Middle-click (camera drag) shares the same
+boundary-aware swallow. Escape's own dismiss cascade
+(`scripts/init_keys.lua`, closing popups/context menu/logs)
+deliberately runs before that gate — the thing that dismisses the
+block can't itself be blocked by it.
+
+The F8 overlay and `scripts/debug_anim_panel.lua` are pass-through
+surfaces that must keep receiving input above an arbitrary modal (not
+just paint above one), so their validity gate
+(`debugOverlay.inGameplayView`/`canShow`) deliberately checks
+`uiManager.isGameplayView()` — the narrower, pre-#742 predicate
+(current view + pause menu only) — rather than the modal-aware
+`isGameplayInputActive()`. A handful of raw per-widget handlers that
+iterate every live instance regardless of page, outside
+`UI.Manager`/`routePointer` hit-testing entirely (dropdown/randbox
+"click outside" close-or-submit), use `UI.isPageInScope(pageHandle)`
+instead — it filters out instances on a page the boundary has
+excluded, while leaving same-page instances (e.g. a dropdown on the
+modal itself, dismissed by clicking elsewhere on that page) working
+exactly as before.
 
 ## Project Layout
 

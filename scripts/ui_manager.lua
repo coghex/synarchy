@@ -71,34 +71,50 @@ require("scripts.ui_manager_events")
 -----------------------------------------------------------
 
 -- True only when the player is in a gameplay view with no blocking
--- menu/overlay on top. Gameplay key handlers (init.lua game.onKeyDown)
--- gate on this (#182): ordinary menus/overlays don't take UI focus, so
--- the input thread can't divert keys away from gameplay for us — keys
--- still broadcast to every Lua module. currentMenu is the authoritative
--- view, and the pause menu is an overlay shown while currentMenu stays
--- world_view/test_arena_view, so it has to be checked explicitly.
--- Menu-level keys (e.g. Escape closing a menu) are unaffected: they go
--- through uiManager.onUIEscape, a separate broadcast.
---
--- #742: UI.isInputBlocked() folds in EVERY visible input-exclusive
--- modal page (settings/save-browser/create-world/event-combat-injury-
--- unit logs/context menu/... — see UI.Manager.Page's default
--- upInputExclusive classification), not just the pause menu — a modal
--- page makes gameplay input inactive the same way pause always has.
--- The pauseMenu.visible check stays as a redundant belt-and-suspenders
--- (pause's own page is already exclusive) rather than being removed,
--- since it costs nothing and this function predates the page-based
--- mechanism. Click routing (init_mouse.lua) and camera scroll
--- (ui_manager_scroll.lua) share this SAME gate, so all three input
--- kinds go inert behind a modal uniformly. Escape's own dismiss
--- cascade (init_keys.lua) deliberately runs BEFORE this gate — closing
--- the very modal that's blocking gameplay can't itself be blocked.
-function uiManager.isGameplayInputActive()
+-- MENU on top — currentMenu is the authoritative view, and the pause
+-- menu is an overlay shown while currentMenu stays world_view/
+-- test_arena_view, so it has to be checked explicitly. Deliberately
+-- does NOT know about the general #742 modal-exclusivity mechanism
+-- (see isGameplayInputActive below for that) — this is the narrower,
+-- pre-#742 "current view" predicate that debug.lua's F8 overlay and
+-- debug_anim_panel.lua's parallel hit-test paths validate against
+-- (scripts/debug.lua's inGameplayView/canShow), so those pass-through
+-- debug surfaces keep working above an arbitrary modal exactly as the
+-- issue requires, while still refusing to (re)open on the zoom map, in
+-- a real menu, or while paused (#147/#151 — pause_menu.show() also
+-- explicitly tears the overlay down, but this check stands on its
+-- own regardless of that).
+function uiManager.isGameplayView()
     if uiManager.currentMenu ~= "world_view" and uiManager.currentMenu ~= "test_arena_view" then
         return false
     end
     local pauseMenu = require("scripts.pause_menu")
     if pauseMenu.visible then
+        return false
+    end
+    return true
+end
+
+-- True only when isGameplayView() AND no visible page holds the #742
+-- modal-exclusivity boundary (UI.isInputBlocked() — settings/save-
+-- browser/create-world/event-combat-injury-unit logs/context menu/...,
+-- see UI.Manager.Page's default upInputExclusive classification, not
+-- just the pause menu isGameplayView() already covers). Gameplay key
+-- handlers (init.lua game.onKeyDown) gate on this (#182): ordinary
+-- menus/overlays don't take UI focus, so the input thread can't divert
+-- keys away from gameplay for us — keys still broadcast to every Lua
+-- module. Menu-level keys (e.g. Escape closing a menu) are unaffected:
+-- they go through uiManager.onUIEscape, a separate broadcast. Click
+-- routing (init_mouse.lua) and camera scroll (ui_manager_scroll.lua)
+-- share this SAME gate, so all three input kinds go inert behind a
+-- modal uniformly. Escape's own dismiss cascade (init_keys.lua)
+-- deliberately runs BEFORE this gate — closing the very modal that's
+-- blocking gameplay can't itself be blocked. The debug overlay/anim
+-- panel deliberately do NOT use this function (see isGameplayView
+-- above) — their owned controls must keep receiving input above any
+-- modal per the issue's pass-through requirement.
+function uiManager.isGameplayInputActive()
+    if not uiManager.isGameplayView() then
         return false
     end
     if UI.isInputBlocked() then
