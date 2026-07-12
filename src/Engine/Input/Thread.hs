@@ -540,6 +540,14 @@ dispatchInput env inpSt event = case event of
                     then do
                         logDebug logger CatUI
                             "Middle-click swallowed by UI surface"
+                        -- #743 review round 5: middle-click has no Lua
+                        -- event of its own to ride a focus-clear on
+                        -- (unlike a RouteElement click), so — same as
+                        -- the left/right-click RouteBlocked cases above
+                        -- — clear stale UI focus explicitly here; a
+                        -- focused textbox must not stay captured just
+                        -- because the consuming surface has no callback.
+                        Q.writeQueue lq LuaUIFocusLost
                         recordRouteOutcome "noop" (Just "ui_surface_block")
                         return ClickSwallowed
                     else do

@@ -378,7 +378,7 @@ spec = do
                 msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
                 msgs `shouldSatisfy` all (not ∘ isUIRightClickEvent)
 
-            it "a middle-click over a pointer-blocking element is swallowed (no camera-drag routing)" $ \env → do
+            it "a middle-click over a pointer-blocking element is swallowed (no camera-drag routing) and clears stale UI focus" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                     (_eh, m2) = blockingAt "logPanelBg" pt (100, 100) hudH m1
@@ -388,6 +388,10 @@ spec = do
                 inputTick env
                 msgs ← drainLuaMsgs env
                 msgs `shouldSatisfy` all (not ∘ isMouseDownEvent)
+                -- #743 review round 5: middle-click has no click event
+                -- of its own to ride a focus-clear on, unlike a
+                -- RouteElement/RouteBlocked left/right-click.
+                msgs `shouldSatisfy` elem LuaUIFocusLost
 
             it "a middle-click over a purely visual, pass-through element still reaches gameplay (#743 behavior change)" $ \env → do
                 resetAll env
