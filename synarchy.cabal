@@ -615,6 +615,10 @@ library
                      World.Geology.Timeline.Helpers
                      World.Geology.Timeline.Volcanism
                      World.Geology.Timeline.River
+                     World.Geology.Timeline.River.Reconcile
+                     World.Geology.Timeline.River.Evolve
+                     World.Geology.Timeline.River.Merge
+                     World.Geology.Timeline.River.SourceDiversity
                      World.Geology.Timeline.RiverTrace
                      World.Geology.Timeline.RiverTrace.Unwrap
                      World.Geology.Timeline.RiverTrace.Subdivide
