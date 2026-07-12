@@ -11,6 +11,7 @@ module UI.Manager
   , hidePage
   , getPage
   , getVisiblePages
+  , setPageInputExclusive
     -- * Element Creation
   , createBox
   , createText

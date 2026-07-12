@@ -94,7 +94,17 @@ function M.onMouseDown(button, x, y)
     -- right-click cancels. #154: when gameplay input is inactive only
     -- let the right-click cancel through, so a blank left-click can't
     -- commit a placement onto a hidden/paused world behind an overlay.
-    if gameplayActive or button == MOUSE_RIGHT then
+    -- #742 review round 3: that right-click bypass is NOT a pure
+    -- cancel for any of these five tools — with no pending anchor,
+    -- build_tool/mine_tool/chop_tool/till_tool/plant_tool's right-click
+    -- branch instead ERASES whatever designation sits under the cursor
+    -- (a real world mutation, see e.g. scripts/build_tool.lua's
+    -- MOUSE_RIGHT case). A modal-blocked right-click reaches here as an
+    -- ordinary game-route miss (debug/shell still need first refusal
+    -- on it), so exclude UI.isInputBlocked() specifically from the
+    -- bypass — the pre-#742 view/pause right-click-cancel behavior
+    -- (isGameplayView() false but no modal) is otherwise unchanged.
+    if gameplayActive or (button == MOUSE_RIGHT and not UI.isInputBlocked()) then
         local buildTool = require("scripts.build_tool")
         if buildTool.handleMouseDown(button, x, y) then
             recordClick("build_tool", nil, x, y)

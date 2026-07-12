@@ -175,7 +175,16 @@ end
 -- Game Scroll (no UI element under cursor, no shift)
 -----------------------------------------------------------
 
+-- #742: a wheel miss that was actually stopped at a modal boundary
+-- (routePointer/UI.InputOwnership on the engine side) still reaches
+-- here as an ordinary game-scroll broadcast — the modal-page hit-test
+-- scope only keeps a LOWER UI element from capturing it, not gameplay
+-- itself. Gate on the same UI.isInputBlocked() predicate
+-- isGameplayInputActive() folds in, so camera zoom can't act behind a
+-- visible modal (a pause/settings/log/... page open over currentMenu
+-- staying "world_view" previously left this ungated).
 function uiManager.onScroll(dx, dy)
+    if UI.isInputBlocked() then return end
     local currentMenu = uiManager.currentMenu
     if currentMenu == "world_view" then
         worldView.onScroll(dx, dy)
@@ -190,7 +199,14 @@ end
 -- Z-Slice Scroll (shift+scroll)
 -----------------------------------------------------------
 
+-- #742 review round 1: shift+wheel bypasses UI hit-testing entirely on
+-- the engine side (Engine.Input.Thread routes it before ever touching
+-- routePointer, same as before #742 — see the issue's own out-of-scope
+-- carve-out), so this is the one place that must consult
+-- UI.isInputBlocked() itself, or a Shift-wheel over a visible modal's
+-- empty space would still change the gameplay z-slice behind it.
 function uiManager.onZSliceScroll(dx, dy)
+    if UI.isInputBlocked() then return end
     local currentMenu = uiManager.currentMenu
     if currentMenu == "world_view" then
         worldView.onZSliceScroll(dx, dy)

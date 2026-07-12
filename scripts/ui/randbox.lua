@@ -766,7 +766,11 @@ end
 
 function randbox.onClickOutside(mouseX, mouseY)
     for id, rb in pairs(randboxes) do
-        if rb.focused then
+        -- #742 review round 1: same page-scope guard as
+        -- scripts/ui/dropdown.lua's onClickOutside — a randbox on a
+        -- page the modal boundary has excluded must not react to a
+        -- click the boundary already consumed.
+        if rb.focused and UI.isPageInScope(rb.page) then
             local inBox = mouseX >= rb.x and mouseX <= rb.x + rb.inputWidth
                 and mouseY >= rb.y and mouseY <= rb.y + rb.height
             local inBtn = mouseX >= rb.x + rb.inputWidth

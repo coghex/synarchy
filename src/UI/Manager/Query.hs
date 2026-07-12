@@ -11,6 +11,8 @@ module UI.Manager.Query
   , findElementAt
   , findElementAtExcept
   , findRightClickableElementAt
+  , topHitBy
+  , hitsAtPointBy
   ) where
 
 import UPrelude
@@ -123,6 +125,13 @@ isPointInElement (px, py) element mgr =
 --   bounds — the renderer doesn't either (dropdown option lists
 --   extend past their display box). An invisible element prunes its
 --   whole subtree, matching the renderer.
+--
+--   @pageOk@ is a plain filter here, not a modal-boundary decision —
+--   callers that need the #742 modal-input-exclusive boundary (a miss
+--   on the boundary page must not fall through to a lower one) go
+--   through 'UI.InputOwnership.routePointer', which computes a scoped
+--   @pageOk@ from 'UI.InputOwnership.pagesInScope' and passes it in
+--   here/'topHitBy' unchanged.
 hitsAtPointBy ∷ (UIPage → Bool) → (UIElement → Bool) → (Float, Float)
               → UIPageManager → [(ElementHandle, Int)]
 hitsAtPointBy pageOk elemOk pos mgr =

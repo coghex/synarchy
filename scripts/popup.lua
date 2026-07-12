@@ -691,6 +691,12 @@ end
 function popup.init(scriptId)
     if popup.pageId == nil then
         popup.pageId = UI.newPage("popups", "modal")
+        -- #742: "modal" here is stacking only (baseZ per active card,
+        -- see below) — notification cards are pass-through outside
+        -- their own X/OK buttons, never a global modal blocker. A
+        -- LayerModal page defaults input-exclusive, so opt back out
+        -- explicitly.
+        UI.setPageInputExclusive(popup.pageId, false)
     end
 end
 
@@ -712,6 +718,7 @@ function popup.bootstrap(boxTex, btnTex, font, w, h)
     end
     if popup.pageId == nil then
         popup.pageId = UI.newPage("popups", "modal")
+        UI.setPageInputExclusive(popup.pageId, false)
     end
     UI.showPage(popup.pageId)
     popup.bootstrapped = true

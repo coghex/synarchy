@@ -204,6 +204,61 @@ registry.
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering. UI layout and behavior is driven from Lua scripts.
 
+Pages (`UI.Manager.Page`) live on one of six `UILayer`s (`UI.Types`),
+paint bottom-to-top: `LayerHUD < LayerOverlay < LayerMenu < LayerModal
+< LayerTooltip < LayerDebug` (`uiLayerBand` is the single paint-order
+source of truth both hit-testing and rendering share). Layer alone only
+decides paint/hit-test order; whether a page actually **blocks** pointer
+input from reaching whatever paints below it is the separate per-page
+`upInputExclusive` flag (#742, `UI.InputOwnership`). A `LayerModal` page
+is input-exclusive by default; every other layer defaults pass-through.
+When a visible exclusive page exists, it's the topmost one that owns
+the **modal boundary**: pointer input (left/right-click, wheel) that
+misses every owned control on or above that page is consumed rather
+than falling through to a lower page or the game world — empty modal
+space blocks a control several layers down exactly like a real control
+would. A page that's `LayerModal` for stacking only, not a real dialog
+(e.g. `scripts/popup.lua`'s notification cards), opts out via
+`UI.setPageInputExclusive(page, false)`. `LayerDebug` (the shell) and
+the F8 debug overlay (`scripts/debug.lua`, which hit-tests itself in
+Lua via a parallel `tryClaimClick` rather than through `UI.Manager` at
+all) are pass-through by design and always paint above any modal, so
+their owned controls keep receiving input regardless of what modal is
+open; a miss on them keeps searching downward until it either hits a
+lower control or reaches the modal boundary.
+
+`UI.isInputBlocked()` is true while any visible page holds the modal
+boundary; `scripts/ui_manager.lua`'s `isGameplayInputActive()` folds
+this in (alongside the pre-existing `currentMenu`/pause-menu checks) so
+ordinary gameplay key handlers, click-selection/tool-claim handling,
+camera-zoom scroll, and Shift-wheel z-slice paging all go inert behind
+a modal uniformly. Middle-click (camera drag) shares the same
+boundary-aware swallow. Escape's own dismiss cascade
+(`scripts/init_keys.lua`, closing popups/context menu/logs)
+deliberately runs before that gate — the thing that dismisses the
+block can't itself be blocked by it.
+
+The F8 overlay and `scripts/debug_anim_panel.lua` both render on a real
+`LayerDebug` page (`UI.newPage(_, "debug")`, #742 review round 2 — they
+used to sit on `LayerOverlay`, below `LayerModal`'s band, which let
+their raw parallel rects claim input from a screen position a visible
+modal was actually painted over) but own NO clickable `UI.Manager`
+elements of their own — every real click they claim goes through their
+own parallel `tryClaimClick`, entirely outside `routePointer`/
+`topHitBy`. They're pass-through surfaces that must keep receiving
+input above an arbitrary modal, so their validity gate
+(`debugOverlay.inGameplayView`/`canShow`) deliberately checks
+`uiManager.isGameplayView()` — the narrower, pre-#742 predicate
+(current view + pause menu only) — rather than the modal-aware
+`isGameplayInputActive()`. A handful of raw per-widget handlers that
+iterate every live instance regardless of page, outside
+`UI.Manager`/`routePointer` hit-testing entirely (dropdown/randbox
+"click outside" close-or-submit), use `UI.isPageInScope(pageHandle)`
+instead — it filters out instances on a page the boundary has
+excluded, while leaving same-page instances (e.g. a dropdown on the
+modal itself, dismissed by clicking elsewhere on that page) working
+exactly as before.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
