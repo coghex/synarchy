@@ -146,6 +146,20 @@ spec = do
                 RouteConsumedNoHandler _ leftCb → leftCb `shouldBe` "btnClick"
                 other → expectationFailure ("expected RouteConsumedNoHandler, got " ⧺ show other)
 
+        it "a disabled clickable control (ueClickable=False) that also opts into pointer-blocking does not revive its stale callback" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (eh, m2) = clickableAt "btn" pt (100, 100) "staleCallback" hudH m1
+                m3 = setElementClickable eh False m2
+                m4 = setElementBlocksPointer eh True m3
+            in do
+                routePointer PointerLeftClick pt m4 `shouldBe` RouteBlocked eh
+                -- The right-click fallback to "some ordinary left-clickable
+                -- control" must ALSO respect ueClickable=False, not just the
+                -- primary callback check — else a disabled button would
+                -- still swallow a right-click "on behalf of" its disabled
+                -- left callback.
+                routePointer PointerRightClick pt m4 `shouldBe` RouteBlocked eh
+
         it "a passive visual element consumes no pointer button" $
             let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                 (_eh, m2) = visualAt "deco" pt (100, 100) hudH m1

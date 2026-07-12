@@ -190,23 +190,36 @@ scopedPageOk mgr =
 --   an ordinary left-clickable control with no right-click handler of
 --   its own (pre-#742/#743 parity — 'RouteConsumedNoHandler', carrying
 --   that control's left-click callback identity for F4 bookkeeping).
+--
+--   Firing EITHER callback still requires 'ueClickable' — pointer-
+--   blocking and click-firing are independent policies, but a control
+--   temporarily disabled via @UI.setClickable(el, false)@ (callback
+--   left registered for later re-enabling) must not have that stale
+--   callback revived just because it (or an explicit 'ueBlocksPointer'
+--   opt-in) also makes it pointer-blocking; it degrades to
+--   'RouteBlocked' like any other callback-less blocking element.
 routePointer ∷ PointerKind → (Float, Float) → UIPageManager → InputRoute
 routePointer kind pos mgr =
     case topHitBy (scopedPageOk mgr) elementBlocksPointer pos mgr of
         Nothing → RouteMiss
         Just h  → case Map.lookup h (upmElements mgr) of
             Nothing → RouteMiss
-            Just el → case primaryCallback el of
+            Just el → case activeCallback kind el of
                 Just cb → RouteElement h cb
                 Nothing → case kind of
-                    PointerRightClick → case ueOnClick el of
+                    PointerRightClick → case activeCallback PointerLeftClick el of
                         Just leftCb → RouteConsumedNoHandler h leftCb
                         Nothing     → RouteBlocked h
                     PointerLeftClick  → RouteBlocked h
   where
-    primaryCallback = case kind of
-        PointerLeftClick  → ueOnClick
-        PointerRightClick → ueOnRightClick
+    -- The active (fireable) callback for a gesture: 'Nothing' whenever
+    -- the element isn't 'ueClickable', regardless of which callback
+    -- field is populated — mirrors the pre-#743 'clickOk' gate exactly.
+    activeCallback k el
+        | not (ueClickable el) = Nothing
+        | otherwise = case k of
+            PointerLeftClick  → ueOnClick el
+            PointerRightClick → ueOnRightClick el
 
 -- | #743: route one wheel/scroll event through the page stack,
 --   independent of the click callback machinery 'routePointer' uses.
