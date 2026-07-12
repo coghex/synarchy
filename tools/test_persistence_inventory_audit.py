@@ -20,7 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from persistence_inventory_audit import (  # type: ignore
     extract_record_fields, extract_lua_registered_modules,
-    find_lua_register_aliases, find_untracked_registry_aliases,
+    find_lua_register_aliases, find_lua_register_dynamic_names,
+    find_untracked_registry_aliases,
     parse_classified_names, audit,
 )
 
@@ -579,6 +580,38 @@ function saveModules.register(name, serializeFn, deserializeFn)
 end
 """
 
+# The module-name argument is a CONCATENATION, not a complete literal --
+# `saveModules.register` (the real function) accepts and stores
+# whatever this evaluates to at runtime ("unit_ai_untracked"), but the
+# literal PREFIX alone ("unit_ai") is already a classified name. A
+# scanner that captures just the prefix silently misreads this as a
+# harmless re-registration of an already-classified module instead of a
+# NEW, unclassified one.
+SYNTHETIC_LUA_REGISTER_CONCATENATED_NAME = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register("unit_ai" .. "_untracked", function() end, function() end)
+"""
+
+# The receiver is wrapped in redundant parens -- `(saveMods)` is exactly
+# as direct a call as bare `saveMods`, just with cosmetic grouping.
+SYNTHETIC_LUA_REGISTER_PARENTHESIZED_RECEIVER = """\
+local saveMods = require("scripts.lib.save_modules")
+
+(saveMods).register("untracked_parenthesized", function() end, function() end)
+"""
+
+# The real registry's OWN function DEFINITION, isolated -- a Lua
+# parameter list (`name, serializeFn, deserializeFn`) is syntactically
+# indistinguishable from a call's argument list to a receiver+`(`
+# matcher, and none of the bare parameter names satisfy a
+# complete-literal check. Must NOT be misread as a "dynamic name" call.
+SYNTHETIC_LUA_REGISTER_DEFINITION_ONLY = """\
+function saveModules.register(name, serializeFn, deserializeFn)
+    saveModules.registry[name] = { serialize = serializeFn, deserialize = deserializeFn }
+end
+"""
+
 # A long-bracket STRING (not a comment) whose content happens to
 # mention "saveMods.register" -- prose, not a live reference. Mirrors
 # SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING but for the
@@ -902,6 +935,67 @@ def test_find_lua_register_aliases_detects_package_loaded_chained_stored_referen
     expect(offenders == ["scripts/fake.lua"],
            f"package.loaded[...].register stored in a local (not called "
            f"directly) is flagged, got {offenders}")
+
+
+def test_extract_lua_registered_modules_ignores_concatenated_name():
+    # Regression: a module-name argument built via concatenation is NOT
+    # a complete literal -- extraction must not silently capture just
+    # the literal PREFIX ("unit_ai", already classified) as if it were
+    # the whole (differently-named, unclassified) registration.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_CONCATENATED_NAME})
+    expect(found == [],
+           f"a register() call whose name argument is a concatenation "
+           f"is not extracted as a registration of its literal prefix, "
+           f"got {found}")
+
+
+def test_find_lua_register_dynamic_names_detects_concatenated_name():
+    offenders = find_lua_register_dynamic_names(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_CONCATENATED_NAME})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a register() call with a concatenated (non-literal) name "
+           f"argument is flagged, got {offenders}")
+
+
+def test_extract_lua_registered_modules_finds_parenthesized_receiver():
+    # `(saveMods).register(...)` is exactly as direct a call as bare
+    # `saveMods.register(...)` -- must still be extracted normally.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENTHESIZED_RECEIVER})
+    names = [n for n, _ in found]
+    expect(names == ["untracked_parenthesized"],
+           f"a register() call through a parenthesized receiver is "
+           f"extracted, got {names}")
+
+
+def test_find_lua_register_aliases_ignores_parenthesized_receiver_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENTHESIZED_RECEIVER})
+    expect(offenders == [],
+           f"a parenthesized-receiver DIRECT call is not flagged as an "
+           f"alias, got {offenders}")
+
+
+def test_find_lua_register_dynamic_names_ignores_parenthesized_receiver():
+    offenders = find_lua_register_dynamic_names(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENTHESIZED_RECEIVER})
+    expect(offenders == [],
+           f"a parenthesized-receiver call with a complete literal name "
+           f"is not flagged as a dynamic name, got {offenders}")
+
+
+def test_find_lua_register_dynamic_names_ignores_the_registry_own_definition():
+    # Regression: `function saveModules.register(name, ...)` -- the real
+    # registry's own DEFINITION -- is syntactically indistinguishable
+    # from a call to a receiver+`(` matcher, and its bare parameter
+    # names never satisfy a complete-literal check. Must not be
+    # misread as a "dynamic name" call.
+    offenders = find_lua_register_dynamic_names(
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_DEFINITION_ONLY})
+    expect(offenders == [],
+           f"the registry's own function definition is not flagged as "
+           f"a dynamic name call, got {offenders}")
 
 
 def test_find_lua_register_aliases_ignores_longbracket_string_prose():
@@ -1523,6 +1617,55 @@ def test_audit_detects_aliased_package_loaded_chained_registration():
            f"as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_concatenated_module_name():
+    """The req-10 acceptance test's dynamic-name variant: a register()
+    call whose module-name argument is a concatenation (not a complete
+    literal) is a real, live registration of a DIFFERENT, unclassified
+    runtime name -- silently capturing just the classified literal
+    prefix would hide this from the audit entirely."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_CONCATENATED_NAME},
+        SYNTHETIC_INVENTORY_COMPLETE,  # classifies "unit_ai", not the concatenated runtime name
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "literal" in v.lower() for v in violations),
+           f"a register() call with a concatenated name argument is "
+           f"reported as a violation, got {violations}")
+
+
+def test_audit_detects_unclassified_parenthesized_receiver_registration():
+    """A module registered through a parenthesized receiver is ordinary,
+    fully traceable Lua -- an unclassified module registered that way
+    must still be reported (and NOT also as an alias)."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PARENTHESIZED_RECEIVER},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for untracked_parenthesized
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("untracked_parenthesized" in v for v in violations),
+           f"a module registered through a parenthesized receiver is "
+           f"reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a parenthesized-receiver DIRECT call is not ALSO reported "
+           f"as an aliasing violation, got {violations}")
+
+
+def test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name():
+    """Regression: the registry's own `function saveModules.register(name,
+    ...)` definition must not be misread as a dynamic-name call."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_DEFINITION_ONLY},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("literal" in v.lower() for v in violations),
+           f"the registry's own function definition is not reported as "
+           f"a dynamic-name violation, got {violations}")
+
+
 def test_audit_does_not_flag_longbracket_string_prose_as_an_alias():
     """Regression: a long-bracket STRING literal (not a comment) whose
     content happens to mention "saveMods.register" used to be
@@ -1793,6 +1936,12 @@ def main() -> int:
         test_find_lua_register_aliases_detects_require_chained_stored_reference,
         test_find_lua_register_aliases_ignores_package_loaded_chained_direct_call,
         test_find_lua_register_aliases_detects_package_loaded_chained_stored_reference,
+        test_extract_lua_registered_modules_ignores_concatenated_name,
+        test_find_lua_register_dynamic_names_detects_concatenated_name,
+        test_extract_lua_registered_modules_finds_parenthesized_receiver,
+        test_find_lua_register_aliases_ignores_parenthesized_receiver_direct_call,
+        test_find_lua_register_dynamic_names_ignores_parenthesized_receiver,
+        test_find_lua_register_dynamic_names_ignores_the_registry_own_definition,
         test_find_lua_register_aliases_ignores_longbracket_string_prose,
         test_find_untracked_registry_aliases_detects_arbitrary_local_name,
         test_find_untracked_registry_aliases_ignores_sanctioned_local_name,
@@ -1835,6 +1984,9 @@ def main() -> int:
         test_audit_detects_aliased_require_chained_registration,
         test_audit_detects_unclassified_package_loaded_chained_module_registration,
         test_audit_detects_aliased_package_loaded_chained_registration,
+        test_audit_detects_concatenated_module_name,
+        test_audit_detects_unclassified_parenthesized_receiver_registration,
+        test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,
         test_audit_detects_registration_via_untracked_require_local,

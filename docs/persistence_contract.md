@@ -311,7 +311,9 @@ serialization-correctness proof. It:
    signature).
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
    covering four Lua access-expression forms for the registry table
-   itself (a local named `saveMods`/`saveModules`, bracket-indexed
+   itself (a local named `saveMods`/`saveModules`, optionally wrapped in
+   one level of redundant parens — `(saveMods).register(...)` is
+   exactly as direct a call as the bare form —, bracket-indexed
    `saveMods["register"](...)`/`saveMods['register'](...)`,
    `require("scripts.lib.save_modules").register(...)` chained directly
    off its own `require()` with no local binding at all, and
@@ -329,7 +331,13 @@ serialization-correctness proof. It:
    LOOKS like a registration (`[[example: saveMods.register("x", nil,
    nil)]]`) is never extracted as a live one — only a real call's own
    receiver, which is never itself inside a string, is ever excluded
-   from that filter.
+   from that filter. The literal itself must be the COMPLETE first
+   argument — immediately followed by the arg-separating comma or the
+   call's closing paren, never concatenated with further expression
+   text — so a call like `saveMods.register("unit_ai" ..
+   "_untracked", ...)` is never misread as a harmless re-registration
+   of the classified literal prefix "unit_ai" when it actually
+   registers a different, unclassified runtime name (see item 7).
 3. Parses `persistence_state_inventory.md`'s classification tables for
    the set of item names that have a recorded classification AND that
    classification's own cell text, scoped to the exact `### OwnerName`
@@ -422,6 +430,25 @@ serialization-correctness proof. It:
    stops being a tractable improvement and starts being a hand-rolled
    Lua interpreter; this audit deliberately stays a static guard, not a
    serialization-correctness proof (see the opening of this section).
+7. Separately fails on any direct `.register(...)`/`["register"](...)`
+   call (any of the four receiver forms above) whose module-name
+   argument is NOT a complete, standalone literal per item 2's
+   completeness check — e.g. a concatenation
+   (`"unit_ai" .. "_untracked"`), a variable, or any other computed
+   expression. `saveModules.register` (the real function) accepts and
+   stores whatever string the argument evaluates to at RUNTIME; tracing
+   an arbitrary Lua expression to that string is real interpretation
+   territory, the same reasoning that makes an untraceable alias itself
+   the failure in items 5–6. Rather than silently ignoring such a call
+   (which would leave a new, unclassified runtime module invisible to
+   the audit) or worse, matching just a literal PREFIX and treating
+   that as the whole call, the call itself is the failure — the
+   codebase's real registration convention is a plain literal name at
+   all four known call sites. Excludes the registry's OWN `function
+   saveModules.register(name, serializeFn, deserializeFn)` DEFINITION
+   site, which is syntactically indistinguishable from a call to a
+   receiver-plus-open-paren matcher (a Lua parameter list looks
+   identical) but is a declaration, not a registration.
 
 Run it directly:
 

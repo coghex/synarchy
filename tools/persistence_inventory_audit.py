@@ -86,9 +86,28 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # be reached by BRACKET indexing instead of dot access
 # (`saveMods["register"](...)`/`saveMods['register'](...)`) -- a
 # perfectly ordinary direct call, not an alias, so it's recognized as
-# an alternate spelling of the same access rather than flagged.
+# an alternate spelling of the same access rather than flagged. Lua
+# also allows the bare name to be wrapped in one level of redundant
+# parens -- `(saveMods).register(...)` is exactly as direct a call as
+# `saveMods.register(...)`, just with cosmetic grouping -- so a
+# dedicated parenthesized alternative matches `( saveMods )` (the
+# require()/package.loaded forms are already parenthesized-looking via
+# their own call/index syntax and aren't wrapped like this in practice,
+# so parens support is scoped to the bare-name alternative). This is
+# its OWN alternative rather than an optional `\(*`/`\)*` wrapped
+# around the plain bare-name alternative: an UNCONDITIONALLY optional
+# paren would let its accompanying `\s*` swallow ordinary PRECEDING
+# whitespace/indentation even with no paren present at all (the
+# regex engine finds the leftmost successful match, and whitespace
+# before an unparenthesized `saveMods` satisfies `\(*\s*` with zero
+# parens matched), silently shifting every real match's start position
+# earlier by however much leading whitespace precedes it -- which
+# desyncs any position-based comparison against a DIFFERENT pattern
+# anchored to the identifier itself (e.g. the function-definition-site
+# exclusion in find_lua_register_dynamic_names, which surfaced this).
 _REGISTER_TABLE_REF = (
-    r"(?:save(?:Mods|Modules)"
+    r"(?:\(\s*save(?:Mods|Modules)\s*\)"
+    r"|save(?:Mods|Modules)"
     r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)"
     r"|package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
 )
@@ -159,13 +178,42 @@ _PACKAGE_LOADED_ASSIGNMENT_TARGET_RE = re.compile(
 # quote style for the module name -- `(['"])` captures the opening
 # quote and `\1` backreferences it as the closing delimiter, so
 # `'name'` and `"name"` both match and neither is truncated by the
-# OTHER quote character appearing inside it.
-REGISTER_RE = re.compile(_REGISTER_ACCESS + r"\s*\(\s*(['\"])((?:(?!\1).)*)\1")
+# OTHER quote character appearing inside it. The trailing `(?=\s*[,)])`
+# requires the literal to be the COMPLETE first argument -- immediately
+# followed by the arg-separating comma or the call's closing paren, not
+# concatenated with further expression text (`"unit_ai" .. "_untracked"`).
+# Without this, the regex captures just the literal PREFIX of whatever
+# the real (dynamically-built) module name turns out to be at runtime,
+# silently misreporting a call that actually registers a DIFFERENT,
+# unclassified name as if it re-registered the already-classified
+# literal alone -- see find_lua_register_dynamic_names for the
+# complementary hard-fail on a call that fails this completeness check.
+REGISTER_RE = re.compile(
+    _REGISTER_ACCESS + r"\s*\(\s*(['\"])((?:(?!\1).)*)\1(?=\s*[,)])")
 # Lua long-bracket strings: `[[name]]`, `[=[name]=]`, `[==[name]==]`, ...
 # -- the `=` run's LENGTH must match on both sides (Lua's own rule),
 # enforced here via backreference `\1` same as the quote form above.
+# Same completeness lookahead as REGISTER_RE.
 REGISTER_RE_LONGBRACKET = re.compile(
-    _REGISTER_ACCESS + r"\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
+    _REGISTER_ACCESS + r"\s*\(\s*\[(=*)\[(.*?)\]\1\](?=\s*[,)])", re.DOTALL)
+# Any direct call at all (register access immediately followed by an
+# opening paren), regardless of what the argument looks like -- used to
+# find calls whose module-name argument ISN'T a complete literal (see
+# find_lua_register_dynamic_names), by finding every direct call and
+# then checking which ones REGISTER_RE/REGISTER_RE_LONGBRACKET do NOT
+# also match at the exact same position.
+_REGISTER_CALL_RE = re.compile(_REGISTER_ACCESS + r"\s*\(")
+# `function saveModules.register(name, serializeFn, deserializeFn)` --
+# the real registry's OWN function DEFINITION (a Lua parameter list, not
+# a call) is syntactically indistinguishable from a call to
+# _REGISTER_CALL_RE (both are "register access immediately followed by
+# `(`"), and its bare-identifier parameter names never satisfy
+# REGISTER_RE/REGISTER_RE_LONGBRACKET's literal-argument check, so
+# without this exclusion the definition site itself would be
+# misreported as a "dynamic name" call. Captures the register-access
+# START position (group 1) so find_lua_register_dynamic_names can skip
+# any _REGISTER_CALL_RE match that starts there.
+_REGISTER_DEFINITION_RE = re.compile(r"function\s+(" + _REGISTER_ACCESS + r")")
 # A reference to `saveMods.register`/`saveModules.register` (dot OR
 # bracket form) NOT immediately followed by a call `(` -- i.e. the
 # function is being ALIASED into a variable/table field rather than
@@ -590,6 +638,55 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
     return offenders
 
 
+def find_lua_register_dynamic_names(scripts_text_by_file: dict[str, str]) -> list[str]:
+    """Files with a direct saveMods.register(...)-shaped call whose
+    module-name argument is NOT a complete, standalone string/
+    long-bracket literal -- e.g. `saveMods.register("unit_ai" ..
+    "_untracked", ...)`, where `saveModules.register` (the real
+    function -- see scripts/lib/save_modules.lua) accepts and stores
+    whatever string the argument expression evaluates to at runtime,
+    but the literal PREFIX visible to static analysis ("unit_ai") is
+    already a classified name.
+
+    extract_lua_registered_modules (via REGISTER_RE/REGISTER_RE_LONGBRACKET)
+    only recognizes a call whose entire first argument is one literal;
+    tracing an arbitrary Lua expression (concatenation, a variable,
+    string.format(...), ...) to the string it evaluates to at runtime is
+    real interpretation territory, not a tractable regex improvement --
+    the same reasoning that makes an alias itself the failure elsewhere
+    in this module (find_lua_register_aliases,
+    find_untracked_registry_aliases). So rather than silently ignoring
+    a call whose argument extraction fails, or worse, silently matching
+    just the literal PREFIX and treating that as the whole registration,
+    this flags the CALL itself as a failure: every direct call
+    (_REGISTER_CALL_RE) whose argument doesn't ALSO satisfy REGISTER_RE/
+    REGISTER_RE_LONGBRACKET's completeness check is reported. The
+    codebase's real registration convention is a plain literal name
+    (verified against all 4 real call sites), so this never fires on
+    genuine code. Explicitly skips the registry's own `function
+    saveModules.register(name, ...)` DEFINITION site -- a Lua parameter
+    list is syntactically indistinguishable from a call to
+    _REGISTER_CALL_RE, but it's a declaration, not a registration.
+    """
+    offenders: list[str] = []
+    for relpath, text in sorted(scripts_text_by_file.items()):
+        cleaned = _strip_lua_comments(text)
+        spans = _string_literal_spans(cleaned)
+        definition_starts = {
+            m.start(1) for m in _REGISTER_DEFINITION_RE.finditer(cleaned)}
+        for m in _REGISTER_CALL_RE.finditer(cleaned):
+            if any(start <= m.start() < end for start, end in spans):
+                continue  # inside a string literal, not real code
+            if m.start() in definition_starts:
+                continue  # the registry's own function DEFINITION site
+            if REGISTER_RE.match(cleaned, m.start()) or \
+                    REGISTER_RE_LONGBRACKET.match(cleaned, m.start()):
+                continue  # a complete, well-formed literal argument
+            offenders.append(relpath)
+            break
+    return offenders
+
+
 # `TARGET = saveMods`/`TARGET = saveModules` (with or without a leading
 # `local`) where TARGET is anything other than the bare canonical name
 # -- re-aliasing the already-canonical table into a second variable OR
@@ -869,6 +966,15 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             f"without calling it directly (e.g. assigning it to a local "
             f"or table field) -- the audit can only trace direct calls; "
             f"call saveMods.register(...) directly instead of aliasing it")
+
+    for relpath in find_lua_register_dynamic_names(scripts_text_by_file):
+        violations.append(
+            f"{relpath} calls saveMods.register/saveModules.register with "
+            f"a module-name argument that isn't a complete, standalone "
+            f"string/long-bracket literal (e.g. a concatenation or other "
+            f"expression) -- the audit can only trace a plain literal "
+            f"name; pass the module name as one literal string instead "
+            f"of a computed expression")
 
     for relpath in find_untracked_registry_aliases(scripts_text_by_file):
         violations.append(
