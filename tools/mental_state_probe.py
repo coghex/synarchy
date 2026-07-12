@@ -450,6 +450,14 @@ def main():
             print(f"  [FAIL] catatonia leaked movement or physiological state: "
                   f"disp=({x1 - x0:.2f},{y1 - y0:.2f}) gate={gate}")
 
+        # Narration distinguishable from wander/flee (#717 requirement 7).
+        evs = send(P, "return engine.getEventLog()")
+        if "catatonic mental break" in evs:
+            print("  [pass] catatonia narrates distinctly in the event log")
+        else:
+            ok = False
+            print(f"  [FAIL] no catatonia-specific narration in the log: {evs[-400:]}")
+
         send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
         if poll_until(5, lambda: mstate(P, uid) != "break"):
             print("  [pass] catatonia exits through the normal cooldown path")
@@ -472,9 +480,27 @@ def main():
         set_wellbeing(P, lash, 1.0, 0.0)
         poll_until(5, lambda: mstate(P, lash) == "stable")
         attacker = spawn_acolyte(P, -29, -25)
+        # Neuter BOTH units' damage output before staging the hit — a
+        # full-strength acolyte swing landed on an unarmored target can
+        # be lethal in one blow (Combat.Resolution's E_swing scales with
+        # strength), and a dead unit stops ticking mental_state entirely
+        # (unit_resources skips dead/collapsed units), which would wedge
+        # every check below forever. This includes lash's own retaliation
+        # once it's hit (ordinary combat AI fights back before lash-out
+        # takes over below) — either direction landing a full-strength
+        # hit risks killing the other side. We only need landed hits to
+        # register, not a realistic fight. toughness=100 caps
+        # Combat.Resolution's energy-transfer reduction at its 50% max
+        # (clamp(toughness*0.05, 0, 0.5)) regardless of roll variance —
+        # a second, independent line of defense on top of the strength
+        # nerf (strength alone left a small residual death chance).
+        send(P, f"unit.setStat({attacker},'strength',0.05); "
+                f"unit.setStat({attacker},'toughness',100); "
+                f"unit.setStat({lash},'strength',0.05); "
+                f"unit.setStat({lash},'toughness',100); return 'ok'")
         send(P, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
                 f"return 'ok'")
-        hit = poll_until(20, lambda: send(
+        hit = poll_until(35, lambda: send(
             P, f"local a=unit.getLastAttacker({lash}); return a and a.uid or 'nil'"
         ) == str(attacker))
         if hit:
@@ -485,24 +511,57 @@ def main():
             print(f"  [FAIL] attacker {attacker} never landed a hit on {lash} "
                   f"— can't test attacker preference")
 
-        # Deliberately leave attacker's own commandAttack(lash) running —
-        # it keeps both units engaged (no ambient-wander drift risk
-        # between here and forcing the episode below) and doesn't affect
-        # lash's own state, which is all the checks below assert on.
+        # Stop BOTH sides' ordinary combat AI immediately. Lash's own AI
+        # retaliates against attacker via the normal incoming_hit/engage
+        # mechanism the instant it's hit — left running for the several
+        # seconds the rest of this setup takes, sustained mutual combat
+        # can collapse either side from accumulated blood loss even with
+        # toughness/strength reduced (those shrink per-hit severity, not
+        # how long the fight runs), and a collapsed attacker is exactly
+        # what lash-out's own eligibility correctly excludes — silently
+        # invalidating this "prefers a live attacker" scenario. Draining
+        # attacker's stamina below the acolyte config's
+        # wander_min_stamina_fraction (0.2 — never to 0, the engine's
+        # universal death rule) also disables its ambient wander, so it
+        # stays a stationary target once its goal is cleared.
+        send(P, f"local ai=require('scripts.unit_ai') "
+                f"local ids={{{attacker},{lash}}} "
+                f"for _,u in ipairs(ids) do "
+                f"local s=ai.getState(u); "
+                f"if s then ai.markGoalAccomplished(s,'attack'); "
+                f"s.attackTargetUid=nil end; unit.stop(u) end "
+                f"local st=require('scripts.unit_stats') "
+                f"unit.setStat({attacker},'stamina', "
+                f"st.get({attacker},'max_stamina')*0.1); return 'ok'")
+
+        # Unconditionally revive both — whatever the brief exchange above
+        # left them at, this scenario needs attacker standing to test
+        # "prefers a live recent attacker" at all (a collapsed one is
+        # correctly excluded by lash-out's own eligibility, invalidating
+        # the check for an unrelated reason), and needs lash conscious
+        # since a collapsed unit's AI doesn't tick at all.
+        send(P, f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
+
+        # Snap attacker back to a fixed, known distance from lash — the
+        # swing that landed above can knock either side back by an
+        # unpredictable amount, and the stop command above only takes
+        # effect on the next tick, leaving a brief window where it could
+        # still drift. teleporting removes that uncertainty entirely
+        # rather than trusting wherever combat physics left it.
         lx, ly = unit_pos(P, lash)
-        ax, ay = unit_pos(P, attacker)
-        d_att = ((lx - ax) ** 2 + (ly - ay) ** 2) ** 0.5
-        # Place the decoy at HALF the current attacker distance (rather
-        # than a fixed offset) — attacker is still actively fighting lash
-        # (see above), so its distance from lash varies run to run;
-        # halving guarantees the decoy is strictly closer whenever
-        # d_att > 0, regardless of how close combat has already drawn them.
-        decoy_dist = max(0.02, d_att / 2)
-        decoy = spawn_acolyte(P, lx + decoy_dist, ly)
-        if decoy_dist >= d_att:
+        send(P, f"unit.setPos({attacker}, {lx + 1}, {ly}); return 'ok'")
+        # unit.setPos just enqueues a UnitTeleport — confirm it actually
+        # landed before trusting the new distance (it's processed on the
+        # unit thread, asynchronously from this console command).
+        if not poll_until(5, lambda: (lambda x, y:
+                (x - (lx + 1)) ** 2 + (y - ly) ** 2 < 0.05)(*unit_pos(P, attacker))):
             ok = False
-            print(f"  [FAIL] setup: decoy ({decoy_dist:.2f} away) not closer "
-                  f"than attacker (d_att={d_att:.2f})")
+            print(f"  [FAIL] setup: teleporting {attacker} back next to "
+                  f"{lash} never took effect")
+        d_att = 1.0
+        # Place the decoy at HALF that distance — always strictly closer.
+        decoy_dist = d_att / 2
+        decoy = spawn_acolyte(P, lx + decoy_dist, ly)
 
         send(P, f"require('scripts.mental_state').forceBreak({lash},'lash_out'); "
                 f"return 'ok'")
@@ -531,21 +590,178 @@ def main():
             ok = False
             print(f"  [FAIL] lash-out never landed an attack on {attacker}")
 
-        # 9c. Episode end clears every lash-out-owned goal/target.
+        # Narration distinguishable from wander/flee (#717 requirement 7).
+        evs = send(P, "return engine.getEventLog()")
+        if "violent mental break" in evs:
+            print("  [pass] lash-out narrates distinctly in the event log")
+        else:
+            ok = False
+            print(f"  [FAIL] no lash-out-specific narration in the log: {evs[-400:]}")
+
+        # Done with lash/attacker/decoy — end lash's episode; no further
+        # assertions need them (the dedicated cleanup test below uses its
+        # own isolated pair, see the note there for why).
         send(P, f"unit.setStat({lash},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, lash) != "break")
 
-        def cleaned():
-            f = lash_ai_flags(P, lash)
+        # 9c. Episode end clears every lash-out-owned goal/target.
+        # Isolated from ordinary re-engagement: attacker's original staged
+        # hit is still within the ordinary combat system's 10s incoming_
+        # hit engage window, so ending the mental episode against THAT
+        # pair also lets ordinary AI legitimately re-pick attacker via
+        # engage/attack_target moments later — externally indistinguishable
+        # from a leak (both converge on the same tgt/goal). Pin lashC's own
+        # unit.getLastAttacker to nil instead, so once the episode ends,
+        # ordinary combat AI has no incoming-hit reason to re-target
+        # whoever lash-out was fighting, isolating what this check assert on.
+        lashC = spawn_acolyte(P, 10, 40)
+        set_wellbeing(P, lashC, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, lashC) == "stable")
+        targetC = spawn_acolyte(P, 11, 40)
+        # Neither side needs to land a meaningful blow here (only the
+        # goal/target bookkeeping matters), so keep this pair non-lethal
+        # too — same rationale as the 9a setup above.
+        send(P, f"unit.setStat({lashC},'strength',0.05); "
+                f"unit.setStat({lashC},'toughness',100); "
+                f"unit.setStat({targetC},'strength',0.05); "
+                f"unit.setStat({targetC},'toughness',100); return 'ok'")
+
+        send(P, f"if not _G.__probe_orig_getLastAttacker then "
+                f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
+                f"unit.getLastAttacker = function(u) "
+                f"if u == {lashC} then return nil end "
+                f"return _G.__probe_orig_getLastAttacker(u) end; return 'ok'")
+
+        send(P, f"require('scripts.mental_state').forceBreak({lashC},'lash_out'); "
+                f"return 'ok'")
+
+        def lashC_target():
+            t = lash_target(P, lashC)
+            return t if t != "nil" else None
+        gotC = poll_until(10, lashC_target)
+        if gotC != str(targetC):
+            ok = False
+            print(f"  [FAIL] setup: lashC never targeted {targetC} (got {gotC})")
+
+        send(P, f"unit.setStat({lashC},'mental_until',0); return 'ok'")
+
+        def clearedC():
+            f = lash_ai_flags(P, lashC)
             return f if (not f["tgt"] and f["goal"] != "attack"
                          and not f["committed"]) else None
-        cleared = poll_until(5, cleaned)
+        cleared = poll_until(6, clearedC)
+        send(P, "if _G.__probe_orig_getLastAttacker then "
+                "unit.getLastAttacker = _G.__probe_orig_getLastAttacker; "
+                "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
         if cleared:
             print(f"  [pass] episode end cleared lash-out combat state: {cleared}")
         else:
             ok = False
             print(f"  [FAIL] lash-out combat state leaked past episode end: "
-                  f"{lash_ai_flags(P, lash)}")
+                  f"{lash_ai_flags(P, lashC)}")
+        poll_until(5, lambda: mstate(P, lashC) != "break")
+
+        # 9c2. The shared attack_target retaliation-swap (unit_ai_combat_
+        # attack.lua's mid-fight retarget) must not hand lash-out a
+        # COLLAPSED recent attacker — it only excludes "dead" on its own,
+        # so a collapsed unit that hit us moments ago and stands in
+        # melee range could otherwise bypass lash-out's own eligibility
+        # policy via that shared path.
+        lashB = spawn_acolyte(P, 0, 20)
+        set_wellbeing(P, lashB, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, lashB) == "stable")
+        victimB = spawn_acolyte(P, 1, 20)     # eligible target, stays live
+        attackerB = spawn_acolyte(P, -1, 20)  # becomes the disqualified
+                                               # "recent attacker"
+        # See the neutered-strength note in the 9a setup above — same
+        # one-shot-kill risk applies here, in both directions.
+        send(P, f"unit.setStat({attackerB},'strength',0.05); "
+                f"unit.setStat({attackerB},'toughness',100); "
+                f"unit.setStat({lashB},'strength',0.05); "
+                f"unit.setStat({lashB},'toughness',100); return 'ok'")
+        send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB}); "
+                f"return 'ok'")
+        hitB = poll_until(35, lambda: send(
+            P, f"local a=unit.getLastAttacker({lashB}); return a and a.uid or 'nil'"
+        ) == str(attackerB))
+        if not hitB:
+            ok = False
+            print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
+                  f"— can't test the retaliation-swap exclusion")
+
+        # Stop BOTH sides' ordinary combat AI immediately — see the
+        # identical note in the 9a setup above. This test wants
+        # attackerB's REPORTED pose patched to 'collapsed' below while it
+        # stays actually healthy underneath; letting real mutual combat
+        # run first risks genuinely collapsing lashB instead.
+        send(P, f"local ai=require('scripts.unit_ai') "
+                f"local ids={{{attackerB},{lashB}}} "
+                f"for _,u in ipairs(ids) do "
+                f"local s=ai.getState(u); "
+                f"if s then ai.markGoalAccomplished(s,'attack'); "
+                f"s.attackTargetUid=nil end; unit.stop(u) end; return 'ok'")
+        # Unconditionally revive both (see the identical note in the 9a
+        # setup) — this test wants attackerB's REPORTED pose patched to
+        # 'collapsed' below while actually healthy underneath. Draining
+        # its stamina below the acolyte config's wander_min_stamina_
+        # fraction (0.2 — never to 0, the universal death rule) disables
+        # ambient wander too, so revival doesn't send it drifting off
+        # again before the teleport below is confirmed.
+        send(P, f"unit.revive({attackerB}); unit.revive({lashB}); "
+                f"local st=require('scripts.unit_stats') "
+                f"unit.setStat({attackerB},'stamina', "
+                f"st.get({attackerB},'max_stamina')*0.1); return 'ok'")
+
+        # Snap attackerB back to a fixed, known distance from lashB — see
+        # the identical note in the 9a setup above (knockback can drift
+        # them beyond LASHOUT_RANGE, which would invalidate this check
+        # for the wrong reason).
+        lbx, lby = unit_pos(P, lashB)
+        send(P, f"unit.setPos({attackerB}, {lbx + 1}, {lby}); return 'ok'")
+        # Confirm the (async) teleport actually landed — see the 9a note.
+        if not poll_until(5, lambda: (lambda x, y:
+                (x - (lbx + 1)) ** 2 + (y - lby) ** 2 < 0.05)(*unit_pos(P, attackerB))):
+            ok = False
+            print(f"  [FAIL] setup: teleporting {attackerB} back next to "
+                  f"{lashB} never took effect")
+
+        # Pin attackerB's reported pose to 'collapsed' — unit.collapse()
+        # alone only holds while every gating resource sits below its
+        # revive threshold (see the dead/collapsed/technomule test
+        # below), so this reuses the same wrap-and-delegate technique
+        # for a reliable, deterministic pose throughout this check.
+        send(P, f"if not _G.__probe_orig_getPose then "
+                f"_G.__probe_orig_getPose = unit.getPose end; "
+                f"unit.getPose = function(u) "
+                f"if u == {attackerB} then return 'collapsed' end "
+                f"return _G.__probe_orig_getPose(u) end; return 'ok'")
+
+        send(P, f"require('scripts.mental_state').forceBreak({lashB},'lash_out'); "
+                f"return 'ok'")
+
+        # Sample rapidly through the retaliation-swap's own 3s window
+        # (RETALIATE_WINDOW_SEC, timed from the hit staged above) —
+        # lash-out must land on the eligible victimB and never once show
+        # the collapsed attackerB sneaking in via the shared swap.
+        samplesB = []
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            samplesB.append(lash_target(P, lashB))
+            time.sleep(0.15)
+        send(P, "if _G.__probe_orig_getPose then "
+                "unit.getPose = _G.__probe_orig_getPose; "
+                "_G.__probe_orig_getPose = nil end; return 'ok'")
+
+        if str(victimB) in samplesB and str(attackerB) not in samplesB:
+            print(f"  [pass] lash-out targeted the eligible {victimB} and never "
+                  f"the collapsed recent attacker {attackerB}: "
+                  f"{samplesB[:4]}...")
+        else:
+            ok = False
+            print(f"  [FAIL] expected only {victimB}, saw: {samplesB}")
+
+        send(P, f"unit.setStat({lashB},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, lashB) != "break")
 
         # 9d. No eligible attacker: nearest eligible unit (an ally — every
         # spawned acolyte shares one faction, so this doubles as the
@@ -645,6 +861,14 @@ def main():
             ok = False
             print(f"  [FAIL] lash-out never replaced lost target {t1} with "
                   f"{t2} (current={lash_target(P, subj4)})")
+
+        # Clean up: t2 flees subj4 under ordinary retreat mechanics (up to
+        # RETREAT_SAFE_DIST=12 tiles), which could otherwise drift it into
+        # the "isolated" unit's LASHOUT_RANGE below. Kill it and end
+        # subj4's episode so nothing from this cluster wanders further.
+        send(P, f"unit.kill({t2}); unit.setStat({subj4},'mental_until',0); "
+                f"return 'ok'")
+        poll_until(5, lambda: mstate(P, subj4) != "break")
 
         # 9g. No eligible target: agitated wander, keep searching.
         subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles

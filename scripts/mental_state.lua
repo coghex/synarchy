@@ -147,6 +147,22 @@ function mental.rollBehavior(draw)
     return mental.LASHOUT
 end
 
+-- Per-behaviour narration (#717): the thought and event-log line both
+-- default to the original generic text (wander/flee keep it — no
+-- change to their established narration), overridden for catatonia and
+-- lash-out so they read as distinguishable episodes. Every event-log
+-- variant keeps the "mental break" substring so log/UI code (and the
+-- probe) that greps for it keeps matching regardless of which
+-- behaviour rolled.
+local BREAK_THOUGHT = {
+    [mental.CATATONIA] = "Everything goes distant and still. Moving feels impossible.",
+    [mental.LASHOUT]   = "Something in me wants to hurt someone.",
+}
+local BREAK_EVENT_SUFFIX = {
+    [mental.CATATONIA] = " is having a catatonic mental break — frozen in place.",
+    [mental.LASHOUT]   = " is having a violent mental break — lashing out at anyone nearby.",
+}
+
 local function enterBreak(uid, now, behavior)
     if behavior == nil then
         behavior = mental.rollBehavior()
@@ -158,8 +174,11 @@ local function enterBreak(uid, now, behavior)
     -- over immediately rather than after the current leg.
     unit.stop(uid)
     local who, info = unitLabel(uid)
-    thought.emit(uid, "Something snaps. It is all too much.", "state")
-    emitFor(uid, "unit_warning", who .. " is having a mental break.", info)
+    thought.emit(uid, BREAK_THOUGHT[behavior]
+                     or "Something snaps. It is all too much.", "state")
+    emitFor(uid, "unit_warning",
+            who .. (BREAK_EVENT_SUFFIX[behavior]
+                    or " is having a mental break."), info)
 end
 
 local function enterEuphoria(uid, now)

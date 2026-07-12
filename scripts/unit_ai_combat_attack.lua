@@ -305,8 +305,15 @@ local function attackTargetExecute(uid, s, params)
     -- already handles first contact; this is the in-combat target swap.)
     do
         local att = unit.getLastAttacker(uid)
+        -- A collapsed attacker is disqualified alongside dead — equally
+        -- incapable of being a live threat worth swapping onto (#717:
+        -- this also closes the gap where lash-out's own collapsed-
+        -- target exclusion could otherwise be bypassed via this shared
+        -- retaliation path, since attack_target is the same execute
+        -- function lash-out drives).
+        local attPose = att and unit.getPose(att.uid)
         if att and att.uid ~= target and unit.exists(att.uid)
-           and unit.getPose(att.uid) ~= "dead"
+           and attPose ~= "dead" and attPose ~= "collapsed"
            and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC then
             local m = unit.getInfo(uid)
             local a = unit.getInfo(att.uid)
