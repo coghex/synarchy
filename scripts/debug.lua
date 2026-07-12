@@ -236,7 +236,14 @@ function debugOverlay.createUI()
 
     local s = scale.applyAll(debugOverlay.baseSizes)
     local uiscale = scale.get()
-    debugOverlay.page = UI.newPage("debug_overlay", "overlay")
+    -- #742 review round 2: "debug", not "overlay" — this page renders
+    -- no clickable elements of its own (clicks go through the parallel
+    -- tryClaimClick below), but its labels' PAINT order must actually
+    -- sit above any modal, matching the pass-through contract
+    -- (LayerOverlay's band sits below LayerModal's; LayerDebug's sits
+    -- above it), not just the input-claim priority tryClaimClick
+    -- already has regardless of layer.
+    debugOverlay.page = UI.newPage("debug_overlay", "debug")
 
     debugOverlay.fpsLabelId = label.new({
         name     = "fps_text",

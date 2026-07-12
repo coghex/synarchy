@@ -114,6 +114,25 @@ spec = do
                 RouteElement _ cb → cb `shouldBe` "hudClick"
                 other → expectationFailure ("expected the HUD control, got " ⧺ show other)
 
+        -- #742 review round 2: scripts/debug.lua's F8 overlay and
+        -- scripts/debug_anim_panel.lua both now render on a real
+        -- LayerDebug page (UI.newPage(_, "debug")) — matching this
+        -- fixture exactly — but own NO clickable UI.Manager elements
+        -- of their own; every actual click they claim goes through
+        -- their parallel Lua-side tryClaimClick, entirely outside
+        -- routePointer/topHitBy. This proves the structural property
+        -- their pass-through relies on: an ELEMENTLESS debug-layer
+        -- page still counts as in-scope, above-the-boundary real
+        -- estate — 'isPageInScope' above already proves the same
+        -- thing directly; this proves it doesn't perturb the pointer
+        -- ROUTING decision for what's below it either.
+        it "an elementless debug-layer page (matching F8/debug_anim_panel's real structure) neither captures nor leaks a miss past the modal boundary below it" $
+            let (_debugH, m1) = page "shell" LayerDebug emptyUIPageManager
+                (_modalH, m2) = page "modal" LayerModal m1
+                (hudH, m3) = page "hud" LayerHUD m2
+                m4 = clickableAt "hudBtn" pt (100, 100) "hudClick" hudH m3
+            in routePointer PointerLeftClick pt m4 `shouldBe` RouteMiss
+
     describe "notification-card pass-through (popup.lua parity)" $ do
         let passThroughModal =
                 let (h, m1) = page "popups" LayerModal emptyUIPageManager
@@ -227,7 +246,7 @@ spec = do
                 (_, mgr) = page "modal" LayerModal m1
             in isPageInScope hudH mgr `shouldBe` False
 
-        it "is true for the boundary page itself and for a page above it" $
+        it "is true for the boundary page itself and for a page above it (e.g. F8/debug_anim_panel's real LayerDebug page)" $
             let (modalH, m1) = page "modal" LayerModal emptyUIPageManager
                 (debugH, mgr) = page "shell" LayerDebug m1
             in do

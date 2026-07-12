@@ -19,10 +19,13 @@
 --   always in scope for) above 'LayerModal' (see the 'UI.Types.UILayer'
 --   Ord), so an owned control on the shell or a debug-layer page keeps
 --   receiving input above any modal without this module treating debug
---   as a special case. The F8 overlay's own click detection additionally
---   runs a parallel Lua-side hit-test outside 'UI.Manager' entirely
---   (@scripts/debug.lua@'s @tryClaimClick@, and @scripts/
---   debug_anim_panel.lua@'s equivalent) — this module doesn't (and
+--   as a special case. @scripts/debug.lua@'s F8 overlay and
+--   @scripts/debug_anim_panel.lua@ both render on a real @"debug"@
+--   page (#742 review round 2 — they used to sit on @"overlay"@, below
+--   'LayerModal''s band, which let their raw parallel rects claim a
+--   screen position a modal was actually painted over) but their own
+--   click detection runs a parallel Lua-side hit-test outside
+--   'UI.Manager' entirely (@tryClaimClick@) — this module doesn't (and
 --   can't) see those rects, but it doesn't need to: 'RouteMiss' is
 --   still forwarded to Lua exactly as a pre-#742 miss was, so those
 --   parallel paths keep getting first refusal on it regardless of any

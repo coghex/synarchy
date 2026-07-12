@@ -237,9 +237,15 @@ boundary-aware swallow. Escape's own dismiss cascade
 deliberately runs before that gate — the thing that dismisses the
 block can't itself be blocked by it.
 
-The F8 overlay and `scripts/debug_anim_panel.lua` are pass-through
-surfaces that must keep receiving input above an arbitrary modal (not
-just paint above one), so their validity gate
+The F8 overlay and `scripts/debug_anim_panel.lua` both render on a real
+`LayerDebug` page (`UI.newPage(_, "debug")`, #742 review round 2 — they
+used to sit on `LayerOverlay`, below `LayerModal`'s band, which let
+their raw parallel rects claim input from a screen position a visible
+modal was actually painted over) but own NO clickable `UI.Manager`
+elements of their own — every real click they claim goes through their
+own parallel `tryClaimClick`, entirely outside `routePointer`/
+`topHitBy`. They're pass-through surfaces that must keep receiving
+input above an arbitrary modal, so their validity gate
 (`debugOverlay.inGameplayView`/`canShow`) deliberately checks
 `uiManager.isGameplayView()` — the narrower, pre-#742 predicate
 (current view + pause menu only) — rather than the modal-aware
