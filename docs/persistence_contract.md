@@ -30,8 +30,8 @@ log.
 - **Session replacement, not merge.** Loading a save replaces the
   entire current game session, including every live world page. It does
   not merge the save's pages into whatever happens to already be in
-  memory. (This is the existing #214 multi-world guarantee, generalized:
-  a load is a whole-session operation.)
+  memory. **This is a target for a future runtime child, not current
+  behavior** — see the divergence callout immediately below.
 - **Publish-after-validate.** A successful load publishes the
   replacement session only after restoration and validation of every
   component succeed. A load that fails partway must not leave the live
@@ -59,6 +59,38 @@ inventory resolves to an equivalent value by the rule its classification
 assigns it (exact bytes, a re-resolved reference, a fresh deterministic
 rebuild, or a documented reset) — not bit-for-bit identical process
 state.
+
+### Divergence: current loading merges, it does not replace
+
+The "session replacement, not merge" rule above is this contract's
+target, mandated by this issue's own spec — it is **not** what
+`handleWorldLoadSaveCommand` does today. The current load path
+(`src/World/Thread/Command/Save/LoadWorld.hs`, #191/#218) deliberately
+**preserves** any live world page that isn't part of the save being
+loaded: it computes the set of page ids the load "owns" (the restored
+pages, their saved original ids, and whatever a prior load of the same
+save registered), filters every building/unit down to that set, and
+explicitly keeps everything else — the code's own comment names this
+"off-page ... genuinely unrelated live pages, which we keep (#191)".
+That is a merge, not a session replacement, and it is intentional,
+tested, load-bearing behavior (#191 was itself a bug fix — the prior
+behavior of dropping unrelated pages was the defect).
+
+This is therefore a fourth v82-vs-new-format divergence alongside
+`wpsTimeScale`, `pause.lua`'s `prevTimeScale`, and `wpsToolMode` (see
+`persistence_state_inventory.md`'s summary) — bigger in scope than
+those three, because it changes the *load path's* behavior rather than
+a single field's disposition. This issue does not implement it: no code
+in this PR changes `LoadWorld.hs`. The responsible future child (A2,
+which owns the coordinated snapshot barrier and therefore the shape of
+"what a load operation does") must decide how whole-session replacement
+coexists with the legitimate use case #191 was fixing — a player loading
+a *different* save while other pages are open — and implement it, then
+extend or replace `tools/multiworld_save_probe.py` with a same-process
+load test: the existing probe only exercises save → quit → fresh
+restart → load, which starts every run with zero pre-load pages and so
+cannot observe merge-vs-replace behavior at all. `wmWorlds`/`wmVisible`
+in the inventory (§3) are flagged with this same note.
 
 ## 2. Classification taxonomy
 
@@ -204,7 +236,7 @@ persistence envelope itself:
 
 | Probe | Covers | Disposition | Responsible future child |
 |---|---|---|---|
-| `tools/multiworld_save_probe.py` | Multi-page save/load (#214/#219), world-identity round-trip (#707), the gold-standard save→quit→restart→load pattern | **Rewrite** once the new envelope lands — its assertions (per-page unit/building survival, cross-page isolation, identity round-trip) are exactly what B1's new format must still guarantee, but it currently asserts against v82's field layout and will need updating to the new envelope's shape. | B1 (new save envelope) |
+| `tools/multiworld_save_probe.py` | Multi-page save/load (#214/#219), world-identity round-trip (#707), the gold-standard save→quit→restart→load pattern | **Rewrite, and extend.** Its assertions (per-page unit/building survival, cross-page isolation, identity round-trip) are exactly what B1's new format must still guarantee, but it currently asserts against v82's field layout and will need updating. It also needs a genuinely new case: every run today starts from a fresh restart with zero pre-load pages, so it cannot observe the merge-vs-replace divergence documented in §1 ("Divergence: current loading merges, it does not replace") — a same-process load with an unrelated live page already present must be added once that divergence is implemented. | B1 (field layout); A2 (session-replacement test case) |
 | `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite.** §1/§5 of this contract retarget `wpsTimeScale` to Exclude and drop `prevTimeScale` persistence from `pause.lua` (see inventory) — both are runtime-semantics changes this issue does *not* make, but the probe's current assertions partly depend on the field being restored, so whichever child changes that behavior must update this probe alongside it. | Whichever child implements the req-2 "no persisted sim speed" behavior (likely B1) |
 | `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
 
@@ -282,6 +314,11 @@ in this PR touches them:
   `prevTimeScale` handling — the inventory documents their *target*
   classification for a future child to implement; this issue changes no
   runtime behavior.
+- Changing `handleWorldLoadSaveCommand`'s current merge-unrelated-pages
+  behavior (`LoadWorld.hs`, #191/#218) to the whole-session-replacement
+  target in §1 — see "Divergence: current loading merges, it does not
+  replace"; this issue documents the target and the gap, A2 implements
+  it.
 
 ## Related
 

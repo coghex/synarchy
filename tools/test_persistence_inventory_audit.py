@@ -82,6 +82,39 @@ end
 -- saveMods.register("commented_out", nil, nil)
 """
 
+# A record with an UNBALANCED brace inside a haddock comment (a lone
+# `}`) -- if comments aren't stripped before brace-depth tracking, this
+# closes the record block right after fieldOne and fieldTwo/fieldThree
+# are never seen. This is the exact false-negative the audit must not
+# have.
+SYNTHETIC_ENGINE_ENV_UNBALANCED_COMMENT = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne   ∷ IORef Int
+    -- ^ refers to an unrelated closing brace from other prose: cheese}
+  , fieldTwo   ∷ IORef Text
+  , fieldThree ∷ Q.Queue Int
+  } deriving (Eq)
+"""
+
+# A register() call whose arguments span multiple lines.
+SYNTHETIC_LUA_REGISTER_MULTILINE = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register(
+    "multiline_module",
+    function() return "blob" end,
+    function(b) end)
+"""
+
+# A register() call written with whitespace around the dot (legal Lua).
+SYNTHETIC_LUA_REGISTER_SPACED_DOT = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods . register("spaced_dot_module", nil, nil)
+"""
+
 
 # ----- Tests -------------------------------------------------------------
 
@@ -97,6 +130,14 @@ def test_extract_fields_stray_brace_in_comment_is_harmless():
     fields = extract_record_fields(SYNTHETIC_ENGINE_ENV, r"^data EngineEnv = EngineEnv\b")
     expect("fieldTwo" in fields and "fieldThree" in fields,
            "a brace inside a haddock comment doesn't truncate field extraction")
+
+
+def test_extract_fields_unbalanced_brace_in_comment_does_not_truncate():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_UNBALANCED_COMMENT,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "fieldTwo", "fieldThree"],
+           f"an UNBALANCED brace inside a haddock comment (a lone '}}') does not "
+           f"prematurely close the record and drop later fields, got {fields}")
 
 
 def test_extract_fields_ignores_other_records():
@@ -119,6 +160,30 @@ def test_extract_lua_registered_modules():
     names = [n for n, _ in found]
     expect(names == ["unit_ai"],
            f"finds the live register() call and skips the commented-out one, got {names}")
+
+
+def test_extract_lua_registered_modules_multiline_call():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_MULTILINE})
+    names = [n for n, _ in found]
+    expect(names == ["multiline_module"],
+           f"finds a register() call whose arguments span multiple lines, got {names}")
+
+
+def test_extract_lua_registered_modules_spaced_dot_call():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_SPACED_DOT})
+    names = [n for n, _ in found]
+    expect(names == ["spaced_dot_module"],
+           f"finds a register() call written with whitespace around the dot, got {names}")
+
+
+def test_extract_lua_registered_modules_block_commented_out():
+    lua = SYNTHETIC_LUA_REGISTER + '\n--[[\nsaveMods.register("block_commented_out", nil, nil)\n]]\n'
+    found = extract_lua_registered_modules({"scripts/fake.lua": lua})
+    names = [n for n, _ in found]
+    expect(names == ["unit_ai"],
+           f"a register() call inside a --[[ ]] block comment is not matched, got {names}")
 
 
 def test_parse_classified_names():
@@ -148,6 +213,37 @@ def test_audit_clean_repo_state_has_no_violations():
     )
     expect(not violations,
            f"a fully classified fixture reports no violations at all, got {violations}")
+
+
+def test_audit_detects_field_hidden_behind_unbalanced_comment_brace():
+    """Regression for the false-negative the naive brace counter had: a
+    lone unbalanced `}` in a haddock comment used to close the record
+    block early, so fieldThree was never extracted and its absence from
+    the inventory went unreported. It must be reported now."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV_UNBALANCED_COMMENT},
+        {},
+        SYNTHETIC_INVENTORY_MISSING_ONE,  # missing fieldTwo, not fieldThree
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("fieldTwo" in v for v in violations),
+           f"fieldTwo (dropped from the fixture inventory) is still reported "
+           f"even with an unbalanced brace earlier in the same record, got {violations}")
+
+
+def test_audit_detects_module_registered_across_multiple_lines():
+    """Regression for the Lua false-negative: a register() call split
+    across lines used to never match, so an unclassified module
+    registered that way went unreported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_MULTILINE},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for multiline_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("multiline_module" in v for v in violations),
+           f"a module registered via a multi-line call is reported when "
+           f"unclassified, got {violations}")
 
 
 def test_audit_detects_intentionally_unclassified_field():
@@ -200,12 +296,18 @@ def main() -> int:
     tests = [
         test_extract_fields_from_brace_block,
         test_extract_fields_stray_brace_in_comment_is_harmless,
+        test_extract_fields_unbalanced_brace_in_comment_does_not_truncate,
         test_extract_fields_ignores_other_records,
         test_extract_fields_missing_record_raises,
         test_extract_lua_registered_modules,
+        test_extract_lua_registered_modules_multiline_call,
+        test_extract_lua_registered_modules_spaced_dot_call,
+        test_extract_lua_registered_modules_block_commented_out,
         test_parse_classified_names,
         test_parse_classified_names_ignores_other_columns,
         test_audit_clean_repo_state_has_no_violations,
+        test_audit_detects_field_hidden_behind_unbalanced_comment_brace,
+        test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
         test_audit_against_the_real_repo,

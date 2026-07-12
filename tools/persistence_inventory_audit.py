@@ -47,20 +47,43 @@ ROOT_RECORDS: list[tuple[str, str, str]] = [
 # Matches a record-field declaration line: leading `{` or `,`, the field
 # name, then the (UnicodeSyntax or plain) type-signature arrow.
 FIELD_LINE_RE = re.compile(r"^\s*[{,]\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
-REGISTER_RE = re.compile(r"saveMods\.register\(\s*\"([^\"]+)\"")
+# Tolerates whitespace/newlines around the dot and before the opening
+# paren/string, so a call split across lines (`saveMods.register(\n
+# "name", ...)`) or written `saveMods . register(...)` still matches.
+REGISTER_RE = re.compile(r"saveMods\s*\.\s*register\s*\(\s*\"([^\"]+)\"")
 ROW_FIRST_CELL_RE = re.compile(r"^\|([^|]*)\|")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
+
+
+def _strip_haskell_comments(source: str) -> str:
+    """Blank out Haskell comments, preserving line structure.
+
+    Record field declarations in this codebase never contain string
+    literals, so a plain `--`-to-end-of-line split is safe (no risk of
+    treating an in-string `--` as a comment start). Block comments are
+    stripped non-nested, which is sufficient for this codebase's
+    records (none currently nest `{- -}`).
+    """
+    no_block = re.sub(r"\{-.*?-\}", "", source, flags=re.DOTALL)
+    return "\n".join(line[:idx] if (idx := line.find("--")) != -1 else line
+                      for line in no_block.splitlines())
+
+
+def _strip_lua_comments(text: str) -> str:
+    """Blank out Lua comments, preserving line structure (see above)."""
+    no_block = re.sub(r"--\[\[.*?\]\]", "", text, flags=re.DOTALL)
+    return "\n".join(line[:idx] if (idx := line.find("--")) != -1 else line
+                      for line in no_block.splitlines())
 
 
 def extract_record_fields(source: str, record_start_pattern: str) -> list[str]:
     """Field names declared in one Haskell record's brace block.
 
-    Scans from the `data X = X` line to the matching closing brace,
-    tracking nesting depth char-by-char so a haddock comment containing
-    stray text never confuses the boundary (record fields in this
-    codebase never nest braces).
+    Comments are stripped first so a haddock comment's prose (which may
+    contain an unbalanced brace, e.g. "see the {foo} case") can never
+    desync the brace-depth tracker that finds the block's end.
     """
-    lines = source.splitlines()
+    lines = _strip_haskell_comments(source).splitlines()
     pat = re.compile(record_start_pattern)
     start = next((i for i, line in enumerate(lines) if pat.search(line)), None)
     if start is None:
@@ -85,15 +108,17 @@ def extract_record_fields(source: str, record_start_pattern: str) -> list[str]:
 
 def extract_lua_registered_modules(
         scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
-    """(module name, file) for every saveMods.register("name", ...) call site."""
+    """(module name, file) for every saveMods.register("name", ...) call site.
+
+    Scans the whole (comment-stripped) file as one string rather than
+    line-by-line, so a call whose arguments span multiple lines is still
+    found.
+    """
     found: list[tuple[str, str]] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
-        for line in text.splitlines():
-            if line.strip().startswith("--"):
-                continue
-            m = REGISTER_RE.search(line)
-            if m:
-                found.append((m.group(1), relpath))
+        cleaned = _strip_lua_comments(text)
+        for m in REGISTER_RE.finditer(cleaned):
+            found.append((m.group(1), relpath))
     return found
 
 

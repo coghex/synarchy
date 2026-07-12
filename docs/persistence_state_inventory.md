@@ -126,8 +126,17 @@ classified in their own sections (§2, §3/§4, §5) rather than here.
 
 | Field | Classification | Restoration dependency | Test oracle |
 |---|---|---|---|
-| `wmWorlds` | Rebuild | `SaveData.sdWorlds` | `tools/multiworld_save_probe.py` |
+| `wmWorlds` | Rebuild | `SaveData.sdWorlds` | `tools/multiworld_save_probe.py` — **but see below**: today's rebuild MERGES restored pages into whatever's live, it does not replace the session (contract §1 divergence) |
 | `wmVisible` | Rebuild | `SaveData.sdVisiblePages` | `tools/multiworld_save_probe.py` |
+
+**Current v82 behavior diverges from the contract's target here**:
+`handleWorldLoadSaveCommand` (`src/World/Thread/Command/Save/LoadWorld.hs`,
+#191/#218) deliberately keeps any live page outside the set the load
+"owns" (restored pages + their saved original ids + a prior load's
+pages) rather than dropping it — a merge, not the whole-session
+replacement contract §1 requires. This PR does not change that; see
+`persistence_contract.md`'s "Divergence: current loading merges, it does
+not replace" for the full writeup and the responsible future child.
 
 `WorldState` (`:43`) — per-page, one instance per live world:
 
@@ -376,17 +385,25 @@ definition a persisted instance refers to fails loading per contract §4.
 ## Summary: what's actually new here vs. what v82 already does
 
 Every classification above matches v82's current behavior **except**
-three, all driven directly by contract §1 ("the pre-save speed is not
-persisted") and none of them implemented by this issue:
+four, none of them implemented by this issue:
 
 1. `wsTimeScaleRef` / `wpsTimeScale` — v82 persists it; target is
-   Exclude.
+   Exclude (contract §1, "the pre-save speed is not persisted").
 2. `pause.lua`'s `prevTimeScale` — v82 persists and restores it; target
-   is Exclude.
+   is Exclude (same rule).
 3. `wsToolModeRef` / `wpsToolMode` — v82 writes the field, but the field
    is already dead at load (overridden to `DefaultTool` by #103); this
    is a reclassification of already-dead behavior, not a functional
    change.
+4. `wmWorlds`/`wmVisible` (i.e. the load path as a whole) — v82's
+   `handleWorldLoadSaveCommand` deliberately MERGES a loaded save into
+   whatever's already live, preserving unrelated pages (#191/#218);
+   target is whole-session replacement (contract §1). This is the
+   largest divergence of the four — a load-path behavior, not a single
+   field — see `persistence_contract.md`'s "Divergence: current loading
+   merges, it does not replace" for the full writeup, why #191 made this
+   choice deliberately, and the future child (A2) responsible for
+   reconciling it with the new contract.
 
 Everything else documents v82's existing, unchanged behavior under the
 new taxonomy.
