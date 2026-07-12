@@ -108,6 +108,38 @@ def _count_at_least(text: str, pattern: str, n: int) -> bool:
 _ROC_ROUTE = r"recordRouteOutcome[\s\S]{0,80}?"  # Engine.Input.Thread's helper
 _ROC_CLICK = r"recordClick\([\s\S]{0,60}?"       # init_mouse.lua's helper
 
+# #730: the non-click Layer A families' producer calls, anchored to the
+# EXACT positional argument sequence real source uses (not a lazy window)
+# — each call's outcome/domain string literals sit immediately after the
+# call name with no other field in between, so an exact sequence is both
+# more precise than a window and immune to a window wide enough to bridge
+# past a renamed call into an unrelated sibling's leftover literal.
+_KEY_OUTCOME    = r"recordKeyOutcome\s+env\s+"          # Engine.Input.Thread
+_CHAR_ACC_TRUE  = r'accumulateCharOutcome\s+inpSt\s+True\s+'   # ditto
+_CHAR_ACC_FALSE = r'accumulateCharOutcome\s+inpSt\s+False\s+' # ditto
+_SCROLL_OUTCOME = r"recordScrollOutcome\s+"             # ditto
+_DRAG_OUTCOME   = r"recordDragOutcome\("                # unit_drag_select.lua
+
+LAYER_A_KEY_DOMAINS = [
+    _KEY_OUTCOME + r'"shell_text"', _KEY_OUTCOME + r'"ui_text"',
+    _KEY_OUTCOME + r'"gameplay_key"',
+]
+LAYER_A_CHAR_DOMAINS = [
+    _CHAR_ACC_TRUE + r'"shell_text"', _CHAR_ACC_TRUE + r'"ui_text"',
+    _CHAR_ACC_FALSE + r'"dropped_backtick"',
+    _CHAR_ACC_FALSE + r'"dropped_unfocused"',
+]
+LAYER_A_SCROLL_DOMAINS = [
+    _SCROLL_OUTCOME + r'"accepted"\s*"z_slice"',
+    _SCROLL_OUTCOME + r'"accepted"\s*"ui_scroll"',
+    _SCROLL_OUTCOME + r'"accepted"\s*"game_scroll"',
+    _SCROLL_OUTCOME + r'"noop"\s*"degenerate_viewport"',
+]
+LAYER_A_DRAG_OUTCOMES = [
+    _DRAG_OUTCOME + r'#final > 0 and "accepted" or "noop"',
+    _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"release swallowed',
+]
+
 # Shared source of truth between the real checks below and the self-test:
 # every distinct route/reason literal a multi-route area is expected to
 # carry. Defined once so the self-test proving "remove one -> gap" can't
@@ -298,6 +330,22 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
          lambda: _game_chain_check(
              (REPO_ROOT / "scripts/init_mouse.lua").read_text(encoding="utf-8")
              if (REPO_ROOT / "scripts/init_mouse.lua").exists() else "")),
+        # --- Layer A (#730): non-click H1 input families — keyboard, text,
+        # scroll/z-slice, drag. Each area's `_all_present_check` requires
+        # EVERY registered domain literal, not just one, mirroring the
+        # click area's multi-route pattern above. ---
+        ("A", "input key -> shell/UI-text/gameplay routing domains",
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_KEY_DOMAINS)),
+        ("A", "input type/char -> text-delivery + drop domains (aggregated)",
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_CHAR_DOMAINS)),
+        ("A", "input scroll -> z-slice/UI-scroll/game-scroll/degenerate domains",
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_SCROLL_DOMAINS)),
+        ("A", "input drag -> unit_drag_select box-selection outcome",
+         lambda: _all_present_check(
+             "scripts/unit_drag_select.lua", LAYER_A_DRAG_OUTCOMES)),
 
         # --- Layer B Tier 1: onboarding + highest naive-frequency (this PR) ---
         ("B1", "createWorld.generate (proceed commit)",
@@ -829,6 +877,111 @@ def _self_test() -> list[str]:
     expect("buildTool.commitPlacement: only ONE 'no active world id' hook "
            "(of two call sites) reads gap",
            _build_tool_check(only_one_no_world), False)
+
+    # #730: the non-click Layer A families (keyboard, char/type
+    # aggregation, scroll/z-slice, drag) — same removal-mutation shape
+    # as the click swallowed-routes block above: all domains present
+    # reads DONE, missing any ONE domain reads gap, and the producer
+    # call renamed away (domain literals left behind) reads gap.
+    def key_outcome_fixture(include: set[str], call_name: str = "recordKeyOutcome") -> str:
+        lines = [f"{call_name} ∷ EngineEnv → Text → Maybe Text → Maybe Word32 → IO ()",
+                 f"{call_name} env domain matched target = pure ()"]
+        for domain in ("shell_text", "ui_text", "gameplay_key"):
+            if domain in include:
+                lines.append(f'{call_name} env "{domain}" matched (Just fid)')
+        return "\n".join(lines)
+
+    _KEY_DOMAINS_SET = {"shell_text", "ui_text", "gameplay_key"}
+    key_full = key_outcome_fixture(_KEY_DOMAINS_SET)
+    expect("input key: all three routing domains present reads DONE",
+           _all_present(key_full, LAYER_A_KEY_DOMAINS), True)
+    for domain in _KEY_DOMAINS_SET:
+        expect(f"input key: missing the {domain!r} domain reads gap",
+               _all_present(key_outcome_fixture(_KEY_DOMAINS_SET - {domain}),
+                             LAYER_A_KEY_DOMAINS), False)
+    key_renamed = key_outcome_fixture(_KEY_DOMAINS_SET, call_name="someOtherKeyFn")
+    expect("input key: recordKeyOutcome renamed away (literals kept) reads gap",
+           _all_present(key_renamed, LAYER_A_KEY_DOMAINS), False)
+
+    def char_outcome_fixture(include: set[str],
+                              call_name: str = "accumulateCharOutcome") -> str:
+        lines = [f"{call_name} ∷ InputState → Bool → Text → Maybe Word32 → InputState",
+                 f"{call_name} inpSt applied domain target = inpSt"]
+        if "shell_text" in include:
+            lines.append(f'{call_name} inpSt True "shell_text" (Just fid)')
+        if "ui_text" in include:
+            lines.append(f'{call_name} inpSt True "ui_text" (Just eh)')
+        if "dropped_backtick" in include:
+            lines.append(f'{call_name} inpSt False "dropped_backtick" Nothing')
+        if "dropped_unfocused" in include:
+            lines.append(f'{call_name} inpSt False "dropped_unfocused" Nothing')
+        return "\n".join(lines)
+
+    _CHAR_DOMAINS_SET = {"shell_text", "ui_text", "dropped_backtick", "dropped_unfocused"}
+    char_full = char_outcome_fixture(_CHAR_DOMAINS_SET)
+    expect("input type/char: all four domains present reads DONE",
+           _all_present(char_full, LAYER_A_CHAR_DOMAINS), True)
+    for domain in _CHAR_DOMAINS_SET:
+        expect(f"input type/char: missing the {domain!r} domain reads gap",
+               _all_present(char_outcome_fixture(_CHAR_DOMAINS_SET - {domain}),
+                             LAYER_A_CHAR_DOMAINS), False)
+    char_renamed = char_outcome_fixture(_CHAR_DOMAINS_SET, call_name="someOtherCharFn")
+    expect("input type/char: accumulateCharOutcome renamed away (literals "
+           "kept) reads gap",
+           _all_present(char_renamed, LAYER_A_CHAR_DOMAINS), False)
+
+    def scroll_outcome_fixture(include: set[str],
+                                call_name: str = "recordScrollOutcome") -> str:
+        lines = [f"{call_name} ∷ Text → Text → Maybe Word32 → IO ()",
+                 f"{call_name} outcome domain target = pure ()"]
+        combos = {
+            "z_slice": '"accepted" "z_slice" Nothing',
+            "ui_scroll": '"accepted" "ui_scroll" (Just eh)',
+            "game_scroll": '"accepted" "game_scroll" Nothing',
+            "degenerate_viewport": '"noop" "degenerate_viewport" Nothing',
+        }
+        for name, argtext in combos.items():
+            if name in include:
+                lines.append(f'{call_name} {argtext}')
+        return "\n".join(lines)
+
+    _SCROLL_DOMAINS_SET = {"z_slice", "ui_scroll", "game_scroll", "degenerate_viewport"}
+    scroll_full = scroll_outcome_fixture(_SCROLL_DOMAINS_SET)
+    expect("input scroll: all four domains present reads DONE",
+           _all_present(scroll_full, LAYER_A_SCROLL_DOMAINS), True)
+    for domain in _SCROLL_DOMAINS_SET:
+        expect(f"input scroll: missing the {domain!r} domain reads gap",
+               _all_present(scroll_outcome_fixture(_SCROLL_DOMAINS_SET - {domain}),
+                             LAYER_A_SCROLL_DOMAINS), False)
+    scroll_renamed = scroll_outcome_fixture(_SCROLL_DOMAINS_SET, call_name="someOtherScrollFn")
+    expect("input scroll: recordScrollOutcome renamed away (literals kept) "
+           "reads gap",
+           _all_present(scroll_renamed, LAYER_A_SCROLL_DOMAINS), False)
+
+    def drag_outcome_fixture(include: set[str],
+                              call_name: str = "recordDragOutcome") -> str:
+        lines = [f"local function {call_name}(outcome, x, y, requested, applied, reason)",
+                 '    debug.recordOutcome{kind = "input.drag"}', "end"]
+        if "completed" in include:
+            lines.append(
+                f'{call_name}(#final > 0 and "accepted" or "noop", x, y, #ids, #final)')
+        if "swallowed" in include:
+            lines.append(
+                f'{call_name}("noop", x, y, 0, 0, '
+                '"release swallowed (focus loss / minimize)")')
+        return "\n".join(lines)
+
+    _DRAG_PARTS = {"completed", "swallowed"}
+    drag_full = drag_outcome_fixture(_DRAG_PARTS)
+    expect("input drag: both outcome call sites present reads DONE",
+           _all_present(drag_full, LAYER_A_DRAG_OUTCOMES), True)
+    for part in _DRAG_PARTS:
+        expect(f"input drag: missing the {part!r} call site reads gap",
+               _all_present(drag_outcome_fixture(_DRAG_PARTS - {part}),
+                             LAYER_A_DRAG_OUTCOMES), False)
+    drag_renamed = drag_outcome_fixture(_DRAG_PARTS, call_name="someOtherDragFn")
+    expect("input drag: recordDragOutcome renamed away (literals kept) reads gap",
+           _all_present(drag_renamed, LAYER_A_DRAG_OUTCOMES), False)
 
     return failures
 

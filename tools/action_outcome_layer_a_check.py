@@ -46,8 +46,23 @@ checks, end to end through the real input pipeline:
      needs camera framing that actually puts empty space at that
      corner, which this script doesn't control), so a miss here is
      reported as informational, not a failure.
+  4. (#730) keyboard / text / scroll routing — the non-click Layer A
+     families #646/PR #704 left uninstrumented:
+       4a. a gameplay-domain key (no UI focus) drains ONE "accepted"
+           "input.key" record;
+       4b. a UI-text-focused key matching no recognized editing action
+           (F1) drains ONE "noop" record with handler "ui_text" — the
+           key reached a recognized text domain but did nothing;
+       4c. a synthetic multi-character `input.type` while UI-text-
+           focused drains ONE aggregate "accepted" record (requested
+           == applied == char count), not one record per character;
+       4d. the same type while UNFOCUSED drains ONE aggregate "noop"
+           record (every character dropped);
+       4e/4f. scroll over the fixture button vs. over empty space
+           drain "ui_scroll" (with the button's element handle as
+           target) vs. "game_scroll" respectively.
 
-Exit code 0 = all REQUIRED checks (1, 1b, 2) passed.
+Exit code 0 = all REQUIRED checks (1, 1b, 2, 4a-4f) passed.
 """
 from __future__ import annotations
 
@@ -113,9 +128,17 @@ def main() -> int:
         return (abs(w.get("x", float("inf")) - ex) <= tol
                 and abs(w.get("y", float("inf")) - ey) <= tol)
 
+    # The tick rate is REQUIRED — without it loadScript silently no-ops
+    # and the fixture never registers for broadcasts (require() alone
+    # doesn't); see tools/input_check.py, which this mirrors. The
+    # original click-only checks below never surfaced this (their F4
+    # records fire at the engine dispatch level regardless of whether
+    # any Lua module ends up subscribed to the broadcast), but the
+    # #730 text-entry checks read the fixture's OWN onUICharInput-driven
+    # state, which does need it.
     send(PORT,
          'if not package.loaded["scripts.input_check_fixture"] then '
-         'engine.loadScript("scripts/input_check_fixture.lua") end',
+         'engine.loadScript("scripts/input_check_fixture.lua", 0.0) end',
          expect_result=False)
     geom = lua('return require("scripts.input_check_fixture").setup()')
     if not (isinstance(geom, dict) and "btnX" in geom):
@@ -215,6 +238,123 @@ def main() -> int:
     check("that record's where matches the actual click position "
           "(the game-chain route, scripts/init_mouse.lua)",
           where_matches(deadclick_rec, ex, ey), str(recs2))
+
+    # 4 (#730). Keyboard / text / scroll routing — the non-click Layer A
+    # families this check didn't cover before. Reuses the SAME fixture
+    # (a clickable+left-click-only button plus a text-input element),
+    # since only a real rendering instance can drive InputKeyEvent/
+    # InputCharEvent/InputScrollEvent through the actual GLFW-backed
+    # input thread.
+    tx, ty = geom["txtX"], geom["txtY"]
+
+    # 4a. Gameplay-domain key (no UI focus): drains ONE "input.key"
+    # record, always "accepted" (every onKeyDown broadcasts regardless
+    # of binding — see Engine.Input.Thread.recordKeyOutcome).
+    lua('require("scripts.input_check_fixture").unfocusText(); return true')
+    drain()
+    lua('return input.key("W")')
+    recs4 = drain()
+    check("gameplay key drains EXACTLY ONE record", len(recs4) == 1, str(recs4))
+    gp_rec = recs4[0] if len(recs4) == 1 else next(iter(recs4), {})
+    check('gameplay key record is accepted with handler set (domain '
+          "granularity — #730 review, no per-script attribution required)",
+          bool(gp_rec.get("kind") == "input.key"
+               and gp_rec.get("outcome") == "accepted"
+               and gp_rec.get("handler")),
+          str(recs4))
+
+    # 4b. UI-text-focused key that matches NO recognized editing action
+    # (F1 isn't Backspace/Enter/Tab/arrows/Home/End/Delete/Ctrl+A/E/C) —
+    # the "ignored" side of keyboard routing: reaches a recognized text
+    # domain but does nothing.
+    focus_ok = lua('return require("scripts.input_check_fixture").focusText()')
+    check("text element takes focus", focus_ok is True, str(focus_ok))
+    drain()
+    lua('return input.key("F1")')
+    recs4b = drain()
+    check("unrecognized key while UI-text-focused drains EXACTLY ONE record",
+          len(recs4b) == 1, str(recs4b))
+    noop_key_rec = recs4b[0] if len(recs4b) == 1 else next(iter(recs4b), {})
+    check('that record is noop with handler == "ui_text" (the recognized '
+          "domain, even though nothing fired)",
+          bool(noop_key_rec.get("kind") == "input.key"
+               and noop_key_rec.get("outcome") == "noop"
+               and noop_key_rec.get("handler") == "ui_text"),
+          str(recs4b))
+
+    # 4c. Synthetic multi-character type while UI-text-focused: ONE
+    # aggregate "accepted" record (not one per character) with
+    # requested == applied == len(text), dropped == 0.
+    drain()
+    lua('return input.type("Hi")')
+    recs4c = drain()
+    check("a 2-character synthetic type drains EXACTLY ONE aggregate record "
+          "(#730 — not one per character)",
+          len(recs4c) == 1, str(recs4c))
+    type_rec = recs4c[0] if len(recs4c) == 1 else next(iter(recs4c), {})
+    check('that record is accepted with requested=applied=2, dropped=0, '
+          'handler == "ui_text"',
+          bool(type_rec.get("kind") == "input.type"
+               and type_rec.get("outcome") == "accepted"
+               and type_rec.get("requested") == 2
+               and type_rec.get("applied") == 2
+               and type_rec.get("dropped") == 0
+               and type_rec.get("handler") == "ui_text"),
+          str(recs4c))
+    got_text = lua('return require("scripts.input_check_fixture").getText()')
+    check("the typed text actually landed (recording stayed passive)",
+          got_text == "Hi", str(got_text))
+
+    # 4d. Unfocused synthetic type: every character dropped — ONE
+    # aggregate "noop" record, applied == 0, dropped == requested.
+    lua('require("scripts.input_check_fixture").unfocusText(); return true')
+    drain()
+    lua('return input.type("Hi")')
+    recs4d = drain()
+    check("unfocused synthetic type drains EXACTLY ONE aggregate record",
+          len(recs4d) == 1, str(recs4d))
+    dropped_type_rec = recs4d[0] if len(recs4d) == 1 else next(iter(recs4d), {})
+    check("that record is noop with requested=2, applied=0, dropped=2",
+          bool(dropped_type_rec.get("kind") == "input.type"
+               and dropped_type_rec.get("outcome") == "noop"
+               and dropped_type_rec.get("requested") == 2
+               and dropped_type_rec.get("applied") == 0
+               and dropped_type_rec.get("dropped") == 2),
+          str(recs4d))
+
+    # 4e. Scroll over the UI element -> "ui_scroll" domain, target ==
+    # the fixture button's element handle.
+    lua(f"return input.moveMouse({bx}, {by})")
+    drain()
+    lua("return input.scroll(0, -2)")
+    recs4e = drain()
+    check("scroll over a UI element drains EXACTLY ONE record", len(recs4e) == 1,
+          str(recs4e))
+    ui_scroll_rec = recs4e[0] if len(recs4e) == 1 else next(iter(recs4e), {})
+    check('that record is accepted with handler == "ui_scroll" and target '
+          "== the fixture button's element handle",
+          bool(ui_scroll_rec.get("kind") == "input.scroll"
+               and ui_scroll_rec.get("outcome") == "accepted"
+               and ui_scroll_rec.get("handler") == "ui_scroll"
+               and ui_scroll_rec.get("target") == geom.get("btnHandle")),
+          str(recs4e))
+
+    # 4f. Scroll over empty space -> "game_scroll" domain, no target.
+    empty_x, empty_y = bx, by - 150
+    lua(f"return input.moveMouse({empty_x}, {empty_y})")
+    drain()
+    lua("return input.scroll(0, -2)")
+    recs4f = drain()
+    check("scroll over empty space drains EXACTLY ONE record", len(recs4f) == 1,
+          str(recs4f))
+    game_scroll_rec = recs4f[0] if len(recs4f) == 1 else next(iter(recs4f), {})
+    check('that record is accepted with handler == "game_scroll"',
+          bool(game_scroll_rec.get("kind") == "input.scroll"
+               and game_scroll_rec.get("outcome") == "accepted"
+               and game_scroll_rec.get("handler") == "game_scroll"),
+          str(recs4f))
+
+    lua('return require("scripts.input_check_fixture").teardown()')
 
     print(f"\n{'ALL LAYER A CHECKS PASSED' if not failures else f'{len(failures)} FAILURE(S)'}")
     return 1 if failures else 0

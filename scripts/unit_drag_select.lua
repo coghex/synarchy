@@ -167,6 +167,29 @@ function dragSelect.handleMouseDown(button, x, y)
     dragSelect.currY  = y
 end
 
+-- F4 (#730) Layer A: a drag-select box's real outcome can only be
+-- known at release (hitTestInRect against the final rect) — the
+-- press-time record init_mouse.lua's onMouseDown already wrote (a
+-- plain unit_select/deselect classification, made before any drag
+-- threshold had even been crossed) would be misleading if left as
+-- "the" outcome of a completed drag gesture. This is a SEPARATE,
+-- additive "input.drag" record describing the drag itself, kind-
+-- distinct from "input.click" so it never collides with that
+-- pre-existing press-time record's own cardinality. Only fires once
+-- the drag actually reached "dragging" (crossed DRAG_THRESHOLD) — a
+-- plain click never calls this.
+local function recordDragOutcome(outcome, x, y, requested, applied, reason)
+    debug.recordOutcome{
+        kind = "input.drag",
+        outcome = outcome,
+        where = { x = x, y = y },
+        handler = "unit_drag_select",
+        requested = requested,
+        applied = applied,
+        reason = reason,
+    }
+end
+
 function dragSelect.onMouseUp(button, x, y, downRoute)
     if button ~= 1 then return end
     local wasDragging = (dragSelect.state == "dragging")
@@ -196,6 +219,11 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                 item.deselect()
                 building.deselect()
             end
+            recordDragOutcome(#final > 0 and "accepted" or "noop",
+                x, y, #ids, #final)
+        else
+            recordDragOutcome("noop", x, y, 0, 0,
+                "release swallowed (focus loss / minimize)")
         end
         setEdgesVisible(false)
     end

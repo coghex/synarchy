@@ -13,7 +13,41 @@ data InputState = InputState
       -- ^ Where each button's most recent press was routed, so the
       --   matching release can tell Lua what its down did
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
+    , inpCharBatch ∷ Maybe CharBatch
+      -- ^ F4 (#730) Layer A: running tally of 'InputCharEvent's seen
+      --   since the last flush, so a synthetic multi-character
+      --   @input.type@ sequence — which arrives as N individual char
+      --   events with no other event interleaved before its trailing
+      --   'InputBarrier' — collapses into exactly ONE aggregate
+      --   outcome record instead of N. Flushed (see
+      --   'Engine.Input.Thread.flushPendingCharBatch') whenever a
+      --   non-char event is processed, or once at the tail of every
+      --   queue drain — real typing always has an interleaving key
+      --   event between characters (GLFW fires key-down, char,
+      --   key-up per keystroke), so it naturally flushes once per
+      --   real character.
     } deriving (Show, Eq)
+
+-- | One in-flight aggregate of 'InputCharEvent' outcomes — see
+--   'inpCharBatch'. @cbHandler@ reports the domain an APPLIED
+--   character landed in (shell text / UI text), preferred over a
+--   drop classification so a partially-delivered batch still names
+--   its real destination; @cbDropReason@ separately carries why any
+--   dropped characters were dropped.
+data CharBatch = CharBatch
+    { cbRequested  ∷ !Int
+    , cbApplied    ∷ !Int
+    , cbDropped    ∷ !Int
+    , cbHandler    ∷ !(Maybe Text)
+    , cbTarget     ∷ !(Maybe Word32)
+    , cbDropReason ∷ !(Maybe Text)
+    } deriving (Show, Eq)
+
+emptyCharBatch ∷ CharBatch
+emptyCharBatch = CharBatch
+    { cbRequested = 0, cbApplied = 0, cbDropped = 0
+    , cbHandler = Nothing, cbTarget = Nothing, cbDropReason = Nothing
+    }
 
 -- | Where the input thread routed a mouse press. onMouseUp always
 --   fires on physical release (UI widget drags that started from a
@@ -309,4 +343,5 @@ defaultInputState = InputState
     , inpMouseBtns = Map.empty
     , inpMouseRoutes = Map.empty
     , inpWindowFocused = True
+    , inpCharBatch = Nothing
     }
