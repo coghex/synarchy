@@ -46,6 +46,7 @@ import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
+import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
@@ -96,6 +97,10 @@ main = hspec $ do
         -- drive the #697 fence relay by hand (harness runs neither
         -- the input nor the Lua thread, so the queues are the test's).
         describe "Input.Followup" InputFollowup.spec
+        -- Same technique as Input.Followup above: F4 (#730) Layer A's
+        -- non-click producers live inside Engine.Input.Thread's real
+        -- processInputs, driven directly against the live EngineEnv.
+        describe "Input.LayerA" InputLayerA.spec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead

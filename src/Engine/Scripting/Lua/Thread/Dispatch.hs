@@ -15,7 +15,6 @@ import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
 import Engine.Input.Types (keyToText, clickRouteText)
-import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
@@ -85,13 +84,17 @@ processLuaMsg env ls stateRef msg = case msg of
       [ ScriptNumber (realToFrac dx)
       , ScriptNumber (realToFrac dy)
       ]
-  LuaUIClickEvent elemHandle callbackName x y → do
+  LuaUIClickEvent elemHandle callbackName _x _y → do
     let (ElementHandle h) = elemHandle
-    recordWidgetClickOutcome env "input.click" callbackName x y
+    -- F4 (#730 review round 2): NOT recorded here any more — a
+    -- ClickUI-routed press's outcome is deferred to its matching
+    -- release, so the gesture can be classified as a plain click or a
+    -- UI-widget drag exactly once (see Engine.Input.Thread's
+    -- pendingUIClickRef / inpPendingUIClick).
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
-  LuaUIRightClickEvent elemHandle callbackName x y → do
+  LuaUIRightClickEvent elemHandle callbackName _x _y → do
     let (ElementHandle h) = elemHandle
-    recordWidgetClickOutcome env "input.rightClick" callbackName x y
+    -- F4 (#730 review round 2): see LuaUIClickEvent above.
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
   LuaUIScrollEvent elemHandle dx dy → do
     let (ElementHandle h) = elemHandle
@@ -255,28 +258,6 @@ processLuaMsg env ls stateRef msg = case msg of
       , ScriptNumber (realToFrac a)
       , coordsToScriptValue mCoords
       ]
-
--- | F4 (#646) Layer A: a UI element ate this click — record which
---   callback consumed it. This is the "widget" half of the input-routing
---   consolidation (deadclick / tool / world are the Lua-side
---   scripts/init_mouse.lua chain's job, since only it knows whether the
---   ClickGame route it's handed ultimately hit nothing).
-recordWidgetClickOutcome ∷ EngineEnv → Text → Text → Double → Double → IO ()
-recordWidgetClickOutcome env kind callbackName x y = do
-    gt ← readIORef (gameTimeRef env)
-    pushActionOutcome (actionOutcomeRef env) ActionOutcome
-        { aoTs        = gt
-        , aoKind      = kind
-        , aoOutcome   = "accepted"
-        , aoWhereX    = Just x
-        , aoWhereY    = Just y
-        , aoTarget    = Nothing
-        , aoRequested = Nothing
-        , aoApplied   = Nothing
-        , aoDropped   = Nothing
-        , aoReason    = Nothing
-        , aoHandler   = Just callbackName
-        }
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
 --   Used by 'LuaSaveLoaded' to hand the surviving loaded-page unit /

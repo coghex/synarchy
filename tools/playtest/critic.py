@@ -1105,6 +1105,31 @@ def selftest() -> int:
               and friction_candidates({}, empty_sig) == [],
               str(empty_sig[0]["outcomes"]))
 
+        # #730: a non-click Layer A input-routing outcome must reach the
+        # SAME production join `rec` above exercises for a "marker.place"
+        # world action — not a click, and not tested in isolation from
+        # build_signals/friction_candidates. Shaped exactly like what
+        # Engine.Input.Thread.recordKeyOutcome pushes when a key reaches
+        # a recognized text-input domain but matches none of its editing
+        # actions (a real silent-keyboard-routing-failure shape, the
+        # regression class #730 exists to make visible).
+        key_rec = {"kind": "input.key", "outcome": "noop",
+                   "handler": "shell_text",
+                   "reason": "shell_text: key matched no recognized action"}
+        key_sig = build_signals(tmp, [_f4_turn({"action_outcomes": [key_rec]})])
+        key_cands = friction_candidates({}, key_sig)
+        check("non-click Layer A (input.key noop) reaches the signal",
+              len(key_sig[0]["outcomes"]) == 1
+              and key_sig[0]["bad_outcomes"] == [key_rec],
+              str(key_sig[0]))
+        check("non-click Layer A (input.key noop) yields a friction candidate "
+              "through the real join (#730)",
+              len(key_cands) == 1
+              and any(r.startswith("silent-failure-join")
+                      or r.startswith("bad-outcome-join")
+                      for r in key_cands[0]["reasons"]),
+              str(key_cands and key_cands[0]["reasons"]))
+
         # widget STATE changes must not dedupe as \"unchanged\"
         s_a = dict(base_click, widgets=[{"id": "toggle:x", "value": False}])
         s_b = dict(base_click, turn=2, widgets=[{"id": "toggle:x", "value": True}])
