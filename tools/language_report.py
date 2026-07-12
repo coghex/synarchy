@@ -126,6 +126,13 @@ def main():
             print(f"    {r['form']:<12} {native:<24} ({gloss})")
     print()
 
+    # Root-collision count WITHIN EACH language (requirement 18), not
+    # just an aggregate — one line per seed in the sample.
+    print(f"root collisions per language ({len(seeds)} seeds):")
+    for s in seeds:
+        print(f"  seed {s['seed']}: {s['rootCollisions']} collision(s)")
+    print()
+
     # Aggregate stats over every requested seed, not just the
     # representative ones above.
     signatures = set(s["profileSignature"] for s in seeds)

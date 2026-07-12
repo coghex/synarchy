@@ -20,20 +20,32 @@ profileSignature ∷ Profile → Text
 profileSignature = T.pack ∘ show ∘ canonHash
 
 canonHash ∷ Profile → Word64
-canonHash p = foldl' mix 0xcbf29ce484222325
-    [ textSeed (T.pack (profConsonants p))
-    , textSeed (T.pack (profVowels p))
-    , textSeed (T.pack (concatMap shapeCode (profSyllableShapes p)))
-    , fromIntegral (profMinSyllables p)
-    , fromIntegral (profMaxSyllables p)
-    , compoundOrderCode (profCompoundOrder p)
-    , genitiveOrderCode (pmOrder (profPossessive p))
-    , textSeed (pmAffix (profPossessive p))
-    , textSeed (plmAffix (profPlural p))
-    , joinStyleCode (profJoin p)
-    ]
+canonHash p = foldl' mix 0xcbf29ce484222325 (scalarFields <> shapeFields)
   where
     mix acc w = fmix64 (acc `xor` w)
+
+    scalarFields =
+        [ textSeed (T.pack (profConsonants p))
+        , textSeed (T.pack (profVowels p))
+        , fromIntegral (profMinSyllables p)
+        , fromIntegral (profMaxSyllables p)
+        , compoundOrderCode (profCompoundOrder p)
+        , genitiveOrderCode (pmOrder (profPossessive p))
+        , textSeed (pmAffix (profPossessive p))
+        , textSeed (plmAffix (profPlural p))
+        , joinStyleCode (profJoin p)
+        ]
+
+    -- Each shape is mixed in as its OWN element rather than
+    -- concatenated into one string first: shape codes are variable
+    -- length ("CV"/"VC" are 2 chars, "CVC"/"CCV" are 3), so
+    -- concatenating them ahead of hashing is ambiguous — e.g.
+    -- [CV, CVC] and [CVC, VC] both concatenate to "CVCVC" and would
+    -- hash identically despite being different profiles. A leading
+    -- shape-count element also keeps a shape list distinct from any
+    -- of its own prefixes.
+    shapeFields = fromIntegral (length (profSyllableShapes p))
+                : map (textSeed ∘ T.pack ∘ shapeCode) (profSyllableShapes p)
 
     shapeCode = map segCode ∘ shapeSegments
     segCode ConsonantSlot = 'C'
