@@ -28,7 +28,7 @@ import qualified Engine.Core.Queue as Q
 import UI.Focus (createFocusManager, FocusId(..), registerFocusTarget, setFocus)
 import UI.Manager (createPage, createElement, addElementToPage, showPage,
                     setElementClickable, setElementOnClick, enableTextInput,
-                    setElementFocus)
+                    setElementFocus, setElementCapturesScroll)
 import UI.Types (UILayer(..), ElementHandle(..), emptyUIPageManager)
 
 -- | Reset every piece of state this spec touches to a known-clean
@@ -305,6 +305,12 @@ spec = do
         it "scroll over a UI element drains one accepted ui_scroll record targeting it" $ \env → do
             resetAll env
             fieldH ← focusedUIElement env
+            -- #743: wheel routing now requires the explicit scroll-capture
+            -- opt-in (ueCapturesScroll) rather than reusing the click
+            -- callback 'focusedUIElement' registers — a real UI.setClickable
+            -- + UI.setOnClick control no longer implicitly captures wheel.
+            atomicModifyIORef' (uiManagerRef env) $ \mgr →
+                (setElementCapturesScroll fieldH True mgr, ())
             push env [InputCursorMove 150 65]
             inputTick env
             _ ← drainOutcomes env

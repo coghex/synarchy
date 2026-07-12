@@ -550,6 +550,11 @@ function dropdown.openList(id)
     -- Use the dropdown's own zIndex + offset, not a hardcoded 500
     local listZ = (dd.zIndex or 6) + 10
     UI.setZIndex(dd.listBoxId, listZ)
+    -- #743: explicit scroll-capture on the list container so wheel
+    -- input over any option (a passive child of this box) still
+    -- reaches dropdown.onScroll — pre-#743 this rode along for free on
+    -- each option's own clickable+onClick.
+    UI.setScrollCapture(dd.listBoxId, true)
     
     -- Create only the visible option slots (virtual scrolling)
     dd.optionElements = {}
@@ -946,24 +951,34 @@ end
 
 function dropdown.onClickOutside(mouseX, mouseY)
     for id, dd in pairs(dropdowns) do
-        if dd.open then
-            local scrollWidth = 0
-            if dd.scrollbarId then
-                scrollWidth = scrollbar.getTrackWidth(dd.scrollbarId)
+        -- #742 review round 1: a click the modal boundary already
+        -- consumed still reaches this handler (the debug overlay's
+        -- parallel hit-test needs first refusal on every miss
+        -- regardless of modal state), but a dropdown on a page the
+        -- boundary has excluded must not react to it — only a
+        -- same-page-or-above dropdown (e.g. one on the modal itself,
+        -- dismissed by clicking elsewhere on that same page) may still
+        -- treat this as an ordinary "clicked elsewhere".
+        if UI.isPageInScope(dd.page) then
+            if dd.open then
+                local scrollWidth = 0
+                if dd.scrollbarId then
+                    scrollWidth = scrollbar.getTrackWidth(dd.scrollbarId)
+                end
+                local visibleCount = math.min(#dd.options, dd.maxVisibleOptions)
+                local totalHeight = dd.height + (visibleCount * dd.optionHeight)
+                local totalWidth = dd.displayWidth + scrollWidth
+                if mouseX < dd.x or mouseX > dd.x + totalWidth
+                    or mouseY < dd.y or mouseY > dd.y + totalHeight then
+                    dropdown.closeList(id)
+                end
             end
-            local visibleCount = math.min(#dd.options, dd.maxVisibleOptions)
-            local totalHeight = dd.height + (visibleCount * dd.optionHeight)
-            local totalWidth = dd.displayWidth + scrollWidth
-            if mouseX < dd.x or mouseX > dd.x + totalWidth
-                or mouseY < dd.y or mouseY > dd.y + totalHeight then
-                dropdown.closeList(id)
-            end
-        end
-        if dd.focused then
-            local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
-                and mouseY >= dd.y and mouseY <= dd.y + dd.height
-            if not inDisplay then
-                dropdown.submitInput(id)
+            if dd.focused then
+                local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
+                    and mouseY >= dd.y and mouseY <= dd.y + dd.height
+                if not inDisplay then
+                    dropdown.submitInput(id)
+                end
             end
         end
     end

@@ -320,7 +320,12 @@ end
 
 local function show(uid)
     if not panel.page then
-        panel.page = UI.newPage("debug_anim_panel", "overlay")
+        -- #742 review round 2: "debug", not "overlay" — same rationale
+        -- as scripts/debug.lua's F8 page (see its comment): this
+        -- panel's own clicks go through the parallel tryClaimClick
+        -- below regardless of layer, but its PAINT order must actually
+        -- sit above any modal to match the pass-through contract.
+        panel.page = UI.newPage("debug_anim_panel", "debug")
     end
     panel.visible = true
     UI.showPage(panel.page)

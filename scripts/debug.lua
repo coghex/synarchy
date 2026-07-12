@@ -236,7 +236,14 @@ function debugOverlay.createUI()
 
     local s = scale.applyAll(debugOverlay.baseSizes)
     local uiscale = scale.get()
-    debugOverlay.page = UI.newPage("debug_overlay", "overlay")
+    -- #742 review round 2: "debug", not "overlay" — this page renders
+    -- no clickable elements of its own (clicks go through the parallel
+    -- tryClaimClick below), but its labels' PAINT order must actually
+    -- sit above any modal, matching the pass-through contract
+    -- (LayerOverlay's band sits below LayerModal's; LayerDebug's sits
+    -- above it), not just the input-claim priority tryClaimClick
+    -- already has regardless of layer.
+    debugOverlay.page = UI.newPage("debug_overlay", "debug")
 
     debugOverlay.fpsLabelId = label.new({
         name     = "fps_text",
@@ -284,10 +291,19 @@ end
 -- gate the parallel click hit-test (tryClaimClick) so a stale-visible
 -- overlay left behind by a zoom/menu transition can neither be re-opened
 -- nor swallow clicks outside gameplay (#147, #151).
+--
+-- #742: deliberately calls uiManager.isGameplayView(), NOT
+-- isGameplayInputActive() — the latter additionally folds in
+-- UI.isInputBlocked() (any visible #742 modal-exclusive page), and F8
+-- is a pass-through debug surface that must keep receiving input above
+-- an arbitrary modal (the issue's own requirement), not go inert
+-- behind one the way ordinary gameplay actions correctly do.
+-- isGameplayView() keeps exactly the pre-#742 menu/pause checks this
+-- gate always relied on.
 function debugOverlay.inGameplayView()
     local ok, allowed = pcall(function()
         -- Blocks menus/overlays: Settings, pause menu, main menu, etc.
-        if not require("scripts.ui_manager").isGameplayInputActive() then
+        if not require("scripts.ui_manager").isGameplayView() then
             return false
         end
         -- Only the zoomed-in view is gameplay; block the zoom map and

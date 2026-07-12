@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.UI.Page
   , uiDeletePageFn
   , uiShowPageFn
   , uiHidePageFn
+  , uiSetPageInputExclusiveFn
   ) where
 
 import UPrelude
@@ -63,6 +64,21 @@ uiHidePageFn env = do
     case handleArg of
         Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
             (hidePage (PageHandle $ fromIntegral n) mgr, ())
+        Nothing → pure ()
+    return 0
+
+-- | UI.setPageInputExclusive(pageHandle, exclusive) — #742: override a
+--   page's default modal-boundary classification (@upLayer ≡ LayerModal@
+--   at creation). Used by e.g. scripts/popup.lua to keep its
+--   notification-card page pass-through despite sitting on the modal
+--   layer for visual stacking only.
+uiSetPageInputExclusiveFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetPageInputExclusiveFn env = do
+    handleArg    ← Lua.tointeger 1
+    exclusiveArg ← Lua.toboolean 2
+    case handleArg of
+        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setPageInputExclusive (PageHandle $ fromIntegral n) exclusiveArg mgr, ())
         Nothing → pure ()
     return 0
 

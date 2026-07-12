@@ -11,6 +11,12 @@ module UI.Manager.Query
   , findElementAt
   , findElementAtExcept
   , findRightClickableElementAt
+  , topHitBy
+  , hitsAtPointBy
+  , elementBlocksPointer
+  , elementCapturesScroll
+  , isElementPointerBlocking
+  , isElementScrollCapturing
   ) where
 
 import UPrelude
@@ -123,6 +129,13 @@ isPointInElement (px, py) element mgr =
 --   bounds — the renderer doesn't either (dropdown option lists
 --   extend past their display box). An invisible element prunes its
 --   whole subtree, matching the renderer.
+--
+--   @pageOk@ is a plain filter here, not a modal-boundary decision —
+--   callers that need the #742 modal-input-exclusive boundary (a miss
+--   on the boundary page must not fall through to a lower one) go
+--   through 'UI.InputOwnership.routePointer', which computes a scoped
+--   @pageOk@ from 'UI.InputOwnership.pagesInScope' and passes it in
+--   here/'topHitBy' unchanged.
 hitsAtPointBy ∷ (UIPage → Bool) → (UIElement → Bool) → (Float, Float)
               → UIPageManager → [(ElementHandle, Int)]
 hitsAtPointBy pageOk elemOk pos mgr =
@@ -209,3 +222,37 @@ findRightClickableElementAt pos mgr = do
     pure (h, cb)
   where
     clickOk el = ueClickable el ∧ isJust (ueOnRightClick el)
+
+-- | #743: the EFFECTIVE pointer-blocking predicate — true when this
+--   element consumes left/right/middle pointer input, whether or not
+--   any callback fires. ORs the explicit 'ueBlocksPointer' opt-in with
+--   the pre-existing rule that a clickable control with a registered
+--   left- OR right-click callback blocks by default (so plain
+--   'UI.setClickable' + 'UI.setOnClick'/'UI.setOnRightClick' keeps
+--   blocking exactly as before #743 with 'ueBlocksPointer' left at its
+--   default 'False'). A control with only a right-click callback
+--   still blocks a LEFT click over it (consumed, no fake callback) —
+--   blocking applies per-ELEMENT, not per-button, unless the element
+--   opts out entirely (no flag, no callback).
+elementBlocksPointer ∷ UIElement → Bool
+elementBlocksPointer el = ueBlocksPointer el
+    ∨ (ueClickable el ∧ (isJust (ueOnClick el) ∨ isJust (ueOnRightClick el)))
+
+-- | #743: the scroll-capture predicate — purely the explicit
+--   'ueCapturesScroll' opt-in. Unlike pointer-blocking, nothing about
+--   a registered click callback implies scroll capture: the two
+--   policies are independent, per the #743 contract.
+elementCapturesScroll ∷ UIElement → Bool
+elementCapturesScroll = ueCapturesScroll
+
+-- | Handle-based lookup of 'elementBlocksPointer' — an unknown/deleted
+-- handle never blocks.
+isElementPointerBlocking ∷ ElementHandle → UIPageManager → Bool
+isElementPointerBlocking h mgr =
+    maybe False elementBlocksPointer (Map.lookup h (upmElements mgr))
+
+-- | Handle-based lookup of 'elementCapturesScroll' — an unknown/deleted
+-- handle never captures.
+isElementScrollCapturing ∷ ElementHandle → UIPageManager → Bool
+isElementScrollCapturing h mgr =
+    maybe False elementCapturesScroll (Map.lookup h (upmElements mgr))

@@ -6,6 +6,7 @@ module UI.Manager.Page
   , hidePage
   , getPage
   , getVisiblePages
+  , setPageInputExclusive
   ) where
 
 import UPrelude
@@ -29,6 +30,12 @@ createPage name layer mgr =
           , upVisible      = False
           , upRootElements = []
           , upFocusedElement = Nothing
+          -- #742: a modal-layer page is a real input boundary by
+          -- default; every other layer defaults pass-through. Callers
+          -- that want a modal-layer page to stay pass-through (e.g.
+          -- popup.lua's notification stack) opt out explicitly via
+          -- 'setPageInputExclusive'.
+          , upInputExclusive = layer ≡ LayerModal
           }
     in (handle, mgr
           { upmPages      = Map.insert handle page (upmPages mgr)
@@ -76,6 +83,16 @@ hidePage handle mgr =
 
 getPage ∷ PageHandle → UIPageManager → Maybe UIPage
 getPage handle mgr = Map.lookup handle (upmPages mgr)
+
+-- | Override a page's default input-exclusivity (#742). See
+--   'UI.Types.upInputExclusive'.
+setPageInputExclusive ∷ PageHandle → Bool → UIPageManager → UIPageManager
+setPageInputExclusive handle exclusive mgr =
+    case Map.lookup handle (upmPages mgr) of
+        Nothing → mgr
+        Just page →
+            mgr { upmPages = Map.insert handle
+                    (page { upInputExclusive = exclusive }) (upmPages mgr) }
 
 getVisiblePages ∷ UIPageManager → [UIPage]
 getVisiblePages mgr =

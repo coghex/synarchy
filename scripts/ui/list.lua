@@ -188,6 +188,10 @@ function list.new(params)
         UI.addToPage(ls.page, hitId, ls.x, ls.y + slotY)
         UI.setClickable(hitId, true)
         UI.setOnClick(hitId, LIST_ITEM_CALLBACK)
+        -- #743: explicit scroll-capture so hovering a row and scrolling
+        -- still reaches list.onScroll — pre-#743 this rode along for
+        -- free on any clickable+onClick element; now it's independent.
+        UI.setScrollCapture(hitId, true)
         UI.setZIndex(hitId, ls.zIndex + 3)
 
         table.insert(ls.slotElements, {

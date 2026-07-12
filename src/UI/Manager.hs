@@ -11,6 +11,7 @@ module UI.Manager
   , hidePage
   , getPage
   , getVisiblePages
+  , setPageInputExclusive
     -- * Element Creation
   , createBox
   , createText
@@ -39,6 +40,8 @@ module UI.Manager
   , setElementSize
   , setElementVisible
   , setElementClickable
+  , setElementBlocksPointer
+  , setElementCapturesScroll
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -60,6 +63,10 @@ module UI.Manager
   , getElementChildren
   , findElementAt
   , findElementAtExcept
+  , elementBlocksPointer
+  , elementCapturesScroll
+  , isElementPointerBlocking
+  , isElementScrollCapturing
     -- * Tooltips
   , setElementTooltip
   , clearElementTooltip

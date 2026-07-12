@@ -46,14 +46,21 @@ newtype PageHandle = PageHandle { unPageHandle ∷ Word32 }
 newtype ElementHandle = ElementHandle { unElementHandle ∷ Word32 }
   deriving (Eq, Ord, Show)
 
--- | UI layers (rendered bottom to top)
+-- | UI layers (rendered bottom to top). Layer alone only decides paint
+--   order — whether a page actually BLOCKS input reaching whatever
+--   paints below it is the separate, per-page 'upInputExclusive' flag
+--   (see 'UI.InputOwnership'). 'LayerModal' pages default exclusive
+--   (a real modal boundary); every other layer, including 'LayerDebug'
+--   and 'LayerTooltip', defaults pass-through — a miss on them simply
+--   continues the search to whatever paints below.
 data UILayer
   = LayerHUD      -- ^ in-world hud (tile cursor, selections)
   | LayerOverlay  -- ^ hud chrome over the world view (toolbar, panels)
   | LayerMenu
   | LayerModal
   | LayerTooltip
-  | LayerDebug
+  | LayerDebug    -- ^ shell + debug overlay: pass-through by design,
+                  --   always painted (and hit-tested) above any modal
   deriving (Eq, Ord, Enum, Bounded, Show)
 
 -- | Paint-order band for a page — the SINGLE source of truth for UI
@@ -83,6 +90,16 @@ data UIPage = UIPage
   , upVisible      ∷ Bool
   , upRootElements ∷ [ElementHandle]
   , upFocusedElement ∷ Maybe ElementHandle
+  , upInputExclusive ∷ Bool
+    -- ^ #742: when visible, this page establishes a modal input
+    --   boundary — pointer input that misses every owned control on
+    --   or above it cannot reach a lower page or the game world (see
+    --   'UI.InputOwnership.routePointer'). Defaults to
+    --   @upLayer ≡ LayerModal@ at creation ('UI.Manager.Page.createPage');
+    --   override with 'UI.Manager.Page.setPageInputExclusive' for a
+    --   modal-layer page that is only visual stacking, not a real
+    --   input-exclusive dialog (e.g. 'scripts/popup.lua's notification
+    --   cards).
   } deriving (Show)
 
 -- | A UI element
@@ -100,6 +117,24 @@ data UIElement = UIElement
   , ueRenderData ∷ UIRenderData
   , ueOnClick    ∷ Maybe Text
   , ueOnRightClick ∷ Maybe Text
+  , ueBlocksPointer ∷ Bool
+    -- ^ #743: explicit opt-in that this element blocks pointer input
+    --   (left/right/middle) even with no click callback of its own —
+    --   independent of 'ueClickable'/'ueOnClick'/'ueOnRightClick'. The
+    --   EFFECTIVE predicate a click/middle-click route actually
+    --   consults is 'UI.Manager.Query.elementBlocksPointer', which
+    --   ORs this flag with the pre-existing rule that a clickable
+    --   control with a registered left- or right-click callback
+    --   blocks by default (so 'UI.setClickable' + 'UI.setOnClick'
+    --   keeps working exactly as before with this left at its default
+    --   'False'). Defaults to 'False' — a purely visual element stays
+    --   pointer-pass-through.
+  , ueCapturesScroll ∷ Bool
+    -- ^ #743: explicit opt-in that this element captures wheel/scroll
+    --   input, independent of click/pointer-blocking policy — see
+    --   'UI.InputOwnership.routeScroll'. Unlike 'ueBlocksPointer' this
+    --   has no callback-derived fallback: nothing about registering a
+    --   click callback implies scroll capture. Defaults to 'False'.
   , ueTextBuffer  ∷ Maybe TextBuffer
   , ueTooltip     ∷ Maybe TooltipContent
     -- ^ Optional hover tooltip. When set and the cursor lingers over

@@ -54,10 +54,12 @@ function logPanel.create(params)
         uiscale    = uiscale,
     }))
 
-    -- Make the right panel clickable so it receives scroll events
+    -- #743: explicit scroll-capture + pointer-block, replacing the old
+    -- no-op-onClick-just-for-wheel-routing workaround (the actual
+    -- scrolling is handled by createWorldMenu.onScroll via onUIScroll).
     local rightPanelHandle = panel.getBoxHandle(rightPanelId)
-    UI.setClickable(rightPanelHandle, true)
-    UI.setOnClick(rightPanelHandle, "onLogPanelScroll")
+    UI.setScrollCapture(rightPanelHandle, true)
+    UI.setPointerBlocking(rightPanelHandle, true)
 
     local rightBounds = panel.getContentBounds(rightPanelId)
 

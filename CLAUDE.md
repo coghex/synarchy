@@ -87,8 +87,9 @@ probes, and probes that fail on master today for content reasons. Run
 authoritative, always-current list of every registered probe's CI
 eligibility — CI-eligible, or manual-only with its reason category
 (`flaky`, `base-failing`, `slow/worldgen-heavy`, `scenario-heavy`,
-`targeted`, or `unclassified` for a probe simply not yet reviewed for
-promotion — never trust a comment enumerating probe names, they drift).
+`targeted`, `needs-gpu`, or `unclassified` for a probe simply not yet
+reviewed for promotion — never trust a comment enumerating probe
+names, they drift).
 Growing the eligible set is a follow-up: prove a probe is deterministic,
 broad enough, and cheap enough for the blocking gate, then move its key
 from `MANUAL_ONLY_REASONS` to `CI_ELIGIBLE` in `tools/ci_probes.py`.
@@ -202,6 +203,91 @@ registry.
 
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering. UI layout and behavior is driven from Lua scripts.
+
+Pages (`UI.Manager.Page`) live on one of six `UILayer`s (`UI.Types`),
+paint bottom-to-top: `LayerHUD < LayerOverlay < LayerMenu < LayerModal
+< LayerTooltip < LayerDebug` (`uiLayerBand` is the single paint-order
+source of truth both hit-testing and rendering share). Layer alone only
+decides paint/hit-test order; whether a page actually **blocks** pointer
+input from reaching whatever paints below it is the separate per-page
+`upInputExclusive` flag (#742, `UI.InputOwnership`). A `LayerModal` page
+is input-exclusive by default; every other layer defaults pass-through.
+When a visible exclusive page exists, it's the topmost one that owns
+the **modal boundary**: pointer input (left/right-click, wheel) that
+misses every owned control on or above that page is consumed rather
+than falling through to a lower page or the game world — empty modal
+space blocks a control several layers down exactly like a real control
+would. A page that's `LayerModal` for stacking only, not a real dialog
+(e.g. `scripts/popup.lua`'s notification cards), opts out via
+`UI.setPageInputExclusive(page, false)`. `LayerDebug` (the shell) and
+the F8 debug overlay (`scripts/debug.lua`, which hit-tests itself in
+Lua via a parallel `tryClaimClick` rather than through `UI.Manager` at
+all) are pass-through by design and always paint above any modal, so
+their owned controls keep receiving input regardless of what modal is
+open; a miss on them keeps searching downward until it either hits a
+lower control or reaches the modal boundary.
+
+`UI.isInputBlocked()` is true while any visible page holds the modal
+boundary; `scripts/ui_manager.lua`'s `isGameplayInputActive()` folds
+this in (alongside the pre-existing `currentMenu`/pause-menu checks) so
+ordinary gameplay key handlers, click-selection/tool-claim handling,
+camera-zoom scroll, and Shift-wheel z-slice paging all go inert behind
+a modal uniformly. Middle-click (camera drag) shares the same
+boundary-aware swallow. Escape's own dismiss cascade
+(`scripts/init_keys.lua`, closing popups/context menu/logs)
+deliberately runs before that gate — the thing that dismisses the
+block can't itself be blocked by it.
+
+The F8 overlay and `scripts/debug_anim_panel.lua` both render on a real
+`LayerDebug` page (`UI.newPage(_, "debug")`, #742 review round 2 — they
+used to sit on `LayerOverlay`, below `LayerModal`'s band, which let
+their raw parallel rects claim input from a screen position a visible
+modal was actually painted over) but own NO clickable `UI.Manager`
+elements of their own — every real click they claim goes through their
+own parallel `tryClaimClick`, entirely outside `routePointer`/
+`topHitBy`. They're pass-through surfaces that must keep receiving
+input above an arbitrary modal, so their validity gate
+(`debugOverlay.inGameplayView`/`canShow`) deliberately checks
+`uiManager.isGameplayView()` — the narrower, pre-#742 predicate
+(current view + pause menu only) — rather than the modal-aware
+`isGameplayInputActive()`. A handful of raw per-widget handlers that
+iterate every live instance regardless of page, outside
+`UI.Manager`/`routePointer` hit-testing entirely (dropdown/randbox
+"click outside" close-or-submit), use `UI.isPageInScope(pageHandle)`
+instead — it filters out instances on a page the boundary has
+excluded, while leaving same-page instances (e.g. a dropdown on the
+modal itself, dismissed by clicking elsewhere on that page) working
+exactly as before.
+
+Within the page-level boundary above, an individual `UIElement` (#743,
+`UI.InputOwnership`/`UI.Manager.Query`) exposes three **independent**
+input policies rather than one conflated `ueClickable`+callback gate:
+whether it fires a click callback, whether it **blocks pointer** input
+(left/right/middle) from reaching whatever is beneath it, and whether
+it **captures wheel/scroll** input. Registering a click callback via
+`UI.setClickable`+`UI.setOnClick`/`setOnRightClick` still makes a
+control pointer-blocking by default (existing widgets are unaffected),
+but an element can now opt into pointer-blocking
+(`UI.setPointerBlocking`) or scroll-capture (`UI.setScrollCapture`)
+with **no callback at all** — the effective predicates are
+`elementBlocksPointer`/`elementCapturesScroll`, queryable from Lua via
+`UI.isPointerBlocking`/`UI.isScrollCapturing`. A pointer-blocking
+element with no callback relevant to a given gesture still consumes it
+(`RouteBlocked` — no fake Lua callback fires, but the press can't fall
+through to a lower element, page, or gameplay, and stale UI focus still
+clears); blocking applies per-element across all three mouse buttons,
+so a right-click-only control also blocks a left-click over it. Wheel
+routing (`routeScroll`) no longer shares the click-callback machinery
+at all — it selects the visually topmost in-scope
+`elementCapturesScroll` surface via the same `topHitBy` paint-order
+walk hit-testing already uses, so a scroll-capturing container still
+wins over its own passive child visuals. This is what let the combat/
+injury/unit/event log panels and the settings tab frame drop their old
+no-op-click-callback-just-for-wheel-routing workarounds
+(`scripts/combat_log.lua`, `scripts/injury_log_panel.lua`,
+`scripts/unit_log.lua`, `scripts/event_log.lua`,
+`scripts/settings_menu.lua`, `scripts/create_world/log_panel.lua`) for
+the explicit contract.
 
 ## Project Layout
 
