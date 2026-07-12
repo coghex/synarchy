@@ -66,11 +66,19 @@ spec = describe "Semantic proper names" $ do
             let domains = nub $ sort $ map ceDomain $ M.elems (catConcepts prodCat)
             domains `shouldBe` [minBound .. maxBound]
 
-        it "keeps each domain within the 20-30 concept balance range" $ do
-            let counts = M.fromListWith (+)
+        -- The 20-30 balance range is a #713 rule for the six ORIGINAL
+        -- domains only; a future optional new domain (#713 req 2) is
+        -- exempt from it, so this list is hardcoded rather than
+        -- [minBound .. maxBound] (which would wrongly pull any later
+        -- domain into the same range).
+        it "keeps each of the six original domains within the 20-30 concept balance range" $ do
+            let originalDomains =
+                    [ DomainPlace, DomainElement, DomainCelestial
+                    , DomainCreature, DomainEmotion, DomainMythic ]
+                counts = M.fromListWith (+)
                     [ (ceDomain ce, 1 ∷ Int) | ce ← M.elems (catConcepts prodCat) ]
                 outOfRange = [ (d, c)
-                             | d ← [minBound .. maxBound]
+                             | d ← originalDomains
                              , let c = M.findWithDefault 0 d counts
                              , c < 20 ∨ c > 30 ]
             outOfRange `shouldBe` []
