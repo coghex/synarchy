@@ -193,6 +193,14 @@ function M.shortCircuit(uid, s, params, activity, actList)
         s.mentalLashoutActive = nil
         core.markGoalAccomplished(s, "attack")
         unit.clearAnimOverride(uid)
+        -- Stop any in-flight pursuit (an out-of-range target has one:
+        -- attackTargetExecute's own moveTo, unit_ai_combat_attack.lua).
+        -- Clearing only the Lua-side state above isn't enough on its
+        -- own: if delirium ALSO overlaps this exact tick, the branch
+        -- below only re-issues a move when the unit isn't already
+        -- walking/running (its own no-spam gate) — so a still-moving
+        -- pursuit would otherwise ride out its old leg untouched.
+        unit.stop(uid)
     end
 
     -- Delirium: the unit stumbles — aimless slow wander, no goals/

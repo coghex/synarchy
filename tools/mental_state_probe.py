@@ -970,16 +970,21 @@ def main():
         subjJ = spawn_acolyte(P, -25, -10)
         set_wellbeing(P, subjJ, 1.0, 0.0)
         poll_until(5, lambda: mstate(P, subjJ) == "stable")
-        targetJ = spawn_acolyte(P, -24, -10)
+        targetJ = spawn_acolyte(P, -19, -10)   # 6 tiles off — a real pursuit,
+                                                # not already-in-melee-range
         send(P, f"require('scripts.mental_state').forceBreak({subjJ},'lash_out'); "
                 f"return 'ok'")
 
-        def j_target():
+        def j_pursuing():
             t = lash_target(P, subjJ)
-            return t if t != "nil" else None
-        if poll_until(10, j_target) != str(targetJ):
+            act = send(P, f"return unit.getActivity({subjJ})")
+            return True if (t == str(targetJ) and act in ("walking", "running")) else None
+        if not poll_until(10, j_pursuing):
             ok = False
-            print(f"  [FAIL] setup: {subjJ} never targeted {targetJ}")
+            print(f"  [FAIL] setup: {subjJ} never pursued {targetJ}")
+
+        jx0, jy0 = unit_pos(P, subjJ)
+        d_to_target_start = ((jx0 - (-19)) ** 2 + (jy0 - (-10)) ** 2) ** 0.5
 
         # Drive consciousness into the delirious band (brain.lua:
         # 0.15..0.40) via blood_oxygen — the same technique
@@ -1016,14 +1021,28 @@ def main():
             return f if (not f["tgt"] and f["goal"] != "attack"
                          and not f["committed"]) else None
         cleared_j = poll_until(10, j_cleaned)
-        if cleared_j and still_delirious:
+
+        # The Lua-side target/goal clearing above isn't the whole story:
+        # the in-flight moveTo pursuit toward targetJ must actually stop
+        # too, not just ride out its old leg while delirium's own no-spam
+        # gate (already walking -> no replacement move) leaves it alone.
+        time.sleep(1.5)
+        jx1, jy1 = unit_pos(P, subjJ)
+        d_to_target_end = ((jx1 - (-19)) ** 2 + (jy1 - (-10)) ** 2) ** 0.5
+        closed_gap_j = d_to_target_start - d_to_target_end
+
+        if cleared_j and still_delirious and closed_gap_j < 2.0:
             print(f"  [pass] episode-end cleanup fires even while still "
-                  f"delirious (still_delirious={still_delirious}): {cleared_j}")
+                  f"delirious AND stops the in-flight pursuit "
+                  f"(still_delirious={still_delirious}, "
+                  f"closed only {closed_gap_j:.2f} tiles toward the old "
+                  f"target): {cleared_j}")
         else:
             ok = False
-            print(f"  [FAIL] lash-out state leaked while delirium overlapped "
-                  f"episode end: {lash_ai_flags(P, subjJ)} "
-                  f"(still_delirious={still_delirious})")
+            print(f"  [FAIL] lash-out state or pursuit leaked while delirium "
+                  f"overlapped episode end: {lash_ai_flags(P, subjJ)} "
+                  f"(still_delirious={still_delirious}, "
+                  f"closed_gap={closed_gap_j:.2f})")
 
         send(P, f"unit.setStat({subjJ},'blood_oxygen',1.0); return 'ok'")
         poll_until(10, lambda: not json.loads(send(P,
