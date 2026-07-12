@@ -44,7 +44,7 @@ formatGlobals cs =
     , "║                CLIMATE STATE SUMMARY                    ║"
     , "╠══════════════════════════════════════════════════════════╣"
     , "║  Global CO₂:            " <> padR 31 (showF1 (csGlobalCO2 cs)) <> "║"
-    , "║  Global temp offset:    " <> padR 31 (showF1 (csGlobalTemp cs) <> " °C") <> "║"
+    , "║  Global mean temp:      " <> padR 31 (showF1 (csGlobalTemp cs) <> " °C") <> "║"
     , "║  Solar constant:        " <> padR 31 (showF1 (csSolarConst cs)) <> "║"
     , "╚══════════════════════════════════════════════════════════╝"
     , ""
