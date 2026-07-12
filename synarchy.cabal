@@ -608,6 +608,9 @@ library
                      World.Geology.Evolution
                      World.Geology.Timeline
                      World.Geology.Timeline.Types
+                     World.Geology.Timeline.Feature
+                     World.Geology.Timeline.Event
+                     World.Geology.Timeline.BBox
                      World.Geology.Timeline.Helpers
                      World.Geology.Timeline.Volcanism
                      World.Geology.Timeline.River

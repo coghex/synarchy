@@ -1,0 +1,382 @@
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+module World.Geology.Timeline.BBox
+    ( EventBBox(..)
+    , noBBox
+    , eventBBox
+    , featureShapeBBox
+    , volcanicFeatureBBox
+    , glacierBBox
+    , hydroFeatureBBox
+    , hydroEvolutionBBox
+    , tileInBBoxWrapped
+    , bboxOverlapsChunk
+    , tagEventsWithBBox
+    ) where
+
+import UPrelude hiding (get)
+import GHC.Generics (Generic)
+import Control.DeepSeq (NFData)
+import Data.Serialize (Serialize(..))
+import Data.Hashable (Hashable)
+import qualified Data.Vector as V
+import World.Base (GeoCoord(..))
+import World.Geology.Ore.Types (OreSheetParams(..))
+import World.Geology.Timeline.Event
+    ( GeoEvent(..)
+    , RiverSegmentCarve(..)
+    , RiverDeltaParams(..)
+    )
+import World.Geology.Timeline.Feature
+    ( FeatureShape(..)
+    , VolcanicFeature(..)
+    , FeatureEvolution(..)
+    , CraterParams(..)
+    , LandslideParams(..)
+    , FloodParams(..)
+    , ShieldParams(..)
+    , CinderConeParams(..)
+    , LavaDomeParams(..)
+    , CalderaParams(..)
+    , FissureParams(..)
+    , LavaTubeParams(..)
+    , SuperVolcanoParams(..)
+    , HydrothermalParams(..)
+    )
+import World.Hydrology.Types
+    ( HydroFeature(..)
+    , HydroEvolution(..)
+    , GlacierParams(..)
+    , GlacierMoraineParams(..)
+    , RiverParams(..)
+    , RiverSegment(..)
+    , LakeParams(..)
+    )
+
+data EventBBox = EventBBox
+    { bbMinX ∷ !Int
+    , bbMinY ∷ !Int
+    , bbMaxX ∷ !Int
+    , bbMaxY ∷ !Int
+    } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
+
+noBBox ∷ EventBBox
+noBBox = EventBBox minBound minBound maxBound maxBound
+
+-- * Bounding boxes
+
+-- | Wrap a GeoCoord into canonical u-space.
+--   Duplicates the logic of wrapGlobalU to avoid circular imports.
+{-# INLINE wrapCoordU #-}
+wrapCoordU ∷ Int → Int → Int → (Int, Int)
+wrapCoordU worldSize gx gy =
+    let w = worldSize * 16  -- worldWidthTiles
+        halfW = w `div` 2
+        u = gx - gy
+        v = gx + gy
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+    in ((wrappedU + v) `div` 2, (v - wrappedU) `div` 2)
+
+-- | Position a point relative to an already-wrapped reference point,
+--   using the shortest u-axis path. For multi-point features (fissures,
+--   lava tubes, rivers), wrapping each endpoint independently with
+--   wrapCoordU can map nearby points to opposite sides of the world
+--   when the feature straddles the u-wrap boundary, producing a
+--   world-spanning bbox. This helper preserves spatial continuity.
+{-# INLINE wrapRelative #-}
+wrapRelative ∷ Int → Int → Int → Int → Int → (Int, Int)
+wrapRelative worldSize refX refY gx gy =
+    let w = worldSize * 16
+        halfW = w `div` 2
+        du = (gx - gy) - (refX - refY)
+        dv = (gx + gy) - (refX + refY)
+        wdu = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dx = (wdu + dv) `div` 2
+        dy = (dv - wdu) `div` 2
+    in (refX + dx, refY + dy)
+
+eventBBox ∷ GeoEvent → Int → EventBBox
+eventBBox (CraterEvent cp) ws =                                    -- was _ws
+    let GeoCoord cx0 cy0 = cpCenter cp
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = cpEjectaRadius cp
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+eventBBox (VolcanicEvent shape) ws = featureShapeBBox shape ws
+eventBBox (VolcanicModify _fid evo) ws =                           -- was _ws
+    let GeoCoord cx0 cy0 = feCenter evo
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = case evo of
+                FlankCollapse { feDebrisRadius = dr } → max (feRadius evo) dr
+                _                                     → feRadius evo
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+eventBBox (LandslideEvent ls) ws =                                 -- was _ws
+    let GeoCoord cx0 cy0 = lsCenter ls
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = lsRadius ls
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+eventBBox (FloodEvent fp) ws =                                     -- was _ws
+    let GeoCoord cx0 cy0 = fpCenter fp
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = fpRadius fp
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+eventBBox (GlaciationEvent glacier) ws =                           -- was _ws
+    glacierBBoxW ws glacier                                        -- CHANGED
+eventBBox (HydroEvent hf) ws = hydroFeatureBBox hf ws
+eventBBox (HydroModify _fid evo) ws =                              -- was _ws
+    hydroEvolutionBBoxW ws evo                                     -- CHANGED
+
+-- tight bbox around just this one segment
+eventBBox (RiverSegmentEvent rsc) ws =
+    let seg = rscSegment rsc
+        GeoCoord sx0 sy0 = rsStart seg
+        GeoCoord ex0 ey0 = rsEnd seg
+        (sx, sy) = wrapCoordU ws sx0 sy0
+        (ex, ey) = wrapRelative ws sx sy ex0 ey0
+        pad = rsValleyWidth seg
+    in EventBBox (min sx ex - pad) (min sy ey - pad)
+                 (max sx ex + pad) (max sy ey + pad)
+
+-- tight bbox around the river mouth delta
+eventBBox (RiverDeltaEvent rdp) ws =                               -- was _ws
+    let seg = rdpLastSegment rdp
+        GeoCoord mx0 my0 = rsEnd seg
+        (mx, my) = wrapCoordU ws mx0 my0                          -- ADDED
+        totalFlow = rdpFlowRate rdp
+        deltaRadius = round (min 40.0 (totalFlow * 12.0 + 8.0)) ∷ Int
+    in EventBBox (mx - deltaRadius) (my - deltaRadius)
+                 (mx + deltaRadius) (my + deltaRadius)
+
+-- Ore sheet: bbox of the raster window's four (u,v) corners mapped to
+-- (x,y), plus one spacing of margin for the bilinear taper. The
+-- window origin may be unwrapped (seam-straddling fans); the
+-- centre-relative wrap inside 'tileInBBoxWrapped' handles that.
+eventBBox (OreSheetEvent os) _ws =
+    let halfGrid = osGridW os `div` 2
+        s = osSpacing os
+        u0 = (osIX0 os - halfGrid) * s
+        u1 = (osIX0 os + osW os - 1 - halfGrid) * s
+        v0 = (osIY0 os - halfGrid) * s
+        v1 = (osIY0 os + osH os - 1 - halfGrid) * s
+        corners = [ ((u + v) `div` 2, (v - u) `div` 2)
+                  | u ← [u0, u1], v ← [v0, v1] ]
+        xs = map fst corners
+        ys = map snd corners
+    in EventBBox (minimum xs - s) (minimum ys - s)
+                 (maximum xs + s) (maximum ys + s)
+eventBBox (GlacierMoraineEvent mp) ws =
+    glacierMoraineBBoxW ws mp
+
+featureShapeBBox ∷ FeatureShape → Int → EventBBox
+featureShapeBBox (VolcanicShape vf) ws = volcanicFeatureBBox vf ws
+featureShapeBBox (HydroShape hf) ws   = hydroFeatureBBox hf ws
+
+volcanicFeatureBBox ∷ VolcanicFeature → Int → EventBBox
+volcanicFeatureBBox (ShieldVolcano p) ws =                         -- was _ws
+    let GeoCoord cx0 cy0 = shCenter p
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = shBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (CinderCone p) ws =                            -- was _ws
+    let GeoCoord cx0 cy0 = ccCenter p
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = ccBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (LavaDome p) ws =                              -- was _ws
+    let GeoCoord cx0 cy0 = ldCenter p
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = ldBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (Caldera p) ws =                               -- was _ws
+    let GeoCoord cx0 cy0 = caCenter p
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = round (fromIntegral (caOuterRadius p) * (1.5 ∷ Float))
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (SuperVolcano p) ws =                          -- was _ws
+    let GeoCoord cx0 cy0 = svCenter p
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = svEjectaRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (HydrothermalVent p) ws =                      -- was _ws
+    let GeoCoord cx0 cy0 = htCenter p
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        r = htRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (FissureVolcano p) ws =
+    let GeoCoord sx0 sy0 = fpStart p
+        GeoCoord ex0 ey0 = fpEnd p
+        (sx, sy) = wrapCoordU ws sx0 sy0
+        (ex, ey) = wrapRelative ws sx sy ex0 ey0
+        w = fpWidth p
+    in EventBBox (min sx ex - w) (min sy ey - w)
+                 (max sx ex + w) (max sy ey + w)
+volcanicFeatureBBox (LavaTube p) ws =
+    let GeoCoord sx0 sy0 = ltStart p
+        GeoCoord ex0 ey0 = ltEnd p
+        (sx, sy) = wrapCoordU ws sx0 sy0
+        (ex, ey) = wrapRelative ws sx sy ex0 ey0
+        w = ltWidth p
+    in EventBBox (min sx ex - w) (min sy ey - w)
+                 (max sx ex + w) (max sy ey + w)
+
+-- | Glacier bbox, now with wrapping
+glacierBBoxW ∷ Int → GlacierParams → EventBBox
+glacierBBoxW ws glacier =
+    let GeoCoord cx0 cy0 = glCenter glacier
+        (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
+        len = glLength glacier
+        w = glWidth glacier
+        moraine = glMoraineSize glacier
+        r = len + moraine + w
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+-- | Keep the old glacierBBox for callers that don't have worldSize
+glacierBBox ∷ GlacierParams → EventBBox
+glacierBBox glacier =
+    let GeoCoord cx cy = glCenter glacier
+        len = glLength glacier
+        w = glWidth glacier
+        moraine = glMoraineSize glacier
+        r = len + moraine + w
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+glacierMoraineBBoxW ∷ Int → GlacierMoraineParams → EventBBox
+glacierMoraineBBoxW ws mp =
+    let GeoCoord cx0 cy0 = gmpCenter mp
+        (cx, cy) = wrapCoordU ws cx0 cy0
+        footX0 = cx0 + round (fromIntegral (gmpLength mp) * cos (gmpFlowDir mp))
+        footY0 = cy0 + round (fromIntegral (gmpLength mp) * sin (gmpFlowDir mp))
+        (fx, fy) = wrapRelative ws cx cy footX0 footY0
+        r = gmpWidth mp + gmpRidgeHalfLength mp + gmpDepositHeight mp + 4
+    in EventBBox (fx - r) (fy - r) (fx + r) (fy + r)
+
+hydroFeatureBBox ∷ HydroFeature → Int → EventBBox
+hydroFeatureBBox (RiverFeature river) ws =
+    let GeoCoord srcX0 srcY0 = rpSourceRegion river
+        (srcX, srcY) = wrapCoordU ws srcX0 srcY0
+        wrapR (GeoCoord x y) = wrapRelative ws srcX srcY x y
+        (mthX, mthY) = wrapR (rpMouthRegion river)
+        segBounds = V.foldl' (\(xlo, ylo, xhi, yhi) seg →
+            let (sx, sy) = wrapR (rsStart seg)
+                (ex, ey) = wrapR (rsEnd seg)
+            in ( min xlo (min sx ex)
+               , min ylo (min sy ey)
+               , max xhi (max sx ex)
+               , max yhi (max sy ey)
+               )
+            ) (srcX, srcY, srcX, srcY) (rpSegments river)
+        (xlo0, ylo0, xhi0, yhi0) = segBounds
+        xlo = min xlo0 (min srcX mthX)
+        ylo = min ylo0 (min srcY mthY)
+        xhi = max xhi0 (max srcX mthX)
+        yhi = max yhi0 (max srcY mthY)
+        maxValley = if V.null (rpSegments river)
+                    then 8
+                    else V.maximum (V.map rsValleyWidth (rpSegments river))
+    in EventBBox (xlo - maxValley) (ylo - maxValley)
+                 (xhi + maxValley) (yhi + maxValley)
+hydroFeatureBBox (GlacierFeature glacier) ws = glacierBBoxW ws glacier
+hydroFeatureBBox (LakeFeature lake) ws =
+    let GeoCoord cx0 cy0 = lkCenter lake
+        (cx, cy) = wrapCoordU ws cx0 cy0
+        r = lkRadius lake
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+-- | Hydro evolution bbox with wrapping
+hydroEvolutionBBoxW ∷ Int → HydroEvolution → EventBBox
+hydroEvolutionBBoxW ws (RiverBranch branchPt _angle len _childId) =
+    let GeoCoord bx0 by0 = branchPt
+        (bx, by) = wrapCoordU ws bx0 by0
+    in EventBBox (bx - len) (by - len) (bx + len) (by + len)
+hydroEvolutionBBoxW _ws (RiverMeander _ _) = noBBox
+hydroEvolutionBBoxW ws (RiverCapture _capturedId capturePoint) =
+    let GeoCoord cx0 cy0 = capturePoint
+        (cx, cy) = wrapCoordU ws cx0 cy0
+        r = 30
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+hydroEvolutionBBoxW ws (RiverDam damPt _lakeId damH) =
+    let GeoCoord dx0 dy0 = damPt
+        (dx, dy) = wrapCoordU ws dx0 dy0
+        r = max 10 damH
+    in EventBBox (dx - r) (dy - r) (dx + r) (dy + r)
+hydroEvolutionBBoxW _ws RiverDryUp = noBBox
+hydroEvolutionBBoxW _ws (GlacierAdvance _ _) = noBBox
+hydroEvolutionBBoxW _ws (GlacierRetreat _ _) = noBBox
+hydroEvolutionBBoxW _ws (GlacierMelt _) = noBBox
+hydroEvolutionBBoxW ws (GlacierBranch branchPt _angle len _childId) =
+    let GeoCoord bx0 by0 = branchPt
+        (bx, by) = wrapCoordU ws bx0 by0
+    in EventBBox (bx - len) (by - len) (bx + len) (by + len)
+hydroEvolutionBBoxW _ws (LakeDrain _) = noBBox
+hydroEvolutionBBoxW _ws (LakeExpand _ _) = noBBox
+
+-- | Keep old unwrapped versions if anything still references them
+hydroEvolutionBBox ∷ HydroEvolution → EventBBox
+hydroEvolutionBBox (RiverBranch branchPt _angle len _childId) =
+    let GeoCoord bx by = branchPt
+    in EventBBox (bx - len) (by - len) (bx + len) (by + len)
+hydroEvolutionBBox (RiverMeander _ _) = noBBox
+hydroEvolutionBBox (RiverCapture _capturedId capturePoint) =
+    let GeoCoord cx cy = capturePoint
+        r = 30
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+hydroEvolutionBBox (RiverDam damPt _lakeId damH) =
+    let GeoCoord dx dy = damPt
+        r = max 10 damH
+    in EventBBox (dx - r) (dy - r) (dx + r) (dy + r)
+hydroEvolutionBBox RiverDryUp = noBBox
+hydroEvolutionBBox (GlacierAdvance _ _) = noBBox
+hydroEvolutionBBox (GlacierRetreat _ _) = noBBox
+hydroEvolutionBBox (GlacierMelt _) = noBBox
+hydroEvolutionBBox (GlacierBranch branchPt _angle len _childId) =
+    let GeoCoord bx by = branchPt
+    in EventBBox (bx - len) (by - len) (bx + len) (by + len)
+hydroEvolutionBBox (LakeDrain _) = noBBox
+hydroEvolutionBBox (LakeExpand _ _) = noBBox
+
+-- | Check if a wrapped tile coordinate falls within an event bbox,
+--   accounting for u-axis wrapping.
+{-# INLINE tileInBBoxWrapped #-}
+tileInBBoxWrapped ∷ Int → Int → Int → EventBBox → Bool
+tileInBBoxWrapped worldSize gx gy bb =
+    let w = worldSize * 16
+        halfW = w `div` 2
+        -- Bbox center and half-extents
+        bMidX = (bbMinX bb + bbMaxX bb) `div` 2
+        bMidY = (bbMinY bb + bbMaxY bb) `div` 2
+        bHalfX = (bbMaxX bb - bbMinX bb) `div` 2
+        bHalfY = (bbMaxY bb - bbMinY bb) `div` 2
+        -- Wrapped delta between tile and bbox center in u-space
+        du = (gx - gy) - (bMidX - bMidY)
+        dv = (gx + gy) - (bMidX + bMidY)
+        wdu = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dxi = (wdu + dv) `div` 2
+        dyi = (dv - wdu) `div` 2
+    in abs dxi ≤ bHalfX ∧ abs dyi ≤ bHalfY
+
+bboxOverlapsChunk ∷ Int → EventBBox → Int → Int → Int → Int → Bool
+bboxOverlapsChunk worldSize bb cMinX cMinY cMaxX cMaxY =
+    let w = worldSize * 16
+        halfW = w `div` 2
+        -- Chunk center and half-extents
+        cMidX = (cMinX + cMaxX) `div` 2
+        cMidY = (cMinY + cMaxY) `div` 2
+        cHalfX = (cMaxX - cMinX) `div` 2
+        cHalfY = (cMaxY - cMinY) `div` 2
+        -- Bbox center and half-extents
+        bMidX = (bbMinX bb + bbMaxX bb) `div` 2
+        bMidY = (bbMinY bb + bbMaxY bb) `div` 2
+        bHalfX = (bbMaxX bb - bbMinX bb) `div` 2
+        bHalfY = (bbMaxY bb - bbMinY bb) `div` 2
+        -- Wrapped distance between centers in u-space
+        du = (cMidX - cMidY) - (bMidX - bMidY)
+        dv = (cMidX + cMidY) - (bMidX + bMidY)
+        wdu = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dxi = (wdu + dv) `div` 2
+        dyi = (dv - wdu) `div` 2
+    in abs dxi ≤ (cHalfX + bHalfX) ∧ abs dyi ≤ (cHalfY + bHalfY)
+
+-- | Tag events with bounding boxes. River HydroEvents are exploded
+--   into per-segment events BEFORE tagging, so each segment gets
+--   its own tight bbox.
+tagEventsWithBBox ∷ Int → [GeoEvent] → [(GeoEvent, EventBBox)]
+tagEventsWithBBox worldSize events =
+    map (\evt → (evt, eventBBox evt worldSize)) events
