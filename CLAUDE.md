@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
 - **Debug output:** Set `ENGINE_DEBUG=Vulkan,Graphics,etc...` environment variable
 
 ## Testing Tiers
@@ -987,6 +987,16 @@ echo 'engine.quit()' | nc -w 2 localhost 8008
 - If port is busy and you're sure it's a stale headless instance, use `kill $HPID` or `lsof -ti:9008 | xargs kill`
 
 ## Save / Load
+
+**Persistence contract:** [`docs/persistence_contract.md`](docs/persistence_contract.md) is the
+authoritative contract for what a save represents, how every piece of engine/Lua state is
+classified (persist exactly / persist as reference / rebuild / reset to default / exclude), and
+how the classification stays enforced as the codebase grows — see
+[`docs/persistence_state_inventory.md`](docs/persistence_state_inventory.md) for the field-by-field
+classification and `tools/persistence_inventory_audit.py` (wired into `make ci`) for the automated
+guard that fails when a new root state owner or registered Lua save module has no classification.
+Read the contract before changing anything that adds state to `EngineEnv`, `WorldState`,
+`World.Save.Types`, or `scripts/lib/save_modules.lua`'s registry.
 
 Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) plus a human-readable `world_gen.yaml` alongside.
 
