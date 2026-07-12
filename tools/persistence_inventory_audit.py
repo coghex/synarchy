@@ -71,18 +71,33 @@ FIELD_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
 # grouped declaration `name1, name2 :: Type` where several names share
 # one trailing type signature. See extract_record_fields.
 BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
+# The registry table is called `saveMods` at every real require site
+# (`local saveMods = require("scripts.lib.save_modules")`) but is
+# `saveModules` inside its OWN definition file -- match either local
+# name everywhere a call/reference is recognized.
 # Tolerates whitespace/newlines around the dot and before the opening
 # paren/string (a call split across lines, or `saveMods . register(...)`
 # with spaced dots), and either Lua quote style -- `(['"])` captures the
 # opening quote and `\1` backreferences it as the closing delimiter, so
 # `'name'` and `"name"` both match and neither is truncated by the
 # OTHER quote character appearing inside it.
-REGISTER_RE = re.compile(r"saveMods\s*\.\s*register\s*\(\s*(['\"])((?:(?!\1).)*)\1")
+REGISTER_RE = re.compile(
+    r"save(?:Mods|Modules)\s*\.\s*register\s*\(\s*(['\"])((?:(?!\1).)*)\1")
 # Lua long-bracket strings: `[[name]]`, `[=[name]=]`, `[==[name]==]`, ...
 # -- the `=` run's LENGTH must match on both sides (Lua's own rule),
 # enforced here via backreference `\1` same as the quote form above.
 REGISTER_RE_LONGBRACKET = re.compile(
-    r"saveMods\s*\.\s*register\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
+    r"save(?:Mods|Modules)\s*\.\s*register\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
+# A reference to `saveMods.register`/`saveModules.register` NOT
+# immediately followed by a call `(` -- i.e. the function is being
+# ALIASED into a variable/table field rather than called directly
+# (`local register = saveMods.register; register(...)`). REGISTER_RE/
+# REGISTER_RE_LONGBRACKET only recognize direct calls, so a stored
+# alias would silently bypass req 10's audit; rather than trying to
+# trace what an alias eventually gets called with (real interpretation
+# territory), any such reference is treated as a hard failure on its
+# own -- see find_lua_register_aliases.
+ALIAS_RE = re.compile(r"save(?:Mods|Modules)\s*\.\s*register\b(?!\s*\()")
 # A Lua long-bracket opener `[`, zero-or-more `=`, `[` -- shared by the
 # comment stripper (both long comments and long strings) and the
 # register-call matcher above.
@@ -131,7 +146,7 @@ def _strip_haskell_comments(source: str) -> str:
                       for line in no_block.splitlines())
 
 
-def _strip_lua_comments(text: str) -> str:
+def _strip_lua_comments(text: str, *, keep_strings: bool = True) -> str:
     """Blank out Lua comments, preserving line structure.
 
     String-aware in the FULL sense: quoted (`'`/`"`, with `\\`-escapes
@@ -143,6 +158,13 @@ def _strip_lua_comments(text: str) -> str:
     COMMENTS (`--[[...]]`/`--[=[...]=]`/...) are likewise recognized
     with their `=`-run level matched on both delimiters, and (per Lua's
     own rule) don't nest.
+
+    By default string CONTENT is kept verbatim (`keep_strings=True`) --
+    callers that parse call arguments (which live inside those strings)
+    need it. Pass `keep_strings=False` for a code-SHAPE check, where a
+    string literal's text must not be mistaken for real code (e.g. an
+    error message that happens to mention "saveModules.register" is
+    not a reference to the function).
     """
     out: list[str] = []
     i = 0
@@ -151,18 +173,22 @@ def _strip_lua_comments(text: str) -> str:
         ch = text[i]
         if ch in ("'", '"'):
             quote = ch
-            out.append(ch)
+            if keep_strings:
+                out.append(ch)
             i += 1
             while i < n and text[i] != quote:
                 if text[i] == "\\" and i + 1 < n:
-                    out.append(text[i])
-                    out.append(text[i + 1])
+                    if keep_strings:
+                        out.append(text[i])
+                        out.append(text[i + 1])
                     i += 2
                     continue
-                out.append(text[i])
+                if keep_strings:
+                    out.append(text[i])
                 i += 1
             if i < n:
-                out.append(text[i])
+                if keep_strings:
+                    out.append(text[i])
                 i += 1
             continue
         if text[i:i + 2] == "--":
@@ -175,15 +201,16 @@ def _strip_lua_comments(text: str) -> str:
             nl = text.find("\n", i)
             i = n if nl == -1 else nl
             continue
-        # A bare long-bracket STRING (no leading `--`) must be copied
-        # through verbatim -- its content, which may itself contain
-        # `--`, is never a comment trigger.
+        # A bare long-bracket STRING (no leading `--`) must not be
+        # treated as code -- its content, which may itself contain
+        # `--`, is never a comment trigger either way.
         long_open = LONG_BRACKET_OPEN_RE.match(text, i)
         if long_open:
             close = "]" + long_open.group(1) + "]"
             end = text.find(close, long_open.end())
             span_end = n if end == -1 else end + len(close)
-            out.append(text[i:span_end])
+            if keep_strings:
+                out.append(text[i:span_end])
             i = span_end
             continue
         out.append(ch)
@@ -296,11 +323,40 @@ def extract_lua_registered_modules(
     return found
 
 
+def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:
+    """Files that reference saveMods.register/saveModules.register
+    WITHOUT calling it directly (e.g. `local r = saveMods.register`).
+
+    extract_lua_registered_modules can only trace DIRECT calls; an
+    alias stored in a variable or table field and invoked later would
+    silently escape req 10's audit. Rather than attempting to trace
+    what an alias eventually gets called with, this enforces a
+    direct-call-only registration convention: any such reference is
+    itself reported, regardless of whether it's ever actually called.
+
+    Uses keep_strings=False: this is a code-SHAPE check, so a string
+    literal's text (e.g. `error("saveModules.register: name must be a
+    string")`, the real registry's own validation message) must not be
+    mistaken for a reference to the function.
+    """
+    offenders: list[str] = []
+    for relpath, text in sorted(scripts_text_by_file.items()):
+        cleaned = _strip_lua_comments(text, keep_strings=False)
+        if ALIAS_RE.search(cleaned):
+            offenders.append(relpath)
+    return offenders
+
+
 # The five classifications the contract defines (docs/persistence_contract.md
-# SS2). A table cell "counts" if it CONTAINS one of these as a substring, so
-# parenthetical/bold-wrapped variants ("Persist exactly (container)",
-# "**Exclude (new format)**", "Rebuild + Persist (mixed)") all still count --
-# but a bare "—"/blank placeholder, which contains none of them, does not.
+# SS2). The contract requires EXACTLY ONE per item, so a cell counts only
+# if its CORE text (after stripping bold markup and a trailing parenthetical
+# aside -- see _classification_core) EQUALS one of these exactly. That
+# accepts decorated variants ("Persist exactly (container)",
+# "**Exclude (new format)**") while rejecting both a bare "--"/blank
+# placeholder (core matches none of them) and a compound value like
+# "Rebuild + Persist (mixed)" (core is "Rebuild + Persist", which matches
+# none of them exactly either -- a plain substring test would have missed
+# this, since "Persist exactly" isn't literally present).
 VALID_CLASSIFICATIONS = (
     "Persist exactly",
     "Persist as identity/reference",
@@ -308,10 +364,18 @@ VALID_CLASSIFICATIONS = (
     "Reset to default",
     "Exclude",
 )
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _classification_core(cell_text: str) -> str:
+    """Strip bold markup and one trailing parenthetical aside."""
+    text = cell_text.strip().replace("**", "")
+    text = _TRAILING_PAREN_RE.sub("", text)
+    return text.strip()
 
 
 def _is_valid_classification(cell_text: str) -> bool:
-    return any(label in cell_text for label in VALID_CLASSIFICATIONS)
+    return _classification_core(cell_text) in VALID_CLASSIFICATIONS
 
 
 _NO_CLASSIFICATION_COLUMN = -1
@@ -416,6 +480,13 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
                 f"classification {classified_lua[name]!r} under the "
                 f"'### {LUA_OWNER_HEADING}' heading in {INVENTORY_PATH.name} "
                 f"is not one of {VALID_CLASSIFICATIONS}")
+
+    for relpath in find_lua_register_aliases(scripts_text_by_file):
+        violations.append(
+            f"{relpath} references saveMods.register/saveModules.register "
+            f"without calling it directly (e.g. assigning it to a local "
+            f"or table field) -- the audit can only trace direct calls; "
+            f"call saveMods.register(...) directly instead of aliasing it")
 
     return violations
 

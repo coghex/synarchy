@@ -373,7 +373,7 @@ one for documentation's sake.
 | `Unit.Thread`'s `lastTimeRef` | `src/Unit/Thread.hs:37` | Exclude | — | dt clock, reset at boot | none yet |
 | `Combat.Thread`'s local `tick` counter | `src/Combat/Thread.hs:51` | Exclude | — | resets to 0 every restart, gates wound-tick rate only (contract §1: thread scheduling not persisted) | none yet |
 | `Sim.Thread`'s `simStateRef` (`SimState`/`SimWorldState`/`SimChunkState`) | `src/Sim/Thread.hs:62`, `src/Sim/State/Types.hs` | Rebuild | loaded chunk tile/fluid data (`wsTilesRef`) | fresh `SimChunkState` derives from chunk tile/fluid data as each chunk reactivates post-load; settled results already live in `wsTilesRef`/`wsEditsRef`, this is pure active-simulation scratch space | `tools/world_check.py` (fluid settle behavior) |
-| `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | Rebuild + Persist (mixed) | boot-time `loadScript` sequence, then §7's `saveModules.deserializeAll` | the VM itself is rebuilt fresh by re-running `loadScript` at boot; the specific durable slices of its global tables are what §7's `saveModules` registry persists — everything else in the VM is Exclude by omission | `tools/lua_orphan_prune_probe.py` |
+| `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | Rebuild | boot-time `loadScript` sequence, then §7's `saveModules.deserializeAll` | the VM CONTAINER itself is rebuilt fresh by re-running `loadScript` at boot — this single "Rebuild" classification is for that container, not a blanket claim about everything inside it. The specific durable SLICES of its global tables are separately classified, one label each: §7's four `saveModules`-registered modules are `Persist exactly`/`Reset to default` in their own right; everything else in the VM's global state is `Exclude` by omission (never touched by save/load). | `tools/lua_orphan_prune_probe.py` |
 | `Lua.Thread`'s `lbsScripts` (registered scripts + tick schedule) | `src/Engine/Scripting/Lua/Types.hs:22` | Exclude | — | rebuilt by the boot-time `loadScript` sequence | none yet |
 | `Lua.Thread`'s `lbsNextScriptId` | `src/Engine/Scripting/Lua/Types.hs` | Exclude | — | rebuilt at boot | none yet |
 | `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | — | — | no persistent thread-local state; local IORefs are recreated per-event inside handler scope | — |
@@ -424,6 +424,8 @@ referenced below rather than re-audited here).
 All Rebuild — loaded fresh from YAML (or built in) at boot, referenced
 by id/name from persisted instances rather than embedded. A missing
 definition a persisted instance refers to fails loading per contract §4.
+
+### Content-definition registries
 
 | Registry | Owner | Loader | Test oracle |
 |---|---|---|---|

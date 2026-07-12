@@ -289,9 +289,20 @@ serialization-correctness proof. It:
    under a DIFFERENT owner can never mask a missing decision.
 4. Fails, naming each offender, if any extracted field or registered
    module name has no matching inventory entry under its own owner
-   heading, OR if its classification cell doesn't contain one of the
-   five taxonomy labels (§2) — a bare placeholder like "—" does not
-   count as a classification decision.
+   heading, OR if its classification cell's CORE value (after stripping
+   bold markup and a trailing parenthetical aside) doesn't exactly equal
+   one of the five taxonomy labels (§2) — a bare placeholder like "—"
+   fails this the same as a compound value like "Rebuild + Persist
+   (mixed)" would; the contract requires exactly one label per item, not
+   zero and not several.
+5. Separately fails on any `saveMods.register`/`saveModules.register`
+   reference that is NOT itself a direct call (e.g. stored in a local
+   or table field and invoked through that alias later) — extraction
+   can only trace direct calls, so an alias would otherwise register a
+   module invisibly to the audit. Rather than attempting to trace what
+   an alias eventually gets called with, this makes the alias itself
+   the failure: the codebase's registration convention is direct calls
+   only.
 
 Run it directly:
 

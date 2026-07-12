@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from persistence_inventory_audit import (  # type: ignore
     extract_record_fields, extract_lua_registered_modules,
-    parse_classified_names, audit,
+    find_lua_register_aliases, parse_classified_names, audit,
 )
 
 FAILURES: list[str] = []
@@ -340,6 +340,54 @@ local saveMods = require("scripts.lib.save_modules")
 local dash = [[--]]; saveMods.register([[longbracket_dash_module]], nil, nil)
 """
 
+# saveMods.register is stored in a local and called THROUGH the alias --
+# a live, unclassified registration the direct-call matcher can't trace.
+SYNTHETIC_LUA_REGISTER_ALIASED = """\
+local saveMods = require("scripts.lib.save_modules")
+
+local register = saveMods.register
+register("aliased_module", nil, nil)
+"""
+
+# Mirrors the REAL save_modules.lua registry's own validation message --
+# the literal text "saveModules.register" appears inside a string
+# literal here, not as a reference to the function. Must NOT be flagged
+# as an alias.
+SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING = """\
+local saveModules = package.loaded["scripts.lib.save_modules"] or {}
+
+function saveModules.register(name, serializeFn, deserializeFn)
+    if type(name) ~= "string" then
+        error("saveModules.register: name must be a string")
+    end
+    saveModules.registry[name] = { serialize = serializeFn, deserialize = deserializeFn }
+end
+"""
+
+# Two names sharing one classification, joined with "+" -- looks
+# plausible but is not a single taxonomy label.
+SYNTHETIC_INVENTORY_COMPOUND_CLASSIFICATION = """\
+# Fake inventory
+
+## 1. EngineEnv fields
+
+### EngineEnv
+
+| Field | Classification |
+|---|---|
+| `fieldOne` | Persist exactly |
+| `fieldTwo` | Rebuild + Persist (mixed) |
+| `fieldThree` | Exclude |
+
+## 7. Lua persistence registry
+
+### Lua persistence registry
+
+| Field | Classification |
+|---|---|
+| `unit_ai` | Persist exactly (opaque blob) |
+"""
+
 
 # ----- Tests -------------------------------------------------------------
 
@@ -478,6 +526,45 @@ def test_extract_lua_registered_modules_survives_dash_in_longbracket_string():
            f"a `--` embedded in an earlier LONG-BRACKET string literal on "
            f"the same line does not swallow a real register() call after "
            f"it, got {names}")
+
+
+def test_extract_lua_registered_modules_does_not_see_through_alias():
+    # extract_lua_registered_modules only recognizes DIRECT calls -- an
+    # aliased call is invisible to it BY DESIGN; find_lua_register_aliases
+    # (tested below) is what catches this case instead.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_ALIASED})
+    names = [n for n, _ in found]
+    expect(names == [],
+           f"a call routed through an alias is not seen as a direct "
+           f"registration (that's find_lua_register_aliases's job), got {names}")
+
+
+def test_find_lua_register_aliases_detects_stored_reference():
+    offenders = find_lua_register_aliases({"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_ALIASED})
+    expect(offenders == ["scripts/fake.lua"],
+           f"a saveMods.register reference stored in a local (not called "
+           f"directly) is flagged, got {offenders}")
+
+
+def test_find_lua_register_aliases_ignores_direct_calls():
+    offenders = find_lua_register_aliases({"scripts/fake.lua": SYNTHETIC_LUA_REGISTER})
+    expect(offenders == [],
+           f"ordinary direct register() calls are not flagged as aliases, "
+           f"got {offenders}")
+
+
+def test_find_lua_register_aliases_ignores_the_definition_and_its_error_string():
+    # The real save_modules.lua's OWN function definition
+    # (`function saveModules.register(...)`) is a direct-call-shaped
+    # signature, not an alias -- and its validation error string
+    # literally contains the text "saveModules.register", which must
+    # not be mistaken for a reference to the function either.
+    offenders = find_lua_register_aliases(
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING})
+    expect(offenders == [],
+           f"the registry's own definition + error message are not "
+           f"flagged as an alias, got {offenders}")
 
 
 def test_parse_classified_names_scoped_by_owner_heading():
@@ -757,11 +844,11 @@ def test_audit_rejects_a_blank_placeholder_as_a_classification():
 
 
 def test_audit_accepts_a_decorated_valid_classification():
-    """A valid taxonomy label wrapped in bold markup with a parenthetical
-    suffix (e.g. the real inventory's '**Exclude (new-format target
-    differs)**' rows) must still count as valid -- the check is a
-    substring match against the five canonical labels, not exact
-    equality."""
+    """A valid taxonomy label wrapped in bold markup with a trailing
+    parenthetical aside (e.g. the real inventory's '**Exclude
+    (new-format target differs)**' rows) must still count as valid --
+    the check strips that decoration down to a CORE value and requires
+    the core to equal one of the five canonical labels exactly."""
     violations = audit(
         {"Fake.hs": SYNTHETIC_ENGINE_ENV},
         {},
@@ -771,6 +858,55 @@ def test_audit_accepts_a_decorated_valid_classification():
     expect(not any("EngineEnv.fieldTwo" in v for v in violations),
            f"a bold-wrapped, parenthetical-suffixed but still-valid "
            f"classification is accepted, got {violations}")
+
+
+def test_audit_rejects_a_compound_classification():
+    """Regression for the "more than one label at once" gap: a value
+    like 'Rebuild + Persist (mixed)' looks plausible but its CORE
+    (after stripping the trailing parenthetical) is 'Rebuild + Persist'
+    -- not a single canonical label -- so it must be rejected. A plain
+    substring test would have missed this, since "Persist exactly"
+    isn't literally present in the text."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {},
+        SYNTHETIC_INVENTORY_COMPOUND_CLASSIFICATION,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("EngineEnv.fieldTwo" in v and "not one of" in v for v in violations),
+           f"a compound 'Rebuild + Persist (mixed)' classification is "
+           f"rejected as not a single taxonomy label, got {violations}")
+
+
+def test_audit_detects_aliased_lua_registration():
+    """Regression for the alias-bypass gap: a module registered by
+    calling saveMods.register through a stored alias, rather than
+    directly, must still be reported -- the audit can't trace the
+    alias, so it fails on the aliasing pattern itself."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_ALIASED},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"a saveMods.register reference stored in a local is reported "
+           f"as an aliasing violation, got {violations}")
+
+
+def test_audit_does_not_flag_the_registry_definition_as_an_alias():
+    """The real save_modules.lua's own function definition and its
+    validation error string (which contains the literal text
+    "saveModules.register") must not trip the alias check."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("alias" in v for v in violations),
+           f"the registry's own definition and error message are not "
+           f"reported as an aliasing violation, got {violations}")
 
 
 def test_audit_detects_intentionally_unclassified_field():
@@ -838,6 +974,10 @@ def main() -> int:
         test_extract_lua_registered_modules_longbracket,
         test_extract_lua_registered_modules_longbracket_leveled,
         test_extract_lua_registered_modules_survives_dash_in_longbracket_string,
+        test_extract_lua_registered_modules_does_not_see_through_alias,
+        test_find_lua_register_aliases_detects_stored_reference,
+        test_find_lua_register_aliases_ignores_direct_calls,
+        test_find_lua_register_aliases_ignores_the_definition_and_its_error_string,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
@@ -856,6 +996,9 @@ def main() -> int:
         test_audit_does_not_let_a_sibling_record_in_the_same_numbered_section_count,
         test_audit_rejects_a_blank_placeholder_as_a_classification,
         test_audit_accepts_a_decorated_valid_classification,
+        test_audit_rejects_a_compound_classification,
+        test_audit_detects_aliased_lua_registration,
+        test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
         test_audit_against_the_real_repo,
