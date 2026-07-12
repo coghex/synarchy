@@ -291,6 +291,11 @@ spec = do
                 , "scripts/ui/scrollbar.lua"
                 , "scripts/ui/dropdown.lua"
                 , "scripts/unit_info_v2_panel_engine.lua"
+                -- Review round 4: tools/input_check.py's own fixture
+                -- asserts scroll-over-a-clickable-element routes to
+                -- onUIScroll — the same coupling every other case here
+                -- relied on.
+                , "scripts/input_check_fixture.lua"
                 ]
             mapM_ (\src → T.isInfixOf "UI.setScrollCapture" src `shouldBe` True) sources
 
