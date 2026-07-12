@@ -431,6 +431,24 @@ serialization-correctness proof. It:
    stops being a tractable improvement and starts being a hand-rolled
    Lua interpreter; this audit deliberately stays a static guard, not a
    serialization-correctness proof (see the opening of this section).
+   The same limitation covers every OTHER Lua construct capable of
+   binding the registry table to a name/location this audit doesn't
+   specifically pattern-match: a table CONSTRUCTOR field
+   (`{ [1] = saveMods }` or `{ registry = saveMods }`), multiple
+   assignment (`local a, b = 1, saveMods`), a function-call argument
+   (`store(saveMods)`, where `store` does the aliasing internally), a
+   for-loop iteration variable (`for _, v in ipairs({saveMods}) do
+   v.register(...) end`), a closure upvalue, a coroutine, or a
+   metatable `__index` proxy. This audit targets the codebase's ACTUAL
+   registration convention (a direct call or one sanctioned local name,
+   verified against all 4 real call sites) rather than every
+   theoretically expressible Lua aliasing construct; a determined
+   author could always find one more syntactic form this audit's
+   pattern matching hasn't special-cased. Closing this class of gap
+   completely would require actually interpreting Lua, not extending a
+   regex — a code-review norm (register through the sanctioned local,
+   nothing cleverer) is the intended backstop past this point, not
+   further additions to this tool.
 7. Separately fails on any direct `.register(...)`/`["register"](...)`
    call (any of the four receiver forms above) whose module-name
    argument is NOT a complete, standalone literal per item 2's
@@ -501,6 +519,16 @@ in this PR touches them:
   target in §1 — see "Divergence: current loading merges, it does not
   replace"; this issue documents the target and the gap, A2 implements
   it.
+- Exhaustively pattern-matching every Lua construct capable of aliasing
+  the save-modules registry table — table constructors, multiple
+  assignment, function-call arguments, for-loop variables, closures,
+  coroutines, and metatable proxying are all real gaps in the audit's
+  Lua scanner (§7 item 6), left unaddressed by design past the point
+  where closing them would mean interpreting Lua rather than pattern-
+  matching it. The scanner covers the codebase's actual registration
+  convention (a direct call or the one sanctioned local name); a
+  code-review norm, not further regex, is the intended backstop for
+  anything cleverer.
 
 ## Related
 
