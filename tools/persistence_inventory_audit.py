@@ -71,6 +71,23 @@ FIELD_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
 # grouped declaration `name1, name2 :: Type` where several names share
 # one trailing type signature. See extract_record_fields.
 BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
+# `package.loaded`'s own field access -- Lua lets `loaded` be reached
+# either by dot access (`package.loaded`, the common idiom, used
+# everywhere in this codebase) or by BRACKET indexing the exact same
+# field (`package["loaded"]`/`package['loaded']`) -- the same dot-vs-
+# bracket duality every OTHER field access in this file already
+# tolerates (`saveMods.register` vs `saveMods["register"]`). Shared by
+# every "is this the package.loaded cache slot" check below, so the two
+# forms can't drift apart the way _REGISTER_TABLE_REF/_TABLE_CONSTRUCTOR
+# fixes did when the parens tolerance wasn't originally shared (round
+# 20). The dot form keeps a trailing `\b` (guards against a coincidental
+# longer field name like a hypothetical `package.loadedFoo` being
+# mistaken for this one); the bracket form doesn't need one -- the
+# quote delimiters around the literal `'loaded'`/`"loaded"` key already
+# make it exact, with no prefix-matching ambiguity possible.
+_PACKAGE_LOADED_ACCESS_RE_FRAGMENT = (
+    r"package\s*(?:\.\s*loaded\b|\[\s*(?:'loaded'|\"loaded\")\s*\])"
+)
 # The registry table is called `saveMods` at every real require site
 # (`local saveMods = require("scripts.lib.save_modules")`) but is
 # `saveModules` inside its OWN definition file -- match either local
@@ -78,9 +95,11 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # no local binding at all (`require("scripts.lib.save_modules")
 # .register(...)`, fully traceable since the module path is a literal
 # string identifying this exact registry), OR the table reached
-# directly off `package.loaded["scripts.lib.save_modules"]` -- Lua's
-# `require()` itself reads/writes exactly this cache slot, so this is a
-# THIRD spelling of the identical singleton table, not a different one;
+# directly off `package.loaded["scripts.lib.save_modules"]` (or its
+# bracket-indexed sibling `package["loaded"]["scripts.lib.save_modules"]`,
+# per _PACKAGE_LOADED_ACCESS_RE_FRAGMENT above) -- Lua's `require()`
+# itself reads/writes exactly this cache slot, so this is a THIRD
+# spelling of the identical singleton table, not a different one;
 # `package.loaded[...].register(...)` is exactly as direct and
 # traceable as the require()-chained form. Lua also lets a table field
 # be reached by BRACKET indexing instead of dot access
@@ -118,7 +137,8 @@ _REGISTER_TABLE_REF = (
     r"(?:\(+\s*save(?:Mods|Modules)\s*\)+"
     r"|save(?:Mods|Modules)"
     r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)"
-    r"|package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
+    r"|" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
+    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
 )
 _REGISTER_ACCESS = (
     _REGISTER_TABLE_REF + r"\s*"
@@ -155,13 +175,15 @@ _REQUIRE_SANCTIONED_LOCAL_RE = re.compile(
 # call support only catches an IMMEDIATE `.register`/`["register"]`
 # chain, not a table reference stored in a local first).
 _PACKAGE_LOADED_SAVE_MODULES_RE = re.compile(
-    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]")
+    _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
+    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]")
 # Sanctioned continuation #1: chained straight into `.register`/
 # `["register"]` access -- a direct call, or the package.loaded-chained
 # alias form (both already handled by REGISTER_RE/REGISTER_RE_LONGBRACKET/
 # ALIAS_RE via _REGISTER_ACCESS, which now includes this receiver).
 _PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
-    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]\s*"
+    _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
+    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]\s*"
     r"(?:\.\s*register\b|\[\s*(?:'register'|\"register\")\s*\])")
 # Sanctioned continuation #2: bound to a local named EXACTLY
 # `saveMods`/`saveModules` -- the real registry's OWN definition-file
@@ -170,7 +192,8 @@ _PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
 # required).
 _PACKAGE_LOADED_SANCTIONED_LOCAL_RE = re.compile(
     r"local\s+(?:saveMods|saveModules)\s*=\s*"
-    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
+    + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
+    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
     r"(?:\s*or\s*\{\s*\})?")
 # Sanctioned continuation #3: it's the ASSIGNMENT TARGET, not a fetch at
 # all -- `package.loaded["scripts.lib.save_modules"] = saveModules` is
@@ -179,7 +202,8 @@ _PACKAGE_LOADED_SANCTIONED_LOCAL_RE = re.compile(
 # `==`, a comparison) means this occurrence is never read as a value
 # here, so it cannot itself be the source of a new alias.
 _PACKAGE_LOADED_ASSIGNMENT_TARGET_RE = re.compile(
-    r"package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
+    _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
+    + r"\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\]"
     r"\s*=(?!=)")
 # Tolerates whitespace/newlines before the opening paren/string (a call
 # split across lines, `saveMods . register(...)` with a spaced dot, or
@@ -767,7 +791,7 @@ _BARE_CANONICAL_VALUE_RE_FRAGMENT = (
 )
 _BARE_REGISTRY_ALIAS_RE = re.compile(
     r"(?<![.\w])(?:local\s+)?(?!saveMods\b|saveModules\b)"
-    r"(?!package\s*\.\s*loaded\b)"
+    r"(?!" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT + r")"
     + _ASSIGNMENT_TARGET_RE_FRAGMENT
     + r"\s*=\s*" + _BARE_CANONICAL_VALUE_RE_FRAGMENT)
 # The canonical name hidden as a TABLE CONSTRUCTOR field's value --

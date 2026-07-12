@@ -318,7 +318,10 @@ serialization-correctness proof. It:
    `saveMods["register"](...)`/`saveMods['register'](...)`,
    `require("scripts.lib.save_modules").register(...)` chained directly
    off its own `require()` with no local binding at all, and
-   `package.loaded["scripts.lib.save_modules"].register(...)` chained
+   `package.loaded["scripts.lib.save_modules"].register(...)` (or its
+   bracket-indexed sibling `package["loaded"]["scripts.lib.save_modules"]
+   .register(...)`, since `loaded` is itself just an ordinary field on
+   `package` reachable the same dot-vs-bracket way as `.register`) chained
    directly off the exact cache slot `require()` itself reads/writes —
    all ordinary, fully traceable Lua) and all three Lua string-literal
    forms for the module name (`'...'`, `"..."`, and long brackets `[[...]]`/
@@ -399,8 +402,13 @@ serialization-correctness proof. It:
    own universal require()-caching idiom (used by `save_modules.lua`'s
    own definition, not a bypass attempt), so a target starting with
    `package.loaded` is excluded rather than letting the general
-   table-key case flag it. Every `package.loaded["scripts.lib.save_modules"]`
-   occurrence gets the SAME escape tracking as `require(...)` (a direct-
+   table-key case flag it — recognizing EITHER spelling of `loaded`
+   itself (dot-accessed `package.loaded`, or bracket-indexed
+   `package["loaded"]`/`package['loaded']`, one shared fragment used
+   everywhere `package.loaded` is referenced in this scanner, so the
+   two spellings can't drift apart the way earlier fixes did before
+   they shared a fragment). Every `package.loaded["scripts.lib.save_modules"]`
+   occurrence (either spelling) gets the SAME escape tracking as `require(...)` (a direct-
    call-only receiver isn't enough on its own — `local registry =
    package.loaded[...]; registry.register(...)` re-aliases the table
    itself, not just its `.register` function, through a spelling the

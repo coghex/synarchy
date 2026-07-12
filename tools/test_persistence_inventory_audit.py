@@ -677,6 +677,32 @@ local registry = (saveMods)
 registry.register("untracked_paren_bare_realias", nil, nil)
 """
 
+# `package.loaded`'s field access via BRACKET indexing instead of dot
+# access -- `package["loaded"]` -- the dot-vs-bracket duality every
+# OTHER field access in this scanner already tolerates, direct call form.
+SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_CALL = """\
+package["loaded"]["scripts.lib.save_modules"].register("bracket_pkg_module", nil, nil)
+"""
+
+# The bracket-indexed sibling escaping to an untracked local, the same
+# way the dot form's package.loaded[...] table escape does.
+SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_TABLE_ESCAPE = """\
+local registry = package["loaded"]["scripts.lib.save_modules"]
+registry.register("untracked_bracket_pkg", nil, nil)
+"""
+
+# The bracket-indexed sibling of the real registry's own fetch-into-
+# sanctioned-local-then-write-back idiom -- must NOT be flagged, the
+# same as the dot-form version isn't.
+SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_DEFINITION_ROUNDTRIP = """\
+local saveModules = package["loaded"]["scripts.lib.save_modules"] or {}
+package["loaded"]["scripts.lib.save_modules"] = saveModules
+
+function saveModules.register(name, serializeFn, deserializeFn)
+    saveModules.registry[name] = { serialize = serializeFn, deserialize = deserializeFn }
+end
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -1013,6 +1039,26 @@ def test_find_lua_register_aliases_detects_package_loaded_chained_stored_referen
            f"directly) is flagged, got {offenders}")
 
 
+def test_extract_lua_registered_modules_finds_bracket_package_loaded_call():
+    # Regression: `package["loaded"]` (bracket-indexed) is the same
+    # cache slot as `package.loaded` (dot-accessed) -- must be
+    # recognized as an equally direct call.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_CALL})
+    names = [n for n, _ in found]
+    expect(names == ["bracket_pkg_module"],
+           f"a register() call through bracket-indexed package[\"loaded\"] "
+           f"is extracted, got {names}")
+
+
+def test_find_lua_register_aliases_ignores_bracket_package_loaded_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_CALL})
+    expect(offenders == [],
+           f"a bracket-indexed package[\"loaded\"][...].register(...) "
+           f"DIRECT call is not flagged as an alias, got {offenders}")
+
+
 def test_extract_lua_registered_modules_ignores_concatenated_name():
     # Regression: a module-name argument built via concatenation is NOT
     # a complete literal -- extraction must not silently capture just
@@ -1219,6 +1265,30 @@ def test_find_untracked_registry_aliases_ignores_package_loaded_definition_round
     expect(offenders == [],
            f"the registry's own package.loaded fetch-into-sanctioned-"
            f"local-then-write-back idiom is not flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_detects_bracket_package_loaded_table_escape():
+    # The bracket-indexed sibling of the package.loaded table escape --
+    # `package["loaded"]` is the same cache slot under a second
+    # spelling, and needs the SAME escape tracking as the dot form.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_TABLE_ESCAPE})
+    expect(offenders == ["scripts/fake.lua"],
+           f"the registry table fetched via bracket-indexed "
+           f"package[\"loaded\"][...] and stored in an arbitrary local "
+           f"is flagged, got {offenders}")
+
+
+def test_find_untracked_registry_aliases_ignores_bracket_package_loaded_definition_roundtrip():
+    # The bracket-indexed sibling of the real registry's own fetch-
+    # into-sanctioned-local-then-write-back idiom -- must NOT be
+    # flagged, the same as the dot-form version isn't.
+    offenders = find_untracked_registry_aliases(
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_DEFINITION_ROUNDTRIP})
+    expect(offenders == [],
+           f"the registry's own bracket-indexed package[\"loaded\"] "
+           f"fetch-into-sanctioned-local-then-write-back idiom is not "
+           f"flagged, got {offenders}")
 
 
 def test_find_untracked_registry_aliases_detects_table_constructor_bracket_key():
@@ -2112,6 +2182,55 @@ def test_audit_does_not_flag_package_loaded_definition_roundtrip_as_an_alias():
            f"is not reported as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_unclassified_bracket_package_loaded_module_registration():
+    """Round 21's finding: `package["loaded"]` (bracket-indexed) is the
+    same cache slot as `package.loaded` (dot-accessed) and just as
+    direct a call -- an unclassified module registered through it must
+    still be reported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for bracket_pkg_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("bracket_pkg_module" in v for v in violations),
+           f"a module registered via bracket-indexed package[\"loaded\"] "
+           f"is reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a bracket-indexed package[\"loaded\"] DIRECT call is not "
+           f"ALSO reported as an aliasing violation, got {violations}")
+
+
+def test_audit_detects_registration_via_bracket_package_loaded_table_escape():
+    """The bracket-indexed sibling of the package.loaded table-escape
+    gap."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_TABLE_ESCAPE},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"the registry table fetched via bracket-indexed "
+           f"package[\"loaded\"][...] and stored in an arbitrary local "
+           f"is reported as an untracked-alias violation, got {violations}")
+
+
+def test_audit_does_not_flag_bracket_package_loaded_definition_roundtrip_as_an_alias():
+    """The bracket-indexed sibling of the real registry definition
+    file's own fetch/write-back idiom must not be flagged."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_BRACKET_PACKAGE_LOADED_DEFINITION_ROUNDTRIP},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("alias" in v for v in violations),
+           f"the registry's own bracket-indexed package[\"loaded\"] "
+           f"fetch/write-back idiom is not reported as an aliasing "
+           f"violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -2210,6 +2329,8 @@ def main() -> int:
         test_find_lua_register_aliases_detects_require_chained_stored_reference,
         test_find_lua_register_aliases_ignores_package_loaded_chained_direct_call,
         test_find_lua_register_aliases_detects_package_loaded_chained_stored_reference,
+        test_extract_lua_registered_modules_finds_bracket_package_loaded_call,
+        test_find_lua_register_aliases_ignores_bracket_package_loaded_direct_call,
         test_extract_lua_registered_modules_ignores_concatenated_name,
         test_find_lua_register_dynamic_names_detects_concatenated_name,
         test_extract_lua_registered_modules_finds_parenthesized_receiver,
@@ -2231,6 +2352,8 @@ def main() -> int:
         test_find_untracked_registry_aliases_detects_dot_field_realias,
         test_find_untracked_registry_aliases_detects_package_loaded_table_escape,
         test_find_untracked_registry_aliases_ignores_package_loaded_definition_roundtrip,
+        test_find_untracked_registry_aliases_detects_bracket_package_loaded_table_escape,
+        test_find_untracked_registry_aliases_ignores_bracket_package_loaded_definition_roundtrip,
         test_find_untracked_registry_aliases_detects_table_constructor_bracket_key,
         test_find_untracked_registry_aliases_detects_table_constructor_named_key,
         test_find_untracked_registry_aliases_detects_table_constructor_positional,
@@ -2287,6 +2410,9 @@ def main() -> int:
         test_audit_detects_registration_via_dot_field_realias,
         test_audit_detects_registration_via_package_loaded_table_escape,
         test_audit_does_not_flag_package_loaded_definition_roundtrip_as_an_alias,
+        test_audit_detects_unclassified_bracket_package_loaded_module_registration,
+        test_audit_detects_registration_via_bracket_package_loaded_table_escape,
+        test_audit_does_not_flag_bracket_package_loaded_definition_roundtrip_as_an_alias,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
