@@ -186,11 +186,13 @@ jobs:
       # against the exe already built above.
       # --jobs 2 (#671) pairs probes on the 4-vCPU runner — the eligible
       # set ran strictly sequentially before (~4 min for the full set of
-      # 4). --retries 1 re-runs a failed probe SOLO before failing; that
-      # solo re-run is the designed absorber for exactly the parallel-
-      # engine contention flakes --jobs can introduce, so if flaky
-      # retries start showing up regularly here, drop back to --jobs 1
-      # rather than growing the retry count.
+      # 4; #722 grew the set to 7, ~6 min sequential / ~3-4 min under
+      # --jobs 2 on a warm dev machine). --retries 1 re-runs a failed
+      # probe SOLO before failing; that solo re-run is the designed
+      # absorber for exactly the parallel-engine contention flakes
+      # --jobs can introduce, so if flaky retries start showing up
+      # regularly here, drop back to --jobs 1 rather than growing the
+      # retry count.
       - name: Behavior probes (path-selective)
         if: github.event_name == 'pull_request'
         run: |
