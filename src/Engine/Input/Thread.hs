@@ -27,7 +27,7 @@ import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
 import UI.Types (ElementHandle(..))
 import UI.Focus (getInputMode, InputMode(..), FocusId(..), fmCurrentFocus)
 import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer
-                          , isPointerSurfaceBlocked)
+                          , routeScroll, isPointerSurfaceBlocked)
 
 -- | F4 (#730 review round 2): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
@@ -509,23 +509,26 @@ dispatchInput env inpSt event = case event of
                 return ClickSwallowed
               else case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
-              -- Otherwise hit-test the UI so a middle-click over ANY UI/
-              -- menu surface can't fall through to gameplay middle-click
-              -- behavior (the loop uses it for camera dragging — see
-              -- Engine.Loop.Camera). Unlike left/right-click (which only
-              -- block on clickable controls), middle-click has no UI
-              -- handler to dispatch to and exists purely to pan the
-              -- camera, so a passive panel under the cursor must block it
-              -- too — hence isPointerSurfaceBlocked (any sized element,
-              -- OR a modal boundary exists at all — #742 review round 1:
-              -- a gap in the modal's own layout must not leak a
-              -- middle-click through to panning behind it) rather than
-              -- findClickableElementAt. A blocked point SWALLOWS the
-              -- click: the camera middle-drag polls inpMouseBtns
-              -- directly (bypassing the route), so only ClickSwallowed —
-              -- which keeps the button out of inpMouseBtns — actually
-              -- stops the drag. Empty (non-UI, no-modal) space still
-              -- routes the middle-click to the world.
+              -- Otherwise hit-test the UI so a middle-click over a
+              -- pointer-blocking UI/menu surface can't fall through to
+              -- gameplay middle-click behavior (the loop uses it for
+              -- camera dragging — see Engine.Loop.Camera). Middle-click
+              -- has no UI handler to dispatch to and exists purely to
+              -- pan the camera, so isPointerSurfaceBlocked consults
+              -- elementBlocksPointer (#743 — a menu/panel/HUD background
+              -- that opts in via ueBlocksPointer, or any control with a
+              -- registered click callback, still blocks it) OR a modal
+              -- boundary existing at all (#742 review round 1: a gap in
+              -- the modal's own layout must not leak a middle-click
+              -- through to panning behind it). #743 narrowed this from
+              -- "any sized element" pre-#742 parity — a purely visual,
+              -- non-blocking element no longer swallows middle-click on
+              -- its own. A blocked point SWALLOWS the click: the camera
+              -- middle-drag polls inpMouseBtns directly (bypassing the
+              -- route), so only ClickSwallowed — which keeps the button
+              -- out of inpMouseBtns — actually stops the drag. Empty
+              -- (non-blocking, no-modal) space still routes the
+              -- middle-click to the world.
               GLFW.MouseButton'3 →
                 if isTooltipVisible uiMgr
                   then do
@@ -601,6 +604,19 @@ dispatchInput env inpSt event = case event of
                                 writeIORef pendingUIClickRef
                                     (Just ("input.click", callback, x, y))
                                 return ClickUI
+                            -- #743: a pointer-blocking element with no
+                            -- left-click callback of its own (e.g. a
+                            -- right-click-only control, or a scroll-
+                            -- capturing log panel background) consumes
+                            -- the press — no fake Lua callback, but it
+                            -- can't fall through to a lower element,
+                            -- page, or gameplay either. Clears stale UI
+                            -- focus exactly like the miss path below,
+                            -- since no LuaUIClickEvent rides to do it.
+                            RouteBlocked _elemHandle → do
+                                Q.writeQueue lq LuaUIFocusLost
+                                recordRouteOutcome "noop" (Just "ui_pointer_block")
+                                return ClickSwallowed
                             -- RouteConsumedNoHandler never arises for
                             -- left-click (only PointerRightClick's
                             -- left-click fallback produces it) — a plain
@@ -663,6 +679,17 @@ dispatchInput env inpSt event = case event of
                                 writeIORef pendingUIClickRef
                                     (Just ("input.click", leftClickCallback, x, y))
                                 return ClickUI
+                            -- #743: a pointer-blocking element with
+                            -- neither a right-click callback nor a
+                            -- left-click one to fall back to (e.g. a
+                            -- scroll-capturing log panel background) —
+                            -- consumed, no fake callback, same
+                            -- explicit-focus-clear rationale as the
+                            -- left-click RouteBlocked case above.
+                            RouteBlocked _elemHandle → do
+                                Q.writeQueue lq LuaUIFocusLost
+                                recordRouteOutcome "noop" (Just "ui_pointer_block")
+                                return ClickSwallowed
                             RouteMiss → do
                                 -- A right-click that misses all UI clears
                                 -- focus before reaching gameplay, exactly
@@ -821,17 +848,21 @@ dispatchInput env inpSt event = case event of
             -- recording must not alter that routing).
             if viewportDegenerate winW winH fbW fbH
               then recordScrollOutcome "noop" "degenerate_viewport" Nothing
-              -- #742: same modal-scoped search as click routing — a wheel
-              -- miss stopped at a modal boundary is forwarded as a game
-              -- scroll exactly like a genuine miss (Lua's isGameplayBlocked
-              -- gate is what actually stops camera zoom behind a modal;
-              -- see scripts/ui_manager_scroll.lua's onScroll).
-              else case routePointer PointerWheel (mouseX, mouseY) uiMgr of
-                RouteElement elemHandle@(ElementHandle eh) _callback → do
+              -- #743: routeScroll selects the topmost elementCapturesScroll
+              -- surface in the same modal-scoped search click routing uses
+              -- (#742) — a wheel miss stopped at a modal boundary is
+              -- forwarded as a game scroll exactly like a genuine miss
+              -- (Lua's isGameplayBlocked gate is what actually stops camera
+              -- zoom behind a modal; see scripts/ui_manager_scroll.lua's
+              -- onScroll). Unlike click routing, scroll capture carries no
+              -- callback name of its own — onUIScroll dispatches purely on
+              -- the element handle.
+              else case routeScroll (mouseX, mouseY) uiMgr of
+                Just elemHandle@(ElementHandle eh) → do
                     logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
                     Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)
                     recordScrollOutcome "accepted" "ui_scroll" (Just eh)
-                _ → do
+                Nothing → do
                     logDebug logger CatInput "Scroll: game scroll (camera zoom)"
                     Q.writeQueue (luaQueue env) (LuaScrollEvent x y)
                     recordScrollOutcome "accepted" "game_scroll" Nothing

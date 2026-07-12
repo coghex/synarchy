@@ -38,9 +38,22 @@
 --   'isPointerSurfaceBlocked' extends the boundary to middle-click
 --   (camera drag), which has no owned handler and no page concept of
 --   its own in 'Engine.Input.Thread' — pre-#742 it swallowed on ANY
---   visible sized element; here it additionally swallows whenever a
---   modal boundary exists at all, so a gap in the modal's own layout
---   can't leak a middle-click through to panning behind it.
+--   visible sized element; #743 narrowed that to
+--   'UI.Manager.Query.elementBlocksPointer' (see below), and it
+--   additionally swallows whenever a modal boundary exists at all, so
+--   a gap in the modal's own layout can't leak a middle-click through
+--   to panning behind it.
+--
+--   #743 (element-level input policy): page-level ownership above
+--   decides WHICH PAGES are in scope for pointer/wheel routing; within
+--   that scope, 'routePointer'/'routeScroll' further restrict the
+--   search to elements that actually opt into pointer-blocking or
+--   scroll-capture ('UI.Manager.Query.elementBlocksPointer' /
+--   'elementCapturesScroll') rather than every clickable-with-a-
+--   callback element as before. A pointer-blocking element with no
+--   callback relevant to the gesture still consumes it ('RouteBlocked')
+--   — no fake Lua callback fires, but the press/miss can't fall
+--   through to a lower element, a lower page, or gameplay either.
 --
 --   'isPageInScope' is for the OTHER kind of raw Lua handler: one that
 --   iterates every live widget instance regardless of page, entirely
@@ -57,6 +70,7 @@ module UI.InputOwnership
   , isPageInScope
   , isGameplayBlocked
   , routePointer
+  , routeScroll
   , isPointerSurfaceBlocked
   ) where
 
@@ -65,17 +79,15 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import UI.Types
 import UI.Manager.Page (getVisiblePages)
-import UI.Manager.Query (topHitBy, findElementAt)
+import UI.Manager.Query (topHitBy, elementBlocksPointer, elementCapturesScroll)
 
--- | Which pointer gesture is being routed — decides which callback
---   field on an element counts as "owned" for this event. Wheel reuses
---   'ueOnClick', matching the pre-#742 convention
---   ('Engine.Input.Thread' already targeted @findClickableElementAt@
---   for scroll misses).
+-- | Which click gesture is being routed — decides which callback
+--   field on an element counts as "owned" for this event. Wheel/scroll
+--   is NOT a 'PointerKind' (#743): it no longer shares the click
+--   callback machinery at all — see 'routeScroll'.
 data PointerKind
   = PointerLeftClick
   | PointerRightClick
-  | PointerWheel
   deriving (Eq, Show)
 
 -- | Outcome of routing one pointer event through the page stack.
@@ -91,6 +103,15 @@ data InputRoute
     --   fallback ("no right-click handler under the cursor, but SOME
     --   clickable control is"), now scoped by the same modal boundary
     --   as everything else.
+  | RouteBlocked ElementHandle
+    -- ^ #743: a pointer-blocking element ('UI.Manager.Query.
+    --   elementBlocksPointer') sits under the cursor but has no
+    --   callback relevant to THIS gesture at all (a left-click over a
+    --   right-click-only control, or any click over an element that
+    --   opted into 'ueBlocksPointer' with no callback whatsoever, e.g.
+    --   a scroll-capturing log panel background). Consumed — no fake
+    --   Lua callback fires, and unlike 'RouteMiss' this can never fall
+    --   through to a lower element, a lower page, or gameplay.
   | RouteMiss
     -- ^ No owned control captured the pointer — either nothing is
     --   there, or a modal boundary stopped the search before it could
@@ -146,52 +167,81 @@ isPageInScope h mgr = Set.member h (Set.fromList (map upHandle (pagesInScope mgr
 isGameplayBlocked ∷ UIPageManager → Bool
 isGameplayBlocked = isJust ∘ inputBoundaryPage
 
+-- | Pages in scope as a fast membership set — shared by 'routePointer',
+--   'routeScroll', and the middle-click surface check below.
+scopedPageOk ∷ UIPageManager → UIPage → Bool
+scopedPageOk mgr =
+    let inScope = Set.fromList (map upHandle (pagesInScope mgr))
+    in \page → upHandle page `Set.member` inScope
+
 -- | Route one pointer event through the page stack. Restricts the
 --   underlying element search ('UI.Manager.Query.topHitBy') to pages
 --   at or above the modal boundary (if any) — a lower page's owned
 --   control, HUD button included, is invisible to the search once a
 --   boundary exists, so empty modal space blocks it exactly like a
 --   real control would; with no boundary the scope is every visible
---   page, so behaviour is unchanged from before #742. The callback
---   field checked depends on 'PointerKind'; right-click additionally
---   falls back to an ordinary left-clickable control with no handler
---   of its own (pre-#742 parity), still scoped to the same boundary.
+--   page, so behaviour is unchanged from before #742.
+--
+--   #743: the element search is scoped to 'elementBlocksPointer'
+--   (not just clickable-with-a-callback), so a topmost pointer-
+--   blocking element with no callback still consumes the gesture
+--   ('RouteBlocked') instead of falling through to a lower element,
+--   callback-bearing or not. Right-click additionally falls back to
+--   an ordinary left-clickable control with no right-click handler of
+--   its own (pre-#742/#743 parity — 'RouteConsumedNoHandler', carrying
+--   that control's left-click callback identity for F4 bookkeeping).
 routePointer ∷ PointerKind → (Float, Float) → UIPageManager → InputRoute
-routePointer kind pos mgr = case hitBy primaryCallback of
-    Just (h, cb) → RouteElement h cb
-    Nothing → case kind of
-        PointerRightClick → case hitBy ueOnClick of
-            Just (h, leftCb) → RouteConsumedNoHandler h leftCb
-            Nothing           → RouteMiss
-        _ → RouteMiss
+routePointer kind pos mgr =
+    case topHitBy (scopedPageOk mgr) elementBlocksPointer pos mgr of
+        Nothing → RouteMiss
+        Just h  → case Map.lookup h (upmElements mgr) of
+            Nothing → RouteMiss
+            Just el → case primaryCallback el of
+                Just cb → RouteElement h cb
+                Nothing → case kind of
+                    PointerRightClick → case ueOnClick el of
+                        Just leftCb → RouteConsumedNoHandler h leftCb
+                        Nothing     → RouteBlocked h
+                    PointerLeftClick  → RouteBlocked h
   where
-    inScope = Set.fromList (map upHandle (pagesInScope mgr))
-    pageOk page = upHandle page `Set.member` inScope
-
     primaryCallback = case kind of
         PointerLeftClick  → ueOnClick
         PointerRightClick → ueOnRightClick
-        PointerWheel      → ueOnClick
 
-    hitBy callbackOf = do
-        h  ← topHitBy pageOk (clickOk callbackOf) pos mgr
-        el ← Map.lookup h (upmElements mgr)
-        cb ← callbackOf el
-        pure (h, cb)
+-- | #743: route one wheel/scroll event through the page stack,
+--   independent of the click callback machinery 'routePointer' uses.
+--   Selects the visually topmost 'elementCapturesScroll' element in
+--   scope (same modal-boundary restriction as 'routePointer' —
+--   scrolling can never cross it either), reusing the same paint-order
+--   'topHitBy' walk rendering/hit-testing already share: a
+--   scroll-capturing container still wins over its own passive child
+--   visuals (they're simply not candidates, so the walk falls through
+--   to the nearest ancestor/sibling that IS), and a higher capturing
+--   surface wins over an overlapping lower one. 'Nothing' means no
+--   scroll-capturing surface is in scope at this point — the caller
+--   falls back to gameplay (camera zoom).
+routeScroll ∷ (Float, Float) → UIPageManager → Maybe ElementHandle
+routeScroll pos mgr = topHitBy (scopedPageOk mgr) elementCapturesScroll pos mgr
 
-    clickOk callbackOf el = ueClickable el ∧ isJust (callbackOf el)
-
--- | #742 review round 1: the middle-click "any visible UI surface
---   blocks" check ('Engine.Input.Thread' — middle-click has no owned
---   handler of its own and exists purely to pan the camera, so ANY
---   sized element under the point already swallows it, pre-#742).
+-- | #742 review round 1: the middle-click "UI surface blocks" check
+--   ('Engine.Input.Thread' — middle-click has no owned handler of its
+--   own and exists purely to pan the camera). Pre-#742 this swallowed
+--   on ANY visible sized element; #743 narrows the surface check to
+--   'elementBlocksPointer' (unscoped — a modal boundary, if any, is
+--   already folded in via 'isGameplayBlocked' below, so a purely
+--   visual, pass-through element no longer blocks the camera drag on
+--   its own, per #743's "a middle-click over a purely visual,
+--   pass-through element must remain eligible to reach gameplay"
+--   requirement — menu/panel/HUD backgrounds that should still swallow
+--   middle-click opt in via 'ueBlocksPointer' or a real callback).
 --   Folds in the modal boundary: once one exists, the WHOLE screen is
 --   blocked for this purpose, not just the boundary page's own
 --   elements — otherwise a gap in the modal's own layout (no element
 --   at the exact point) would leak the middle-click through to
 --   camera-drag panning behind the modal. When there's no boundary
---   this reduces to exactly the original (unscoped) surface check, so
---   behaviour is unchanged from before #742 in the common case.
+--   this reduces to exactly the unscoped pointer-blocking surface
+--   check, so behaviour outside a modal now depends only on which
+--   elements opted into blocking.
 isPointerSurfaceBlocked ∷ (Float, Float) → UIPageManager → Bool
 isPointerSurfaceBlocked pos mgr =
-    isGameplayBlocked mgr ∨ isJust (findElementAt pos mgr)
+    isGameplayBlocked mgr ∨ isJust (topHitBy (const True) elementBlocksPointer pos mgr)

@@ -286,7 +286,16 @@ createUI = function()
         uiscale    = 1.0,
     })
     table.insert(unitLog.chromePanels, panelId)
-    pcall(function() UI.setClickable(panel.getBoxHandle(panelId), true) end)
+    -- #743: explicit scroll-capture + pointer-block, replacing the old
+    -- setClickable(true)-with-no-callback attempt (which never actually
+    -- worked — wheel routing required a click callback too) so a mouse
+    -- wheel over the content routes to unitLog.onScroll, and blank
+    -- panel space doesn't leak clicks through to gameplay underneath.
+    pcall(function()
+        local boxHandle = panel.getBoxHandle(panelId)
+        UI.setScrollCapture(boxHandle, true)
+        UI.setPointerBlocking(boxHandle, true)
+    end)
 
     local titleId = label.new({
         name     = "unit_log_title",

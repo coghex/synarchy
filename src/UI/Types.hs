@@ -117,6 +117,24 @@ data UIElement = UIElement
   , ueRenderData ∷ UIRenderData
   , ueOnClick    ∷ Maybe Text
   , ueOnRightClick ∷ Maybe Text
+  , ueBlocksPointer ∷ Bool
+    -- ^ #743: explicit opt-in that this element blocks pointer input
+    --   (left/right/middle) even with no click callback of its own —
+    --   independent of 'ueClickable'/'ueOnClick'/'ueOnRightClick'. The
+    --   EFFECTIVE predicate a click/middle-click route actually
+    --   consults is 'UI.Manager.Query.elementBlocksPointer', which
+    --   ORs this flag with the pre-existing rule that a clickable
+    --   control with a registered left- or right-click callback
+    --   blocks by default (so 'UI.setClickable' + 'UI.setOnClick'
+    --   keeps working exactly as before with this left at its default
+    --   'False'). Defaults to 'False' — a purely visual element stays
+    --   pointer-pass-through.
+  , ueCapturesScroll ∷ Bool
+    -- ^ #743: explicit opt-in that this element captures wheel/scroll
+    --   input, independent of click/pointer-blocking policy — see
+    --   'UI.InputOwnership.routeScroll'. Unlike 'ueBlocksPointer' this
+    --   has no callback-derived fallback: nothing about registering a
+    --   click callback implies scroll capture. Defaults to 'False'.
   , ueTextBuffer  ∷ Maybe TextBuffer
   , ueTooltip     ∷ Maybe TooltipContent
     -- ^ Optional hover tooltip. When set and the cursor lingers over

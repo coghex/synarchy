@@ -13,6 +13,10 @@ module UI.Manager.Query
   , findRightClickableElementAt
   , topHitBy
   , hitsAtPointBy
+  , elementBlocksPointer
+  , elementCapturesScroll
+  , isElementPointerBlocking
+  , isElementScrollCapturing
   ) where
 
 import UPrelude
@@ -218,3 +222,37 @@ findRightClickableElementAt pos mgr = do
     pure (h, cb)
   where
     clickOk el = ueClickable el ∧ isJust (ueOnRightClick el)
+
+-- | #743: the EFFECTIVE pointer-blocking predicate — true when this
+--   element consumes left/right/middle pointer input, whether or not
+--   any callback fires. ORs the explicit 'ueBlocksPointer' opt-in with
+--   the pre-existing rule that a clickable control with a registered
+--   left- OR right-click callback blocks by default (so plain
+--   'UI.setClickable' + 'UI.setOnClick'/'UI.setOnRightClick' keeps
+--   blocking exactly as before #743 with 'ueBlocksPointer' left at its
+--   default 'False'). A control with only a right-click callback
+--   still blocks a LEFT click over it (consumed, no fake callback) —
+--   blocking applies per-ELEMENT, not per-button, unless the element
+--   opts out entirely (no flag, no callback).
+elementBlocksPointer ∷ UIElement → Bool
+elementBlocksPointer el = ueBlocksPointer el
+    ∨ (ueClickable el ∧ (isJust (ueOnClick el) ∨ isJust (ueOnRightClick el)))
+
+-- | #743: the scroll-capture predicate — purely the explicit
+--   'ueCapturesScroll' opt-in. Unlike pointer-blocking, nothing about
+--   a registered click callback implies scroll capture: the two
+--   policies are independent, per the #743 contract.
+elementCapturesScroll ∷ UIElement → Bool
+elementCapturesScroll = ueCapturesScroll
+
+-- | Handle-based lookup of 'elementBlocksPointer' — an unknown/deleted
+-- handle never blocks.
+isElementPointerBlocking ∷ ElementHandle → UIPageManager → Bool
+isElementPointerBlocking h mgr =
+    maybe False elementBlocksPointer (Map.lookup h (upmElements mgr))
+
+-- | Handle-based lookup of 'elementCapturesScroll' — an unknown/deleted
+-- handle never captures.
+isElementScrollCapturing ∷ ElementHandle → UIPageManager → Bool
+isElementScrollCapturing h mgr =
+    maybe False elementCapturesScroll (Map.lookup h (upmElements mgr))

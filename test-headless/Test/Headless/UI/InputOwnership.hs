@@ -90,8 +90,10 @@ spec = do
             routePointer PointerLeftClick pt mgrModalBlocks `shouldBe` RouteMiss
         it "empty modal space blocks a lower HUD control (right-click)" $
             routePointer PointerRightClick pt mgrModalBlocks `shouldBe` RouteMiss
-        it "empty modal space blocks a lower HUD control (wheel)" $
-            routePointer PointerWheel pt mgrModalBlocks `shouldBe` RouteMiss
+        -- Wheel/scroll routing (#743) no longer shares the click callback
+        -- machinery — it's tested separately via 'routeScroll' in
+        -- Test.Headless.UI.ElementInputPolicy, including its own
+        -- modal-boundary coverage.
 
     describe "debug/shell pass-through above a modal" $ do
         it "a control on a debug-layer page still receives input above a modal, regardless of creation order" $
@@ -233,12 +235,20 @@ spec = do
             let (_, mgr) = page "modal" LayerModal emptyUIPageManager
             in isPointerSurfaceBlocked pt mgr `shouldBe` True
 
-        it "is blocked by any visible sized element when no modal is present (pre-#742 parity)" $
+        -- #743 narrowed this from "any visible sized element" (the
+        -- pre-#742/#743 behavior) to 'elementBlocksPointer' — a bare
+        -- visual element with no pointer-blocking opt-in and no click
+        -- callback is now pass-through, so a middle-click over it
+        -- reaches gameplay. See Test.Headless.UI.ElementInputPolicy for
+        -- the full independent click/pointer-block/scroll-capture
+        -- matrix (including the element still blocking when it opts in
+        -- via ueBlocksPointer or a registered callback).
+        it "is NOT blocked by a bare visual element with no pointer-blocking opt-in, when no modal is present (#743 behavior change)" $
             let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                 (eh, m2) = createElement "hudPanel" 100 100 hudH m1
                 (px, py) = pt
                 m3 = addElementToPage hudH eh px py m2
-            in isPointerSurfaceBlocked pt m3 `shouldBe` True
+            in isPointerSurfaceBlocked pt m3 `shouldBe` False
 
         it "is not blocked over genuinely empty space with no modal present" $
             isPointerSurfaceBlocked pt emptyUIPageManager `shouldBe` False
