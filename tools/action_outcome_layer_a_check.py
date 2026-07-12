@@ -61,8 +61,18 @@ checks, end to end through the real input pipeline:
        4e/4f. scroll over the fixture button vs. over empty space
            drain "ui_scroll" (with the button's element handle as
            target) vs. "game_scroll" respectively.
+  5. (#730 review round 5) game-world drag-select timing race: boots a
+     fresh throwaway arena and fires mouseDown/moveMouse/mouseUp back
+     to back with no sleep between calls, so the whole gesture can
+     complete within a single scripts/unit_drag_select.lua update(dt)
+     tick interval (0.03s) — the classification must still read
+     "input.drag", not fall back to a stale press-time "input.click"
+     because the periodic tick never got a chance to observe the
+     movement. SWITCHES THE RUNNING INSTANCE into gameplay view.
 
-Exit code 0 = all REQUIRED checks (1, 1b, 2, 4a-4f) passed.
+Exit code 0 = all REQUIRED checks (1, 1b, 2, 4a-4f) passed. Check 5
+needs a gameplay world to activate; a failure to do so is reported as
+informational, not a failure (mirrors check 3's best-effort framing).
 """
 from __future__ import annotations
 
@@ -355,6 +365,45 @@ def main() -> int:
           str(recs4f))
 
     lua('return require("scripts.input_check_fixture").teardown()')
+
+    # 5 (#730 review round 5). Game-world drag-select timing race:
+    # scripts/unit_drag_select.lua's click-vs-drag classification must
+    # not depend on its periodic update(dt) tick (0.03s, scripts/
+    # init_loader.lua) having already observed the movement — a fast
+    # press+move+release completing within one tick interval (which a
+    # rapid debug-console mouseDown/moveMouse/mouseUp sequence
+    # routinely does) must still classify as a drag if it crossed
+    # DRAG_THRESHOLD, not fall back to a stale press-time click. This
+    # SWITCHES THE RUNNING INSTANCE into a real gameplay world (a fresh
+    # throwaway arena) — run it when that's fine to do, not mid-session
+    # (same caveat as check #2's main-menu switch above).
+    print("\n  -- game-world drag-select timing race (#730 review round 5) --")
+    lua('world.initArena("f4_drag_race_arena", 32, 32); return "queued"')
+    inited = lua("return world.waitForInit(60)")
+    lua('require("scripts.ui_manager").showMenu("test_arena_view"); return "shown"')
+    gameplay_active = lua(
+        'return require("scripts.ui_manager").isGameplayInputActive()')
+    if gameplay_active is True:
+        lua("unit.deselectAll(); return true")
+        drain()
+        dcx, dcy = fb_w * 0.5, fb_h * 0.5
+        # Fired back-to-back over the debug console — no sleep between
+        # calls, so this is exactly the "no intervening update tick"
+        # sequence the round-5 review asked be regression-tested.
+        lua(f"return input.mouseDown({dcx}, {dcy})")
+        lua(f"return input.moveMouse({dcx + 100}, {dcy + 100})")
+        lua(f"return input.mouseUp({dcx + 100}, {dcy + 100})")
+        recs5 = drain()
+        check("a fast game-world drag (no intervening update tick) "
+              "drains EXACTLY ONE record", len(recs5) == 1, str(recs5))
+        drag_rec = recs5[0] if len(recs5) == 1 else next(iter(recs5), {})
+        check('that record is "input.drag", not a stale press-time '
+              '"input.click" (#730 review round 5)',
+              drag_rec.get("kind") == "input.drag", str(recs5))
+    else:
+        info("could not activate a gameplay world for the game-world "
+             "drag-select timing race check — skipped",
+             f"waitForInit={inited!r} gameplayActive={gameplay_active!r}")
 
     print(f"\n{'ALL LAYER A CHECKS PASSED' if not failures else f'{len(failures)} FAILURE(S)'}")
     return 1 if failures else 0

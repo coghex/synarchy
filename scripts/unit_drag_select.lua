@@ -49,6 +49,23 @@ dragSelect.whiteTex = nil
 -- Pixels of mouse motion before we commit to a drag (window-space).
 local DRAG_THRESHOLD = 4
 
+-- F4 (#730 review round 5): the click-vs-drag CLASSIFICATION must be
+-- computed directly from press vs. release coordinates, not derived
+-- from dragSelect.state — state's "pressed" -> "dragging" transition
+-- only happens inside dragSelect.update(dt), which runs on the
+-- script's periodic 0.03s tick (scripts/init_loader.lua), not on
+-- every mouse event. A fast real drag — or an H1 mouseDown/moveMouse/
+-- mouseUp sequence — can complete entirely within one tick interval,
+-- so onMouseUp could see state still "pressed" despite the gesture
+-- having genuinely crossed DRAG_THRESHOLD, misclassifying a real drag
+-- as a click (and skipping the box-selection commit too). This helper
+-- is the single source of truth both onMouseUp and update() use.
+local function pastThreshold(startX, startY, x, y)
+    local dx = x - startX
+    local dy = y - startY
+    return (dx * dx + dy * dy) >= DRAG_THRESHOLD * DRAG_THRESHOLD
+end
+
 -- Outline color (white) and thickness in framebuffer pixels.
 local EDGE_R, EDGE_G, EDGE_B, EDGE_A = 1.0, 1.0, 1.0, 1.0
 local EDGE_THICKNESS = 2
@@ -135,9 +152,7 @@ function dragSelect.update(dt)
             dragSelect.currY = my
 
             if dragSelect.state == "pressed" then
-                local dx = mx - dragSelect.startX
-                local dy = my - dragSelect.startY
-                if dx * dx + dy * dy >= DRAG_THRESHOLD * DRAG_THRESHOLD then
+                if pastThreshold(dragSelect.startX, dragSelect.startY, mx, my) then
                     dragSelect.state = "dragging"
                     setEdgesVisible(true)
                     -- The press might have triggered a stray tile-cursor
@@ -161,12 +176,8 @@ function dragSelect.update(dt)
     -- click-vs-drag classification below.
     if dragSelect.rightState == "pressed" then
         local mx, my = engine.getMousePosition()
-        if mx then
-            local dx = mx - dragSelect.rightStartX
-            local dy = my - dragSelect.rightStartY
-            if dx * dx + dy * dy >= DRAG_THRESHOLD * DRAG_THRESHOLD then
-                dragSelect.rightState = "dragging"
-            end
+        if mx and pastThreshold(dragSelect.rightStartX, dragSelect.rightStartY, mx, my) then
+            dragSelect.rightState = "dragging"
         end
     end
 end
@@ -259,75 +270,83 @@ end
 
 function dragSelect.onMouseUp(button, x, y, downRoute)
     if button == 1 then
-        local wasDragging = (dragSelect.state == "dragging")
-        local wasPressed   = (dragSelect.state == "pressed")
-        if wasDragging then
-            -- A focus-loss / minimize transition arrives as a synthetic
-            -- release routed "swallowed" (Engine.Input.Thread). That cancels
-            -- the drag: tear the box down without committing a selection at
-            -- the stale last-cursor position. A real release commits.
-            if downRoute ~= "swallowed" then
-                local ids = unit.hitTestInRect(
-                    dragSelect.startX, dragSelect.startY, x, y) or {}
-                local final
-                if isShiftHeld() then
-                    local current = unit.getSelected() or {}
-                    final = mergeIds(current, ids)
+        if dragSelect.state ~= "idle" then
+            -- #730 review round 5: classify against the ACTUAL
+            -- press->release distance (pastThreshold), NOT
+            -- dragSelect.state — see pastThreshold's own comment for
+            -- why state alone can be stale here.
+            local wasDragging = pastThreshold(
+                dragSelect.startX, dragSelect.startY, x, y)
+            if wasDragging then
+                -- A focus-loss / minimize transition arrives as a synthetic
+                -- release routed "swallowed" (Engine.Input.Thread). That cancels
+                -- the drag: tear the box down without committing a selection at
+                -- the stale last-cursor position. A real release commits.
+                if downRoute ~= "swallowed" then
+                    local ids = unit.hitTestInRect(
+                        dragSelect.startX, dragSelect.startY, x, y) or {}
+                    local final
+                    if isShiftHeld() then
+                        local current = unit.getSelected() or {}
+                        final = mergeIds(current, ids)
+                    else
+                        final = ids
+                    end
+                    unit.setSelection(final)
+                    -- A drag that establishes a unit selection must clear the
+                    -- item/building domains: ground-item selection is mutually
+                    -- exclusive with unit/building selection (World.Cursor.Types),
+                    -- enforced by the click routing. The box can start over an
+                    -- item/building, so clear the other domains whenever we end
+                    -- up with units selected — matching scripts/init.lua.
+                    if #final > 0 then
+                        item.deselect()
+                        building.deselect()
+                    end
+                    recordDragOutcome(#final > 0 and "accepted" or "noop",
+                        x, y, #ids, #final)
                 else
-                    final = ids
+                    recordDragOutcome("noop", x, y, 0, 0,
+                        "release swallowed (focus loss / minimize)")
                 end
-                unit.setSelection(final)
-                -- A drag that establishes a unit selection must clear the
-                -- item/building domains: ground-item selection is mutually
-                -- exclusive with unit/building selection (World.Cursor.Types),
-                -- enforced by the click routing. The box can start over an
-                -- item/building, so clear the other domains whenever we end
-                -- up with units selected — matching scripts/init.lua.
-                if #final > 0 then
-                    item.deselect()
-                    building.deselect()
-                end
-                recordDragOutcome(#final > 0 and "accepted" or "noop",
-                    x, y, #ids, #final)
+                setEdgesVisible(false)
             else
-                recordDragOutcome("noop", x, y, 0, 0,
-                    "release swallowed (focus loss / minimize)")
+                -- Never crossed the drag threshold — this gesture is really
+                -- just a click. Fire init_mouse.lua's deferred classification
+                -- now that it's known to be the gesture's final (and only)
+                -- outcome (#730 — keeps a below-threshold "drag" H1 action to
+                -- exactly one record, same as a real click).
+                if dragSelect.pendingClick then
+                    recordDeferredClick(dragSelect.pendingClick)
+                end
             end
-            setEdgesVisible(false)
-        elseif wasPressed then
-            -- Never crossed the drag threshold — this gesture is really
-            -- just a click. Fire init_mouse.lua's deferred classification
-            -- now that it's known to be the gesture's final (and only)
-            -- outcome (#730 — keeps a below-threshold "drag" H1 action to
-            -- exactly one record, same as a real click).
-            if dragSelect.pendingClick then
-                recordDeferredClick(dragSelect.pendingClick)
-            end
+            dragSelect.pendingClick = nil
+            dragSelect.state = "idle"
         end
-        dragSelect.pendingClick = nil
-        dragSelect.state = "idle"
     elseif button == 2 then
         -- Right-button (#730 review round 4): no box-selection effect
         -- to commit, just the click-vs-drag classification. A real
         -- drag has no gameplay meaning here, so it's recorded as an
         -- honest noop rather than inventing a fake accepted outcome.
-        local wasDragging = (dragSelect.rightState == "dragging")
-        local wasPressed  = (dragSelect.rightState == "pressed")
-        if wasDragging then
-            if downRoute ~= "swallowed" then
-                recordDragOutcome("noop", x, y, 0, 0,
-                    "no drag gesture is defined for right-button game-world input")
+        if dragSelect.rightState ~= "idle" then
+            local wasDragging = pastThreshold(
+                dragSelect.rightStartX, dragSelect.rightStartY, x, y)
+            if wasDragging then
+                if downRoute ~= "swallowed" then
+                    recordDragOutcome("noop", x, y, 0, 0,
+                        "no drag gesture is defined for right-button game-world input")
+                else
+                    recordDragOutcome("noop", x, y, 0, 0,
+                        "release swallowed (focus loss / minimize)")
+                end
             else
-                recordDragOutcome("noop", x, y, 0, 0,
-                    "release swallowed (focus loss / minimize)")
+                if dragSelect.rightPendingClick then
+                    recordDeferredClick(dragSelect.rightPendingClick)
+                end
             end
-        elseif wasPressed then
-            if dragSelect.rightPendingClick then
-                recordDeferredClick(dragSelect.rightPendingClick)
-            end
+            dragSelect.rightPendingClick = nil
+            dragSelect.rightState = "idle"
         end
-        dragSelect.rightPendingClick = nil
-        dragSelect.rightState = "idle"
     end
 end
 
