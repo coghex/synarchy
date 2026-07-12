@@ -158,16 +158,16 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
 
     -- Step 3: Climate — refine the timeline's co-evolved climate
-    --   with the precise chunk-resolution ocean map
+    --   with the precise chunk-resolution ocean map. The timeline's own
+    --   final CO2/solar constant are threaded through so the rebuilt
+    --   regional grid and its csGlobalCO2/csGlobalTemp/csSolarConst
+    --   summary fields all come from ONE coherent forcing pass, rather
+    --   than a baseline-forcing grid with evolved summary fields
+    --   patched on afterward (#785).
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
     sendGenLog env "Refining climate with ocean data..."
-    let climateState = initEarlyClimate worldSize oceanMap timeline
-    -- Carry forward CO2 and global temp from timeline evolution
-    let climateState' = climateState
-            { csGlobalCO2  = csGlobalCO2 timelineClimate
-            , csGlobalTemp = csGlobalTemp timelineClimate
-            , csSolarConst = csSolarConst timelineClimate
-            }
+    let climateState' = initEarlyClimate worldSize oceanMap timeline
+            (csGlobalCO2 timelineClimate) (csSolarConst timelineClimate)
     _ ← evaluate (force climateState')
 
     let weatherLines = formatWeather climateState'

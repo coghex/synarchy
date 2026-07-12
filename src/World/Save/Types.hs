@@ -124,7 +124,18 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 82  -- v82: player-facing world identity (#707).
+currentSaveVersion = 83  -- v83: worldgen-output change, not a layout
+                         --      change (#785). Final regional climate
+                         --      is now rebuilt from the completed
+                         --      timeline's own evolved CO2/solar
+                         --      forcing instead of hardcoded baseline
+                         --      forcing (1.0/0.0/1.0) with only the
+                         --      csGlobalCO2/csGlobalTemp/csSolarConst
+                         --      summary fields patched from the
+                         --      timeline afterward — so a save's
+                         --      stored regional climate grid differs
+                         --      from pre-#785 saves for the same seed.
+                         -- v82: player-facing world identity (#707).
                          --      WorldPageSave gains a trailing
                          --      'wpsIdentity' (Maybe WorldIdentity:
                          --      display name + optional gloss) and
