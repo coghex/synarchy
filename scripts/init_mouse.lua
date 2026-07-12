@@ -282,7 +282,7 @@ function M.onMouseDown(button, x, y)
         -- is untouched and still happens immediately, exactly as
         -- before; only the F4 record's timing moves.
         local function recordClick(handler, outcome, x, y, reason)
-            dragSelect.deferClick(handler, outcome, x, y, reason)
+            dragSelect.deferClick(button, handler, outcome, x, y, reason)
         end
 
         local id = unit.hitTestAt(x, y)
@@ -396,6 +396,20 @@ function M.onMouseDown(button, x, y)
             recordClick(nil, "deadclick", x, y,
                 "gameplay input inactive (menu/paused/hidden world)")
             return
+        end
+
+        -- F4 (#730 review round 4): a right-button H1 `drag` action
+        -- reaches this same context-menu/move-order/deadclick chain —
+        -- arm the (visual-less) right-button threshold tracking and
+        -- defer every classification below to release, exactly like
+        -- the MOUSE_LEFT branch above, so a real right-button drag
+        -- reads as one "input.drag" instead of a stale press-time
+        -- click. The MENU/MOVE-ORDER EFFECT is unaffected — it still
+        -- happens immediately below; only the F4 record's timing moves.
+        local dragSelect = require("scripts.unit_drag_select")
+        dragSelect.handleMouseDown(button, x, y)
+        local function recordClick(handler, outcome, x, y, reason)
+            dragSelect.deferClick(button, handler, outcome, x, y, reason)
         end
 
         -- Per-target menu construction lives in init_context_menu.lua;

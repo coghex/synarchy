@@ -138,6 +138,11 @@ LAYER_A_SCROLL_DOMAINS = [
 LAYER_A_DRAG_OUTCOMES = [
     _DRAG_OUTCOME + r'#final > 0 and "accepted" or "noop"',
     _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"release swallowed',
+    # #730 review round 4: right-button game-world drags (context
+    # menus / move-order / deadclick chain) have no box-selection
+    # effect, so a real drag is an honest noop rather than a fake
+    # "accepted".
+    _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"no drag gesture is defined for right-button',
 ]
 
 # #730 review rounds 2 & 3: a ClickUI-routed press (real UI widget
@@ -1006,11 +1011,15 @@ def _self_test() -> list[str]:
             lines.append(
                 f'{call_name}("noop", x, y, 0, 0, '
                 '"release swallowed (focus loss / minimize)")')
+        if "right_undefined" in include:
+            lines.append(
+                f'{call_name}("noop", x, y, 0, 0, '
+                '"no drag gesture is defined for right-button game-world input")')
         return "\n".join(lines)
 
-    _DRAG_PARTS = {"completed", "swallowed"}
+    _DRAG_PARTS = {"completed", "swallowed", "right_undefined"}
     drag_full = drag_outcome_fixture(_DRAG_PARTS)
-    expect("input drag: both outcome call sites present reads DONE",
+    expect("input drag: all three outcome call sites present reads DONE",
            _all_present(drag_full, LAYER_A_DRAG_OUTCOMES), True)
     for part in _DRAG_PARTS:
         expect(f"input drag: missing the {part!r} call site reads gap",
