@@ -42,8 +42,12 @@ short-circuit (scripts/unit_ai_mental.lua) to confirm:
      attacker; excludes dead, collapsed, self, and the technomule;
      replaces a lost target (dies mid-episode) with another eligible
      unit; wanders and keeps searching when nothing is eligible;
-     produces a real landed attack through the short-circuit; and
-     clears every lash-out-owned goal/target once the episode ends.
+     produces a real landed attack through the short-circuit; clears
+     every lash-out-owned goal/target once the episode ends — even if
+     delirium overlaps the exact tick the episode expires; ranks
+     nearest-eligible by Chebyshev distance (not Euclidean); and stops
+     a stale pursuit immediately (rather than walking it out) when a
+     target leaves range with no replacement available.
 
 Usage: python3 tools/mental_state_probe.py [--port 9352]
 Exit 0 = pass.
@@ -786,6 +790,15 @@ def main():
             print(f"  [FAIL] expected nearest ally {near_ally}, got "
                   f"target={target2} (far_ally={far_ally})")
 
+        # Clean up: near_ally/far_ally can drift under ordinary AI
+        # (wander, retreat from subj2's lash-out) into later clusters'
+        # LASHOUT_RANGE — see the identical note after 9f below. Kill
+        # them and end subj2's episode so nothing from this cluster
+        # wanders further.
+        send(P, f"unit.kill({near_ally}); unit.kill({far_ally}); "
+                f"unit.setStat({subj2},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, subj2) != "break")
+
         # 9e. Dead, collapsed, self, and the technomule are excluded —
         # all placed CLOSER than the one live unit, which must still win.
         subj3 = spawn_acolyte(P, 0, -25)
@@ -869,6 +882,153 @@ def main():
         send(P, f"unit.kill({t2}); unit.setStat({subj4},'mental_until',0); "
                 f"return 'ok'")
         poll_until(5, lambda: mstate(P, subj4) != "break")
+
+        # 9h. Nearest-target ranking uses Chebyshev distance — matching
+        # eligibility's own metric — not squared Euclidean. (6,6) is
+        # nearer than (8,0) under Chebyshev (6 vs 8) despite (8,0) being
+        # nearer under squared Euclidean (64 vs 72).
+        subjH = spawn_acolyte(P, -15, 40)
+        set_wellbeing(P, subjH, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subjH) == "stable")
+        nearChebyshev = spawn_acolyte(P, -9, 46)   # +6,+6
+        nearEuclidean = spawn_acolyte(P, -7, 40)   # +8,0
+        send(P, f"require('scripts.mental_state').forceBreak({subjH},'lash_out'); "
+                f"return 'ok'")
+
+        def h_target():
+            t = lash_target(P, subjH)
+            return t if t != "nil" else None
+        targetH = poll_until(10, h_target)
+        if targetH == str(nearChebyshev):
+            print(f"  [pass] nearest-target ranking uses Chebyshev distance "
+                  f"({nearChebyshev} over the Euclidean-nearer {nearEuclidean})")
+        else:
+            ok = False
+            print(f"  [FAIL] expected Chebyshev-nearer {nearChebyshev}, got "
+                  f"{targetH} (Euclidean-nearer would be {nearEuclidean})")
+        send(P, f"unit.setStat({subjH},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, subjH) != "break")
+
+        # 9i. A lost target with no replacement stops the stale pursuit
+        # immediately rather than walking out the old leg toward the
+        # target's vacated position.
+        subjI = spawn_acolyte(P, -25, 10)
+        set_wellbeing(P, subjI, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subjI) == "stable")
+        targetI = spawn_acolyte(P, -19, 10)   # 6 tiles off — needs a real walk
+        send(P, f"require('scripts.mental_state').forceBreak({subjI},'lash_out'); "
+                f"return 'ok'")
+
+        def i_pursuing():
+            t = lash_target(P, subjI)
+            act = send(P, f"return unit.getActivity({subjI})")
+            return True if (t == str(targetI) and act in ("walking", "running")) else None
+        if not poll_until(10, i_pursuing):
+            ok = False
+            print(f"  [FAIL] setup: {subjI} never pursued {targetI}")
+
+        # lashOutExecute runs every world tick (~60Hz, well before the
+        # thought_interval cadence gate), so the single tick where
+        # unit.stop() takes hold and getActivity briefly reads "idle" is
+        # far too narrow a window for external polling (0.1-0.3s
+        # intervals) to reliably observe directly. Assert the outcome
+        # that actually distinguishes stopped-and-rewandered from
+        # walked-out-the-old-leg instead: how much of the ~6-tile gap to
+        # the target's ORIGINAL position closes after it's teleported
+        # away. Continuing the stale pursuit would close most of it
+        # (~2 tiles/s at ordered speed); stopping and wandering
+        # independently should close only a small, bounded amount.
+        old_target_x, old_target_y = -19, 10
+        x0, y0 = unit_pos(P, subjI)
+        d_to_old_start = ((x0 - old_target_x) ** 2 + (y0 - old_target_y) ** 2) ** 0.5
+
+        # Teleport the target out of LASHOUT_RANGE (8) mid-pursuit.
+        send(P, f"unit.setPos({targetI}, -19, 25); return 'ok'")
+        poll_until(5, lambda: (lambda x, y:
+                (x - (-19)) ** 2 + (y - 25) ** 2 < 0.25)(*unit_pos(P, targetI)))
+
+        time.sleep(2.0)
+        x1, y1 = unit_pos(P, subjI)
+        d_to_old_end = ((x1 - old_target_x) ** 2 + (y1 - old_target_y) ** 2) ** 0.5
+        closed_gap = d_to_old_start - d_to_old_end
+        cleared_i = lash_target(P, subjI) == "nil"
+        if cleared_i and closed_gap < 2.0:
+            print(f"  [pass] lost target with no replacement stops the stale "
+                  f"pursuit (closed only {closed_gap:.2f} tiles of the old "
+                  f"gap in 2s, target cleared)")
+        else:
+            ok = False
+            print(f"  [FAIL] stale pursuit continued toward the target's old "
+                  f"position: closed_gap={closed_gap:.2f} cleared={cleared_i}")
+        send(P, f"unit.setStat({subjI},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, subjI) != "break")
+
+        # 9j. Delirium overlapping episode expiry must not skip
+        # episode-end cleanup. Cleanup is tracked via s.mentalLashoutActive
+        # rather than inferred from s.currentAction, which delirium
+        # preempts to "delirious" the instant it overlaps a break.
+        subjJ = spawn_acolyte(P, -25, -10)
+        set_wellbeing(P, subjJ, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subjJ) == "stable")
+        targetJ = spawn_acolyte(P, -24, -10)
+        send(P, f"require('scripts.mental_state').forceBreak({subjJ},'lash_out'); "
+                f"return 'ok'")
+
+        def j_target():
+            t = lash_target(P, subjJ)
+            return t if t != "nil" else None
+        if poll_until(10, j_target) != str(targetJ):
+            ok = False
+            print(f"  [FAIL] setup: {subjJ} never targeted {targetJ}")
+
+        # Drive consciousness into the delirious band (brain.lua:
+        # 0.15..0.40) via blood_oxygen — the same technique
+        # collapse_crawl_probe.py uses. brain.tick recomputes
+        # consciousness from blood_oxygen every physiology tick and
+        # blood_oxygen itself drifts back on its own, so this needs
+        # RE-pinning on every poll (like set_wellbeing's own dead-band
+        # samples elsewhere in this file) to actually hold the unit
+        # delirious through the whole window this test needs, rather
+        # than recovering before the overlap it's testing occurs.
+        def j_pin_and_check_delirious():
+            send(P, f"unit.setStat({subjJ},'blood_oxygen',0.59); return 'ok'")
+            return json.loads(send(P,
+                f"local b=require('scripts.brain'); "
+                f"return {{d=b.isDelirious({subjJ})}}"))["d"]
+        if not poll_until(10, j_pin_and_check_delirious):
+            ok = False
+            print(f"  [FAIL] setup: {subjJ} never became delirious")
+
+        # End the episode, re-pinning blood_oxygen on every poll so
+        # delirium doesn't clear out from under this before mental_tick
+        # actually ends the episode.
+        send(P, f"unit.setStat({subjJ},'mental_until',0); return 'ok'")
+        if not poll_until(5, lambda: (j_pin_and_check_delirious(),
+                                       mstate(P, subjJ) != "break")[-1]):
+            ok = False
+            print(f"  [FAIL] setup: {subjJ}'s episode never ended")
+
+        still_delirious = j_pin_and_check_delirious()
+
+        def j_cleaned():
+            send(P, f"unit.setStat({subjJ},'blood_oxygen',0.59); return 'ok'")
+            f = lash_ai_flags(P, subjJ)
+            return f if (not f["tgt"] and f["goal"] != "attack"
+                         and not f["committed"]) else None
+        cleared_j = poll_until(10, j_cleaned)
+        if cleared_j and still_delirious:
+            print(f"  [pass] episode-end cleanup fires even while still "
+                  f"delirious (still_delirious={still_delirious}): {cleared_j}")
+        else:
+            ok = False
+            print(f"  [FAIL] lash-out state leaked while delirium overlapped "
+                  f"episode end: {lash_ai_flags(P, subjJ)} "
+                  f"(still_delirious={still_delirious})")
+
+        send(P, f"unit.setStat({subjJ},'blood_oxygen',1.0); return 'ok'")
+        poll_until(10, lambda: not json.loads(send(P,
+            f"local b=require('scripts.brain'); "
+            f"return {{d=b.isDelirious({subjJ})}}"))["d"])
 
         # 9g. No eligible target: agitated wander, keep searching.
         subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles

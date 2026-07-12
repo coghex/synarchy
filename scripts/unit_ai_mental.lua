@@ -8,8 +8,9 @@
 --     onExit (see preempt below) — the old inline block skipped it.
 --   * Mental break (psychological, scripts/mental_state.lua): the
 --     state-of-mind episode. Behaviour was rolled once at episode
---     entry and held: aimless wander (the same stumble delirium uses)
---     or fleeing — running away from the nearest other unit.
+--     entry and held: aimless wander (the same stumble delirium uses),
+--     fleeing — running away from the nearest other unit, catatonia —
+--     frozen in place, or lash-out — episode-owned combat (below).
 --
 -- Both run BEFORE the nextActionAt cadence gate (a broken/delirious
 -- unit must not sit frozen waiting for its next decision slot), so
@@ -87,20 +88,24 @@ local function eligibleLashoutTarget(uid, me, oid)
 end
 
 -- Prefer a recent live attacker (same engage window unit_ai_combat uses)
--- that's still eligible; otherwise the nearest eligible unit.
+-- that's still eligible; otherwise the nearest eligible unit. "Nearest"
+-- ranks by the SAME Chebyshev metric eligibility itself is gated on
+-- (LASHOUT_RANGE above) — ranking by Euclidean distance instead would
+-- disagree with it (e.g. an (8,0) candidate reading "nearer" than a
+-- (6,6) one, despite the latter being closer under Chebyshev).
 local function pickLashoutTarget(uid, me)
     local att = unit.getLastAttacker(uid)
     if att and (engine.gameTime() - (att.at or 0)) <= LASHOUT_ATTACKER_WINDOW
        and eligibleLashoutTarget(uid, me, att.uid) then
         return att.uid
     end
-    local best, bestD2 = nil, math.huge
+    local best, bestD = nil, math.huge
     for _, oid in ipairs(unit.getAllIds() or {}) do
         if eligibleLashoutTarget(uid, me, oid) then
             local info = unit.getInfo(oid)
-            local dx, dy = info.gridX - me.gridX, info.gridY - me.gridY
-            local d2 = dx * dx + dy * dy
-            if d2 < bestD2 then best, bestD2 = oid, d2 end
+            local d = math.max(math.abs(info.gridX - me.gridX),
+                                math.abs(info.gridY - me.gridY))
+            if d < bestD then best, bestD = oid, d end
         end
     end
     return best
@@ -118,6 +123,7 @@ local function lashOutExecute(uid, s, params)
     local me = unit.getInfo(uid)
     if not me then return end
 
+    local hadTarget = s.attackTargetUid ~= nil
     if s.attackTargetUid
        and not eligibleLashoutTarget(uid, me, s.attackTargetUid) then
         s.attackTargetUid = nil
@@ -126,7 +132,13 @@ local function lashOutExecute(uid, s, params)
         local target = pickLashoutTarget(uid, me)
         if not target then
             -- No one to lash out at: agitated wander, keep looking —
-            -- the next tick re-tries pickLashoutTarget.
+            -- the next tick re-tries pickLashoutTarget. A target lost
+            -- THIS tick (dead/collapsed/out of range) already has a
+            -- combat pursuit in flight (attackTargetExecute's own
+            -- moveTo, unit_ai_combat_attack.lua) — stop it immediately
+            -- rather than letting the unit walk out that stale leg
+            -- before the activity-gated wander below can fire.
+            if hadTarget then unit.stop(uid) end
             local activity = unit.getActivity(uid)
             if activity ~= "walking" and activity ~= "running" then
                 needs.wanderExecute(uid, s, params)
@@ -166,16 +178,19 @@ end
 -- purposefully and the dispatch loop must not score actions.
 function M.shortCircuit(uid, s, params, activity, actList)
     -- Episode-end cleanup (#717): lash-out's target/goal belong only to
-    -- the episode. The tick after a lash-out break ends, currentAction
-    -- still reads "mental_break" (nothing else updates it until the
-    -- normal scoring loop below runs) and the behaviour stat still
-    -- holds the ended episode's last value, so this fires exactly once
-    -- per episode, clearing state before ordinary combat AI (engage/
-    -- retreat/attack_target) can inherit a stale episode-owned pursuit.
-    if s.currentAction == "mental_break" and not mental.isBreaking(uid)
-       and mental.breakBehavior(uid) == "lash_out" then
+    -- the episode. Tracked via s.mentalLashoutActive (set/cleared below)
+    -- rather than inferred from s.currentAction — delirium (just below)
+    -- preempts currentAction to "delirious" whenever it overlaps a
+    -- break, so a break that ends while the unit is STILL delirious
+    -- would otherwise never match "mental_break" and skip this cleanup
+    -- entirely, leaking the episode's target/goal into ordinary combat
+    -- AI once the unit becomes lucid again. The flag survives that
+    -- preemption untouched, so this still fires the tick isBreaking
+    -- goes false regardless of what currentAction reads by then.
+    if s.mentalLashoutActive and not mental.isBreaking(uid) then
         s.attackTargetUid = nil
         s.committed        = nil
+        s.mentalLashoutActive = nil
         core.markGoalAccomplished(s, "attack")
         unit.clearAnimOverride(uid)
     end
@@ -192,11 +207,10 @@ function M.shortCircuit(uid, s, params, activity, actList)
 
     -- Mental break: same short-circuit, psychologically driven.
     if mental.isBreaking(uid) then
-        local wasBreaking = s.currentAction == "mental_break"
         preempt(uid, s, params, actList, "mental_break")
         local behavior = mental.breakBehavior(uid)
 
-        if not wasBreaking and behavior == "lash_out" then
+        if not s.mentalLashoutActive and behavior == "lash_out" then
             -- Fresh episode: lash-out picks its own target from scratch
             -- via pickLashoutTarget, never inheriting whatever combat
             -- (or lack of it) was running the moment before the break.
@@ -204,6 +218,7 @@ function M.shortCircuit(uid, s, params, activity, actList)
             s.committed        = nil
             unit.clearAnimOverride(uid)
         end
+        if behavior == "lash_out" then s.mentalLashoutActive = true end
 
         if behavior == "catatonia" then
             -- Frozen in place: no replacement movement, work, combat,
