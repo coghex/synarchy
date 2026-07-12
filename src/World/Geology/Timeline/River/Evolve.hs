@@ -2,7 +2,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Timeline.River.Evolve
     ( evolveExistingRiver
-    , evolveDeepen
     ) where
 import UPrelude
 import qualified Data.Vector as V
