@@ -601,6 +601,29 @@ local saveMods = require("scripts.lib.save_modules")
 (saveMods).register("untracked_parenthesized", function() end, function() end)
 """
 
+# Redundant parens nested to an ARBITRARY (here, 5-deep) level -- proves
+# the fix generalizes to any depth in one shot, not just one more level
+# past the single-paren case above.
+SYNTHETIC_LUA_REGISTER_DEEPLY_PARENTHESIZED_RECEIVER = """\
+local saveMods = require("scripts.lib.save_modules")
+
+(((((saveMods))))).register("deeply_parenthesized", function() end, function() end)
+"""
+
+# Regression for the round-16 whitespace-drift bug: the registry's own
+# function DEFINITION, indented (real code is never at column 0) --
+# proves the parenthesized-receiver fix doesn't let match positions
+# drift into leading indentation the way the first (reverted) `\(*\s*`
+# attempt did, which would have made this misread as a dynamic-name call.
+SYNTHETIC_LUA_REGISTER_INDENTED_DEFINITION = """\
+local saveModules = package.loaded["scripts.lib.save_modules"] or {}
+package.loaded["scripts.lib.save_modules"] = saveModules
+
+    function saveModules.register(name, serializeFn, deserializeFn)
+        saveModules.registry[name] = { serialize = serializeFn, deserialize = deserializeFn }
+    end
+"""
+
 # The real registry's OWN function DEFINITION, isolated -- a Lua
 # parameter list (`name, serializeFn, deserializeFn`) is syntactically
 # indistinguishable from a call's argument list to a receiver+`(`
@@ -996,6 +1019,37 @@ def test_find_lua_register_dynamic_names_ignores_the_registry_own_definition():
     expect(offenders == [],
            f"the registry's own function definition is not flagged as "
            f"a dynamic name call, got {offenders}")
+
+
+def test_extract_lua_registered_modules_finds_deeply_parenthesized_receiver():
+    # Regression: the parens fix must generalize to ANY depth in one
+    # shot, not just the single-level case -- proves it with 5 levels.
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_DEEPLY_PARENTHESIZED_RECEIVER})
+    names = [n for n, _ in found]
+    expect(names == ["deeply_parenthesized"],
+           f"a register() call through an arbitrarily deeply "
+           f"parenthesized receiver is extracted, got {names}")
+
+
+def test_find_lua_register_aliases_ignores_deeply_parenthesized_receiver_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_DEEPLY_PARENTHESIZED_RECEIVER})
+    expect(offenders == [],
+           f"a deeply-parenthesized-receiver DIRECT call is not flagged "
+           f"as an alias, got {offenders}")
+
+
+def test_find_lua_register_dynamic_names_ignores_indented_definition():
+    # Regression for the round-16 whitespace-drift bug: real code is
+    # never at column 0, so the registry's own function definition,
+    # indented, must still be excluded -- proves the fix doesn't let
+    # match positions drift into leading indentation.
+    offenders = find_lua_register_dynamic_names(
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_INDENTED_DEFINITION})
+    expect(offenders == [],
+           f"the registry's own INDENTED function definition is not "
+           f"flagged as a dynamic name call, got {offenders}")
 
 
 def test_find_lua_register_aliases_ignores_longbracket_string_prose():
@@ -1652,6 +1706,40 @@ def test_audit_detects_unclassified_parenthesized_receiver_registration():
            f"as an aliasing violation, got {violations}")
 
 
+def test_audit_detects_unclassified_deeply_parenthesized_receiver_registration():
+    """The req-10 acceptance test's arbitrary-depth-parens variant: a
+    module registered through a 5-level-deep parenthesized receiver is
+    just as live and traceable as the single-paren case -- proves the
+    fix isn't depth-limited."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_DEEPLY_PARENTHESIZED_RECEIVER},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for deeply_parenthesized
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("deeply_parenthesized" in v for v in violations),
+           f"a module registered through a deeply parenthesized "
+           f"receiver is reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a deeply-parenthesized-receiver DIRECT call is not ALSO "
+           f"reported as an aliasing violation, got {violations}")
+
+
+def test_audit_does_not_flag_indented_definition_as_dynamic_name():
+    """Regression for the round-16 whitespace-drift bug: the registry's
+    own function definition, indented like real code, must not be
+    misread as a dynamic-name call."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/save_modules.lua": SYNTHETIC_LUA_REGISTER_INDENTED_DEFINITION},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("literal" in v.lower() for v in violations),
+           f"the registry's own INDENTED function definition is not "
+           f"reported as a dynamic-name violation, got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name():
     """Regression: the registry's own `function saveModules.register(name,
     ...)` definition must not be misread as a dynamic-name call."""
@@ -1942,6 +2030,9 @@ def main() -> int:
         test_find_lua_register_aliases_ignores_parenthesized_receiver_direct_call,
         test_find_lua_register_dynamic_names_ignores_parenthesized_receiver,
         test_find_lua_register_dynamic_names_ignores_the_registry_own_definition,
+        test_extract_lua_registered_modules_finds_deeply_parenthesized_receiver,
+        test_find_lua_register_aliases_ignores_deeply_parenthesized_receiver_direct_call,
+        test_find_lua_register_dynamic_names_ignores_indented_definition,
         test_find_lua_register_aliases_ignores_longbracket_string_prose,
         test_find_untracked_registry_aliases_detects_arbitrary_local_name,
         test_find_untracked_registry_aliases_ignores_sanctioned_local_name,
@@ -1986,6 +2077,8 @@ def main() -> int:
         test_audit_detects_aliased_package_loaded_chained_registration,
         test_audit_detects_concatenated_module_name,
         test_audit_detects_unclassified_parenthesized_receiver_registration,
+        test_audit_detects_unclassified_deeply_parenthesized_receiver_registration,
+        test_audit_does_not_flag_indented_definition_as_dynamic_name,
         test_audit_does_not_flag_the_registry_own_definition_as_dynamic_name,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,

@@ -312,8 +312,9 @@ serialization-correctness proof. It:
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
    covering four Lua access-expression forms for the registry table
    itself (a local named `saveMods`/`saveModules`, optionally wrapped in
-   one level of redundant parens — `(saveMods).register(...)` is
-   exactly as direct a call as the bare form —, bracket-indexed
+   ANY number of redundant parens — `(saveMods).register(...)`,
+   `((saveMods)).register(...)`, arbitrarily deep, are all exactly as
+   direct a call as the bare form —, bracket-indexed
    `saveMods["register"](...)`/`saveMods['register'](...)`,
    `require("scripts.lib.save_modules").register(...)` chained directly
    off its own `require()` with no local binding at all, and

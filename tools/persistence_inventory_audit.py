@@ -87,26 +87,35 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # (`saveMods["register"](...)`/`saveMods['register'](...)`) -- a
 # perfectly ordinary direct call, not an alias, so it's recognized as
 # an alternate spelling of the same access rather than flagged. Lua
-# also allows the bare name to be wrapped in one level of redundant
-# parens -- `(saveMods).register(...)` is exactly as direct a call as
-# `saveMods.register(...)`, just with cosmetic grouping -- so a
-# dedicated parenthesized alternative matches `( saveMods )` (the
-# require()/package.loaded forms are already parenthesized-looking via
-# their own call/index syntax and aren't wrapped like this in practice,
-# so parens support is scoped to the bare-name alternative). This is
-# its OWN alternative rather than an optional `\(*`/`\)*` wrapped
-# around the plain bare-name alternative: an UNCONDITIONALLY optional
-# paren would let its accompanying `\s*` swallow ordinary PRECEDING
-# whitespace/indentation even with no paren present at all (the
-# regex engine finds the leftmost successful match, and whitespace
-# before an unparenthesized `saveMods` satisfies `\(*\s*` with zero
-# parens matched), silently shifting every real match's start position
-# earlier by however much leading whitespace precedes it -- which
-# desyncs any position-based comparison against a DIFFERENT pattern
-# anchored to the identifier itself (e.g. the function-definition-site
-# exclusion in find_lua_register_dynamic_names, which surfaced this).
+# also allows the bare name to be wrapped in ANY number of redundant
+# parens -- `(saveMods).register(...)`, `((saveMods)).register(...)`,
+# arbitrarily deep, are all exactly as direct a call as the bare form,
+# just with cosmetic grouping (the require()/package.loaded forms are
+# already parenthesized-looking via their own call/index syntax and
+# aren't wrapped like this in practice, so parens support is scoped to
+# the bare-name alternative). Unlike an arbitrary-depth ALIAS chain
+# (each hop introduces a genuinely NEW identifier this audit can't
+# enumerate in advance -- real interpretation territory, the accepted
+# limitation described in item 6 of SS7 below), redundant parens around
+# one FIXED, already-known token are a regular pattern: `\(+`/`\)+`
+# (one-or-more, not "optional") cover any depth in a single bounded
+# match, so this is fully general, not "one more level" -- no future
+# depth of parens can bypass it. This is its OWN alternative (requiring
+# AT LEAST one paren on each side) rather than making the parens
+# optional around the plain bare-name alternative: an UNCONDITIONALLY
+# optional paren (`\(*`/`\)*`, tried first and reverted) let its
+# accompanying `\s*` swallow ordinary PRECEDING whitespace/indentation
+# even with NO paren present at all (the regex engine finds the
+# leftmost successful match, and whitespace before an unparenthesized
+# `saveMods` satisfies `\(*\s*` with zero parens matched), silently
+# shifting every real match's start position earlier by however much
+# leading whitespace precedes it -- desyncing the position-based
+# function-definition-site exclusion in find_lua_register_dynamic_names
+# that surfaced this. Requiring `\(+` (never satisfiable with zero
+# parens) keeps the parenthesized alternative fully separate from the
+# whitespace-free bare-name one, so this failure mode can't recur.
 _REGISTER_TABLE_REF = (
-    r"(?:\(\s*save(?:Mods|Modules)\s*\)"
+    r"(?:\(+\s*save(?:Mods|Modules)\s*\)+"
     r"|save(?:Mods|Modules)"
     r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)"
     r"|package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
