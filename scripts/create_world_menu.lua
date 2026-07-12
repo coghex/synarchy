@@ -307,7 +307,7 @@ function createWorldMenu.init(panelTex, btnTex, font, width, height)
     createWorldMenu.loadDefaults()
 
     createWorldMenu.worldPreviewTexture =
-        engine.loadTexture("assets/textures/utility/notexture.png")
+        engine.loadTexture("assets/textures/ui/world_preview_pending.png")
     createWorldMenu.barTextures = {
         trackLeft   = engine.loadTexture("assets/textures/ui/bar/bar_left.png"),
         trackCenter = engine.loadTexture("assets/textures/ui/bar/bar_center.png"),
