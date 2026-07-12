@@ -310,13 +310,15 @@ serialization-correctness proof. It:
    (`{ name1, name2 ∷ Type }`, several names sharing one trailing type
    signature).
 2. Extracts every `saveMods.register(...)` call site across `scripts/`,
-   covering three Lua access-expression forms for the registry table
+   covering four Lua access-expression forms for the registry table
    itself (a local named `saveMods`/`saveModules`, bracket-indexed
-   `saveMods["register"](...)`/`saveMods['register'](...)`, and
+   `saveMods["register"](...)`/`saveMods['register'](...)`,
    `require("scripts.lib.save_modules").register(...)` chained directly
-   off its own `require()` with no local binding at all — all ordinary,
-   fully traceable Lua) and all three Lua string-literal forms for the
-   module name (`'...'`, `"..."`, and long brackets `[[...]]`/
+   off its own `require()` with no local binding at all, and
+   `package.loaded["scripts.lib.save_modules"].register(...)` chained
+   directly off the exact cache slot `require()` itself reads/writes —
+   all ordinary, fully traceable Lua) and all three Lua string-literal
+   forms for the module name (`'...'`, `"..."`, and long brackets `[[...]]`/
    `[=[...]=]`/...), fully string-literal-aware in both directions — a
    `--` embedded in a quoted OR long-bracket string is never mistaken
    for a comment start (which would otherwise truncate the line and
@@ -346,10 +348,11 @@ serialization-correctness proof. It:
    fails this the same as a compound value like "Rebuild + Persist
    (mixed)" would; the contract requires exactly one label per item, not
    zero and not several.
-5. Separately fails on any of the three registry-table access forms
-   above (dot, bracket, or `require(...)`-chained) that is NOT itself a
-   direct call (e.g. stored in a local or table field and invoked
-   through that alias later) — extraction can only trace direct calls,
+5. Separately fails on any of the four registry-table access forms
+   above (dot, bracket, `require(...)`-chained, or `package.loaded[...]`-
+   chained) that is NOT itself a direct call (e.g. stored in a local or
+   table field and invoked through that alias later) — extraction can
+   only trace direct calls,
    so an alias would otherwise register a module invisibly to the
    audit. Rather than attempting to trace what an alias eventually gets
    called with, this makes the alias itself the failure: the codebase's

@@ -536,6 +536,23 @@ local register = require("scripts.lib.save_modules").register
 register("aliased_require_module", nil, nil)
 """
 
+# A direct call reached off `package.loaded["scripts.lib.save_modules"]`
+# with no local binding at all -- `require()` itself reads/writes
+# exactly this cache slot, so this is a THIRD spelling of the identical
+# singleton table (alongside the bare local name and the require()-
+# chained form), just as directly traceable as either.
+SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_CHAINED_CALL = """\
+package.loaded["scripts.lib.save_modules"].register("pkg_loaded_module", nil, nil)
+"""
+
+# package.loaded[...].register is stored in a local and called THROUGH
+# the alias -- the package.loaded sibling of
+# SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_ALIASED.
+SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_CHAINED_ALIASED = """\
+local register = package.loaded["scripts.lib.save_modules"].register
+register("aliased_pkg_loaded_module", nil, nil)
+"""
+
 # A long-bracket STRING (not a comment) whose content happens to
 # mention "saveMods.register" -- prose, not a live reference. Mirrors
 # SYNTHETIC_LUA_REGISTER_DEFINITION_WITH_ERROR_STRING but for the
@@ -842,6 +859,22 @@ def test_find_lua_register_aliases_detects_require_chained_stored_reference():
         {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_ALIASED})
     expect(offenders == ["scripts/fake.lua"],
            f"require(...).register stored in a local (not called "
+           f"directly) is flagged, got {offenders}")
+
+
+def test_find_lua_register_aliases_ignores_package_loaded_chained_direct_call():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_CHAINED_CALL})
+    expect(offenders == [],
+           f"a package.loaded[...].register(...) DIRECT call is not "
+           f"flagged as an alias, got {offenders}")
+
+
+def test_find_lua_register_aliases_detects_package_loaded_chained_stored_reference():
+    offenders = find_lua_register_aliases(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_CHAINED_ALIASED})
+    expect(offenders == ["scripts/fake.lua"],
+           f"package.loaded[...].register stored in a local (not called "
            f"directly) is flagged, got {offenders}")
 
 
@@ -1404,6 +1437,41 @@ def test_audit_detects_aliased_require_chained_registration():
            f"aliasing violation, got {violations}")
 
 
+def test_audit_detects_unclassified_package_loaded_chained_module_registration():
+    """Regression: `package.loaded["scripts.lib.save_modules"]` is a
+    THIRD spelling of the identical singleton table require() itself
+    reads/writes -- a module registered via
+    package.loaded[...].register(...) with no local binding at all was
+    invisible to extraction entirely (neither flagged unclassified nor
+    alias-flagged), a worse gap than an alias since it went completely
+    undetected."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_CHAINED_CALL},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for pkg_loaded_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("pkg_loaded_module" in v for v in violations),
+           f"a module registered via package.loaded[...].register(...) "
+           f"is reported when unclassified, got {violations}")
+    expect(not any("alias" in v for v in violations),
+           f"a package.loaded[...].register(...) DIRECT call is not "
+           f"ALSO reported as an aliasing violation, got {violations}")
+
+
+def test_audit_detects_aliased_package_loaded_chained_registration():
+    """The alias-bypass gap's package.loaded-chained sibling."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_PACKAGE_LOADED_CHAINED_ALIASED},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "alias" in v for v in violations),
+           f"package.loaded[...].register stored in a local is reported "
+           f"as an aliasing violation, got {violations}")
+
+
 def test_audit_does_not_flag_longbracket_string_prose_as_an_alias():
     """Regression: a long-bracket STRING literal (not a comment) whose
     content happens to mention "saveMods.register" used to be
@@ -1639,6 +1707,8 @@ def main() -> int:
         test_find_lua_register_aliases_detects_bracket_form_stored_reference,
         test_find_lua_register_aliases_ignores_require_chained_direct_call,
         test_find_lua_register_aliases_detects_require_chained_stored_reference,
+        test_find_lua_register_aliases_ignores_package_loaded_chained_direct_call,
+        test_find_lua_register_aliases_detects_package_loaded_chained_stored_reference,
         test_find_lua_register_aliases_ignores_longbracket_string_prose,
         test_find_untracked_registry_aliases_detects_arbitrary_local_name,
         test_find_untracked_registry_aliases_ignores_sanctioned_local_name,
@@ -1677,6 +1747,8 @@ def main() -> int:
         test_audit_detects_aliased_bracket_form_registration,
         test_audit_detects_unclassified_require_chained_module_registration,
         test_audit_detects_aliased_require_chained_registration,
+        test_audit_detects_unclassified_package_loaded_chained_module_registration,
+        test_audit_detects_aliased_package_loaded_chained_registration,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,
         test_audit_detects_registration_via_untracked_require_local,

@@ -74,17 +74,23 @@ BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
 # The registry table is called `saveMods` at every real require site
 # (`local saveMods = require("scripts.lib.save_modules")`) but is
 # `saveModules` inside its OWN definition file -- match either local
-# name, OR the table reached directly off its OWN require() call with
+# name, the table reached directly off its OWN require() call with
 # no local binding at all (`require("scripts.lib.save_modules")
 # .register(...)`, fully traceable since the module path is a literal
-# string identifying this exact registry). Lua also lets a table field
+# string identifying this exact registry), OR the table reached
+# directly off `package.loaded["scripts.lib.save_modules"]` -- Lua's
+# `require()` itself reads/writes exactly this cache slot, so this is a
+# THIRD spelling of the identical singleton table, not a different one;
+# `package.loaded[...].register(...)` is exactly as direct and
+# traceable as the require()-chained form. Lua also lets a table field
 # be reached by BRACKET indexing instead of dot access
 # (`saveMods["register"](...)`/`saveMods['register'](...)`) -- a
 # perfectly ordinary direct call, not an alias, so it's recognized as
 # an alternate spelling of the same access rather than flagged.
 _REGISTER_TABLE_REF = (
     r"(?:save(?:Mods|Modules)"
-    r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\))"
+    r"|require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)"
+    r"|package\s*\.\s*loaded\s*\[\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\])"
 )
 _REGISTER_ACCESS = (
     _REGISTER_TABLE_REF + r"\s*"
