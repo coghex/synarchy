@@ -546,27 +546,46 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
     return offenders
 
 
-def find_untracked_require_bindings(scripts_text_by_file: dict[str, str]) -> list[str]:
-    """Files where `require("scripts.lib.save_modules")` escapes to
-    something other than the two sanctioned patterns (e.g.
-    `local registry = require("scripts.lib.save_modules");
-    registry.register("untracked", nil, nil)`).
+# `local X = saveMods`/`local X = saveModules` where X is a DIFFERENT
+# name -- re-aliasing the already-canonical table into a second local,
+# the same violation class as an untracked require() binding (see
+# find_untracked_registry_aliases), just one hop later. Not followed by
+# `.register`/`["register"]` access, which would just be an ordinary
+# (already-covered) call/alias-of-the-FUNCTION through the canonical
+# name.
+_BARE_REGISTRY_ALIAS_RE = re.compile(
+    r"local\s+(?!saveMods\b|saveModules\b)\w+\s*=\s*save(?:Mods|Modules)\b"
+    r"(?!\s*\.\s*register|\s*\[\s*(?:'register'|\"register\")\s*\])")
+
+
+def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:
+    """Files where the registry table escapes to an untracked local
+    name -- either `require("scripts.lib.save_modules")`'s result
+    directly (`local registry = require("scripts.lib.save_modules")`),
+    or a SECOND-level alias of the already-canonical name
+    (`local registry = saveMods`). Either way, a later
+    `registry.register("untracked", ...)` is a real, live registration
+    this audit's fixed-receiver-name matchers cannot trace.
 
     `find_lua_register_aliases`/REGISTER_RE only ever look for the
     FIXED receiver spellings `saveMods`/`saveModules`/a direct
-    `require(...)` chain -- binding the require() result to an
-    ARBITRARY local name is a data-flow problem no amount of regex
-    matching on fixed names can trace (Lua allows any identifier). So
-    rather than trying to enumerate every possible name, this flags
-    the ESCAPE itself: every `require("scripts.lib.save_modules")`
-    occurrence must be either (a) chained straight into `.register`/
-    `["register"]` access (a direct call, or the require-chained alias
-    form -- both already covered elsewhere), or (b) assigned to a
-    local named EXACTLY `saveMods`/`saveModules`, the codebase's own
-    convention. Anything else -- bound to another name, passed as an
-    argument, stored in a table under an arbitrary key -- means the
-    registry table is now reachable only through something this audit
-    cannot trace, so it's a hard failure on its own.
+    `require(...)` chain -- binding the registry table to an ARBITRARY
+    local name is a data-flow problem no amount of regex matching on
+    fixed names can trace (Lua allows any identifier, and allows
+    aliasing an alias). Rather than trying to enumerate every possible
+    name or chase arbitrary aliasing depth, this flags the ESCAPE
+    itself: every `require("scripts.lib.save_modules")` occurrence, and
+    every bare `saveMods`/`saveModules` occurrence, must be either
+    (a) chained straight into `.register`/`["register"]` access (a
+    direct call, or the alias-of-the-function form -- both already
+    covered elsewhere), or (b) itself assigned to a local named EXACTLY
+    `saveMods`/`saveModules`, the codebase's own convention. Anything
+    else -- bound to another name, passed as an argument, stored in a
+    table under an arbitrary key -- means the registry table is now
+    reachable only through something this audit cannot trace, so it's a
+    hard failure on its own. A THIRD level of aliasing (re-aliasing the
+    SECOND local yet again) is a known, accepted limitation of this
+    static, non-interpreting approach.
     """
     offenders: list[str] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
@@ -574,6 +593,7 @@ def find_untracked_require_bindings(scripts_text_by_file: dict[str, str]) -> lis
         string_spans = _string_literal_spans(cleaned)
         sanctioned_local_spans = [
             (m.start(), m.end()) for m in _REQUIRE_SANCTIONED_LOCAL_RE.finditer(cleaned)]
+        untracked = False
         for m in REQUIRE_SAVE_MODULES_RE.finditer(cleaned):
             if any(start <= m.start() < end for start, end in string_spans):
                 continue  # inside a string literal, not real code
@@ -581,8 +601,15 @@ def find_untracked_require_bindings(scripts_text_by_file: dict[str, str]) -> lis
                 continue  # chained into .register/["register"] access
             if any(start <= m.start() < end for start, end in sanctioned_local_spans):
                 continue  # local saveMods/saveModules = require(...)
-            offenders.append(relpath)
+            untracked = True
             break
+        if not untracked:
+            for m in _BARE_REGISTRY_ALIAS_RE.finditer(cleaned):
+                if not any(start <= m.start() < end for start, end in string_spans):
+                    untracked = True
+                    break
+        if untracked:
+            offenders.append(relpath)
     return offenders
 
 
@@ -727,14 +754,15 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             f"or table field) -- the audit can only trace direct calls; "
             f"call saveMods.register(...) directly instead of aliasing it")
 
-    for relpath in find_untracked_require_bindings(scripts_text_by_file):
+    for relpath in find_untracked_registry_aliases(scripts_text_by_file):
         violations.append(
-            f'{relpath} binds require("scripts.lib.save_modules") to '
-            f"something other than a direct .register()/[\"register\"] "
-            f"access or a local named saveMods/saveModules -- the audit "
-            f"cannot trace a .register(...) call made through an "
-            f"arbitrarily-named local; use one of the two sanctioned "
-            f"patterns instead")
+            f"{relpath} aliases the save-modules registry table "
+            f'(via require("scripts.lib.save_modules") or the '
+            f"saveMods/saveModules name) into something other than a "
+            f"direct .register()/[\"register\"] access or a local named "
+            f"exactly saveMods/saveModules -- the audit cannot trace a "
+            f".register(...) call made through an arbitrarily-named "
+            f"alias; use one of the two sanctioned patterns instead")
 
     return violations
 

@@ -361,16 +361,27 @@ serialization-correctness proof. It:
    literal like `[[saveMods.register]]` — is never mistaken for a live
    reference to the function.
 6. Separately fails on any `require("scripts.lib.save_modules")`
-   result that escapes to something other than the two sanctioned
+   result — OR the already-canonical bare `saveMods`/`saveModules`
+   name — that escapes to something other than the two sanctioned
    patterns above (chained straight into `.register` access, or bound
    to a local literally named `saveMods`/`saveModules`) — e.g.
    `local registry = require("scripts.lib.save_modules");
-   registry.register(...)`. Binding the registry table to an
+   registry.register(...)`, or one hop further,
+   `local saveMods = require(...); local registry = saveMods;
+   registry.register(...)` (re-aliasing the ALREADY-sanctioned name
+   into a second local). Binding the registry table to an
    arbitrarily-named local is a genuine data-flow problem no
-   fixed-name regex can trace (Lua allows any identifier), so rather
-   than trying to enumerate every possible name, the escape itself —
-   the require() result reaching anything other than the two
-   sanctioned patterns — is the failure.
+   fixed-name regex can trace (Lua allows any identifier, and allows
+   aliasing an alias), so rather than trying to enumerate every
+   possible name or chase arbitrary aliasing depth, the escape itself
+   — the registry table reaching anything other than the two
+   sanctioned patterns — is the failure. A THIRD level of aliasing
+   (re-aliasing the second local yet again) is a known, accepted
+   limitation of this static, non-interpreting approach — at some
+   point, tracing arbitrary-depth data flow through regex matching
+   stops being a tractable improvement and starts being a hand-rolled
+   Lua interpreter; this audit deliberately stays a static guard, not a
+   serialization-correctness proof (see the opening of this section).
 
 Run it directly:
 
