@@ -26,6 +26,7 @@ import math
 import re
 import subprocess
 import sys
+from collections import Counter
 
 # One canonical native word: an uppercase ASCII letter, then lowercase
 # ASCII letters, with optional internal '-'/''' runs of letters — never
@@ -135,14 +136,23 @@ def main():
             if reasons:
                 violations.append((s["seed"], r["form"], name, reasons))
 
-    distinct_names = set(n for n in all_names if n is not None)
+    name_counts = Counter(n for n in all_names if n is not None)
+    distinct_names = set(name_counts)
     total_names = len(all_names)
     distinct_frac = (len(distinct_names) / total_names) if total_names else 0.0
+    duplicated = {n: c for n, c in name_counts.items() if c > 1}
+    # Extra occurrences beyond each name's first — the count that
+    # reconciles with distinct/total above (total - distinct).
+    duplicate_name_count = sum(c - 1 for c in duplicated.values())
 
     print(f"distinct profile signatures: {len(signatures)} / {len(seeds)}")
     print(f"root collisions (post-resolution, summed over all seeds): {total_collisions}")
     print(f"distinct native names: {len(distinct_names)} / {total_names} "
           f"({distinct_frac * 100:.1f}%)")
+    print(f"duplicate native names across the sample: {duplicate_name_count} "
+          f"({len(duplicated)} distinct string(s) repeated)")
+    for name, count in list(duplicated.items())[:20]:
+        print(f"  {name!r} appears {count} times")
     if lengths:
         print(f"output length distribution: min={min(lengths)} max={max(lengths)} "
               f"avg={sum(lengths) / len(lengths):.1f}")
