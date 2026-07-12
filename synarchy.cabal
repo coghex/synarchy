@@ -608,6 +608,9 @@ library
                      World.Geology.Evolution
                      World.Geology.Timeline
                      World.Geology.Timeline.Types
+                     World.Geology.Timeline.Feature
+                     World.Geology.Timeline.Event
+                     World.Geology.Timeline.BBox
                      World.Geology.Timeline.Helpers
                      World.Geology.Timeline.Volcanism
                      World.Geology.Timeline.River
@@ -942,6 +945,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Input.Inject
                    Test.Headless.Input.Followup
+                   Test.Headless.Input.LayerA
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot

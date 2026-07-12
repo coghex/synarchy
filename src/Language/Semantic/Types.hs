@@ -115,6 +115,10 @@ data CatalogueError
       -- ^ concept, offending raw domain
     | InvalidLexicalForm !ConceptId !FormKind !Text
       -- ^ concept, form, reason
+    | DuplicateSingularForm !Text !ConceptId !ConceptId
+      -- ^ colliding singular (as authored on the first concept, compared
+      --   case-insensitively), the first concept to author it, and the
+      --   later concept that repeats it
     deriving (Show, Eq)
 
 -- | Why a semantically well-typed 'NameExpr' could not be rendered
@@ -187,6 +191,9 @@ catalogueErrorText err = case err of
     InvalidLexicalForm (ConceptId cid) k why →
         "concept " <> cid <> " has an invalid " <> formKindText k
         <> " form: " <> why
+    DuplicateSingularForm sing (ConceptId first) (ConceptId second) →
+        "concepts " <> first <> " and " <> second
+        <> " share the same singular form " <> T.pack (show sing)
 
 renderErrorText ∷ RenderError → Text
 renderErrorText err = case err of

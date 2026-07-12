@@ -74,21 +74,31 @@ loadCatalogue path = parseCatalogue ⊚ BS.readFile path
 validateCatalogue ∷ RawCatalogue → Either CatalogueError Catalogue
 validateCatalogue (RawCatalogue ver raws)
     | ver < 1   = Left (InvalidVersion ver)
-    | otherwise = Catalogue ver ⊚ foldM step M.empty raws
+    | otherwise = mkCatalogue ⊚ foldM step (M.empty, M.empty) raws
   where
-    step ∷ M.Map ConceptId ConceptEntry → RawConcept
-         → Either CatalogueError (M.Map ConceptId ConceptEntry)
-    step acc rc = do
+    mkCatalogue (concepts, _) = Catalogue ver concepts
+
+    -- Accumulator: the validated catalogue map, plus every singular form
+    -- seen so far (lowercased) keyed to the concept that first authored
+    -- it, so a later collision can name both offending ids.
+    step ∷ (M.Map ConceptId ConceptEntry, M.Map Text ConceptId) → RawConcept
+         → Either CatalogueError (M.Map ConceptId ConceptEntry, M.Map Text ConceptId)
+    step (acc, singulars) rc = do
         cid ← validateId (rcId rc)
         when (M.member cid acc) $ Left (DuplicateConceptId cid)
         dom ← case domainFromText (rcDomain rc) of
             Nothing → Left (UnknownDomain cid (rcDomain rc))
             Just d  → Right d
         sing ← validateForm cid FormSingular (rcSingular rc)
+        let singKey = T.toLower sing
+        case M.lookup singKey singulars of
+            Just first → Left (DuplicateSingularForm sing first cid)
+            Nothing    → pure ()
         plu  ← traverse (validateForm cid FormPlural)     (rcPlural rc)
         modi ← traverse (validateForm cid FormModifier)   (rcModifier rc)
         poss ← traverse (validateForm cid FormPossessive) (rcPossessive rc)
-        pure $ M.insert cid (ConceptEntry dom sing plu modi poss) acc
+        pure ( M.insert cid (ConceptEntry dom sing plu modi poss) acc
+             , M.insert singKey cid singulars )
 
 -- | Concept ids are #710's root-derivation input, so their shape is
 --   pinned: nonempty, starting with an uppercase ASCII letter, made of

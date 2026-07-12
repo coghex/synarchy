@@ -108,20 +108,103 @@ def _count_at_least(text: str, pattern: str, n: int) -> bool:
 _ROC_ROUTE = r"recordRouteOutcome[\s\S]{0,80}?"  # Engine.Input.Thread's helper
 _ROC_CLICK = r"recordClick\([\s\S]{0,60}?"       # init_mouse.lua's helper
 
+# #730: the non-click Layer A families' producer calls, anchored to the
+# EXACT positional argument sequence real source uses (not a lazy window)
+# — each call's outcome/domain string literals sit immediately after the
+# call name with no other field in between, so an exact sequence is both
+# more precise than a window and immune to a window wide enough to bridge
+# past a renamed call into an unrelated sibling's leftover literal.
+_KEY_OUTCOME    = r"recordKeyOutcome\s+env\s+"          # Engine.Input.Thread
+_CHAR_ACC_TRUE  = r'accumulateCharOutcome\s+inpSt\s+True\s+'   # ditto
+_CHAR_ACC_FALSE = r'accumulateCharOutcome\s+inpSt\s+False\s+' # ditto
+_SCROLL_OUTCOME = r"recordScrollOutcome\s+"             # ditto
+_DRAG_OUTCOME   = r"recordDragOutcome\("                # unit_drag_select.lua
+
+LAYER_A_KEY_DOMAINS = [
+    _KEY_OUTCOME + r'"shell_text"', _KEY_OUTCOME + r'"ui_text"',
+    _KEY_OUTCOME + r'"gameplay_key"',
+]
+LAYER_A_CHAR_DOMAINS = [
+    _CHAR_ACC_TRUE + r'"shell_text"', _CHAR_ACC_TRUE + r'"ui_text"',
+    _CHAR_ACC_FALSE + r'"dropped_backtick"',
+    _CHAR_ACC_FALSE + r'"dropped_unfocused"',
+]
+LAYER_A_SCROLL_DOMAINS = [
+    _SCROLL_OUTCOME + r'"accepted"\s*"z_slice"',
+    _SCROLL_OUTCOME + r'"accepted"\s*"ui_scroll"',
+    _SCROLL_OUTCOME + r'"accepted"\s*"game_scroll"',
+    _SCROLL_OUTCOME + r'"noop"\s*"degenerate_viewport"',
+]
+LAYER_A_DRAG_OUTCOMES = [
+    _DRAG_OUTCOME + r'#final > 0 and "accepted" or "noop"',
+    _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"release swallowed',
+    # #730 review round 4: right-button game-world drags (context
+    # menus / move-order / deadclick chain) have no box-selection
+    # effect, so a real drag is an honest noop rather than a fake
+    # "accepted".
+    _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"no drag gesture is defined for right-button',
+    # #730 review round 6: a left-button press that reached a debug/
+    # build/mine/chop/till/plant tool claim (or the gameplay-inactive
+    # deadclick) is armed for classification but never box-select-armed
+    # — a real drag there is ALSO an honest noop, not a fake box-select
+    # "accepted".
+    _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"no drag gesture is defined for this input"',
+]
+
+# #730 review rounds 2 & 3: a ClickUI-routed press (real UI widget
+# click OR an H1 drag that starts on one) OR a middle-button press
+# (camera-drag) is deferred to its matching release — 'Engine.Input.
+# Thread' stashes (kind, callback, press-x, press-y) via writeIORef
+# pendingUIClickRef at EACH of the four producing sites (left-click
+# hit, right-click hit, right-click-consumed-by-a-left-only-control,
+# middle-button camera_drag), then resolves exactly one outcome at
+# release by comparing movement against uiDragThresholdPx — OR, if
+# focus loss/minimize swallows the release entirely (round 3),
+# 'Engine.Input.State.releaseHeldButtons' resolves it as an
+# interrupted noop instead of losing it silently. Anchored to the
+# actual call/comparison, not bare literals, same convention as
+# _ROC_ROUTE.
+_PENDING_UI_CLICK = r'writeIORef pendingUIClickRef[\s\S]{0,60}?'
+
+
+def _ui_click_deferred_check(thread_text: str, state_text: str) -> bool:
+    if not thread_text or not state_text:
+        return False
+    return (
+        # THREE sites push a leading "input.click" (the left-click hit,
+        # the right-click-consumed-by-left-only-control fallback, AND
+        # the middle-button camera_drag site below) — a count, not a
+        # bare _all_present, so losing any one of them still reads as
+        # a gap (mirrors the game-chain deadclick count above).
+        _count_at_least(thread_text, _PENDING_UI_CLICK + r'"input\.click"', 3)
+        and bool(re.search(_PENDING_UI_CLICK + r'"input\.rightClick"', thread_text))
+        and bool(re.search(
+            _PENDING_UI_CLICK + r'"input\.click",\s*"camera_drag"', thread_text))
+        and bool(re.search(
+            r'movedPx\s*≥\s*uiDragThresholdPx[\s\S]{0,80}?"input\.drag"'
+            r'[\s\S]{0,80}?else\s*\(clickKind', thread_text))
+        and bool(re.search(
+            r'pushActionOutcome[\s\S]{0,220}?aoOutcome\s*=\s*"noop"'
+            r'[\s\S]{0,260}?"release swallowed \(focus loss / minimize\)"',
+            state_text)))
+
 # Shared source of truth between the real checks below and the self-test:
 # every distinct route/reason literal a multi-route area is expected to
 # carry. Defined once so the self-test proving "remove one -> gap" can't
 # silently drift from what main() actually checks (review round 2).
 LAYER_A_SWALLOWED_ROUTES = [
     _ROC_ROUTE + r'"degenerate_viewport"', _ROC_ROUTE + r'"tooltip_lock_toggle"',
-    _ROC_ROUTE + r'"ui_surface_block"', _ROC_ROUTE + r'"camera_drag"',
+    _ROC_ROUTE + r'"ui_surface_block"',
     _ROC_ROUTE + r'"tooltip_lock_dismiss"',
-    # The no-right-click-handler route records the control's OWN
-    # left-click callback (its real identity, review round 8), not a
-    # fixed literal — so this checks the SOURCE STRUCTURE that wires it
-    # through, not a runtime string.
-    _ROC_ROUTE + r'"accepted"\s*\(Just leftClickCallback\)',
     _ROC_ROUTE + r'"unmapped_button"',  # GLFW buttons 4-8, mapped to Lua button 0
+    # NB: "camera_drag" (middle-button) and the no-right-click-handler
+    # route (review round 8) used to live here as immediate
+    # recordRouteOutcome calls — #730 review rounds 2-3 moved BOTH to
+    # the SAME deferred-to-release pendingUIClickRef mechanism as the
+    # other ClickUI routes (a right-click OR middle-button press can
+    # start an H1 drag too), so their coverage now lives in
+    # _ui_click_deferred_check's "click_site2"/"camera_drag_site" parts
+    # instead.
 ]
 LAYER_A_GAME_CHAIN_HANDLERS = [
     _ROC_CLICK + r'"debug_overlay"', _ROC_CLICK + r'"debug_anim_panel"',
@@ -278,14 +361,20 @@ def _build_tool_check(text: str) -> bool:
 def _build_verbs() -> list[tuple[str, str, callable]]:
     return [
         # --- Layer A: input routing, "complete" per the issue's scope note ---
-        ("A", "input click -> UI widget consumption (real event queued)",
-         # Both the left- and right-click producer calls are required —
-         # a single "does recordWidgetClickOutcome appear anywhere"
-         # check reads DONE with either one deleted (review round 8).
-         lambda: _all_present_check(
-             "src/Engine/Scripting/Lua/Thread/Dispatch.hs",
-             [r'recordWidgetClickOutcome env "input\.click"',
-              r'recordWidgetClickOutcome env "input\.rightClick"'])),
+        ("A", "input click -> UI/camera-drag consumption (deferred to release, #730 rounds 2-3)",
+         # #730 review round 2 moved this from an immediate Dispatch.hs
+         # record to a deferred Engine.Input.Thread one; round 3 added
+         # the middle-button camera_drag site and the focus-loss/
+         # minimize interrupted-release resolution in Engine.Input.State
+         # (see _ui_click_deferred_check) — a UI-origin OR middle-button
+         # H1 drag reads as exactly one "input.drag" instead of also
+         # carrying a stale press-time "input.click", and a swallowed
+         # release no longer loses the record outright.
+         lambda: _ui_click_deferred_check(
+             (REPO_ROOT / "src/Engine/Input/Thread.hs").read_text(encoding="utf-8")
+             if (REPO_ROOT / "src/Engine/Input/Thread.hs").exists() else "",
+             (REPO_ROOT / "src/Engine/Input/State.hs").read_text(encoding="utf-8")
+             if (REPO_ROOT / "src/Engine/Input/State.hs").exists() else "")),
         ("A", "input click -> swallowed/no-handler routes (no event ever queued)",
          # Every distinct ClickSwallowed/no-handler-ClickUI route this
          # module knows about — ALL must be present, not just one, or a
@@ -298,6 +387,22 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
          lambda: _game_chain_check(
              (REPO_ROOT / "scripts/init_mouse.lua").read_text(encoding="utf-8")
              if (REPO_ROOT / "scripts/init_mouse.lua").exists() else "")),
+        # --- Layer A (#730): non-click H1 input families — keyboard, text,
+        # scroll/z-slice, drag. Each area's `_all_present_check` requires
+        # EVERY registered domain literal, not just one, mirroring the
+        # click area's multi-route pattern above. ---
+        ("A", "input key -> shell/UI-text/gameplay routing domains",
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_KEY_DOMAINS)),
+        ("A", "input type/char -> text-delivery + drop domains (aggregated)",
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_CHAR_DOMAINS)),
+        ("A", "input scroll -> z-slice/UI-scroll/game-scroll/degenerate domains",
+         lambda: _all_present_check(
+             "src/Engine/Input/Thread.hs", LAYER_A_SCROLL_DOMAINS)),
+        ("A", "input drag -> unit_drag_select box-selection outcome",
+         lambda: _all_present_check(
+             "scripts/unit_drag_select.lua", LAYER_A_DRAG_OUTCOMES)),
 
         # --- Layer B Tier 1: onboarding + highest naive-frequency (this PR) ---
         ("B1", "createWorld.generate (proceed commit)",
@@ -532,11 +637,8 @@ def _self_test() -> list[str]:
     #    call-renaming mutation (review round 5) is provably caught too.
     _ROUTE_NAMES = [
         "degenerate_viewport", "tooltip_lock_toggle", "ui_surface_block",
-        "camera_drag", "tooltip_lock_dismiss", "unmapped_button",
+        "tooltip_lock_dismiss", "unmapped_button",
     ]
-    # The no-right-click-handler route (review round 8): NOT a quoted
-    # literal, since it records the control's own callback variable.
-    _LEFT_CLICK_CALLBACK_ROUTE = "leftClickCallback"
     _HANDLER_NAMES = [
         "debug_overlay", "debug_anim_panel", "build_tool", "mine_tool",
         "chop_tool", "till_tool", "plant_tool", "unit_select", "item_select",
@@ -545,29 +647,23 @@ def _self_test() -> list[str]:
         "context_menu_tile",
     ]
 
-    def swallowed_routes_fixture(include: set[str], with_left_click_route: bool,
+    def swallowed_routes_fixture(include: set[str],
                                   call_name: str = "recordRouteOutcome") -> str:
         lines = [f"{call_name} ∷ Text → Maybe Text → IO ()",
                   f"{call_name} outcome handler = do pure ()"]
         for name in _ROUTE_NAMES:
             if name in include:
                 lines.append(f'{call_name} "accepted" (Just "{name}")')
-        if with_left_click_route:
-            lines.append(f'{call_name} "accepted" (Just {_LEFT_CLICK_CALLBACK_ROUTE})')
         return "\n".join(lines)
 
-    swallowed_full = swallowed_routes_fixture(set(_ROUTE_NAMES), True)
+    swallowed_full = swallowed_routes_fixture(set(_ROUTE_NAMES))
     expect("Layer A swallowed routes: all present reads DONE",
            _all_present(swallowed_full, LAYER_A_SWALLOWED_ROUTES), True)
     for name in _ROUTE_NAMES:
-        missing_one = swallowed_routes_fixture(set(_ROUTE_NAMES) - {name}, True)
+        missing_one = swallowed_routes_fixture(set(_ROUTE_NAMES) - {name})
         expect(f"Layer A swallowed routes: missing {name!r} reads gap",
                _all_present(missing_one, LAYER_A_SWALLOWED_ROUTES), False)
-    missing_left_click_route = swallowed_routes_fixture(set(_ROUTE_NAMES), False)
-    expect("Layer A swallowed routes: missing the no-right-click-handler "
-           "route (review round 8) reads gap",
-           _all_present(missing_left_click_route, LAYER_A_SWALLOWED_ROUTES), False)
-    renamed_call = swallowed_routes_fixture(set(_ROUTE_NAMES), True, call_name="someOtherHelper")
+    renamed_call = swallowed_routes_fixture(set(_ROUTE_NAMES), call_name="someOtherHelper")
     expect("Layer A swallowed routes: recordRouteOutcome renamed away "
            "(literals kept) reads as a gap (review round 5)",
            _all_present(renamed_call, LAYER_A_SWALLOWED_ROUTES), False)
@@ -829,6 +925,191 @@ def _self_test() -> list[str]:
     expect("buildTool.commitPlacement: only ONE 'no active world id' hook "
            "(of two call sites) reads gap",
            _build_tool_check(only_one_no_world), False)
+
+    # #730: the non-click Layer A families (keyboard, char/type
+    # aggregation, scroll/z-slice, drag) — same removal-mutation shape
+    # as the click swallowed-routes block above: all domains present
+    # reads DONE, missing any ONE domain reads gap, and the producer
+    # call renamed away (domain literals left behind) reads gap.
+    def key_outcome_fixture(include: set[str], call_name: str = "recordKeyOutcome") -> str:
+        lines = [f"{call_name} ∷ EngineEnv → Text → Maybe Text → Maybe Word32 → IO ()",
+                 f"{call_name} env domain matched target = pure ()"]
+        for domain in ("shell_text", "ui_text", "gameplay_key"):
+            if domain in include:
+                lines.append(f'{call_name} env "{domain}" matched (Just fid)')
+        return "\n".join(lines)
+
+    _KEY_DOMAINS_SET = {"shell_text", "ui_text", "gameplay_key"}
+    key_full = key_outcome_fixture(_KEY_DOMAINS_SET)
+    expect("input key: all three routing domains present reads DONE",
+           _all_present(key_full, LAYER_A_KEY_DOMAINS), True)
+    for domain in _KEY_DOMAINS_SET:
+        expect(f"input key: missing the {domain!r} domain reads gap",
+               _all_present(key_outcome_fixture(_KEY_DOMAINS_SET - {domain}),
+                             LAYER_A_KEY_DOMAINS), False)
+    key_renamed = key_outcome_fixture(_KEY_DOMAINS_SET, call_name="someOtherKeyFn")
+    expect("input key: recordKeyOutcome renamed away (literals kept) reads gap",
+           _all_present(key_renamed, LAYER_A_KEY_DOMAINS), False)
+
+    def char_outcome_fixture(include: set[str],
+                              call_name: str = "accumulateCharOutcome") -> str:
+        lines = [f"{call_name} ∷ InputState → Bool → Text → Maybe Word32 → InputState",
+                 f"{call_name} inpSt applied domain target = inpSt"]
+        if "shell_text" in include:
+            lines.append(f'{call_name} inpSt True "shell_text" (Just fid)')
+        if "ui_text" in include:
+            lines.append(f'{call_name} inpSt True "ui_text" (Just eh)')
+        if "dropped_backtick" in include:
+            lines.append(f'{call_name} inpSt False "dropped_backtick" Nothing')
+        if "dropped_unfocused" in include:
+            lines.append(f'{call_name} inpSt False "dropped_unfocused" Nothing')
+        return "\n".join(lines)
+
+    _CHAR_DOMAINS_SET = {"shell_text", "ui_text", "dropped_backtick", "dropped_unfocused"}
+    char_full = char_outcome_fixture(_CHAR_DOMAINS_SET)
+    expect("input type/char: all four domains present reads DONE",
+           _all_present(char_full, LAYER_A_CHAR_DOMAINS), True)
+    for domain in _CHAR_DOMAINS_SET:
+        expect(f"input type/char: missing the {domain!r} domain reads gap",
+               _all_present(char_outcome_fixture(_CHAR_DOMAINS_SET - {domain}),
+                             LAYER_A_CHAR_DOMAINS), False)
+    char_renamed = char_outcome_fixture(_CHAR_DOMAINS_SET, call_name="someOtherCharFn")
+    expect("input type/char: accumulateCharOutcome renamed away (literals "
+           "kept) reads gap",
+           _all_present(char_renamed, LAYER_A_CHAR_DOMAINS), False)
+
+    def scroll_outcome_fixture(include: set[str],
+                                call_name: str = "recordScrollOutcome") -> str:
+        lines = [f"{call_name} ∷ Text → Text → Maybe Word32 → IO ()",
+                 f"{call_name} outcome domain target = pure ()"]
+        combos = {
+            "z_slice": '"accepted" "z_slice" Nothing',
+            "ui_scroll": '"accepted" "ui_scroll" (Just eh)',
+            "game_scroll": '"accepted" "game_scroll" Nothing',
+            "degenerate_viewport": '"noop" "degenerate_viewport" Nothing',
+        }
+        for name, argtext in combos.items():
+            if name in include:
+                lines.append(f'{call_name} {argtext}')
+        return "\n".join(lines)
+
+    _SCROLL_DOMAINS_SET = {"z_slice", "ui_scroll", "game_scroll", "degenerate_viewport"}
+    scroll_full = scroll_outcome_fixture(_SCROLL_DOMAINS_SET)
+    expect("input scroll: all four domains present reads DONE",
+           _all_present(scroll_full, LAYER_A_SCROLL_DOMAINS), True)
+    for domain in _SCROLL_DOMAINS_SET:
+        expect(f"input scroll: missing the {domain!r} domain reads gap",
+               _all_present(scroll_outcome_fixture(_SCROLL_DOMAINS_SET - {domain}),
+                             LAYER_A_SCROLL_DOMAINS), False)
+    scroll_renamed = scroll_outcome_fixture(_SCROLL_DOMAINS_SET, call_name="someOtherScrollFn")
+    expect("input scroll: recordScrollOutcome renamed away (literals kept) "
+           "reads gap",
+           _all_present(scroll_renamed, LAYER_A_SCROLL_DOMAINS), False)
+
+    def drag_outcome_fixture(include: set[str],
+                              call_name: str = "recordDragOutcome") -> str:
+        lines = [f"local function {call_name}(outcome, x, y, requested, applied, reason)",
+                 '    debug.recordOutcome{kind = "input.drag"}', "end"]
+        if "completed" in include:
+            lines.append(
+                f'{call_name}(#final > 0 and "accepted" or "noop", x, y, #ids, #final)')
+        if "swallowed" in include:
+            lines.append(
+                f'{call_name}("noop", x, y, 0, 0, '
+                '"release swallowed (focus loss / minimize)")')
+        if "right_undefined" in include:
+            lines.append(
+                f'{call_name}("noop", x, y, 0, 0, '
+                '"no drag gesture is defined for right-button game-world input")')
+        if "left_undefined" in include:
+            lines.append(
+                f'{call_name}("noop", x, y, 0, 0, '
+                '"no drag gesture is defined for this input")')
+        return "\n".join(lines)
+
+    _DRAG_PARTS = {"completed", "swallowed", "right_undefined", "left_undefined"}
+    drag_full = drag_outcome_fixture(_DRAG_PARTS)
+    expect("input drag: all four outcome call sites present reads DONE",
+           _all_present(drag_full, LAYER_A_DRAG_OUTCOMES), True)
+    for part in _DRAG_PARTS:
+        expect(f"input drag: missing the {part!r} call site reads gap",
+               _all_present(drag_outcome_fixture(_DRAG_PARTS - {part}),
+                             LAYER_A_DRAG_OUTCOMES), False)
+    drag_renamed = drag_outcome_fixture(_DRAG_PARTS, call_name="someOtherDragFn")
+    expect("input drag: recordDragOutcome renamed away (literals kept) reads gap",
+           _all_present(drag_renamed, LAYER_A_DRAG_OUTCOMES), False)
+
+    # #730 review rounds 2 & 3: the deferred-to-release UI/camera-drag
+    # click classification — the "input.click" push sites (left-click
+    # hit, right-click-consumed-by-left-only-control), the
+    # "input.rightClick" site, the middle-button "camera_drag" site,
+    # the release-side threshold comparison that picks between them
+    # and "input.drag" (all in Engine.Input.Thread, `thread_include`),
+    # and the interrupted-release resolution in Engine.Input.State
+    # (`state_include`) for a focus-loss/minimize swallow.
+    def ui_click_deferred_fixture(thread_include: set[str],
+                                   pending_call: str = "writeIORef pendingUIClickRef") -> str:
+        lines = []
+        if "click_site1" in thread_include:
+            lines.append(f'{pending_call} (Just ("input.click", callback, x, y))')
+        if "rightclick_site" in thread_include:
+            lines.append(f'{pending_call} (Just ("input.rightClick", callback, x, y))')
+        if "click_site2" in thread_include:
+            lines.append(f'{pending_call} (Just ("input.click", leftClickCallback, x, y))')
+        if "camera_drag_site" in thread_include:
+            lines.append(f'{pending_call} (Just ("input.click", "camera_drag", x, y))')
+        if "release_classify" in thread_include:
+            lines.append(
+                'if movedPx ≥ uiDragThresholdPx then ("input.drag", x, y) '
+                'else (clickKind, px, py)')
+        return "\n".join(lines)
+
+    def ui_click_interrupted_fixture(include: set[str],
+                                      push_call: str = "pushActionOutcome") -> str:
+        if "interrupted" not in include:
+            return ""
+        return (f'{push_call} (actionOutcomeRef env) ActionOutcome\n'
+                '    { aoOutcome = "noop"\n'
+                '    , aoReason = Just "release swallowed (focus loss / minimize)"\n'
+                '    }')
+
+    _UI_CLICK_THREAD_PARTS = {
+        "click_site1", "rightclick_site", "click_site2",
+        "camera_drag_site", "release_classify",
+    }
+    _UI_CLICK_STATE_PARTS = {"interrupted"}
+    ui_click_full = ui_click_deferred_fixture(_UI_CLICK_THREAD_PARTS)
+    ui_interrupted_full = ui_click_interrupted_fixture(_UI_CLICK_STATE_PARTS)
+    expect("input click UI deferral: all parts present reads DONE",
+           _ui_click_deferred_check(ui_click_full, ui_interrupted_full), True)
+    for part in _UI_CLICK_THREAD_PARTS:
+        expect(f"input click UI deferral: missing {part!r} reads gap",
+               _ui_click_deferred_check(
+                   ui_click_deferred_fixture(_UI_CLICK_THREAD_PARTS - {part}),
+                   ui_interrupted_full),
+               False)
+    expect("input click UI deferral: missing the interrupted-release "
+           "resolution (review round 3) reads gap",
+           _ui_click_deferred_check(ui_click_full, ui_click_interrupted_fixture(set())),
+           False)
+    # Only ONE of the two "input.click" push sites present must still
+    # read as a gap (a count, not a bare presence check).
+    expect("input click UI deferral: only one of two 'input.click' sites reads gap",
+           _ui_click_deferred_check(
+               ui_click_deferred_fixture(
+                   {"click_site1", "rightclick_site", "camera_drag_site", "release_classify"}),
+               ui_interrupted_full),
+           False)
+    ui_click_renamed = ui_click_deferred_fixture(
+        _UI_CLICK_THREAD_PARTS, pending_call="someOtherPendingWrite")
+    expect("input click UI deferral: pendingUIClickRef write renamed away "
+           "(literals kept) reads gap",
+           _ui_click_deferred_check(ui_click_renamed, ui_interrupted_full), False)
+    ui_interrupted_renamed = ui_click_interrupted_fixture(
+        _UI_CLICK_STATE_PARTS, push_call="someOtherPushFn")
+    expect("input click UI deferral: interrupted-release pushActionOutcome "
+           "renamed away (literals kept) reads gap",
+           _ui_click_deferred_check(ui_click_full, ui_interrupted_renamed), False)
 
     return failures
 

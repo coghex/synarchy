@@ -4,6 +4,8 @@ module Engine.Input.State where
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Graphics.UI.GLFW as GLFW
+import Data.IORef (readIORef)
+import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Core.State
 import Engine.Scripting.Lua.Types
 import qualified Engine.Core.Queue as Q
@@ -54,11 +56,17 @@ updateWindowState state _ = state
 -- | Clear all held mouse-button and key state. Used on focus-loss /
 --   minimize transitions, where the OS may never deliver the releases
 --   that would normally clear it. Cursor position is left untouched.
+--   'inpPendingUIClick' is cleared too (#730 review round 3) — any
+--   entry still in it at this point was already resolved (as an
+--   interrupted noop) by 'releaseHeldButtons', called just before this
+--   with the PRE-clear state; leaving it around would let a later,
+--   unrelated press on the same button inherit a stale press position.
 clearHeldInput ∷ InputState → InputState
 clearHeldInput state = state
-    { inpKeyStates   = Map.empty
-    , inpMouseBtns   = Map.empty
-    , inpMouseRoutes = Map.empty
+    { inpKeyStates      = Map.empty
+    , inpMouseBtns      = Map.empty
+    , inpMouseRoutes    = Map.empty
+    , inpPendingUIClick = Map.empty
     }
 
 -- | Emit the mouse-up events the OS swallows on a focus-loss / minimize
@@ -75,10 +83,33 @@ clearHeldInput state = state
 --   selection) skip it on this route, while handlers that merely tear
 --   down drag state (slider / scrollbar / button) ignore the route and
 --   release as usual.
+--
+--   F4 (#730 review round 3): a button with a pending deferred click/
+--   drag classification (see 'Engine.Input.Thread's pendingUIClickRef
+--   — a ClickUI press, or a middle-button camera-drag press, not yet
+--   resolved by a normal release) would otherwise lose its F4 record
+--   ENTIRELY here — this synthetic release path bypasses
+--   'Engine.Input.Thread's own InputMouseEvent-release handling
+--   completely, and 'clearHeldInput' (called right after this, by
+--   'updateWindowState') wipes 'inpPendingUIClick' with no other
+--   chance to record it. Resolve every such pending entry now, as an
+--   interrupted "noop" — the gesture's whole-movement outcome can
+--   never be known once focus is gone (no more relative movement is
+--   coming), mirroring how 'scripts/unit_drag_select.lua' records a
+--   swallowed release for the game-world drag case.
 releaseHeldButtons ∷ EngineEnv → InputState → IO ()
-releaseHeldButtons env inpSt =
+releaseHeldButtons env inpSt = do
     forM_ (heldButtonReleases inpSt) $ \(btn, mx, my, route) →
         Q.writeQueue (luaQueue env) (LuaMouseUpEvent btn mx my route)
+    forM_ (Map.toList (inpPendingUIClick inpSt)) $ \(_btn, (kind, callback, px, py)) → do
+        gt ← readIORef (gameTimeRef env)
+        pushActionOutcome (actionOutcomeRef env) ActionOutcome
+            { aoTs = gt, aoKind = kind, aoOutcome = "noop"
+            , aoWhereX = Just px, aoWhereY = Just py, aoTarget = Nothing
+            , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
+            , aoReason = Just "release swallowed (focus loss / minimize)"
+            , aoHandler = Just callback
+            }
 
 -- | The synthetic releases 'releaseHeldButtons' should emit: one per
 --   currently-held button, at the last known cursor position, all routed

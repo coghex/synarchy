@@ -45,6 +45,29 @@ function M.onMouseDown(button, x, y)
     -- #148; this gate just keeps blank clicks from ACTING on a hidden world).
     local gameplayActive = require("scripts.ui_manager").isGameplayInputActive()
 
+    -- F4 (#730 review round 6): arm click-vs-drag classification for
+    -- EVERY press reaching this function, before any of the ordered
+    -- tool/overlay claim guards below get a chance to consume it — an
+    -- H1 `drag` action can start on any of them (a build-tool
+    -- placement drag, a menu-background drag, ...), not just the
+    -- "no tool claimed it" unit/item/building select-or-deselect
+    -- fallback that used to be the only place this armed. Shadowing
+    -- recordClick here (not renaming every call site below) defers
+    -- ALL of them through dragSelect.deferClick, so whichever of
+    -- dragSelect.onMouseUp/.cancel resolves the gesture records
+    -- exactly one outcome for it. The SELECTION/TOOL/MENU EFFECT each
+    -- branch below performs is unaffected — it still happens
+    -- immediately, at press, exactly as before; only the F4 record's
+    -- timing/kind moves. Box-selection's own visual/commit behavior
+    -- stays opt-in via dragSelect.armBoxSelect (called only at the
+    -- fallback path, below), preserving #114's original ordering
+    -- restriction on where a background box-selection can arm.
+    local dragSelect = require("scripts.unit_drag_select")
+    dragSelect.handleMouseDown(button, x, y)
+    local function recordClick(handler, outcome, x, y, reason)
+        dragSelect.deferClick(button, handler, outcome, x, y, reason)
+    end
+
     -- Debug overlay's parallel hit-test gets first crack. If a debug
     -- rect (spawn button / list entry) eats the click, we stop here
     -- so the click can't fall through into selection / tile-cursor.
@@ -252,22 +275,25 @@ function M.onMouseDown(button, x, y)
             return
         end
 
-        -- Arm unit drag-select. Forward-only (handle*, not a broadcast)
-        -- so it sits in THIS ordered claim chain: every guard above —
-        -- the debug overlay / anim panel / build tool / mine tool, AND
-        -- the debug armed-placement modes (spawn / item / fluid /
-        -- terrain / location / structure) that each `return` above —
-        -- has already consumed and bailed on its own click. So a click
-        -- eaten by any of them can no longer also start a background
-        -- box-selection (#114). Placed below those returns rather than
-        -- enumerating the armed* fields, so a future armed mode stays
-        -- shielded for free. It doesn't consume the click — the
-        -- single-unit selection / tile-cursor logic below still runs;
-        -- the drag only takes over on mouse-up if it passes threshold.
-        -- The gameplay-active gate (#154/#146 — a box-select must never
-        -- arm behind a menu / pause overlay) is the early return at the
-        -- top of this MOUSE_LEFT branch, so no per-call check is needed.
-        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+        -- Arm unit drag-select's BOX-SELECTION effect specifically
+        -- (click-vs-drag classification itself was already armed at
+        -- the top of this function, #730 review round 6). Forward-only
+        -- (handle*, not a broadcast) so it sits in THIS ordered claim
+        -- chain: every guard above — the debug overlay / anim panel /
+        -- build tool / mine tool, AND the debug armed-placement modes
+        -- (spawn / item / fluid / terrain / location / structure) that
+        -- each `return` above — has already consumed and bailed on its
+        -- own click. So a click eaten by any of them can no longer also
+        -- start a background box-selection (#114). Placed below those
+        -- returns rather than enumerating the armed* fields, so a
+        -- future armed mode stays shielded for free. It doesn't consume
+        -- the click — the single-unit selection / tile-cursor logic
+        -- below still runs; the drag only takes over on mouse-up if it
+        -- passes threshold. The gameplay-active gate (#154/#146 — a
+        -- box-select must never arm behind a menu / pause overlay) is
+        -- the early return at the top of this MOUSE_LEFT branch, so no
+        -- per-call check is needed.
+        dragSelect.armBoxSelect()
 
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
