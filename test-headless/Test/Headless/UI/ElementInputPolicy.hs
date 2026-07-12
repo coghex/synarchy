@@ -294,6 +294,23 @@ spec = do
                 ]
             mapM_ (\src → T.isInfixOf "UI.setScrollCapture" src `shouldBe` True) sources
 
+        -- Review round 3: the stats-panel background's onStatsPanelBgClick
+        -- was itself a dead no-op click callback (its return value is
+        -- discarded by broadcastToModules) registered only to keep the
+        -- element clickable for the old wheel-routing coupling — the
+        -- same class of fake callback #743's audit already targeted.
+        -- Replaced with explicit UI.setPointerBlocking; the dead
+        -- callback chain (unit_info_v2_stats.lua + its ui_manager_panels
+        -- relay) is removed.
+        it "unit_info_v2's stats panel background uses explicit pointer-blocking, and its dead click-relay callback is gone" $ do
+            engineSource ← TIO.readFile "scripts/unit_info_v2_panel_engine.lua"
+            statsSource ← TIO.readFile "scripts/unit_info_v2_stats.lua"
+            panelsSource ← TIO.readFile "scripts/ui_manager_panels.lua"
+            T.isInfixOf "UI.setPointerBlocking" engineSource `shouldBe` True
+            T.isInfixOf "\"onStatsPanelBgClick\"" engineSource `shouldBe` False
+            T.isInfixOf "function unitInfoV2.onStatsPanelBgClick" statsSource `shouldBe` False
+            T.isInfixOf "function uiManager.onStatsPanelBgClick" panelsSource `shouldBe` False
+
         it "the dead onTabFrameScroll/onLogPanelScroll no-op click callbacks are gone" $ do
             panelsSource ← TIO.readFile "scripts/ui_manager_panels.lua"
             settingsSource ← TIO.readFile "scripts/settings_menu.lua"

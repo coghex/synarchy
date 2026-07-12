@@ -212,18 +212,6 @@ function uiManager.onAccessoryRowRightClick(elemHandle)
     return false
 end
 
--- Click on the unit-info-v2 stats-panel transparent background. Pure
--- no-op; we register the click solely to keep the element in the
--- engine's clickable set so wheel events over the panel body route
--- through onUIScroll instead of being misread as world zoom.
-function uiManager.onStatsPanelBgClick(elemHandle)
-    local mod = package.loaded["scripts.unit_info_v2"]
-    if mod and mod.onStatsPanelBgClick then
-        return mod.onStatsPanelBgClick(elemHandle)
-    end
-    return false
-end
-
 -- Context menu click routes. Both fire as broadcast callbacks named in
 -- scripts.ui.context_menu — items run the row's callback, backdrop
 -- closes the menu without doing anything else.
