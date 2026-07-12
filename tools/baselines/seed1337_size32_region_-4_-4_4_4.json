@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "8ac36e520b108db0f851f0c8dad55c375d0eae924cc553161559599d4506770b",
-      "8ac36e520b108db0f851f0c8dad55c375d0eae924cc553161559599d4506770b",
-      "8ac36e520b108db0f851f0c8dad55c375d0eae924cc553161559599d4506770b"
+      "c2ba976b91b9200bcdc1fa43f6fdd42b1edb36ee1945e6f707eb959a6daa0393",
+      "c2ba976b91b9200bcdc1fa43f6fdd42b1edb36ee1945e6f707eb959a6daa0393",
+      "c2ba976b91b9200bcdc1fa43f6fdd42b1edb36ee1945e6f707eb959a6daa0393"
     ]
   },
   "tileCount": 20736,
