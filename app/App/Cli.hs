@@ -12,6 +12,8 @@ module App.Cli
   , parsePreview
   , PreviewCategoryKind(..)
   , classifyPreviewCategory
+  , parseLanguageReport
+  , parseSeeds
   ) where
 
 import UPrelude
@@ -132,6 +134,33 @@ classifyPreviewCategory cat
   where
     simpleCategories  = ["icons", "equipment", "hud", "items", "ui", "world"]
     groupedCategories = ["units", "flora", "buildings"]
+
+-- | Whether @--language-report@ (#710) is present at all. It never
+--   boots the engine/world (unlike --dump/--headless/--offscreen), so
+--   Main only needs a presence check plus 'parseSeeds' for its value.
+parseLanguageReport ∷ [String] → Bool
+parseLanguageReport = elem "--language-report"
+
+-- | Parse @--seeds LO:HI@ (an inclusive 'Word64' range) from args.
+--   Nothing on absence, a malformed range, LO > HI, or either bound
+--   outside @[0, 2^64-1]@ — 'reads' alone is not enough here since
+--   GHC's 'Word64' 'Read' instance silently wraps a negative literal
+--   via 'fromInteger' rather than rejecting it, so bounds are parsed as
+--   'Integer' first and range-checked before narrowing.
+parseSeeds ∷ [String] → Maybe (Word64, Word64)
+parseSeeds args = do
+    s ← parseStrArg "--seeds" args
+    case splitOn ':' s of
+        [loS, hiS] → do
+            lo ← parseWord64Bound loS
+            hi ← parseWord64Bound hiS
+            if lo ≤ hi then Just (lo, hi) else Nothing
+        _ → Nothing
+
+parseWord64Bound ∷ String → Maybe Word64
+parseWord64Bound s = case reads s ∷ [(Integer, String)] of
+    [(v, "")] | v ≥ 0 ∧ v ≤ toInteger (maxBound ∷ Word64) → Just (fromInteger v)
+    _ → Nothing
 
 splitOn ∷ Char → String → [String]
 splitOn _ [] = [""]
