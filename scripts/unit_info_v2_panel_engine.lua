@@ -308,11 +308,11 @@ function M.buildIconStatPanel(rect, uid, rowDefs, kind)
         end
     end
 
-    -- Clickable transparent background: persists across same-tab
-    -- rebuilds. Without this, wheel events over the panel body
-    -- (between rows / over non-clickable icons) escape to the
-    -- engine's findClickableElementAt → game-scroll → world zoom.
-    -- With it, the hit-test finds the bg and routes via onUIScroll.
+    -- Transparent background: persists across same-tab rebuilds.
+    -- #743: explicit scroll-capture so wheel events over the panel body
+    -- (between rows / over non-clickable icons) route via onUIScroll
+    -- instead of escaping to game-scroll → world zoom; still clickable
+    -- + onClick for onStatsPanelBgClick's own recognition purpose.
     if not unitInfoV2.statsBgClickId then
         local bgId = UI.newElement(
             "unit_info_v2_stats_bg",
@@ -321,6 +321,7 @@ function M.buildIconStatPanel(rect, uid, rowDefs, kind)
         UI.addToPage(unitInfoV2.page, bgId, rect.x, rect.y)
         UI.setClickable(bgId, true)
         UI.setOnClick(bgId, "onStatsPanelBgClick")
+        UI.setScrollCapture(bgId, true)
         -- Below row icons (z=12); just needs to be findable by hit-
         -- test, not visible.
         UI.setZIndex(bgId, 5)

@@ -377,9 +377,9 @@ function unitInfoV2.onScroll(elemHandle, dx, dy)
     return true
 end
 
--- Bg-box click is a no-op; we register the callback solely so the
--- element stays in the engine's clickable set, which is what the
--- wheel routing checks via findClickableElementAt.
+-- Bg-box click is a no-op recognition gate; wheel routing to this
+-- element is handled independently via UI.setScrollCapture (#743,
+-- unit_info_v2_panel_engine.lua), not via this click callback.
 function unitInfoV2.onStatsPanelBgClick(elemHandle)
     return elemHandle == unitInfoV2.statsBgClickId
 end

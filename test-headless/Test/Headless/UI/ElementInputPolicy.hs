@@ -278,6 +278,22 @@ spec = do
             mapM_ (\src → T.isInfixOf "UI.setScrollCapture" src `shouldBe` True) sources
             mapM_ (\src → T.isInfixOf "UI.setPointerBlocking" src `shouldBe` True) sources
 
+        -- Review round 2: any element that relied on the OLD
+        -- clickable+onClick-implies-wheel-eligible coupling for a REAL
+        -- (not dead/no-op) feature — a list row, a scrollbar button/tab,
+        -- a dropdown's option list, the unit-info stats panel body —
+        -- needs the explicit scroll-capture opt-in restored at the
+        -- shared-widget level, or wheel-over-that-widget silently
+        -- regresses to world zoom.
+        it "shared widgets that relied on the old click-implies-wheel coupling keep explicit scroll-capture" $ do
+            sources ← mapM TIO.readFile
+                [ "scripts/ui/list.lua"
+                , "scripts/ui/scrollbar.lua"
+                , "scripts/ui/dropdown.lua"
+                , "scripts/unit_info_v2_panel_engine.lua"
+                ]
+            mapM_ (\src → T.isInfixOf "UI.setScrollCapture" src `shouldBe` True) sources
+
         it "the dead onTabFrameScroll/onLogPanelScroll no-op click callbacks are gone" $ do
             panelsSource ← TIO.readFile "scripts/ui_manager_panels.lua"
             settingsSource ← TIO.readFile "scripts/settings_menu.lua"
