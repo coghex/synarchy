@@ -59,12 +59,29 @@ spec = describe "Semantic proper names" $ do
         it "is version 1" $
             catVersion prodCat `shouldBe` 1
 
-        it "holds at least 48 unique concepts" $
-            conceptCount prodCat `shouldSatisfy` (≥ 48)
+        it "holds at least 150 unique concepts" $
+            conceptCount prodCat `shouldSatisfy` (≥ 150)
 
         it "spans all six naming domains" $ do
             let domains = nub $ sort $ map ceDomain $ M.elems (catConcepts prodCat)
             domains `shouldBe` [minBound .. maxBound]
+
+        -- The 20-30 balance range is a #713 rule for the six ORIGINAL
+        -- domains only; a future optional new domain (#713 req 2) is
+        -- exempt from it, so this list is hardcoded rather than
+        -- [minBound .. maxBound] (which would wrongly pull any later
+        -- domain into the same range).
+        it "keeps each of the six original domains within the 20-30 concept balance range" $ do
+            let originalDomains =
+                    [ DomainPlace, DomainElement, DomainCelestial
+                    , DomainCreature, DomainEmotion, DomainMythic ]
+                counts = M.fromListWith (+)
+                    [ (ceDomain ce, 1 ∷ Int) | ce ← M.elems (catConcepts prodCat) ]
+                outOfRange = [ (d, c)
+                             | d ← originalDomains
+                             , let c = M.findWithDefault 0 d counts
+                             , c < 20 ∨ c > 30 ]
+            outOfRange `shouldBe` []
 
         it "authors all four forms for every concept (so #710 can sample any name form)" $ do
             let missing = [ (c, k)
@@ -204,6 +221,29 @@ spec = describe "Semantic proper names" $ do
             case r of
                 Left (CatalogueYamlError _) → pure ()
                 other → expectationFailure $ "expected CatalogueYamlError, got " ⧺ show other
+
+        it "rejects two concepts sharing an identical singular form" $ do
+            let r = parseCatalogue $ yamlOf
+                    [ "version: 1"
+                    , "concepts:"
+                    , "  - { id: WOLF, domain: creature, singular: wolf }"
+                    , "  - { id: HOUND, domain: creature, singular: wolf }"
+                    ]
+            r `shouldBe` Left (DuplicateSingularForm "wolf" (cid "WOLF") (cid "HOUND"))
+            case r of
+                Left err → do
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "WOLF"
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "HOUND"
+                Right _ → expectationFailure "catalogue should have been rejected"
+
+        it "rejects a duplicate singular form even when the case differs" $ do
+            let r = parseCatalogue $ yamlOf
+                    [ "version: 1"
+                    , "concepts:"
+                    , "  - { id: WOLF, domain: creature, singular: wolf }"
+                    , "  - { id: HOUND, domain: creature, singular: Wolf }"
+                    ]
+            r `shouldBe` Left (DuplicateSingularForm "Wolf" (cid "WOLF") (cid "HOUND"))
 
     describe "rendering failures (no silent fallback)" $ do
         it "an unknown concept id is a descriptive error, not raw-id text" $ do
