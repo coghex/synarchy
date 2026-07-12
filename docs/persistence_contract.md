@@ -262,12 +262,17 @@ serialization-correctness proof. It:
    its source file, via a Haskell record-field parser that strips
    (possibly nested) `{- -}` and `--` comments first so prose in a
    Haddock comment can never desync the brace-depth tracking that finds
-   a record's boundary, and understands the codebase's `UnicodeSyntax`
-   (`∷`) field separators.
-2. Extracts every `saveMods.register("name", ...)`/`saveMods.register('name', ...)`
-   call site across `scripts/`, string-literal-aware so a `--` inside an
-   unrelated string can't be mistaken for a comment and swallow a real
-   call after it.
+   a record's boundary; splits the record's brace block on top-level
+   commas only (so a comma inside a field's own type — a tuple, a
+   list-of-tuples — is never mistaken for a field separator); and
+   understands the codebase's `UnicodeSyntax` (`∷`) field separators
+   with the field name and its arrow allowed on different physical
+   lines.
+2. Extracts every `saveMods.register(...)` call site across `scripts/`,
+   covering all three Lua string-literal forms for the module name
+   (`'...'`, `"..."`, and long brackets `[[...]]`/`[=[...]=]`/...) and
+   string-literal-aware so a `--` inside an unrelated string can't be
+   mistaken for a comment and swallow a real call after it.
 3. Parses `persistence_state_inventory.md`'s classification tables for
    the set of item names that have a recorded classification, scoped to
    the exact `### OwnerName` heading each table sits under — not merely

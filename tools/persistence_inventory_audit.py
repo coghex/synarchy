@@ -58,9 +58,11 @@ ROOT_RECORDS: list[tuple[str, str, str]] = [
     ("SaveData", "src/World/Save/Types.hs", r"^data SaveData = SaveData\b"),
 ]
 
-# Matches a record-field declaration line: leading `{` or `,`, the field
-# name, then the (UnicodeSyntax or plain) type-signature arrow.
-FIELD_LINE_RE = re.compile(r"^\s*[{,]\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
+# Matches a field declaration's leading name + arrow within a single
+# top-level record segment (see _split_top_level_fields) -- `\s*` here
+# already spans newlines, so a field name and its `∷`/`::` written on
+# DIFFERENT physical lines still match.
+FIELD_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
 # Tolerates whitespace/newlines around the dot and before the opening
 # paren/string (a call split across lines, or `saveMods . register(...)`
 # with spaced dots), and either Lua quote style -- `(['"])` captures the
@@ -68,6 +70,11 @@ FIELD_LINE_RE = re.compile(r"^\s*[{,]\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
 # `'name'` and `"name"` both match and neither is truncated by the
 # OTHER quote character appearing inside it.
 REGISTER_RE = re.compile(r"saveMods\s*\.\s*register\s*\(\s*(['\"])((?:(?!\1).)*)\1")
+# Lua long-bracket strings: `[[name]]`, `[=[name]=]`, `[==[name]==]`, ...
+# -- the `=` run's LENGTH must match on both sides (Lua's own rule),
+# enforced here via backreference `\1` same as the quote form above.
+REGISTER_RE_LONGBRACKET = re.compile(
+    r"saveMods\s*\.\s*register\s*\(\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
 ROW_FIRST_CELL_RE = re.compile(r"^\|([^|]*)\|")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 OWNER_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
@@ -158,32 +165,72 @@ def _strip_lua_comments(text: str) -> str:
     return "".join(out)
 
 
+def _find_matching_brace(text: str, open_index: int) -> int:
+    """Index of the `}` that closes the `{` at `open_index` in `text`."""
+    depth = 0
+    for i in range(open_index, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    raise ValueError("no matching closing brace found")
+
+
+def _split_top_level_fields(block: str) -> list[str]:
+    """Split a record's `{ ... }` block into one raw segment per field.
+
+    `block` includes the outer braces. Splits ONLY on commas at nesting
+    depth 0 relative to the block's own content (tracking `(`/`[`/`{`
+    vs `)`/`]`/`}` generically), so a comma inside a field's own type --
+    a tuple `(WorldPageId, WorldState)`, a list-of-tuples, etc. -- is
+    never mistaken for a field separator.
+    """
+    inner = block[1:-1]
+    depth = 0
+    current: list[str] = []
+    segments: list[str] = []
+    for ch in inner:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    segments.append("".join(current))
+    return segments
+
+
 def extract_record_fields(source: str, record_start_pattern: str) -> list[str]:
     """Field names declared in one Haskell record's brace block.
 
     Comments are stripped first so a haddock comment's prose can never
-    desync the brace-depth tracker that finds the block's end.
+    desync the brace-depth tracker that finds the block's end. Field
+    names are extracted from top-level comma-delimited segments (see
+    _split_top_level_fields), not per PHYSICAL LINE, so a field whose
+    name and `∷`/`::` are written on different lines -- legal Haskell,
+    e.g. `, someField\n    ∷ Int` -- is still found.
     """
-    lines = _strip_haskell_comments(source).splitlines()
-    pat = re.compile(record_start_pattern)
-    start = next((i for i, line in enumerate(lines) if pat.search(line)), None)
-    if start is None:
+    cleaned = _strip_haskell_comments(source)
+    pat = re.compile(record_start_pattern, re.MULTILINE)
+    m = pat.search(cleaned)
+    if m is None:
         raise ValueError(f"record start not found: {record_start_pattern!r}")
+    brace_start = cleaned.find("{", m.end())
+    if brace_start == -1:
+        raise ValueError(
+            f"no opening brace found after record start: {record_start_pattern!r}")
+    brace_end = _find_matching_brace(cleaned, brace_start)
+    block = cleaned[brace_start:brace_end + 1]
     fields: list[str] = []
-    depth = 0
-    opened = False
-    for line in lines[start:]:
-        for ch in line:
-            if ch == "{":
-                depth += 1
-                opened = True
-            elif ch == "}":
-                depth -= 1
-        m = FIELD_LINE_RE.match(line)
-        if opened and m:
-            fields.append(m.group(1))
-        if opened and depth <= 0:
-            break
+    for segment in _split_top_level_fields(block):
+        fm = FIELD_NAME_RE.match(segment)
+        if fm:
+            fields.append(fm.group(1))
     return fields
 
 
@@ -193,12 +240,17 @@ def extract_lua_registered_modules(
 
     Scans the whole (comment/string-aware-stripped) file as one string
     rather than line-by-line, so a call whose arguments span multiple
-    lines is still found.
+    lines is still found. Covers both Lua quoting forms for the module
+    name: `'...'`/`"..."` (REGISTER_RE) and long brackets `[[...]]`/
+    `[=[...]=]`/... (REGISTER_RE_LONGBRACKET) -- a single call site uses
+    exactly one form, so the two never double-match.
     """
     found: list[tuple[str, str]] = []
     for relpath, text in sorted(scripts_text_by_file.items()):
         cleaned = _strip_lua_comments(text)
         for m in REGISTER_RE.finditer(cleaned):
+            found.append((m.group(2), relpath))
+        for m in REGISTER_RE_LONGBRACKET.finditer(cleaned):
             found.append((m.group(2), relpath))
     return found
 

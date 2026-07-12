@@ -204,6 +204,20 @@ data EngineEnv = EngineEnv
   } deriving (Eq)
 """
 
+# fieldTwo's name and its `∷`/type are on DIFFERENT physical lines --
+# legal Haskell layout. A field-name matcher anchored to "same line as
+# the arrow" never sees it.
+SYNTHETIC_ENGINE_ENV_MULTILINE_FIELD = """\
+module Fake where
+
+data EngineEnv = EngineEnv
+  { fieldOne   ∷ IORef Int
+  , fieldTwo
+      ∷ IORef Text
+  , fieldThree ∷ Q.Queue Int
+  } deriving (Eq)
+"""
+
 # A register() call whose arguments span multiple lines.
 SYNTHETIC_LUA_REGISTER_MULTILINE = """\
 local saveMods = require("scripts.lib.save_modules")
@@ -238,6 +252,21 @@ local saveMods = require('scripts.lib.save_modules')
 saveMods.register('single_quoted_module', nil, nil)
 """
 
+# A register() call using Lua LONG-BRACKET strings (`[[...]]`, or
+# `[=[...]=]` etc. for a name that itself contains `]]`) -- a third,
+# less common but fully legal Lua string-literal form.
+SYNTHETIC_LUA_REGISTER_LONGBRACKET = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register([[longbracket_module]], nil, nil)
+"""
+
+SYNTHETIC_LUA_REGISTER_LONGBRACKET_LEVELED = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register([==[leveled_longbracket_module]==], nil, nil)
+"""
+
 
 # ----- Tests -------------------------------------------------------------
 
@@ -270,6 +299,14 @@ def test_extract_fields_nested_block_comment_does_not_truncate():
            f"a legally NESTED {{- -}} block comment (with a stray '}}' left "
            f"over from a non-nesting strip) does not truncate extraction, "
            f"got {fields}")
+
+
+def test_extract_fields_name_and_arrow_on_different_lines():
+    fields = extract_record_fields(SYNTHETIC_ENGINE_ENV_MULTILINE_FIELD,
+                                    r"^data EngineEnv = EngineEnv\b")
+    expect(fields == ["fieldOne", "fieldTwo", "fieldThree"],
+           f"a field whose name and `∷`/type are on DIFFERENT physical "
+           f"lines is still extracted, got {fields}")
 
 
 def test_extract_fields_ignores_other_records():
@@ -333,6 +370,23 @@ def test_extract_lua_registered_modules_single_quoted():
     names = [n for n, _ in found]
     expect(names == ["single_quoted_module"],
            f"finds a register() call using single-quoted Lua strings, got {names}")
+
+
+def test_extract_lua_registered_modules_longbracket():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET})
+    names = [n for n, _ in found]
+    expect(names == ["longbracket_module"],
+           f"finds a register() call using [[ ]] long-bracket Lua strings, got {names}")
+
+
+def test_extract_lua_registered_modules_longbracket_leveled():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_LONGBRACKET_LEVELED})
+    names = [n for n, _ in found]
+    expect(names == ["leveled_longbracket_module"],
+           f"finds a register() call using a leveled [==[ ]==] long-bracket "
+           f"string, got {names}")
 
 
 def test_parse_classified_names_scoped_by_owner_heading():
@@ -409,6 +463,22 @@ def test_audit_detects_field_hidden_behind_nested_comment():
            f"earlier in the same record, got {violations}")
 
 
+def test_audit_detects_field_with_name_and_arrow_on_different_lines():
+    """Regression for the multiline-field false-negative: a field
+    whose name and `∷`/type are on different physical lines used to
+    never be extracted, so its absence from the inventory went
+    unreported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV_MULTILINE_FIELD},
+        {},
+        SYNTHETIC_INVENTORY_MISSING_ONE,  # missing fieldTwo
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("fieldTwo" in v for v in violations),
+           f"fieldTwo (whose name and arrow are on different lines in this "
+           f"fixture) is still reported when unclassified, got {violations}")
+
+
 def test_audit_detects_module_registered_across_multiple_lines():
     """Regression for the Lua false-negative: a register() call split
     across lines used to never match, so an unclassified module
@@ -451,6 +521,25 @@ def test_audit_detects_single_quoted_module_registration():
     expect(any("single_quoted_module" in v for v in violations),
            f"a module registered with single-quoted Lua strings is reported "
            f"when unclassified, got {violations}")
+
+
+def test_audit_detects_longbracket_module_registration():
+    """Regression for the long-bracket gap: a register() call using
+    Lua's [[ ]] / [=[ ]=] long-bracket string syntax used to never
+    match, so a live, unclassified registration went unreported."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": (SYNTHETIC_LUA_REGISTER_LONGBRACKET
+                               + SYNTHETIC_LUA_REGISTER_LONGBRACKET_LEVELED)},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for either module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("longbracket_module" in v and "leveled" not in v for v in violations),
+           f"a module registered with [[ ]] long brackets is reported when "
+           f"unclassified, got {violations}")
+    expect(any("leveled_longbracket_module" in v for v in violations),
+           f"a module registered with a leveled [==[ ]==] long bracket is "
+           f"reported when unclassified, got {violations}")
 
 
 def test_audit_does_not_let_a_same_named_entry_under_another_owner_count():
@@ -543,6 +632,7 @@ def main() -> int:
         test_extract_fields_stray_brace_in_comment_is_harmless,
         test_extract_fields_unbalanced_brace_in_comment_does_not_truncate,
         test_extract_fields_nested_block_comment_does_not_truncate,
+        test_extract_fields_name_and_arrow_on_different_lines,
         test_extract_fields_ignores_other_records,
         test_extract_fields_missing_record_raises,
         test_extract_lua_registered_modules,
@@ -551,15 +641,19 @@ def main() -> int:
         test_extract_lua_registered_modules_block_commented_out,
         test_extract_lua_registered_modules_survives_dash_in_string,
         test_extract_lua_registered_modules_single_quoted,
+        test_extract_lua_registered_modules_longbracket,
+        test_extract_lua_registered_modules_longbracket_leveled,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
         test_audit_clean_repo_state_has_no_violations,
         test_audit_detects_field_hidden_behind_unbalanced_comment_brace,
         test_audit_detects_field_hidden_behind_nested_comment,
+        test_audit_detects_field_with_name_and_arrow_on_different_lines,
         test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_module_registered_after_dash_string,
         test_audit_detects_single_quoted_module_registration,
+        test_audit_detects_longbracket_module_registration,
         test_audit_does_not_let_a_same_named_entry_under_another_owner_count,
         test_audit_does_not_let_a_sibling_record_in_the_same_numbered_section_count,
         test_audit_detects_intentionally_unclassified_field,
