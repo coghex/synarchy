@@ -267,7 +267,23 @@ function M.onMouseDown(button, x, y)
         -- The gameplay-active gate (#154/#146 — a box-select must never
         -- arm behind a menu / pause overlay) is the early return at the
         -- top of this MOUSE_LEFT branch, so no per-call check is needed.
-        require("scripts.unit_drag_select").handleMouseDown(button, x, y)
+        local dragSelect = require("scripts.unit_drag_select")
+        dragSelect.handleMouseDown(button, x, y)
+
+        -- F4 (#730): every press reaching here is drag-ELIGIBLE (armed
+        -- above), so its outcome can't be known until release — it
+        -- either stays a plain click (never crosses DRAG_THRESHOLD) or
+        -- becomes a real drag-select box. Recording a click outcome
+        -- HERE unconditionally, immediately, would leave a real drag
+        -- with TWO records (this one plus dragSelect.onMouseUp's own
+        -- "input.drag"); deferring to dragSelect — which knows the
+        -- gesture's actual final shape at release — keeps it to
+        -- exactly one. The SELECTION EFFECT below (unit.select etc.)
+        -- is untouched and still happens immediately, exactly as
+        -- before; only the F4 record's timing moves.
+        local function recordClick(handler, outcome, x, y, reason)
+            dragSelect.deferClick(handler, outcome, x, y, reason)
+        end
 
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")

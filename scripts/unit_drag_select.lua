@@ -165,19 +165,20 @@ function dragSelect.handleMouseDown(button, x, y)
     dragSelect.startY = y
     dragSelect.currX  = x
     dragSelect.currY  = y
+    dragSelect.pendingClick = nil
 end
 
 -- F4 (#730) Layer A: a drag-select box's real outcome can only be
--- known at release (hitTestInRect against the final rect) — the
--- press-time record init_mouse.lua's onMouseDown already wrote (a
--- plain unit_select/deselect classification, made before any drag
--- threshold had even been crossed) would be misleading if left as
--- "the" outcome of a completed drag gesture. This is a SEPARATE,
--- additive "input.drag" record describing the drag itself, kind-
--- distinct from "input.click" so it never collides with that
--- pre-existing press-time record's own cardinality. Only fires once
--- the drag actually reached "dragging" (crossed DRAG_THRESHOLD) — a
--- plain click never calls this.
+-- known at release (hitTestInRect against the final rect). Kind-
+-- distinct from "input.click" ("input.drag") so a completed drag's
+-- ONE record describes the box selection itself rather than the
+-- press-time click classification init_mouse.lua computed before any
+-- drag threshold had even been crossed — that press-time record is
+-- deferred (see deferClick/pendingClick below) rather than recorded
+-- immediately, precisely so a real drag doesn't ALSO carry it as a
+-- second, misleading "input.click" record (review: exactly one
+-- primary Layer A record per H1 action). Only fires once the drag
+-- actually reached "dragging" (crossed DRAG_THRESHOLD).
 local function recordDragOutcome(outcome, x, y, requested, applied, reason)
     debug.recordOutcome{
         kind = "input.drag",
@@ -190,9 +191,39 @@ local function recordDragOutcome(outcome, x, y, requested, applied, reason)
     }
 end
 
+-- F4 (#730): mirrors init_mouse.lua's own recordClick shape exactly,
+-- so a deferred click reads identically to one recorded immediately —
+-- only ever called with a real dragSelect.pendingClick, once the
+-- gesture is known to have stayed a plain click (never reached
+-- "dragging").
+local function recordDeferredClick(pc)
+    debug.recordOutcome{
+        kind = "input.click",
+        outcome = pc.outcome or "accepted",
+        where = { x = pc.x, y = pc.y },
+        handler = pc.handler,
+        reason = pc.reason,
+    }
+end
+
+-- Store this press's click classification instead of recording it
+-- immediately (#730). Called by init_mouse.lua's onMouseDown chain for
+-- every drag-eligible press (unit/item/building selection or
+-- deselect) — whichever of onMouseUp / cancel below resolves this
+-- gesture is responsible for eventually recording it exactly once (a
+-- real drag drops it in favor of its own "input.drag" record instead).
+-- The SELECTION EFFECT (unit.select etc.) is unaffected — it still
+-- runs immediately in init_mouse.lua, at press, exactly as before;
+-- only the F4 record's timing/existence moves.
+function dragSelect.deferClick(handler, outcome, x, y, reason)
+    dragSelect.pendingClick = { handler = handler, outcome = outcome,
+                                 x = x, y = y, reason = reason }
+end
+
 function dragSelect.onMouseUp(button, x, y, downRoute)
     if button ~= 1 then return end
     local wasDragging = (dragSelect.state == "dragging")
+    local wasPressed   = (dragSelect.state == "pressed")
     if wasDragging then
         -- A focus-loss / minimize transition arrives as a synthetic
         -- release routed "swallowed" (Engine.Input.Thread). That cancels
@@ -226,7 +257,17 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                 "release swallowed (focus loss / minimize)")
         end
         setEdgesVisible(false)
+    elseif wasPressed then
+        -- Never crossed the drag threshold — this gesture is really
+        -- just a click. Fire init_mouse.lua's deferred classification
+        -- now that it's known to be the gesture's final (and only)
+        -- outcome (#730 — keeps a below-threshold "drag" H1 action to
+        -- exactly one record, same as a real click).
+        if dragSelect.pendingClick then
+            recordDeferredClick(dragSelect.pendingClick)
+        end
     end
+    dragSelect.pendingClick = nil
     dragSelect.state = "idle"
 end
 
@@ -239,11 +280,24 @@ end
 -- neither the world/zoom page swap nor the HUD-page hide touches it.
 -- Without this, an armed/dragging box survives the transition and could
 -- resume or commit later against the wrong view (#146).
+--
+-- F4 (#730): also the one path that resolves a gesture abandoned mid-
+-- flight (no mouse-up ever arrives) — flushes whatever it was heading
+-- toward (a deferred click if still "pressed", a cancelled-drag "noop"
+-- if already "dragging") rather than silently dropping it, since
+-- dragSelect.onMouseUp will never get a chance to.
 function dragSelect.cancel()
     if dragSelect.state == "idle" then return end
+    if dragSelect.state == "dragging" then
+        recordDragOutcome("noop", dragSelect.startX, dragSelect.startY, 0, 0,
+            "cancelled (view transition)")
+    elseif dragSelect.pendingClick then
+        recordDeferredClick(dragSelect.pendingClick)
+    end
     if dragSelect.edgeIds then
         setEdgesVisible(false)
     end
+    dragSelect.pendingClick = nil
     dragSelect.state = "idle"
 end
 
