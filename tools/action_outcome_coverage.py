@@ -143,6 +143,12 @@ LAYER_A_DRAG_OUTCOMES = [
     # effect, so a real drag is an honest noop rather than a fake
     # "accepted".
     _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"no drag gesture is defined for right-button',
+    # #730 review round 6: a left-button press that reached a debug/
+    # build/mine/chop/till/plant tool claim (or the gameplay-inactive
+    # deadclick) is armed for classification but never box-select-armed
+    # — a real drag there is ALSO an honest noop, not a fake box-select
+    # "accepted".
+    _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"no drag gesture is defined for this input"',
 ]
 
 # #730 review rounds 2 & 3: a ClickUI-routed press (real UI widget
@@ -1015,11 +1021,15 @@ def _self_test() -> list[str]:
             lines.append(
                 f'{call_name}("noop", x, y, 0, 0, '
                 '"no drag gesture is defined for right-button game-world input")')
+        if "left_undefined" in include:
+            lines.append(
+                f'{call_name}("noop", x, y, 0, 0, '
+                '"no drag gesture is defined for this input")')
         return "\n".join(lines)
 
-    _DRAG_PARTS = {"completed", "swallowed", "right_undefined"}
+    _DRAG_PARTS = {"completed", "swallowed", "right_undefined", "left_undefined"}
     drag_full = drag_outcome_fixture(_DRAG_PARTS)
-    expect("input drag: all three outcome call sites present reads DONE",
+    expect("input drag: all four outcome call sites present reads DONE",
            _all_present(drag_full, LAYER_A_DRAG_OUTCOMES), True)
     for part in _DRAG_PARTS:
         expect(f"input drag: missing the {part!r} call site reads gap",

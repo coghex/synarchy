@@ -29,6 +29,20 @@ dragSelect.startY   = 0
 dragSelect.currX    = 0
 dragSelect.currY    = 0
 dragSelect.page     = nil
+-- F4 (#730 review round 6): dragSelect.handleMouseDown now arms
+-- click-vs-drag CLASSIFICATION for every left-button press reaching
+-- init_mouse.lua's onMouseDown — debug overlay/anim panel, build/
+-- mine/chop/till/plant tool claims, and the gameplay-inactive
+-- deadclick, not just the "no tool claimed it" unit/item/building
+-- select-or-deselect fallback. Only THAT fallback has real
+-- box-selection behavior (the visual rect, hitTestInRect commit,
+-- world.clearWorldCursorSelect) — boxSelectArmed opts a press into
+-- it explicitly (see armBoxSelect); every other press still gets
+-- correct classification (exactly one "input.click" or "input.drag"),
+-- just without the box-select-specific effects, which would be
+-- meaningless (or actively wrong — a selection rect flashing while
+-- dragging a build-tool placement) for them.
+dragSelect.boxSelectArmed = false
 -- F4 (#730 review round 4): a right-button press through
 -- init_mouse.lua's context-menu/move-order/deadclick chain has no
 -- box-selection behavior of its own, but an H1 `drag` action can
@@ -145,29 +159,36 @@ local function updateRectVisual()
 end
 
 function dragSelect.update(dt)
-    if dragSelect.state ~= "idle" then
+    -- Box-select visuals/effects only ever apply to a boxSelectArmed
+    -- press (#730 review round 6) — a non-armed press (debug/build/
+    -- mine/chop/till/plant tool claims, a menu-background deadclick)
+    -- never transitions to "dragging" here at all; its click-vs-drag
+    -- F4 classification is computed directly from coordinates in
+    -- onMouseUp regardless (round 5), so it needs nothing from this
+    -- periodic tick.
+    if dragSelect.state == "pressed" and dragSelect.boxSelectArmed then
         local mx, my = engine.getMousePosition()
         if mx then
             dragSelect.currX = mx
             dragSelect.currY = my
-
-            if dragSelect.state == "pressed" then
-                if pastThreshold(dragSelect.startX, dragSelect.startY, mx, my) then
-                    dragSelect.state = "dragging"
-                    setEdgesVisible(true)
-                    -- The press might have triggered a stray tile-cursor
-                    -- select via hud.onMouseDown. Now that we know it was a
-                    -- drag, undo that so we don't leave a tile selected
-                    -- behind the box.
-                    if world.clearWorldCursorSelect and hud.worldId then
-                        world.clearWorldCursorSelect(hud.worldId)
-                    end
+            if pastThreshold(dragSelect.startX, dragSelect.startY, mx, my) then
+                dragSelect.state = "dragging"
+                setEdgesVisible(true)
+                -- The press might have triggered a stray tile-cursor
+                -- select via hud.onMouseDown. Now that we know it was a
+                -- drag, undo that so we don't leave a tile selected
+                -- behind the box.
+                if world.clearWorldCursorSelect and hud.worldId then
+                    world.clearWorldCursorSelect(hud.worldId)
                 end
             end
-
-            if dragSelect.state == "dragging" then
-                updateRectVisual()
-            end
+        end
+    elseif dragSelect.state == "dragging" then
+        local mx, my = engine.getMousePosition()
+        if mx then
+            dragSelect.currX = mx
+            dragSelect.currY = my
+            updateRectVisual()
         end
     end
 
@@ -182,13 +203,16 @@ function dragSelect.update(dt)
     end
 end
 
--- Arm the drag. Forward-only: called from game.onMouseDown (init.lua)
--- AFTER the ordered tool/overlay claim guards (debug overlay, debug
--- anim panel, build tool, mine tool) have each had their crack and
--- returned early on a consumed click. That single ordered decision is
--- the only thing that arms drag-select now, so a click already eaten by
--- one of those handlers can no longer start a background box-selection
--- (#114).
+-- Arm click-vs-drag CLASSIFICATION tracking. Called from game.onMouseDown
+-- (init_mouse.lua) at the very TOP, before ANY of the ordered tool/
+-- overlay claim guards (#730 review round 6 — every one of those
+-- claims, plus the gameplay-inactive deadclick, needs its H1 `drag`
+-- outcome classified too, not just the "no tool claimed it" fallback).
+-- Box-selection's own EFFECT (the visual rect, hitTestInRect commit) is
+-- separately opt-in via armBoxSelect, called only by that one fallback
+-- path (#114's original ordering restriction — a click already eaten by
+-- an overlay/tool guard still can't start a background box-selection —
+-- is preserved by armBoxSelect's OWN placement, not by this function).
 --
 -- Named handle* (not on*) deliberately: this module is engine-loaded
 -- (loadScript), so an on*-named function would ALSO fire on every engine
@@ -202,13 +226,23 @@ function dragSelect.handleMouseDown(button, x, y)
         dragSelect.startY = y
         dragSelect.currX  = x
         dragSelect.currY  = y
-        dragSelect.pendingClick = nil
+        dragSelect.pendingClick    = nil
+        dragSelect.boxSelectArmed  = false
     elseif button == 2 then
         dragSelect.rightState        = "pressed"
         dragSelect.rightStartX       = x
         dragSelect.rightStartY       = y
         dragSelect.rightPendingClick = nil
     end
+end
+
+-- Opts THIS press into box-selection's visual/commit behavior — called
+-- only by init_mouse.lua's "no tool claimed it" unit/item/building
+-- select-or-deselect fallback (#730 review round 6), never by the
+-- debug/build/mine/chop/till/plant tool-claim branches or the
+-- gameplay-inactive deadclick, which have no box-select meaning.
+function dragSelect.armBoxSelect()
+    dragSelect.boxSelectArmed = true
 end
 
 -- F4 (#730) Layer A: a drag-select box's real outcome can only be
@@ -265,6 +299,15 @@ function dragSelect.deferClick(button, handler, outcome, x, y, reason)
         dragSelect.pendingClick = pc
     elseif button == 2 then
         dragSelect.rightPendingClick = pc
+    else
+        -- Buttons this module doesn't track (middle is classified
+        -- entirely at the engine level, Engine.Input.Thread; side
+        -- buttons 4-8 aren't in H1's button vocabulary at all, and
+        -- init_mouse.lua's onMouseDown broadcast still fires for them)
+        -- — record immediately rather than silently dropping it, since
+        -- onMouseUp/cancel above never resolve anything for these
+        -- buttons. Preserves the pre-#730 behavior for this fallback.
+        recordDeferredClick(pc)
     end
 end
 
@@ -277,7 +320,7 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
             -- why state alone can be stale here.
             local wasDragging = pastThreshold(
                 dragSelect.startX, dragSelect.startY, x, y)
-            if wasDragging then
+            if wasDragging and dragSelect.boxSelectArmed then
                 -- A focus-loss / minimize transition arrives as a synthetic
                 -- release routed "swallowed" (Engine.Input.Thread). That cancels
                 -- the drag: tear the box down without committing a selection at
@@ -310,6 +353,21 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                         "release swallowed (focus loss / minimize)")
                 end
                 setEdgesVisible(false)
+            elseif wasDragging then
+                -- Crossed the threshold, but this press was never
+                -- box-select-armed (#730 review round 6) — a debug/
+                -- build/mine/chop/till/plant tool claim, or a
+                -- gameplay-inactive deadclick, dragged past the
+                -- threshold. None of those have a drag GESTURE bound to
+                -- them, so record that honestly instead of inventing a
+                -- fake box-selection outcome.
+                if downRoute ~= "swallowed" then
+                    recordDragOutcome("noop", x, y, 0, 0,
+                        "no drag gesture is defined for this input")
+                else
+                    recordDragOutcome("noop", x, y, 0, 0,
+                        "release swallowed (focus loss / minimize)")
+                end
             else
                 -- Never crossed the drag threshold — this gesture is really
                 -- just a click. Fire init_mouse.lua's deferred classification
@@ -320,7 +378,8 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                     recordDeferredClick(dragSelect.pendingClick)
                 end
             end
-            dragSelect.pendingClick = nil
+            dragSelect.pendingClick   = nil
+            dragSelect.boxSelectArmed = false
             dragSelect.state = "idle"
         end
     elseif button == 2 then
@@ -376,7 +435,8 @@ function dragSelect.cancel()
         if dragSelect.edgeIds then
             setEdgesVisible(false)
         end
-        dragSelect.pendingClick = nil
+        dragSelect.pendingClick   = nil
+        dragSelect.boxSelectArmed = false
         dragSelect.state = "idle"
     end
     -- Right-button (#730 review round 4): same resolve-don't-lose
