@@ -19,6 +19,7 @@ import World.Types (WorldGenParams(..))
 import World.Weather.Types
     ( ClimateState(..), ClimateGrid(..), RegionClimate(..)
     , SeasonalClimate(..), ClimateCoord(..) )
+import World.Weather.Generate (initEarlyClimate)
 import World.Weather.Generate.ClimateBuilder (buildClimateFromOceanSet)
 
 -- | A small synthetic world: one ocean region at the origin, the rest
@@ -79,22 +80,43 @@ spec = describe "Final climate refinement" $ do
                     synthFreshwater 1.2 0.0 1.0
         a `shouldBe` b
 
-    it "integration wiring: a completed world stores regional climate coherent with the timeline's final forcing" $ \env → do
+    it "integration wiring: a completed world stores regional climate rebuilt from the timeline's final forcing, not baseline" $ \env → do
         -- Reuses the canonical shared world other worldgen specs
-        -- already pay for — no extra generation cost. Its timeline
-        -- evolves CO2 away from 1.0 and its final ocean set is
-        -- resolved at chunk precision, distinct from the coarse
-        -- ocean set the timeline's own Age-boundary climate updates
-        -- use — so under the old baseline-forcing-then-patch wiring,
-        -- csGlobalTemp (copied from the timeline's evolved-forcing,
-        -- coarse-ocean climate) would NOT agree with the mean of the
-        -- final regional grid (built from baseline forcing on the
-        -- precise ocean set).
+        -- already pay for — no extra generation cost.
         ws ← sharedWorld env 42 64 3
         mParams ← getWorldGenParams ws
         case mParams of
             Nothing → expectationFailure "expected generated world params"
             Just params → do
-                let climate = wgpClimateState params
-                csGlobalTemp climate `shouldSatisfy`
-                    closeTo 0.05 (regionMeanTemp climate)
+                let stored = wgpClimateState params
+                    worldSize = wgpWorldSize params
+                    oceanMap = wgpOceanMap params
+                    timeline = wgpGeoTimeline params
+
+                -- (1) The stored summary forcing genuinely evolved away
+                -- from baseline (CO2 1.0) — rules out a regression
+                -- where BOTH the regional grid and the summary fields
+                -- are built from hardcoded baseline forcing (which
+                -- would otherwise look self-consistent).
+                csGlobalCO2 stored `shouldNotSatisfy` closeTo 0.05 1.0
+
+                -- (2) Rebuilding via the same public final-refinement
+                -- function, fed the SAME ocean map / completed
+                -- timeline plus the STORED final forcing, reproduces
+                -- the exact stored climate. This proves the stored
+                -- regional grid — not just its mean — was actually
+                -- built from the final ocean/freshwater inputs and
+                -- final CO2/solar forcing, rather than some other
+                -- grid with a coincidentally-matching mean.
+                let rebuiltFromFinal = initEarlyClimate worldSize oceanMap
+                        timeline (csGlobalCO2 stored) (csSolarConst stored)
+                rebuiltFromFinal `shouldBe` stored
+
+                -- (3) Explicitly: that same rebuild recipe, fed
+                -- hardcoded BASELINE forcing instead, produces a
+                -- DIFFERENT climate — so (2) is not a vacuous check
+                -- that would pass regardless of which forcing was
+                -- used.
+                let rebuiltFromBaseline = initEarlyClimate worldSize
+                        oceanMap timeline 1.0 1.0
+                rebuiltFromBaseline `shouldNotBe` stored
