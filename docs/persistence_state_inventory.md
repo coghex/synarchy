@@ -19,14 +19,21 @@ the probe/test expected to catch a regression here; `none yet` is
 recorded honestly rather than inventing coverage that doesn't exist.
 
 Every root-owner field name in this document is wrapped in backticks in
-its own table cell — `tools/persistence_inventory_audit.py` greps for
-exactly that pattern, so **do not reformat a field name out of
-backticks** when editing this file; the audit will report it as
-unclassified.
+its own table cell, under a `### OwnerName` heading naming the exact
+record (or, for Lua, `### Lua persistence registry`) that owns it —
+`tools/persistence_inventory_audit.py` matches classifications by BOTH
+the backtick-quoted name AND its owner heading, so a name shared by two
+different owners (say, a field on one record and an unrelated Lua
+module) can't cross-satisfy each other's requirement. **Do not
+reformat a field name out of backticks, and do not remove or rename a
+`### OwnerName` heading** when editing this file; the audit will report
+the affected fields as unclassified.
 
 ---
 
 ## 1. `EngineEnv` (`src/Engine/Core/State.hs:64`) — global
+
+### EngineEnv
 
 | Field | Scope | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|---|
@@ -113,6 +120,8 @@ classified in their own sections (§2, §3/§4, §5) rather than here.
 
 ## 2. `EngineState` (`src/Engine/Core/State.hs:329`) — global, main-thread-private
 
+### EngineState
+
 | Field | Scope | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|---|
 | `timingState` | global | Exclude | — | frame counters/timing, reset at boot | none yet |
@@ -122,12 +131,14 @@ classified in their own sections (§2, §3/§4, §5) rather than here.
 
 ## 3. `WorldManager` / `WorldState` (`src/World/State/Types.hs`)
 
+### WorldManager
+
 `WorldManager` (`:261`) — global:
 
-| Field | Classification | Restoration dependency | Test oracle |
-|---|---|---|---|
-| `wmWorlds` | Rebuild | `SaveData.sdWorlds` | `tools/multiworld_save_probe.py` — **but see below**: today's rebuild MERGES restored pages into whatever's live, it does not replace the session (contract §1 divergence) |
-| `wmVisible` | Rebuild | `SaveData.sdVisiblePages` | `tools/multiworld_save_probe.py` |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `wmWorlds` | Rebuild | `SaveData.sdWorlds` | today's rebuild MERGES restored pages into whatever's live rather than replacing the session — see the divergence note below | `tools/multiworld_save_probe.py` |
+| `wmVisible` | Rebuild | `SaveData.sdVisiblePages` | none beyond type-correctness | `tools/multiworld_save_probe.py` |
 
 **Current v82 behavior diverges from the contract's target here**:
 `handleWorldLoadSaveCommand` (`src/World/Thread/Command/Save/LoadWorld.hs`,
@@ -137,6 +148,8 @@ pages) rather than dropping it — a merge, not the whole-session
 replacement contract §1 requires. This PR does not change that; see
 `persistence_contract.md`'s "Divergence: current loading merges, it does
 not replace" for the full writeup and the responsible future child.
+
+### WorldState
 
 `WorldState` (`:43`) — per-page, one instance per live world:
 
@@ -197,12 +210,16 @@ beyond type-correct deserialization say so plainly (contract §2:
 validation is only interesting "where that's non-trivial") rather than
 inventing one.
 
+### SaveHeader
+
 `SaveHeader` (`:291`) — global:
 
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
 | `shMagic` | Persist exactly | — (read first, before anything else) | must equal `saveMagic` (`0x53595241`) or the file is rejected as not a save at all | none yet |
 | `shVersion` | Persist exactly | — (read second) | must equal `currentSaveVersion` or load fails clearly with "expected vN, got vM" (contract §5) | format-mismatch error path (manual) |
+
+### SaveMetadata
 
 `SaveMetadata` (`:297`) — global:
 
@@ -215,6 +232,8 @@ inventing one.
 | `smTimestamp` | Persist exactly | — | none beyond type-correctness (display only) | none yet |
 | `smWorldName` | Persist exactly | the active page's `wpsIdentity` at save time | mirrors that page's identity; `Nothing` for an unnamed world | `tools/multiworld_save_probe.py` |
 | `smWorldGloss` | Persist exactly | `smWorldName` | must be `Nothing` whenever `smWorldName` is `Nothing` (a gloss cannot exist without a display name) | `tools/multiworld_save_probe.py` |
+
+### WorldPageSave
 
 `WorldPageSave` (`:325`) — per-page. Every field below whose
 restoration dependency isn't otherwise noted needs only its own page's
@@ -253,6 +272,8 @@ prior fields (no cross-page ordering requirement):
 | `wpsPlantDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/plant_probe.py` |
 | `wpsIdentity` | Persist exactly | — | none beyond type-correctness | `tools/multiworld_save_probe.py` |
 
+### SaveData
+
 `SaveData` (`:438`) — global. `sdMetadata`/`sdGameTime`/`sdEnginePaused`/
 `sdTexPalette`/`sdNextItemInstanceId` are restored first and unconditionally
 (step 0 of `handleWorldLoadSaveCommand`), before any page — every other
@@ -272,35 +293,51 @@ field either has no cross-field dependency or is noted below:
 
 ## 5. Gameplay managers
 
+`UnitManager`/`BuildingManager` are not in `ROOT_RECORDS` (they aren't
+fields of `EngineEnv`/`WorldState` themselves — `unitManagerRef`/
+`buildingManagerRef`, the fields that ARE, are classified in §1 as
+pointers into here), so the audit doesn't scan them; they're inventoried
+per issue requirement 3 for completeness and get owner headings for
+navigability, same as everything else.
+
+### UnitManager
+
 `UnitManager` (`src/Unit/Types.hs:623`) — global:
 
-| Field | Classification | Restoration dependency | Test oracle |
-|---|---|---|---|
-| `umDefs` | Rebuild | `data/units/*.yaml` | see §9 |
-| `umInstances` | Persist exactly | via `UnitSnapshot`/`wpsUnits`, needs `umDefs` resolved first (missing species def fails load — contract §4) | `tools/multiworld_save_probe.py` |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `umDefs` | Rebuild | `data/units/*.yaml` | none beyond type-correctness | see §9 |
+| `umInstances` | Persist exactly | via `UnitSnapshot`/`wpsUnits`, needs `umDefs` resolved first | missing species def fails load (contract §4) | `tools/multiworld_save_probe.py` |
 | `umSelected` | Exclude | — | selections are cleared on load (contract §1) | none yet |
-| `umNextId` | Persist exactly | `usnNextId` | `tools/item_instance_probe.py`-style id-collision reasoning (no dedicated probe) |
+| `umNextId` | Persist exactly | `usnNextId` | must exceed every restored `UnitId` so post-load spawns can't collide | `tools/item_instance_probe.py`-style id-collision reasoning (no dedicated probe) |
+
+### BuildingManager
 
 `BuildingManager` (`src/Building/Types.hs:179`) — global:
 
-| Field | Classification | Restoration dependency | Test oracle |
-|---|---|---|---|
-| `bmDefs` | Rebuild | `data/buildings/*.yaml` | see §9 |
-| `bmInstances` | Persist exactly | via `BuildingSnapshot`/`wpsBuildings`, needs `bmDefs` resolved first | `tools/multiworld_save_probe.py` |
-| `bmNextId` | Persist exactly | — | none yet |
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `bmDefs` | Rebuild | `data/buildings/*.yaml` | none beyond type-correctness | see §9 |
+| `bmInstances` | Persist exactly | via `BuildingSnapshot`/`wpsBuildings`, needs `bmDefs` resolved first | missing building def fails load (contract §4) | `tools/multiworld_save_probe.py` |
+| `bmNextId` | Persist exactly | — | must exceed every restored `BuildingId` so post-load spawns can't collide | none yet |
 | `bmSelected` | Exclude | — | selections are cleared on load (contract §1) | none yet |
 
-`UnitInstance` fields explicitly dropped by `fromUnitSnapshot`
-(`src/World/Save/Types.hs:756`) — per-unit, reset rather than persisted:
+### UnitInstance (reset-on-load fields)
 
-| Field | Classification | Test oracle |
-|---|---|---|
-| `uiLastAttackerUid` | Reset to default | none yet |
-| `uiLastAttackerAt` | Reset to default | none yet |
-| `uiAnimOverride` | Reset to default | `tools/combat_anim_probe.py` (behavior, not persistence) |
-| `uiFrozen` | Reset to default | none yet |
-| `uiForceLoop` | Reset to default | none yet |
-| `uiClimbDest` | Reset to default | `tools/movement_probe.py` (behavior, not persistence) |
+`UnitInstance` fields explicitly dropped by `fromUnitSnapshot`
+(`src/World/Save/Types.hs:756`) — per-unit, reset rather than persisted.
+Not in `ROOT_RECORDS` either (these are individual fields WITHIN
+`UnitInstance`, which is itself reached only via `umInstances` above,
+already covered):
+
+| Field | Classification | Validation | Test oracle |
+|---|---|---|---|
+| `uiLastAttackerUid` | Reset to default | always `Nothing` post-load | none yet |
+| `uiLastAttackerAt` | Reset to default | always `Nothing` post-load | none yet |
+| `uiAnimOverride` | Reset to default | always cleared post-load | `tools/combat_anim_probe.py` (behavior, not persistence) |
+| `uiFrozen` | Reset to default | always `False` post-load | none yet |
+| `uiForceLoop` | Reset to default | always `False` post-load | none yet |
+| `uiClimbDest` | Reset to default | always `Nothing` post-load | `tools/movement_probe.py` (behavior, not persistence) |
 
 Other gameplay managers (item defs, ground items, and every per-page
 designation/job manager) are already classified in §3/§4 by their
@@ -328,47 +365,59 @@ completeness. The audit does not scan these files; a change here does
 not require an inventory update to pass CI, though it should still get
 one for documentation's sake.
 
-| Item | Owner | Classification | Test oracle |
-|---|---|---|---|
-| `World.Thread`'s `lastTimeRef` | `src/World/Thread.hs:34` | Exclude | dt clock, reset at boot | none yet |
-| `Unit.Thread`'s `lastTimeRef` | `src/Unit/Thread.hs:37` | Exclude | dt clock, reset at boot | none yet |
-| `Combat.Thread`'s local `tick` counter | `src/Combat/Thread.hs:51` | Exclude | resets to 0 every restart, gates wound-tick rate only (contract §1: thread scheduling not persisted) | none yet |
-| `Sim.Thread`'s `simStateRef` (`SimState`/`SimWorldState`/`SimChunkState`) | `src/Sim/Thread.hs:62`, `src/Sim/State/Types.hs` | Rebuild | fresh `SimChunkState` derives from chunk tile/fluid data as each chunk reactivates post-load; settled results already live in `wsTilesRef`/`wsEditsRef`, this is pure active-simulation scratch space | `tools/world_check.py` (fluid settle behavior) |
-| `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | Rebuild + Persist (mixed) | the VM itself is rebuilt fresh by re-running `loadScript` at boot; the specific durable slices of its global tables are what §7's `saveModules` registry persists — everything else in the VM is Exclude by omission | `tools/lua_orphan_prune_probe.py` |
-| `Lua.Thread`'s `lbsScripts` (registered scripts + tick schedule) | `src/Engine/Scripting/Lua/Types.hs:22` | Exclude | rebuilt by the boot-time `loadScript` sequence | none yet |
-| `Lua.Thread`'s `lbsNextScriptId` | `src/Engine/Scripting/Lua/Types.hs` | Exclude | rebuilt at boot | none yet |
-| `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | — | no persistent thread-local state; local IORefs are recreated per-event inside handler scope | — |
+### Worker-thread-owned state
+
+| Item | Owner | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|---|
+| `World.Thread`'s `lastTimeRef` | `src/World/Thread.hs:34` | Exclude | — | dt clock, reset at boot | none yet |
+| `Unit.Thread`'s `lastTimeRef` | `src/Unit/Thread.hs:37` | Exclude | — | dt clock, reset at boot | none yet |
+| `Combat.Thread`'s local `tick` counter | `src/Combat/Thread.hs:51` | Exclude | — | resets to 0 every restart, gates wound-tick rate only (contract §1: thread scheduling not persisted) | none yet |
+| `Sim.Thread`'s `simStateRef` (`SimState`/`SimWorldState`/`SimChunkState`) | `src/Sim/Thread.hs:62`, `src/Sim/State/Types.hs` | Rebuild | loaded chunk tile/fluid data (`wsTilesRef`) | fresh `SimChunkState` derives from chunk tile/fluid data as each chunk reactivates post-load; settled results already live in `wsTilesRef`/`wsEditsRef`, this is pure active-simulation scratch space | `tools/world_check.py` (fluid settle behavior) |
+| `Lua.Thread`'s `lbsLuaState` (the Lua VM) | `src/Engine/Scripting/Lua/Thread.hs`, `src/Engine/Scripting/Lua/Types.hs:35` | Rebuild + Persist (mixed) | boot-time `loadScript` sequence, then §7's `saveModules.deserializeAll` | the VM itself is rebuilt fresh by re-running `loadScript` at boot; the specific durable slices of its global tables are what §7's `saveModules` registry persists — everything else in the VM is Exclude by omission | `tools/lua_orphan_prune_probe.py` |
+| `Lua.Thread`'s `lbsScripts` (registered scripts + tick schedule) | `src/Engine/Scripting/Lua/Types.hs:22` | Exclude | — | rebuilt by the boot-time `loadScript` sequence | none yet |
+| `Lua.Thread`'s `lbsNextScriptId` | `src/Engine/Scripting/Lua/Types.hs` | Exclude | — | rebuilt at boot | none yet |
+| `Engine.Input.Thread` | `src/Engine/Input/Thread.hs` | — | — | no persistent thread-local state; local IORefs are recreated per-event inside handler scope | — |
 
 ## 7. Lua persistence registry (`scripts/lib/save_modules.lua`)
 
 Exactly four modules call `saveMods.register(...)`. Each is a root
-state owner under the contract §2 definition; the audit greps
-`scripts/` for these call sites directly.
+state owner under the contract §2 definition; the audit scans
+`scripts/` for these call sites directly and checks each registered
+name against the classifications below.
 
-| Module | Owner | Classification | Restoration dependency | Test oracle |
-|---|---|---|---|---|
-| `unit_ai` | `scripts/unit_ai.lua:335` | Persist exactly (opaque blob) | live unit ids must already be restored (`umInstances`) so the pre-load-snapshot/restore dance (`unitAi._preLoadState`, #195/#191) can reconcile off-page units | `tools/lua_orphan_prune_probe.py` |
-| `unit_resources` | `scripts/unit_resources.lua:68` | Reset to default | — | no serializer; `alerts.resetOnLoad()` clears the per-unit alert-debounce cache on every load, including a load with no blob at all — deliberately never persisted so a reused unit id (post `umNextId` rewind) can't inherit stale suppression state | none yet |
-| `building_spawn` | `scripts/building_spawn.lua:274` | Persist exactly (opaque blob) | live building ids must already be restored (`bmInstances`); NOTE the roster-countdown itself is NOT here — it lives on `BuildingInstance` and is covered under `wpsBuildings` in §4 | none yet |
-| `pause` (`paused` field) | `scripts/pause.lua:127` | Exclude (already dead) | — | the blob's `paused` value is read but ignored at load; `enginePausedRef`/`sdEnginePaused` is authoritative (see §1) | `tools/save_pause_probe.py` |
-| `pause` (`prevTimeScale` field) | `scripts/pause.lua:127` | **Exclude (new-format target differs)** | — | currently persisted and restored; contract §1 ("the pre-save speed is not persisted") retargets this to Exclude. Not a runtime change in this issue — flagged for whichever child implements it (same child as `wpsTimeScale`, see §4). | `tools/save_pause_probe.py` (must be updated alongside) |
+### Lua persistence registry
+
+| Module | Owner | Scope | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|---|---|
+| `unit_ai` | `scripts/unit_ai.lua:335` | global (per-id state keyed inside the blob) | Persist exactly (opaque blob) | live unit ids must already be restored (`umInstances`) | the pre-load-snapshot/restore dance (`unitAi._preLoadState`, #195/#191) must reconcile off-page units, not leak stale per-id state | `tools/lua_orphan_prune_probe.py` |
+| `unit_resources` | `scripts/unit_resources.lua:68` | global (per-id cache) | Reset to default | — | no serializer; `alerts.resetOnLoad()` must clear the per-unit alert-debounce cache on every load, including a load with no blob at all — deliberately never persisted so a reused unit id (post `umNextId` rewind) can't inherit stale suppression state | none yet |
+| `building_spawn` | `scripts/building_spawn.lua:274` | global (per-id state keyed inside the blob) | Persist exactly (opaque blob) | live building ids must already be restored (`bmInstances`) | same reconcile requirement as `unit_ai`; NOTE the roster-countdown itself is NOT here — it lives on `BuildingInstance` and is covered under `wpsBuildings` in §4 | none yet |
+| `pause` (`paused` field) | `scripts/pause.lua:127` | global | Exclude (already dead) | — | the blob's `paused` value is read but ignored at load; `enginePausedRef`/`sdEnginePaused` is authoritative (see §1) | `tools/save_pause_probe.py` |
+| `pause` (`prevTimeScale` field) | `scripts/pause.lua:127` | global | **Exclude (new-format target differs)** | — | currently persisted and restored; contract §1 ("the pre-save speed is not persisted") retargets this to Exclude. Not a runtime change in this issue — flagged for whichever child implements it (same child as `wpsTimeScale`, see §4). | `tools/save_pause_probe.py` (must be updated alongside) |
 
 ## 8. Camera / world-view / UI / tool / selection state
 
-| Item | Owner | Scope | Classification | Test oracle |
-|---|---|---|---|---|
-| `WorldCamera` (`wcX`, `wcY`) | `src/World/Render/Camera/Types.hs:34` | per-page | Persist exactly | source of `wpsCameraX`/`wpsCameraY`, see §3/§4; none yet |
-| `Camera2D` (`camPosition`, `camVelocity`, `camZoom`, `camZoomVelocity`, `camRotation`, `camDragging`, `camDragOrigin`, `camZSlice`, `camZTracking`) | `src/Engine/Graphics/Camera.hs:39` | global | Exclude | session-only render camera; re-synced from the active page's `WorldCamera` + `wpsCameraZoom`/`wpsCameraFacing` on load, not itself a source of truth |
-| `Camera2D`'s `camFacing` | `src/Engine/Graphics/Camera.hs:39` | global | Persist as identity/reference | mirrors `wpsCameraFacing`, the true source of truth |
-| `UICamera` (`uiCamWidth`, `uiCamHeight`) | `src/Engine/Graphics/Camera.hs:66` | global | Exclude | derived from window size |
-| `CursorState` | `src/World/Cursor/Types.hs:9` | per-page | Exclude | already covered as `wsCursorRef` in §3 (contract §1 exclusion list: hover state) |
-| `UIPageManager` | `src/UI/Types.hs:321` | global | Exclude | already covered as `uiManagerRef` in §1 |
-| `FocusManager` | `src/UI/Focus.hs:34` | global | Exclude | already covered as `focusManagerRef` in §1 |
-| `ToolMode` (per-page) | `src/World/Tool/Types.hs:12` | per-page | Reset to default | already covered as `wsToolModeRef`/`wpsToolMode` in §3/§4 |
-| `UnitManager.umSelected` | `src/Unit/Types.hs:626` | global | Exclude | already covered in §5 |
-| `BuildingManager.bmSelected` | `src/Building/Types.hs:183` | global | Exclude | already covered in §5 |
-| `dragSelect` state (`state`, `startX/Y`, `currX/Y`, `page`) | `scripts/unit_drag_select.lua:20` | global (Lua module singleton) | Exclude | transient UI gesture FSM, not registered with `saveModules` — a drag in progress at save time is simply abandoned |
-| Tool-script anchor/preview state (`mine_tool.lua`, `build_tool.lua`, `chop_tool.lua`, `till_tool.lua`, `plant_tool.lua`) | `scripts/*_tool.lua` | per-page (mirrors engine-side anchor fields) | Exclude | transient designation-in-progress UI state, not registered with `saveModules` |
+None of these are in `ROOT_RECORDS` (they're either not reachable from
+`EngineEnv`/`WorldState` at all — the two Lua-side rows — or they
+duplicate a field already classified by its own owner elsewhere, cross-
+referenced below rather than re-audited here).
+
+### Camera / world-view / UI / tool / selection state
+
+| Item | Owner | Scope | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|---|---|
+| `WorldCamera` (`wcX`, `wcY`) | `src/World/Render/Camera/Types.hs:34` | per-page | Persist exactly | — | none beyond type-correctness | source of `wpsCameraX`/`wpsCameraY`, see §3/§4; none yet |
+| `Camera2D` (`camPosition`, `camVelocity`, `camZoom`, `camZoomVelocity`, `camRotation`, `camDragging`, `camDragOrigin`, `camZSlice`, `camZTracking`) | `src/Engine/Graphics/Camera.hs:39` | global | Exclude | the active page's `WorldCamera` + `wpsCameraZoom`/`wpsCameraFacing` | session-only render camera; re-synced on load, not itself a source of truth | none yet |
+| `Camera2D`'s `camFacing` | `src/Engine/Graphics/Camera.hs:39` | global | Persist as identity/reference | `wpsCameraFacing` | mirrors `wpsCameraFacing`, the true source of truth | none yet |
+| `UICamera` (`uiCamWidth`, `uiCamHeight`) | `src/Engine/Graphics/Camera.hs:66` | global | Exclude | window size | derived from window size at boot | none yet |
+| `CursorState` | `src/World/Cursor/Types.hs:9` | per-page | Exclude | — | already covered as `wsCursorRef` in §3 (contract §1 exclusion list: hover state) | none yet |
+| `UIPageManager` | `src/UI/Types.hs:321` | global | Exclude | — | already covered as `uiManagerRef` in §1 | none yet |
+| `FocusManager` | `src/UI/Focus.hs:34` | global | Exclude | — | already covered as `focusManagerRef` in §1 | none yet |
+| `ToolMode` (per-page) | `src/World/Tool/Types.hs:12` | per-page | Reset to default | — | already covered as `wsToolModeRef`/`wpsToolMode` in §3/§4 | none yet |
+| `UnitManager.umSelected` | `src/Unit/Types.hs:626` | global | Exclude | — | already covered in §5 | none yet |
+| `BuildingManager.bmSelected` | `src/Building/Types.hs:183` | global | Exclude | — | already covered in §5 | none yet |
+| `dragSelect` state (`state`, `startX/Y`, `currX/Y`, `page`) | `scripts/unit_drag_select.lua:20` | global (Lua module singleton) | Exclude | — | transient UI gesture FSM, not registered with `saveModules` — a drag in progress at save time is simply abandoned | none yet |
+| Tool-script anchor/preview state (`mine_tool.lua`, `build_tool.lua`, `chop_tool.lua`, `till_tool.lua`, `plant_tool.lua`) | `scripts/*_tool.lua` | per-page (mirrors engine-side anchor fields) | Exclude | — | transient designation-in-progress UI state, not registered with `saveModules` | none yet |
 
 ## 9. Content-definition registries (current content, not persisted state)
 

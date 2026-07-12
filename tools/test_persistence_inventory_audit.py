@@ -49,12 +49,18 @@ data EngineEnv = EngineEnv
 data SomethingElse = SomethingElse { unrelated ∷ Int }
 """
 
-# Section-scoped inventory: section 1 classifies the EngineEnv fixture
-# fields, section 7 classifies the Lua registry fixture.
+# Owner-scoped inventory: the `### EngineEnv` heading classifies the
+# EngineEnv fixture fields, `### Lua persistence registry` classifies
+# the Lua registry fixture -- matching the real inventory doc's scheme
+# (docs/persistence_state_inventory.md), NOT the coarser `## N.`
+# section number (several distinct owners can share one numbered
+# section there, e.g. WorldManager/WorldState both under "## 3.").
 SYNTHETIC_INVENTORY_COMPLETE = """\
 # Fake inventory
 
-## 1. `EngineEnv` fields
+## 1. EngineEnv fields
+
+### EngineEnv
 
 | Field | Classification |
 |---|---|
@@ -64,6 +70,8 @@ SYNTHETIC_INVENTORY_COMPLETE = """\
 
 ## 7. Lua persistence registry
 
+### Lua persistence registry
+
 | Field | Classification |
 |---|---|
 | `unit_ai` | Persist exactly (opaque blob) |
@@ -72,7 +80,9 @@ SYNTHETIC_INVENTORY_COMPLETE = """\
 SYNTHETIC_INVENTORY_MISSING_ONE = """\
 # Fake inventory
 
-## 1. `EngineEnv` fields
+## 1. EngineEnv fields
+
+### EngineEnv
 
 | Field | Classification |
 |---|---|
@@ -80,19 +90,25 @@ SYNTHETIC_INVENTORY_MISSING_ONE = """\
 | `fieldThree` | Exclude |
 
 ## 7. Lua persistence registry
+
+### Lua persistence registry
 
 | Field | Classification |
 |---|---|
 | `unit_ai` | Persist exactly (opaque blob) |
 """
 
-# fieldTwo is only classified under section 7 (as if it were a Lua
-# module name), NOT under section 1 where the real EngineEnv.fieldTwo
-# lives -- this must NOT satisfy EngineEnv.fieldTwo's requirement.
-SYNTHETIC_INVENTORY_CROSS_SECTION_COLLISION = """\
+# fieldTwo is only classified under the Lua registry heading (as if it
+# were a Lua module name), NOT under `### EngineEnv` where the real
+# EngineEnv.fieldTwo lives -- this must NOT satisfy EngineEnv.fieldTwo's
+# requirement, even though both owners share `## 1.`/`## 7.`'s sibling
+# status under the same document.
+SYNTHETIC_INVENTORY_OWNER_COLLISION = """\
 # Fake inventory
 
-## 1. `EngineEnv` fields
+## 1. EngineEnv fields
+
+### EngineEnv
 
 | Field | Classification |
 |---|---|
@@ -101,10 +117,45 @@ SYNTHETIC_INVENTORY_CROSS_SECTION_COLLISION = """\
 
 ## 7. Lua persistence registry
 
+### Lua persistence registry
+
 | Field | Classification |
 |---|---|
 | `fieldTwo` | Persist exactly (opaque blob) |
 | `unit_ai` | Persist exactly (opaque blob) |
+"""
+
+# Two DIFFERENT Haskell records sharing a field name, mirroring the
+# real inventory's WorldManager/WorldState pair (both live under the
+# same "## 3." numbered section but must still be scoped as separate
+# owners). Only OwnerB's `shared` is classified.
+SYNTHETIC_TWO_OWNERS_SHARED_FIELD_NAME = """\
+module Fake where
+
+data OwnerA = OwnerA
+  { shared ∷ Int
+  }
+
+data OwnerB = OwnerB
+  { shared ∷ Int
+  }
+"""
+
+TWO_OWNER_ROOT_RECORDS = [
+    ("OwnerA", "Fake.hs", r"^data OwnerA = OwnerA\b"),
+    ("OwnerB", "Fake.hs", r"^data OwnerB = OwnerB\b"),
+]
+
+SYNTHETIC_INVENTORY_ONLY_OWNER_B_CLASSIFIED = """\
+# Fake inventory
+
+## 3. OwnerA / OwnerB (share one numbered section, like WorldManager/WorldState)
+
+### OwnerB
+
+| Field | Classification |
+|---|---|
+| `shared` | Persist exactly |
 """
 
 SYNTHETIC_LUA_REGISTER = """\
@@ -177,6 +228,14 @@ SYNTHETIC_LUA_REGISTER_AFTER_DASH_STRING = """\
 local saveMods = require("scripts.lib.save_modules")
 
 local dash = "--"; saveMods.register("string_dash_module", nil, nil)
+"""
+
+# A register() call using single-quoted Lua strings (legal Lua, an
+# alternative to double quotes).
+SYNTHETIC_LUA_REGISTER_SINGLE_QUOTED = """\
+local saveMods = require('scripts.lib.save_modules')
+
+saveMods.register('single_quoted_module', nil, nil)
 """
 
 
@@ -268,35 +327,44 @@ def test_extract_lua_registered_modules_survives_dash_in_string():
            f"does not swallow a real register() call after it, got {names}")
 
 
-def test_parse_classified_names_scoped_by_section():
-    by_section = parse_classified_names(SYNTHETIC_INVENTORY_COMPLETE)
-    expect(by_section.get("1") == {"fieldOne", "fieldTwo", "fieldThree"},
-           f"section 1 gets exactly its own backtick-quoted first-column "
-           f"names, got {by_section.get('1')}")
-    expect(by_section.get("7") == {"unit_ai"},
-           f"section 7 gets exactly its own names, got {by_section.get('7')}")
+def test_extract_lua_registered_modules_single_quoted():
+    found = extract_lua_registered_modules(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_SINGLE_QUOTED})
+    names = [n for n, _ in found]
+    expect(names == ["single_quoted_module"],
+           f"finds a register() call using single-quoted Lua strings, got {names}")
+
+
+def test_parse_classified_names_scoped_by_owner_heading():
+    by_owner = parse_classified_names(SYNTHETIC_INVENTORY_COMPLETE)
+    expect(by_owner.get("EngineEnv") == {"fieldOne", "fieldTwo", "fieldThree"},
+           f"the '### EngineEnv' heading gets exactly its own backtick-quoted "
+           f"first-column names, got {by_owner.get('EngineEnv')}")
+    expect(by_owner.get("Lua persistence registry") == {"unit_ai"},
+           f"the Lua registry heading gets exactly its own names, got "
+           f"{by_owner.get('Lua persistence registry')}")
 
 
 def test_parse_classified_names_ignores_other_columns():
     # A name that only appears in a NON-first column (e.g. a cross-
     # reference in "Restoration dependency") must not count as classified.
-    text = "## 1. fake\n\n| `realField` | depends on `otherField` |\n"
-    by_section = parse_classified_names(text)
-    expect(by_section.get("1") == {"realField"},
-           f"only the first column counts as a classification, got {by_section.get('1')}")
+    text = "### Fake\n\n| `realField` | depends on `otherField` |\n"
+    by_owner = parse_classified_names(text)
+    expect(by_owner.get("Fake") == {"realField"},
+           f"only the first column counts as a classification, got {by_owner.get('Fake')}")
 
 
-def test_parse_classified_names_does_not_merge_across_sections():
-    text = ("## 1. fake\n\n| `shared` | x |\n\n"
-            "## 7. fake\n\n| `shared` | y |\n| `only_in_seven` | z |\n")
-    by_section = parse_classified_names(text)
-    expect(by_section.get("1") == {"shared"},
-           f"section 1 keeps only its own copy of a shared name, got {by_section.get('1')}")
-    expect(by_section.get("7") == {"shared", "only_in_seven"},
-           f"section 7 keeps its own names independently, got {by_section.get('7')}")
+def test_parse_classified_names_does_not_merge_across_owners():
+    text = ("### OwnerX\n\n| `shared` | x |\n\n"
+            "### OwnerY\n\n| `shared` | y |\n| `only_in_y` | z |\n")
+    by_owner = parse_classified_names(text)
+    expect(by_owner.get("OwnerX") == {"shared"},
+           f"OwnerX keeps only its own copy of a shared name, got {by_owner.get('OwnerX')}")
+    expect(by_owner.get("OwnerY") == {"shared", "only_in_y"},
+           f"OwnerY keeps its own names independently, got {by_owner.get('OwnerY')}")
 
 
-FAKE_ROOT_RECORDS = [("EngineEnv", "Fake.hs", r"^data EngineEnv = EngineEnv\b", "1")]
+FAKE_ROOT_RECORDS = [("EngineEnv", "Fake.hs", r"^data EngineEnv = EngineEnv\b")]
 
 
 def test_audit_clean_repo_state_has_no_violations():
@@ -371,20 +439,56 @@ def test_audit_detects_module_registered_after_dash_string():
            f"is reported when unclassified, got {violations}")
 
 
-def test_audit_does_not_let_a_same_named_entry_in_another_section_count():
-    """Regression for the owner-scoping gap: a Lua-module row (section 7)
-    happening to be named `fieldTwo` must not satisfy the classification
-    requirement for the UNRELATED EngineEnv.fieldTwo (section 1) --
-    they are different owners and need independent decisions."""
+def test_audit_detects_single_quoted_module_registration():
+    """Regression for the single-quote gap: a register() call using
+    Lua's single-quote string syntax used to never match."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_SINGLE_QUOTED},
+        SYNTHETIC_INVENTORY_COMPLETE,  # has no entry for single_quoted_module
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("single_quoted_module" in v for v in violations),
+           f"a module registered with single-quoted Lua strings is reported "
+           f"when unclassified, got {violations}")
+
+
+def test_audit_does_not_let_a_same_named_entry_under_another_owner_count():
+    """Regression for the owner-scoping gap: a Lua-module row happening
+    to be named `fieldTwo` must not satisfy the classification
+    requirement for the UNRELATED EngineEnv.fieldTwo -- they are
+    different owners and need independent decisions, even though both
+    live in the same document."""
     violations = audit(
         {"Fake.hs": SYNTHETIC_ENGINE_ENV},
         {},
-        SYNTHETIC_INVENTORY_CROSS_SECTION_COLLISION,
+        SYNTHETIC_INVENTORY_OWNER_COLLISION,
         root_records=FAKE_ROOT_RECORDS,
     )
     expect(any("EngineEnv.fieldTwo" in v for v in violations),
            f"EngineEnv.fieldTwo is still reported unclassified even though "
-           f"a same-named row exists in the Lua section, got {violations}")
+           f"a same-named row exists under the Lua registry heading, got {violations}")
+
+
+def test_audit_does_not_let_a_sibling_record_in_the_same_numbered_section_count():
+    """Regression for the reviewer's exact WorldManager/WorldState
+    scenario: two DIFFERENT records sharing a `## N.` numbered section
+    (but each with its own `### OwnerName` heading) must not let one's
+    classified field satisfy the other's requirement for a same-named
+    field."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_TWO_OWNERS_SHARED_FIELD_NAME},
+        {},
+        SYNTHETIC_INVENTORY_ONLY_OWNER_B_CLASSIFIED,
+        root_records=TWO_OWNER_ROOT_RECORDS,
+    )
+    expect(any("OwnerA.shared" in v for v in violations),
+           f"OwnerA.shared is reported unclassified even though OwnerB.shared "
+           f"(a sibling record under the same numbered section, same field "
+           f"name) IS classified, got {violations}")
+    expect(not any("OwnerB.shared" in v for v in violations),
+           f"OwnerB.shared, which IS classified under its own heading, is "
+           f"not falsely reported, got {violations}")
 
 
 def test_audit_detects_intentionally_unclassified_field():
@@ -446,15 +550,18 @@ def main() -> int:
         test_extract_lua_registered_modules_spaced_dot_call,
         test_extract_lua_registered_modules_block_commented_out,
         test_extract_lua_registered_modules_survives_dash_in_string,
-        test_parse_classified_names_scoped_by_section,
+        test_extract_lua_registered_modules_single_quoted,
+        test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
-        test_parse_classified_names_does_not_merge_across_sections,
+        test_parse_classified_names_does_not_merge_across_owners,
         test_audit_clean_repo_state_has_no_violations,
         test_audit_detects_field_hidden_behind_unbalanced_comment_brace,
         test_audit_detects_field_hidden_behind_nested_comment,
         test_audit_detects_module_registered_across_multiple_lines,
         test_audit_detects_module_registered_after_dash_string,
-        test_audit_does_not_let_a_same_named_entry_in_another_section_count,
+        test_audit_detects_single_quoted_module_registration,
+        test_audit_does_not_let_a_same_named_entry_under_another_owner_count,
+        test_audit_does_not_let_a_sibling_record_in_the_same_numbered_section_count,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
         test_audit_against_the_real_repo,

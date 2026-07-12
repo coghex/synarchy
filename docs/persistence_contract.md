@@ -259,15 +259,26 @@ this contract's inventory is wrong.
 serialization-correctness proof. It:
 
 1. Extracts the current field list of every root-owner record (§2) from
-   its source file, via a Haskell record-field parser tolerant of the
-   codebase's Haddock comments and `UnicodeSyntax` (`∷`) field
-   separators.
-2. Extracts every `saveModules.register("name", ...)` call site across
-   `scripts/`.
+   its source file, via a Haskell record-field parser that strips
+   (possibly nested) `{- -}` and `--` comments first so prose in a
+   Haddock comment can never desync the brace-depth tracking that finds
+   a record's boundary, and understands the codebase's `UnicodeSyntax`
+   (`∷`) field separators.
+2. Extracts every `saveMods.register("name", ...)`/`saveMods.register('name', ...)`
+   call site across `scripts/`, string-literal-aware so a `--` inside an
+   unrelated string can't be mistaken for a comment and swallow a real
+   call after it.
 3. Parses `persistence_state_inventory.md`'s classification tables for
-   the set of item names that have a recorded classification.
+   the set of item names that have a recorded classification, scoped to
+   the exact `### OwnerName` heading each table sits under — not merely
+   the coarser `## N.` section a heading belongs to, since several
+   distinct owners can share one numbered section (e.g. `WorldManager`/
+   `WorldState` both under "## 3."). A name is only "classified" for the
+   owner it's actually documented under, so a same-named field/module
+   under a DIFFERENT owner can never mask a missing decision.
 4. Fails, naming each offender, if any extracted field or registered
-   module name has no matching inventory entry.
+   module name has no matching inventory entry under its own owner
+   heading.
 
 Run it directly:
 

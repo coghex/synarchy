@@ -8,11 +8,14 @@ EngineState, WorldManager, WorldState, and the World.Save.Types
 envelope), or a Lua module registered with scripts/lib/save_modules.lua.
 Every such field/module must have a classification entry in the
 inventory doc: a backtick-quoted name in the first column of one of its
-markdown tables, in the SAME `## N.` inventory section that owns that
-field/module (see SECTION below) -- classification is scoped by owner,
-not by name alone, so a field on one record can't be "classified" by
-sheer coincidence of sharing a name with an unrelated Lua module or a
-field on a different record.
+markdown tables, under the SAME `### OwnerName` heading that owns that
+field/module (see ROOT_RECORDS/LUA_OWNER_HEADING below) -- classification
+is scoped PER OWNER, not per name or per numbered section, so a field on
+one record can't be "classified" by sheer coincidence of sharing a name
+with an unrelated Lua module or a field on a DIFFERENT record that
+happens to share the same `## N.` section (e.g. WorldManager and
+WorldState both live under "## 3.", but each gets its own "### " heading
+so a name collision between them still can't mask a missing decision).
 
 This is a static presence check, not a serialization-correctness proof
 (it cannot verify a field classified "Persist exactly" is actually wired
@@ -36,35 +39,38 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "docs" / "persistence_state_inventory.md"
 SCRIPTS_DIR = "scripts"
 
-# The `## N.` inventory section each Lua registration is classified
-# under (docs/persistence_state_inventory.md SS7, "Lua persistence
-# registry").
-LUA_SECTION = "7"
+# The `### ` heading text every Lua registration is classified under
+# (docs/persistence_state_inventory.md SS7, "Lua persistence registry").
+LUA_OWNER_HEADING = "Lua persistence registry"
 
 # (label, file relative to repo root, regex matching the record's
-# `data X = X` line, the `## N.` inventory section it's classified
-# under)
-ROOT_RECORDS: list[tuple[str, str, str, str]] = [
-    ("EngineEnv", "src/Engine/Core/State.hs", r"^data EngineEnv = EngineEnv\b", "1"),
-    ("EngineState", "src/Engine/Core/State.hs", r"^data EngineState = EngineState\b", "2"),
-    ("WorldManager", "src/World/State/Types.hs", r"^data WorldManager = WorldManager\b", "3"),
-    ("WorldState", "src/World/State/Types.hs", r"^data WorldState = WorldState\b", "3"),
-    ("SaveHeader", "src/World/Save/Types.hs", r"^data SaveHeader = SaveHeader\b", "4"),
-    ("SaveMetadata", "src/World/Save/Types.hs", r"^data SaveMetadata = SaveMetadata\b", "4"),
-    ("WorldPageSave", "src/World/Save/Types.hs", r"^data WorldPageSave = WorldPageSave\b", "4"),
-    ("SaveData", "src/World/Save/Types.hs", r"^data SaveData = SaveData\b", "4"),
+# `data X = X` line). `label` doubles as the exact `### label` heading
+# text the inventory doc must use to classify this record's fields --
+# see OWNER_HEADING_RE / parse_classified_names.
+ROOT_RECORDS: list[tuple[str, str, str]] = [
+    ("EngineEnv", "src/Engine/Core/State.hs", r"^data EngineEnv = EngineEnv\b"),
+    ("EngineState", "src/Engine/Core/State.hs", r"^data EngineState = EngineState\b"),
+    ("WorldManager", "src/World/State/Types.hs", r"^data WorldManager = WorldManager\b"),
+    ("WorldState", "src/World/State/Types.hs", r"^data WorldState = WorldState\b"),
+    ("SaveHeader", "src/World/Save/Types.hs", r"^data SaveHeader = SaveHeader\b"),
+    ("SaveMetadata", "src/World/Save/Types.hs", r"^data SaveMetadata = SaveMetadata\b"),
+    ("WorldPageSave", "src/World/Save/Types.hs", r"^data WorldPageSave = WorldPageSave\b"),
+    ("SaveData", "src/World/Save/Types.hs", r"^data SaveData = SaveData\b"),
 ]
 
 # Matches a record-field declaration line: leading `{` or `,`, the field
 # name, then the (UnicodeSyntax or plain) type-signature arrow.
 FIELD_LINE_RE = re.compile(r"^\s*[{,]\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
 # Tolerates whitespace/newlines around the dot and before the opening
-# paren/string, so a call split across lines (`saveMods.register(\n
-# "name", ...)`) or written `saveMods . register(...)` still matches.
-REGISTER_RE = re.compile(r"saveMods\s*\.\s*register\s*\(\s*\"([^\"]+)\"")
+# paren/string (a call split across lines, or `saveMods . register(...)`
+# with spaced dots), and either Lua quote style -- `(['"])` captures the
+# opening quote and `\1` backreferences it as the closing delimiter, so
+# `'name'` and `"name"` both match and neither is truncated by the
+# OTHER quote character appearing inside it.
+REGISTER_RE = re.compile(r"saveMods\s*\.\s*register\s*\(\s*(['\"])((?:(?!\1).)*)\1")
 ROW_FIRST_CELL_RE = re.compile(r"^\|([^|]*)\|")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
-SECTION_HEADING_RE = re.compile(r"^##\s+(\d+)\.")
+OWNER_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 
 
 def _strip_haskell_comments(source: str) -> str:
@@ -193,44 +199,48 @@ def extract_lua_registered_modules(
     for relpath, text in sorted(scripts_text_by_file.items()):
         cleaned = _strip_lua_comments(text)
         for m in REGISTER_RE.finditer(cleaned):
-            found.append((m.group(1), relpath))
+            found.append((m.group(2), relpath))
     return found
 
 
 def parse_classified_names(inventory_text: str) -> dict[str, set[str]]:
-    """Every backtick-quoted first-column name, keyed by the `## N.`
-    inventory section it appears under.
+    """Every backtick-quoted first-column name, keyed by the nearest
+    preceding `### OwnerName` heading.
 
-    Classification is scoped to the section, not global: a name is only
-    "classified" for the specific owner section it's documented in, so
-    an unrelated owner (a different record, or the Lua registry)
-    happening to share that name can't mask a missing decision.
+    Classification is scoped PER OWNER, not globally and not merely per
+    `## N.` section: several distinct owners can share one numbered
+    section (WorldManager/WorldState both live under "## 3.", all four
+    save-envelope records under "## 4.") so a name is only "classified"
+    for the specific `###`-headed owner it's documented under -- a
+    different owner (a sibling record under the same section, or the
+    Lua registry) happening to share that name can't mask a missing
+    decision.
     """
-    by_section: dict[str, set[str]] = {}
-    current_section = "0"
+    by_owner: dict[str, set[str]] = {}
+    current_owner: str | None = None
     for line in inventory_text.splitlines():
-        heading = SECTION_HEADING_RE.match(line)
+        heading = OWNER_HEADING_RE.match(line)
         if heading:
-            current_section = heading.group(1)
+            current_owner = heading.group(1)
             continue
         m = ROW_FIRST_CELL_RE.match(line)
-        if not m:
+        if not m or current_owner is None:
             continue
         for bt in BACKTICK_RE.findall(m.group(1)):
-            by_section.setdefault(current_section, set()).add(bt)
-    return by_section
+            by_owner.setdefault(current_owner, set()).add(bt)
+    return by_owner
 
 
 def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
           inventory_text: str,
-          root_records: list[tuple[str, str, str, str]] | None = None) -> list[str]:
+          root_records: list[tuple[str, str, str]] | None = None) -> list[str]:
     """Pure audit core. Returns a list of human-readable violations."""
     if root_records is None:
         root_records = ROOT_RECORDS
     classified = parse_classified_names(inventory_text)
     violations: list[str] = []
 
-    for label, relpath, pattern, section in root_records:
+    for label, relpath, pattern in root_records:
         source = record_sources.get(relpath)
         if source is None:
             violations.append(f"{label}: source not provided for {relpath}")
@@ -245,26 +255,27 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
                 f"{label}: no fields extracted from {relpath} -- the parser "
                 f"may be out of sync with this record's layout")
             continue
-        classified_here = classified.get(section, set())
+        classified_here = classified.get(label, set())
         for field in fields:
             if field not in classified_here:
                 violations.append(
-                    f"{label}.{field} ({relpath}) has no classification in "
-                    f"{INVENTORY_PATH.name} section {section}")
+                    f"{label}.{field} ({relpath}) has no classification under "
+                    f"the '### {label}' heading in {INVENTORY_PATH.name}")
 
-    classified_lua = classified.get(LUA_SECTION, set())
+    classified_lua = classified.get(LUA_OWNER_HEADING, set())
     for name, relpath in extract_lua_registered_modules(scripts_text_by_file):
         if name not in classified_lua:
             violations.append(
                 f'Lua save module "{name}" (registered in {relpath}) has no '
-                f"classification in {INVENTORY_PATH.name} section {LUA_SECTION}")
+                f"classification under the '### {LUA_OWNER_HEADING}' heading "
+                f"in {INVENTORY_PATH.name}")
 
     return violations
 
 
 def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str]:
     record_sources: dict[str, str] = {}
-    for _, relpath, _, _ in ROOT_RECORDS:
+    for _, relpath, _ in ROOT_RECORDS:
         if relpath not in record_sources:
             record_sources[relpath] = (REPO_ROOT / relpath).read_text(encoding="utf-8")
     scripts_text_by_file: dict[str, str] = {}
@@ -289,7 +300,7 @@ def main() -> int:
 
     total_fields = sum(
         len(extract_record_fields(record_sources[relpath], pattern))
-        for _, relpath, pattern, _ in ROOT_RECORDS)
+        for _, relpath, pattern in ROOT_RECORDS)
     total_lua = len(extract_lua_registered_modules(scripts_text_by_file))
     print(f"persistence-inventory audit: {total_fields} root-owner fields + "
           f"{total_lua} Lua save module(s) all classified")
