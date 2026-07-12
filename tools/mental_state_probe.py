@@ -1049,6 +1049,56 @@ def main():
             f"local b=require('scripts.brain'); "
             f"return {{d=b.isDelirious({subjJ})}}"))["d"])
 
+        # 9k. The shared retaliation-swap must not redirect lash-out onto
+        # a technomule either — mirrors the collapsed-attacker test, but
+        # for the technomule exclusion. A real hit FROM a technomule
+        # isn't a reliably testable event (unclear it can ever land one
+        # in practice), so pin unit.getLastAttacker's report for subjK
+        # instead — the same wrap-and-delegate technique the collapsed-
+        # attacker test uses, applied to the attacker-memory getter this
+        # time rather than getPose.
+        subjK = spawn_acolyte(P, -25, 25)
+        set_wellbeing(P, subjK, 1.0, 0.0)
+        poll_until(5, lambda: mstate(P, subjK) == "stable")
+        targetK = spawn_acolyte(P, -24, 25)   # eligible, adjacent
+        muleK = spawn_acolyte(P, -26, 25, unit="technomule", clear_water=False)
+        send(P, f"require('scripts.mental_state').forceBreak({subjK},'lash_out'); "
+                f"return 'ok'")
+
+        def k_target():
+            t = lash_target(P, subjK)
+            return t if t != "nil" else None
+        if poll_until(10, k_target) != str(targetK):
+            ok = False
+            print(f"  [FAIL] setup: {subjK} never targeted {targetK}")
+
+        send(P, f"if not _G.__probe_orig_getLastAttacker then "
+                f"_G.__probe_orig_getLastAttacker = unit.getLastAttacker end; "
+                f"unit.getLastAttacker = function(u) "
+                f"if u == {subjK} then return {{uid={muleK}, at=engine.gameTime()}} end "
+                f"return _G.__probe_orig_getLastAttacker(u) end; return 'ok'")
+
+        # Sample rapidly through the retaliation-swap's own 3s window —
+        # subjK must stay on targetK and never swap onto the technomule.
+        samplesK = []
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            samplesK.append(lash_target(P, subjK))
+            time.sleep(0.15)
+        send(P, "if _G.__probe_orig_getLastAttacker then "
+                "unit.getLastAttacker = _G.__probe_orig_getLastAttacker; "
+                "_G.__probe_orig_getLastAttacker = nil end; return 'ok'")
+
+        if str(targetK) in samplesK and str(muleK) not in samplesK:
+            print(f"  [pass] lash-out stayed on {targetK} and never swapped "
+                  f"onto the technomule {muleK}: {samplesK[:4]}...")
+        else:
+            ok = False
+            print(f"  [FAIL] expected only {targetK}, saw: {samplesK}")
+
+        send(P, f"unit.setStat({subjK},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, subjK) != "break")
+
         # 9g. No eligible target: agitated wander, keep searching.
         subj5 = spawn_acolyte(P, 30, -25)   # isolated — nothing within 8 tiles
         set_wellbeing(P, subj5, 1.0, 0.0)
