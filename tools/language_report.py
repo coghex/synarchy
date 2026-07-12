@@ -36,13 +36,20 @@ CONTRACT_RE = re.compile(r"^[A-Z][a-z]*(?:['-][a-z]+)*$")
 REPRESENTATIVE_COUNT = 5
 SIGNATURE_RATIO = 240 / 256
 DISTINCT_NAME_RATIO = 0.95
+WORD64_MAX = 2 ** 64 - 1
 
 
 def run_report(lo, hi):
     cmd = ["cabal", "run", "-v0", "exe:synarchy", "--",
            "--language-report", "--seeds", f"{lo}:{hi}"]
-    out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          check=True)
+    try:
+        out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              check=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode(errors="replace").strip() if exc.stderr else ""
+        print(f"language-report generator failed (exit {exc.returncode}): {stderr}",
+              file=sys.stderr)
+        sys.exit(2)
     return json.loads(out.stdout)
 
 
@@ -69,7 +76,7 @@ def parse_seeds(raw):
         lo, hi = int(parts[0]), int(parts[1])
     except ValueError:
         return None
-    if lo < 0 or hi < lo:
+    if lo < 0 or hi < lo or hi > WORD64_MAX:
         return None
     return lo, hi
 
@@ -84,7 +91,8 @@ def main():
 
     seeds_range = parse_seeds(args.seeds)
     if seeds_range is None:
-        print(f"invalid --seeds {args.seeds!r}, expected LO:HI with LO <= HI", file=sys.stderr)
+        print(f"invalid --seeds {args.seeds!r}, expected LO:HI with "
+              f"0 <= LO <= HI <= {WORD64_MAX}", file=sys.stderr)
         return 2
     lo, hi = seeds_range
 
