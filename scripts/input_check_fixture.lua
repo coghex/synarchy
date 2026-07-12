@@ -53,6 +53,11 @@ function M.setup()
         -- element left unclickable routes clicks through to the game.
         UI.setClickable(M.btn, true)
         UI.setOnClick(M.btn, "onInputCheckClick")
+        -- #743: scroll-capture is independent of click policy — tools/
+        -- input_check.py's scroll-over-the-clickable-element assertion
+        -- needs this explicit opt-in now that wheel routing no longer
+        -- rides along with a registered click callback.
+        UI.setScrollCapture(M.btn, true)
         M.txt = UI.newElement("input_check_txt", TXT_W, TXT_H, M.page)
         UI.addToPage(M.page, M.txt, TXT_X, TXT_Y)
         UI.enableTextInput(M.txt)

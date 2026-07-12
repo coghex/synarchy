@@ -189,6 +189,16 @@ createUI = function()
         uiscale    = 1.0,  -- panel dimensions already scaled
     })
     table.insert(eventLog.ownedPanels, panelId)
+    -- #743: explicit scroll-capture + pointer-block on the panel
+    -- background, so a mouse wheel over blank row space routes to
+    -- eventLog.onScroll (below) instead of falling through to world
+    -- zoom, and blank panel space doesn't leak clicks through to
+    -- gameplay underneath.
+    pcall(function()
+        local boxHandle = panel.getBoxHandle(panelId)
+        UI.setScrollCapture(boxHandle, true)
+        UI.setPointerBlocking(boxHandle, true)
+    end)
 
     -- Title (top-left)
     local titleId = label.new({
@@ -628,6 +638,26 @@ function eventLog.onRowClick(elemHandle)
 
     local popupMod = require("scripts.popup")
     popupMod.onShowPopup(ev.category, ev.text, r, g, b, a, ev.coords)
+    return true
+end
+
+-- #743: ui_manager routes mouse-WHEEL scroll here (dy>0 up / dy<0
+-- down), mirroring combat_log/injury_log_panel/unit_log's onScroll —
+-- scrolls when the cursor is over the panel background (now an
+-- explicit scroll-capture surface, see createUI) or the scrollbar itself.
+function eventLog.onScroll(elemHandle, dx, dy)
+    if not (eventLog.visible and eventLog.scrollbarId) then return false end
+    local over = false
+    for _, id in ipairs(eventLog.ownedPanels) do
+        if panel.getBoxHandle(id) == elemHandle then over = true; break end
+    end
+    if not over and scrollbar.findByElementHandle(elemHandle)
+                    == eventLog.scrollbarId then
+        over = true
+    end
+    if not over then return false end
+    if dy > 0 then scrollbar.scrollUp(eventLog.scrollbarId)
+    elseif dy < 0 then scrollbar.scrollDown(eventLog.scrollbarId) end
     return true
 end
 

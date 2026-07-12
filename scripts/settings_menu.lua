@@ -435,10 +435,13 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
 
     tabbar.selectByKey(settingsMenu.tabBarId, settingsMenu.activeTab)
 
-    -- Make frame clickable for scroll events
+    -- #743: explicit scroll-capture + pointer-block on the tab frame,
+    -- replacing the old no-op-onClick-just-for-wheel-routing workaround
+    -- (uiManager.onTabFrameScroll used to exist solely to satisfy the
+    -- pre-#743 "clickable + callback" requirement for wheel routing).
     local frameHandle = tabbar.getFrameHandle(settingsMenu.tabBarId)
-    UI.setClickable(frameHandle, true)
-    UI.setOnClick(frameHandle, "onTabFrameScroll")
+    UI.setScrollCapture(frameHandle, true)
+    UI.setPointerBlocking(frameHandle, true)
 end
 
 -----------------------------------------------------------

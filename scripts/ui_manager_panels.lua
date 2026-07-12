@@ -212,18 +212,6 @@ function uiManager.onAccessoryRowRightClick(elemHandle)
     return false
 end
 
--- Click on the unit-info-v2 stats-panel transparent background. Pure
--- no-op; we register the click solely to keep the element in the
--- engine's clickable set so wheel events over the panel body route
--- through onUIScroll instead of being misread as world zoom.
-function uiManager.onStatsPanelBgClick(elemHandle)
-    local mod = package.loaded["scripts.unit_info_v2"]
-    if mod and mod.onStatsPanelBgClick then
-        return mod.onStatsPanelBgClick(elemHandle)
-    end
-    return false
-end
-
 -- Context menu click routes. Both fire as broadcast callbacks named in
 -- scripts.ui.context_menu — items run the row's callback, backdrop
 -- closes the menu without doing anything else.
@@ -254,13 +242,11 @@ end
 -- Note: "onEventLogRightClick" is broadcast to every loaded script —
 -- hud.onEventLogRightClick handles it directly. No uiManager delegate
 -- needed (and adding one would cause the menu to open twice).
-
-function uiManager.onTabFrameScroll(elemHandle)
-    return false
-end
-
-function uiManager.onLogPanelScroll(elemHandle)
-    -- This callback exists so the right panel is clickable and receives
-    -- scroll events. The actual scrolling is handled by onUIScroll.
-    return false
-end
+--
+-- #743: onTabFrameScroll/onLogPanelScroll used to live here as no-op
+-- click callbacks whose only purpose was making settings_menu.lua's tab
+-- frame and create_world/log_panel.lua's right panel "clickable" so the
+-- (pre-#743) wheel-routing rule would recognize them — the actual
+-- scrolling was always handled by onUIScroll/settingsMenu.onScroll.
+-- Removed now that those two call sites use the explicit
+-- UI.setScrollCapture/UI.setPointerBlocking contract instead.

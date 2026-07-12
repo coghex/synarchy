@@ -550,6 +550,11 @@ function dropdown.openList(id)
     -- Use the dropdown's own zIndex + offset, not a hardcoded 500
     local listZ = (dd.zIndex or 6) + 10
     UI.setZIndex(dd.listBoxId, listZ)
+    -- #743: explicit scroll-capture on the list container so wheel
+    -- input over any option (a passive child of this box) still
+    -- reaches dropdown.onScroll — pre-#743 this rode along for free on
+    -- each option's own clickable+onClick.
+    UI.setScrollCapture(dd.listBoxId, true)
     
     -- Create only the visible option slots (virtual scrolling)
     dd.optionElements = {}

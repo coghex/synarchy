@@ -13,6 +13,10 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiGetElementInfoFn
   , uiGetVisibleElementsFn
   , uiSetClickableFn
+  , uiSetPointerBlockingFn
+  , uiIsPointerBlockingFn
+  , uiSetScrollCaptureFn
+  , uiIsScrollCapturingFn
   , uiSetOnClickFn
   , uiSetOnRightClickFn
   , uiSetZIndexFn
@@ -151,6 +155,11 @@ uiIsPageInScopeFn env = do
 --   elements out of raw UI.newBox/UI.newText instead of a
 --   scripts/ui/*.lua widget module (e.g. the main menu), where there's
 --   no Lua-side cache of the label to fall back on.
+--
+--   pointerBlocking/scrollCapturing (#743) are the EFFECTIVE
+--   'elementBlocksPointer'/'elementCapturesScroll' predicates — the
+--   authoritative "does this element actually consume a click/wheel
+--   event right now" answer, not just the raw opt-in flags.
 pushElementInfoTable ∷ ElementHandle → UIElement → UIPageManager → Lua.LuaE Lua.Exception ()
 pushElementInfoTable handle el mgr = do
     let (ax, ay) = fromMaybe (0, 0) (getElementAbsolutePosition handle mgr)
@@ -162,6 +171,8 @@ pushElementInfoTable handle el mgr = do
         isInteractive = isJust (ueOnClick el) ∨ isJust (ueOnRightClick el)
         visible = isEffectivelyVisible handle mgr
         mText = elementText el mgr
+        pointerBlocking = elementBlocksPointer el
+        scrollCapturing = elementCapturesScroll el
     Lua.newtable
     Lua.pushinteger (fromIntegral (unElementHandle handle))
     Lua.setfield (Lua.nth 2) "handle"
@@ -195,6 +206,10 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "hovered"
     Lua.pushboolean isFocused
     Lua.setfield (Lua.nth 2) "focused"
+    Lua.pushboolean pointerBlocking
+    Lua.setfield (Lua.nth 2) "pointerBlocking"
+    Lua.pushboolean scrollCapturing
+    Lua.setfield (Lua.nth 2) "scrollCapturing"
 
 -- | UI.getElementInfo(elementHandle) -> table or nil (see
 --   'pushElementInfoTable' for the field list) — the authoritative
@@ -244,6 +259,60 @@ uiSetClickableFn env = do
         Nothing → pure ()
 
     return 0
+
+-- | UI.setPointerBlocking(elementHandle, blocking) (#743) — explicit
+--   opt-in that this element blocks pointer input (left/right/middle)
+--   even with no click callback of its own; see 'ueBlocksPointer'.
+uiSetPointerBlockingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetPointerBlockingFn env = do
+    elemArg  ← Lua.tointeger 1
+    blockArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementBlocksPointer (ElementHandle $ fromIntegral e) blockArg mgr, ())
+        Nothing → pure ()
+
+    return 0
+
+-- | UI.isPointerBlocking(elementHandle) -> boolean (#743) — the
+--   EFFECTIVE 'elementBlocksPointer' predicate (the explicit flag OR'd
+--   with the callback-derived default), not just the raw opt-in.
+uiIsPointerBlockingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsPointerBlockingFn env = do
+    elemArg ← Lua.tointeger 1
+    case elemArg of
+        Just e → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            Lua.pushboolean (isElementPointerBlocking (ElementHandle $ fromIntegral e) mgr)
+        Nothing → Lua.pushboolean False
+    return 1
+
+-- | UI.setScrollCapture(elementHandle, captures) (#743) — explicit
+--   opt-in that this element captures wheel/scroll input even with no
+--   click callback of its own; see 'ueCapturesScroll'.
+uiSetScrollCaptureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetScrollCaptureFn env = do
+    elemArg    ← Lua.tointeger 1
+    captureArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementCapturesScroll (ElementHandle $ fromIntegral e) captureArg mgr, ())
+        Nothing → pure ()
+
+    return 0
+
+-- | UI.isScrollCapturing(elementHandle) -> boolean (#743)
+uiIsScrollCapturingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsScrollCapturingFn env = do
+    elemArg ← Lua.tointeger 1
+    case elemArg of
+        Just e → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            Lua.pushboolean (isElementScrollCapturing (ElementHandle $ fromIntegral e) mgr)
+        Nothing → Lua.pushboolean False
+    return 1
 
 -- | UI.setOnClick(elementHandle, callbackName)
 uiSetOnClickFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

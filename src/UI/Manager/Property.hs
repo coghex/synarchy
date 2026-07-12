@@ -4,6 +4,8 @@ module UI.Manager.Property
   , setElementSize
   , setElementVisible
   , setElementClickable
+  , setElementBlocksPointer
+  , setElementCapturesScroll
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -40,6 +42,18 @@ setElementVisible handle visible = modifyElement handle `flip`
 setElementClickable ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementClickable handle clickable = modifyElement handle `flip`
     (\elem → elem { ueClickable = clickable })
+
+-- | #743: explicit opt-in that this element blocks pointer input with
+--   no click callback of its own — see 'ueBlocksPointer'.
+setElementBlocksPointer ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementBlocksPointer handle blocks = modifyElement handle `flip`
+    (\elem → elem { ueBlocksPointer = blocks })
+
+-- | #743: explicit opt-in that this element captures wheel/scroll
+--   input with no click callback of its own — see 'ueCapturesScroll'.
+setElementCapturesScroll ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementCapturesScroll handle captures = modifyElement handle `flip`
+    (\elem → elem { ueCapturesScroll = captures })
 
 setElementOnClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
 setElementOnClick handle callbackName = modifyElement handle `flip`

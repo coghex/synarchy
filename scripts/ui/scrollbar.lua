@@ -137,6 +137,10 @@ function scrollbar.new(params)
     UI.addToPage(sb.page, sb.upButtonId, sb.x, currentY)
     UI.setClickable(sb.upButtonId, true)
     UI.setOnClick(sb.upButtonId, "onScrollUp")
+    -- #743: explicit scroll-capture so a mouse wheel over the button
+    -- itself still reaches onUIScroll — pre-#743 this rode along for
+    -- free on any clickable+onClick element.
+    UI.setScrollCapture(sb.upButtonId, true)
     currentY = currentY + buttonSize
     
     -- Track top cap
@@ -187,6 +191,7 @@ function scrollbar.new(params)
     UI.addToPage(sb.page, sb.downButtonId, sb.x, currentY)
     UI.setClickable(sb.downButtonId, true)
     UI.setOnClick(sb.downButtonId, "onScrollDown")
+    UI.setScrollCapture(sb.downButtonId, true)
     
     -- Scroll tab (9-tile box drawn on top of the track)
     sb.tabId = UI.newBox(
@@ -208,6 +213,7 @@ function scrollbar.new(params)
     -- scrollbar.onDragMove until the user releases the mouse.
     UI.setClickable(sb.tabId, true)
     UI.setOnClick(sb.tabId, TAB_CALLBACK)
+    UI.setScrollCapture(sb.tabId, true)
 
     -- Apply z-indices
     UI.setZIndex(sb.upButtonId, zButton)

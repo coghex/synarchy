@@ -15,6 +15,7 @@ local saveBrowser     = require("scripts.save_browser")
 local combatLog       = require("scripts.combat_log")
 local injuryLog       = require("scripts.injury_log_panel")
 local unitLog         = require("scripts.unit_log")
+local eventLog        = require("scripts.event_log")
 local worldView       = require("scripts.world_view")
 local testArena       = require("scripts.test_arena")
 local hud             = require("scripts.hud")
@@ -151,6 +152,12 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
     if unitLog.isVisible and unitLog.isVisible()
        and unitLog.onScroll then
         if unitLog.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    if eventLog.isVisible and eventLog.isVisible()
+       and eventLog.onScroll then
+        if eventLog.onScroll(elemHandle, dx, dy) then
             return
         end
     end

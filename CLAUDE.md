@@ -259,6 +259,36 @@ excluded, while leaving same-page instances (e.g. a dropdown on the
 modal itself, dismissed by clicking elsewhere on that page) working
 exactly as before.
 
+Within the page-level boundary above, an individual `UIElement` (#743,
+`UI.InputOwnership`/`UI.Manager.Query`) exposes three **independent**
+input policies rather than one conflated `ueClickable`+callback gate:
+whether it fires a click callback, whether it **blocks pointer** input
+(left/right/middle) from reaching whatever is beneath it, and whether
+it **captures wheel/scroll** input. Registering a click callback via
+`UI.setClickable`+`UI.setOnClick`/`setOnRightClick` still makes a
+control pointer-blocking by default (existing widgets are unaffected),
+but an element can now opt into pointer-blocking
+(`UI.setPointerBlocking`) or scroll-capture (`UI.setScrollCapture`)
+with **no callback at all** — the effective predicates are
+`elementBlocksPointer`/`elementCapturesScroll`, queryable from Lua via
+`UI.isPointerBlocking`/`UI.isScrollCapturing`. A pointer-blocking
+element with no callback relevant to a given gesture still consumes it
+(`RouteBlocked` — no fake Lua callback fires, but the press can't fall
+through to a lower element, page, or gameplay, and stale UI focus still
+clears); blocking applies per-element across all three mouse buttons,
+so a right-click-only control also blocks a left-click over it. Wheel
+routing (`routeScroll`) no longer shares the click-callback machinery
+at all — it selects the visually topmost in-scope
+`elementCapturesScroll` surface via the same `topHitBy` paint-order
+walk hit-testing already uses, so a scroll-capturing container still
+wins over its own passive child visuals. This is what let the combat/
+injury/unit/event log panels and the settings tab frame drop their old
+no-op-click-callback-just-for-wheel-routing workarounds
+(`scripts/combat_log.lua`, `scripts/injury_log_panel.lua`,
+`scripts/unit_log.lua`, `scripts/event_log.lua`,
+`scripts/settings_menu.lua`, `scripts/create_world/log_panel.lua`) for
+the explicit contract.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
