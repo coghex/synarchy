@@ -60,8 +60,13 @@ escape hatch, not built). The trace records only the phases that
 actually executed (#698): a turn that ends the session (`done`, stuck
 detection) or is interrupted anywhere between the first injected call
 and the post phase records exactly the acknowledged calls (a
-multi-call action keeps its successful prefix) and whether the step
-completed — replaying it injects no step and no unexecuted call.
+multi-call action keeps its successful prefix) and a `step_phase`
+distinguishing a step that never began from one that began but was
+interrupted from one that fully completed (#728) — replaying a
+never-began turn injects no step and no unexecuted call, while an
+interrupted turn still replays the step itself (just not its
+never-run post calls), since the interruption happened after the
+engine had genuinely already advanced.
 
 ## The cardinal rule: the player is oracle-blind
 
@@ -158,16 +163,26 @@ gitignored):
   output (observation/action/expectation/note + raw + token usage),
   the exact injected `input.*` calls and their acks (**executed calls
   only**, post-step acks retained; `post_injected` counts the trailing
-  post-step entries and `stepped` says whether the sim step completed,
-  #698), and the **oracle snapshot** (`ui.dumpWidgets`,
-  `engine.getEventLog` delta, current menu, pause state), flagged
-  `player_invisible: true`.
+  post-step entries and `step_phase` is `"not_started"` /
+  `"interrupted"` / `"completed"` — whether the unpause-dt-repause sim
+  step never began, began but was interrupted before repause
+  confirmed, or fully completed, #698/#728), and the **oracle
+  snapshot** (`ui.dumpWidgets`, `engine.getEventLog` delta, current
+  menu, pause state), flagged `player_invisible: true`.
 - `replay.jsonl` — one line **per turn** (no-input turns included, so
   replay pacing is faithful): `{"turn": N, "pre": [lua...], "post":
-  [lua...], "stepped": bool}` — `pre` is injected before the sim step,
-  `post` after it (a held key's `keyUp` rides `post`); only calls that
-  actually ran are recorded, and a turn with `stepped: false`
-  (done/stuck/interrupted) replays without a step or post calls (#698).
+  [lua...], "step_phase": "not_started"|"interrupted"|"completed"}` —
+  `pre` is injected before the sim step, `post` after it (a held key's
+  `keyUp` rides `post`); only calls that actually ran are recorded. A
+  `"not_started"` turn (done/stuck, or interrupted before a successful
+  unpause) replays without a step or post calls. An `"interrupted"`
+  turn (unpause succeeded live but the step didn't finish cleanly)
+  still replays one full unpause-dt-repause step — the interruption
+  itself isn't reproduced — but never replays post calls, since those
+  never ran live either; only `"completed"` replays them too (#698,
+  superseded by #728's tri-state field — a legacy trace's missing or
+  boolean `stepped` field loads with the historical mapping:
+  missing/`true` → `"completed"`, `false` → `"not_started"`).
 - `frames/turn_NNNN.png` — the F1 captures.
 - `engine.log` — engine output, copied at session end (an engine crash
   mid-session is a **finding**: the partial trace + logs are retained
