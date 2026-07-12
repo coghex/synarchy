@@ -255,25 +255,33 @@ probes above — 13 as of this writing). Every one of these is
 its own domain's persistence classification, not the save envelope
 itself. A future envelope/format change breaking one is a signal that
 domain's classification needs re-checking, not a sign this contract's
-inventory is wrong — the responsible child there is whichever child
-changes that field's representation (the domain's own row in
-`persistence_state_inventory.md` names it), not a new party.
+inventory is wrong.
 
-| Probe | Domain gated (inventory row) | Disposition |
-|---|---|---|
-| `tools/chop_probe.py` | `wsChopDesignationsRef`/`wpsChopDesignations` (§3/§4) | Retain — the save round-trip assertion here is "a chop designation survives save→load", unaffected by envelope-level decisions. |
-| `tools/crop_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` (§3/§4) | Retain — same reasoning, crop plots. |
-| `tools/foraging_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` (§3/§4) | Retain — same reasoning, foraged-flora harvest state. |
-| `tools/item_instance_probe.py` | `wsGroundItemsRef`/`wpsGroundItems` + `sdNextItemInstanceId` (§1/§3/§4) | Retain — asserts item-instance identity survives save→load; the allocator max-not-lowered rule (#67) it also covers is independent of envelope format. |
-| `tools/flora_growth_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` + the world date (`wpsDateYear`/`Month`/`Day`, §4) | Retain — asserts the growth clock survives save→load. |
-| `tools/farm_ai_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` + `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, farm-AI-driven plot/designation state. |
-| `tools/location_overlay_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure overlay rides the edit log) | Retain — asserts a placed structure's overlay survives save→load. |
-| `tools/location_stamp_idempotent_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure stamps) | Retain — asserts re-stamping is idempotent across a save→load boundary. |
-| `tools/location_content_probe.py` | `LocationRegistry.lrDefs` (§9, content) + `wsEditsRef`/`wpsEdits` for any spawned structure | Retain — mostly a content-loading gate; its save/load touch is incidental (spawned-structure persistence), unaffected by envelope decisions. |
-| `tools/item_temp_probe.py` | item-instance temperature, riding the same `wsGroundItemsRef`/`wpsGroundItems`/unit-inventory item data as `item_instance_probe.py` | Retain — same reasoning. |
-| `tools/power_probe.py` | `wsPowerNodesRef`/`wpsPowerNodes` (§3/§4) | Retain — asserts power-node state (incl. battery charge, #360) survives save→load. |
-| `tools/plant_probe.py` | `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, planting designations. |
-| `tools/till_probe.py` | `wsTillDesignationsRef`/`wpsTillDesignations` (§3/§4) | Retain — same reasoning, till designations. |
+Every row's "Responsible future child" is **B1** (the new save envelope):
+each probe's domain field is a `WorldPageSave`/`SaveData` member, so
+only a change to THAT field's wire representation — B1's job, by
+definition — could ever require touching these probes. None is A2's
+responsibility (the snapshot barrier changes *when*/*how atomically* a
+save happens, not what any individual field looks like), and none
+needs a domain-specific child of its own — unlike the three primary
+probes above, where the specific behavior under test (session
+replacement, sim-speed persistence) is itself changing.
+
+| Probe | Domain gated (inventory row) | Disposition | Responsible future child |
+|---|---|---|---|
+| `tools/chop_probe.py` | `wsChopDesignationsRef`/`wpsChopDesignations` (§3/§4) | Retain — the save round-trip assertion here is "a chop designation survives save→load", unaffected by envelope-level decisions. | B1 (only if `wpsChopDesignations`'s representation changes) |
+| `tools/crop_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` (§3/§4) | Retain — same reasoning, crop plots. | B1 (only if `wpsCropPlots` changes) |
+| `tools/foraging_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` (§3/§4) | Retain — same reasoning, foraged-flora harvest state. | B1 (only if `wpsFloraHarvests` changes) |
+| `tools/item_instance_probe.py` | `wsGroundItemsRef`/`wpsGroundItems` + `sdNextItemInstanceId` (§1/§3/§4) | Retain — asserts item-instance identity survives save→load; the allocator max-not-lowered rule (#67) it also covers is independent of envelope format. | B1 (only if `wpsGroundItems`/`sdNextItemInstanceId` changes) |
+| `tools/flora_growth_probe.py` | `wsFloraHarvestsRef`/`wpsFloraHarvests` + the world date (`wpsDateYear`/`Month`/`Day`, §4) | Retain — asserts the growth clock survives save→load. | B1 (only if those fields change) |
+| `tools/farm_ai_probe.py` | `wsCropPlotsRef`/`wpsCropPlots` + `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, farm-AI-driven plot/designation state. | B1 (only if either field changes) |
+| `tools/location_overlay_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure overlay rides the edit log) | Retain — asserts a placed structure's overlay survives save→load. | B1 (only if `wpsEdits` changes) |
+| `tools/location_stamp_idempotent_probe.py` | `wsEditsRef`/`wpsEdits` (§3/§4, structure stamps) | Retain — asserts re-stamping is idempotent across a save→load boundary. | B1 (only if `wpsEdits` changes) |
+| `tools/location_content_probe.py` | `LocationRegistry.lrDefs` (§9, content) + `wsEditsRef`/`wpsEdits` for any spawned structure | Retain — mostly a content-loading gate; its save/load touch is incidental (spawned-structure persistence), unaffected by envelope decisions. | B1 (only if `wpsEdits` changes; content-loading itself has no format dependency) |
+| `tools/item_temp_probe.py` | item-instance temperature, riding the same `wsGroundItemsRef`/`wpsGroundItems`/unit-inventory item data as `item_instance_probe.py` | Retain — same reasoning. | B1 (only if `wpsGroundItems`/unit-inventory item representation changes) |
+| `tools/power_probe.py` | `wsPowerNodesRef`/`wpsPowerNodes` (§3/§4) | Retain — asserts power-node state (incl. battery charge, #360) survives save→load. | B1 (only if `wpsPowerNodes` changes) |
+| `tools/plant_probe.py` | `wsPlantDesignationsRef`/`wpsPlantDesignations` (§3/§4) | Retain — same reasoning, planting designations. | B1 (only if `wpsPlantDesignations` changes) |
+| `tools/till_probe.py` | `wsTillDesignationsRef`/`wpsTillDesignations` (§3/§4) | Retain — same reasoning, till designations. | B1 (only if `wpsTillDesignations` changes) |
 
 ## 7. The persistence-inventory audit
 
@@ -352,6 +360,17 @@ serialization-correctness proof. It:
    contain "saveModules.register", or an unrelated long-bracket string
    literal like `[[saveMods.register]]` — is never mistaken for a live
    reference to the function.
+6. Separately fails on any `require("scripts.lib.save_modules")`
+   result that escapes to something other than the two sanctioned
+   patterns above (chained straight into `.register` access, or bound
+   to a local literally named `saveMods`/`saveModules`) — e.g.
+   `local registry = require("scripts.lib.save_modules");
+   registry.register(...)`. Binding the registry table to an
+   arbitrarily-named local is a genuine data-flow problem no
+   fixed-name regex can trace (Lua allows any identifier), so rather
+   than trying to enumerate every possible name, the escape itself —
+   the require() result reaching anything other than the two
+   sanctioned patterns — is the failure.
 
 Run it directly:
 

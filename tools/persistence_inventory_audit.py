@@ -90,6 +90,25 @@ _REGISTER_ACCESS = (
     _REGISTER_TABLE_REF + r"\s*"
     r"(?:\.\s*register|\[\s*(?:'register'|\"register\")\s*\])"
 )
+# `require("scripts.lib.save_modules")` itself, standalone -- used to
+# find every occurrence of the registry table being fetched, so each
+# one can be checked against the sanctioned patterns below.
+REQUIRE_SAVE_MODULES_RE = re.compile(
+    r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)")
+# Sanctioned continuation #1: the require() result is chained straight
+# into `.register`/`["register"]` access (a direct call, or the
+# require-chained alias form -- both already handled by REGISTER_RE/
+# REGISTER_RE_LONGBRACKET/ALIAS_RE via _REGISTER_ACCESS).
+_REQUIRE_CHAINED_ACCESS_RE = re.compile(
+    r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)\s*"
+    r"(?:\.\s*register\b|\[\s*(?:'register'|\"register\")\s*\])")
+# Sanctioned continuation #2: the require() result is bound to a local
+# named EXACTLY `saveMods`/`saveModules`, the codebase's own
+# convention -- a later `saveMods.register(...)` is tracked by that
+# name already (REGISTER_RE etc. above).
+_REQUIRE_SANCTIONED_LOCAL_RE = re.compile(
+    r"local\s+(?:saveMods|saveModules)\s*=\s*"
+    r"require\s*\(\s*(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\")\s*\)")
 # Tolerates whitespace/newlines before the opening paren/string (a call
 # split across lines, `saveMods . register(...)` with a spaced dot, or
 # `saveMods[ "register" ](...)` with spaced brackets), and either Lua
@@ -527,6 +546,46 @@ def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]
     return offenders
 
 
+def find_untracked_require_bindings(scripts_text_by_file: dict[str, str]) -> list[str]:
+    """Files where `require("scripts.lib.save_modules")` escapes to
+    something other than the two sanctioned patterns (e.g.
+    `local registry = require("scripts.lib.save_modules");
+    registry.register("untracked", nil, nil)`).
+
+    `find_lua_register_aliases`/REGISTER_RE only ever look for the
+    FIXED receiver spellings `saveMods`/`saveModules`/a direct
+    `require(...)` chain -- binding the require() result to an
+    ARBITRARY local name is a data-flow problem no amount of regex
+    matching on fixed names can trace (Lua allows any identifier). So
+    rather than trying to enumerate every possible name, this flags
+    the ESCAPE itself: every `require("scripts.lib.save_modules")`
+    occurrence must be either (a) chained straight into `.register`/
+    `["register"]` access (a direct call, or the require-chained alias
+    form -- both already covered elsewhere), or (b) assigned to a
+    local named EXACTLY `saveMods`/`saveModules`, the codebase's own
+    convention. Anything else -- bound to another name, passed as an
+    argument, stored in a table under an arbitrary key -- means the
+    registry table is now reachable only through something this audit
+    cannot trace, so it's a hard failure on its own.
+    """
+    offenders: list[str] = []
+    for relpath, text in sorted(scripts_text_by_file.items()):
+        cleaned = _strip_lua_comments(text)
+        string_spans = _string_literal_spans(cleaned)
+        sanctioned_local_spans = [
+            (m.start(), m.end()) for m in _REQUIRE_SANCTIONED_LOCAL_RE.finditer(cleaned)]
+        for m in REQUIRE_SAVE_MODULES_RE.finditer(cleaned):
+            if any(start <= m.start() < end for start, end in string_spans):
+                continue  # inside a string literal, not real code
+            if _REQUIRE_CHAINED_ACCESS_RE.match(cleaned, m.start()):
+                continue  # chained into .register/["register"] access
+            if any(start <= m.start() < end for start, end in sanctioned_local_spans):
+                continue  # local saveMods/saveModules = require(...)
+            offenders.append(relpath)
+            break
+    return offenders
+
+
 # The five classifications the contract defines (docs/persistence_contract.md
 # SS2). The contract requires EXACTLY ONE per item, so a cell counts only
 # if its CORE text (after stripping bold markup and a trailing parenthetical
@@ -667,6 +726,15 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             f"without calling it directly (e.g. assigning it to a local "
             f"or table field) -- the audit can only trace direct calls; "
             f"call saveMods.register(...) directly instead of aliasing it")
+
+    for relpath in find_untracked_require_bindings(scripts_text_by_file):
+        violations.append(
+            f'{relpath} binds require("scripts.lib.save_modules") to '
+            f"something other than a direct .register()/[\"register\"] "
+            f"access or a local named saveMods/saveModules -- the audit "
+            f"cannot trace a .register(...) call made through an "
+            f"arbitrarily-named local; use one of the two sanctioned "
+            f"patterns instead")
 
     return violations
 

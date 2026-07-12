@@ -20,7 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from persistence_inventory_audit import (  # type: ignore
     extract_record_fields, extract_lua_registered_modules,
-    find_lua_register_aliases, parse_classified_names, audit,
+    find_lua_register_aliases, find_untracked_require_bindings,
+    parse_classified_names, audit,
 )
 
 FAILURES: list[str] = []
@@ -459,6 +460,25 @@ local doc = [[example: saveMods.register("not_a_module", nil, nil)]]
 saveMods.register("real_module_2", nil, nil)
 """
 
+# The registry table itself escapes to an ARBITRARILY-named local (not
+# saveMods/saveModules) and is called through THAT name -- untraceable
+# by any fixed-receiver-name regex.
+SYNTHETIC_LUA_REGISTER_UNTRACKED_REQUIRE_LOCAL = """\
+local registry = require("scripts.lib.save_modules")
+
+registry.register("untracked_via_registry_local", nil, nil)
+"""
+
+# The codebase's own sanctioned pattern: require()'d straight into a
+# local literally named `saveMods`, then called by that name later --
+# must NOT be flagged as an untracked binding (it's how every real
+# call site in the repo is written).
+SYNTHETIC_LUA_REGISTER_SANCTIONED_LOCAL = """\
+local saveMods = require("scripts.lib.save_modules")
+
+saveMods.register("sanctioned_module", nil, nil)
+"""
+
 # A direct call reached off require(...)'s return value with no local
 # binding at all -- fully traceable (the module path is a literal
 # string), not an alias.
@@ -789,6 +809,41 @@ def test_find_lua_register_aliases_ignores_longbracket_string_prose():
            f"a long-bracket STRING literal mentioning \"saveMods.register\" "
            f"in its text is not mistaken for a live reference, "
            f"got {offenders}")
+
+
+def test_find_untracked_require_bindings_detects_arbitrary_local_name():
+    offenders = find_untracked_require_bindings(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_UNTRACKED_REQUIRE_LOCAL})
+    expect(offenders == ["scripts/fake.lua"],
+           f"require(\"scripts.lib.save_modules\") bound to an "
+           f"arbitrarily-named local (not saveMods/saveModules) is "
+           f"flagged, got {offenders}")
+
+
+def test_find_untracked_require_bindings_ignores_sanctioned_local_name():
+    offenders = find_untracked_require_bindings(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_SANCTIONED_LOCAL})
+    expect(offenders == [],
+           f"the codebase's own sanctioned pattern (local saveMods = "
+           f"require(...)) is not flagged, got {offenders}")
+
+
+def test_find_untracked_require_bindings_ignores_chained_direct_call():
+    offenders = find_untracked_require_bindings(
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_REQUIRE_CHAINED_CALL})
+    expect(offenders == [],
+           f"require(...).register(...) chained directly (no local at "
+           f"all) is not flagged as an untracked binding, got {offenders}")
+
+
+def test_find_untracked_require_bindings_ignores_prose_mention():
+    # A mention of require("scripts.lib.save_modules") inside a string
+    # literal is not real code.
+    lua = 'local doc = "see require(\\"scripts.lib.save_modules\\")"\n'
+    offenders = find_untracked_require_bindings({"scripts/fake.lua": lua})
+    expect(offenders == [],
+           f"a string literal merely mentioning the require() call is "
+           f"not flagged, got {offenders}")
 
 
 def test_extract_lua_registered_modules_ignores_call_shaped_prose_in_string():
@@ -1279,6 +1334,45 @@ def test_audit_does_not_flag_call_shaped_prose_as_unclassified_module():
            f"unclassified, got {violations}")
 
 
+def test_audit_detects_registration_via_untracked_require_local():
+    """The req-10 acceptance test's arbitrary-local-name variant: a
+    module registered by first binding require("scripts.lib.
+    save_modules") to a NON-canonical local name and calling .register
+    through it is a real, live registration in the actual Lua registry
+    -- the audit must fail on the untracked binding itself, since it
+    cannot trace what gets registered through an arbitrary name."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_UNTRACKED_REQUIRE_LOCAL},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(any("scripts/fake.lua" in v and "require" in v for v in violations),
+           f"binding require(\"scripts.lib.save_modules\") to an "
+           f"arbitrary local is reported as an untracked-binding "
+           f"violation, got {violations}")
+
+
+def test_audit_does_not_flag_sanctioned_require_local_as_untracked():
+    """The codebase's own sanctioned pattern (local saveMods =
+    require(...)) must not be reported as an untracked binding -- only
+    as an unclassified module, since this fixture's inventory doesn't
+    classify "sanctioned_module"."""
+    violations = audit(
+        {"Fake.hs": SYNTHETIC_ENGINE_ENV},
+        {"scripts/fake.lua": SYNTHETIC_LUA_REGISTER_SANCTIONED_LOCAL},
+        SYNTHETIC_INVENTORY_COMPLETE,
+        root_records=FAKE_ROOT_RECORDS,
+    )
+    expect(not any("untracked" in v.lower() or "binds require" in v for v in violations),
+           f"the sanctioned local pattern is not reported as an "
+           f"untracked-binding violation, got {violations}")
+    expect(any("sanctioned_module" in v for v in violations),
+           f"the module registered through it IS reported when "
+           f"unclassified (via the normal direct-call path), "
+           f"got {violations}")
+
+
 def test_audit_does_not_flag_the_registry_definition_as_an_alias():
     """The real save_modules.lua's own function definition and its
     validation error string (which contains the literal text
@@ -1376,6 +1470,10 @@ def main() -> int:
         test_find_lua_register_aliases_ignores_require_chained_direct_call,
         test_find_lua_register_aliases_detects_require_chained_stored_reference,
         test_find_lua_register_aliases_ignores_longbracket_string_prose,
+        test_find_untracked_require_bindings_detects_arbitrary_local_name,
+        test_find_untracked_require_bindings_ignores_sanctioned_local_name,
+        test_find_untracked_require_bindings_ignores_chained_direct_call,
+        test_find_untracked_require_bindings_ignores_prose_mention,
         test_parse_classified_names_scoped_by_owner_heading,
         test_parse_classified_names_ignores_other_columns,
         test_parse_classified_names_does_not_merge_across_owners,
@@ -1405,6 +1503,8 @@ def main() -> int:
         test_audit_detects_aliased_require_chained_registration,
         test_audit_does_not_flag_longbracket_string_prose_as_an_alias,
         test_audit_does_not_flag_call_shaped_prose_as_unclassified_module,
+        test_audit_detects_registration_via_untracked_require_local,
+        test_audit_does_not_flag_sanctioned_require_local_as_untracked,
         test_audit_does_not_flag_the_registry_definition_as_an_alias,
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
