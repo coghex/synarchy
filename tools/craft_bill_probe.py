@@ -202,8 +202,8 @@ def check(passed, ok, label, detail=""):
 def poll(port, seconds, fn, interval=1.0):
     """Poll fn until true, defensively unpausing each pass: notification
     categories can be user-configured to auto-pause (config/
-    notifications.yaml), and e.g. a stuck-walk unit_warning mid-fetch
-    would otherwise freeze the whole sim under the probe."""
+    notifications.local.yaml), and e.g. a stuck-walk unit_warning
+    mid-fetch would otherwise freeze the whole sim under the probe."""
     deadline = time.time() + seconds
     while time.time() < deadline:
         send(port, "engine.setPaused(false); return 'ok'")

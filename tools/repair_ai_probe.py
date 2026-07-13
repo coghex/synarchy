@@ -119,7 +119,7 @@ def poll_until(port: int, seconds: float, fn):
         # Defensive: ANY unit_warning (not just repair's "No X available"
         # — e.g. the pre-existing stuck-walk watchdog's "Stuck — can't
         # reach destination") pauses the engine per this repo's
-        # config/notifications.yaml. A human would notice and dismiss it;
+        # config/notifications.local.yaml. A human would notice and dismiss it;
         # a headless poll loop would otherwise hang for its entire
         # remaining budget with gameTime frozen. Unconditionally
         # unpausing each cycle is a no-op when already running.
@@ -679,7 +679,7 @@ def main() -> int:
         todo = PHASES.values() if args.phase == "all" else [PHASES[args.phase]]
         for phase in todo:
             # Defensive: a "No <consumable> available" failure emits a
-            # unit_warning event, and this repo's config/notifications.yaml
+            # unit_warning event, and this repo's config/notifications.local.yaml
             # has pause:true for that category — an unexpected failure in
             # one phase would otherwise freeze gameTime for every phase
             # after it. Each phase starts from a known unpaused state.

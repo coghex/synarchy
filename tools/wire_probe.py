@@ -130,7 +130,7 @@ def destroy_unit(port: int, uid: int) -> None:
 
 def poll_until(port: int, seconds: float, fn):
     """Poll fn until truthy, defensively unpausing each pass: notification
-    categories can auto-pause (config/notifications.yaml unit_warning /
+    categories can auto-pause (config/notifications.local.yaml unit_warning /
     survival_critical), which would otherwise freeze unit_ai's update()
     (early-returns while paused) and stall the whole probe (matches
     tools/craft_bill_probe.py's `poll`)."""
