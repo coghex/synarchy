@@ -3,6 +3,7 @@
 -- Supports different random modes via randbox.Type constants.
 local scale = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
+local utf8Safe = require("scripts.ui.utf8_safe")
 local randbox = {}
 
 -----------------------------------------------------------
@@ -391,7 +392,7 @@ function randbox.focus(id)
     UI.setBoxTextures(rb.boxId, texSetSelected)
 
     local text = UI.getTextInput(rb.boxId) or ""
-    UI.setCursor(rb.boxId, #text)
+    UI.setCursor(rb.boxId, utf8Safe.codepointLength(text))
 
     if rb.cursorId then
         cursorVisible = true
@@ -487,7 +488,7 @@ function randbox.updateDisplay(id)
     UI.setPosition(rb.textId, textX, textY)
 
     if rb.cursorId and rb.focused then
-        local textBeforeCursor = text:sub(1, cursorPos)
+        local textBeforeCursor = utf8Safe.prefix(text, cursorPos)
         local cursorTextWidth = engine.getTextWidth(rb.font, textBeforeCursor, rb.fontSize)
         local cursorX = textX + cursorTextWidth
                       - (engine.getTextWidth(rb.font, "|", rb.fontSize) / 2)
@@ -573,7 +574,7 @@ function randbox.onCharInput(char)
 
     -- Enforce max length
     local text = UI.getTextInput(rb.boxId) or ""
-    if #text >= getMaxLength(rb) then
+    if utf8Safe.codepointLength(text) >= getMaxLength(rb) then
         return true
     end
 

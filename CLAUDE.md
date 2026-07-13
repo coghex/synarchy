@@ -204,6 +204,13 @@ registry.
 ### UI system
 `UI.*` handles focus management, text input, and UI rendering. UI layout and behavior is driven from Lua scripts.
 
+Editable text uses one coordinate contract across Haskell and Lua:
+`UI.TextBuffer`, `UI.getCursor`, and `UI.setCursor` use zero-based Unicode
+code-point offsets. Lua strings remain UTF-8 byte arrays, so editable widgets
+must use `scripts/ui/utf8_safe.lua` for lengths, cursor-prefix measurement,
+and slicing rather than `#text` or byte-based `string.sub`. Combining marks
+are separate code points; grapheme-cluster navigation is not implied.
+
 Pages (`UI.Manager.Page`) live on one of six `UILayer`s (`UI.Types`),
 paint bottom-to-top: `LayerHUD < LayerOverlay < LayerMenu < LayerModal
 < LayerTooltip < LayerDebug` (`uiLayerBand` is the single paint-order
