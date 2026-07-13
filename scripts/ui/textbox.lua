@@ -1,5 +1,6 @@
 -- TextBox UI component (using engine focus and text buffer)
 local boxTextures = require("scripts.ui.box_textures")
+local utf8Safe = require("scripts.ui.utf8_safe")
 local textbox = {}
 
 -----------------------------------------------------------
@@ -270,16 +271,18 @@ function textbox.updateDisplay(id)
 
     -- Clip text from the left if it exceeds available width
     local clippedText = displayText
+    local clippedCodepoints = 0
     local textWidth = engine.getTextWidth(tb.font, clippedText, tb.fontSize)
     if textWidth > availableWidth then
-        -- Remove characters from the left until it fits
-        local startIdx = 1
-        while startIdx < #clippedText do
-            startIdx = startIdx + 1
-            local candidate = clippedText:sub(startIdx)
+        -- Remove whole code points from the left until it fits. Cursor
+        -- positions are code-point offsets; string.sub offsets are bytes.
+        local displayLength = utf8Safe.codepointLength(displayText)
+        for startPos = 1, displayLength do
+            local candidate = utf8Safe.suffix(displayText, startPos)
             local w = engine.getTextWidth(tb.font, candidate, tb.fontSize)
             if w <= availableWidth then
                 clippedText = candidate
+                clippedCodepoints = startPos
                 textWidth = w
                 break
             end
@@ -298,13 +301,11 @@ function textbox.updateDisplay(id)
 
     if tb.cursorId then
         -- Compute cursor position relative to the clipped text
-        local textBeforeCursor = rawText:sub(1, cursorPos)
-        local suffixLen = #displayText - #rawText  -- suffix chars (e.g. "x")
-        local clipOffset = #displayText - #clippedText
+        local textBeforeCursor = utf8Safe.prefix(rawText, cursorPos)
         local cursorTextWidth = engine.getTextWidth(tb.font, textBeforeCursor, tb.fontSize)
         -- Offset for clipping: if text was clipped, cursor shifts left
-        if clipOffset > 0 then
-            local clippedPrefix = displayText:sub(1, clipOffset)
+        if clippedCodepoints > 0 then
+            local clippedPrefix = utf8Safe.prefix(displayText, clippedCodepoints)
             local clippedWidth = engine.getTextWidth(tb.font, clippedPrefix, tb.fontSize)
             cursorTextWidth = cursorTextWidth - clippedWidth
         end
@@ -389,7 +390,7 @@ function textbox.focus(id)
     end
     
     local text = UI.getTextInput(tb.boxId) or ""
-    UI.setCursor(tb.boxId, #text)
+    UI.setCursor(tb.boxId, utf8Safe.codepointLength(text))
     textbox.updateDisplay(id)
     
     engine.logDebug("TextBox focused: " .. tb.name)
