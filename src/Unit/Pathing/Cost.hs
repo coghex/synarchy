@@ -120,7 +120,56 @@ stepCost pc reg wtd (sgx, sgy) (dgx, dgy) = do
             fall   = if negate dz ≥ pcFallTriggerDrop pc
                      then pcFallFactor pc ** fromIntegral (negate dz)
                      else 0
-        in pure $! horizD + climb + fall + fluidCost
+        in pure $! clampStepCost (horizD + climb + fall + fluidCost)
+
+-- | Ceiling for a single step's total cost (see `clampStepCost`).
+--   Comfortably discourages the step over any real route (routing
+--   thresholds like `pcReplanCostThreshold` top out in the single
+--   digits), while staying low enough that `Unit.Pathing.AStar`'s
+--   accumulated g-score can't overflow either: `localAStar` bounds a
+--   search to at most `maxRadius * maxRadius * 4` expanded nodes
+--   (`defaultMaxRadius` = 16 → 1024), so the worst case is every step
+--   on the path landing at this ceiling — 1024 * 1.0e6 ≈ 1.0e9, still
+--   many orders of magnitude under `Float`'s ~3.4e38 max. A per-step
+--   cap alone isn't enough: several BELOW-ceiling-but-still-huge steps
+--   (e.g. a config with a merely large, not overflowing, climb_factor)
+--   could otherwise sum past `Float`'s max across a path and overflow
+--   there instead.
+maxStepCost ∷ Float
+maxStepCost = 1.0e6
+
+-- | Force a computed step cost finite, non-negative, and no larger
+--   than `maxStepCost`.
+--   `normalizePathingConfig` keeps each individual tunable in a safe
+--   range, but the derived per-step cost can still overflow even from
+--   FINITE, in-range tunables: the exponential fall term
+--   (@fall_factor ** drop@) overflows `Float` well within plausible
+--   world depths — the shipped default @fall_factor: 5.0@ already
+--   overflows on a 56+ z drop — and a config bypassing
+--   `normalizePathingConfig` entirely (a directly-constructed
+--   `PathingConfig`, as tests do) could hand a negative or non-finite
+--   factor straight to this function. Capping at a ceiling rather than
+--   only rejecting non-finite values also matters: a finite-but-huge
+--   cost that stays under `Float`'s max on its own can still push
+--   `Unit.Pathing.AStar`'s accumulated g-score into Infinity after a
+--   few such steps, which is just as fatal to its f-score comparisons
+--   (Infinity compares equal to Infinity; NaN compares false to
+--   everything) as a single-step overflow. This is the one place every
+--   step cost — regardless of how it was built — is guaranteed sane
+--   before it reaches the search.
+--
+--   Deliberately explicit (`isNaN` check first) rather than bare
+--   `min`/`max`, whose `Ord`-based implementation would launder a NaN
+--   through as a silent side effect rather than a documented rule (see
+--   `Unit.Pathing.Config.finiteOr`) — `NaN > maxStepCost` and
+--   `NaN < 0` are both `False`, so a bare clamp chain would fall
+--   through to `otherwise` and return the NaN unchanged.
+clampStepCost ∷ Float → Float
+clampStepCost x
+    | isNaN x         = maxStepCost
+    | x > maxStepCost = maxStepCost
+    | x < 0           = 0
+    | otherwise       = x
 
 -- | Is a single tile traversable on its own merits? True iff its chunk
 --   is loaded (terrain z resolves) and its fluid isn't a non-wadeable
