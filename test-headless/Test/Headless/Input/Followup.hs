@@ -59,7 +59,7 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.InputInject (injectAndSettle, SettleResult(..))
 import Engine.Scripting.Lua.Script (loadModuleRef)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
-import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
+import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
 import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..), LuaScript(..))
 import Test.Hspec
 
@@ -177,6 +177,14 @@ readFixtureBool ls ref field = Lua.runWith (lbsLuaState ls) $ do
 --   relative to the 500us fake-pump poll interval above.
 settleTimeoutMicros ∷ Int
 settleTimeoutMicros = 5 * 1000 * 1000
+
+-- | Deliberately tiny — used only by the #773 specs below, where
+--   NOTHING drains 'inputQueue' during the call. Any small timeout
+--   here times out DETERMINISTICALLY (there is nothing racing it to
+--   drain the queue in time), standing in for an input thread that
+--   has stalled past the wait's own budget.
+guaranteedTimeoutMicros ∷ Int
+guaranteedTimeoutMicros = 1000
 
 isFollowupMsg ∷ LuaMsg → Bool
 isFollowupMsg (LuaInjectFollowup _) = True
@@ -447,3 +455,68 @@ spec = do
                 `shouldReturn` Just False
             st ← readIORef (inputStateRef env)
             shiftState st `shouldBe` Just False
+
+    -- #773: 'injectEvents' (see "Engine.Input.Inject") bundles the
+    -- whole synthesized sequence and its trailing barrier into ONE
+    -- FIFO batch before it ever starts waiting, so once the wait
+    -- begins the events are irretractably queued — a timeout on that
+    -- wait can never prove the action didn't run. Pre-#773,
+    -- 'injectAndSettle' mapped this to 'SettlePrimaryTimedOut',
+    -- documented (wrongly) as "nothing happened, safe to retry"; a
+    -- caller retrying on it could double-fire an already-executed
+    -- click. These two specs are the issue's two acceptance scenarios
+    -- — both collapse to the exact same code path ('injectEvents'\'s
+    -- own 'waitForBarrier' timing out; see that function's haddock for
+    -- why the two physical causes are indistinguishable from here), so
+    -- both must observe the same 'SettleIndeterminateTimedOut'
+    -- classification, never a result that could be read as
+    -- retry-safe.
+    it "a synthesized action already sitting fully processable when its own settle wait times out is not reported as safe non-execution (#773)" $ \env → do
+        resetInput env
+        (ls, stateRef, _fixtureRef) ← newTestLuaBackend env
+        -- Deliberately nothing drains 'inputQueue' during this call —
+        -- the tiny timeout above times out DETERMINISTICALLY (nothing
+        -- races it), standing in for "the action was processed but its
+        -- own barrier missed the timeout window".
+        result ← injectAndSettle env ls stateRef guaranteedTimeoutMicros
+            (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
+        result `shouldBe` SettleIndeterminateTimedOut
+
+        -- The events 'injectEvents' queued are still sitting exactly
+        -- where it left them — draining now (standing in for the
+        -- input thread catching up a moment later) proves the click
+        -- DID land. Pre-#773 this outcome was documented as "nothing
+        -- happened"; it plainly is something happening.
+        inputTick env
+        st ← readIORef (inputStateRef env)
+        shiftState st `shouldBe` Just True
+        inpMousePos st `shouldBe` (100, 50)
+
+    it "a stalled input thread that only resumes after the ack has already timed out still executes the queued action end-to-end (#773)" $ \env → do
+        resetInput env
+        (ls, stateRef, fixtureRef) ← newTestLuaBackend env
+        -- Same guaranteed-timeout setup as above (nothing drains the
+        -- queue during the call), but here the post-timeout resumption
+        -- is carried all the way through to a REAL Lua callback via
+        -- 'processLuaMsgs' — the same drain 'injectAndSettle's own
+        -- 'settle' would have run had it not already given up — proving
+        -- the action didn't just sit processed at the queue level but
+        -- genuinely ran end-to-end.
+        result ← injectAndSettle env ls stateRef guaranteedTimeoutMicros
+            (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
+        result `shouldBe` SettleIndeterminateTimedOut
+
+        inputTick env
+        processLuaMsgs env ls stateRef
+        readFixtureBool ls fixtureRef "mouseDownShift"
+            `shouldReturn` Just True
+        readFixtureBool ls fixtureRef "mouseUpShift"
+            `shouldReturn` Just True
+
+        -- Drain the fence's reinjected release too, leaving both
+        -- queues empty for whatever spec runs next against this
+        -- shared EngineEnv (this describe block's 'aroundAll' boots
+        -- one engine for every spec in it).
+        inputTick env
+        st ← readIORef (inputStateRef env)
+        shiftState st `shouldBe` Just False
