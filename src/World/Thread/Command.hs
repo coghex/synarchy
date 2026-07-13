@@ -27,6 +27,7 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldSetWorldCursorSelectCommand
                                    , handleWorldSetWorldCursorDeselectCommand
                                    , handleWorldSelectTileByCoordCommand
+                                   , handleWorldSelectChunkByCoordCommand
                                    , handleWorldSetWorldCursorSelectTextureCommand
                                    , handleWorldSetWorldCursorHoverTextureCommand
                                    , handleWorldSetWorldCursorSelectBgTextureCommand
@@ -127,6 +128,8 @@ handleWorldCommand env logger (WorldSetWorldCursorDeselect pageId)
   = handleWorldSetWorldCursorDeselectCommand env logger pageId
 handleWorldCommand env logger (WorldSelectTileByCoord pageId gx gy mz)
   = handleWorldSelectTileByCoordCommand env logger pageId gx gy mz
+handleWorldCommand env logger (WorldSelectChunkByCoord pageId gx gy)
+  = handleWorldSelectChunkByCoordCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetMineAnchor pageId gx gy)
   = handleWorldSetMineAnchorCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldClearMineAnchor pageId)

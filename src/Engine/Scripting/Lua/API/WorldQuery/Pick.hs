@@ -6,18 +6,22 @@ module Engine.Scripting.Lua.API.WorldQuery.Pick
     , worldGetHoverPosFn
     , worldPickTileFn
     , worldPickPosFn
+    , worldPickChunkFn
     ) where
 
 import UPrelude
 import qualified HsLua as Lua
+import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), activeWorldState)
 import World.Types
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Render.HitTest (pickWorldTile)
 import World.Render.ViewBounds (computeViewBounds)
+import World.Render.Zoom.Cursor (pixelToChunkOrigin)
 import World.Generate (viewDepth)
-import Engine.Scripting.Lua.API.WorldQuery.Lookup (mVisibleWorldState)
+import Engine.Scripting.Lua.API.WorldQuery.Lookup
+    (mVisibleWorldState, worldStateByPage)
 
 -- | world.getHoverTile() → gx, gy or nil
 --   Returns the tile coordinates currently under the mouse cursor in
@@ -123,6 +127,63 @@ worldPickTileFn env = do
                             Lua.pushinteger (fromIntegral gy)
                             Lua.pushinteger (fromIntegral z)
                             return 3
+                        Nothing → do
+                            Lua.pushnil
+                            return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | world.pickChunk(pageId, pixX, pixY) → gx, gy or nil
+--   Synchronous screen-pixel → chunk-origin hit-test for the zoom-map
+--   (chunk) selection — the zoomed-out analog of pickTile/pickPos.
+--   Runs pixelToChunkOrigin NOW against the live camera + window state
+--   and the NAMED page's own world size, so a click resolves to the
+--   chunk under the pixel at this instant rather than the periodically
+--   pushed hover position a later mouse move or camera pan/zoom could
+--   change before some later render pass resolved it (issue #813).
+--
+--   Takes an explicit pageId (unlike pickTile, which reads the head of
+--   wmVisible) because more than one page can sit in wmVisible at
+--   once, each drawing its own zoom map at its OWN world size
+--   (World.Render.Zoom.Quads.renderFromBaked) — resolving against the
+--   page the caller is actually driving keeps a click for one page
+--   from being sized by a different page's geometry.
+--
+--   Returns nil when the page doesn't exist, the pixel is off-map, or
+--   the viewport is degenerate (zero-size window/framebuffer, e.g.
+--   minimized) — pair with @world.selectChunk@ and skip the call
+--   entirely on nil, so an off-map click is a full no-op rather than
+--   clearing an existing selection.
+worldPickChunkFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldPickChunkFn env = do
+    pageIdArg ← Lua.tostring 1
+    mPx ← Lua.tonumber 2
+    mPy ← Lua.tonumber 3
+    case (pageIdArg, mPx, mPy) of
+        (Just pageIdBS, Just px', Just py') → do
+            let px = round px'
+                py = round py'
+            mWs ← Lua.liftIO $ worldStateByPage env (TE.decodeUtf8 pageIdBS)
+            case mWs of
+                Just ws → do
+                    camera   ← Lua.liftIO $ readIORef (cameraRef env)
+                    paramsM  ← Lua.liftIO $ readIORef (wsGenParamsRef ws)
+                    (winW, winH) ← Lua.liftIO $ readIORef (windowSizeRef env)
+                    (fbW, fbH)   ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+                    let facing    = camFacing camera
+                        worldSize = case paramsM of
+                                      Nothing     → 128
+                                      Just params → wgpWorldSize params
+                    case pixelToChunkOrigin facing camera winW winH fbW fbH
+                                             worldSize px py of
+                        Just (gx, gy) → do
+                            Lua.pushinteger (fromIntegral gx)
+                            Lua.pushinteger (fromIntegral gy)
+                            return 2
                         Nothing → do
                             Lua.pushnil
                             return 1

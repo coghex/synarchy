@@ -32,6 +32,7 @@ module World.Thread.Command.Cursor
     , handleWorldSetWorldCursorSelectBgTextureCommand
     , handleWorldSetWorldCursorHoverBgTextureCommand
     , handleWorldSelectTileByCoordCommand
+    , handleWorldSelectChunkByCoordCommand
     , handleWorldSetMineAnchorCommand
     , handleWorldClearMineAnchorCommand
     , handleWorldDesignateMineCommand
@@ -73,6 +74,7 @@ import World.Thread.Command.Cursor.Select
     , handleWorldSetWorldCursorSelectBgTextureCommand
     , handleWorldSetWorldCursorHoverBgTextureCommand
     , handleWorldSelectTileByCoordCommand
+    , handleWorldSelectChunkByCoordCommand
     )
 import World.Thread.Command.Cursor.Mine
     ( handleWorldSetMineAnchorCommand

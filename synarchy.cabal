@@ -960,6 +960,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Identity
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.SelectTileZ
+                   Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.Spoil
                    Test.Headless.Combat.Damage

@@ -746,12 +746,11 @@ function hud.onMouseDown(button_num, mx, my)
     end
     -- Recover window-pixel click coords. uiManager.onMouseDown forwards
     -- mx,my already scaled into FRAMEBUFFER space, but the synchronous
-    -- pickers (world.pickTile) and the zoom-cursor hit-test
-    -- (pixelToChunkOrigin, fed by setZoomCursorHover) both expect WINDOW
-    -- pixels — the same space engine.getMousePosition() reports. Convert
-    -- back so a click resolves at the actual click position rather than
-    -- the 0.1s-stale cached hover the select APIs would otherwise read
-    -- (#123).
+    -- pickers (world.pickTile, world.pickChunk) expect WINDOW pixels —
+    -- the same space engine.getMousePosition() reports. Convert back so
+    -- a click resolves at the actual click position rather than the
+    -- periodically-cached hover the deferred select APIs would otherwise
+    -- read (#123, #813).
     local cx, cy = mx, my
     do
         local ww, wh   = engine.getWindowSize()
@@ -763,13 +762,22 @@ function hud.onMouseDown(button_num, mx, my)
     end
     if hud.currentView == "zoomed_out" then
         if button_num == 1 then
-            -- Refresh the zoom-cursor position to the actual click coords
-            -- before arming the select. The chunk is committed from
-            -- zoomCursorPos at render time (makeCursorQuad); without this
-            -- it would commit the periodically-cached hover, so a fast
-            -- move-then-click selected the previously hovered chunk (#123).
-            world.setZoomCursorHover(hud.worldId, cx, cy)
-            world.setZoomCursorSelect(hud.worldId)
+            -- Live pick at the click coords, then select that chunk
+            -- directly (#813). setZoomCursorSelect would arm a select
+            -- that commits from the periodically-cached zoomCursorPos at
+            -- render time (makeCursorQuad), so a later hover update or a
+            -- camera pan/zoom before that render pass could retarget an
+            -- already-accepted click; pickChunk resolves the chunk under
+            -- the click NOW and selectChunk commits it in one shot (also
+            -- dropping any zoomed-in tile selection, #135) — mirrors the
+            -- pickTile/selectTile fix below for the zoomed-in path
+            -- (#123). An off-map click returns nil and is a full no-op:
+            -- no chunk is selected, and neither the chunk nor tile
+            -- selection is touched.
+            local gx, gy = world.pickChunk(hud.worldId, cx, cy)
+            if gx and gy then
+                world.selectChunk(hud.worldId, gx, gy)
+            end
         elseif button_num == 2 then
             world.clearZoomCursorSelect(hud.worldId)
         end
