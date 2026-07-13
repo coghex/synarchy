@@ -36,6 +36,7 @@ import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
+import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.Combat.Damage as CombatDamage
@@ -115,6 +116,11 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- Own engine (not the shared-worlds one above): needs a real
+    -- pixel hit-test against loaded tile data (renderWorldCursorQuads),
+    -- so it generates its own cheap private w8 page rather than sharing
+    -- or disturbing the worldgen specs' engine/camera state.
+    aroundAll withHeadlessEngine SelectChunk.sharedSpec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec
@@ -135,6 +141,7 @@ main = hspec $ do
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "World.CursorInfo" CursorInfo.spec
+    describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "WorldGen.SoilShed" SoilShed.spec

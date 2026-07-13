@@ -27,6 +27,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetHoverPosFn
     , worldPickTileFn
     , worldPickPosFn
+    , worldPickChunkFn
     , worldGetClimateAtFn
     , worldGetAmbientAtFn
     , worldGetSunAngleAtFn

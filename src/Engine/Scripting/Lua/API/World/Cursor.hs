@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.World.Cursor
     , worldSetWorldCursorSelectFn
     , worldClearWorldCursorSelectFn
     , worldSelectTileFn
+    , worldSelectChunkFn
     , worldSetWorldCursorSelectBgTextureFn
     , worldSetWorldCursorHoverBgTextureFn
     ) where
@@ -156,6 +157,28 @@ worldSetWorldCursorSelectTextureFn env = do
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorSelectTexture pageId texHandle
+        _ → pure ()
+    return 0
+
+-- | world.selectChunk(pageId, gx, gy) — atomically mark the chunk whose
+--   chunk-aligned grid origin is (gx, gy) as the zoom map's selected
+--   chunk, dropping any zoomed-in tile selection in the same write
+--   (issue #135). Pair with @world.pickChunk@, the zoomed-out analog of
+--   @world.pickTile@ + @world.selectTile@: a zoom-map click resolves the
+--   chunk under the click NOW and commits it in one shot, instead of
+--   arming @setZoomCursorSelect@'s deferred render-time resolve — so a
+--   later hover update, camera pan/zoom, or render timing can't retarget
+--   an already-accepted click (issue #813).
+worldSelectChunkFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSelectChunkFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tonumber 2
+    gyArg     ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldSelectChunkByCoord pageId (round gx) (round gy)
         _ → pure ()
     return 0
 
