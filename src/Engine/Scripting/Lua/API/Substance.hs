@@ -28,7 +28,7 @@ loadSubstanceYamlFn env = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 defs ← loadSubstanceYaml logger filePath
@@ -69,7 +69,7 @@ substanceGetFn env = do
             Lua.pushnil
             return 1
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             mDef ← Lua.liftIO $ do
                 mgr ← readIORef (substanceManagerRef env)
                 pure (lookupSubstance name mgr)

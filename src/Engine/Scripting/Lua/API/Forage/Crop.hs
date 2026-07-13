@@ -56,7 +56,7 @@ worldPlantCropAtFn env = do
         (Just gx', Just gy', Just nameBS) → do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
-                name = TE.decodeUtf8 nameBS
+                name = TE.decodeUtf8Lenient nameBS
             ok ← Lua.liftIO $ do
                 mWs ← activeWorldState env
                 case mWs of

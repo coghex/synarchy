@@ -58,7 +58,7 @@ uiSetTextInputFn env = do
     textArg ← Lua.tostring  2
     case (elemArg, textArg) of
         (Just e, Just txtBS) → do
-            let txt        = TE.decodeUtf8 txtBS
+            let txt        = TE.decodeUtf8Lenient txtBS
                 elemHandle = ElementHandle (fromIntegral e)
             Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                 let newBuffer = TextBuffer { tbContent = txt, tbCursor = T.length txt }
@@ -102,7 +102,7 @@ uiInsertCharFn env = do
     case (elemArg, charArg) of
         (Just e, Just charBS) → do
             let elemHandle = ElementHandle (fromIntegral e)
-                charText   = TE.decodeUtf8 charBS
+                charText   = TE.decodeUtf8Lenient charBS
             case T.uncons charText of
                 Just (c, _) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                     (modifyTextBuffer elemHandle (TB.insertChar c) mgr, ())

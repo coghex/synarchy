@@ -47,10 +47,10 @@ worldInitFn env = do
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
-                identity = mkWorldIdentity (TE.decodeUtf8 ⊚ nameArg)
-                                           (TE.decodeUtf8 ⊚ glossArg)
+                identity = mkWorldIdentity (TE.decodeUtf8Lenient ⊚ nameArg)
+                                           (TE.decodeUtf8Lenient ⊚ glossArg)
                 rawSize = maybe 64 fromIntegral sizeArg
                 size = normalizeWorldSize rawSize
                 -- Plate count scales with worldSize when caller
@@ -89,7 +89,7 @@ worldGetIdentityFn env = do
     mIdentity ← Lua.liftIO $ case pageIdArg of
         Just pageIdBS → do
             mgr ← readIORef (worldManagerRef env)
-            case lookup (WorldPageId (TE.decodeUtf8 pageIdBS)) (wmWorlds mgr) of
+            case lookup (WorldPageId (TE.decodeUtf8Lenient pageIdBS)) (wmWorlds mgr) of
                 Just ws → readIORef (wsIdentityRef ws)
                 Nothing → pure Nothing
         Nothing → pure Nothing
@@ -109,7 +109,7 @@ worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitArenaFn env = do
     pageIdArg ← Lua.tostring 1
     let pageId = case pageIdArg of
-            Just bs → WorldPageId (TE.decodeUtf8 bs)
+            Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"    -- default when called with no args
     Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArena pageId)
     return 0
@@ -119,7 +119,7 @@ worldInitArenaDoneFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitArenaDoneFn env = do
     pageIdArg ← Lua.tostring 1
     let pageId = case pageIdArg of
-            Just bs → WorldPageId (TE.decodeUtf8 bs)
+            Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"
     Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArenaDone pageId)
     return 0
@@ -137,7 +137,7 @@ worldShowFn env = do
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) (WorldShow pageId)
         Nothing → pure ()
 
@@ -150,7 +150,7 @@ worldHideFn env = do
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) (WorldHide pageId)
         Nothing → pure ()
 
@@ -236,7 +236,7 @@ worldDestroyFn env = do
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) (WorldDestroy pageId)
         Nothing → pure ()
 

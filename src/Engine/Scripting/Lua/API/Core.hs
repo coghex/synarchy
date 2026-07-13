@@ -141,7 +141,7 @@ loadScriptFn env backendState lst = do
         (Just pathBS, Just rate) → do
             logger ← Lua.liftIO $ readIORef (loggerRef env)
             scriptId ← Lua.liftIO $ do
-                let pathStr = TE.decodeUtf8 pathBS
+                let pathStr = TE.decodeUtf8Lenient pathBS
 
                 -- Dedup by path: loading the same script twice would
                 -- create a second tickable instance (update/broadcast
@@ -258,8 +258,8 @@ listFilesFn = do
     extArg ← Lua.tostring 2
     case (dirArg, extArg) of
         (Just dirBS, Just extBS) → do
-            let dirPath = T.unpack (TE.decodeUtf8 dirBS)
-                ext     = T.unpack (TE.decodeUtf8 extBS)
+            let dirPath = T.unpack (TE.decodeUtf8Lenient dirBS)
+                ext     = T.unpack (TE.decodeUtf8Lenient extBS)
             exists ← Lua.liftIO $ doesDirectoryExist dirPath
             if not exists
                 then do

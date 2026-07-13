@@ -37,7 +37,7 @@ loadTextureFn backendState = do
   case path of
     Just pathBS → do
       handle ← Lua.liftIO $ do
-        let pathStr = TE.decodeUtf8 pathBS
+        let pathStr = TE.decodeUtf8Lenient pathBS
             (lteq, _) = lbsMsgQueues backendState
         pool ← readIORef (lbsAssetPool backendState)
         handle ← generateTextureHandle pool
@@ -122,7 +122,7 @@ setColorFn env backendState = do
     (Just idVal, Just c) → do
       Lua.liftIO $ do
         let (lteq, _) = lbsMsgQueues backendState
-            cStr = T.unpack $ TE.decodeUtf8 c
+            cStr = T.unpack $ TE.decodeUtf8Lenient c
             msg = LuaSetColorRequest (ObjectId (fromIntegral idVal)) (colorToVec4 cStr)
         Q.writeQueue lteq msg
       return 0

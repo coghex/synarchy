@@ -160,7 +160,7 @@ PROBES = [
     ("state_of_mind", "state_of_mind_probe.py",
      "unified consciousness/mood model: pain/awareness drift, no-hunger-config fallback, locomotor-collapse regression guard (#350)"),
     ("text_encoding", "text_encoding_probe.py",
-     "TE.decodeUtf8Lenient in the Lua text API: malformed UTF-8 through engine.setText no longer errors, and round-trips through engine.getText (#618)"),
+     "TE.decodeUtf8Lenient sweep across Engine.Scripting.Lua: malformed UTF-8 through engine.setText (#618) and the representative non-Text-API world.show boundary (#665) no longer errors, and the Text-API case round-trips through engine.getText"),
     ("thermo_altitude", "thermo_altitude_probe.py",
      "altitude-lapse thermal effect (#308)"),
     ("thought", "thought_probe.py",

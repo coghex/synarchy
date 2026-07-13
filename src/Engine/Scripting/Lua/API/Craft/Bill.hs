@@ -51,7 +51,7 @@ craftAddBillFn env = do
     case (bidArg, ridArg) of
         (Just b, Just ridBS) → do
             let bid   = BuildingId (fromIntegral b)
-                rid   = TE.decodeUtf8 ridBS
+                rid   = TE.decodeUtf8Lenient ridBS
                 count = maybe (-1) fromIntegral countArg
             result ← Lua.liftIO $ do
                 mPage ← activeWorldPage env
@@ -170,7 +170,7 @@ craftReorderBillFn env = do
     Lua.pushboolean ok
     return 1
   where
-    toDirection bs = case TE.decodeUtf8 bs of
+    toDirection bs = case TE.decodeUtf8Lenient bs of
         "up"   → Just MoveUp
         "down" → Just MoveDown
         _      → Nothing

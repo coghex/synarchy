@@ -42,7 +42,7 @@ constructSetAnchorFn env = do
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetConstructAnchor pageId (round gx) (round gy)
         _ → pure ()
@@ -54,7 +54,7 @@ constructClearAnchorFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $ WorldClearConstructAnchor pageId
         _ → pure ()
     return 0
@@ -78,10 +78,10 @@ constructDesignateFn env = do
     cArg ← Lua.tostring 9
     case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg, catArg) of
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2, Just catBS) →
-            case mkTarget (TE.decodeUtf8 catBS) aArg bArg cArg of
+            case mkTarget (TE.decodeUtf8Lenient catBS) aArg bArg cArg of
                 Nothing → pure ()
                 Just tgt → Lua.liftIO $ do
-                    let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                    let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     Q.writeQueue (worldQueue env) $
                         WorldDesignateConstruct pageId
                             (round x1) (round y1) (round x2) (round y2) tgt
@@ -90,10 +90,10 @@ constructDesignateFn env = do
   where
     mkTarget "structure" (Just packBS) (Just kindBS) edge =
         Just $ CtStructure $ StructurePiece
-            (TE.decodeUtf8 packBS) (TE.decodeUtf8 kindBS)
-            (TE.decodeUtf8 <$> edge)
+            (TE.decodeUtf8Lenient packBS) (TE.decodeUtf8Lenient kindBS)
+            (TE.decodeUtf8Lenient <$> edge)
     mkTarget "building" (Just defBS) _ _ =
-        Just $ CtBuilding (TE.decodeUtf8 defBS)
+        Just $ CtBuilding (TE.decodeUtf8Lenient defBS)
     mkTarget _ _ _ _ = Nothing
 
 -- | construction.cancelDesignation(gx, gy) — remove the designation at a
@@ -159,7 +159,7 @@ constructGetDesignationAtFn env = do
     gyArg ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -178,7 +178,7 @@ constructGetDesignationCountFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
@@ -198,7 +198,7 @@ constructNearestDesignationFn env = do
     yArg ← Lua.tonumber 3
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -235,9 +235,9 @@ constructSetJobStatusFn env = do
     statusArg ← Lua.tostring 4
     case (pageIdArg, gxArg, gyArg, statusArg) of
         (Just pageIdBS, Just gx, Just gy, Just statusBS) →
-            case textToConstructStatus (TE.decodeUtf8 statusBS) of
+            case textToConstructStatus (TE.decodeUtf8Lenient statusBS) of
                 Just st → Lua.liftIO $ do
-                    let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                    let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     Q.writeQueue (worldQueue env) $
                         WorldSetConstructStatus pageId (round gx) (round gy) st
                 Nothing → pure ()
@@ -257,7 +257,7 @@ constructAddJobProgressFn env = do
     deltaArg ← Lua.tonumber 4
     case (pageIdArg, gxArg, gyArg, deltaArg) of
         (Just pageIdBS, Just gx, Just gy, Just delta) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldAddConstructProgress pageId (round gx) (round gy)
                     (realToFrac delta)
@@ -274,11 +274,11 @@ constructSetDesignateTextureFn env = do
     handleArg ← Lua.tointeger 3
     case (pageIdArg, catArg, handleArg) of
         (Just pageIdBS, Just catBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetConstructDesignateTexture pageId
-                    (TE.decodeUtf8 catBS) texHandle
+                    (TE.decodeUtf8Lenient catBS) texHandle
         _ → pure ()
     return 0
 
@@ -295,7 +295,7 @@ constructSetLineModeFn env = do
     enabledArg ← Lua.toboolean 2
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetConstructLineMode pageId enabledArg
         Nothing → pure ()

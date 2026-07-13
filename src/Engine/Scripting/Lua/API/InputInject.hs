@@ -230,10 +230,10 @@ readButtonArg idx = do
             mbs ← Lua.tostring idx
             case mbs of
                 Nothing → pure (Left "input: button must be a string")
-                Just bs → case resolveButton (TE.decodeUtf8 bs) of
+                Just bs → case resolveButton (TE.decodeUtf8Lenient bs) of
                     Just b  → pure (Right b)
                     Nothing → pure . Left $
-                        "input: unknown button \"" <> TE.decodeUtf8 bs
+                        "input: unknown button \"" <> TE.decodeUtf8Lenient bs
                         <> "\" (expected left|right|middle)"
 
 -- | Optional mods argument: absent/nil → no modifiers; otherwise a
@@ -273,7 +273,7 @@ readStringList idx = do
                                 else return Nothing
                         Lua.pop 1
                         case ms of
-                            Just bs → go (i + 1) (TE.decodeUtf8 bs : acc)
+                            Just bs → go (i + 1) (TE.decodeUtf8Lenient bs : acc)
                             Nothing → return Nothing
             go (1 ∷ Lua.Integer) []
 
@@ -344,7 +344,7 @@ keyVerb buildSeq verbName env ls stateRef = headlessGuard env $ do
         Nothing → pushError $ "input." <> verbName
             <> ": key name (string) required"
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             case (resolveKeyName name, eMods) of
                 (Just k, Right mm) → ackInject env ls stateRef (buildSeq k mm)
                 (Nothing, _) → pushError $
@@ -374,7 +374,7 @@ inputTypeFn env ls stateRef = headlessGuard env $ do
     mText ← Lua.tostring 1
     case mText of
         Nothing → pushError "input.type: text (string) required"
-        Just bs → ackInject env ls stateRef (typeSequence (TE.decodeUtf8 bs))
+        Just bs → ackInject env ls stateRef (typeSequence (TE.decodeUtf8Lenient bs))
 
 pushOk ∷ Lua.LuaE Lua.Exception Lua.NumResults
 pushOk = do

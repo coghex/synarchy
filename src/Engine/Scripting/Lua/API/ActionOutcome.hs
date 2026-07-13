@@ -42,7 +42,7 @@ debugRecordOutcomeFn env = do
             _ ← Lua.getfield (Lua.nth 1) name
             ms ← Lua.tostring Lua.top
             Lua.pop 1
-            pure (TE.decodeUtf8 <$> ms)
+            pure (TE.decodeUtf8Lenient <$> ms)
         getInt ∷ Lua.Name → Lua.LuaE Lua.Exception (Maybe Int)
         getInt name = do
             _ ← Lua.getfield (Lua.nth 1) name

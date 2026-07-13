@@ -41,14 +41,14 @@ buildingSpawnFn env = do
     pageArg ← Lua.tostring 4
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
-            let defName = TE.decodeUtf8 nameBS
+            let defName = TE.decodeUtf8Lenient nameBS
                 gx      = fromIntegral x
                 gy      = fromIntegral y
             mBid ← Lua.liftIO $ do
                 bm ← readIORef (buildingManagerRef env)
                 mTarget ← case pageArg of
                     Just pidBS → do
-                        let pid = WorldPageId (TE.decodeUtf8 pidBS)
+                        let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
                         wm ← readIORef (worldManagerRef env)
                         pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                     Nothing → activeWorldPage env
@@ -106,7 +106,7 @@ buildingCanPlaceAtFn env = do
     yArg    ← Lua.tointeger 3
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
-            let defName = TE.decodeUtf8 nameBS
+            let defName = TE.decodeUtf8Lenient nameBS
                 gx      = fromIntegral x
                 gy      = fromIntegral y
             result ← Lua.liftIO $ do
@@ -153,7 +153,7 @@ buildingSetGhostFn env = do
     validArg ← Lua.toboolean 4
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
                 gx   = fromIntegral x
                 gy   = fromIntegral y
             Lua.liftIO $ do

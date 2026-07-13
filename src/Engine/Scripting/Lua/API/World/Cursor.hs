@@ -33,7 +33,7 @@ worldSetZoomCursorHoverFn env = do
 
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetZoomCursorHover pageId (round x) (round y)
         _ → pure ()
@@ -45,7 +45,7 @@ worldSetZoomCursorSelectFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $ WorldSetZoomCursorSelect pageId
         _ → pure ()
     return 0
@@ -57,7 +57,7 @@ worldClearZoomCursorSelectFn env = do
 
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetZoomCursorDeselect pageId
         _ → pure ()
@@ -70,7 +70,7 @@ worldSetZoomCursorSelectTextureFn env = do
 
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetZoomCursorSelectTexture pageId texHandle
@@ -84,7 +84,7 @@ worldSetZoomCursorHoverTextureFn env = do
 
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetZoomCursorHoverTexture pageId texHandle
@@ -98,7 +98,7 @@ worldSetWorldCursorHoverFn env = do
     yArg ← Lua.tonumber 3
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorHover pageId (round x) (round y)
         _ → pure ()
@@ -109,7 +109,7 @@ worldSetWorldCursorSelectFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $ WorldSetWorldCursorSelect pageId
         _ → pure ()
     return 0
@@ -119,7 +119,7 @@ worldClearWorldCursorSelectFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $ WorldSetWorldCursorDeselect pageId
         _ → pure ()
     return 0
@@ -140,7 +140,7 @@ worldSelectTileFn env = do
     zArg      ← Lua.tonumber 4
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 mz     = round ⊚ zArg
             Q.writeQueue (worldQueue env) $
                 WorldSelectTileByCoord pageId (round gx) (round gy) mz
@@ -153,7 +153,7 @@ worldSetWorldCursorSelectTextureFn env = do
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorSelectTexture pageId texHandle
@@ -176,7 +176,7 @@ worldSelectChunkFn env = do
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSelectChunkByCoord pageId (round gx) (round gy)
         _ → pure ()
@@ -188,7 +188,7 @@ worldSetWorldCursorHoverTextureFn env = do
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorHoverTexture pageId texHandle
@@ -201,7 +201,7 @@ worldSetWorldCursorHoverBgTextureFn env = do
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorHoverBgTexture pageId texHandle
@@ -214,7 +214,7 @@ worldSetWorldCursorSelectBgTextureFn env = do
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorSelectBgTexture pageId texHandle

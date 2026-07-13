@@ -51,7 +51,7 @@ loadYamlFn = do
     case pathA of
         Nothing → Lua.pushnil >> return 1
         Just pathBS → do
-            let path = T.unpack (TE.decodeUtf8 pathBS)
+            let path = T.unpack (TE.decodeUtf8Lenient pathBS)
             r ← Lua.liftIO (Yaml.decodeFileEither path)
             case (r ∷ Either Yaml.ParseException A.Value) of
                 Left _  → Lua.pushnil >> return 1

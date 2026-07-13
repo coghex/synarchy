@@ -199,7 +199,7 @@ worldFindHarvestableFloraFn env = do
             let gx = fromIntegral gx' ∷ Int
                 gy = fromIntegral gy' ∷ Int
                 radius = min 64 (max 1 (maybe 24 fromIntegral mRad)) ∷ Int
-                tagFilter = TE.decodeUtf8 <$> mTag
+                tagFilter = TE.decodeUtf8Lenient <$> mTag
             mBest ← Lua.liftIO $ do
                 mWs ← activeWorldState env
                 case mWs of
@@ -312,7 +312,7 @@ itemGetFoodFn env = do
     case nameArg of
         Nothing → Lua.pushnil >> return 1
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             mFood ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
                 pure (lookupItemDef name itemMgr >>= idFood)
