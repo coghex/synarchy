@@ -63,6 +63,16 @@ def bootstrap(port):
     # brain.* predicates directly, not by watching AI behaviour).
     send(port, "pcall(function() require('scripts.unit_ai').update = "
                "function() end end); return 'ok'")
+    # Neutralise periodic thoughts (#351): each unit rolls its first thought
+    # at a random 0-30 game-second deadline, and a fired thought overwrites
+    # 'mood' directly (scripts/thoughts.lua) — able to land inside this
+    # probe's ~4s sampling windows and mask (or fake) the pain/awareness
+    # mood drift under test (#793). unit_resources.lua's shared thoughts
+    # table (required above via unit_resources.lua) is the same object this
+    # require() returns, so the no-op reaches the real tick call; brain.tick
+    # and the rest of the physiology chain stay untouched.
+    send(port, "pcall(function() require('scripts.thoughts').tick = "
+               "function() end end); return 'ok'")
     send(port, "require('scripts.movement_arena').buildCourse('flat'); return 'ok'")
 
 
