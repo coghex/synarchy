@@ -47,13 +47,13 @@ import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (modifyTVar', readTVarIO)
 import Control.Exception (finally)
-import Data.IORef (IORef, readIORef, writeIORef, newIORef)
+import Data.IORef (IORef, readIORef, writeIORef, newIORef, modifyIORef')
 import Data.List (findIndex)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Inject (clickSequence, noMods, waitForBarrier, newBarrierToken)
-import Engine.Input.Thread (processInputs)
+import Engine.Input.Thread (processInputs, processInput)
 import Engine.Input.Types
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.InputInject (injectAndSettle, SettleResult(..))
@@ -113,6 +113,40 @@ withFakeInputThread env act = do
             unless stop $ do
                 st ← readIORef (inputStateRef env)
                 _ ← processInputs env st
+                threadDelay 500
+                pump
+    tid ← forkIO pump
+    act `finally` (writeIORef stopRef True ≫ killThread tid)
+
+-- | Stand-in "input thread" for the #773 spec proving a synthesized
+--   action can be fully, genuinely processed WHILE 'injectAndSettle's
+--   own wait is still in flight, with only the wait's own confirming
+--   'InputBarrier' withheld — the "processed but its own barrier
+--   missed the timeout" half of the issue's two acceptance scenarios,
+--   distinct from "nothing runs until the caller has already given
+--   up" (the other half, covered below). Drains and APPLIES every
+--   ordinary event immediately, exactly like the real input thread
+--   would (state published, Lua broadcasts queued for real) — but
+--   every 'InputBarrier' token it sees is collected into 'heldRef'
+--   instead of being applied, so it can never satisfy a wait on it.
+--   This makes the timeout itself deterministic (nothing can ever
+--   supply the barrier while withheld) while the action's own
+--   execution is real, concurrent, and prompt — not delayed to
+--   simulate the outcome, actually produced by it.
+withBarrierWithholdingPump ∷ EngineEnv → IORef [Int] → IO α → IO α
+withBarrierWithholdingPump env heldRef act = do
+    stopRef ← newIORef False
+    let pump = do
+            stop ← readIORef stopRef
+            unless stop $ do
+                mEvent ← Q.tryReadQueue (inputQueue env)
+                case mEvent of
+                    Just (InputBarrier tok) → modifyIORef' heldRef (⧺ [tok])
+                    Just event → do
+                        st ← readIORef (inputStateRef env)
+                        newSt ← processInput env st event
+                        writeIORef (inputStateRef env) newSt
+                    Nothing → pure ()
                 threadDelay 500
                 pump
     tid ← forkIO pump
@@ -178,13 +212,26 @@ readFixtureBool ls ref field = Lua.runWith (lbsLuaState ls) $ do
 settleTimeoutMicros ∷ Int
 settleTimeoutMicros = 5 * 1000 * 1000
 
--- | Deliberately tiny — used only by the #773 specs below, where
---   NOTHING drains 'inputQueue' during the call. Any small timeout
---   here times out DETERMINISTICALLY (there is nothing racing it to
---   drain the queue in time), standing in for an input thread that
---   has stalled past the wait's own budget.
+-- | Deliberately tiny — used only by the #773 "resumes only after the
+--   timeout" spec below, where NOTHING drains 'inputQueue' during the
+--   call. Any small timeout here times out DETERMINISTICALLY (there is
+--   nothing racing it to drain the queue in time), standing in for an
+--   input thread that has stalled past the wait's own budget.
 guaranteedTimeoutMicros ∷ Int
 guaranteedTimeoutMicros = 1000
+
+-- | Timeout for the #773 "action processed, its own barrier withheld"
+--   spec below — larger than 'guaranteedTimeoutMicros' so
+--   'withBarrierWithholdingPump's 500us poll cadence has real breathing
+--   room to drain and apply the synthesized action's substantive
+--   events WHILE each of 'injectAndSettle's three internal waits is
+--   still in flight. The timeout side is still guaranteed regardless
+--   of margin (every barrier the pump ever sees is withheld, so no
+--   wait can ever be satisfied) — this constant only affects how
+--   promptly the action's own execution is proven, and the total test
+--   wall-clock (three waits of this length in sequence).
+barrierWithholdTimeoutMicros ∷ Int
+barrierWithholdTimeoutMicros = 20000
 
 isFollowupMsg ∷ LuaMsg → Bool
 isFollowupMsg (LuaInjectFollowup _) = True
@@ -471,26 +518,41 @@ spec = do
     -- both must observe the same 'SettleIndeterminateTimedOut'
     -- classification, never a result that could be read as
     -- retry-safe.
-    it "a synthesized action already sitting fully processable when its own settle wait times out is not reported as safe non-execution (#773)" $ \env → do
+    it "an action's substantive events run for real, concurrently, while only its own confirming barrier is withheld past the timeout (#773)" $ \env → do
         resetInput env
-        (ls, stateRef, _fixtureRef) ← newTestLuaBackend env
-        -- Deliberately nothing drains 'inputQueue' during this call —
-        -- the tiny timeout above times out DETERMINISTICALLY (nothing
-        -- races it), standing in for "the action was processed but its
-        -- own barrier missed the timeout window".
-        result ← injectAndSettle env ls stateRef guaranteedTimeoutMicros
-            (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
+        (ls, stateRef, fixtureRef) ← newTestLuaBackend env
+        heldRef ← newIORef []
+        -- The withholding pump applies every ordinary event the
+        -- instant it sees it — real state publish, real Lua broadcast
+        -- enqueue — but never lets a single 'InputBarrier' through, so
+        -- every one of 'injectAndSettle's three internal waits times
+        -- out GUARANTEED, not by a race. The click itself, meanwhile,
+        -- genuinely executes WHILE those waits are still in flight.
+        result ← withBarrierWithholdingPump env heldRef $
+            injectAndSettle env ls stateRef barrierWithholdTimeoutMicros
+                (clickSequence (100, 50) GLFW.MouseButton'1 shiftMod)
         result `shouldBe` SettleIndeterminateTimedOut
 
-        -- The events 'injectEvents' queued are still sitting exactly
-        -- where it left them — draining now (standing in for the
-        -- input thread catching up a moment later) proves the click
-        -- DID land. Pre-#773 this outcome was documented as "nothing
-        -- happened"; it plainly is something happening.
-        inputTick env
+        -- By the time injectAndSettle gives up, the click has ALREADY
+        -- run to completion for real — not "would land if drained now"
+        -- (that was round 1's gap), but genuinely executed concurrently
+        -- with the very waits that timed out: 'injectAndSettle's OWN
+        -- trailing 'settle' calls dispatch whatever the withholding
+        -- pump has already queued on 'luaQueue' by the time each one
+        -- runs, so the click's real Lua callbacks (which observed
+        -- shift held, per the fixture) AND its deferred modifier-
+        -- release fence both already resolved. This is the "processed,
+        -- but its own barrier missed the deadline" half of the issue's
+        -- two acceptance scenarios; a caller told "safe to retry" here
+        -- would be wrong even though the outcome was never anything
+        -- other than a genuine timeout.
+        readFixtureBool ls fixtureRef "mouseDownShift"
+            `shouldReturn` Just True
+        readFixtureBool ls fixtureRef "mouseUpShift"
+            `shouldReturn` Just True
         st ← readIORef (inputStateRef env)
-        shiftState st `shouldBe` Just True
         inpMousePos st `shouldBe` (100, 50)
+        shiftState st `shouldBe` Just False
 
     it "a stalled input thread that only resumes after the ack has already timed out still executes the queued action end-to-end (#773)" $ \env → do
         resetInput env
