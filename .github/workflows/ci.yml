@@ -26,15 +26,34 @@
 #      avoidance rebuilds only dirty modules + their reverse-deps.
 # The dist-newstyle key includes the GHC and Cabal versions and the
 # dependency plan hash (so a compiler/Cabal bump or a dependency change
-# invalidates it) plus a per-commit suffix so every run saves a fresh
-# snapshot; restore-keys let the next run restore the most recent
-# snapshot for partial reuse.
+# invalidates it) — and NOTHING per-commit (#790). GitHub cache keys
+# are immutable: actions/cache only writes on a key miss and an
+# exact-key hit never re-saves, so a stable plan-hash key means the
+# FIRST run for a given plan freezes one snapshot and every later run
+# on that same plan just restores it and saves nothing. Retained
+# build-product snapshots are therefore BOUNDED by the number of
+# distinct dependency plans in flight (a handful that only turns over
+# when dependencies change), not by commit count. This mirrors the
+# dependency-store cache below, which has always been keyed this same
+# stable way. When the plan DOES change the exact key misses and
+# restore-keys fall back to the most recent snapshot for this GHC/Cabal
+# for partial reuse, after which exactly one new snapshot is saved
+# under the new plan key. Trade-off (accepted for #790, and the same
+# one the deps cache already makes): within one plan window the
+# snapshot is frozen at that window's first commit, so a warm run
+# rebuilds everything changed since then rather than only since the
+# previous commit — still incremental (deps + unchanged modules
+# restored), never a cold build. Concurrent runs on the same plan are
+# safe with no delete step at all: a second saver of an existing key
+# gets a benign "already exists" and no run can evict a cache another
+# is restoring.
 # Both key families carry a v2 marker BEFORE the variable parts: caches
 # captured before #671 hold content archived under the old toolchain
 # paths (actions/cache preserves absolute paths), so restoring one would
 # extract to a location nothing reads from — the marker keeps
 # prefix-matched restore-keys from ever picking them up.
-# GitHub's 10 GB LRU cache eviction bounds the accumulation.
+# Bounding this churn also stops build-product caches from crowding the
+# shared repo cache quota and LRU-evicting the deps-store cache (#790).
 #
 # Trade-off accepted at #526: there is NO separate from-scratch clean
 # -Werror backstop job. A warning that only surfaces on a full rebuild of
@@ -120,18 +139,19 @@ jobs:
 
       # Cache the project build products so GHC recompiles only dirty
       # modules. plan.json (from the --dry-run above) exists now, so its
-      # hash keys the cache alongside the GHC version; the per-commit
-      # suffix makes every run save a fresh snapshot, and restore-keys
-      # fall back to the most recent snapshot (same plan first, then any
-      # snapshot for this GHC) for partial reuse. Combined cache action:
-      # restores here, saves dist-newstyle at post-job.
+      # hash keys the cache alongside the GHC/Cabal versions. The key is
+      # stable per plan (no per-commit component, #790): the combined
+      # cache action restores here and, at post-job, saves dist-newstyle
+      # ONLY when the exact key missed — so an unchanged plan re-saves
+      # nothing (one frozen snapshot per plan), while a changed plan
+      # restores the newest prior snapshot for this GHC/Cabal via
+      # restore-keys and then saves exactly one new entry.
       - name: Cache project build (dist-newstyle)
         uses: actions/cache@v4
         with:
           path: dist-newstyle
-          key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-${{ github.sha }}
+          key: dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}
           restore-keys: |
-            dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-
             dist-v2-${{ runner.os }}-ghc-9.12.2-cabal-3.16.1.0-
 
       - name: Build dependencies
