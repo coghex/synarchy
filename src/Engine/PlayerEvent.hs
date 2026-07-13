@@ -77,7 +77,7 @@ data CategoryCfg = CategoryCfg
 -- | The notification registry as held in 'EngineEnv'. Keyed by
 --   category id (see 'ccId'). Built at boot from
 --   @data/notification_categories.yaml@ merged with
---   @config/notifications.yaml@.
+--   @config/notifications.local.yaml@ (#786).
 type NotificationCfg = HM.HashMap Text CategoryCfg
 
 -- | Maximum entries kept in the event-log ring buffer. Oldest entries

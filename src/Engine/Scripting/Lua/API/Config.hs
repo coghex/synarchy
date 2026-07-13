@@ -93,7 +93,7 @@ saveVideoConfigFn env = do
     Lua.liftIO $ do
         config ← readIORef (videoConfigRef env)
         logger ← readIORef (loggerRef env)
-        saveVideoConfig logger "config/video.yaml" config
+        saveVideoConfig logger "config/video.local.yaml" config
     return 0
 
 loadDefaultConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

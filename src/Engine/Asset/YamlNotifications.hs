@@ -2,6 +2,7 @@
 module Engine.Asset.YamlNotifications
     ( loadNotificationCfg
     , writeNotificationOverrides
+    , OverridesFile
     ) where
 
 import UPrelude
@@ -95,7 +96,7 @@ loadNotificationCfg ∷ LoggerState
                     → FilePath        -- ^ registry path
                                       --   (data/notification_categories.yaml)
                     → FilePath        -- ^ overrides path
-                                      --   (config/notifications.yaml)
+                                      --   (config/notifications.local.yaml, #786)
                     → IO (NotificationCfg, [Text])
                        -- ^ (resolved map, registry-order list of ids)
 loadNotificationCfg logger registryPath overridesPath = do
@@ -155,8 +156,9 @@ mkCategoryCfg e overrides =
         , ccLogCoalesceWindow   = reLogCoalesceWindow e
         }
 
--- | Load 'config/notifications.yaml' if present, else materialize it
---   from the registry defaults so the player has a file to edit.
+-- | Load 'config/notifications.local.yaml' (#786) if present, else
+--   materialize it from the registry defaults so the player has a file
+--   to edit.
 loadOverrides ∷ LoggerState
               → FilePath
               → [RegistryEntry]
