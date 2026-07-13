@@ -36,6 +36,7 @@ import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
+import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.Combat.Damage as CombatDamage
@@ -135,6 +136,7 @@ main = hspec $ do
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "World.CursorInfo" CursorInfo.spec
+    describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "WorldGen.SoilShed" SoilShed.spec

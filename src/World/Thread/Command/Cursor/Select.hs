@@ -17,6 +17,7 @@ module World.Thread.Command.Cursor.Select
     , handleWorldSetWorldCursorSelectBgTextureCommand
     , handleWorldSetWorldCursorHoverBgTextureCommand
     , handleWorldSelectTileByCoordCommand
+    , handleWorldSelectChunkByCoordCommand
     ) where
 
 import UPrelude
@@ -49,7 +50,14 @@ handleWorldSetZoomCursorSelectCommand env _logger pageId = do
             -- cursor hover at render time (makeCursorQuad), which is also
             -- where the opposing tile selection is cleared — doing the
             -- clear here instead would blank the cursor for the frames
-            -- before the commit lands (issue #135).
+            -- before the commit lands (issue #135). NOTE: the zoom-map
+            -- left click no longer drives this arm/render-commit path
+            -- (issue #813) — it binds to the clicked chunk synchronously
+            -- via 'handleWorldSelectChunkByCoordCommand' below instead, so
+            -- a later hover update or camera move can't retarget an
+            -- already-accepted click. This command remains as the
+            -- lower-level "arm from current hover" primitive
+            -- @world.setZoomCursorSelect@ still exposes.
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { zoomSelectNow = True }, ())
         Nothing → pure ()
@@ -197,3 +205,26 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectedTile = Just (gx, gy, z)
                             , zoomSelectedPos   = Nothing }, ())
+
+-- | Directly select the chunk whose chunk-aligned grid origin is
+--   (gx, gy) on the given world — the coordinates 'world.pickChunk'
+--   (backed by 'World.Render.Zoom.Cursor.pixelToChunkOrigin') already
+--   resolved against the click pixel, live camera, and this page's own
+--   world size. This is the chunk-selection analog of
+--   'handleWorldSelectTileByCoordCommand': the set and the opposing
+--   tile-selection clear happen in the SAME atomic write, so there is
+--   no armed-but-uncommitted window a later hover update, camera
+--   pan/zoom, or render pass could resolve differently from what the
+--   player actually clicked (issue #813). No-op if the page doesn't
+--   exist, so a click for one page can never commit into another
+--   page's cursor state.
+handleWorldSelectChunkByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → IO ()
+handleWorldSelectChunkByCoordCommand env _logger pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing → pure ()
+        Just worldState →
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                (cs { zoomSelectedPos   = Just (gx, gy)
+                    , worldSelectedTile = Nothing }, ())

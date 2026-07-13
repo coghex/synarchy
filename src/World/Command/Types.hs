@@ -85,6 +85,19 @@ data WorldCommand
         --   has no live pick). Bypasses the hover-then-select dance so
         --   the caller doesn't have to fight the continuous mouse-hover
         --   overwrites for one-shot selections.
+    | WorldSelectChunkByCoord WorldPageId Int Int
+        -- ^ Atomically set zoomSelectedPos to the chunk whose
+        --   chunk-aligned grid origin is (gx, gy) — as produced by
+        --   'World.Render.Zoom.Cursor.pixelToChunkOrigin' /
+        --   @world.pickChunk@ — clearing any zoomed-in tile selection
+        --   in the same write (issue #135's newest-selection-owns
+        --   rule). This is the chunk-selection analog of
+        --   'WorldSelectTileByCoord': the set and the opposing clear
+        --   land in ONE atomic write, so a zoom-map left click binds
+        --   to the chunk under the click at click time and can't be
+        --   retargeted by a later hover update, camera pan/zoom, or
+        --   render timing before some later render pass gets around
+        --   to resolving it (issue #813).
     | WorldSetToolMode WorldPageId ToolMode
     | WorldSetMineAnchor WorldPageId Int Int
         -- ^ Mine tool: first click anchors the designation rectangle

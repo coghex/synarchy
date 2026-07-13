@@ -62,6 +62,11 @@ makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmS
             Just (pixX, pixY) →
                 pixelToChunkOrigin facing camera winW winH fbW fbH worldSize pixX pixY
 
+    -- A zoom-map left click no longer arms zoomSelectNow (issue #813): it
+    -- commits synchronously via handleWorldSelectChunkByCoordCommand
+    -- instead, so zoomSelectedPos below is normally already final by the
+    -- time this render pass runs. This branch remains live for whatever
+    -- else still arms a deferred commit through world.setZoomCursorSelect.
     cs' ← if zoomSelectNow cs
            then atomicModifyIORef' csRef $ \current →
                   -- Re-check the arm flag against 'current' (not the earlier
@@ -81,12 +86,23 @@ makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmS
                   -- Atomic (was a plain write) so it can't clobber a
                   -- concurrent world-thread cursor update now that it
                   -- touches worldSelectedTile too.
+                  --
+                  -- An off-map / degenerate-viewport commit (hoverChunk =
+                  -- Nothing) is a full no-op on both fields (issue #813):
+                  -- it must not select a chunk, and — since nothing was
+                  -- actually clicked on the map — must not clear a
+                  -- pre-existing chunk OR tile selection either. Only
+                  -- zoomSelectNow itself is consumed; a real click always
+                  -- resolves hoverChunk to Just, so this branch is reached
+                  -- only when there was nothing valid to commit.
                   let committedChunk = case hoverChunk of
                           Just _  → True
                           Nothing → False
                       newCs = current
                           { zoomSelectNow     = False
-                          , zoomSelectedPos   = hoverChunk
+                          , zoomSelectedPos   = if committedChunk
+                                then hoverChunk
+                                else zoomSelectedPos current
                           , worldSelectedTile = if committedChunk
                                 then Nothing
                                 else worldSelectedTile current }
