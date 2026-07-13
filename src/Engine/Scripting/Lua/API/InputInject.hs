@@ -147,17 +147,30 @@ injectAndSettle env ls stateRef timeoutMicros evs = do
     primaryOk ← injectEvents (inputBarrierNextRef env) (inputBarrierRef env)
                               (inputQueue env) timeoutMicros evs
     settled ← settle env ls stateRef timeoutMicros
-    pure $ if not primaryOk then SettlePrimaryTimedOut
+    pure $ if not primaryOk then SettleIndeterminateTimedOut
            else if settled then SettleOk
            else SettleFenceTimedOut
 
 -- | 'injectAndSettle's outcome — kept distinct from a plain 'Bool' so
---   'ackInject' can tell "nothing happened, safe to retry" apart from
---   "the action DID execute, only its trailing cleanup didn't settle
---   in time" (#727 review): folding both into one failure would let a
---   caller that retries on error double-fire an already-executed
---   click/key.
-data SettleResult = SettleOk | SettlePrimaryTimedOut | SettleFenceTimedOut
+--   'ackInject' can report a genuine success ('SettleOk') separately
+--   from a timeout. NEITHER timeout constructor means "nothing
+--   happened, safe to retry" (#773): 'injectEvents' (see
+--   "Engine.Input.Inject") enqueues the whole synthesized sequence
+--   AND its trailing barrier as one FIFO batch before it ever starts
+--   waiting, so once that wait begins the events are irretractably
+--   queued. A timeout on that wait ('SettleIndeterminateTimedOut')
+--   therefore cannot prove non-execution — the action may already
+--   have run while only the barrier itself is still pending, or it
+--   may run later when a stalled input thread resumes; the two are
+--   indistinguishable from here (both present as the same barrier
+--   wait timing out), so this single constructor covers both physical
+--   causes rather than pretending to tell them apart. A caller that
+--   retries on this result risks double-firing an already-executed
+--   click/key, exactly like retrying on 'SettleFenceTimedOut' would —
+--   the one case that IS determinate about the primary action (it
+--   definitely ran; only its deferred modifier-release cleanup didn't
+--   settle in time), which is why its message differs.
+data SettleResult = SettleOk | SettleIndeterminateTimedOut | SettleFenceTimedOut
     deriving (Eq, Show)
 
 -- | Inject a prebuilt sequence and push the ack table.
@@ -168,10 +181,12 @@ ackInject env ls stateRef evs = do
         injectAndSettle env ls stateRef consumeTimeoutMicros evs
     case result of
         SettleOk → pushOk
-        SettlePrimaryTimedOut → pushError $
+        SettleIndeterminateTimedOut → pushError $
             "input: timed out waiting for the input thread to consume "
-            <> "the synthesized events — is the engine's input thread "
-            <> "running?"
+            <> "the synthesized events — the action may have already "
+            <> "run, or may still run later once a stalled input "
+            <> "thread catches up; do NOT retry this action "
+            <> "automatically — is the engine's input thread running?"
         SettleFenceTimedOut → pushError $
             "input: the action itself completed, but its deferred "
             <> "modifier release did not settle in time — do NOT retry "
