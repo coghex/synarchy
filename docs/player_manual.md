@@ -87,9 +87,12 @@ exhausted. Your job is to make the means exist:
 - **Food:** the starting rations will run out. Foraging bridges the
   gap; farming sustains — till soil, then plant crops on the tilled
   ground, and they will be tended and harvested in season.
-- **Injury and death:** falls, cold, hunger, and fighting all wound
-  acolytes. Death from wounds is rarely instant — a hurt acolyte that
-  stays fed, watered, and rested can pull through.
+- **Injury and death:** falls, fighting, and frostbite can wound acolytes.
+  Wounds are rarely instantly fatal — a hurt acolyte that stays fed,
+  watered, and rested can pull through. Hunger and dehydration are separate
+  survival threats: without food or water, the body weakens and can
+  eventually give out. Feed a hungry acolyte and give a thirsty one water
+  to prevent this.
 
 ## Saving, loading, quitting
 
