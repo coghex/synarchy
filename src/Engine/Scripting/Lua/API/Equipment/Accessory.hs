@@ -45,7 +45,7 @@ equipmentEquipAccessoryFn env = do
     case (uidArg, nameArg) of
         (Just n, Just nameBS) → do
             let uid    = UnitId (fromIntegral n)
-                defName = TE.decodeUtf8 nameBS
+                defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)

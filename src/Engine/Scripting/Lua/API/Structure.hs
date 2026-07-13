@@ -79,7 +79,7 @@ structurePlaceFn env = do
     pageA     ← Lua.tostring 9
     case (gxA, gyA, slotA, texA, faceA) of
         (Just gx, Just gy, Just slotBS, Just tex, Just face) →
-            case slotFromText (TE.decodeUtf8 slotBS) of
+            case slotFromText (TE.decodeUtf8Lenient slotBS) of
                 Nothing → Lua.pushboolean False >> return 1
                 Just slot → do
                     let z       = maybe 0 fromIntegral zA
@@ -95,10 +95,10 @@ structurePlaceFn env = do
                         case (texPathA, facePathA) of
                             (Just tp, Just fp) → do
                                 texId  ← atomicModifyIORef' (texPaletteRef env) $ \pal →
-                                    let (i, pal') = internPath (TE.decodeUtf8 tp) pal
+                                    let (i, pal') = internPath (TE.decodeUtf8Lenient tp) pal
                                     in (pal', i)
                                 faceId ← atomicModifyIORef' (texPaletteRef env) $ \pal →
-                                    let (i, pal') = internPath (TE.decodeUtf8 fp) pal
+                                    let (i, pal') = internPath (TE.decodeUtf8Lenient fp) pal
                                     in (pal', i)
                                 -- record paletteId → handle so the renderer can
                                 -- resolve this piece immediately (the handle is
@@ -107,7 +107,7 @@ structurePlaceFn env = do
                                     ( HM.insert texId  (TextureHandle (fromIntegral tex))
                                     $ HM.insert faceId (TextureHandle (fromIntegral face)) m
                                     , () )
-                                mActive ← resolveStructurePage env (TE.decodeUtf8 <$> pageA)
+                                mActive ← resolveStructurePage env (TE.decodeUtf8Lenient <$> pageA)
                                 case mActive of
                                     Just (pageId, ws) → do
                                         -- Only stage + queue when the target chunk
@@ -153,7 +153,7 @@ structureClearFn env = do
     slotA ← Lua.tostring 3
     case (gxA, gyA, slotA) of
         (Just gx, Just gy, Just slotBS) →
-            case slotFromText (TE.decodeUtf8 slotBS) of
+            case slotFromText (TE.decodeUtf8Lenient slotBS) of
                 Nothing → Lua.pushboolean False >> return 1
                 Just slot → do
                     let gxi     = fromIntegral gx
@@ -277,7 +277,7 @@ structureFloorZAtFn env = do
     case (gxA, gyA) of
         (Just gx, Just gy) → do
             mSpd ← Lua.liftIO $
-                lookupStructure env (TE.decodeUtf8 <$> pageA)
+                lookupStructure env (TE.decodeUtf8Lenient <$> pageA)
                                 (fromIntegral gx) (fromIntegral gy) SFloor
             case mSpd of
                 Just spd → Lua.pushinteger (fromIntegral (spdGridZ spd)) >> return 1
@@ -295,11 +295,11 @@ structureHasAtFn env = do
     pageA ← Lua.tostring 4
     case (gxA, gyA, slotA) of
         (Just gx, Just gy, Just slotBS) →
-            case slotFromText (TE.decodeUtf8 slotBS) of
+            case slotFromText (TE.decodeUtf8Lenient slotBS) of
                 Nothing → Lua.pushboolean False >> return 1
                 Just slot → do
                     mSpd ← Lua.liftIO $
-                        lookupStructure env (TE.decodeUtf8 <$> pageA)
+                        lookupStructure env (TE.decodeUtf8Lenient <$> pageA)
                                         (fromIntegral gx) (fromIntegral gy) slot
                     Lua.pushboolean (maybe False (const True) mSpd)
                     return 1
@@ -319,11 +319,11 @@ structureGetAtFn env = do
     pageA ← Lua.tostring 4
     case (gxA, gyA, slotA) of
         (Just gx, Just gy, Just slotBS) →
-            case slotFromText (TE.decodeUtf8 slotBS) of
+            case slotFromText (TE.decodeUtf8Lenient slotBS) of
                 Nothing → Lua.pushnil >> return 1
                 Just slot → do
                     mSpd ← Lua.liftIO $
-                        lookupStructure env (TE.decodeUtf8 <$> pageA)
+                        lookupStructure env (TE.decodeUtf8Lenient <$> pageA)
                                         (fromIntegral gx) (fromIntegral gy) slot
                     case mSpd of
                         Nothing → Lua.pushnil >> return 1

@@ -27,7 +27,7 @@ loadLootTableYamlFn env = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 mDef ← loadLootTableYaml logger filePath
@@ -63,7 +63,7 @@ lootRollFn env = do
     case idArg of
         Nothing → Lua.pushnil >> return 1
         Just idBS → do
-            let tid = TE.decodeUtf8 idBS
+            let tid = TE.decodeUtf8Lenient idBS
             mPick ← Lua.liftIO $ do
                 reg ← readIORef (lootTableRegistryRef env)
                 case lookupLootTable tid reg of

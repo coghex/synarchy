@@ -18,7 +18,7 @@ shellExecuteFn = do
   code ← Lua.tostring 1
   case code of
     Just codeBS → do
-      let codeStr = TE.decodeUtf8 codeBS
+      let codeStr = TE.decodeUtf8Lenient codeBS
       (result, isError) ← shellExecuteInSandbox codeStr
       Lua.pushstring (TE.encodeUtf8 result)
       Lua.pushboolean isError
@@ -193,11 +193,11 @@ luaValueToText depth idx
                         Lua.pushvalue idx
                         mStr ← Lua.tostring (-1)
                         Lua.pop 1
-                        return $ maybe "0" TE.decodeUtf8 mStr
+                        return $ maybe "0" TE.decodeUtf8Lenient mStr
             Lua.TypeString  → do
                 mStr ← Lua.tostring idx
                 return $ case mStr of
-                    Just bs → "\"" <> escapeJsonText (TE.decodeUtf8 bs) <> "\""
+                    Just bs → "\"" <> escapeJsonText (TE.decodeUtf8Lenient bs) <> "\""
                     Nothing → "\"\""
             Lua.TypeTable   → luaTableToJson depth idx
             _               → do
@@ -206,7 +206,7 @@ luaValueToText depth idx
                 mStr ← Lua.tostring (-1)
                 Lua.pop 1
                 return $ case mStr of
-                    Just bs → TE.decodeUtf8 bs
+                    Just bs → TE.decodeUtf8Lenient bs
                     Nothing → "\"<" <> T.pack (show ty) <> ">\""
 
 -- | Serialize a Lua table to JSON. Detects arrays vs objects:
@@ -257,10 +257,10 @@ collectTablePairs depth tableIdx acc = do
                         Lua.pushvalue (-2)
                         mStr ← Lua.tostring (-1)
                         Lua.pop 1
-                        return $ maybe "0" TE.decodeUtf8 mStr
+                        return $ maybe "0" TE.decodeUtf8Lenient mStr
                     Lua.TypeString → do
                         mStr ← Lua.tostring (-2)
-                        return $ maybe "" TE.decodeUtf8 mStr
+                        return $ maybe "" TE.decodeUtf8Lenient mStr
                     _ → return "<key>"
             Lua.pop 1  -- pop value, keep key for next iteration
             collectTablePairs depth tableIdx ((keyText, valText) : acc)

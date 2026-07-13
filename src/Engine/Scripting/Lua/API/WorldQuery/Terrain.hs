@@ -40,7 +40,7 @@ worldGetTerrainAtFn env = do
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ case mPage of
                 Just pidBS → do
-                    mWs ← worldStateByPage env (TE.decodeUtf8 pidBS)
+                    mWs ← worldStateByPage env (TE.decodeUtf8Lenient pidBS)
                     case mWs of
                         Just ws → Just <$> readIORef (wsTilesRef ws)
                         Nothing → pure Nothing

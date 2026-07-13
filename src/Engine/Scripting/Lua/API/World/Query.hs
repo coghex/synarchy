@@ -44,7 +44,7 @@ worldGetDigInfoAtFn env = do
     gyArg ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -128,7 +128,7 @@ worldDebugTileQuadsFn env = do
     matArg ← Lua.tonumber 2
     case (pageIdArg, matArg) of
         (Just pageIdBS, Just (Lua.Number matN)) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
@@ -181,7 +181,7 @@ worldGetGemInfoAtFn env = do
     gyArg ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
@@ -211,7 +211,7 @@ worldGetSpoilInfoFn env = do
     case pageIdArg of
         Nothing → Lua.pushnil >> return 1
         Just pageIdBS → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1

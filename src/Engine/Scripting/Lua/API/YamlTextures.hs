@@ -55,7 +55,7 @@ loadMaterialYamlFn env backendState = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 -- Parse the single YAML file
@@ -134,7 +134,7 @@ loadVegetationYamlFn env backendState = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 -- Parse the single vegetation YAML file
@@ -190,7 +190,7 @@ loadFloraYamlFn env backendState = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 defs ← loadFloraYaml logger filePath
@@ -404,7 +404,7 @@ getTextureHandleFn env = do
             Lua.pushnumber (-1)
             return 1
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             result ← Lua.liftIO $ do
                 registry ← readIORef (textureNameRegistryRef env)
                 return $ lookupTextureName name registry

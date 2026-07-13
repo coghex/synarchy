@@ -29,7 +29,7 @@ loadLocationYamlFn env = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 defs ← loadLocationYaml logger filePath

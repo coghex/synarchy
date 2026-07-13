@@ -41,7 +41,7 @@ logInfoFn env = do
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
-            let msgText = TE.decodeUtf8 msgBS
+            let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
             logThreadInfo logger CatLua fullMsg
@@ -60,7 +60,7 @@ logWarnFn env = do
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
-            let msgText = TE.decodeUtf8 msgBS
+            let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
             logThreadWarn logger CatLua fullMsg
@@ -79,7 +79,7 @@ logErrorFn env = do
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
-            let msgText = TE.decodeUtf8 msgBS
+            let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":"
                               <> T.pack (show srcLine) <> "] " <> msgText
             logThreadError logger CatLua fullMsg
@@ -101,7 +101,7 @@ logDebugFn env = do
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (loggerRef env)
-            let msgText = TE.decodeUtf8 msgBS
+            let msgText = TE.decodeUtf8Lenient msgBS
                 fullMsg = "[" <> T.pack srcFileStripped <> ":" <> T.pack (show srcLine) <> "] " <> msgText
             logThreadDebug logger CatLua fullMsg
         Nothing → pure ()
@@ -132,7 +132,7 @@ setDebugCategoryFn loggerRef = do
   
   logger ← Lua.liftIO $ readIORef loggerRef
   
-  case parseCategory (TE.decodeUtf8 categoryStr) of
+  case parseCategory (TE.decodeUtf8Lenient categoryStr) of
     Nothing → do
       Lua.pushstring $ "Unknown category: " <> categoryStr
       Lua.pushboolean False

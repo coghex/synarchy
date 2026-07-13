@@ -43,7 +43,7 @@ craftExecuteFn env = do
     case (idArg, ridArg) of
         (Just n, Just ridBS) → do
             let uid = UnitId (fromIntegral n)
-                rid = TE.decodeUtf8 ridBS
+                rid = TE.decodeUtf8Lenient ridBS
             result ← Lua.liftIO $ executeCraft env uid rid
             pushCraftResult result
         _ → pushCraftResult (Left "craft.execute: expected (uid, recipeId)")
@@ -67,7 +67,7 @@ craftExecuteAtFn env = do
     case (idArg, ridArg, bidArg) of
         (Just n, Just ridBS, Just b) → do
             let uid     = UnitId (fromIntegral n)
-                rid     = TE.decodeUtf8 ridBS
+                rid     = TE.decodeUtf8Lenient ridBS
                 bid     = BuildingId (fromIntegral b)
                 mBillId = BillId . fromIntegral ⊚ billArg
             result ← Lua.liftIO $ do

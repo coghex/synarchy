@@ -25,8 +25,8 @@ uiNewPageFn env = do
 
     case (nameArg, layerArg) of
         (Just nameBS, Just layerBS) → do
-            let name  = TE.decodeUtf8 nameBS
-                layer = parseLayer (TE.decodeUtf8 layerBS)
+            let name  = TE.decodeUtf8Lenient nameBS
+                layer = parseLayer (TE.decodeUtf8Lenient layerBS)
 
             handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                 let (h, newMgr) = createPage name layer mgr
