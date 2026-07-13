@@ -1,9 +1,10 @@
-# This file's content hash IS the image tag (#784): .github/workflows/
-# ci.yml's resolve-image job tags every build `ci-<sha256 of this file,
-# 16 hex chars>` and publishes a given tag at most once — the first time
-# its content is seen. There's no version number to bump anywhere:
-# editing this file is the entire "refresh the CI image" procedure, and
-# the content-derived tag is what makes a published tag safe to treat as
+# This file's content hash (together with .github/workflows/ci-image.yml's
+# own bytes) IS the image tag (#784): ci-image.yml's tag job computes
+# `ci-<sha256 of both files, 16 hex chars>` and publishes a given tag at
+# most once — the first time that exact content pair is seen. There's no
+# version number to bump anywhere: editing this file (or ci-image.yml's
+# build recipe) is the entire "refresh the CI image" procedure, and the
+# content-derived tag is what makes a published tag safe to treat as
 # immutable (a later edit always produces a new tag, never overwrites
 # this one).
 FROM ubuntu:22.04

@@ -55,50 +55,66 @@
 # Bounding this churn also stops build-product caches from crowding the
 # shared repo cache quota and LRU-evicting the deps-store cache (#790).
 #
-# CI-image publication ordering (#784): this file and the former
-# separate ci-image.yml workflow used to race — both fired on the same
+# CI-image publication ordering (#784): this file and ci-image.yml used
+# to race as two fully independent workflows — both fired on the same
 # push, with no ordering between "publish a new image" and "consume the
 # fixed tag", so a Dockerfile-changing push could start build-test
 # against the STALE previous image while the new one was still being
 # built, and a Dockerfile-changing PR never built or validated its
-# candidate at all (ci-image.yml had no pull_request trigger). The
-# image-resolution logic now lives in THIS file as the resolve-image job
-# below, which build-test `needs:` — a same-workflow job dependency, so
-# GitHub structurally cannot start build-test's container before
-# resolve-image finishes. That's also why container.image below is an
-# expression referencing needs.resolve-image.outputs.image rather than a
-# literal tag: GitHub resolves jobs.<job>.container.image using the
-# `needs` context once every needed job has completed, so a job-level
-# container CAN depend on a job that runs earlier in the same run — the
+# candidate at all (ci-image.yml had no pull_request trigger). The fix:
+# resolve-image below calls ci-image.yml as a REUSABLE workflow
+# (`uses: ./.github/workflows/ci-image.yml`) — its jobs join THIS run's
+# dependency graph rather than running as a separate, unordered trigger
+# — and build-test `needs: resolve-image`, so GitHub structurally cannot
+# start build-test's container before resolve-image (and therefore
+# ci-image.yml's own jobs) finish. That's also why container.image below
+# is an expression referencing needs.resolve-image.outputs.image rather
+# than a literal tag: GitHub resolves jobs.<job>.container.image using
+# the `needs` context once every needed job has completed, so a
+# job-level container CAN depend on a job earlier in the same run — the
 # old belief that it couldn't (see #671's original literal-tag choice)
-# is what let publication and consumption go unordered across two
-# separate workflows in the first place.
+# is what let publication and consumption go unordered in the first
+# place.
 #
-# resolve-image tags each build content-addressably:
-# `ci-<sha256 of .github/ci/Dockerfile, first 16 hex chars>`. A tag is
-# only ever pushed ONCE — the first time that exact Dockerfile content
-# is seen — so an image reference already consumed by an in-progress or
-# historical run can never be silently overwritten with different
-# contents; a later Dockerfile edit always produces a brand-new tag
-# rather than mutating an old one. Every run (PR or push) computes this
-# tag and does a cheap registry-metadata check (`docker buildx
-# imagetools inspect`, no layer pull) to see if it already exists:
-#   - Already published (the overwhelmingly common case — no Dockerfile
-#     change): resolve-image just resolves the existing tag, no rebuild.
-#   - Not yet published (a Dockerfile-changing push OR pull_request):
-#     resolve-image builds the candidate, hard-validates its baked GHC/
-#     Cabal versions against the Dockerfile's own ARG defaults (failing
-#     the job — and therefore build-test, transitively, via `needs:` —
-#     if they don't match), and ONLY THEN pushes it under the new
-#     content tag. This is what makes a Dockerfile-changing PR build and
-#     validate its own candidate image before merge, rather than
-#     deferring the first real build to master while that PR's own CI
-#     still runs against the old contract.
+# ci-image.yml tags each build content-addressably: `ci-<sha256 of
+# .github/ci/Dockerfile ++ .github/workflows/ci-image.yml itself, first
+# 16 hex chars>` — deliberately covering BOTH files, so a PR that only
+# changes the image-build recipe (not the Dockerfile) still mints a new
+# tag and re-exercises the candidate build+validate path, not just a
+# Dockerfile edit. A tag is only ever pushed ONCE — the first time that
+# exact (Dockerfile, recipe) pair is seen — so an image reference
+# already consumed by an in-progress or historical run can never be
+# silently overwritten with different contents; a later edit to either
+# file always produces a brand-new tag rather than mutating an old one.
+# Every run (PR or push) computes this tag and does a cheap
+# registry-metadata check (`docker buildx imagetools inspect`, no layer
+# pull) to see if it already exists:
+#   - Already published (the overwhelmingly common case — neither file
+#     changed): resolve-image just resolves the existing tag, no rebuild.
+#   - Not yet published (a Dockerfile- or recipe-changing push OR
+#     pull_request): builds the candidate, hard-validates its baked
+#     GHC/Cabal versions against the Dockerfile's own ARG defaults
+#     (failing the job — and therefore build-test, transitively, via
+#     `needs:` — if they don't match), and ONLY THEN pushes it under the
+#     new content tag. This is what makes a Dockerfile/recipe-changing PR
+#     build and validate its own candidate image before merge, rather
+#     than deferring the first real build to master while that PR's own
+#     CI still runs against the old contract.
+# Docker builds aren't perfectly reproducible even from byte-identical
+# input (e.g. `apt-get update`/an unpinned ghcup download can resolve
+# different bytes on a later rebuild), so two concurrent runs that land
+# on the SAME not-yet-published tag could otherwise both build and race
+# to push possibly-different content to it. ci-image.yml's resolve job
+# closes this with a job-level `concurrency:` group keyed on the tag
+# itself: GitHub queues a second run sharing that group behind the
+# first rather than letting both execute their check-then-push window
+# concurrently, so by the time the second one's own existence check
+# runs, the first one's publish (if any) has already landed and it
+# always takes the fast, no-rebuild path instead of racing.
 # There is no manual version-bump/refresh procedure to follow any more —
-# editing the Dockerfile IS the procedure; resolve-image detects the
-# content change and publishes automatically as part of that same
-# PR/push's CI run. This supersedes ci-image.yml (deleted): its
-# build-and-push job now lives here, `needs`-ordered instead of racing.
+# editing the Dockerfile (or ci-image.yml's build recipe) IS the
+# procedure; resolve-image detects the content change and publishes
+# automatically as part of that same PR/push's CI run.
 #
 # Trade-off accepted at #526: there is NO separate from-scratch clean
 # -Werror backstop job. A warning that only surfaces on a full rebuild of
@@ -119,86 +135,16 @@ concurrency:
 
 jobs:
   # Resolves (building + validating + first-publishing when needed) the
-  # immutable, content-addressed CI image tag build-test consumes. See
-  # the header comment above for the full design (#784).
+  # immutable, content-addressed CI image tag build-test consumes. Lives
+  # in the separate reusable workflow .github/workflows/ci-image.yml
+  # (not inlined here) so that file's own content participates in the
+  # candidate's identity hash — see that file's header and the header
+  # comment above for the full design (#784).
   resolve-image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    uses: ./.github/workflows/ci-image.yml
     permissions:
       contents: read
       packages: write
-    outputs:
-      image: ${{ steps.pick.outputs.image }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute content-addressed candidate tag
-        id: hash
-        run: echo "tag=ci-$(sha256sum .github/ci/Dockerfile | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check whether this content is already published
-        id: exists
-        run: |
-          if docker buildx imagetools inspect "ghcr.io/coghex/synarchy-ci:${{ steps.hash.outputs.tag }}" >/dev/null 2>&1; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Only runs the first time this exact Dockerfile content is seen —
-      # e.g. a Dockerfile-changing PR — so an ordinary PR/push that
-      # doesn't touch the Dockerfile pays only the cheap existence check
-      # above, not a rebuild.
-      - name: Build candidate image
-        id: build
-        if: steps.exists.outputs.found != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .github/ci
-          file: .github/ci/Dockerfile
-          push: false
-          load: true
-          tags: synarchy-ci:candidate
-
-      # Demonstrates the requirement that a candidate whose exact
-      # GHC/Cabal contract doesn't match the Dockerfile's own ARG
-      # defaults fails here — before anything is published, and before
-      # build-test (which `needs:` this job) ever starts.
-      - name: Validate candidate GHC/Cabal contract
-        if: steps.build.outcome == 'success'
-        run: |
-          GHC_EXPECTED="$(grep -oP '^ARG GHC_VERSION=\K.*' .github/ci/Dockerfile)"
-          CABAL_EXPECTED="$(grep -oP '^ARG CABAL_VERSION=\K.*' .github/ci/Dockerfile)"
-          GHC_OUT="$(docker run --rm synarchy-ci:candidate /usr/local/.ghcup/bin/ghc --version)"
-          CABAL_OUT="$(docker run --rm synarchy-ci:candidate /usr/local/.ghcup/bin/cabal --version)"
-          echo "$GHC_OUT"
-          echo "$CABAL_OUT"
-          echo "$GHC_OUT" | grep -qF "$GHC_EXPECTED" || { echo "::error::candidate image's baked GHC does not match Dockerfile ARG GHC_VERSION=$GHC_EXPECTED"; exit 1; }
-          echo "$CABAL_OUT" | grep -qF "$CABAL_EXPECTED" || { echo "::error::candidate image's baked Cabal does not match Dockerfile ARG CABAL_VERSION=$CABAL_EXPECTED"; exit 1; }
-
-      # First (and only) publish of this content's tag — see the header
-      # comment: a tag is never pushed again once it exists, so this can
-      # never overwrite an image an in-progress or historical run
-      # resolved to different contents.
-      - name: Publish validated candidate
-        if: steps.build.outcome == 'success'
-        run: |
-          TAG="ghcr.io/coghex/synarchy-ci:${{ steps.hash.outputs.tag }}"
-          docker tag synarchy-ci:candidate "$TAG"
-          docker push "$TAG"
-
-      - name: Select immutable image reference
-        id: pick
-        run: echo "image=ghcr.io/coghex/synarchy-ci:${{ steps.hash.outputs.tag }}" >> "$GITHUB_OUTPUT"
 
   build-test:
     needs: resolve-image

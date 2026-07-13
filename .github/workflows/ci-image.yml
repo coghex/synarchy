@@ -1,0 +1,135 @@
+# Reusable workflow (#784): resolves the immutable CI image build-test
+# consumes. Called from ci.yml's resolve-image job via
+# `uses: ./.github/workflows/ci-image.yml` — that `uses:` join is what
+# makes this file's jobs part of the SAME workflow run's dependency
+# graph as build-test, rather than a second, independently-triggered
+# workflow racing the first (see ci.yml's header comment for the full
+# design and why that distinction is the actual fix for #784).
+#
+# This logic lives in its OWN file, not inlined into ci.yml, so that
+# this file's own bytes participate in the candidate identity hash below
+# — a PR that changes the image-build recipe here (e.g. the build
+# action's context/options, the validation logic) without touching the
+# Dockerfile still mints a new tag and re-exercises the full candidate
+# build+validate+publish path, exactly like a Dockerfile edit does.
+#
+# Tag = `ci-<sha256 of (this file's bytes ++ .github/ci/Dockerfile's
+# bytes), first 16 hex chars>`, computed once by the `tag` job below and
+# shared by `resolve`. A given tag is pushed at MOST once — the first
+# time that exact (recipe, Dockerfile) pair is seen. `resolve`'s
+# job-level `concurrency:` group is keyed on that tag so two runs that
+# land on the same not-yet-published tag (most commonly: two unrelated
+# PRs that both leave the Dockerfile and this file untouched, so both
+# compute whatever tag master currently has) can never race their
+# check-then-push windows against each other — Docker builds aren't
+# perfectly reproducible even from byte-identical input (unpinned
+# `apt-get`/ghcup fetches can resolve differently on a later rebuild),
+# so two independent builds of "the same" tag really could push
+# different bytes to it without this lock.
+on:
+  workflow_call:
+    outputs:
+      image:
+        description: Immutable CI image reference for this revision.
+        value: ${{ jobs.resolve.outputs.image }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.hash.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute content-addressed candidate tag
+        id: hash
+        run: |
+          echo "tag=ci-$(cat .github/workflows/ci-image.yml .github/ci/Dockerfile | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+  resolve:
+    needs: tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Keyed on the candidate tag (see header comment): serializes any
+    # two runs that would otherwise race to check-then-push the SAME
+    # not-yet-published tag, without affecting runs that land on a
+    # different (e.g. genuinely new Dockerfile content) tag.
+    concurrency:
+      group: ci-image-${{ needs.tag.outputs.tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.pick.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether this content is already published
+        id: exists
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only runs the first time this exact (recipe, Dockerfile) content
+      # is seen, thanks to the concurrency lock above ensuring no other
+      # run can publish it out from under this check — so an ordinary
+      # PR/push that changes neither file pays only the cheap existence
+      # check, never a rebuild.
+      - name: Build candidate image
+        id: build
+        if: steps.exists.outputs.found != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .github/ci
+          file: .github/ci/Dockerfile
+          push: false
+          load: true
+          tags: synarchy-ci:candidate
+
+      # Demonstrates the requirement that a candidate whose exact
+      # GHC/Cabal contract doesn't match the Dockerfile's own ARG
+      # defaults fails here — before anything is published, and before
+      # build-test (which transitively needs this workflow) ever starts.
+      - name: Validate candidate GHC/Cabal contract
+        if: steps.build.outcome == 'success'
+        run: |
+          GHC_EXPECTED="$(grep -oP '^ARG GHC_VERSION=\K.*' .github/ci/Dockerfile)"
+          CABAL_EXPECTED="$(grep -oP '^ARG CABAL_VERSION=\K.*' .github/ci/Dockerfile)"
+          GHC_OUT="$(docker run --rm synarchy-ci:candidate /usr/local/.ghcup/bin/ghc --version)"
+          CABAL_OUT="$(docker run --rm synarchy-ci:candidate /usr/local/.ghcup/bin/cabal --version)"
+          echo "$GHC_OUT"
+          echo "$CABAL_OUT"
+          echo "$GHC_OUT" | grep -qF "$GHC_EXPECTED" || { echo "::error::candidate image's baked GHC does not match Dockerfile ARG GHC_VERSION=$GHC_EXPECTED"; exit 1; }
+          echo "$CABAL_OUT" | grep -qF "$CABAL_EXPECTED" || { echo "::error::candidate image's baked Cabal does not match Dockerfile ARG CABAL_VERSION=$CABAL_EXPECTED"; exit 1; }
+
+      # First (and only) publish of this content's tag. Safe from the
+      # concurrency-race this workflow used to have (see header comment)
+      # because the `resolve` job's concurrency group already ensures no
+      # other run holding the SAME tag can be mid-publish right now.
+      - name: Publish validated candidate
+        if: steps.build.outcome == 'success'
+        run: |
+          TAG="ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}"
+          docker tag synarchy-ci:candidate "$TAG"
+          docker push "$TAG"
+
+      - name: Select immutable image reference
+        id: pick
+        run: echo "image=ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
