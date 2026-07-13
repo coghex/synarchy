@@ -297,11 +297,14 @@ the explicit contract.
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
 - `config/` — YAML config. `*_default.yaml` / `pathing.yaml` /
   `world_gen_default.yaml` are versioned defaults/templates (tracked).
-  `keybinds.yaml`, `video.yaml`, `notifications.yaml` are local
-  runtime state (gitignored) that the settings UI's Save actions
-  write — absent on a fresh clone, where boot falls back to the
+  `keybinds.local.yaml`, `video.local.yaml`, `notifications.local.yaml`
+  are local runtime state (gitignored) that the settings UI's Save
+  actions write — absent on a fresh clone, where boot falls back to the
   `_default.yaml` template or (notifications) materializes from
-  `data/notification_categories.yaml` (#638)
+  `data/notification_categories.yaml` (#638). `keybinds.yaml`,
+  `video.yaml`, `notifications.yaml` are ALSO tracked, but only as a
+  pre-#786 upgrade source read once at first boot if a local file
+  doesn't exist yet — see "Testing config state headless" below (#786)
 - `data/` — Game data YAML (materials, vegetation, flora, units)
 - `assets/` — Images and graphical resources
 - `scripts/` — Lua scripts for game logic

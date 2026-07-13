@@ -44,9 +44,9 @@ the affected fields as unclassified.
 | `windowStateRef` | global | Exclude | — | OS/window-owned | none yet |
 | `framebufferSizeRef` | global | Exclude | — | OS/window-owned | none yet |
 | `fpsRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
-| `brightnessRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
-| `pixelSnapRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
-| `textureFilterRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
+| `brightnessRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
+| `pixelSnapRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
+| `textureFilterRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
 | `inputQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `inputBarrierNextRef` | global | Exclude | — | session-only automation token allocator | none yet |
 | `inputBarrierRef` | global | Exclude | — | session-only automation token allocator | none yet |

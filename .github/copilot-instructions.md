@@ -25,7 +25,7 @@
   - `World.Thread` drains world commands, advances world simulation/loading, and publishes world quads for rendering.
   - `Unit.Thread` processes unit commands and movement, then publishes render-visible unit state.
 - UI and game flow are Lua-driven. The Lua bootstrap in `scripts/init.lua` loads the shell, debug, unit manager, and UI manager scripts, so many gameplay/UI changes require coordinated Haskell API and Lua script edits.
-- Engine startup reads repository configuration from YAML files in `config/` (for example `video.yaml`, `keybinds.yaml`, and `world_gen_default.yaml`), while gameplay content is also driven by YAML-backed loaders in the engine and Lua scripts.
+- Engine startup reads repository configuration from YAML files in `config/` (for example `video.local.yaml`, `keybinds.local.yaml`, and `world_gen_default.yaml`), while gameplay content is also driven by YAML-backed loaders in the engine and Lua scripts.
 
 ## Key conventions
 

@@ -31,8 +31,9 @@ extra-doc-files:    CHANGELOG.md
 -- relative paths at run time — game-data YAML, image/font assets, the
 -- Lua game scripts, and the versioned config templates. The config
 -- entries are enumerated (not globbed) on purpose: config/ also holds
--- gitignored local runtime state (keybinds.yaml, video.yaml,
--- notifications.yaml, #638) that a glob would leak into the tarball.
+-- gitignored local runtime state (keybinds.local.yaml, video.local.yaml,
+-- notifications.local.yaml, #638/#786) that a glob would leak into the
+-- tarball.
 extra-source-files: cbits/*.h
                     data/**/*.yaml
                     assets/**/*.png
