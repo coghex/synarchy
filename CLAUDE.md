@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/haskell_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
 - **Debug output:** Set `ENGINE_DEBUG=Vulkan,Graphics,etc...` environment variable
 
 ## Testing Tiers
@@ -26,7 +26,9 @@ stays in seconds and the expensive gates run once, at the end.
    ~2 min) · `python3 tools/test_audit.py` (instant) ·
    `python3 tools/lua_module_budget.py` (instant — #538/#541/#545
    line-budget guard for split Lua modules such as unit AI,
-   unit-resource physiology, and the debug overlay).
+   unit-resource physiology, and the debug overlay) ·
+   `python3 tools/haskell_module_budget.py` (instant — #787's Haskell
+   equivalent, guarding the input-thread facade + dispatch split).
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (adds the
    w128 volcano exposure case, +~25 s), then re-capture baselines
@@ -59,8 +61,9 @@ master, on Linux: full build with `-Werror` (the #435 warning-clean
 state is enforced, dependency warnings excluded), both test-suite
 builds, the headless suite, `test_audit.py`, `tools/lua_module_budget.py`
 (#538/#541/#545 — fails if a Lua module split to stay reviewable grows
-back past its agreed line budget), and `world_check --quick` — all
-blocking. Worldgen output proved bit-identical between
+back past its agreed line budget), `tools/haskell_module_budget.py`
+(#787 — the same guard for the Haskell input-thread facade split), and
+`world_check --quick` — all blocking. Worldgen output proved bit-identical between
 macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
 tracked baselines are platform-agnostic; a worldgen-output PR that
 skips its tier-3 rebaseline fails CI.
@@ -158,6 +161,16 @@ The engine uses multiple worker threads communicating via STM (TVar, queues):
 - **Lua scripting thread:** Runs Lua scripts (`Engine.Scripting.Lua.Thread`)
 - **World thread:** Procedural generation and simulation (`World.Thread`)
 - **Unit thread:** Actor/unit management (`Unit.Thread`)
+
+`Engine.Input.Thread` (#787) is a thin thread-lifecycle facade —
+`startInputThread` + the `runInputLoop` drain/sleep tick. Queue
+draining and top-level per-event routing live in
+`Engine.Input.Thread.Dispatch` (re-exported through the facade so
+`processInputs`/`processInput` resolve the same either way); per-domain
+dispatch lives in `Engine.Input.Thread.Keyboard`,
+`Engine.Input.Thread.Char`, `Engine.Input.Thread.Mouse`, and
+`Engine.Input.Thread.Scroll`. Each file is capped at 500 physical
+lines (`tools/haskell_module_budget.py`, wired into CI and `make ci`).
 
 ### Graphics pipeline
 Vulkan-based renderer with GLFW windowing. Key subsystems:
