@@ -205,6 +205,42 @@ spec = do
                         c `shouldSatisfy` (≥ 0)
                     Nothing → expectationFailure "expected Just"
 
+            it "a huge but FINITE climb factor is capped at the ceiling, not passed through raw" $ do
+                -- 3e6 doesn't overflow Float on its own (3e6 * 10 = 3e7,
+                -- nowhere near Float's ~3.4e38 max) — this must be caught
+                -- by an explicit ceiling, not by an isInfinite/isNaN check.
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 4 else 14
+                        in (z, Nothing)
+                    pcHugeFinite = pc { pcClimbFactor = 3.0e6 }
+                case stepCost pcHugeFinite reg wtd (7, 5) (8, 5) of
+                    Just c  → c `shouldSatisfy` (< 3.0e6)
+                    Nothing → expectationFailure "expected Just"
+
+            it "a per-step cost stays bounded such that a full A* search budget can't overflow (#815 round 2)" $ do
+                -- Unit.Pathing.AStar bounds a local search to at most
+                -- maxRadius*maxRadius*4 expanded nodes (1024 for the
+                -- default radius 16). A SINGLE step here (climb_factor
+                -- 1e36 over a 1-z climb) is individually finite — nowhere
+                -- near Float's ~3.4e38 max on its own — so an isNaN/
+                -- isInfinite-only guard would let it straight through.
+                -- But 1024 such steps summed (1024 * 1e36 ≈ 1.024e39)
+                -- DOES overflow Float — this is exactly the "several
+                -- below-ceiling-but-still-huge steps overflow once
+                -- accumulated across a path" failure mode; the ceiling
+                -- must catch it at the single-step level, before
+                -- `Unit.Pathing.AStar`'s g-score ever sums it.
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 4 else 5
+                        in (z, Nothing)
+                    pcAstronomical = pc { pcClimbFactor = 1.0e36 }
+                case stepCost pcAstronomical reg wtd (7, 5) (8, 5) of
+                    Just c  → do
+                        let worstCaseAccumulated = c * 1024
+                        isInfinite worstCaseAccumulated `shouldBe` False
+                        isNaN worstCaseAccumulated `shouldBe` False
+                    Nothing → expectationFailure "expected Just"
+
         describe "fluid impassability" $ do
             let wtd = worldWith $ customChunk $ \(lx, _) →
                     if lx ≡ 5 then (0, Just Ocean)
