@@ -21,7 +21,7 @@
 --     modal ("Key [KEY] is already bound to [ACTION]") with Cancel / Remap.
 --
 -- The keybind data lives in the engine (keyBindingsRef, persisted to
--- config/keybinds.yaml). This tab only reads engine.getKeybinds() and
+-- config/keybinds.local.yaml). This tab only reads engine.getKeybinds() and
 -- edits through the add/remove/save API. Escape and Grave are engine-
 -- reserved and the API refuses them, so they can never be captured here.
 

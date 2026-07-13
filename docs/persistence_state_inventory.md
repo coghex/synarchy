@@ -39,11 +39,11 @@ the affected fields as unclassified.
 |---|---|---|---|---|---|
 | `engineConfig` | global | Exclude | — | boot flag, not session state | none yet |
 | `engineStateRef` | global | Rebuild | see §2 (`EngineState` fields classified individually) | the IORef itself is always freshly allocated at boot; it is never the pointer that's restored, only the value it comes to hold, which is why the interesting classification decisions live on `EngineState`'s own fields (§2), not here | none yet |
-| `videoConfigRef` | global | Exclude | — | local runtime config (`config/video.yaml`, #638) | `tools/config_state_probe.py` |
+| `videoConfigRef` | global | Exclude | — | local runtime config (`config/video.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `windowSizeRef` | global | Exclude | — | OS/window-owned | none yet |
 | `windowStateRef` | global | Exclude | — | OS/window-owned | none yet |
 | `framebufferSizeRef` | global | Exclude | — | OS/window-owned | none yet |
-| `fpsRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
+| `fpsRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
 | `brightnessRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
 | `pixelSnapRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
 | `textureFilterRef` | global | Exclude | — | display setting (`video.yaml`) | `tools/config_state_probe.py` |
@@ -60,7 +60,7 @@ the affected fields as unclassified.
 | `nextItemInstanceIdRef` | global | Persist exactly | — | must restore as `max(loaded, current)`, never lower (#67) — the existing `sdNextItemInstanceId` rule | `tools/item_instance_probe.py` |
 | `fontCacheRef` | global | Rebuild | font assets on disk | rebuilt at boot | none yet |
 | `inputStateRef` | global | Exclude | — | live device state (keys/buttons down) | none yet |
-| `keyBindingsRef` | global | Exclude | — | local runtime config (`config/keybinds.yaml`, #638) | `tools/config_state_probe.py` |
+| `keyBindingsRef` | global | Exclude | — | local runtime config (`config/keybinds.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `currentKeyDownRef` | global | Exclude | — | transient dispatch flag, `Nothing` outside a key-down broadcast | none yet |
 | `textBuffersRef` | global | Exclude | — | transient UI text-input buffers | none yet |
 | `cameraRef` | global | Exclude | active page's `WorldCamera` + `wpsCameraZoom`/`wpsCameraFacing` | session-only render camera; see §8 for the per-page source of truth | none yet |
@@ -110,7 +110,7 @@ the affected fields as unclassified.
 | `locationDefsRef` | global | Rebuild | `data/*.yaml` location content | see §9 | `tools/location_content_probe.py` |
 | `lootTableRegistryRef` | global | Rebuild | `data/*.yaml` loot content | see §9 | none yet |
 | `eventStoreRef` | global | Exclude | — | player-event ring buffer, explicitly session-only | `tools/injury_log_probe.py` (stream behavior) |
-| `notificationCfgRef` | global | Exclude | — | local runtime config (`config/notifications.yaml`, #638) | `tools/config_state_probe.py` |
+| `notificationCfgRef` | global | Exclude | — | local runtime config (`config/notifications.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `notificationOrder` | global | Exclude | — | local runtime config, derived ordering | `tools/config_state_probe.py` |
 | `popupQueueRef` | global | Exclude | — | transient popup event queue | none yet |
 
