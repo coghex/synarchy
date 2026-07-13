@@ -141,10 +141,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "wire": (TARGETED, "narrow #359 wire connection/path-builder/build-AI regression"),
     "lua_orphan_prune": (TARGETED, "narrow #195 Lua per-id AI-state-pruning save/load "
                                    "regression; ~40s solo, passed all 3 solo runs (#724)"),
-    # --- base-failing: fails today on master for content reasons unrelated
-    # to CI infrastructure; gating it would redden every PR. ---
-    "state_of_mind": (BASE_FAILING, "fails on master: the awareness/perception term doesn't "
-                                    "measurably drag mood over the probed ticks (#350)"),
+    "state_of_mind": (TARGETED, "narrow #350 state-of-mind/awareness-term regression; "
+                                "periodic thoughts (#351) are neutralised for the probe's "
+                                "own engine so a random 0-30s thought can't land inside its "
+                                "mood-drift sampling windows (#793)"),
+    # (no probes currently classified base-failing — the category stays
+    # defined below for any future genuinely-broken-on-master case.)
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),
