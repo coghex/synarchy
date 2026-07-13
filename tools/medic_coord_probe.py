@@ -39,7 +39,7 @@ Determinism notes (#589 — stabilized for the blocking CI gate):
     calls (one per think-tick) before it's free, giving M2 a comfortable
     multi-second margin to lock its own claim on P2 first.
   * A stray `unit_warning` (e.g. an unrelated stuck-walk watchdog) auto-
-    pauses the whole sim per `config/notifications.yaml`; the poll loop
+    pauses the whole sim per `config/notifications.local.yaml`; the poll loop
     defensively un-pauses every iteration so a passing hiccup can't freeze
     the scenario for the rest of the run.
 
@@ -191,7 +191,7 @@ def main() -> int:
         while time.time() - t0 < args.seconds:
             t = time.time() - t0
             # A stray unit_warning (e.g. an unrelated stuck-walk watchdog)
-            # auto-pauses the whole sim per config/notifications.yaml —
+            # auto-pauses the whole sim per config/notifications.local.yaml —
             # defensively keep unpausing so a passing hiccup elsewhere
             # can't freeze this scenario for the rest of the run.
             send(args.port, "engine.setPaused(false)", expect_result=False)

@@ -632,7 +632,7 @@ end
 -- checkbox icon is clicked. Looks up the popup via the reverse map,
 -- toggles the category's `popup` notification setting through the
 -- existing setNotificationOverrides path (which writes through to
--- config/notifications.yaml on the next persist), and swaps the
+-- config/notifications.local.yaml on the next persist), and swaps the
 -- sprite texture to reflect the new state. The popup stays open so
 -- the player can still read or interact with the current event.
 function popup.onMuteToggleClick(elemHandle)

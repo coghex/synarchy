@@ -73,6 +73,9 @@ PROBES = [
      "real fight headless; verifies swing/death animations play"),
     ("concussion_revive", "concussion_revive_probe.py",
      "checkRevive concussion-band hysteresis (#304)"),
+    ("config_migration", "config_migration_probe.py",
+     "pre-#661 legacy config (video/keybinds/notifications) migrates to "
+     "*.local.yaml on boot: idempotent, local-wins, malformed-fails-safe (#786)"),
     ("config_state", "config_state_probe.py",
      "local runtime config (video/keybinds/notifications) vs versioned "
      "_default.yaml templates never dirties git (#638)"),

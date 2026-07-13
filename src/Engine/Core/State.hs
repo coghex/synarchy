@@ -301,7 +301,7 @@ data EngineEnv = EngineEnv
   , notificationCfgRef ∷ IORef NotificationCfg
     -- ^ Resolved notification settings keyed by category id. Loaded
     --   at boot from 'data/notification_categories.yaml' merged with
-    --   'config/notifications.yaml'. Wrapped in an IORef so the
+    --   'config/notifications.local.yaml' (#786). Wrapped in an IORef so the
     --   Phase 2 settings tab can update it at runtime (each checkbox
     --   toggle writes both the IORef and the overrides YAML). The
     --   emitEvent read path takes a single 'readIORef' per call —

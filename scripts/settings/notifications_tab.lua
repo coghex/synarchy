@@ -13,7 +13,7 @@
 --
 -- Apply timing: each checkbox click writes through immediately via
 -- engine.setNotificationOverrides — the engine updates the in-memory
--- IORef and persists to config/notifications.yaml. There is no
+-- IORef and persists to config/notifications.local.yaml. There is no
 -- "pending" state for this tab and no Apply/Cancel for notification
 -- changes (consistent with the user's choice on 2026-05-18).
 
