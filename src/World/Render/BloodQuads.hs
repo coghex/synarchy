@@ -25,6 +25,7 @@
 --   frame — it appears once 'uploadBloodTextures' catches up.
 module World.Render.BloodQuads
     ( uploadBloodTextures
+    , disposeQueuedBloodTextures
     , renderBloodDecalQuads
     ) where
 
@@ -58,6 +59,7 @@ import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , defaultGridConfig)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.ViewBounds (computeViewBounds)
+import World.Blood.Teardown (drainBloodDisposalRecords)
 import World.Types
 
 -- * GPU upload / eviction sync (EngineM, once per frame)
@@ -110,21 +112,63 @@ syncWorldBloodTextures dev pdev cmdPool queue bindless0 (_pid, ws) = do
 
 type HandleMap = HM.HashMap BloodTextureId (TextureHandle, IO ())
 
--- | Unregister + dispose one evicted texture's GPU resources (after the
+-- | Unregister + dispose one blood texture's GPU resources (after the
 --   caller has already waited for the device to go idle — see
---   'syncWorldBloodTextures'), and drop its now-stale 'textureSizeRef'
---   entry (issue #606 review: eviction must fully release generated
---   bookkeeping, not just the bindless slot).
+--   'syncWorldBloodTextures' / 'disposeQueuedBloodTextures'): drop its
+--   bindless slot, its now-stale 'textureSizeRef' entry (issue #606
+--   review: eviction must fully release generated bookkeeping, not just
+--   the bindless slot), and run its own image/view cleanup. Shared by
+--   FIFO 'evictOne' and world-teardown disposal (#788).
+disposeBloodRecord ∷ Device → BindlessTextureSystem → (TextureHandle, IO ())
+                   → EngineM ε σ BindlessTextureSystem
+disposeBloodRecord dev bl (h, cleanup) = do
+    bl' ← unregisterTexture dev h bl
+    env ← ask
+    liftIO $ atomicModifyIORef' (textureSizeRef env) (\m → (HM.delete h m, ()))
+    liftIO cleanup
+    pure bl'
+
+-- | Drop one FIFO-evicted texture from a live world's handle map.
 evictOne ∷ Device → (BindlessTextureSystem, HandleMap) → BloodTextureId
         → EngineM ε σ (BindlessTextureSystem, HandleMap)
 evictOne dev (bl, known) tid = case HM.lookup tid known of
-    Nothing            → pure (bl, known)
-    Just (h, cleanup)  → do
-        bl' ← unregisterTexture dev h bl
-        env ← ask
-        liftIO $ atomicModifyIORef' (textureSizeRef env) (\m → (HM.delete h m, ()))
-        liftIO cleanup
+    Nothing      → pure (bl, known)
+    Just record  → do
+        bl' ← disposeBloodRecord dev bl record
         pure (bl', HM.delete tid known)
+
+-- | Drain 'bloodDisposeQueue' (#788): free the blood-texture GPU
+--   resources of world pages that a lifecycle path (destroy /
+--   destroy-all / init- or arena- or load-replacement) removed from
+--   'wmWorlds', which 'uploadBloodTextures' can therefore no longer
+--   reach. Runs on the render thread beside 'uploadBloodTextures', but —
+--   unlike it — is NOT gated on graphical mode: it must still drain the
+--   queue headless so nothing accumulates. 'drainBloodDisposalRecords'
+--   pulls every queued page's remaining records out of its live handle
+--   'IORef' (emptying it); a still-in-flight FIFO 'evictOne' on the same
+--   map freed only what it removed, so this frees a disjoint set — no
+--   double-free. Idempotent (a ref enqueued twice yields nothing the
+--   second time). One 'deviceWaitIdle', only when there is something to
+--   destroy, for the same in-flight-frame reasoning 'syncWorldBloodTextures'
+--   documents. Safe no-op with no GPU: headless never uploads, so the
+--   drained record set is always empty and the device branch is skipped.
+disposeQueuedBloodTextures ∷ EngineM ε σ ()
+disposeQueuedBloodTextures = do
+    env ← ask
+    records ← liftIO $ drainBloodDisposalRecords (bloodDisposeQueue env)
+    when (not (null records)) $ do
+        gs ← gets graphicsState
+        mBindless ← liftIO $ readIORef (textureSystemRef env)
+        case (vulkanDevice gs, mBindless) of
+            (Just dev, Just bindless0) → do
+                liftIO (deviceWaitIdle dev)
+                bindless1 ← foldM (disposeBloodRecord dev) bindless0 records
+                liftIO $ writeIORef (textureSystemRef env) (Just bindless1)
+            -- No device (should be unreachable: records only exist once a
+            -- device uploaded them, and the engine holds one device for
+            -- the whole session). Run the image/view cleanups best-effort
+            -- rather than leak; the bindless slots die with the device.
+            _ → liftIO $ mapM_ snd records
 
 uploadOne ∷ Device → PhysicalDevice → CommandPool → Queue
          → (BindlessTextureSystem, HandleMap) → BloodTextureDescriptor

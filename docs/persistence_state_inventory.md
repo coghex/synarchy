@@ -79,6 +79,7 @@ the affected fields as unclassified.
 | `textureSystemRef` | global | Exclude | — | GPU bindless texture system | none yet |
 | `samplerCacheRef` | global | Exclude | — | GPU sampler cache | none yet |
 | `textureSizeRef` | global | Exclude | — | GPU texture dimension cache | none yet |
+| `bloodDisposeQueue` | global | Exclude | — | transient cross-thread GPU-dispose transport queue (#788); see contract §3 | `tools/blood_gpu_lifecycle_probe.py` |
 | `defaultFaceMapSlotRef` | global | Exclude | — | GPU texture slot | none yet |
 | `floraCatalogRef` | global | Rebuild | `data/*.yaml` flora content | reloaded fresh from YAML at boot; species referenced by numeric id from world state (see §9 re: its unused `Serialize` instance) | `tools/flora_growth_probe.py` |
 | `materialRegistryRef` | global | Rebuild | built-in material table | boot-time, not YAML-driven | none yet |

@@ -309,16 +309,24 @@ fills in the pieces #604 deliberately left open:
   generated `width`/`height`/`pixelHash` (regenerated on demand via
   `generateBloodTexture` — never cached alongside the descriptor, so
   it can't drift from what actually gets uploaded).
-- **Scope cut: no GPU cleanup on world teardown.** FIFO eviction
-  *within* a live world always unregisters + disposes the GPU texture
-  (requirement 5). A handful of world-teardown sites (full page
-  removal, save-load stale-page cleanup) do NOT — the last few
-  registered blood textures for a destroyed world page currently leak
-  their GPU resource rather than routing a dispose signal across the
-  world→render thread boundary for content that's already explicitly
-  out of scope for persistence. Bounded by `defaultBloodTextureCap`
-  tiny (≤32×32) textures per destroyed world page; a follow-up if it
-  ever matters in practice.
+- **GPU cleanup on world teardown (#788).** FIFO eviction *within* a
+  live world always unregisters + disposes the GPU texture (requirement
+  5). World-lifecycle paths that remove or replace a page — single-page
+  destroy, destroy-all (Exit to Menu), same-id `world.init`, arena
+  replacement, and save-load page replacement — now do the same for
+  whatever blood textures the orphaned page still held. Those paths run
+  on the world thread with no GPU access, so each hands the orphaned
+  page's live `wsBloodTextureHandlesRef` to the render thread over
+  `EngineEnv.bloodDisposeQueue` (`World.Blood.Teardown`); the render
+  thread drains it beside `uploadBloodTextures`
+  (`disposeQueuedBloodTextures`), running the same
+  bindless-unregister + `textureSizeRef`-delete + image/view-cleanup
+  sequence as FIFO eviction, then empties the map. Enqueuing the *live*
+  ref (not a snapshot) keeps it disjoint from any still-in-flight FIFO
+  eviction of the same map, so no handle is freed twice; a single
+  `deviceWaitIdle` covers in-flight frames; the drain is idempotent and
+  a safe no-op headless (nothing ever uploads there, so nothing is
+  enqueued with records).
 
 ## Implementation notes (#607)
 

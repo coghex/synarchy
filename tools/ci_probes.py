@@ -147,6 +147,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),
+    "blood_gpu_lifecycle": (NEEDS_GPU, "offscreen boot: uploadBloodTextures needs a real Vulkan "
+                                       "device to upload/dispose blood textures (#788) — no GPU on the CI runner"),
     "preview": (NEEDS_GPU, "real preview boot creates a GLFW window and calls "
                            "initializeVulkan (app/App/Preview.hs), same as the "
                            "graphical boot path — no GPU on the CI runner (#722)"),

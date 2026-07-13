@@ -90,6 +90,7 @@ initializeEngineWith logBackend = do
   luaToEngineQueue ← Q.newQueue
   engineToLuaQueue ← Q.newQueue
   screenshotRequestQueue ← Q.newQueue
+  bloodDisposeQueue ← Q.newQueue
   
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
@@ -228,6 +229,7 @@ initializeEngineWith logBackend = do
         , textureSystemRef   = textureSystemRef
         , samplerCacheRef    = samplerCacheRef
         , textureSizeRef     = texSizeRef
+        , bloodDisposeQueue  = bloodDisposeQueue
         , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         , floraCatalogRef    = floraCatRef
         , materialRegistryRef = materialRegistryRef

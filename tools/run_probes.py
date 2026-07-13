@@ -59,6 +59,8 @@ PROBES = [
      "blood decal model: texture reuse/eviction, render quads, wetness-tint aging (#604, #606)"),
     ("blood_impact", "blood_impact_probe.py",
      "wound-kind/severity -> impact-blood style/volume mapping (#607)"),
+    ("blood_gpu_lifecycle", "blood_gpu_lifecycle_probe.py",
+     "blood GPU textures disposed on world destroy/replace teardown paths (#788; offscreen, needs a GPU)"),
     ("cargo_capacity", "cargo_capacity_probe.py",
      "depositToCargo weighs the actual ItemInstance, not the def base weight (#189)"),
     ("chop", "chop_probe.py",

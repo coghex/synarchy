@@ -18,6 +18,7 @@ import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
 import World.Thread.Helpers (unWorldPageId)
+import World.Blood.Teardown (enqueueBloodDisposalForPage, enqueueBloodDisposalAll)
 
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()
 handleWorldTickCommand _ _ _ = return ()
@@ -44,11 +45,17 @@ handleWorldDestroyCommand env logger pageId = do
     -- them for a later re-show); only this world's sim is touched.
     Q.writeQueue (simQueue env) (SimDropWorld pageId)
 
+    -- Reclaim this page's blood-texture GPU resources (#788): hand its
+    -- live handle map to the render thread BEFORE the page drops out of
+    -- wmWorlds and becomes unreachable to uploadBloodTextures.
+    mgr ← readIORef (worldManagerRef env)
+    enqueueBloodDisposalForPage (bloodDisposeQueue env) mgr pageId
+
     -- Remove from visible list
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        (mgr { wmVisible = filter (/= pageId) (wmVisible mgr)
-             , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr)
-             }, ())
+    atomicModifyIORef' (worldManagerRef env) $ \mgr' →
+        (mgr' { wmVisible = filter (/= pageId) (wmVisible mgr')
+              , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr')
+              }, ())
 
     -- Forget this page in the save-load provenance (every save's set): once
     -- destroyed, a page later RECREATED under the same id (Lua can recycle any
@@ -78,6 +85,9 @@ handleWorldDestroyAllCommand env logger = do
     -- being destroyed, so its chunks are gone for good (#58/#61).
     forM_ (map fst (wmWorlds mgr)) $ \pid →
         Q.writeQueue (simQueue env) (SimDropWorld pid)
+    -- Reclaim every page's blood-texture GPU resources (#788) before
+    -- wmWorlds is cleared out from under uploadBloodTextures.
+    enqueueBloodDisposalAll (bloodDisposeQueue env) mgr
     atomicModifyIORef' (worldManagerRef env) $ \m →
         (m { wmWorlds = [], wmVisible = [] }, ())
     -- Forget all save-load provenance: the next game's first load must not

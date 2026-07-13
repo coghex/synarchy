@@ -61,6 +61,7 @@ import qualified Test.Headless.Language.Generated as LanguageGenerated
 import qualified Test.Headless.Blood.Types as BloodTypes
 import qualified Test.Headless.Blood.Texture as BloodTexture
 import qualified Test.Headless.Blood.Impact as BloodImpact
+import qualified Test.Headless.Blood.Teardown as BloodTeardown
 import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
@@ -156,6 +157,7 @@ main = hspec $ do
     describe "Blood.Types" BloodTypes.spec
     describe "Blood.Texture" BloodTexture.spec
     describe "Blood.Impact" BloodImpact.spec
+    describe "Blood.Teardown" BloodTeardown.spec
     describe "Create World player-facing controls" CreateWorldControls.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec

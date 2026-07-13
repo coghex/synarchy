@@ -18,6 +18,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -93,6 +94,12 @@ restoreSavedPage env logger registry palette catalog currentBm currentUm
         worldState ← emptyWorldState
         let phaseRef   = wsLoadPhaseRef worldState
             totalSteps = 4
+
+        -- Loading over an existing restore id orphans its old WorldState;
+        -- reclaim that page's blood-texture GPU resources (#788) before it
+        -- drops out of wmWorlds in the replace below.
+        do preMgr ← readIORef (worldManagerRef env)
+           enqueueBloodDisposalForPage (bloodDisposeQueue env) preMgr rid
 
         -- Register early so the render thread can find this world when
         -- uploading the zoom atlas (same as init path). Dedup by restore id
