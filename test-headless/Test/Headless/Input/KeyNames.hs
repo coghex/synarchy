@@ -4,7 +4,7 @@
 --   and every name it can produce must round-trip through 'textToKey'
 --   and resolve to real GLFW keys via 'parseKeyName' — so anything an
 --   event hands to Lua is pollable with isKeyDown and bindable in
---   keybinds.yaml. The reachability test is the one that would have
+--   keybinds.local.yaml. The reachability test is the one that would have
 --   caught the dead-Home/End bug (a Key constructor with no
 --   fromGLFWKey case).
 module Test.Headless.Input.KeyNames (spec) where

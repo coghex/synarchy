@@ -227,8 +227,8 @@ function repairUtility(uid, s, params)
     -- whose remaining headroom can't cover both would otherwise claim,
     -- fail to fetch, and immediately re-claim the SAME candidate (still
     -- degraded, now sitting in its own inventory) forever — a repeated
-    -- "unit_warning" pause storm (config/notifications.yaml pauses on
-    -- that category) instead of a clean "can't do this job right now" bail.
+    -- "unit_warning" pause storm (config/notifications.local.yaml pauses
+    -- on that category) instead of a clean "can't do this job right now" bail.
     local needed = 0
     if cand.onMule then
         needed = needed + deliverItemWeight(cand.defName)

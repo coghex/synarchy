@@ -79,11 +79,14 @@ cabal test synarchy-test-headless
   `keybinds_default.yaml`, `video_default.yaml`, `pathing.yaml`,
   `world_gen_default.yaml`. Local runtime state (gitignored,
   machine-specific, written by the settings UI's Save actions):
-  `keybinds.yaml`, `video.yaml`, `notifications.yaml` — absent on a
-  fresh clone; the engine falls back to the matching `_default.yaml`
-  template (keybinds/video) or materializes the file from
-  `data/notification_categories.yaml`'s defaults (notifications) until
-  the first Save creates it (#638)
+  `keybinds.local.yaml`, `video.local.yaml`, `notifications.local.yaml`
+  — absent on a fresh clone; the engine falls back to the matching
+  `_default.yaml` template (keybinds/video) or materializes the file
+  from `data/notification_categories.yaml`'s defaults (notifications)
+  until the first Save creates it (#638). `keybinds.yaml`, `video.yaml`,
+  and `notifications.yaml` are ALSO tracked, but only as a one-time
+  upgrade source for a pre-#786 direct update (#786) — never read or
+  written after the local file exists
 - `data/` — game data YAML (buildings, items, units, flora, recipes, materials, structure packs, ...)
 - `assets/` — textures and fonts
 - `scripts/` — Lua scripts driving game logic (UI, AI, world management, item/building loaders)

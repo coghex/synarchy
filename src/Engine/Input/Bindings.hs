@@ -13,7 +13,8 @@ import Engine.Input.Types
 import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug)
 
 -- | Each action maps to a **list** of key names; the action fires when
---   *any* of them is held. Persisted in @keybinds.yaml@ as YAML arrays.
+--   *any* of them is held. Persisted in @keybinds.local.yaml@ (#786) as
+--   YAML arrays.
 type KeyBindings = Map.Map T.Text [T.Text]
 
 defaultKeyBindings ∷ KeyBindings
@@ -52,7 +53,7 @@ isReservedKeyName ∷ Text → Bool
 isReservedKeyName name = any (`elem` reservedGLFWKeys) (parseKeyName name)
 
 -- | Strip reserved key names from every editable action's key list so a
---   hand-edited @keybinds.yaml@ can never make Escape/Grave drive an action
+--   hand-edited @keybinds.local.yaml@ can never make Escape/Grave drive an action
 --   (the Lua edit API already refuses them; this closes the file path).
 --   Reserved-action reference entries are left untouched.
 sanitizeBindings ∷ KeyBindings → KeyBindings
