@@ -12,7 +12,9 @@ import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value, Object)
+import Data.Aeson.Types (parseEither, Parser)
+import qualified Data.Aeson.Key as Key
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | A fixed relative tile offset from a location's anchor (#90).
@@ -88,11 +90,27 @@ data LocationYamlDef = LocationYamlDef
     , lydDiscoveryMargin ∷ !Int
     } deriving (Show, Eq, Generic)
 
+-- | Fetch a required field as a raw 'Value' first (which never fails to
+--   parse — any JSON/YAML value decodes as 'Value') so an absent key or a
+--   value of the wrong shape can be reported with the location id
+--   attached, rather than aeson's own key-not-found / type-mismatch
+--   error, which has no way to know which location it's for (#777).
+requireField ∷ FromJSON a ⇒ Text → Text → Object → Parser a
+requireField lid fieldName v = do
+    mRaw ← v .:? Key.fromText fieldName
+    case mRaw of
+        Nothing → fail (T.unpack ("location '" <> lid
+            <> "': missing required field '" <> fieldName <> "'"))
+        Just (raw ∷ Value) → case parseEither parseJSON raw of
+            Left err → fail (T.unpack ("location '" <> lid <> "': invalid '"
+                <> fieldName <> "' field (" <> T.pack err <> ")"))
+            Right a  → pure a
+
 instance FromJSON LocationYamlDef where
     parseJSON = withObject "LocationYamlDef" $ \v → do
         lid      ← v .: "id"
-        bounds   ← v .: "bounds"
-        margin   ← v .: "discovery_margin"
+        bounds   ← requireField lid "bounds" v
+        margin   ← requireField lid "discovery_margin" v
         contents ← v .:? "contents" .!= []
         -- Reject inverted bounds / a negative margin / an out-of-bounds
         -- fixed content position HERE, at the only entry point for this

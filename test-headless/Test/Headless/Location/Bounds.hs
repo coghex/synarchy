@@ -9,6 +9,7 @@ module Test.Headless.Location.Bounds (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Engine.Asset.YamlLocations
     ( LocationYamlBounds(..), LocationYamlDef(..), LocationYamlFile(..) )
@@ -20,11 +21,16 @@ decodeBounds = either (Left . show) Right . Yaml.decodeEither'
 decodeDef ∷ BS.ByteString → Either String LocationYamlDef
 decodeDef = either (Left . show) Right . Yaml.decodeEither'
 
-isLeft' ∷ Either a b → Bool
-isLeft' = either (const True) (const False)
-
 isRight' ∷ Either a b → Bool
 isRight' = either (const False) (const True)
+
+-- | True iff decoding failed AND the error names the given location id
+--   (the #777 "identifies the location definition" requirement) — a
+--   bare failure check can't catch a regression back to aeson's own
+--   id-less key-not-found/type-mismatch error text.
+rejectedNaming ∷ Text → Either String a → Bool
+rejectedNaming lid = either (T.isInfixOf ("location '" <> lid <> "'") . T.pack)
+                            (const False)
 
 spec ∷ Spec
 spec = describe "Location spatial bounds" $ do
@@ -34,40 +40,46 @@ spec = describe "Location spatial bounds" $ do
             decodeBounds "{ min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
                 `shouldBe` Right (LocationYamlBounds (-2) (-2) 2 2)
 
-        it "rejects a definition missing bounds entirely" $
+        it "rejects a definition missing bounds entirely, naming the location" $
             decodeDef "{ id: t, builder: b, discovery_margin: 6 }"
-                `shouldSatisfy` isLeft'
+                `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects a malformed bounds block (wrong field type)" $
+        it "rejects a definition missing discovery_margin, naming the location" $
+            decodeDef
+                "{ id: t, builder: b,\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
+                `shouldSatisfy` rejectedNaming "t"
+
+        it "rejects a malformed bounds block, naming the location" $
             decodeDef
                 "{ id: t, builder: b, discovery_margin: 6,\
                 \  bounds: { min_x: nope, min_y: -2, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` isLeft'
+                `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects inverted bounds (min_x > max_x)" $
+        it "rejects inverted bounds (min_x > max_x), naming the location" $
             decodeDef
                 "{ id: t, builder: b, discovery_margin: 6,\
                 \  bounds: { min_x: 5, min_y: -2, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` isLeft'
+                `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects inverted bounds (min_y > max_y)" $
+        it "rejects inverted bounds (min_y > max_y), naming the location" $
             decodeDef
                 "{ id: t, builder: b, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: 5, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` isLeft'
+                `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects a negative discovery margin" $
+        it "rejects a negative discovery margin, naming the location" $
             decodeDef
                 "{ id: t, builder: b, discovery_margin: -1,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } }"
-                `shouldSatisfy` isLeft'
+                `shouldSatisfy` rejectedNaming "t"
 
-        it "rejects a fixed content position outside the declared bounds" $
+        it "rejects a fixed content position outside the declared bounds, naming the location" $
             decodeDef
                 "{ id: t, builder: b, discovery_margin: 6,\
                 \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                 \  contents: [ { kind: item, id: x, position: {x: 5, y: 0} } ] }"
-                `shouldSatisfy` isLeft'
+                `shouldSatisfy` rejectedNaming "t"
 
         it "accepts a fixed content position on the bounds edge (inclusive)" $
             decodeDef
