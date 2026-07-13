@@ -78,23 +78,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Fails CLOSED on anything that isn't a confirmed "this tag doesn't
+      # exist" response. A transient registry error (rate limit, 5xx,
+      # network blip) surfaces the same non-zero exit as a genuine miss;
+      # treating every error as "absent" would let a spurious failure
+      # here fall through to the build+push path below and overwrite an
+      # existing tag with possibly-different content (Docker builds
+      # aren't perfectly reproducible — see the header comment). Only
+      # the well-known "doesn't exist" registry responses advance to the
+      # build path; anything else hard-fails the job instead of guessing.
       - name: Check whether this content is already published
         id: exists
         run: |
-          if docker buildx imagetools inspect "ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}" >/dev/null 2>&1; then
+          set +e
+          OUT="$(docker buildx imagetools inspect "ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}" 2>&1)"
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
-          else
+          elif echo "$OUT" | grep -qiE 'not found|manifest unknown|404'; then
             echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$OUT" >&2
+            echo "::error::could not determine whether ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }} is already published (registry error, not a confirmed absence) — failing closed rather than risking a rebuild that could overwrite it with different content. Re-run the job."
+            exit 1
+          fi
+
+      # A fork PR's GITHUB_TOKEN is forced read-only regardless of the
+      # permissions: block above (a GitHub security restriction), so it
+      # can pull/inspect but not push. Only a same-repo pull_request or a
+      # push (always same-repo, by definition) can publish a candidate.
+      - name: Determine publish capability
+        id: fork
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "can_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_publish=true" >> "$GITHUB_OUTPUT"
           fi
 
       # Only runs the first time this exact (recipe, Dockerfile) content
       # is seen, thanks to the concurrency lock above ensuring no other
       # run can publish it out from under this check — so an ordinary
       # PR/push that changes neither file pays only the cheap existence
-      # check, never a rebuild.
+      # check, never a rebuild. Skipped for a fork PR that can't publish
+      # anyway (see "Determine publish capability" above and the
+      # fallback step below).
       - name: Build candidate image
         id: build
-        if: steps.exists.outputs.found != 'true'
+        if: steps.exists.outputs.found != 'true' && steps.fork.outputs.can_publish == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .github/ci
@@ -130,6 +162,37 @@ jobs:
           docker tag synarchy-ci:candidate "$TAG"
           docker push "$TAG"
 
+      # A fork PR that changes the Dockerfile/recipe can't publish its
+      # own candidate (no registry write access), so it can't be
+      # self-validated by this workflow at all — that requires a
+      # maintainer to push the same change from a same-repo branch. What
+      # it CAN still do is run build-test against whatever the PR's base
+      # branch already has published, so the job doesn't just fail on a
+      # confusing permission error. Falls back to the BASE ref's own
+      # (Dockerfile, recipe) content tag, which must already be
+      # published (every same-repo push publishes its own tag, so the
+      # base branch's current tag always exists once this mechanism has
+      # run at least once from a same-repo context).
+      - name: Resolve fallback tag for a fork PR that can't publish its own candidate
+        id: fallback
+        if: steps.exists.outputs.found != 'true' && steps.fork.outputs.can_publish != 'true'
+        run: |
+          BASE='${{ github.event.pull_request.base.sha }}'
+          git fetch --no-tags origin "$BASE"
+          FALLBACK_TAG="ci-$( (git show "$BASE:.github/workflows/ci-image.yml"; git show "$BASE:.github/ci/Dockerfile") | sha256sum | cut -c1-16)"
+          echo "tag=$FALLBACK_TAG" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "ghcr.io/coghex/synarchy-ci:$FALLBACK_TAG" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::this fork PR changes the Dockerfile or ci-image.yml and can't publish its own candidate image (no registry write access), and the base branch's own image (tag $FALLBACK_TAG) isn't published either. A maintainer needs to push this change from a same-repo branch first so a candidate can be built and validated with registry write access."
+            exit 1
+          fi
+
       - name: Select immutable image reference
         id: pick
-        run: echo "image=ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ steps.exists.outputs.found }}" = "true" ] || [ "${{ steps.fork.outputs.can_publish }}" = "true" ]; then
+            echo "image=ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=ghcr.io/coghex/synarchy-ci:${{ steps.fallback.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
