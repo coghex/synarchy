@@ -93,11 +93,35 @@ def backup_local_files() -> dict[str, str]:
 
 
 def restore_local_files(backups: dict[str, str]) -> None:
-    for p in LOCAL_FILES + LEGACY_FILES:
+    # LOCAL_FILES are always cleared: gitignored, so any left over from
+    # this run (e.g. a save action's output) is just cruft. LEGACY_FILES
+    # are only touched here if still pending in `backups` (i.e.
+    # `restore_legacy_files` never ran, e.g. an early exception) —
+    # otherwise they're already correctly back in their tracked state
+    # and must NOT be removed again.
+    for p in LOCAL_FILES:
         if os.path.exists(p):
+            os.remove(p)
+    for p in LEGACY_FILES:
+        if p in backups and os.path.exists(p):
             os.remove(p)
     for p, bak in backups.items():
         shutil.move(bak, p)
+
+
+def restore_legacy_files(backups: dict[str, str]) -> None:
+    """Restore just the tracked legacy paths from `backups`, popping them
+    so the final `restore_local_files` doesn't try to move them again.
+
+    Legacy files are TRACKED (#786) — unlike the gitignored local paths,
+    leaving them hidden until the very end would make the mid-run
+    git-status post-check see them as deleted. They must be back on
+    disk well before that check runs, even though local-file cleanup
+    can still wait until the very end (git never sees those either way)."""
+    for p in LEGACY_FILES:
+        bak = backups.pop(p, None)
+        if bak is not None:
+            shutil.move(bak, p)
 
 
 def load_yaml(path: str):
@@ -180,13 +204,25 @@ def main() -> int:
             passed &= check(f"legacy {p} not resurrected by a fresh-clone boot",
                              not os.path.exists(p))
 
+        # The legacy paths are TRACKED (#786) — restore them on disk now,
+        # well before the mid-run git-status post-check, rather than
+        # leaving them hidden until the final `finally`. This doesn't
+        # disturb the already-running engine (config was already loaded
+        # into memory at boot); the save paths below write from that
+        # in-memory state, not by re-reading these files. Content is
+        # captured so phase 2 can prove the save paths never touch them,
+        # without relying on "does not exist" (no longer true once
+        # they're back on disk).
+        restore_legacy_files(backups)
+        legacy_before = {p: open(p).read() for p in LEGACY_FILES}
+
         print("2. exercise the public save paths")
         send(args.port, "engine.setUIScale(1.23); return 'ok'")
         send(args.port, "engine.saveVideoConfig(); return 'ok'")
         passed &= check("config/video.local.yaml written",
                          os.path.exists("config/video.local.yaml"))
-        passed &= check("legacy config/video.yaml NOT written by save",
-                         not os.path.exists("config/video.yaml"))
+        passed &= check("legacy config/video.yaml NOT modified by save",
+                         open("config/video.yaml").read() == legacy_before["config/video.yaml"])
         if os.path.exists("config/video.local.yaml"):
             saved = load_yaml("config/video.local.yaml")["video"]
             passed &= check("saved video config has the new ui_scale",
@@ -197,8 +233,8 @@ def main() -> int:
         send(args.port, "engine.saveKeybinds(); return 'ok'")
         passed &= check("config/keybinds.local.yaml written",
                          os.path.exists("config/keybinds.local.yaml"))
-        passed &= check("legacy config/keybinds.yaml NOT written by save",
-                         not os.path.exists("config/keybinds.yaml"))
+        passed &= check("legacy config/keybinds.yaml NOT modified by save",
+                         open("config/keybinds.yaml").read() == legacy_before["config/keybinds.yaml"])
         if os.path.exists("config/keybinds.local.yaml"):
             saved_kb = load_yaml("config/keybinds.local.yaml")["keybinds"]
             passed &= check("saved keybinds have the new moveUp",
@@ -207,8 +243,9 @@ def main() -> int:
 
         r = send(args.port, "return tostring(engine.setNotificationOverrides({debug={log=true}}))")
         passed &= check("setNotificationOverrides accepted", r == "true", r)
-        passed &= check("legacy config/notifications.yaml NOT written by save",
-                         not os.path.exists("config/notifications.yaml"))
+        passed &= check("legacy config/notifications.yaml NOT modified by save",
+                         open("config/notifications.yaml").read()
+                             == legacy_before["config/notifications.yaml"])
         if os.path.exists("config/notifications.local.yaml"):
             saved_notif = load_yaml("config/notifications.local.yaml")["categories"]
             passed &= check("saved notification override took effect",
