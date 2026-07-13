@@ -12,6 +12,7 @@ module Location.Types
 import UPrelude
 import GHC.Generics (Generic)
 import Data.List (sortOn)
+import Location.Bounds (RelBounds(..))
 
 -- | One piece of content a location places when it is stamped — a
 --   building, unit, ground item, loot-table roll, or nested structure,
@@ -57,6 +58,15 @@ data LocationDef = LocationDef
                                       --   instances of this type (jittered
                                       --   distribution; #89).
     , ldContents ∷ ![LocationContent] -- ^ content to spawn (raw ids; #90)
+    , ldBounds   ∷ !RelBounds         -- ^ authoritative footprint: an
+                                      --   inclusive tile box relative to
+                                      --   the anchor (#777). Drives the
+                                      --   ruin geometry + content scatter
+                                      --   in scripts/locations.lua — no
+                                      --   independent Lua-side radius.
+    , ldDiscoveryMargin ∷ !Int        -- ^ non-negative tile halo around
+                                      --   'ldBounds' later discovery-
+                                      --   trigger work (#780) expands by.
     } deriving (Show, Eq, Generic)
 
 -- | Engine-wide registry of location defs loaded from data/locations/.

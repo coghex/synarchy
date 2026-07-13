@@ -469,6 +469,7 @@ library
                      Blood.Impact
                      Engine.Scripting.Lua.API.Blood
                      Location.Types
+                     Location.Bounds
                      Location.Overlay.Types
                      Location.Overlay
                      Engine.Asset.YamlLocations
@@ -1000,6 +1001,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge
                    Test.Headless.Render.PanMargin
+                   Test.Headless.Location.Bounds
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers

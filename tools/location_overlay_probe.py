@@ -160,6 +160,8 @@ DENSE_BODY = (
     "    anchor: [waterside]\n"
     "    max_count: 100000\n"
     "    min_spacing: 1\n"
+    "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+    "    discovery_margin: 6\n"
     "    contents: []\n"
 )
 

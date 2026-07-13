@@ -15,6 +15,8 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), activeWorldState)
 import World.Types
 import Location.Overlay.Types (overlayToList)
+import Location.Types (LocationDef(..), LocationRegistry, lookupLocation)
+import Location.Bounds (AbsBounds(..), translateBounds)
 import World.Generate.Coordinates (globalToChunk)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 
@@ -22,7 +24,14 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 --   tables, each:
 --     { cx, cy,    -- chunk coordinate hosting the location
 --       gx, gy,    -- the chunk's centre tile (anchor for stamping)
---       id }       -- the LocationDef id (#88) placed there
+--       id,        -- the LocationDef id (#88) placed there
+--       bounds,    -- { min_x, min_y, max_x, max_y } — absolute,
+--                  --   inclusive tile bounds (#777), anchored at (gx,gy)
+--       discovery_margin }  -- the def's discovery margin (#777)
+--   `bounds` / `discovery_margin` are OMITTED when `id` has no matching
+--   registered def (e.g. its YAML hasn't been (re)loaded this session),
+--   so the query stays total rather than crashing or fabricating
+--   geometry — every other field is unaffected.
 --   With a page-id string argument the named page's overlay is read
 --   (the location stamper needs a specific world's placements even
 --   before it becomes the active page); with no argument the active
@@ -34,13 +43,15 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 worldListPlacedLocationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldListPlacedLocationsFn env = do
     mPage ← Lua.tostring 1
-    mParams ← Lua.liftIO $ do
+    (mParams, defs) ← Lua.liftIO $ do
         mWs ← case mPage of
             Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
             Nothing    → activeWorldState env
-        case mWs of
+        mp ← case mWs of
             Just ws → readIORef (wsGenParamsRef ws)
             Nothing → pure Nothing
+        reg ← readIORef (locationDefsRef env)
+        pure (mp, reg)
     Lua.newtable
     case mParams of
         Nothing → return 1
@@ -48,19 +59,41 @@ worldListPlacedLocationsFn env = do
             let placed = overlayToList (wgpLocationOverlay params)
                 half   = chunkSize `div` 2
             forM_ (zip [1 ..] placed) $ \(i, (ChunkCoord cx cy, lid)) → do
+                let gx = cx * chunkSize + half
+                    gy = cy * chunkSize + half
                 Lua.newtable
                 Lua.pushinteger (fromIntegral cx)
                 Lua.setfield (-2) "cx"
                 Lua.pushinteger (fromIntegral cy)
                 Lua.setfield (-2) "cy"
-                Lua.pushinteger (fromIntegral (cx * chunkSize + half))
+                Lua.pushinteger (fromIntegral gx)
                 Lua.setfield (-2) "gx"
-                Lua.pushinteger (fromIntegral (cy * chunkSize + half))
+                Lua.pushinteger (fromIntegral gy)
                 Lua.setfield (-2) "gy"
                 Lua.pushstring (TE.encodeUtf8 lid)
                 Lua.setfield (-2) "id"
+                pushDefBounds defs lid gx gy
                 Lua.rawseti (-2) i
             return 1
+  where
+    pushDefBounds ∷ LocationRegistry → Text → Int → Int
+                  → Lua.LuaE Lua.Exception ()
+    pushDefBounds defs lid gx gy = case lookupLocation lid defs of
+        Nothing  → return ()
+        Just def → do
+            let ab = translateBounds (gx, gy) (ldBounds def)
+            Lua.newtable
+            Lua.pushinteger (fromIntegral (abMinX ab))
+            Lua.setfield (-2) "min_x"
+            Lua.pushinteger (fromIntegral (abMinY ab))
+            Lua.setfield (-2) "min_y"
+            Lua.pushinteger (fromIntegral (abMaxX ab))
+            Lua.setfield (-2) "max_x"
+            Lua.pushinteger (fromIntegral (abMaxY ab))
+            Lua.setfield (-2) "max_y"
+            Lua.setfield (-2) "bounds"
+            Lua.pushinteger (fromIntegral (ldDiscoveryMargin def))
+            Lua.setfield (-2) "discovery_margin"
 
 -- | world.hasSpawnedLocationContents(gx, gy [, pageId]) → bool.
 --   One-time content-spawn flag (#90): true once the chunk containing

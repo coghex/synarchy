@@ -20,6 +20,15 @@ locations:
     # Terrain placement constraint tags read by the world-gen overlay
     # (#89) to filter candidate chunks. The room wants flat ground.
     anchor: [flat]
+    # Authoritative spatial contract (#777): an inclusive, axis-aligned
+    # tile box relative to the anchor. This IS the 5x5 footprint — the
+    # builder (room_small_damaged) and the content scatter below both
+    # derive their geometry from these bounds; there is no separate
+    # Lua-side radius constant to keep in sync. discovery_margin is the
+    # tile halo later discovery-trigger work (#780) expands the bounds
+    # by before a unit is considered "near" the ruin.
+    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }
+    discovery_margin: 6
     # World-gen overlay (#89) placement controls. Per-type, not global:
     # at most `max_count` instances, each at least `min_spacing` chunks
     # from another ruin (jittered, deterministic from the seed). Both are
