@@ -17,7 +17,7 @@ import System.Directory
 import System.FilePath ((</>))
 import System.IO (stderr)
 import qualified Data.HashMap.Strict as HM
-import Engine.Core.Init (resolveConfigPath)
+import Engine.Core.Init (resolveConfigPath, migrateLegacyConfig)
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..))
 import Engine.Asset.YamlNotifications (loadNotificationCfg, writeNotificationOverrides)
 import Engine.PlayerEvent (CategoryCfg(..))
@@ -62,6 +62,60 @@ spec = do
                     deflt = dir </> "default.yaml"
                 writeFile deflt "default"
                 resolveConfigPath local deflt `shouldReturn` deflt
+
+    describe "Engine.Core.Init.migrateLegacyConfig legacy config upgrade (#786)" $ do
+        it "copies a valid legacy file to the local path when local is absent" $
+            withTempDir $ \dir → do
+                logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+                let legacy = dir </> "legacy.yaml"
+                    local  = dir </> "local.yaml"
+                writeFile legacy "video:\n  ui_scale: 1.5\n"
+                migrateLegacyConfig logger legacy local
+                existsAfter ← doesFileExist local
+                existsAfter `shouldBe` True
+                migrated ← readFile local
+                migrated `shouldBe` "video:\n  ui_scale: 1.5\n"
+
+        it "is a no-op when there is no legacy file to migrate" $
+            withTempDir $ \dir → do
+                logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+                let legacy = dir </> "legacy.yaml"
+                    local  = dir </> "local.yaml"
+                migrateLegacyConfig logger legacy local
+                doesFileExist local `shouldReturn` False
+
+        it "never overwrites an existing local file, even with a legacy file present" $
+            withTempDir $ \dir → do
+                logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+                let legacy = dir </> "legacy.yaml"
+                    local  = dir </> "local.yaml"
+                writeFile legacy "video:\n  ui_scale: 1.5\n"
+                writeFile local "video:\n  ui_scale: 2.0\n"
+                migrateLegacyConfig logger legacy local
+                kept ← readFile local
+                kept `shouldBe` "video:\n  ui_scale: 2.0\n"
+
+        it "is idempotent: a second call after a successful migration changes nothing" $
+            withTempDir $ \dir → do
+                logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+                let legacy = dir </> "legacy.yaml"
+                    local  = dir </> "local.yaml"
+                writeFile legacy "video:\n  ui_scale: 1.5\n"
+                migrateLegacyConfig logger legacy local
+                writeFile local "video:\n  ui_scale: 9.0\n" -- simulate a later player Save
+                migrateLegacyConfig logger legacy local
+                kept ← readFile local
+                kept `shouldBe` "video:\n  ui_scale: 9.0\n"
+
+        it "leaves a malformed legacy file unmigrated (falls back safely, \
+           \no local file appears)" $
+            withTempDir $ \dir → do
+                logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+                let legacy = dir </> "legacy.yaml"
+                    local  = dir </> "local.yaml"
+                writeFile legacy "video: [this, is: not, valid: {yaml"
+                migrateLegacyConfig logger legacy local
+                doesFileExist local `shouldReturn` False
 
     describe "Engine.Asset.YamlNotifications config load/save contract (#638)" $ do
         it "materializes the overrides file from registry defaults when absent" $

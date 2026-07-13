@@ -6,6 +6,7 @@ module Engine.Core.Init
   , initializeEngineHeadlessWith
   , EngineInitResult(..)
   , resolveConfigPath
+  , migrateLegacyConfig
   ) where
 
 import UPrelude
@@ -15,7 +16,11 @@ import Data.Time.Calendar (fromGregorian)
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
+import qualified Data.Text as T
+import qualified Data.Yaml as Yaml
+import Data.Aeson (Value)
 import Control.Concurrent.STM (newTVarIO)
+import Control.Exception (SomeException, try, displayException)
 import qualified System.Random as Random
 import qualified Combat.Types
 import Engine.ActionOutcome (emptyActionOutcomeQueue)
@@ -24,9 +29,10 @@ import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
-                       , LogBackend(..))
+                       , LogBackend(..), LoggerState, logInfo, logWarn
+                       , LogCategory(..))
 import System.IO (stdout)
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, copyFile)
 import Engine.Core.State
 import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
@@ -69,6 +75,50 @@ resolveConfigPath localPath defaultPath = do
   hasLocal ← doesFileExist localPath
   return $ if hasLocal then localPath else defaultPath
 
+-- | One-time upgrade from the pre-#661 tracked config layout (#786).
+--   @config/video.yaml@ / @config/keybinds.yaml@ / @config/notifications.yaml@
+--   were tracked player state before #661 moved runtime writes to the
+--   gitignored @*.local.yaml@ paths; #661's @git rm --cached@ only kept
+--   the file in the PR author's own working tree; a downstream `git
+--   pull` that finds no local modification deletes it as an ordinary
+--   tree change, and nothing can react to that after the fact — the
+--   file is already gone from disk before the engine next boots. This
+--   function instead covers the case a locally MODIFIED tracked file
+--   leaves behind: git refuses to silently overwrite that during a
+--   merge, so the file survives on disk (now untracked, since #661's
+--   commit already dropped it from the tree) until the update is
+--   resolved by hand — at which point this picks it up. If the
+--   current-format local file is already present, this never runs —
+--   that single existence gate is what makes migration idempotent
+--   (the copy it makes on first boot is what every later boot finds)
+--   and what guarantees a newer local file always wins over a stale
+--   legacy one, and what keeps a fresh clone (which has neither file)
+--   on the versioned default/registry exactly as before. A legacy file
+--   that fails to parse as YAML (malformed, partial, or unreadable) is
+--   left untouched and logged rather than copied, so it falls back to
+--   the versioned default/registry exactly like a missing legacy file
+--   rather than propagating garbage into the new local path.
+migrateLegacyConfig ∷ LoggerState → FilePath → FilePath → IO ()
+migrateLegacyConfig logger legacyPath localPath = do
+  hasLocal ← doesFileExist localPath
+  unless hasLocal $ do
+    hasLegacy ← doesFileExist legacyPath
+    when hasLegacy $ do
+      outcome ← try $ do
+        eVal ← Yaml.decodeFileEither legacyPath
+        case (eVal ∷ Either Yaml.ParseException Value) of
+          Left err → ioError $ userError $ show err
+          Right _  → copyFile legacyPath localPath
+      case (outcome ∷ Either SomeException ()) of
+        Right () → logInfo logger CatInit $
+          "Migrated legacy config " <> T.pack legacyPath
+            <> " -> " <> T.pack localPath
+        Left e → logWarn logger CatInit $
+          "Legacy config " <> T.pack legacyPath
+            <> " could not be migrated (malformed, partial, or "
+            <> "unreadable); falling back to the versioned default: "
+            <> T.pack (displayException e)
+
 -- | Allocate every 'IORef', queue, and subsystem, then bundle into
 --   'EngineEnv'. Logs to stdout (the graphical default).
 initializeEngine ∷ IO EngineInitResult
@@ -106,12 +156,14 @@ initializeEngineWith logBackend = do
   texNameRegRef ← newIORef emptyTextureNameRegistry
   
   inputStateRef ← newIORef defaultInputState
-  keybindsPath ← resolveConfigPath "config/keybinds.yaml" "config/keybinds_default.yaml"
+  migrateLegacyConfig logger "config/keybinds.yaml" "config/keybinds.local.yaml"
+  keybindsPath ← resolveConfigPath "config/keybinds.local.yaml" "config/keybinds_default.yaml"
   keyBindings ← loadKeyBindings logger keybindsPath
   keyBindingsRef ← newIORef keyBindings
   currentKeyDownRef ← newIORef Nothing
 
-  videoConfigPath ← resolveConfigPath "config/video.yaml" "config/video_default.yaml"
+  migrateLegacyConfig logger "config/video.yaml" "config/video.local.yaml"
+  videoConfigPath ← resolveConfigPath "config/video.local.yaml" "config/video_default.yaml"
   videoConfig ← loadVideoConfig logger videoConfigPath
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
@@ -178,9 +230,10 @@ initializeEngineWith logBackend = do
   -- popup queue. Both TVars are multi-writer (world/unit/Lua threads
   -- can all push via Engine.PlayerEvent.emitEvent). The cfg IORef
   -- is updated at runtime by the Phase 2 notifications settings tab.
+  migrateLegacyConfig logger "config/notifications.yaml" "config/notifications.local.yaml"
   (notificationCfg0, notificationOrder) ← loadNotificationCfg logger
                         "data/notification_categories.yaml"
-                        "config/notifications.yaml"
+                        "config/notifications.local.yaml"
   notificationCfgRef ← newIORef notificationCfg0
   eventStoreRef ← newTVarIO Seq.empty
   popupQueueRef ← newTVarIO Seq.empty

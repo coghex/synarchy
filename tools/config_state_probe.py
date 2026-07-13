@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""Headless config-state probe (#638).
+"""Headless config-state probe (#638, paths updated for #786).
 
 Verifies the boundary between versioned config *templates*
 (`config/*_default.yaml`, tracked) and local runtime config *state*
-(`config/video.yaml`, `config/keybinds.yaml`, `config/notifications.yaml`,
-gitignored) that the settings UI's Save actions write:
+(`config/video.local.yaml`, `config/keybinds.local.yaml`,
+`config/notifications.local.yaml`, gitignored) that the settings UI's
+Save actions write:
 
   1. `git status` for `config/` + `.gitignore` starts clean.
-  2. With no local config files present (simulating a fresh clone), the
-     engine boots and falls back to the versioned `_default.yaml`
-     templates (video/keybinds) or materializes from
-     `data/notification_categories.yaml` (notifications) — same
-     effective defaults either way.
+  2. With no local config files AND no legacy pre-#661 config files
+     present (simulating a fresh clone), the engine boots and falls
+     back to the versioned `_default.yaml` templates (video/keybinds)
+     or materializes from `data/notification_categories.yaml`
+     (notifications) — same effective defaults either way.
   3. The public save paths (`engine.saveVideoConfig`, `engine.saveKeybinds`,
-     `engine.setNotificationOverrides`) write the expected local files.
+     `engine.setNotificationOverrides`) write the expected `*.local.yaml`
+     files, not the legacy paths.
   4. None of that dirties git: `git status` for `config/` + `.gitignore`
      is still clean afterward.
 
-Any local config files present before the probe runs are backed up and
-restored afterward, so a developer's own settings survive a run.
+Legacy-file migration itself (the #786 upgrade path) is
+`tools/config_migration_probe.py`'s job, not this one's.
+
+Any local/legacy config files present before the probe runs are backed
+up and restored afterward, so a developer's own settings survive a run.
 
 Usage:
   python3 tools/config_state_probe.py [--port 9165]
@@ -38,6 +43,16 @@ from probelib import quit_engine, boot, send
 LOG = "/tmp/config_state_probe_engine.log"
 
 LOCAL_FILES = [
+    "config/video.local.yaml",
+    "config/keybinds.local.yaml",
+    "config/notifications.local.yaml",
+]
+
+# Pre-#661 paths. Nothing writes to these any more, but a probe run (or
+# a developer's own machine) could still have one lying around from an
+# old checkout — #786's migrateLegacyConfig would treat that as legacy
+# state to import, so a "simulated fresh clone" must hide these too.
+LEGACY_FILES = [
     "config/video.yaml",
     "config/keybinds.yaml",
     "config/notifications.yaml",
@@ -60,15 +75,16 @@ BACKUP_DIR = "/tmp/config_state_probe_backup"
 
 
 def backup_local_files() -> dict[str, str]:
-    """Move aside any existing local config files (simulate a fresh
-    clone) and return a map of original path -> backup path to restore.
+    """Move aside any existing local/legacy config files (simulate a
+    fresh clone) and return a map of original path -> backup path to
+    restore.
 
     Backups live under /tmp, not alongside the originals — a sibling
     `config/video.yaml.bak` would itself show up as untracked in the
     `git status -- config` checks this probe runs, contaminating them."""
     backups = {}
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    for p in LOCAL_FILES:
+    for p in LOCAL_FILES + LEGACY_FILES:
         if os.path.exists(p):
             bak = os.path.join(BACKUP_DIR, os.path.basename(p))
             shutil.move(p, bak)
@@ -77,7 +93,7 @@ def backup_local_files() -> dict[str, str]:
 
 
 def restore_local_files(backups: dict[str, str]) -> None:
-    for p in LOCAL_FILES:
+    for p in LOCAL_FILES + LEGACY_FILES:
         if os.path.exists(p):
             os.remove(p)
     for p, bak in backups.items():
@@ -104,7 +120,7 @@ def main() -> int:
     backups = backup_local_files()
     proc = None
     try:
-        for p in LOCAL_FILES:
+        for p in LOCAL_FILES + LEGACY_FILES:
             passed &= check(f"{p} absent pre-boot (simulated fresh clone)",
                              not os.path.exists(p))
 
@@ -129,8 +145,8 @@ def main() -> int:
         passed &= check("keybinds == config/keybinds_default.yaml",
                          r == ",".join(want_kb["moveUp"]), r)
 
-        passed &= check("config/notifications.yaml materialized on boot",
-                         os.path.exists("config/notifications.yaml"))
+        passed &= check("config/notifications.local.yaml materialized on boot",
+                         os.path.exists("config/notifications.local.yaml"))
         r = send(args.port,
                   "local cfg = engine.getNotificationCfg(); "
                   "for _,c in ipairs(cfg) do if c.id == 'debug' then "
@@ -158,32 +174,43 @@ def main() -> int:
         passed &= check("unit_warning.pause comes from the registry (not the old drifted file)",
                          r == "false", r)
 
-        for p in ("config/video.yaml", "config/keybinds.yaml"):
+        for p in ("config/video.local.yaml", "config/keybinds.local.yaml"):
             passed &= check(f"{p} not written just by loading", not os.path.exists(p))
+        for p in LEGACY_FILES:
+            passed &= check(f"legacy {p} not resurrected by a fresh-clone boot",
+                             not os.path.exists(p))
 
         print("2. exercise the public save paths")
         send(args.port, "engine.setUIScale(1.23); return 'ok'")
         send(args.port, "engine.saveVideoConfig(); return 'ok'")
-        passed &= check("config/video.yaml written", os.path.exists("config/video.yaml"))
-        if os.path.exists("config/video.yaml"):
-            saved = load_yaml("config/video.yaml")["video"]
+        passed &= check("config/video.local.yaml written",
+                         os.path.exists("config/video.local.yaml"))
+        passed &= check("legacy config/video.yaml NOT written by save",
+                         not os.path.exists("config/video.yaml"))
+        if os.path.exists("config/video.local.yaml"):
+            saved = load_yaml("config/video.local.yaml")["video"]
             passed &= check("saved video config has the new ui_scale",
                              abs(float(saved["ui_scale"]) - 1.23) < 1e-6,
                              str(saved.get("ui_scale")))
 
         send(args.port, "engine.setActionKeys('moveUp', {'I','K'}); return 'ok'")
         send(args.port, "engine.saveKeybinds(); return 'ok'")
-        passed &= check("config/keybinds.yaml written", os.path.exists("config/keybinds.yaml"))
-        if os.path.exists("config/keybinds.yaml"):
-            saved_kb = load_yaml("config/keybinds.yaml")["keybinds"]
+        passed &= check("config/keybinds.local.yaml written",
+                         os.path.exists("config/keybinds.local.yaml"))
+        passed &= check("legacy config/keybinds.yaml NOT written by save",
+                         not os.path.exists("config/keybinds.yaml"))
+        if os.path.exists("config/keybinds.local.yaml"):
+            saved_kb = load_yaml("config/keybinds.local.yaml")["keybinds"]
             passed &= check("saved keybinds have the new moveUp",
                              saved_kb.get("moveUp") == ["I", "K"],
                              str(saved_kb.get("moveUp")))
 
         r = send(args.port, "return tostring(engine.setNotificationOverrides({debug={log=true}}))")
         passed &= check("setNotificationOverrides accepted", r == "true", r)
-        if os.path.exists("config/notifications.yaml"):
-            saved_notif = load_yaml("config/notifications.yaml")["categories"]
+        passed &= check("legacy config/notifications.yaml NOT written by save",
+                         not os.path.exists("config/notifications.yaml"))
+        if os.path.exists("config/notifications.local.yaml"):
+            saved_notif = load_yaml("config/notifications.local.yaml")["categories"]
             passed &= check("saved notification override took effect",
                              saved_notif.get("debug", {}).get("log") is True,
                              str(saved_notif.get("debug")))
