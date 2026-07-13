@@ -30,7 +30,7 @@ data InputState = InputState
       --   events with no other event interleaved before its trailing
       --   'InputBarrier' — collapses into exactly ONE aggregate
       --   outcome record instead of N. Flushed (see
-      --   'Engine.Input.Thread.flushPendingCharBatch') whenever a
+      --   'Engine.Input.Thread.Char.flushPendingCharBatch') whenever a
       --   non-char event is processed, or once at the tail of every
       --   queue drain — real typing always has an interleaving key
       --   event between characters (GLFW fires key-down, char,
