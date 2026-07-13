@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 -- | Lua bindings for the per-element text buffer: enabling text input,
---   reading/writing content, and cursor movement / editing.
+--   reading/writing content, and cursor movement / editing. Cursor positions
+--   crossing this API are zero-based Unicode code-point offsets, never Lua
+--   UTF-8 byte offsets; editable Lua widgets convert through ui/utf8_safe.lua.
 module Engine.Scripting.Lua.API.UI.TextInput
   ( uiEnableTextInputFn
   , uiGetTextFn
