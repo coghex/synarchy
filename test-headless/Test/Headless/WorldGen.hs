@@ -28,6 +28,7 @@ import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
 import Location.Types (LocationDef(..))
+import Location.Bounds (RelBounds(..))
 import Location.Overlay
     ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..) )
 -- chunkSeamChebyshev comes in via World.Types (World.Chunk.Types, #423)
@@ -135,7 +136,8 @@ spec = do
         let mkDef lid anchors = LocationDef
                 { ldId = lid, ldLabel = lid, ldType = "test"
                 , ldBuilder = "noop", ldAnchor = anchors
-                , ldMaxCount = 8, ldMinSpacing = 3, ldContents = [] }
+                , ldMaxCount = 8, ldMinSpacing = 3, ldContents = []
+                , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6 }
             flatDef = mkDef "flat_test"     ["flat"]
             mtnDef  = mkDef "mountain_test" ["mountain"]
             overlayFor p defs = computeLocationOverlay

@@ -33,7 +33,11 @@ local locations = {}
 -- always reflects what's registered — no local cache to invalidate.
 -- Each engine LocationDef table is:
 --   { id, label, type, builder, anchor={tag,…},
+--     bounds={min_x,min_y,max_x,max_y}, discovery_margin,
 --     contents={{kind,id,count},…} }.
+-- `bounds` (#777) is the authoritative footprint, relative to the
+-- anchor tile: the builders and content scatter below both derive
+-- their geometry from it instead of an independent radius constant.
 
 -- All registered location defs, in registration order.
 function locations.listDefs()
@@ -57,8 +61,11 @@ end
 -- overlay for the ACTIVE world. Each entry:
 --   { cx, cy,    -- chunk coordinate
 --     gx, gy,    -- chunk-centre tile (anchor for stamping)
---     id }       -- LocationDef id (join with locations.getDef for
+--     id,        -- LocationDef id (join with locations.getDef for
 --                --   label/type/builder)
+--     bounds,    -- absolute, inclusive tile bounds (#777), or nil if
+--                --   `id` has no matching registered def
+--     discovery_margin }
 -- With no argument the active world is read; pass a page id to read a
 -- specific world's overlay. Returns {} when no such world or nothing placed.
 function locations.listPlaced(worldId)
@@ -181,15 +188,15 @@ local builders = {}
 --
 -- Perimeter edge per side: −gx = nw, +gx = se, −gy = ne, +gy = sw.
 -- worldId selects the page; baseZ (from flattenFootprint) is the levelled
--- ground the pieces sit on. Ceiling is OFF by default so the interior stays
--- visible while iterating.
-local ROOM_SMALL_RADIUS = 2   -- → 5×5 footprint
-
-function builders.room_small(worldId, gx, gy, withCeiling)
+-- ground the pieces sit on. `def` is the resolved LocationDef (buildAt
+-- always supplies one — this is only ever reached through locations.build/
+-- stamp); its `bounds` (#777) gives the footprint, so a 5x5 room is simply
+-- whatever bounds the def declares, not a hardcoded radius.
+function builders.room_small(worldId, gx, gy, def)
     local S = require("scripts.structures")
-    local r = ROOM_SMALL_RADIUS
-    local x0, x1 = gx - r, gx + r
-    local y0, y1 = gy - r, gy + r
+    local b = def.bounds
+    local x0, x1 = gx + b.min_x, gx + b.max_x
+    local y0, y1 = gy + b.min_y, gy + b.max_y
 
     -- 0. level the ground so the room is flat: flatten the footprint to its
     --    lowest base elevation and build every piece at that explicit z. (The
@@ -218,16 +225,10 @@ function builders.room_small(worldId, gx, gy, withCeiling)
         S.wall(x, y1, "sw", worldId, baseZ)   -- +gy side
     end
 
-    -- 4. ceiling (optional)
-    if withCeiling then
-        for x = x0, x1 do
-            for y = y0, y1 do S.ceiling(x, y, worldId, baseZ) end
-        end
-    end
+    -- No ceiling by default, so the interior stays visible while iterating.
 
-    engine.logInfo(string.format("locations: room_small %dx%d at %d,%d%s",
-        x1 - x0 + 1, y1 - y0 + 1, gx, gy,
-        withCeiling and " (+ceiling)" or ""))
+    engine.logInfo(string.format("locations: room_small %dx%d at %d,%d",
+        x1 - x0 + 1, y1 - y0 + 1, gx, gy))
 end
 
 -- A partially-collapsed room_small (#91): same 5×5 footprint and piece
@@ -252,11 +253,15 @@ local function collapseRng(gx, gy)
     end
 end
 
-function builders.room_small_damaged(worldId, gx, gy)
+-- `def` is the resolved LocationDef (buildAt always supplies one); its
+-- `bounds` (#777) is this ruin's authoritative footprint — the same box
+-- reported by engine.listLocationDefs / world.listPlacedLocations, not
+-- a second, independently-tracked radius.
+function builders.room_small_damaged(worldId, gx, gy, def)
     local S = require("scripts.structures")
-    local r = ROOM_SMALL_RADIUS
-    local x0, x1 = gx - r, gx + r
-    local y0, y1 = gy - r, gy + r
+    local b = def.bounds
+    local x0, x1 = gx + b.min_x, gx + b.max_x
+    local y0, y1 = gy + b.min_y, gy + b.max_y
     local rand = collapseRng(gx, gy)
     local baseZ = locations.flattenFootprint(worldId, x0, y0, x1, y1)
 
@@ -320,7 +325,7 @@ local function buildAt(id, gx, gy, worldId)
             "' names unknown builder '" .. tostring(def.builder) .. "'")
         return false
     end
-    b(worldId, math.floor(gx), math.floor(gy))
+    b(worldId, math.floor(gx), math.floor(gy), def)
     return true
 end
 
@@ -357,20 +362,14 @@ end
 -- otherwise re-run every load, and a player demolishing the floor
 -- would otherwise re-trigger every content spawn too.
 
--- Scatter radius (tiles from anchor), keyed by LocationDef.builder,
--- for content entries that omit `position`. Add an entry here for
--- each new builder's footprint; unknown builders fall back to the
--- default.
-local FOOTPRINT_RADIUS = { room_small         = ROOM_SMALL_RADIUS,
-                           room_small_damaged = ROOM_SMALL_RADIUS }
-local DEFAULT_FOOTPRINT_RADIUS = 2
-
+-- Scatter within the def's own authoritative bounds (#777) — no
+-- independent per-builder radius table to keep in sync with it.
 local function contentOffset(def, entry)
     if entry.position then
         return entry.position.x or 0, entry.position.y or 0
     end
-    local r = FOOTPRINT_RADIUS[def.builder] or DEFAULT_FOOTPRINT_RADIUS
-    return math.random(-r, r), math.random(-r, r)
+    local b = def.bounds
+    return math.random(b.min_x, b.max_x), math.random(b.min_y, b.max_y)
 end
 
 local function spawnUnitContent(def, entry, gx, gy, worldId)
@@ -440,7 +439,11 @@ local function spawnStructureContent(def, entry, gx, gy, worldId)
         return
     end
     local ox, oy = contentOffset(def, entry)
-    b(worldId, gx + ox, gy + oy)
+    -- The nested builder has no LocationDef of its own (`id` here names a
+    -- builder function, not a registered location) — its `bounds`-driven
+    -- geometry uses the OUTER def's, the only bounds in scope at a nested
+    -- content entry.
+    b(worldId, gx + ox, gy + oy, def)
 end
 
 local function dispatchContent(def, entry, gx, gy, worldId)

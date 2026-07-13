@@ -78,6 +78,7 @@ import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
+import qualified Test.Headless.Location.Bounds as LocationBounds
 
 main ∷ IO ()
 main = hspec $ do
@@ -173,3 +174,4 @@ main = hspec $ do
     describe "Camera.ZoomScroll" ZoomScroll.spec
     describe "Scene.BatchMerge" BatchMerge.spec
     describe "Render.PanMargin" PanMargin.spec
+    LocationBounds.spec

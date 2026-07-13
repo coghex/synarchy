@@ -154,6 +154,14 @@ computeLocationOverlay seed worldSize plates oceanMap oceanDist lakes rivers def
     -- the water overhanging the carved rim (#414). A def opts back IN via
     -- a coast anchor.
     --
+    -- This is a CHUNK-level placement filter, deliberately coarser than —
+    -- and independent of — a location's own tile-level footprint
+    -- ('Location.Types.ldBounds', #777): it keeps a whole chunk clear of
+    -- water candidates for placement, it does not describe the physical
+    -- extent of whatever gets stamped there. The authoritative bounding
+    -- box for that is 'Location.Bounds.translateBounds' applied to
+    -- 'ldBounds', not this filter.
+    --
     -- Every coord is canonicalised through 'wrapChunkCoordU' first, because
     -- the ocean / lake / river tables are keyed by the wrapped coord (see
     -- 'World.Generate.Chunk') — a seam-crossing neighbour read raw would

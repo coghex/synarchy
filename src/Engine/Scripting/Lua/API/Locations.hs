@@ -14,6 +14,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
 import Engine.Asset.YamlLocations
 import Location.Types
+import Location.Bounds (RelBounds(..))
 
 -- | engine.loadLocationYaml(path) — parses a YAML file of location
 --   defs, registers each into the LocationRegistry, returns the count.
@@ -43,6 +44,8 @@ loadLocationYamlFn env = do
                             , ldMaxCount   = lydMaxCount d
                             , ldMinSpacing = lydMinSpacing d
                             , ldContents   = map toContent (lydContents d)
+                            , ldBounds     = toBounds (lydBounds d)
+                            , ldDiscoveryMargin = lydDiscoveryMargin d
                             }
                     atomicModifyIORef' (locationDefsRef env) $ \reg →
                         (registerLocation def reg, ())
@@ -63,16 +66,24 @@ loadLocationYamlFn env = do
         , lconFaction  = lycFaction c
         , lconRolls    = lycRolls c
         }
+    toBounds b = RelBounds
+        { rbMinX = lybMinX b, rbMinY = lybMinY b
+        , rbMaxX = lybMaxX b, rbMaxY = lybMaxY b
+        }
 
 -- | engine.listLocationDefs() → array of location def tables, in
 --   registration order. Each entry:
 --     { id, label, type, builder,
 --       anchor   = { tag, … },
+--       bounds   = { min_x, min_y, max_x, max_y },  -- relative to anchor (#777)
+--       discovery_margin = number,
 --       contents = { { kind, id, count, rolls,
 --                      position = {x,y} | nil,
 --                      faction  = string | nil }, … } }
 --   `position` / `faction` fields are OMITTED (not set to a Lua nil
 --   value) when absent, so `entry.position` reads as nil either way.
+--   `bounds` / `discovery_margin` are always present — every def loads
+--   with a required, validated spatial contract (#777).
 --   The Lua `locations` module wraps this as locations.listDefs().
 locationListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 locationListDefsFn env = do
@@ -88,6 +99,19 @@ locationListDefsFn env = do
         Lua.setfield (-2) "type"
         Lua.pushstring (TE.encodeUtf8 (ldBuilder d))
         Lua.setfield (-2) "builder"
+        -- bounds: relative inclusive tile box (#777)
+        Lua.newtable
+        Lua.pushinteger (fromIntegral (rbMinX (ldBounds d)))
+        Lua.setfield (-2) "min_x"
+        Lua.pushinteger (fromIntegral (rbMinY (ldBounds d)))
+        Lua.setfield (-2) "min_y"
+        Lua.pushinteger (fromIntegral (rbMaxX (ldBounds d)))
+        Lua.setfield (-2) "max_x"
+        Lua.pushinteger (fromIntegral (rbMaxY (ldBounds d)))
+        Lua.setfield (-2) "max_y"
+        Lua.setfield (-2) "bounds"
+        Lua.pushinteger (fromIntegral (ldDiscoveryMargin d))
+        Lua.setfield (-2) "discovery_margin"
         -- anchor: array of tag strings
         Lua.newtable
         forM_ (zip [1..] (ldAnchor d)) $ \(j, tag) → do
