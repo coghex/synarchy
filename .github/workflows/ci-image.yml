@@ -117,16 +117,20 @@ jobs:
             echo "can_publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Only runs the first time this exact (recipe, Dockerfile) content
-      # is seen, thanks to the concurrency lock above ensuring no other
-      # run can publish it out from under this check — so an ordinary
-      # PR/push that changes neither file pays only the cheap existence
-      # check, never a rebuild. Skipped for a fork PR that can't publish
-      # anyway (see "Determine publish capability" above and the
-      # fallback step below).
+      # Building and validating a candidate needs no registry write
+      # access at all (push: false, load: true — purely local), so this
+      # runs unconditionally on a miss regardless of fork status: a fork
+      # PR's own candidate gets the SAME real build+validate exercise as
+      # a same-repo one, satisfying "Dockerfile/image-workflow PRs build
+      # and validate their candidate before merge" even when it can't be
+      # published. Only runs the first time this exact (recipe,
+      # Dockerfile) content is seen, thanks to the concurrency lock above
+      # ensuring no other run can publish it out from under this check —
+      # so an ordinary PR/push that changes neither file pays only the
+      # cheap existence check, never a rebuild.
       - name: Build candidate image
         id: build
-        if: steps.exists.outputs.found != 'true' && steps.fork.outputs.can_publish == 'true'
+        if: steps.exists.outputs.found != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .github/ci
@@ -139,6 +143,9 @@ jobs:
       # GHC/Cabal contract doesn't match the Dockerfile's own ARG
       # defaults fails here — before anything is published, and before
       # build-test (which transitively needs this workflow) ever starts.
+      # Runs for a fork PR's candidate too (see "Build candidate image"
+      # above), so a fork PR that breaks the toolchain contract still
+      # fails this job even though it can never publish anything.
       - name: Validate candidate GHC/Cabal contract
         if: steps.build.outcome == 'success'
         run: |
@@ -151,28 +158,33 @@ jobs:
           echo "$GHC_OUT" | grep -qF "$GHC_EXPECTED" || { echo "::error::candidate image's baked GHC does not match Dockerfile ARG GHC_VERSION=$GHC_EXPECTED"; exit 1; }
           echo "$CABAL_OUT" | grep -qF "$CABAL_EXPECTED" || { echo "::error::candidate image's baked Cabal does not match Dockerfile ARG CABAL_VERSION=$CABAL_EXPECTED"; exit 1; }
 
-      # First (and only) publish of this content's tag. Safe from the
-      # concurrency-race this workflow used to have (see header comment)
-      # because the `resolve` job's concurrency group already ensures no
-      # other run holding the SAME tag can be mid-publish right now.
+      # First (and only) publish of this content's tag. Gated on
+      # can_publish: a fork PR's GITHUB_TOKEN can't push regardless (see
+      # "Determine publish capability" above) — its candidate was still
+      # genuinely built and validated just above, it just can't be
+      # published for build-test to pull (see the fallback step below).
+      # Safe from the concurrency-race this workflow used to have (see
+      # header comment) because the `resolve` job's concurrency group
+      # already ensures no other run holding the SAME tag can be
+      # mid-publish right now.
       - name: Publish validated candidate
-        if: steps.build.outcome == 'success'
+        if: steps.build.outcome == 'success' && steps.fork.outputs.can_publish == 'true'
         run: |
           TAG="ghcr.io/coghex/synarchy-ci:${{ needs.tag.outputs.tag }}"
           docker tag synarchy-ci:candidate "$TAG"
           docker push "$TAG"
 
-      # A fork PR that changes the Dockerfile/recipe can't publish its
-      # own candidate (no registry write access), so it can't be
-      # self-validated by this workflow at all — that requires a
-      # maintainer to push the same change from a same-repo branch. What
-      # it CAN still do is run build-test against whatever the PR's base
-      # branch already has published, so the job doesn't just fail on a
-      # confusing permission error. Falls back to the BASE ref's own
-      # (Dockerfile, recipe) content tag, which must already be
-      # published (every same-repo push publishes its own tag, so the
-      # base branch's current tag always exists once this mechanism has
-      # run at least once from a same-repo context).
+      # A fork PR's candidate was just built and validated above (real
+      # exercise of the fork's own revision), but it can't publish that
+      # candidate for build-test to pull (no registry write access) —
+      # that requires a maintainer to push the same change from a
+      # same-repo branch. What it CAN still do is run build-test against
+      # whatever the PR's base branch already has published, so the job
+      # doesn't just fail on a confusing permission error. Falls back to
+      # the BASE ref's own (Dockerfile, recipe) content tag, which must
+      # already be published (every same-repo push publishes its own
+      # tag, so the base branch's current tag always exists once this
+      # mechanism has run at least once from a same-repo context).
       - name: Resolve fallback tag for a fork PR that can't publish its own candidate
         id: fallback
         if: steps.exists.outputs.found != 'true' && steps.fork.outputs.can_publish != 'true'
