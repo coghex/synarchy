@@ -15,6 +15,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -242,6 +243,13 @@ handleWorldLoadSaveCommand env logger pageId saveData
                        `HS.difference` restoredPageIds
     forM_ (HS.toList staleIds) $ \gid →
         Q.writeQueue (simQueue env) (SimDropWorld gid)
+    -- Reclaim each stale page's blood-texture GPU resources (#788) before
+    -- it drops out of wmWorlds below — otherwise a within-session load's
+    -- remapped-away / superseded pages leak their bindless registrations
+    -- and images the same way a destroy/replace would.
+    do preMgr ← readIORef (worldManagerRef env)
+       forM_ (HS.toList staleIds)
+             (enqueueBloodDisposalForPage (bloodDisposeQueue env) preMgr)
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
         ( mgr { wmWorlds  = filter (\(p,_) → not (HS.member p staleIds))
                                    (wmWorlds mgr)

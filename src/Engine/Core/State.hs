@@ -55,7 +55,8 @@ import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
-                   , WorldState, WorldPageId, wmWorlds, wmVisible)
+                   , WorldState, WorldPageId, wmWorlds, wmVisible
+                   , BloodTextureHandles)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
 import Unit.Pathing.Config (PathingConfig)
@@ -167,6 +168,21 @@ data EngineEnv = EngineEnv
     --   'VkSampler' per kind is alive at a time. Destroyed wholesale at
     --   shutdown via 'destroySamplerCache'.
   , textureSizeRef      ∷ IORef (HM.HashMap TextureHandle (Int, Int))
+  , bloodDisposeQueue   ∷ Q.Queue (IORef BloodTextureHandles)
+    -- ^ Cross-thread GPU-dispose transport for #606 blood textures owned
+    --   by a world page the world thread is removing/replacing (#788).
+    --   'uploadBloodTextures' only sweeps pages still in 'wmWorlds', so a
+    --   removed page's 'wsBloodTextureHandlesRef' would otherwise be
+    --   unreachable and its bindless registrations / Vulkan images /
+    --   'textureSizeRef' entries leak. The world-thread teardown sites
+    --   enqueue the orphaned page's live handle 'IORef' here (never a
+    --   snapshot — read at drain time); the render thread drains it in
+    --   'World.Render.BloodQuads.disposeQueuedBloodTextures', disposing
+    --   whatever remains and emptying the map. Enqueuing the LIVE ref
+    --   keeps it disjoint from any still-in-flight FIFO eviction of the
+    --   same map (that sweep frees what it removed; the drain frees the
+    --   rest), so the two never double-free. Empty and inert headless
+    --   (nothing ever uploads, so nothing is ever enqueued with records).
   , defaultFaceMapSlotRef  ∷ IORef Word32
   , floraCatalogRef     ∷ IORef FloraCatalog
   , materialRegistryRef   ∷ IORef MaterialRegistry

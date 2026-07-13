@@ -604,6 +604,7 @@ library
                      World.Plant.Types
                      World.Render.SpoilQuads
                      World.Render.BloodQuads
+                     World.Blood.Teardown
                      World.Gem
                      World.Spoil.Logic
                      World.Spoil.Types
@@ -978,6 +979,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Blood.Types
                    Test.Headless.Blood.Texture
                    Test.Headless.Blood.Impact
+                   Test.Headless.Blood.Teardown
                    Test.Headless.UI.CreateWorldControls
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership

@@ -12,6 +12,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import System.Random
@@ -82,6 +83,13 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- for every caller that doesn't name its world (arena, headless,
     -- dump, the 4-argument world.init).
     writeIORef (wsIdentityRef worldState) identity
+
+    -- Re-initialising an existing page id replaces (and orphans) its old
+    -- WorldState; reclaim that old page's blood-texture GPU resources
+    -- (#788) before it drops out of wmWorlds below. No-op the common case
+    -- where no page yet exists under this id.
+    do preMgr ← readIORef (worldManagerRef env)
+       enqueueBloodDisposalForPage (bloodDisposeQueue env) preMgr pageId
 
     -- register early so lua can read the loading phase
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
@@ -317,6 +325,11 @@ handleWorldInitArenaCommand env logger pageId = do
 
     worldState ← emptyWorldState
     gen ← newStdGen
+
+    -- Replacing an existing page id orphans its old WorldState; reclaim
+    -- its blood-texture GPU resources (#788) before it drops out below.
+    do preMgr ← readIORef (worldManagerRef env)
+       enqueueBloodDisposalForPage (bloodDisposeQueue env) preMgr pageId
 
     -- Register early so textures sent after this command are routed correctly
     atomicModifyIORef' (worldManagerRef env) $ \mgr →

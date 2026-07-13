@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.State.Types
     ( WorldState(..)
+    , BloodTextureHandles
     , emptyWorldState
     , bumpQuadCacheGen
     , WorldManager(..)
@@ -39,6 +40,13 @@ import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import World.Flora.CropPlot (CropPlots, emptyCropPlots)
 import Item.Ground (GroundItems, emptyGroundItems)
+
+-- | Per-world GPU-upload bookkeeping for #606's procedurally generated
+--   blood textures: each live 'BloodTextureId' maps to its bindless
+--   'TextureHandle' plus that texture's own GPU cleanup action. Named so
+--   the cross-thread dispose transport ('Engine.Core.State.bloodDisposeQueue',
+--   #788) can carry a page's live handle 'IORef' to the render thread.
+type BloodTextureHandles = HM.HashMap BloodTextureId (TextureHandle, IO ())
 
 data WorldState = WorldState
     { wsTilesRef     ∷ IORef WorldTileData
@@ -167,7 +175,7 @@ data WorldState = WorldState
       --   worlds and dies with the WorldState; a reloaded world gets a
       --   fresh empty store. Never saved — #604 is explicitly model +
       --   debug-surface only, no save/load persistence.
-    , wsBloodTextureHandlesRef ∷ IORef (HM.HashMap BloodTextureId (TextureHandle, IO ()))
+    , wsBloodTextureHandlesRef ∷ IORef BloodTextureHandles
       -- ^ GPU-upload state for #606's procedurally generated blood
       --   textures: which 'BloodTextureId's currently have a live
       --   bindless 'TextureHandle', plus that texture's own GPU
@@ -175,13 +183,14 @@ data WorldState = WorldState
       --   'World.Render.BloodQuads.uploadBloodTextures' — reading
       --   'wsBloodStoreRef's FIFO to upload anything new and unregister
       --   anything evicted — since the FIFO itself is mutated from the
-      --   Lua/world thread with no GPU access of its own. Deliberately
-      --   NOT torn down when a world page is removed from
-      --   'WorldManager' (a small, bounded leak — at most
-      --   'defaultBloodTextureCap' tiny textures per destroyed world —
-      --   traded for not plumbing a cross-thread GPU-dispose signal
-      --   into the handful of world-teardown sites for content that's
-      --   already explicitly out-of-scope for persistence).
+      --   Lua/world thread with no GPU access of its own. When a world
+      --   page is removed or replaced (destroy / destroy-all / init /
+      --   arena / save-load), the world thread hands THIS 'IORef' to the
+      --   render thread via 'Engine.Core.State.bloodDisposeQueue' (#788),
+      --   which disposes every remaining handle — bindless unregister,
+      --   'textureSizeRef' removal, image/view cleanup — and empties the
+      --   map, so a destroyed page's GPU textures are reclaimed rather
+      --   than leaked. Not persisted: a reloaded world uploads fresh.
     , wsIdentityRef ∷ IORef (Maybe WorldIdentity)
       -- ^ The page's optional player-facing identity (#707): display
       --   name + optional gloss, distinct from the routing page id and

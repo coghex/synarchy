@@ -17,15 +17,19 @@ module Engine.Scripting.Lua.API.Blood
     , bloodListTexturesFn
     , bloodGetTextureCapFn
     , bloodGetRenderQuadsFn
+    , bloodGpuStatsFn
     , bloodClearFn
     ) where
 
 import UPrelude
 import Data.List (elemIndex)
 import qualified Data.Text.Encoding as TE
+import qualified Data.HashMap.Strict as HM
+import qualified Data.Map as Map
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified HsLua as Lua
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import World.Page.Types (WorldPageId(..))
 import World.Types (WorldManager(..), WorldState(..))
 import Unit.Types (UnitId(..))
@@ -257,6 +261,32 @@ bloodGetTextureCapFn env = do
             Nothing      → return 0
             Just (_, ws) → btpCap . bstPool ⊚ readIORef (wsBloodStoreRef ws)
     Lua.pushinteger (fromIntegral cap)
+    return 1
+
+-- | blood.gpuStats() → { bindless, texSize, bloodHandles } — GPU-side
+--   resource counts for the #788 world-teardown lifecycle probe:
+--   total registered bindless textures ('btsHandleMap' size), total
+--   'textureSizeRef' dimension-cache entries, and the ACTIVE page's live
+--   blood handle-map size (0 with no active page or no bindless system).
+--   The first two are engine-wide (not blood-only), so the probe reads
+--   DELTAS around a controlled blood spawn / page teardown rather than
+--   absolute counts; a fixed leak would leave the post-teardown delta
+--   above baseline. All three are 0 headless (nothing uploads).
+bloodGpuStatsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+bloodGpuStatsFn env = do
+    (bindless, texSize, bloodHandles) ← Lua.liftIO $ do
+        mSys     ← readIORef (textureSystemRef env)
+        texSizes ← readIORef (textureSizeRef env)
+        mPage    ← activeWorldPage env
+        bh ← case mPage of
+            Nothing      → pure (0 ∷ Int)
+            Just (_, ws) → HM.size ⊚ readIORef (wsBloodTextureHandlesRef ws)
+        pure (maybe 0 (Map.size . btsHandleMap) mSys, HM.size texSizes, bh)
+    Lua.newtable
+    let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
+    putI "bindless"     bindless
+    putI "texSize"      texSize
+    putI "bloodHandles" bloodHandles
     return 1
 
 -- | blood.getRenderQuads([pageId]) → array of render-record tables
