@@ -216,11 +216,14 @@ categories:
     default_settings: { log: false, popup: false, pause: false }
 ```
 
-### 4.3 Player overrides — `config/notifications.yaml`
+### 4.3 Player overrides — `config/notifications.local.yaml`
 
 Auto-created on first run by copying `default_settings` from the
 registry. The player edits it through the settings tab (Phase 2) or
-by editing the file directly.
+by editing the file directly. (`config/notifications.yaml` is a
+pre-#786 legacy path kept only as a one-time migration source at first
+boot — see "Config migration (#786)" below; editing it after the local
+file already exists has no effect.)
 
 ```yaml
 categories:
@@ -260,7 +263,7 @@ type NotificationCfg = HashMap Text CategoryCfg
 
 `NotificationCfg` is loaded at boot and is **immutable for the
 session**. Phase 1 doesn't change settings at runtime; Phase 2's
-settings-tab UI rewrites `config/notifications.yaml` and reloads.
+settings-tab UI rewrites `config/notifications.local.yaml` and reloads.
 
 ---
 
@@ -536,7 +539,7 @@ popup.init(boxTexSet, menuFont, fbW, fbH)
 loadNotificationCfg :: FilePath -> FilePath -> IO NotificationCfg
 loadNotificationCfg registryPath overridesPath = do
   registry <- decodeFileThrow registryPath  -- data/notification_categories.yaml
-  overrides <- tryDecode overridesPath       -- config/notifications.yaml
+  overrides <- tryDecode overridesPath       -- config/notifications.local.yaml (#786)
   let merged = mergeOverrides registry (fromMaybe HM.empty overrides)
   -- If overridesPath didn't exist, write defaults so the file exists.
   unless (isJust overrides) $
@@ -570,7 +573,7 @@ A tab in the existing settings menu. For each category in the
 registry, a row showing display_name + three checkboxes
 (log / popup / pause) + a tooltip area showing description on hover.
 
-Writes `config/notifications.yaml` on close. Reload of
+Writes `config/notifications.local.yaml` on close. Reload of
 `notificationCfg` happens via a queued engine message
 (`LuaReloadNotificationCfg`); active popups and log entries are
 unaffected.

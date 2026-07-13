@@ -297,11 +297,14 @@ the explicit contract.
 - `cbits/` — C code (stb_truetype font rasterization, Lua debug FFI)
 - `config/` — YAML config. `*_default.yaml` / `pathing.yaml` /
   `world_gen_default.yaml` are versioned defaults/templates (tracked).
-  `keybinds.yaml`, `video.yaml`, `notifications.yaml` are local
-  runtime state (gitignored) that the settings UI's Save actions
-  write — absent on a fresh clone, where boot falls back to the
+  `keybinds.local.yaml`, `video.local.yaml`, `notifications.local.yaml`
+  are local runtime state (gitignored) that the settings UI's Save
+  actions write — absent on a fresh clone, where boot falls back to the
   `_default.yaml` template or (notifications) materializes from
-  `data/notification_categories.yaml` (#638)
+  `data/notification_categories.yaml` (#638). `keybinds.yaml`,
+  `video.yaml`, `notifications.yaml` are ALSO tracked, but only as a
+  pre-#786 upgrade source read once at first boot if a local file
+  doesn't exist yet — see "Testing config state headless" below (#786)
 - `data/` — Game data YAML (materials, vegetation, flora, units)
 - `assets/` — Images and graphical resources
 - `scripts/` — Lua scripts for game logic
@@ -1014,37 +1017,130 @@ headless and checks the injury stream roundtrip, `unit.injure` →
 event, and `emitEventForUnit` → `getEventLog().uid` (gating), plus a
 best-effort real-fall test. `--no-fall` skips the movement phase.
 
-### Testing config state headless (#638)
+### Testing config state headless (#638, upgrade path #786)
 
-`config/video.yaml`, `config/keybinds.yaml`, and `config/notifications.yaml`
-are gitignored local runtime state written by the settings UI's save
-paths (`engine.saveVideoConfig`/`saveKeybinds`/`setNotificationOverrides`),
-not versioned source. Boot falls back to the tracked
-`config/video_default.yaml`/`config/keybinds_default.yaml` templates
-(`Engine.Core.Init.resolveConfigPath`) when the local file is absent;
-`config/notifications.yaml` has no separate default file — it
-self-materializes from `data/notification_categories.yaml`'s
-`default_settings`, same as before #638. Existing on-disk files from
-before this change are left untouched (untracked via `git rm --cached`,
-not deleted), so nobody's local preferences are silently discarded.
+`config/video.local.yaml`, `config/keybinds.local.yaml`, and
+`config/notifications.local.yaml` are gitignored local runtime state
+written by the settings UI's save paths (`engine.saveVideoConfig`/
+`saveKeybinds`/`setNotificationOverrides`), not versioned source. Boot
+falls back to the tracked `config/video_default.yaml`/
+`config/keybinds_default.yaml` templates (`Engine.Core.Init.resolveConfigPath`)
+when the local file is absent; `config/notifications.local.yaml` has no
+separate default file — it self-materializes from
+`data/notification_categories.yaml`'s `default_settings`, same as
+before #638.
 
-The pre-#638 tracked `config/video.yaml`/`config/notifications.yaml` had
-already drifted from their own templates/registry (`ui_scale: 1.5`/
-`vsync: false`; `building.popup`/`unit_warning.pause` flipped from the
-registry's `false`) — exactly the accidental-local-preference problem
-#638 removes, not an intentional default. A fresh clone deliberately
-gets the clean template/registry values, not the old drifted ones;
-`config_state_probe.py` pins this explicitly.
+**Correction (#786):** #638's original claim that the pre-#638 tracked
+`config/video.yaml`/`config/keybinds.yaml`/`config/notifications.yaml`
+were "left untouched (untracked via `git rm --cached`, not deleted)" on
+an update was **wrong**. `git rm --cached` only spares the file in the
+PR author's own working tree; a downstream `git pull` that finds no
+local modification to one of those paths deletes it as an ordinary
+tree change — no different from any other file removed upstream. That
+already happened for real on the paths above: `config/video.yaml` and
+`config/keybinds.yaml` are gone from disk on the checkout that carried
+#638 forward, and `config/notifications.yaml` only survived because its
+loader self-materializes fresh registry defaults on the next boot when
+the file is absent — silently replacing the old drifted values
+(`ui_scale: 1.5`/`vsync: false`; `building.popup`/`unit_warning.pause`
+flipped from the registry's `false`) rather than preserving them. That
+loss is irretrievable for any checkout that already pulled past it —
+#786 does not attempt to recover it — but #786 does fix the pattern
+going forward:
 
-Turnkey harness: **`python3 tools/config_state_probe.py`** — the #638
-gate. Backs up any local config files present (restored afterward), boots
-headless to confirm a simulated fresh clone falls back to the versioned
-templates, exercises the three public save paths, and asserts
-`git status --short -- config .gitignore` is clean both before and after.
+- `config/video.yaml`, `config/keybinds.yaml`, and
+  `config/notifications.yaml` are tracked again, deliberately, with
+  content equal to the versioned default/registry (never a real
+  player's values — see the notes above on why the old tracked content
+  was itself accidental drift, not a real setting worth re-enshrining).
+  Their only purpose is to guarantee a *readable legacy file always
+  exists* for a direct updater's first boot, so `migrateLegacyConfig`
+  (below) always has something to react to instead of reaching a
+  silently-already-deleted path. Because the tracked content is neutral,
+  this is invisible for anyone who never touches these files: migrating
+  it produces the same effective values as falling back to the default
+  directly (the exact pattern `config/notifications.yaml` already used
+  pre-#638 — it always self-materialized a file on first boot too).
+- A player who actually saved through the *old* settings UI (pre-#786)
+  has a **locally modified** copy of one of these paths. `git` itself —
+  not this PR — is what protects that: a plain `git pull`/checkout
+  refuses to silently discard an uncommitted local modification to a
+  tracked file, so their real values stay on disk until the update is
+  resolved by hand, at which point `migrateLegacyConfig` picks up
+  *their* real content (not the tracked neutral placeholder). This is
+  the only case where "preserve the player's real values" is actually
+  meaningful, and it works precisely because the tracked content
+  choice above is irrelevant to it.
+- Save actions target the new `*.local.yaml` paths, which are never
+  tracked, so gitignoring them can never repeat this exact loss for a
+  *new* config path going forward.
+- `Engine.Core.Init.migrateLegacyConfig` is the one-time upgrade step:
+  at boot, if a legacy-named file is present on disk and the
+  current-format local file is not, it decodes the legacy file against
+  the SAME `FromJSON` type its subsystem's own loader uses (passed in
+  via a `Proxy` — `VideoConfigFile` / `KeyBindingConfig` / `OverridesFile`)
+  and, only on success, copies it to the local path and logs the fact.
+  Validating against the real target schema (not just "is this
+  syntactically valid YAML") matters: a legacy file that parses as YAML
+  but is missing a field the real loader requires (e.g. video's
+  `resolution`) must not be copied and logged as a successful
+  migration — that would silently mask the load failure the loader
+  would otherwise report AND permanently block any future migration
+  attempt, since the existence gate below would see the copied-but-
+  unusable local file and never look at legacy again.
+- The migration only ever runs when the local path is absent — a single
+  existence gate that makes a second boot a no-op (idempotent) and
+  guarantees a real local file always wins over a stale legacy one,
+  without needing to compare timestamps or content.
+- A legacy file that fails that schema-aware decode (malformed, partial,
+  schema-incomplete, or unreadable) is left alone and logged rather than
+  copied, falling back to the versioned default/registry exactly like a
+  missing legacy file — it can never destroy or mask an already-valid
+  local file. Notifications' own `OverridesFile` parser treats a missing
+  `categories` key (or any of a category's three fields) as valid —
+  the exact same tolerance `loadOverrides` already applies when
+  self-materializing a fresh file — so "schema-incomplete" only rejects
+  a legacy notifications file for video/keybinds-style reasons
+  (unparseable YAML); an empty or field-sparse-but-well-formed one
+  still migrates successfully, unlike video's genuinely required
+  `resolution` field.
+- A fresh clone has no local file (only the tracked, neutral legacy
+  file), so its first boot migrates that neutral content — same
+  effective values as the versioned template/registry either way.
+
+Turnkey harnesses:
+- **`python3 tools/config_state_probe.py`** — the #638 gate. Backs up
+  any local *and* legacy config files present (restored afterward),
+  boots headless to confirm a simulated fresh clone (neither local nor
+  legacy files present) falls back to the versioned templates,
+  exercises the three public save paths (asserting they write the
+  `*.local.yaml` paths and never resurrect a legacy path), and asserts
+  `git status --short -- config .gitignore` is clean both before and
+  after.
+- **`python3 tools/config_migration_probe.py`** — the #786 gate. First
+  proves the upgrade against the REAL committed tree (no fixtures): the
+  tracked legacy files resolve to the versioned default/registry and
+  migrate into `*.local.yaml` on a plain boot — the direct-updater path
+  itself, not just the mechanism in isolation. Then drives the
+  mechanism directly with hand-placed fixtures carrying distinct
+  non-default values (a probe can't reproduce the interesting `git
+  pull` case itself, since git blocks it rather than executing it — see
+  above): a legacy-only boot migrates all three subsystems' values and
+  writes the matching local files; a second boot is idempotent even
+  after the legacy file is edited further; an existing local file wins
+  outright over a legacy file present from the start, and migration
+  never touches either file in that case; and a malformed (or
+  schema-incomplete) legacy file falls back to the versioned default
+  without ever creating a local file, and — separately — without
+  touching an already-valid local file sitting next to it.
+
 Also covered by pure hspec coverage (no engine): `cabal test
 synarchy-test-headless --test-options='--match "config"'` includes
-`Test.Headless.Core.ConfigState`'s direct tests of `resolveConfigPath`
-and the notification-overrides materialize/round-trip contract.
+`Test.Headless.Core.ConfigState`'s direct tests of `resolveConfigPath`,
+`migrateLegacyConfig` (present/absent/syntactically-malformed/
+schema-incomplete legacy, idempotency, never overwriting an existing
+local file), and the notification-overrides materialize/round-trip
+contract.
 
 ### Shutdown
 

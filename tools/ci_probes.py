@@ -120,6 +120,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     # PR gate. Run them when touching the named feature. ---
     "collapse_crawl": (TARGETED, "narrow #304 collapse/crawl hysteresis regression"),
     "concussion_revive": (TARGETED, "narrow #304 concussion revive hysteresis regression"),
+    "config_migration": (TARGETED, "narrow #786 pre-#661 legacy config upgrade regression"),
     "config_state": (TARGETED, "narrow #638 config load/save vs git-tracking regression"),
     "cooking": (TARGETED, "cooking content integration; craft remains the generic craft smoke gate"),
     "disarm": (TARGETED, "narrow #193 disabled-hand auto-drop regression"),

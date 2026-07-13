@@ -173,7 +173,7 @@ getNotificationCfgFn env = do
     return 1
 
 -- | @engine.setNotificationOverrides(overrides)@ — apply per-category
---   overrides and persist to @config/notifications.yaml@. The
+--   overrides and persist to @config/notifications.local.yaml@. The
 --   @overrides@ table is shaped @{ catId = {log=b, popup=b, pause=b}
 --   ... }@; missing categories and missing fields are left alone.
 --   Unknown category ids are ignored with a dev-log warning.
@@ -218,7 +218,7 @@ setNotificationOverridesFn env = do
             -- routes the next emit; the YAML is the next-session
             -- record.
             Lua.liftIO $ writeNotificationOverrides
-                "config/notifications.yaml" updated
+                "config/notifications.local.yaml" updated
             Lua.pushboolean True
             return 1
 

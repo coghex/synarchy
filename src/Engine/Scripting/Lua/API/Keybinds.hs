@@ -221,13 +221,13 @@ removeActionKeysMatchingFn env = do
     return 1
 
 -- | engine.saveKeybinds() → bool
---   Persist the live bindings to config/keybinds.yaml.
+--   Persist the live bindings to config/keybinds.local.yaml.
 saveKeybindsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveKeybindsFn env = do
     Lua.liftIO $ do
         bindings ← readIORef (keyBindingsRef env)
         logger ← readIORef (loggerRef env)
-        saveKeyBindings logger "config/keybinds.yaml" bindings
+        saveKeyBindings logger "config/keybinds.local.yaml" bindings
     Lua.pushboolean True
     return 1
 
