@@ -181,6 +181,30 @@ spec = do
                         (v3 / v1) `shouldSatisfy` (> 3.0)
                     _ → expectationFailure "expected Just from both"
 
+        describe "deep-drop and deep-climb finiteness (#815)" $ do
+            it "a 56-z drop with the default fall_factor stays finite (5^56 overflows Float)" $ do
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 60 else 4
+                        in (z, Nothing)
+                case stepCost pc reg wtd (7, 5) (8, 5) of
+                    Just c  → do
+                        isInfinite c `shouldBe` False
+                        isNaN c `shouldBe` False
+                        c `shouldSatisfy` (≥ 0)
+                    Nothing → expectationFailure "expected Just"
+
+            it "an overflowing climb factor still yields a finite, non-negative cost" $ do
+                let wtd = worldWith $ customChunk $ \(lx, _) →
+                        let z = if lx < 8 then 4 else 60
+                        in (z, Nothing)
+                    pcHuge = pc { pcClimbFactor = 1 / 0 }
+                case stepCost pcHuge reg wtd (7, 5) (8, 5) of
+                    Just c  → do
+                        isInfinite c `shouldBe` False
+                        isNaN c `shouldBe` False
+                        c `shouldSatisfy` (≥ 0)
+                    Nothing → expectationFailure "expected Just"
+
         describe "fluid impassability" $ do
             let wtd = worldWith $ customChunk $ \(lx, _) →
                     if lx ≡ 5 then (0, Just Ocean)

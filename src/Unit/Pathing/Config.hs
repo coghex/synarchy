@@ -82,9 +82,30 @@ defaultPathingConfig = PathingConfig
     , pcDownhillSpeedBonus  = 0.1
     }
 
--- | Clamp a parsed config to runtime-safe ranges. Two invariants the
+-- | Replace a non-finite value (+Infinity, -Infinity, or NaN — e.g. an
+--   oversized YAML scalar like @fall_factor: 1e999@, which `Data.Yaml`
+--   decodes straight to +Infinity) with the field's own historical
+--   default, so a single overflowing knob degrades to known-safe
+--   behaviour instead of an uncomparable float. This must run BEFORE
+--   the `max`/`min` bound clamps below: they don't handle non-finite
+--   inputs safely on their own — `max 0 Infinity` still returns
+--   Infinity (Infinity is already ≥ 0), and `max 0 NaN` silently
+--   collapses to 0.0 only as an accident of derived `Ord Float`'s
+--   `<=`-based implementation, not a deliberate rule. Handling it here
+--   explicitly (`isNaN`/`isInfinite`) makes the fallback intentional
+--   and documented rather than an incidental side effect.
+finiteOr ∷ Float → Float → Float
+finiteOr fallback x
+    | isNaN x ∨ isInfinite x = fallback
+    | otherwise               = x
+
+-- | Clamp a parsed config to runtime-safe ranges. Invariants the
 --   cost/movement code relies on:
 --
+--     * every `Float` tunable must be finite (`finiteOr`, above) —
+--       required so every A* edge weight built from it stays
+--       comparable; an Infinity/NaN tunable collapses route comparison
+--       once it reaches `Unit.Pathing.AStar`'s open-set ordering.
 --     * @fall_trigger_drop@ must be ≥ 1. The fall checks are
 --       @drop ≥ pcFallTriggerDrop@; at 0 (or negative) a flat step
 --       (@drop == 0@) reads as a fall, so the planner surcharges level
@@ -101,19 +122,24 @@ defaultPathingConfig = PathingConfig
 --       than 10% speed), bonus at 0.5.
 --
 --   Out-of-range values are clamped (not rejected) so a single bad knob
---   degrades to a sane default instead of failing engine init.
+--   degrades to a sane default instead of failing engine init. This
+--   only fixes up individual TUNABLES — the derived per-step cost
+--   (`Unit.Pathing.Cost.stepCost`) can still overflow a finite,
+--   in-range tunable over an extreme terrain delta (e.g. a 56+ z drop
+--   with the shipped default @fall_factor: 5.0@), so `stepCost` clamps
+--   its own result too rather than relying solely on this.
 normalizePathingConfig ∷ PathingConfig → PathingConfig
 normalizePathingConfig pc = pc
-    { pcClimbFactor         = max 0 (pcClimbFactor pc)
-    , pcRampFactor          = max 0 (pcRampFactor pc)
-    , pcFallFactor          = max 0 (pcFallFactor pc)
+    { pcClimbFactor         = max 0 (finiteOr (pcClimbFactor defaultPathingConfig) (pcClimbFactor pc))
+    , pcRampFactor          = max 0 (finiteOr (pcRampFactor defaultPathingConfig) (pcRampFactor pc))
+    , pcFallFactor          = max 0 (finiteOr (pcFallFactor defaultPathingConfig) (pcFallFactor pc))
     , pcFallTriggerDrop     = max 1 (pcFallTriggerDrop pc)
-    , pcRiverPenalty        = max 0 (pcRiverPenalty pc)
-    , pcLakePenalty         = max 0 (pcLakePenalty pc)
-    , pcReplanCostThreshold = max 0 (pcReplanCostThreshold pc)
-    , pcMaterialReplanMargin = max 0 (pcMaterialReplanMargin pc)
-    , pcUphillSpeedPenalty  = min 0.9 (max 0 (pcUphillSpeedPenalty pc))
-    , pcDownhillSpeedBonus  = min 0.5 (max 0 (pcDownhillSpeedBonus pc))
+    , pcRiverPenalty        = max 0 (finiteOr (pcRiverPenalty defaultPathingConfig) (pcRiverPenalty pc))
+    , pcLakePenalty         = max 0 (finiteOr (pcLakePenalty defaultPathingConfig) (pcLakePenalty pc))
+    , pcReplanCostThreshold = max 0 (finiteOr (pcReplanCostThreshold defaultPathingConfig) (pcReplanCostThreshold pc))
+    , pcMaterialReplanMargin = max 0 (finiteOr (pcMaterialReplanMargin defaultPathingConfig) (pcMaterialReplanMargin pc))
+    , pcUphillSpeedPenalty  = min 0.9 (max 0 (finiteOr (pcUphillSpeedPenalty defaultPathingConfig) (pcUphillSpeedPenalty pc)))
+    , pcDownhillSpeedBonus  = min 0.5 (max 0 (finiteOr (pcDownhillSpeedBonus defaultPathingConfig) (pcDownhillSpeedBonus pc)))
     }
 
 -- | Per-key optional parse: any omitted key keeps its default. (Using

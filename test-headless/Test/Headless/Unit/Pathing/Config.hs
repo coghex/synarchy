@@ -95,3 +95,33 @@ spec = do
 
         it "leaves a valid config unchanged" $
             normalizePathingConfig defaultPathingConfig `shouldBe` defaultPathingConfig
+
+        it "replaces +Infinity tunables with their own default, not 0 (#815)" $
+            normalizePathingConfig defaultPathingConfig
+                { pcClimbFactor         = 1 / 0
+                , pcFallFactor          = 1 / 0
+                , pcReplanCostThreshold = 1 / 0
+                } `shouldBe` defaultPathingConfig
+
+        it "replaces -Infinity and NaN tunables with their own default (#815)" $
+            normalizePathingConfig defaultPathingConfig
+                { pcRampFactor   = -1 / 0
+                , pcRiverPenalty = 0 / 0
+                } `shouldBe` defaultPathingConfig
+
+        it "a non-finite field doesn't discard a valid sibling override (#815)" $
+            normalizePathingConfig defaultPathingConfig
+                { pcFallFactor = 1 / 0
+                , pcClimbFactor = 99.0
+                } `shouldBe` defaultPathingConfig { pcClimbFactor = 99.0 }
+
+    describe "an oversized YAML scalar decodes safely (#815)" $
+        it "fall_factor: 1e999 decodes to +Infinity, then normalizes to the default" $ do
+            let yaml = "fall_factor: 1e999\nclimb_factor: 42.0\n"
+            case decode yaml of
+                Right pc → do
+                    isInfinite (pcFallFactor pc) `shouldBe` True
+                    let normalized = normalizePathingConfig pc
+                    pcFallFactor normalized `shouldBe` pcFallFactor defaultPathingConfig
+                    pcClimbFactor normalized `shouldBe` 42.0
+                Left err → expectationFailure ("expected Right, got " <> err)

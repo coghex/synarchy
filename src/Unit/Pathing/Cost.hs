@@ -120,7 +120,41 @@ stepCost pc reg wtd (sgx, sgy) (dgx, dgy) = do
             fall   = if negate dz ≥ pcFallTriggerDrop pc
                      then pcFallFactor pc ** fromIntegral (negate dz)
                      else 0
-        in pure $! horizD + climb + fall + fluidCost
+        in pure $! clampStepCost (horizD + climb + fall + fluidCost)
+
+-- | Ceiling for a single step's total cost (see `clampStepCost`).
+--   Comfortably discourages the step over any real route (routing
+--   thresholds like `pcReplanCostThreshold` top out in the single
+--   digits) while staying many orders of magnitude below where `Float`
+--   arithmetic (additions across an A* search, comparisons in its
+--   open-set ordering) itself starts to misbehave.
+maxStepCost ∷ Float
+maxStepCost = 1.0e6
+
+-- | Force a computed step cost finite and non-negative.
+--   `normalizePathingConfig` keeps each individual tunable in a safe
+--   range, but the derived per-step cost can still overflow even from
+--   FINITE, in-range tunables: the exponential fall term
+--   (@fall_factor ** drop@) overflows `Float` well within plausible
+--   world depths — the shipped default @fall_factor: 5.0@ already
+--   overflows on a 56+ z drop — and a config bypassing
+--   `normalizePathingConfig` entirely (a directly-constructed
+--   `PathingConfig`, as tests do) could hand a negative or non-finite
+--   factor straight to this function. Either failure mode would
+--   collapse `Unit.Pathing.AStar`'s f-score comparisons (Infinity
+--   compares equal to Infinity; NaN compares false to everything), so
+--   this is the one place every step cost — regardless of how it was
+--   built — is guaranteed sane before it reaches the search.
+--
+--   Deliberately explicit (`isNaN`/`isInfinite`) rather than `min`/
+--   `max`, whose `Ord`-based implementation would launder a NaN
+--   through as a silent side effect rather than a documented rule (see
+--   `Unit.Pathing.Config.finiteOr`).
+clampStepCost ∷ Float → Float
+clampStepCost x
+    | isNaN x ∨ isInfinite x = maxStepCost
+    | x < 0                  = 0
+    | otherwise              = x
 
 -- | Is a single tile traversable on its own merits? True iff its chunk
 --   is loaded (terrain z resolves) and its fluid isn't a non-wadeable

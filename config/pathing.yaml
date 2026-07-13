@@ -9,6 +9,17 @@
 # (shown here), and a missing or malformed file falls back to all
 # defaults, so deleting this file is harmless. Edit a value and restart
 # to retune routing without recompiling.
+#
+# Numeric bounds: every cost/penalty/threshold below must resolve to a
+# finite, non-negative number. An oversized scalar that overflows to
+# Infinity (e.g. 1e999), or any other non-finite value, is replaced
+# with that key's own default rather than accepted — other keys in the
+# same file are unaffected. fall_trigger_drop is floored at 1; the two
+# slope speed modifiers are additionally capped (uphill_speed_penalty
+# at 0.9, downhill_speed_bonus at 0.5). Separately, the per-step cost
+# derived from these tunables (climb/fall over a terrain delta) is
+# itself clamped finite at run time, since even an in-range factor like
+# the shipped fall_factor can overflow over an extreme enough drop.
 
 # Cost added per +1 z of a CLIFF climb (a vertical face). High enough
 # that units prefer flat detours; low enough that they'll climb when
