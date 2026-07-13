@@ -86,7 +86,7 @@ data EngineEnv = EngineEnv
     --   reused.
   , inputBarrierRef     ∷ TVar Int
     -- ^ The highest 'InputBarrier' token the input thread has FULLY
-    --   processed — advanced by 'Engine.Input.Thread.processInput'
+    --   processed — advanced by 'Engine.Input.Thread.Dispatch.processInput'
     --   strictly after that barrier's turn in 'inputQueue' comes up,
     --   which (FIFO, single consumer, single producer thread — tokens
     --   are allocated and pushed in the same order) is only after
