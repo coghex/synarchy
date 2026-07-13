@@ -24,6 +24,8 @@ module Test.Headless.World.SelectChunk (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.IORef (readIORef, writeIORef, modifyIORef')
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
@@ -72,6 +74,35 @@ setSinglePage env pid ws = do
 
 lookupSlot ∷ TextureHandle → Int
 lookupSlot _ = 0
+
+-- | Slice out the full 'hud.onMouseDown' function body — from its
+--   definition up to (not including) the next top-level function
+--   definition — so the Lua-source contract test below can't be
+--   confused by the unrelated "zoomed_out" branch inside hud.update
+--   (the continuous per-tick hover push, which legitimately still
+--   calls setZoomCursorHover and must not be flagged).
+onMouseDownBody ∷ Text → Text
+onMouseDownBody src =
+    let marker = "function hud.onMouseDown"
+        (_, afterStart) = T.breakOn marker src
+        body = T.drop (T.length marker) afterStart
+        (fnBody, _) = T.breakOn "\nfunction " body
+    in fnBody
+
+-- | Further narrow to just the "zoomed_out" left/right-click branch
+--   inside onMouseDown, excluding the function's leading gameplay-gate
+--   doc comment (which mentions "world.setZoomCursorSelect" in prose
+--   while explaining an unrelated #153 concern, and would otherwise
+--   false-positive the negative check below).
+zoomedOutClickBranch ∷ Text → Text
+zoomedOutClickBranch src =
+    let startMarker = "if hud.currentView == \"zoomed_out\" then"
+        endMarker   = "elseif hud.currentView == \"zoomed_in\" then"
+        fnBody = onMouseDownBody src
+        (_, afterStart) = T.breakOn startMarker fnBody
+        body = T.drop (T.length startMarker) afterStart
+        (branch, _) = T.breakOn endMarker body
+    in branch
 
 spec ∷ Spec
 spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
@@ -139,7 +170,6 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
     it "an off-map / degenerate click is a full no-op, preserving any existing selection" $ \env → do
         ws ← freshPage
         setSinglePage env pidA ws
-        logger ← readIORef (loggerRef env)
 
         -- Pre-existing chunk + tile selections, sentinel values.
         writeIORef (wsCursorRef ws) $ emptyCursorState
@@ -193,6 +223,51 @@ spec = beforeAll initEnv $ describe "zoom cursor selection (#813)" $ do
         afterRealArm ← readIORef (wsCursorRef ws)
         zoomSelectedPos afterRealArm `shouldNotBe` Just (32, 48)
         worldSelectedTile afterRealArm `shouldBe` Nothing
+
+    it "a fresh direct selection wins outright over a lingering deferred arm" $ \env → do
+        ws ← freshPage
+        setSinglePage env pidA ws
+        logger ← readIORef (loggerRef env)
+        camera ← readIORef (cameraRef env)
+        (winW, winH) ← readIORef (windowSizeRef env)
+        (fbW, fbH)   ← readIORef (framebufferSizeRef env)
+
+        case pixelToChunkOrigin (camFacing camera) camera winW winH fbW fbH
+                                 (wgpWorldSize testParams) 500 350 of
+            Nothing → expectationFailure "test pixel unexpectedly off-map"
+            Just (gx, gy) → do
+                -- Simulate a stale, still-pending arm from an earlier
+                -- world.setZoomCursorSelect that no render pass has
+                -- resolved yet, hovering a DIFFERENT pixel than the fresh
+                -- click below.
+                writeIORef (wsCursorRef ws) $ emptyCursorState
+                    { zoomSelectNow = True
+                    , zoomCursorPos = Just (10, 10)
+                    }
+
+                handleWorldSelectChunkByCoordCommand env logger pidA gx gy
+                afterSelect ← readIORef (wsCursorRef ws)
+                zoomSelectedPos afterSelect `shouldBe` Just (gx, gy)
+                zoomSelectNow afterSelect `shouldBe` False
+
+                -- A subsequent render pass must NOT resolve the
+                -- now-cleared arm and clobber the fresh selection with
+                -- whatever chunk the stale hover pixel maps to.
+                _ ← makeCursorQuad (camFacing camera) camera winW winH fbW fbH
+                        (wgpWorldSize testParams) (wsCursorRef ws) lookupSlot (-1)
+                afterRender ← readIORef (wsCursorRef ws)
+                zoomSelectedPos afterRender `shouldBe` Just (gx, gy)
+
+    it "hud.lua's zoomed-out click branch drives the synchronous pick+select API" $ \_env → do
+        src ← TIO.readFile "scripts/hud.lua"
+        let branch = zoomedOutClickBranch src
+        -- Pins the actual click-handling source: a regression back to
+        -- arming setZoomCursorHover/setZoomCursorSelect (the shared,
+        -- deferred-hover design this issue fixes) would fail here even
+        -- though the command-handler tests above never touch hud.lua.
+        branch `shouldSatisfy` T.isInfixOf "world.pickChunk"
+        branch `shouldSatisfy` T.isInfixOf "world.selectChunk"
+        branch `shouldSatisfy` (not ∘ T.isInfixOf "world.setZoomCursorSelect(")
 
     it "world hide teardown clears an already-committed chunk selection" $ \env → do
         ws ← freshPage

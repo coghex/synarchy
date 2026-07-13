@@ -218,6 +218,13 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do
 --   player actually clicked (issue #813). No-op if the page doesn't
 --   exist, so a click for one page can never commit into another
 --   page's cursor state.
+--
+--   Also clears zoomSelectNow: this direct selection is authoritative
+--   and must win outright over any still-pending deferred arm from
+--   world.setZoomCursorSelect (issue #813 review) — leaving it True
+--   would let a LATER render pass's makeCursorQuad resolve that stale
+--   arm against whatever zoomCursorPos is by then and clobber the
+--   fresh selection just committed here.
 handleWorldSelectChunkByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSelectChunkByCoordCommand env _logger pageId gx gy = do
@@ -227,4 +234,5 @@ handleWorldSelectChunkByCoordCommand env _logger pageId gx gy = do
         Just worldState →
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { zoomSelectedPos   = Just (gx, gy)
+                    , zoomSelectNow     = False
                     , worldSelectedTile = Nothing }, ())
