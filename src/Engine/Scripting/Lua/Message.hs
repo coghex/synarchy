@@ -39,7 +39,7 @@ import Engine.Scripting.Lua.Message.Video ( handleSetResolution
 import Engine.Scripting.Lua.Message.WorldTexture ( handleWorldPreview
                                                    , handleZoomAtlasUpload)
 import Engine.Scripting.Lua.Types
-import World.Render.BloodQuads (uploadBloodTextures)
+import World.Render.BloodQuads (uploadBloodTextures, disposeQueuedBloodTextures)
 
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
@@ -54,6 +54,10 @@ processLuaMessages = do
     whenGraphical handleWorldPreview
     whenGraphical handleZoomAtlasUpload
     whenGraphical uploadBloodTextures
+    -- NOT whenGraphical: must drain bloodDisposeQueue in every mode so a
+    -- world teardown never leaks the queued handle refs (#788). Internally
+    -- a no-op with no device / no queued records — the headless case.
+    disposeQueuedBloodTextures
   where
     process [] = pure ()
     process (LuaLoadTextureRequest handle path : rest) = do
