@@ -2,6 +2,7 @@
 local scale = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local scrollbar = require("scripts.ui.scrollbar")
+local utf8Safe = require("scripts.ui.utf8_safe")
 local dropdown = {}
 
 -----------------------------------------------------------
@@ -83,12 +84,20 @@ end
 -- Value Matching
 -----------------------------------------------------------
 
+-- Preserve the existing ASCII case-insensitive matching without asking Lua's
+-- locale-sensitive string.lower to transform individual UTF-8 bytes. Unicode
+-- case folding is intentionally outside the editable cursor contract.
+local function asciiLower(text)
+    return (text:gsub("[A-Z]", string.lower))
+end
+
 function dropdown.findBestMatch(dd, inputText)
     if not inputText or inputText == "" then return nil end
     
-    local lower = inputText:lower()
+    local lower = asciiLower(inputText)
+    local lowerLength = utf8Safe.codepointLength(lower)
     for i, opt in ipairs(dd.options) do
-        if opt.value:lower() == lower or opt.text:lower() == lower then
+        if asciiLower(opt.value) == lower or asciiLower(opt.text) == lower then
             return i
         end
     end
@@ -98,7 +107,7 @@ function dropdown.findBestMatch(dd, inputText)
     end
     
     for i, opt in ipairs(dd.options) do
-        if opt.text:lower():sub(1, #lower) == lower then
+        if utf8Safe.prefix(asciiLower(opt.text), lowerLength) == lower then
             return i
         end
     end
@@ -387,7 +396,7 @@ function dropdown.focus(id)
     UI.setBoxTextures(dd.displayBoxId, displayTexSetFocused)
     
     local text = UI.getTextInput(dd.displayBoxId) or ""
-    UI.setCursor(dd.displayBoxId, #text)
+    UI.setCursor(dd.displayBoxId, utf8Safe.codepointLength(text))
     
     if dd.cursorId then
         UI.setVisible(dd.cursorId, true)
@@ -478,7 +487,7 @@ function dropdown.updateDisplay(id)
     UI.setPosition(dd.displayTextId, textX, textY)
     
     if dd.cursorId and dd.focused then
-        local textBeforeCursor = text:sub(1, cursorPos)
+        local textBeforeCursor = utf8Safe.prefix(text, cursorPos)
         local cursorTextWidth = engine.getTextWidth(dd.font, textBeforeCursor, dd.fontSize)
         local cursorX = textX + cursorTextWidth - (engine.getTextWidth(dd.font, "|", dd.fontSize) / 2)
         UI.setPosition(dd.cursorId, cursorX, textY)
