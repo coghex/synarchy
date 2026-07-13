@@ -1096,7 +1096,14 @@ going forward:
   schema-incomplete, or unreadable) is left alone and logged rather than
   copied, falling back to the versioned default/registry exactly like a
   missing legacy file — it can never destroy or mask an already-valid
-  local file.
+  local file. Notifications' own `OverridesFile` parser treats a missing
+  `categories` key (or any of a category's three fields) as valid —
+  the exact same tolerance `loadOverrides` already applies when
+  self-materializing a fresh file — so "schema-incomplete" only rejects
+  a legacy notifications file for video/keybinds-style reasons
+  (unparseable YAML); an empty or field-sparse-but-well-formed one
+  still migrates successfully, unlike video's genuinely required
+  `resolution` field.
 - A fresh clone has no local file (only the tracked, neutral legacy
   file), so its first boot migrates that neutral content — same
   effective values as the versioned template/registry either way.
