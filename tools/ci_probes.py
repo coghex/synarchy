@@ -50,7 +50,6 @@ CI_ELIGIBLE = {
     "consumable_effects",
     "craft",
     "medic_coord",
-    "movement",
     "repair",
     "repair_item",
 }
@@ -129,6 +128,12 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "machine_shop": (TARGETED, "electric furnace + machine_shop content regression, narrower "
                                "than the generic #590 power-draw mechanism probe"),
     "mental_state": (TARGETED, "narrow #352 mental-state ladder/hysteresis/break-AI regression"),
+    "movement": (TARGETED, "registered CI invocation takes no arguments, so it runs only "
+                           "movement_probe.py's default corner_trap diagonal-routing "
+                           "regression, not the cliff/fall/ramp/stamina courses the "
+                           "obstacle-course description implies (#722 defined promotion "
+                           "broadness from the actual registered invocation; #754 made "
+                           "the unsupported promotion; #772 demoted it)"),
     "resource_root": (TARGETED, "narrow #636 resource-root launch-contract regression "
                                 "(also runs its own small worldgen dump)"),
     "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression"),
