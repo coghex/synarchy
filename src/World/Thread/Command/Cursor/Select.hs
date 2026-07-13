@@ -219,12 +219,20 @@ handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do
 --   exist, so a click for one page can never commit into another
 --   page's cursor state.
 --
---   Also clears zoomSelectNow: this direct selection is authoritative
---   and must win outright over any still-pending deferred arm from
---   world.setZoomCursorSelect (issue #813 review) — leaving it True
---   would let a LATER render pass's makeCursorQuad resolve that stale
---   arm against whatever zoomCursorPos is by then and clobber the
---   fresh selection just committed here.
+--   Also clears BOTH zoomSelectNow and worldSelectNow: this direct
+--   selection is authoritative and must win outright over any
+--   still-pending deferred arm from EITHER world.setZoomCursorSelect
+--   or world.setWorldCursorSelect (issue #813 review). Leaving
+--   zoomSelectNow True would let a LATER render pass's makeCursorQuad
+--   resolve that stale arm against whatever zoomCursorPos is by then
+--   and clobber the fresh selection just committed here; leaving
+--   worldSelectNow True is just as dangerous from the OTHER side —
+--   renderWorldCursorQuads's own per-frame commit
+--   (World.Render.CursorQuads) unconditionally clears zoomSelectedPos
+--   whenever it resolves a pending worldSelectNow arm (the #135
+--   opposing-clear, mirrored the other way), so a lingering tile arm
+--   could wipe out this fresh chunk selection on the very next tile
+--   render even though nothing about it was ever re-armed.
 handleWorldSelectChunkByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldSelectChunkByCoordCommand env _logger pageId gx gy = do
@@ -235,4 +243,5 @@ handleWorldSelectChunkByCoordCommand env _logger pageId gx gy = do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { zoomSelectedPos   = Just (gx, gy)
                     , zoomSelectNow     = False
+                    , worldSelectNow    = False
                     , worldSelectedTile = Nothing }, ())

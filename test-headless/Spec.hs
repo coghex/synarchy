@@ -116,6 +116,11 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- Own engine (not the shared-worlds one above): needs a real
+    -- pixel hit-test against loaded tile data (renderWorldCursorQuads),
+    -- so it generates its own cheap private w8 page rather than sharing
+    -- or disturbing the worldgen specs' engine/camera state.
+    aroundAll withHeadlessEngine SelectChunk.sharedSpec
     describe "Wrap Seam" WrapSeam.spec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec
