@@ -1015,6 +1015,7 @@ test-suite synarchy-test-headless
                 , bytestring
                 , cereal
                 , yaml
+                , aeson
                 , directory
                 , filepath
     ghc-options: "-with-rtsopts=-N -A128M"

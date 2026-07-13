@@ -4,20 +4,19 @@ dist-prof/
 *.prof
 config/shell_history.txt
 # Local runtime/user config state written by the settings UI's Save
-# actions. Versioned defaults/templates (config/*_default.yaml,
+# actions (#786). Versioned defaults/templates (config/*_default.yaml,
 # config/pathing.yaml, config/world_gen_default.yaml) are NOT covered by
-# these and stay tracked.
-#
-# config/video.yaml / config/keybinds.yaml / config/notifications.yaml
-# are the pre-#661 paths — nothing writes to them any more (#786 moved
-# Save actions to the *.local.yaml paths below), but they stay listed
-# here in case one ever survives on disk from an old checkout: should
-# it, Engine.Core.Init.migrateLegacyConfig reads it once (if no
-# *.local.yaml exists yet) to seed the player's local file rather than
-# silently ignoring it.
-config/video.yaml
-config/keybinds.yaml
-config/notifications.yaml
+# these and stay tracked. config/video.yaml / config/keybinds.yaml /
+# config/notifications.yaml — the pre-#786 runtime paths — are ALSO
+# tracked (deliberately): their content is a neutral stand-in equal to
+# the versioned default/registry, kept only so Engine.Core.Init.
+# migrateLegacyConfig always has a readable legacy file to seed a
+# direct updater's local file from at first boot. A player who actually
+# saved through the old settings UI has a LOCALLY MODIFIED copy of one
+# of these paths; git itself refuses to silently overwrite that during
+# an update, so their real values survive on disk (now off this list's
+# purpose, since the tree no longer needs to protect them) until
+# migrateLegacyConfig picks them up. Nothing writes to them any more.
 config/video.local.yaml
 config/keybinds.local.yaml
 config/notifications.local.yaml

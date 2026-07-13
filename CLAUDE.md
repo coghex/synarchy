@@ -1045,33 +1045,58 @@ loss is irretrievable for any checkout that already pulled past it —
 #786 does not attempt to recover it — but #786 does fix the pattern
 going forward:
 
-- Save actions now target the new `*.local.yaml` paths above, which
-  were never tracked, so gitignoring them can never repeat this exact
-  loss.
-- `Engine.Core.Init.migrateLegacyConfig` is a reactive, one-time upgrade
-  step: at boot, if a legacy-named file (`config/video.yaml` etc.) is
-  present on disk and the current-format local file is not, it copies
-  the legacy file's content into the local path and logs the fact. This
-  covers the one case that survives a botched update in practice — a
-  tracked file the player had **locally modified** (e.g. via the old
-  settings UI) makes `git pull` refuse to overwrite it outright, so it
-  lingers on disk (now untracked, since the tree no longer lists it)
-  until the update is resolved by hand; the next boot picks it up. A
-  *clean*, unmodified legacy file is deleted by the pull itself before
-  the engine ever runs again, which no post-hoc engine code can react
-  to — hence "legacy file present on disk at first boot" rather than
-  any stronger guarantee.
+- `config/video.yaml`, `config/keybinds.yaml`, and
+  `config/notifications.yaml` are tracked again, deliberately, with
+  content equal to the versioned default/registry (never a real
+  player's values — see the notes above on why the old tracked content
+  was itself accidental drift, not a real setting worth re-enshrining).
+  Their only purpose is to guarantee a *readable legacy file always
+  exists* for a direct updater's first boot, so `migrateLegacyConfig`
+  (below) always has something to react to instead of reaching a
+  silently-already-deleted path. Because the tracked content is neutral,
+  this is invisible for anyone who never touches these files: migrating
+  it produces the same effective values as falling back to the default
+  directly (the exact pattern `config/notifications.yaml` already used
+  pre-#638 — it always self-materialized a file on first boot too).
+- A player who actually saved through the *old* settings UI (pre-#786)
+  has a **locally modified** copy of one of these paths. `git` itself —
+  not this PR — is what protects that: a plain `git pull`/checkout
+  refuses to silently discard an uncommitted local modification to a
+  tracked file, so their real values stay on disk until the update is
+  resolved by hand, at which point `migrateLegacyConfig` picks up
+  *their* real content (not the tracked neutral placeholder). This is
+  the only case where "preserve the player's real values" is actually
+  meaningful, and it works precisely because the tracked content
+  choice above is irrelevant to it.
+- Save actions target the new `*.local.yaml` paths, which are never
+  tracked, so gitignoring them can never repeat this exact loss for a
+  *new* config path going forward.
+- `Engine.Core.Init.migrateLegacyConfig` is the one-time upgrade step:
+  at boot, if a legacy-named file is present on disk and the
+  current-format local file is not, it decodes the legacy file against
+  the SAME `FromJSON` type its subsystem's own loader uses (passed in
+  via a `Proxy` — `VideoConfigFile` / `KeyBindingConfig` / `OverridesFile`)
+  and, only on success, copies it to the local path and logs the fact.
+  Validating against the real target schema (not just "is this
+  syntactically valid YAML") matters: a legacy file that parses as YAML
+  but is missing a field the real loader requires (e.g. video's
+  `resolution`) must not be copied and logged as a successful
+  migration — that would silently mask the load failure the loader
+  would otherwise report AND permanently block any future migration
+  attempt, since the existence gate below would see the copied-but-
+  unusable local file and never look at legacy again.
 - The migration only ever runs when the local path is absent — a single
   existence gate that makes a second boot a no-op (idempotent) and
   guarantees a real local file always wins over a stale legacy one,
   without needing to compare timestamps or content.
-- A legacy file that fails to parse as YAML (malformed, partial, or
-  unreadable) is left alone and logged rather than copied, falling back
-  to the versioned default/registry exactly like a missing legacy file
-  — it can never destroy or mask an already-valid local file.
-- A fresh clone has neither a legacy nor a local file, so it falls
-  through to the versioned template/registry exactly as before —
-  unaffected by any of the above.
+- A legacy file that fails that schema-aware decode (malformed, partial,
+  schema-incomplete, or unreadable) is left alone and logged rather than
+  copied, falling back to the versioned default/registry exactly like a
+  missing legacy file — it can never destroy or mask an already-valid
+  local file.
+- A fresh clone has no local file (only the tracked, neutral legacy
+  file), so its first boot migrates that neutral content — same
+  effective values as the versioned template/registry either way.
 
 Turnkey harnesses:
 - **`python3 tools/config_state_probe.py`** — the #638 gate. Backs up
@@ -1082,25 +1107,30 @@ Turnkey harnesses:
   `*.local.yaml` paths and never resurrect a legacy path), and asserts
   `git status --short -- config .gitignore` is clean both before and
   after.
-- **`python3 tools/config_migration_probe.py`** — the #786 gate.
-  Places legacy-shaped fixtures with distinct non-default values
-  directly on disk (a probe can't reproduce the `git pull` itself,
-  since git blocks the interesting case rather than executing it — see
-  above) and proves the upgrade end to end: a legacy-only boot migrates
-  all three subsystems' values and writes the matching local files; a
-  second boot is idempotent even after the legacy file is edited
-  further; an existing local file wins outright over a legacy file
-  present from the start, and migration never touches either file in
-  that case; and a malformed legacy file falls back to the versioned
-  default without ever creating a local file, and — separately —
-  without touching an already-valid local file sitting next to it.
+- **`python3 tools/config_migration_probe.py`** — the #786 gate. First
+  proves the upgrade against the REAL committed tree (no fixtures): the
+  tracked legacy files resolve to the versioned default/registry and
+  migrate into `*.local.yaml` on a plain boot — the direct-updater path
+  itself, not just the mechanism in isolation. Then drives the
+  mechanism directly with hand-placed fixtures carrying distinct
+  non-default values (a probe can't reproduce the interesting `git
+  pull` case itself, since git blocks it rather than executing it — see
+  above): a legacy-only boot migrates all three subsystems' values and
+  writes the matching local files; a second boot is idempotent even
+  after the legacy file is edited further; an existing local file wins
+  outright over a legacy file present from the start, and migration
+  never touches either file in that case; and a malformed (or
+  schema-incomplete) legacy file falls back to the versioned default
+  without ever creating a local file, and — separately — without
+  touching an already-valid local file sitting next to it.
 
 Also covered by pure hspec coverage (no engine): `cabal test
 synarchy-test-headless --test-options='--match "config"'` includes
 `Test.Headless.Core.ConfigState`'s direct tests of `resolveConfigPath`,
-`migrateLegacyConfig` (present/absent/malformed legacy, idempotency,
-never overwriting an existing local file), and the notification-overrides
-materialize/round-trip contract.
+`migrateLegacyConfig` (present/absent/syntactically-malformed/
+schema-incomplete legacy, idempotency, never overwriting an existing
+local file), and the notification-overrides materialize/round-trip
+contract.
 
 ### Shutdown
 

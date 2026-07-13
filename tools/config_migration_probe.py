@@ -2,13 +2,19 @@
 """Headless config-migration probe (#786).
 
 `Engine.Core.Init.migrateLegacyConfig` is the upgrade path from the
-pre-#661 tracked config layout (`config/video.yaml`,
+pre-#786 tracked config layout (`config/video.yaml`,
 `config/keybinds.yaml`, `config/notifications.yaml`) to the current
-gitignored `*.local.yaml` runtime paths. This probe places legacy-shaped
-fixtures directly on disk (representing a legacy file that survived an
-update — see CLAUDE.md for why a probe can't reproduce the git pull
-itself) and asserts the engine-side upgrade contract end to end:
+gitignored `*.local.yaml` runtime paths. Those three legacy paths stay
+tracked with content equal to the versioned default/registry (never a
+real player's values) purely so a readable legacy file always exists —
+see CLAUDE.md for why. This probe asserts the engine-side upgrade
+contract end to end:
 
+  0. The REAL committed tree (not a hand-placed fixture) retains a
+     readable legacy file, resolves it to the versioned default, and
+     migrates it into the matching `*.local.yaml` on a plain boot —
+     the direct-updater path itself, not just the mechanism in
+     isolation.
   1. A legacy file with distinct non-default values, present with no
      local file yet, gets migrated on boot: the resolved config reflects
      the legacy values, and the matching `*.local.yaml` is written.
@@ -22,8 +28,10 @@ itself) and asserts the engine-side upgrade contract end to end:
      malformed legacy file next to an already-valid local file leaves
      that local file completely untouched.
 
-Any local/legacy config files present before the probe runs are backed
-up and restored afterward.
+Any local config files present before the probe runs are backed up and
+restored afterward. Phases 1-4 additionally overwrite (then restore)
+the tracked legacy files with their own fixtures to drive the mechanism
+directly with known, distinct values.
 
 Usage:
   python3 tools/config_migration_probe.py [--port 9166]
@@ -35,6 +43,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 import yaml
 from probelib import quit_engine, boot, send
@@ -99,10 +108,38 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
     return ok
 
 
+def git_status(paths: list[str]) -> str:
+    r = subprocess.run(["git", "status", "--short", "--"] + paths,
+                        capture_output=True, text=True, check=True)
+    return r.stdout
+
+
 def clear_all() -> None:
     for p in LOCAL_FILES + LEGACY_FILES:
         if os.path.exists(p):
             os.remove(p)
+
+
+def backup_local_only() -> dict[str, str]:
+    """Back up (move aside) only the *.local.yaml paths, leaving the
+    tracked legacy files exactly as committed — used for phase 0, which
+    tests the real repo tree rather than a hand-placed fixture."""
+    backups = {}
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    for p in LOCAL_FILES:
+        if os.path.exists(p):
+            bak = os.path.join(BACKUP_DIR, os.path.basename(p) + ".orig")
+            shutil.move(p, bak)
+            backups[p] = bak
+    return backups
+
+
+def restore_local_only(backups: dict[str, str]) -> None:
+    for p in LOCAL_FILES:
+        if os.path.exists(p):
+            os.remove(p)
+    for p, bak in backups.items():
+        shutil.move(bak, p)
 
 
 def backup_all() -> dict[str, str]:
@@ -140,9 +177,61 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9166)
     args = ap.parse_args()
 
-    backups = backup_all()
-    proc = None
     passed = True
+    proc = None
+
+    # ----------------------------------------------------------------
+    # Phase 0: the REAL committed tree (not a hand-placed fixture)
+    # retains a readable legacy file and migrates it cleanly. This is
+    # the direct-updater path itself, not just the mechanism exercised
+    # against synthetic fixtures below.
+    # ----------------------------------------------------------------
+    print("0. the real committed legacy files resolve to versioned defaults and migrate")
+    for p in LEGACY_FILES:
+        passed &= check(f"tracked {p} is present on disk", os.path.exists(p))
+    status = git_status(LEGACY_FILES)
+    passed &= check("tracked legacy files are unmodified (clean git status)",
+                     status == "", status.strip())
+
+    local_backups = backup_local_only()
+    try:
+        for p in LOCAL_FILES:
+            passed &= check(f"{p} absent pre-boot", not os.path.exists(p))
+
+        proc = boot(args.port, log=LOG)
+
+        want_default = load_yaml("config/video_default.yaml")["video"]
+        scale, vsync = get_video_ui_scale(args.port)
+        passed &= check("real legacy video.yaml resolves to the versioned default ui_scale",
+                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale))
+        passed &= check("real legacy video.yaml resolves to the versioned default vsync",
+                         vsync == bool(want_default["vsync"]), str(vsync))
+
+        want_kb = load_yaml("config/keybinds_default.yaml")["keybinds"]
+        r = send(args.port, "local b = engine.getKeybinds(); return table.concat(b.moveUp, ',')")
+        passed &= check("real legacy keybinds.yaml resolves to the versioned default moveUp",
+                         r == ",".join(want_kb["moveUp"]), r)
+
+        r = send(args.port,
+                  "local cfg = engine.getNotificationCfg(); "
+                  "for _,c in ipairs(cfg) do if c.id == 'debug' then "
+                  "return tostring(c.log) end end; return 'NOTFOUND'")
+        passed &= check("real legacy notifications.yaml resolves to the registry default",
+                         r == "false", r)
+
+        for p in LOCAL_FILES:
+            passed &= check(f"{p} created by migrating the real committed legacy file",
+                             os.path.exists(p))
+
+        quit_engine(args.port, proc)
+        proc = None
+    finally:
+        if proc is not None:
+            quit_engine(args.port, proc)
+            proc = None
+        restore_local_only(local_backups)
+
+    backups = backup_all()
     try:
         # ------------------------------------------------------------
         # Phase 1: upgrade — legacy present, local absent, all three
