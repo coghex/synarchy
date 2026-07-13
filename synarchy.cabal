@@ -982,6 +982,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ElementInputPolicy
+                   Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
