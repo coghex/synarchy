@@ -31,9 +31,9 @@ emitEventFn env = do
     case (catArg, textArg) of
         (Just catBS, Just textBS) →
             Lua.liftIO $ emitEvent env
-                (TE.decodeUtf8 catBS)
+                (TE.decodeUtf8Lenient catBS)
                 "Lua"
-                (TE.decodeUtf8 textBS)
+                (TE.decodeUtf8Lenient textBS)
         _ → return ()
     return 0
 
@@ -50,9 +50,9 @@ emitEventAtFn env = do
     case (catArg, textArg, gxArg, gyArg) of
         (Just catBS, Just textBS, Just gx, Just gy) →
             Lua.liftIO $ emitEventAt env
-                (TE.decodeUtf8 catBS)
+                (TE.decodeUtf8Lenient catBS)
                 "Lua"
-                (TE.decodeUtf8 textBS)
+                (TE.decodeUtf8Lenient textBS)
                 (Just (fromIntegral gx, fromIntegral gy))
         _ → return ()
     return 0
@@ -75,9 +75,9 @@ emitEventForUnitFn env = do
                     (Just gx, Just gy) → Just (fromIntegral gx, fromIntegral gy)
                     _                  → Nothing
             Lua.liftIO $ emitEventFull env
-                (TE.decodeUtf8 catBS)
+                (TE.decodeUtf8Lenient catBS)
                 "Lua"
-                (TE.decodeUtf8 textBS)
+                (TE.decodeUtf8Lenient textBS)
                 mCoords
                 (Just (fromIntegral uid))
         _ → return ()
@@ -257,7 +257,7 @@ readOverridesTable = do
                         p ← readBoolField "popup"
                         z ← readBoolField "pause"
                         Lua.pop 1  -- pop inner table (keep key)
-                        loop (HM.insert (TE.decodeUtf8 kb) (l, p, z) acc)
+                        loop (HM.insert (TE.decodeUtf8Lenient kb) (l, p, z) acc)
                     _ → do
                         Lua.pop 1
                         loop acc

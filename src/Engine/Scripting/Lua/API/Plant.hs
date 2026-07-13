@@ -49,10 +49,10 @@ plantDesignateFn env = do
     cropArg ← Lua.tostring 4
     case (pageIdArg, gxArg, gyArg, cropArg) of
         (Just pageIdBS, Just gx, Just gy, Just cropBS) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldDesignatePlant pageId (round gx) (round gy)
-                    (TE.decodeUtf8 cropBS)
+                    (TE.decodeUtf8Lenient cropBS)
         _ → pure ()
     return 0
 
@@ -87,7 +87,7 @@ plantGetDesignationAtFn env = do
     gyArg ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gx = round gxN ∷ Int
                 gy = round gyN ∷ Int
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -124,7 +124,7 @@ plantGetDesignationCountFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
@@ -144,7 +144,7 @@ plantNearestDesignationFn env = do
     yArg ← Lua.tonumber 3
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -178,7 +178,7 @@ plantSetDesignateTextureFn env = do
     handleArg ← Lua.tointeger 2
     case (pageIdArg, handleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetPlantDesignateTexture pageId texHandle

@@ -18,8 +18,8 @@ worldSetToolModeFn env = do
     toolModeArg ← Lua.tostring 2
     case (pageIdArg, toolModeArg) of
         (Just pageIdBS, Just toolModeBS) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-                toolMode = TE.decodeUtf8 toolModeBS
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                toolMode = TE.decodeUtf8Lenient toolModeBS
             Q.writeQueue (worldQueue env) $
                 WorldSetToolMode pageId $ textToToolMode toolMode
         _ → pure ()

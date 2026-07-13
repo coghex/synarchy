@@ -53,7 +53,7 @@ captureScreenshotFn env = do
                 <> "running --headless (GPU-less); screenshots need a "
                 <> "rendering instance (windowed or --offscreen)"
             | otherwise → do
-                let path = T.unpack (TE.decodeUtf8 pathBS)
+                let path = T.unpack (TE.decodeUtf8Lenient pathBS)
                 result ← Lua.liftIO $ requestCapture env path
                 case result of
                     Left err → pushError err

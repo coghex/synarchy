@@ -69,8 +69,8 @@ saveWorldFn env = do
     nameArg   ← Lua.tostring 2
     case (pageIdArg, nameArg) of
         (Just pageIdBS, Just nameBS) → do
-            let saveName = TE.decodeUtf8 nameBS
-                pageId   = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let saveName = TE.decodeUtf8Lenient nameBS
+                pageId   = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             logger ← Lua.liftIO $ readIORef (loggerRef env)
             case sanitizeSaveName saveName of
                 Left err → do
@@ -173,7 +173,7 @@ loadSaveFn env = do
     nameArg ← Lua.tostring 1
     case nameArg of
         Just nameBS → do
-            let saveName = TE.decodeUtf8 nameBS
+            let saveName = TE.decodeUtf8Lenient nameBS
             result ← Lua.liftIO $ loadWorld saveName
             case result of
                 Right saveData → do
@@ -337,8 +337,8 @@ readStringTable = do
                 Lua.pop 1  -- pop value, keep key for the next next()
                 case (mk, mv) of
                     (Just kb, Just vb) →
-                        loop (HM.insert (TE.decodeUtf8 kb)
-                                        (TE.decodeUtf8 vb) acc)
+                        loop (HM.insert (TE.decodeUtf8Lenient kb)
+                                        (TE.decodeUtf8Lenient vb) acc)
                     _ → loop acc
 
 -- | Push a HashMap onto the stack as a Lua table with string keys.

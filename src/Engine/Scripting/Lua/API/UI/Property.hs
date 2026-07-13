@@ -322,7 +322,7 @@ uiSetOnClickFn env = do
 
     case (elemArg, callbackArg) of
         (Just e, Just cbBS) → do
-            let callback = TE.decodeUtf8 cbBS
+            let callback = TE.decodeUtf8Lenient cbBS
             Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                 (setElementOnClick (ElementHandle $ fromIntegral e) callback mgr, ())
         _ → pure ()
@@ -337,7 +337,7 @@ uiSetOnRightClickFn env = do
 
     case (elemArg, callbackArg) of
         (Just e, Just cbBS) → do
-            let callback = TE.decodeUtf8 cbBS
+            let callback = TE.decodeUtf8Lenient cbBS
             Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                 (setElementOnRightClick (ElementHandle $ fromIntegral e) callback mgr, ())
         _ → pure ()
@@ -394,7 +394,7 @@ uiSetTextFn env = do
     case (elemArg, textArg) of
         (Just e, Just txtBS) → do
             let elemHandle = ElementHandle (fromIntegral e)
-                text       = TE.decodeUtf8 txtBS
+                text       = TE.decodeUtf8Lenient txtBS
             Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                 (setText elemHandle text mgr, ())
         _ → pure ()

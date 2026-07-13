@@ -28,7 +28,7 @@ uiNewElementFn env = do
 
     case (nameArg, widthArg, heightArg, pageArg) of
         (Just nameBS, Just w, Just h, Just p) → do
-            let name       = TE.decodeUtf8 nameBS
+            let name       = TE.decodeUtf8Lenient nameBS
                 pageHandle = PageHandle (fromIntegral p)
 
             handle ← Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
@@ -57,7 +57,7 @@ uiNewBoxFn env = do
 
     case (nameArg, widthArg, heightArg, boxTexArg, tileSizeArg, rArg, gArg, bArg, aArg, overflowArg, pageArg) of
         (Just nameBS, Just w, Just h, Just bt, Just ts, Just r, Just g, Just b, Just a, Just ovf, Just p) → do
-            let name         = TE.decodeUtf8 nameBS
+            let name         = TE.decodeUtf8Lenient nameBS
                 boxTexHandle = BoxTextureHandle (fromIntegral bt)
                 tileSize     = realToFrac ts
                 color        = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
@@ -125,8 +125,8 @@ uiNewTextFn env = do
 
     case (nameArg, textArg, fontArg, sizeArg, rArg, gArg, bArg, aArg, pageArg) of
         (Just nameBS, Just txtBS, Just f, Just s, Just r, Just g, Just b, Just a, Just p) → do
-            let name       = TE.decodeUtf8 nameBS
-                text       = TE.decodeUtf8 txtBS
+            let name       = TE.decodeUtf8Lenient nameBS
+                text       = TE.decodeUtf8Lenient txtBS
                 fontHandle = FontHandle (fromIntegral f)
                 color      = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
                 pageHandle = PageHandle (fromIntegral p)
@@ -156,7 +156,7 @@ uiNewSpriteFn env = do
 
     case (nameArg, widthArg, heightArg, texArg, rArg, gArg, bArg, aArg, pageArg) of
         (Just nameBS, Just w, Just h, Just t, Just r, Just g, Just b, Just a, Just p) → do
-            let name      = TE.decodeUtf8 nameBS
+            let name      = TE.decodeUtf8Lenient nameBS
                 texHandle = TextureHandle (fromIntegral t)
                 color     = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
                 pageHandle = PageHandle (fromIntegral p)

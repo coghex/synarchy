@@ -29,7 +29,7 @@ loadInfectionYamlFn env = do
     case pathArg of
         Nothing → Lua.pushnumber 0 >> return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 defs ← loadInfectionYaml logger filePath
@@ -74,7 +74,7 @@ infectionGetFn env = do
     case idArg of
         Nothing → Lua.pushnil >> return 1
         Just idBS → do
-            let key = TE.decodeUtf8 idBS
+            let key = TE.decodeUtf8Lenient idBS
             mDef ← Lua.liftIO $ do
                 m ← readIORef (infectionManagerRef env)
                 pure (lookupInfection key m)

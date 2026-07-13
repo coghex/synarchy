@@ -167,7 +167,7 @@ worldPickChunkFn env = do
         (Just pageIdBS, Just px', Just py') → do
             let px = round px'
                 py = round py'
-            mWs ← Lua.liftIO $ worldStateByPage env (TE.decodeUtf8 pageIdBS)
+            mWs ← Lua.liftIO $ worldStateByPage env (TE.decodeUtf8Lenient pageIdBS)
             case mWs of
                 Just ws → do
                     camera   ← Lua.liftIO $ readIORef (cameraRef env)

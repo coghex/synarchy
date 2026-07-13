@@ -47,7 +47,7 @@ repairGetFn env = do
     case idArg of
         Nothing → Lua.pushnil >> return 1
         Just idBS → do
-            let key = TE.decodeUtf8 idBS
+            let key = TE.decodeUtf8Lenient idBS
             mDef ← Lua.liftIO $ do
                 m ← readIORef (recipeManagerRef env)
                 pure (lookupRecipe key m)
@@ -87,7 +87,7 @@ repairAtFn env = do
     case (idArg, ridArg, instArg, bidArg) of
         (Just n, Just ridBS, Just iidI, Just b) → do
             let uid = UnitId (fromIntegral n)
-                rid = TE.decodeUtf8 ridBS
+                rid = TE.decodeUtf8Lenient ridBS
                 iid = fromIntegral iidI ∷ Word64
                 bid = BuildingId (fromIntegral b)
             result ← Lua.liftIO $ runRepairAt env uid rid iid bid

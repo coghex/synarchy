@@ -51,7 +51,7 @@ worldHarvestFloraFn env = do
         (Just gx', Just gy') → do
             let gx = fromIntegral gx'
                 gy = fromIntegral gy'
-                tagFilter = TE.decodeUtf8 <$> mTag
+                tagFilter = TE.decodeUtf8Lenient <$> mTag
             mSpawned ← Lua.liftIO $ do
                 mWs ← activeWorldState env
                 case mWs of
