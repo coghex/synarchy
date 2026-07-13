@@ -92,9 +92,10 @@ spec = do
             sequence_ (map snd records)
             readIORef counter `shouldReturn` 7
 
-    describe "same-id replacement (init / arena / save-load)" $ do
-        -- All three replacement paths reduce to the same call: enqueue the
-        -- OLD state under the reused id before the manager drops it.
+    describe "replacement / stale-page removal (init / arena / save-load)" $ do
+        -- The init / arena / save-load-replacement AND LoadWorld
+        -- stale-page-removal paths all reduce to the same call: enqueue
+        -- the OLD state under the doomed id before the manager drops it.
         it "reclaims the replaced page's records under the reused id" $ do
             counter ← newIORef 0
             q ← Q.newQueue
@@ -105,6 +106,22 @@ spec = do
             records ← drainBloodDisposalRecords q
             length records `shouldBe` 6
             handleCount oldWs `shouldReturn` 0
+
+        it "reclaims a stale within-session-load page dropped from wmWorlds" $ do
+            -- LoadWorld drops remapped-away / superseded pages; each must
+            -- have its blood enqueued before it leaves wmWorlds.
+            counter ← newIORef 0
+            q ← Q.newQueue
+            keep  ← mkPage counter 2       -- a page the load keeps
+            stale ← mkPage counter 4       -- a stale page the load supersedes
+            let mgr = emptyWorldManager
+                    { wmWorlds = [ (WorldPageId "main_world", keep)
+                                 , (WorldPageId "main_world#2", stale) ] }
+            enqueueBloodDisposalForPage q mgr (WorldPageId "main_world#2")
+            records ← drainBloodDisposalRecords q
+            length records `shouldBe` 4
+            handleCount stale `shouldReturn` 0
+            handleCount keep  `shouldReturn` 2   -- kept page untouched
 
     describe "idempotency (FIFO eviction / teardown overlap)" $ do
         it "yields each record only once even if the same ref is enqueued twice" $ do

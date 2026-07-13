@@ -313,8 +313,10 @@ fills in the pieces #604 deliberately left open:
   live world always unregisters + disposes the GPU texture (requirement
   5). World-lifecycle paths that remove or replace a page — single-page
   destroy, destroy-all (Exit to Menu), same-id `world.init`, arena
-  replacement, and save-load page replacement — now do the same for
-  whatever blood textures the orphaned page still held. Those paths run
+  replacement, save-load page replacement, and stale-page removal during
+  a within-session load (`LoadWorld` dropping a remapped-away or
+  superseded page) — now do the same for whatever blood textures the
+  orphaned page still held. Those paths run
   on the world thread with no GPU access, so each hands the orphaned
   page's live `wsBloodTextureHandlesRef` to the render thread over
   `EngineEnv.bloodDisposeQueue` (`World.Blood.Teardown`); the render
