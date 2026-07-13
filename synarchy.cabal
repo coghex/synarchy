@@ -227,6 +227,11 @@ library
                      Engine.Input.State
                      Engine.Input.Types
                      Engine.Input.Thread
+                     Engine.Input.Thread.Dispatch
+                     Engine.Input.Thread.Keyboard
+                     Engine.Input.Thread.Char
+                     Engine.Input.Thread.Mouse
+                     Engine.Input.Thread.Scroll
                      Engine.Scripting.Types
                      Engine.Scripting.Lua.Debug
                      Engine.Scripting.Lua.DebugServer
