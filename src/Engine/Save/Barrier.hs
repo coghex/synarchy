@@ -8,6 +8,7 @@ module Engine.Save.Barrier
     ( SaveOwner(..), SavePhase(..), SaveOutcome(..), SaveStatus(..)
     , SaveBarrier, newSaveBarrier, beginSave, acknowledgeSave, failSave
     , reachSnapshot, finishSave, waitForOwners, readSaveStatus, acknowledgeCurrent
+    , captureLocked
     ) where
 
 import UPrelude
@@ -96,3 +97,11 @@ acknowledgeCurrent barrier owner = do
     current ← readSaveStatus barrier
     forM_ current $ \s → when (ssOutcome s ≡ Nothing) $
         acknowledgeSave barrier (ssRequestId s) owner
+
+-- | Once capture starts, persistent command consumers must leave subsequent
+-- work queued for after the transaction.  The world owner is the sole
+-- exception: it consumes the already-authorized WorldSave command itself.
+captureLocked ∷ SaveBarrier → IO Bool
+captureLocked barrier = do
+    current ← readSaveStatus barrier
+    pure $ maybe False ((≡ SaveSnapshotBoundary) ∘ ssPhase) current

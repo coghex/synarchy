@@ -82,14 +82,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                         logWarn logger CatWorld err
                         failTransaction env err
                 Just activeParams → do
-                    -- #216: snapshot EVERY live page in wmWorlds, not just
-                    -- the active one. A page with no gen params (e.g. an
-                    -- arena still mid-init) is not a real, persistable world
-                    -- — skip it rather than abort the whole save.
-                    pageSaves ← forM (wmWorlds mgr) $ \(pid, ws) → do
+                    -- Every page must be snapshotable.  Omitting an
+                    -- in-progress page makes a superficially successful save
+                    -- corrupt the whole session, so fail the transaction.
+                    maybePages ← forM (wmWorlds mgr) $ \(pid, ws) → do
                         mParams ← readIORef (wsGenParamsRef ws)
                         case mParams of
-                            Nothing → pure Nothing
+                            Nothing → pure $ Left ("page is not snapshotable: " <> unWorldPageId pid)
                             Just params → do
                                 WorldTime h m    ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
@@ -144,7 +143,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     simStates = HM.filterWithKey
                                         (\uid _ → uid `HS.member` savedUids)
                                         (utsSimStates uts)
-                                pure $ Just WorldPageSave
+                                pure $ Right WorldPageSave
                                     { wpsPageId     = pid
                                     , wpsGenParams  = params
                                     , wpsCameraX    = cx
@@ -180,7 +179,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsPlantDesignations = plantDesigs
                                     , wpsIdentity    = identity
                                     }
-                    -- UTC ISO 8601 microsecond precision, captured and
+                    case sequence maybePages of
+                      Left err → do
+                        logWarn logger CatWorld err
+                        failTransaction env err
+                      Right pageSaves → do
+                        -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
                     -- saveWorldFn) — NOT here, so two saves queued
                     -- back-to-back don't get the same wall-second
@@ -189,8 +193,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                     -- chronologically correct, so the
                     -- Lua-side `a.timestamp > b.timestamp` in
                     -- main_menu works without further wrapping.
-                    let meta = SaveMetadata
-                            { smName       = saveName
+                        let meta = SaveMetadata { smName       = saveName
                             , smSeed       = wgpSeed activeParams
                             , smWorldSize  = wgpWorldSize activeParams
                             , smPlateCount = wgpPlateCount activeParams
@@ -198,8 +201,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , smWorldName  = wiName ⊚ primaryIdentity
                             , smWorldGloss = wiGloss =≪ primaryIdentity
                             }
-                        sd = SaveData
-                            { sdMetadata   = meta
+                            sd = SaveData { sdMetadata   = meta
                             , sdGameTime     = gameTime
                             , sdEnginePaused = paused
                             , sdLuaModules   = luaBlobs
@@ -209,17 +211,17 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             -- Record visibility so the loaded game comes up
                             -- showing what the player last saw (#216).
                             , sdVisiblePages = wmVisible mgr
-                            , sdWorlds       = catMaybes pageSaves
+                            , sdWorlds       = pageSaves
                             }
-                    result ← saveWorld saveName sd
-                    case result of
-                        Right () → do
+                        result ← saveWorld saveName sd
+                        case result of
+                          Right () → do
                             completeTransaction env
                             logInfo logger CatWorld $
                                 "World saved successfully: " <> saveName
                             emitEvent env "save_load" "World.Save" $
                                 "Game saved: " <> saveName
-                        Left err → do
+                          Left err → do
                             failTransaction env err
                             logError logger CatWorld $
                                 "Failed to save world: " <> err

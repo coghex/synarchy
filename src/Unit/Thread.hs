@@ -14,7 +14,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import Unit.Types
 import Unit.Sim.Types
@@ -72,13 +72,14 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 let dt = tickStart - lastTime
                 writeIORef lastTimeRef tickStart
 
-                processAllUnitCommands env utsRef
+                locked ← captureLocked (saveBarrierRef env)
+                unless locked $ processAllUnitCommands env utsRef
                 paused ← readIORef (enginePausedRef env)
                 unless paused $ do
                     modifyIORef' (gameTimeRef env) (+ dt)
                     tickAllMovement dt env utsRef
                 publishToRender env utsRef
-                processAllBuildingCommands env
+                unless locked $ processAllBuildingCommands env
                 acknowledgeCurrent (saveBarrierRef env) SaveUnit
                 acknowledgeCurrent (saveBarrierRef env) SaveBuilding
 

@@ -17,7 +17,7 @@ import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, catch, finally)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
@@ -95,12 +95,13 @@ simLoop env stateRef simStateRef = do
             ok ← catch
               (do
                 -- Process all pending commands
-                processSimCommands env logger simStateRef
+                locked ← captureLocked (saveBarrierRef env)
+                unless locked $ processSimCommands env logger simStateRef
                 acknowledgeCurrent (saveBarrierRef env) SaveSimulation
 
                 ss ← readIORef simStateRef
 
-                if ssPaused ss ∨ not (anyLiveWorld ss)
+                if locked ∨ ssPaused ss ∨ not (anyLiveWorld ss)
                     then do
                         threadDelay (ssTickRate ss)
                         pure True
