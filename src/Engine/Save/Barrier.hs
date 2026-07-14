@@ -70,7 +70,10 @@ acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
             -- last owner can causally enqueue work for one that acknowledged
             -- earlier.  Make every owner drain once more before capture.
             then writeTVar status $ Just s
-                { ssAcknowledged = Set.empty
+                -- The save call itself owns Lua and blocks its interpreter
+                -- while waiting, so it is already quiescent for every later
+                -- worker-drain pass; only asynchronous owners must re-ack.
+                { ssAcknowledged = Set.intersection (Set.singleton SaveLua) (ssOwners s)
                 , ssQuiescencePasses = ssQuiescencePasses s + 1
                 , ssPhase = SavePausing }
             else do

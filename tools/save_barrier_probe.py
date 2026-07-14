@@ -19,6 +19,16 @@ def main():
     a = ap.parse_args(); path = os.path.join("saves", SAVE); p = boot(a.port, log="/tmp/save_barrier_probe.log")
     try:
         send(a.port, f'world.init("barrier",{a.seed},64,3)', expect_result=False); send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False)
+        # This is a real World -> simulation -> World path: the edit is
+        # accepted by worldQueue, synchronizes its chunk into simQueue, and
+        # fluid settling publishes a WorldApplyFluids writeback.  Waiting for
+        # the visible fluid before saving makes its whole causal chain
+        # pre-boundary work.
+        send(a.port, 'world.setFluidTile("barrier", 0, 0, "water")', expect_result=False)
+        def fluid():
+            value = send(a.port, "return world.getFluidAt(0,0)")
+            return value if value not in ("nil", "") else None
+        fluid_before = wait(fluid, "world/simulation fluid writeback")
         if send(a.port, f'return engine.saveWorld("barrier","{SAVE}")').strip() != "true": raise RuntimeError("save rejected")
         def state():
             raw = send(a.port, "return engine.getSaveStatus()"); return json.loads(raw) if raw != "nil" else None
@@ -34,6 +44,12 @@ def main():
         if send(a.port, f'return engine.loadSave("{SAVE}")').strip() != "true": raise RuntimeError("load rejected")
         send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("main_world")', expect_result=False); time.sleep(1)
         if send(a.port, "return engine.isPaused()").strip() != "true": raise RuntimeError("load was not paused")
+        if send(a.port, "return world.getFluidAt(0,0)") != fluid_before:
+            raise RuntimeError("pre-boundary World->Sim->World fluid effect was not saved")
+        paused_fluid = send(a.port, "return world.getFluidAt(0,0)")
+        time.sleep(2)
+        if send(a.port, "return world.getFluidAt(0,0)") != paused_fluid:
+            raise RuntimeError("loaded world mutated while paused")
     finally:
         quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True)
     print("PASS: save owners acknowledged and loaded session stayed paused")
