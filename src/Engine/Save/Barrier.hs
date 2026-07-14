@@ -36,6 +36,12 @@ data SaveStatus = SaveStatus
 
 data SaveBarrier = SaveBarrier !(TVar Int) !(TVar (Maybe SaveStatus)) deriving (Eq)
 
+-- | World→simulation→world is the longest currently supported persistent
+-- command cycle.  Every pass drains every owner once; the first handles the
+-- original work, the second its first-hop effects, and the third writeback.
+requiredQuiescencePasses ∷ Int
+requiredQuiescencePasses = 3
+
 newSaveBarrier ∷ IO SaveBarrier
 newSaveBarrier = SaveBarrier <$> newTVarIO 0 <*> newTVarIO Nothing
 
@@ -56,9 +62,10 @@ beginSave (SaveBarrier next status) owners = atomically $ do
 acknowledgeSave ∷ SaveBarrier → Int → SaveOwner → IO ()
 acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
     current ← readTVar status
-    forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing) $ do
+    forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
+            ∧ ssPhase s ≠ SaveSnapshotBoundary) $ do
         let acks = Set.insert owner (ssAcknowledged s)
-        if acks ≡ ssOwners s ∧ ssQuiescencePasses s < 1
+        if acks ≡ ssOwners s ∧ ssQuiescencePasses s + 1 < requiredQuiescencePasses
             -- One full drain is not a boundary: a command handled by the
             -- last owner can causally enqueue work for one that acknowledged
             -- earlier.  Make every owner drain once more before capture.
@@ -68,7 +75,10 @@ acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
                 , ssPhase = SavePausing }
             else do
                 let phase = if acks ≡ ssOwners s then SaveWaitingOwners else SavePausing
-                writeTVar status $ Just s { ssAcknowledged = acks, ssPhase = phase }
+                    passes = if acks ≡ ssOwners s then ssQuiescencePasses s + 1
+                                                     else ssQuiescencePasses s
+                writeTVar status $ Just s { ssAcknowledged = acks, ssPhase = phase
+                                           , ssQuiescencePasses = passes }
 
 waitForOwners ∷ Int → SaveBarrier → Int → IO (Either Text ())
 waitForOwners micros (SaveBarrier _ status) n = do

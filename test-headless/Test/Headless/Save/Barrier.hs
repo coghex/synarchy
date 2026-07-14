@@ -21,10 +21,18 @@ spec = describe "save snapshot barrier" $ do
         acknowledgeSave b n SaveLua
         acknowledgeSave b n SaveWorld
         acknowledgeSave b n SaveUnit
+        acknowledgeSave b n SaveLua
+        acknowledgeSave b n SaveWorld
+        acknowledgeSave b n SaveUnit
         waitForOwners 1000 b n `shouldReturn` Right ()
         reachSnapshot b n
         status ← readSaveStatus b
         ssPhase <$> status `shouldBe` Just SaveSnapshotBoundary
+        -- Worker loops continue ticking during capture.  Their stale acks
+        -- must not reopen command processing after the boundary.
+        acknowledgeSave b n SaveLua
+        statusAgain ← readSaveStatus b
+        ssPhase <$> statusAgain `shouldBe` Just SaveSnapshotBoundary
 
     it "fails a non-responsive owner without completing capture" $ do
         b ← newSaveBarrier
