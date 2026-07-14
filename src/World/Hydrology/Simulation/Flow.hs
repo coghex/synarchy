@@ -3,6 +3,7 @@ module World.Hydrology.Simulation.Flow
     ( simulateHydrology
     , calderaHazardsFor
     , isCalderaHazardAt
+    , calderaHazardsForWorld
     ) where
 
 import UPrelude
@@ -17,7 +18,8 @@ import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Geology.Hash (wrappedDeltaUV)
 import World.Hydrology.Simulation.Types
-    (ElevGrid(..), FlowResult(..), effRiverThreshold, minLakeDepth)
+    ( ElevGrid(..), FlowResult(..), effRiverThreshold, minLakeDepth
+    , calderaGuardCeiling )
 import World.Hydrology.Simulation.PriorityFlood (fillDepressions)
 import World.Hydrology.Simulation.LakeDedup (dedupLakes)
 
@@ -61,6 +63,19 @@ isCalderaHazardAt worldSize hazards gx gy = any within hazards
     within (cx, cy, r) =
         let (dx, dy) = wrappedDeltaUV worldSize gx gy cx cy
         in dx * dx + dy * dy ≤ r * r
+
+-- | 'calderaHazardsFor', scoped to worlds below 'calderaGuardCeiling'.
+--   128+ already had inland-source extension enabled before issue #811
+--   and PR #288 verified that path lava-neutral with NO caldera guard
+--   at all, so this returns @[]@ (making 'isCalderaHazardAt' always
+--   False) at and above the ceiling — 128+ generation must stay
+--   exactly as it was, not gain a new, unrequested containment check.
+--   Only worlds below the ceiling (the ones newly getting extension
+--   from this issue) get a real hazard list.
+calderaHazardsForWorld ∷ Int → [PersistentFeature] → [(Int, Int, Int)]
+calderaHazardsForWorld worldSize features
+    | worldSize ≥ calderaGuardCeiling = []
+    | otherwise = calderaHazardsFor features
 
 -- * Flow Simulation
 
@@ -293,9 +308,13 @@ simulateHydrology _seed worldSize _ageIdx grid climate features =
         isLakeCell i = landVec VU.! i ∧ filledElev VU.! i > origElev VU.! i
 
         -- Caldera-scale volcanic hazards on this world (issue #811) —
-        -- see 'calderaHazardsFor' / 'isCalderaHazardAt'.
+        -- see 'calderaHazardsForWorld'. Empty at/above
+        -- 'calderaGuardCeiling' so 128+ output stays bit-identical to
+        -- before this change (issue #811 requires established 128+
+        -- behavior stay intact — review round 1 flagged the guard
+        -- changing it).
         calderaHazards ∷ [(Int, Int, Int)]
-        calderaHazards = calderaHazardsFor features
+        calderaHazards = calderaHazardsForWorld worldSize features
 
         isCalderaCell ∷ Int → Bool
         isCalderaCell i =

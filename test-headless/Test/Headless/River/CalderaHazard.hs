@@ -16,7 +16,8 @@ import World.Geology.Timeline.Types
     , VolcanicFeature(..), CalderaParams(..), SuperVolcanoParams(..)
     , ShieldParams(..)
     )
-import World.Hydrology.Simulation (calderaHazardsFor, isCalderaHazardAt)
+import World.Hydrology.Simulation
+    (calderaHazardsFor, isCalderaHazardAt, calderaHazardsForWorld)
 
 worldSize ∷ Int
 worldSize = 32
@@ -143,3 +144,18 @@ spec = do
             -- wrappedDeltaUV folds them to (-2, 2), just 3 tiles apart.
             isCalderaHazardAt worldSize [(-128, 128, 10)] 126 (-126)
                 `shouldBe` True
+
+    describe "calderaHazardsForWorld (issue #811 review round 1: 128+ non-regression)" $ do
+        it "is empty at worldSize=128, even with a real hazard present" $ do
+            calderaHazardsForWorld 128 [superVolcanoAt (GeoCoord 0 0) 40 FActive]
+                `shouldBe` []
+
+        it "is empty above worldSize=128 too" $ do
+            calderaHazardsForWorld 256 [superVolcanoAt (GeoCoord 0 0) 40 FActive]
+                `shouldBe` []
+
+        it "is non-empty below worldSize=128 (the sizes this issue newly extends)" $ do
+            calderaHazardsForWorld 64 [superVolcanoAt (GeoCoord 0 0) 40 FActive]
+                `shouldBe` [(0, 0, 46)]
+            calderaHazardsForWorld 32 [superVolcanoAt (GeoCoord 0 0) 40 FActive]
+                `shouldBe` [(0, 0, 46)]

@@ -14,6 +14,7 @@ import Test.Headless.Harness
 import World.Types
 import World.Geology.Timeline.Helpers (isActiveRiver, getRiverParamsFromPf)
 import World.Fluid.Lake.Types (Lake(..), WorldLakes(..))
+import World.Geology.Hash (wrappedDeltaUV)
 
 -- | Every currently-active river's 'RiverParams' on a generated page.
 activeRivers ∷ WorldGenParams → [RiverParams]
@@ -42,6 +43,18 @@ totalLavaTiles ∷ WorldGenParams → Int
 totalLavaTiles p =
     sum (map lkArea (V.toList (wlLakes (gtWorldLavaPools (wgpGeoTimeline p)))))
 
+-- | Wrap-aware source-to-mouth span, the same per-axis Chebyshev
+--   measure 'World.Geology.Timeline.RiverTrace's @pathTooLong@ cap
+--   uses (@abs (mx - sx) > maxSpan ∨ abs (my - sy) > maxSpan@) —
+--   computed here via 'wrappedDeltaUV' so it matches across the
+--   u-axis wrap seam instead of a naive (and misleading) raw delta.
+riverSpan ∷ Int → RiverParams → Int
+riverSpan worldSize river =
+    let GeoCoord sx sy = rpSourceRegion river
+        GeoCoord mx my = rpMouthRegion river
+        (dx, dy) = wrappedDeltaUV worldSize sx sy mx my
+    in max (abs dx) (abs dy)
+
 spec ∷ SpecWith EngineEnv
 spec = do
     describe "Inland-origin river sources on Tiny/Small worlds (issue #811)" $ do
@@ -62,15 +75,43 @@ spec = do
             rivers `shouldSatisfy` (not . null)
             maximum (map (sourceOceanDist p) rivers) `shouldSatisfy` (≥ 4)
 
+        -- Regression guard for the maxSpan/extension coupling (issue
+        -- review round 1): checking only that SOME river survives
+        -- tracing doesn't prove the maxSpan relaxation is what let it
+        -- survive — that assertion would still pass even if the old
+        -- per-size worldTiles/3 cap were silently reinstated for these
+        -- sizes and simply discarded (via RiverTrace's `pathTooLong` /
+        -- Reconcile's `catMaybes`) every extended source long enough to
+        -- need the fix, leaving only shorter, always-legal survivors.
+        -- Instead, assert a survives river's OWN span exceeds the OLD
+        -- (worldSize<128) worldTiles/3 cap: a river that long could only
+        -- have reached 'gtFeatures' by surviving the relaxed
+        -- worldTiles/2 cap, so its mere presence proves the coupling
+        -- fix — not just the source extension — is load-bearing here.
+        it "has a river beyond the OLD worldSize<128 maxSpan cap for worldSize=32" $ \env → do
+            ws ← sharedWorld env 42 32 3
+            Just p ← getWorldGenParams ws
+            let rivers = activeRivers p
+                oldCap = wgpWorldSize p * chunkSize `div` 3
+            rivers `shouldSatisfy` (not . null)
+            maximum (map (riverSpan (wgpWorldSize p)) rivers)
+                `shouldSatisfy` (> oldCap)
+
+        it "has a river beyond the OLD worldSize<128 maxSpan cap for worldSize=64" $ \env → do
+            ws ← sharedWorld env 42 64 3
+            Just p ← getWorldGenParams ws
+            let rivers = activeRivers p
+                oldCap = wgpWorldSize p * chunkSize `div` 3
+            rivers `shouldSatisfy` (not . null)
+            maximum (map (riverSpan (wgpWorldSize p)) rivers)
+                `shouldSatisfy` (> oldCap)
+
         it "keeps every extended river's traced course non-degenerate (survives tracing)" $ \env → do
-            -- Regression guard for the maxSpan/extension coupling (#811
-            -- review): an extended source that got silently discarded by
-            -- RiverTrace's span cap would still show up here via
-            -- 'gtFeatures' (built from a successful trace) with a real
-            -- mouth and at least one segment — a river that failed to
-            -- trace never becomes a PersistentFeature at all. Checking
-            -- every returned river's segment count catches a
-            -- would-be-empty/degenerate trace slipping through.
+            -- Every returned river reaching 'gtFeatures' at all implies
+            -- a successful trace (a failed trace never becomes a
+            -- PersistentFeature — Reconcile.hs's catMaybes drops it
+            -- first), but a degenerate one (no real segments) would
+            -- still slip through a bare non-null check.
             ws ← sharedWorld env 42 64 3
             Just p ← getWorldGenParams ws
             let rivers = activeRivers p
