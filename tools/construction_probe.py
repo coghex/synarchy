@@ -17,7 +17,13 @@ next phase's utility scan is clean):
   3. release   : the claimant is destroyed mid-job; the sweep releases
                  the claim ("pending" again — observable), and a second
                  acolyte picks the job up and finishes it.
-  4. stake     : a building designation; the acolyte walks up and stakes
+  4. occupied  : #805 — re-designating an already-built floor's slot is
+                 rejected (no job, outcome stream says so), a DIFFERENT
+                 slot on that same tile still designates/builds normally
+                 (coexistence), and a slot that fills in AFTER
+                 designation but BEFORE a claimant pays materials is
+                 cancelled rather than paid for.
+  5. stake     : a building designation; the acolyte walks up and stakes
                  it (building.spawn) and the blueprint completes. Runs
                  LAST: the staked portal spawns its roster, which would
                  contaminate later phases.
@@ -82,6 +88,15 @@ def designation_at(port: int, x: int, y: int):
     return send_json(
         port,
         f"return construction.getDesignationAt(world.getActiveWorldId(), {x}, {y})")
+
+
+def pick_tile(port: int, sx: int, sy: int) -> tuple[int, int]:
+    """world.pickTile(screenX, screenY) -> (gx, gy) — the SAME hit test
+    buildTool.handleMouseDown runs on a real click (mirrors wire_probe.py's
+    helper of the same name)."""
+    raw = send(port, f"return world.pickTile({sx}, {sy})")
+    parts = raw.split()
+    return int(float(parts[0])), int(float(parts[1]))
 
 
 def spawn_acolyte(port: int, x: float, y: float) -> int:
@@ -203,6 +218,130 @@ def phase_ground(port: int) -> None:
     destroy_unit(port, uid)
 
 
+def phase_occupied(port: int) -> None:
+    """#805: an already-occupied structure slot must not be re-designated
+    (or paid for if it fills in mid-job), while a compatible slot on the
+    same tile keeps working normally."""
+    print("\n[phase 5] occupied structure slots (#805)")
+    w = wid(port)
+
+    # --- a slot that's already built must not accept a re-designation.
+    send(port, "require('scripts.structures').floor(8, 30); return 'ok'")
+    built = poll_until(port, 10, lambda: send(
+        port, "return structure.hasAt(8, 30, 'floor')") == "true")
+    check("fixture floor placed directly", built is not None)
+
+    send(port, "return debug.drainActionOutcomes()")  # clear the slate
+    send(port, f"construction.designate('{w}', 8, 30, 8, 30, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    check("re-designating an already-built floor creates no job",
+          designation_at(port, 8, 30) is None)
+    check("the existing floor is untouched",
+          send(port, "return structure.hasAt(8, 30, 'floor')") == "true")
+    outcomes = send_json(port, "return debug.drainActionOutcomes()")
+    if not isinstance(outcomes, list):
+        outcomes = []
+    matches = [o for o in outcomes
+               if isinstance(o, dict) and o.get("kind") == "construction.designate"
+               and (o.get("where") or {}).get("x") == 8
+               and (o.get("where") or {}).get("y") == 30]
+    check("occupied-slot designation reports a non-accepted outcome",
+          bool(matches) and all(o.get("outcome") != "accepted" for o in matches))
+
+    # --- the ACTUAL UI path (build_tool.lua), not just the lower-level
+    # construction.designate call above, must not claim "accepted" for a
+    # fully-occupied commit either (review round 1).
+    send(port, "camera.setPosition(0, 0); return 'ok'")
+    send(port, "local bt = require('scripts.build_tool'); "
+               f"bt.hud = {{ worldId = '{w}' }}; return 'ok'")
+    px, py = 960, 540
+    ux, uy = pick_tile(port, px, py)
+    send(port, f"require('scripts.structures').floor({ux}, {uy}); return 'ok'")
+    uiBuilt = poll_until(port, 10, lambda: send(
+        port, f"return structure.hasAt({ux}, {uy}, 'floor')") == "true")
+    check("UI-path fixture floor placed", uiBuilt is not None)
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.enterPlacement({kind='structure', pack='dungeon_1', "
+               "piece='floor', edge=nil, displayName='Floor'}); return 'ok'")
+    send(port, "return debug.drainActionOutcomes()")  # clear the slate
+    send(port, f"local bt = require('scripts.build_tool'); "
+               f"return bt.handleMouseDown(1, {px}, {py})")   # anchor
+    send(port, f"local bt = require('scripts.build_tool'); "
+               f"return bt.handleMouseDown(1, {px}, {py})")   # commit (same tile)
+    time.sleep(0.5)
+    check("UI commit over an occupied floor creates no job",
+          designation_at(port, ux, uy) is None)
+    uiOutcomes = send_json(port, "return debug.drainActionOutcomes()")
+    if not isinstance(uiOutcomes, list):
+        uiOutcomes = []
+    uiMatches = [o for o in uiOutcomes
+                 if isinstance(o, dict) and o.get("kind") == "buildTool.commitPlacement"]
+    check("UI outcome for the occupied commit is not 'accepted'",
+          bool(uiMatches) and all(o.get("outcome") != "accepted" for o in uiMatches))
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.exitPlacement(); return 'ok'")
+
+    # --- coexistence: a DIFFERENT slot on the same tile still designates
+    # and builds normally, and never disturbs the existing floor.
+    send(port, f"construction.designate('{w}', 8, 30, 8, 30, "
+               "'structure', 'dungeon_1', 'wall', 'ne'); return 'ok'")
+    time.sleep(0.5)
+    check("a compatible slot on the same tile still designates",
+          designation_at(port, 8, 30) is not None)
+
+    coUid = spawn_acolyte(port, 5.5, 30.5)
+    send(port, f"unit.addItem({coUid}, 'steel_bar', 0); "
+               f"unit.addItem({coUid}, 'steel_bar', 0); return 'ok'")
+    done = poll_until(port, 60, lambda: (
+        send(port, "return structure.hasAt(8, 30, 'wall_ne')") == "true"
+        and designation_at(port, 8, 30) is None))
+    check("wall built alongside the pre-existing floor", done is not None)
+    check("floor still present after the coexisting wall build",
+          send(port, "return structure.hasAt(8, 30, 'floor')") == "true")
+    destroy_unit(port, coUid)
+
+    # --- race: the requested slot fills in AFTER designation but BEFORE
+    # the claimant pays materials — must resolve without paying/overwriting.
+    send(port, f"construction.designate('{w}', 8, 36, 8, 36, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    check("race-case tile designated", designation_at(port, 8, 36) is not None)
+
+    racer = spawn_acolyte(port, 1.5, 36.5)
+    send(port, f"unit.addItem({racer}, 'steel_plate', 0); return 'ok'")
+    claimed = poll_until(port, 20, lambda: (
+        (designation_at(port, 8, 36) or {}).get("status") == "claimed"))
+    check("racer claimed the tile before the slot filled", claimed is not None)
+
+    # Fill the slot out from under the claimant while it's still walking
+    # over — simulates a second worker (or a re-designation) winning the
+    # race for the same slot.
+    send(port, "return debug.drainActionOutcomes()")  # clear the slate
+    send(port, "require('scripts.structures').floor(8, 36); return 'ok'")
+    filled = poll_until(port, 10, lambda: send(
+        port, "return structure.hasAt(8, 36, 'floor')") == "true")
+    check("competing floor landed mid-job", filled is not None)
+
+    resolved = poll_until(port, 60, lambda: designation_at(port, 8, 36) is None)
+    check("raced designation resolves (cancelled), no stuck job",
+          resolved is not None)
+    check("claimant never paid its material",
+          send(port, f"local n = 0; for _, it in ipairs(unit.getInventory({racer}) "
+                     "or {}) do if it.defName == 'steel_plate' then n = n + 1 end "
+                     "end; return n") == "1")
+    raceOutcomes = send_json(port, "return debug.drainActionOutcomes()")
+    if not isinstance(raceOutcomes, list):
+        raceOutcomes = []
+    raceMatches = [o for o in raceOutcomes
+                   if isinstance(o, dict) and o.get("kind") == "construction.designate"
+                   and (o.get("where") or {}).get("x") == 8
+                   and (o.get("where") or {}).get("y") == 36]
+    check("mid-job cancellation reports an observable non-accepted outcome",
+          bool(raceMatches) and all(o.get("outcome") != "accepted" for o in raceMatches))
+    destroy_unit(port, racer)
+
+
 def phase_stake(port: int) -> None:
     """A building designation gets staked into a real Appearing building."""
     print("\n[phase 3] building blueprint STAKED (acolyte_portal)")
@@ -275,6 +414,7 @@ PHASES = {
     "inventory": phase_inventory,
     "ground": phase_ground,
     "release": phase_release,
+    "occupied": phase_occupied,
     "stake": phase_stake,
 }
 
