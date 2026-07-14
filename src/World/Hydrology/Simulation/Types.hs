@@ -5,7 +5,7 @@ module World.Hydrology.Simulation.Types
     , effRiverThreshold
     , maxGridDim
     , minLakeDepth
-    , minExtendWorld
+    , calderaGuardCeiling
     , FlowResult(..)
     , ElevGrid(..)
     ) where
@@ -64,14 +64,18 @@ maxGridDim = 384
 minLakeDepth ∷ Int
 minLakeDepth = 9
 
--- | Smallest worldSize for which river sources are extended upstream to
---   their catchment divide (issue #221, see `walkToDivide`). Worlds
---   below this are too small to host long rivers and pack volcanism
---   densely enough that the extension breaches calderas; they keep the
---   original (coastal) source behaviour. 128 is the smallest real
---   playable world; 32/64 are regression-gate sizes only.
-minExtendWorld ∷ Int
-minExtendWorld = 128
+-- | Worlds below this size are the only ones affected by issue #811's
+--   removal of the old @worldSize ≥ 128@ inland-source-extension gate
+--   — 128+ already had extension enabled and PR #288 verified that
+--   path lava-neutral without any caldera-aware guard. The new
+--   caldera/supervolcano hazard check in `walkToDivide` (see
+--   `calderaHazardsFor` / `isCalderaHazardAt`) is therefore scoped to
+--   worlds below this ceiling only: it exists purely to make
+--   extension SAFE on the newly-affected Tiny(32)/Small(64) sizes, and
+--   applying it above 128 as well would be an unrequested behavior
+--   change to output issue #811 explicitly requires stay intact.
+calderaGuardCeiling ∷ Int
+calderaGuardCeiling = 128
 
 -- * Types
 

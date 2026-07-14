@@ -1,6 +1,9 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Hydrology.Simulation.Flow
     ( simulateHydrology
+    , calderaHazardsFor
+    , isCalderaHazardAt
+    , calderaHazardsForWorld
     ) where
 
 import UPrelude
@@ -13,15 +16,72 @@ import Control.Monad.ST (runST)
 import World.Types
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import World.Geology.Hash (wrappedDeltaUV)
 import World.Hydrology.Simulation.Types
-    (ElevGrid(..), FlowResult(..), effRiverThreshold, minLakeDepth, minExtendWorld)
+    ( ElevGrid(..), FlowResult(..), effRiverThreshold, minLakeDepth
+    , calderaGuardCeiling )
 import World.Hydrology.Simulation.PriorityFlood (fillDepressions)
 import World.Hydrology.Simulation.LakeDedup (dedupLakes)
 
+-- * Caldera hazards (issue #811)
+
+-- | Caldera-scale volcanic hazards among the given features, as
+--   (center-x, center-y, hazard radius) — the wide, magma-bearing
+--   rim+floor features. Ordinary shield/cinder/dome/fissure/vent magma
+--   chutes are narrow (2-4 tiles) and only ever breach if a river
+--   happens to cross their exact column, so they're excluded here —
+--   this guard targets the feature shapes wide enough to be a real,
+--   dense-on-small-worlds risk. A feature with no live magma source
+--   (mirroring World.Magma.Init's own FExtinct/FCollapsed exclusion)
+--   can't actually breach.
+calderaHazardsFor ∷ [PersistentFeature] → [(Int, Int, Int)]
+calderaHazardsFor features =
+    [ hazard
+    | pf ← features
+    , pfActivity pf ≢ FExtinct
+    , pfActivity pf ≢ FCollapsed
+    , Just hazard ← [case pfFeature pf of
+        VolcanicShape (Caldera p) →
+            let GeoCoord cx cy = caCenter p
+            in Just (cx, cy, caOuterRadius p)
+        VolcanicShape (SuperVolcano p) →
+            let GeoCoord cx cy = svCenter p
+                -- Matches the rim's true outer edge (World.Geology.
+                -- Volcano's applySuperVolcano: rimOuterR = calderaR +
+                -- calderaR * 0.15).
+                hazardR = round (fromIntegral (svCalderaRadius p)
+                                  * (1.15 ∷ Float))
+            in Just (cx, cy, hazardR)
+        _ → Nothing]
+    ]
+
+-- | True if (gx, gy) sits inside any of the given caldera hazard
+--   footprints, wrap-aware.
+isCalderaHazardAt ∷ Int → [(Int, Int, Int)] → Int → Int → Bool
+isCalderaHazardAt worldSize hazards gx gy = any within hazards
+  where
+    within (cx, cy, r) =
+        let (dx, dy) = wrappedDeltaUV worldSize gx gy cx cy
+        in dx * dx + dy * dy ≤ r * r
+
+-- | 'calderaHazardsFor', scoped to worlds below 'calderaGuardCeiling'.
+--   128+ already had inland-source extension enabled before issue #811
+--   and PR #288 verified that path lava-neutral with NO caldera guard
+--   at all, so this returns @[]@ (making 'isCalderaHazardAt' always
+--   False) at and above the ceiling — 128+ generation must stay
+--   exactly as it was, not gain a new, unrequested containment check.
+--   Only worlds below the ceiling (the ones newly getting extension
+--   from this issue) get a real hazard list.
+calderaHazardsForWorld ∷ Int → [PersistentFeature] → [(Int, Int, Int)]
+calderaHazardsForWorld worldSize features
+    | worldSize ≥ calderaGuardCeiling = []
+    | otherwise = calderaHazardsFor features
+
 -- * Flow Simulation
 
-simulateHydrology ∷ Word64 → Int → Int → ElevGrid → ClimateState → FlowResult
-simulateHydrology _seed worldSize _ageIdx grid climate =
+simulateHydrology ∷ Word64 → Int → Int → ElevGrid → ClimateState
+                  → [PersistentFeature] → FlowResult
+simulateHydrology _seed worldSize _ageIdx grid climate features =
     let gridW   = egGridW grid
         totalSamples = gridW * gridW
         origElev = egElev grid
@@ -188,7 +248,7 @@ simulateHydrology _seed worldSize _ageIdx grid climate =
         -- interior catchments become long — sea-draining rivers reach
         -- the sea, closed-basin rivers still terminate inland.
         --
-        -- The walk STOPS on three conditions:
+        -- The walk STOPS on four conditions:
         --
         --  1. The next cell upstream is a LAKE / basin cell — its
         --     depression-filled surface stands `minLakeDepth` or more
@@ -203,13 +263,27 @@ simulateHydrology _seed worldSize _ageIdx grid climate =
         --     (issue #221 — the lake-collapse / lava blow-up that
         --     extending sources had caused on small volcanic worlds).
         --
-        --  2. The climb exceeds `maxClimb` above the headwater. This
+        --  2. The next cell upstream falls inside a CALDERA / SUPERVOLCANO
+        --     hazard footprint (issue #811). Calderas and supervolcanoes
+        --     carry a real magma chamber reaching close to the surface at
+        --     their rim/floor (World.Magma.Kit); their footprint is wide
+        --     (15-80 tiles) and, on small worlds, dense enough relative to
+        --     world area that a naively-extended catchment divide can run
+        --     straight through one. Carving a river channel there can
+        --     breach the rim and let Magma.Pool's flood-fill (which reads
+        --     CARVE-AWARE terrain) pour lava down the newly-carved valley
+        --     — the seed 13579 w32 regression this issue's acceptance
+        --     covers. Unlike the lake stop, this isn't a basin the flow
+        --     network would naturally detect (a caldera rim is high
+        --     ground, not a fill), so it needs its own check.
+        --
+        --  3. The climb exceeds `maxClimb` above the headwater. This
         --     keeps the source in the foothills rather than on the
         --     volcanic peaks, whose fresh headwater valleys the
         --     lava-pool pour (Magma.Pool floods local depressions to
         --     their rim) would otherwise bury.
         --
-        --  3. The usual ridge / off-land / step bounds.
+        --  4. The usual ridge / off-land / step bounds.
         --
         -- The upstream graph is a forest (flow is acyclic) so it cannot
         -- loop; maxWalk also bounds the cost.
@@ -232,6 +306,21 @@ simulateHydrology _seed worldSize _ageIdx grid climate =
         -- on well-drained ground and flow INTO ponds, never out of them.
         isLakeCell ∷ Int → Bool
         isLakeCell i = landVec VU.! i ∧ filledElev VU.! i > origElev VU.! i
+
+        -- Caldera-scale volcanic hazards on this world (issue #811) —
+        -- see 'calderaHazardsForWorld'. Empty at/above
+        -- 'calderaGuardCeiling' so 128+ output stays bit-identical to
+        -- before this change (issue #811 requires established 128+
+        -- behavior stay intact — review round 1 flagged the guard
+        -- changing it).
+        calderaHazards ∷ [(Int, Int, Int)]
+        calderaHazards = calderaHazardsForWorld worldSize features
+
+        isCalderaCell ∷ Int → Bool
+        isCalderaCell i =
+            isCalderaHazardAt worldSize calderaHazards
+                (gxVec VU.! i) (gyVec VU.! i)
+
         walkToDivide ∷ Int → Int
         walkToDivide start = go start (0 ∷ Int)
           where
@@ -243,6 +332,7 @@ simulateHydrology _seed worldSize _ageIdx grid climate =
                     let up = bestUpstream VU.! idx
                     in if up < 0 ∨ not (landVec VU.! up)
                           ∨ isLakeCell up
+                          ∨ isCalderaCell up
                           ∨ origElev VU.! up - startElev > maxClimb
                        then idx
                        else go up (steps + 1)
@@ -270,25 +360,21 @@ simulateHydrology _seed worldSize _ageIdx grid climate =
                        then go d (steps + 1)
                        else idx
 
-        -- Inland-origin source extension is applied only on real-scale
-        -- worlds (issue #221). On tiny worlds (size 32/64 — the
-        -- regression-gate sizes) it is both pointless (a 512–1024-tile
-        -- world can't host a long river) and actively harmful: their
-        -- volcanism is packed densely enough that an extended river
-        -- routes through a caldera, breaches its rim and lets the
-        -- lava-pool pour flood the low terrain — observed as 100s of
-        -- new lava tiles on ground dropped ~160 z (seed 13579 w32),
-        -- which the per-source lake-stop and climb cap can't prevent
-        -- because the breach is mid-course, not at the source. Gating
-        -- to worldSize ≥ `minExtendWorld` confines the feature to the
-        -- worlds it targets (≥128 verified lava-neutral) and leaves the
-        -- small worlds — and the magma system — exactly as they were.
-        extendSources = worldSize ≥ minExtendWorld
-
+        -- Inland-origin source extension (issue #221) applies on every
+        -- world size (issue #811 — Tiny(32)/Small(64) are player-facing
+        -- modes, not regression-only, and must not wholesale-bypass it).
+        -- It used to be gated to worldSize ≥ 128 because small worlds
+        -- pack volcanism densely enough that an extended river could
+        -- route through a caldera and breach its rim, letting the
+        -- lava-pool pour flood the low terrain — observed as 100s of new
+        -- lava tiles on ground dropped ~160 z (seed 13579 w32). That risk
+        -- is now handled directly by `isCalderaCell` inside
+        -- `walkToDivide`, so every world size gets the same extension
+        -- with the same caldera guard, rather than the smallest two
+        -- player sizes getting none of it.
         riverSources ∷ [(Int, Int, Int, Float)]
         riverSources = map (\idx →
             let srcIdx
-                    | not extendSources = idx              -- small worlds: unchanged
                     | isLakeCell idx    = dropToOutflow idx -- headwater in a lake
                     | otherwise         = walkToDivide idx  -- extend up to divide
                 gx = gxVec VU.! srcIdx
