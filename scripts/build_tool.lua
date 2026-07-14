@@ -591,6 +591,37 @@ function buildTool.snapWirePath(ax, ay, x, y)
     else return ax, y end
 end
 
+-- The structure.hasAt slot a piece designation targets — mirrors
+-- Construct.hs's structurePieceSlot / unit_ai_construct.lua's jobSlot
+-- (#805): walls/posts fall back to the same "ne"/"n" default used when
+-- no edge is recorded.
+local function structureCommitSlot(target)
+    if target.piece == "floor" then return "floor"
+    elseif target.piece == "ceiling" then return "ceiling"
+    elseif target.piece == "wall" then return "wall_" .. (target.edge or "ne")
+    elseif target.piece == "post" then return "post_" .. (target.edge or "n")
+    elseif target.piece == "wire" then return "wire"
+    end
+    return nil
+end
+
+-- Best-effort prediction of whether the commit about to be queued has AT
+-- LEAST one free tile, so the buildTool.commitPlacement outcome below
+-- doesn't claim "accepted" when the backend's occupancy filter (#805)
+-- will actually create zero jobs. Doesn't replicate the backend's
+-- z-level/unloaded-chunk filtering (an existing, unrelated gap) —
+-- occupancy is the one thing this record needs to get right.
+local function structureCommitHasFreeSlot(target, x1, y1, x2, y2)
+    local slot = structureCommitSlot(target)
+    if not slot then return true end
+    for gx = math.min(x1, x2), math.max(x1, x2) do
+        for gy = math.min(y1, y2), math.max(y1, y2) do
+            if not structure.hasAt(gx, gy, slot) then return true end
+        end
+    end
+    return false
+end
+
 -----------------------------------------------------------
 -- Placement mode
 -----------------------------------------------------------
@@ -854,14 +885,24 @@ function buildTool.handleMouseDown(button, x, y)
                     if isWirePath(target) then
                         x2, y2 = buildTool.snapWirePath(a[1], a[2], igx, igy)
                     end
+                    local hasFreeSlot = structureCommitHasFreeSlot(
+                        target, a[1], a[2], x2, y2)
                     construction.designate(wid, a[1], a[2], x2, y2,
                         "structure", target.pack, target.piece, target.edge)
                     buildTool.state.anchor = nil
-                    debug.recordOutcome{
-                        kind = "buildTool.commitPlacement", outcome = "accepted",
-                        where = { x = x2, y = y2 },
-                        reason = "routed to construction.designate",
-                    }
+                    if hasFreeSlot then
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement", outcome = "accepted",
+                            where = { x = x2, y = y2 },
+                            reason = "routed to construction.designate",
+                        }
+                    else
+                        debug.recordOutcome{
+                            kind = "buildTool.commitPlacement", outcome = "rejected",
+                            where = { x = x2, y = y2 },
+                            reason = "requested structure slot(s) already occupied",
+                        }
+                    end
                 end
             else
                 debug.recordOutcome{

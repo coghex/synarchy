@@ -387,6 +387,11 @@ local function constructExecute(uid, s, params)
                 if slot and structure.hasAt(job.x, job.y, slot) then
                     reportFailure(uid,
                         "Construction site is already built")
+                    debug.recordOutcome{
+                        kind = "construction.designate", outcome = "rejected",
+                        where = { x = job.x, y = job.y },
+                        reason = "requested structure slot filled before material payment",
+                    }
                     construction.cancelDesignation(job.x, job.y)
                     releaseConstructJob(s, uid)
                     return

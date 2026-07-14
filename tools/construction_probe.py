@@ -90,6 +90,15 @@ def designation_at(port: int, x: int, y: int):
         f"return construction.getDesignationAt(world.getActiveWorldId(), {x}, {y})")
 
 
+def pick_tile(port: int, sx: int, sy: int) -> tuple[int, int]:
+    """world.pickTile(screenX, screenY) -> (gx, gy) — the SAME hit test
+    buildTool.handleMouseDown runs on a real click (mirrors wire_probe.py's
+    helper of the same name)."""
+    raw = send(port, f"return world.pickTile({sx}, {sy})")
+    parts = raw.split()
+    return int(float(parts[0])), int(float(parts[1]))
+
+
 def spawn_acolyte(port: int, x: float, y: float) -> int:
     uid = send(port, f"return unit.spawn('acolyte', {x}, {y})")
     try:
@@ -240,6 +249,39 @@ def phase_occupied(port: int) -> None:
     check("occupied-slot designation reports a non-accepted outcome",
           bool(matches) and all(o.get("outcome") != "accepted" for o in matches))
 
+    # --- the ACTUAL UI path (build_tool.lua), not just the lower-level
+    # construction.designate call above, must not claim "accepted" for a
+    # fully-occupied commit either (review round 1).
+    send(port, "camera.setPosition(0, 0); return 'ok'")
+    send(port, "local bt = require('scripts.build_tool'); "
+               f"bt.hud = {{ worldId = '{w}' }}; return 'ok'")
+    px, py = 960, 540
+    ux, uy = pick_tile(port, px, py)
+    send(port, f"require('scripts.structures').floor({ux}, {uy}); return 'ok'")
+    uiBuilt = poll_until(port, 10, lambda: send(
+        port, f"return structure.hasAt({ux}, {uy}, 'floor')") == "true")
+    check("UI-path fixture floor placed", uiBuilt is not None)
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.enterPlacement({kind='structure', pack='dungeon_1', "
+               "piece='floor', edge=nil, displayName='Floor'}); return 'ok'")
+    send(port, "return debug.drainActionOutcomes()")  # clear the slate
+    send(port, f"local bt = require('scripts.build_tool'); "
+               f"return bt.handleMouseDown(1, {px}, {py})")   # anchor
+    send(port, f"local bt = require('scripts.build_tool'); "
+               f"return bt.handleMouseDown(1, {px}, {py})")   # commit (same tile)
+    time.sleep(0.5)
+    check("UI commit over an occupied floor creates no job",
+          designation_at(port, ux, uy) is None)
+    uiOutcomes = send_json(port, "return debug.drainActionOutcomes()")
+    if not isinstance(uiOutcomes, list):
+        uiOutcomes = []
+    uiMatches = [o for o in uiOutcomes
+                 if isinstance(o, dict) and o.get("kind") == "buildTool.commitPlacement"]
+    check("UI outcome for the occupied commit is not 'accepted'",
+          bool(uiMatches) and all(o.get("outcome") != "accepted" for o in uiMatches))
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.exitPlacement(); return 'ok'")
+
     # --- coexistence: a DIFFERENT slot on the same tile still designates
     # and builds normally, and never disturbs the existing floor.
     send(port, f"construction.designate('{w}', 8, 30, 8, 30, "
@@ -275,6 +317,7 @@ def phase_occupied(port: int) -> None:
     # Fill the slot out from under the claimant while it's still walking
     # over — simulates a second worker (or a re-designation) winning the
     # race for the same slot.
+    send(port, "return debug.drainActionOutcomes()")  # clear the slate
     send(port, "require('scripts.structures').floor(8, 36); return 'ok'")
     filled = poll_until(port, 10, lambda: send(
         port, "return structure.hasAt(8, 36, 'floor')") == "true")
@@ -287,6 +330,15 @@ def phase_occupied(port: int) -> None:
           send(port, f"local n = 0; for _, it in ipairs(unit.getInventory({racer}) "
                      "or {}) do if it.defName == 'steel_plate' then n = n + 1 end "
                      "end; return n") == "1")
+    raceOutcomes = send_json(port, "return debug.drainActionOutcomes()")
+    if not isinstance(raceOutcomes, list):
+        raceOutcomes = []
+    raceMatches = [o for o in raceOutcomes
+                   if isinstance(o, dict) and o.get("kind") == "construction.designate"
+                   and (o.get("where") or {}).get("x") == 8
+                   and (o.get("where") or {}).get("y") == 36]
+    check("mid-job cancellation reports an observable non-accepted outcome",
+          bool(raceMatches) and all(o.get("outcome") != "accepted" for o in raceMatches))
     destroy_unit(port, racer)
 
 
