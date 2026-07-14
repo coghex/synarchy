@@ -134,16 +134,10 @@ restoreSavedPage env logger registry palette catalog currentBm currentUm
             (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
         writeIORef (wsDateRef worldState)
             (WorldDate (wpsDateYear wps) (wpsDateMonth wps) (wpsDateDay wps))
-        -- Restore each page's real saved clock speed (the player's chosen
-        -- scale). The world is still frozen while paused — tickWorldTime gates
-        -- advancement on enginePausedRef and only ticks wmVisible worlds — so
-        -- holding the live speed here (rather than zeroing) costs no drift but
-        -- lets scripts/pause.lua's onSaveLoaded read the ACTIVE world's real
-        -- speed into prevTimeScale, so a resume restores THAT page's speed (not
-        -- a stale global value) regardless of which page became main_world (#42,
-        -- #214). pause.onSaveLoaded then zeros the active clock to mirror a
-        -- normal pause; background pages keep their speed for when shown.
-        writeIORef (wsTimeScaleRef worldState) (wpsTimeScale wps)
+        -- Keep the positional field decode-compatible, but never restore a
+        -- player's previous simulation speed from a save.  A normal unpause
+        -- after a save/load cycle uses this default scale instead.
+        writeIORef (wsTimeScaleRef worldState) 1
         writeIORef (wsMapModeRef worldState) (wpsMapMode wps)
         -- A loaded world starts on the default tool, NOT the tool that was
         -- active at save time. The HUD toolbar always comes up on the default

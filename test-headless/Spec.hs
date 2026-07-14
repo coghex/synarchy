@@ -85,6 +85,7 @@ import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
+import qualified Test.Headless.Save.Barrier as SaveBarrier
 
 main ∷ IO ()
 main = hspec $ do
@@ -144,6 +145,7 @@ main = hspec $ do
     describe "Item.QualityTier" ItemQualityTier.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
+    describe "Save.Barrier" SaveBarrier.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec

@@ -35,6 +35,7 @@ import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
 import System.IO (stdout)
 import System.Directory (doesFileExist, copyFile)
 import Engine.Core.State
+import Engine.Save.Barrier (newSaveBarrier)
 import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
@@ -224,6 +225,7 @@ initializeEngineWith logBackend = do
 
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
+  saveBarrierRef  ← newSaveBarrier
   -- Seeded to the POSIX epoch so the first save uses the real wall
   -- clock; subsequent saves clamp against it for monotonic, distinct
   -- timestamps (#98).
@@ -315,6 +317,7 @@ initializeEngineWith logBackend = do
         , simQueue          = simQueue
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
+        , saveBarrierRef    = saveBarrierRef
         , lastSaveTimeRef   = lastSaveTimeRef
         , itemManagerRef    = itemManagerRef
         , equipmentClassManagerRef = equipmentClassManagerRef

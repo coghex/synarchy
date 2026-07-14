@@ -160,6 +160,15 @@ def main() -> int:
                 f"after save: a stray setTimeScale un-froze a paused world "
                 f"(isPaused={rp} timeScale={rt})")
 
+        # A resumed loaded session uses the normal default speed, never the
+        # pre-save fast-forward speed retained by older save formats.
+        send(args.port, 'pause.set(false)', expect_result=False)
+        time.sleep(0.5)
+        resumed = as_float(send(args.port, 'return world.getTimeScale("main_world")'))
+        print(f"[resume   ] loaded timeScale={resumed}")
+        if resumed != 1.0:
+            failures.append(f"after load/unpause: expected default scale 1, got {resumed}")
+
         # 3. Load → world thread must restore paused AND a frozen clock.
         #    Wait for the file to actually land first (saveWorld returns on
         #    enqueue, so the write can lag the frozen-clock signal above).

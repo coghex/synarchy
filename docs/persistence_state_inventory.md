@@ -101,6 +101,7 @@ the affected fields as unclassified.
 | `pathingConfigRef` | global | Rebuild | `config/pathing.yaml` | global pathing tunables | none yet |
 | `simQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `enginePausedRef` | global | Persist exactly | — | `sdEnginePaused`; authoritative over any Lua-side copy (see §7 `pause` module) | `tools/save_pause_probe.py` |
+| `saveBarrierRef` | global | Exclude | — | Runtime-only coordinated-save request/owner acknowledgement diagnostics; never serialized. | save-barrier hspec + headless probe |
 | `gameTimeRef` | global | Persist exactly | — | `sdGameTime` | `tools/save_pause_probe.py` |
 | `lastSaveTimeRef` | global | Exclude | — | wall-clock bookkeeping, session-only | none yet |
 | `itemManagerRef` | global | Rebuild | `data/items/*.yaml` | see §9 | none yet |

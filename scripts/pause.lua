@@ -106,10 +106,9 @@ end
 function pause.onSaveLoaded(survUnitIds, survBuildingIds)
     local wid = world.getActiveWorldId()
     if not wid then return end
-    local ts = world.getTimeScale(wid)
-    if ts and ts > 0 then
-        pause.prevTimeScale = ts
-    end
+    -- Save/load never restores a pre-save speed.  The compatibility blob may
+    -- contain one from an older save, but it is deliberately ignored.
+    pause.prevTimeScale = 1.0
     if engine.isPaused() then
         world.setTimeScale(wid, 0)
     end
@@ -128,7 +127,6 @@ function pause.init(scriptId)
         function()
             return saveLib.serialize({
                 paused        = pause.paused,
-                prevTimeScale = pause.prevTimeScale,
             })
         end,
         function(blob)
@@ -138,7 +136,7 @@ function pause.init(scriptId)
             -- before this Lua hook fires). The blob field is kept for
             -- forward-compat with v6 saves but is no longer load-bearing.
             pause.paused        = engine.isPaused()
-            pause.prevTimeScale = t.prevTimeScale or 1.0
+            pause.prevTimeScale = 1.0
         end)
 end
 

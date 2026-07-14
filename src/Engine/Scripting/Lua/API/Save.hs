@@ -2,6 +2,7 @@
 module Engine.Scripting.Lua.API.Save
     ( saveListFn
     , saveWorldFn
+    , saveStatusFn
     , loadSaveFn
     ) where
 
@@ -23,6 +24,8 @@ import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import qualified Data.Set as Set
+import Engine.Save.Barrier
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
 --   sorted newest-first by timestamp. `name` is the save-slot identity
@@ -52,6 +55,28 @@ saveListFn env = do
             Lua.setfield (-2) "worldGloss"
         Lua.rawseti (-2) i
     return 1
+
+-- | engine.getSaveStatus() exposes the authoritative transaction state to
+-- headless diagnostics without coupling probes to log timing.
+saveStatusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+saveStatusFn env = do
+    status ← Lua.liftIO $ readSaveStatus (saveBarrierRef env)
+    case status of
+        Nothing → Lua.pushnil
+        Just s → do
+            Lua.newtable
+            Lua.pushinteger (fromIntegral $ ssRequestId s)
+            Lua.setfield (-2) "id"
+            Lua.pushstring . TE.encodeUtf8 . T.pack . show $ ssPhase s
+            Lua.setfield (-2) "phase"
+            Lua.pushinteger (fromIntegral $ Set.size $ ssAcknowledged s)
+            Lua.setfield (-2) "acknowledgedOwners"
+            Lua.pushinteger (fromIntegral $ Set.size $ ssOwners s)
+            Lua.setfield (-2) "ownerCount"
+            forM_ (ssOutcome s) $ \outcome → do
+                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ outcome
+                Lua.setfield (-2) "outcome"
+    pure 1
 
 -- | engine.saveWorld(pageId, saveName). Validates the request
 --   synchronously (name, world-exists, gen-params present), then
@@ -109,21 +134,45 @@ saveWorldFn env = do
                                             \gen params"
                                     Lua.pushboolean False
                                 Just _ → do
-                                    -- Pause the engine BEFORE collecting
-                                    -- Lua state. Other threads (world,
-                                    -- unit) early-return on this flag, so
-                                    -- their state stops drifting before
-                                    -- we snapshot Lua-side. Without this,
-                                    -- the Lua snapshot references engine
-                                    -- ids whose fields can change before
-                                    -- the world thread runs WorldSave.
-                                    -- handleWorldSaveCommand also writes
-                                    -- this flag (defense for non-Lua
-                                    -- callers); the double-write is
-                                    -- harmless and intentional.
-                                    Lua.liftIO $ writeIORef
-                                        (enginePausedRef env) True
-                                    blobs ← collectLuaBlobs logger
+                                    -- A save is one ordered transaction.  The
+                                    -- Lua thread is the caller and therefore
+                                    -- cannot be acknowledged by another loop;
+                                    -- it acknowledges only after the worker
+                                    -- owners reached their tick boundary.
+                                    started ← Lua.liftIO $ beginSave
+                                        (saveBarrierRef env)
+                                        (Set.fromList [SaveLua, SaveWorld,
+                                          SaveUnit, SaveBuilding, SaveCombat,
+                                          SaveSimulation])
+                                    case started of
+                                      Left err → do
+                                        Lua.liftIO $ do
+                                            logWarn logger CatLua err
+                                            emitEvent env "save_load" "World.Save" $
+                                                "Save failed: " <> err
+                                        Lua.pushboolean False
+                                      Right requestId → do
+                                        Lua.liftIO $ do
+                                            -- The pause is authoritative and
+                                            -- remains set even if the barrier
+                                            -- times out or serialization fails.
+                                            writeIORef (enginePausedRef env) True
+                                            acknowledgeSave (saveBarrierRef env)
+                                                requestId SaveLua
+                                        ready ← Lua.liftIO $ waitForOwners
+                                            5000000 (saveBarrierRef env) requestId
+                                        case ready of
+                                          Left err → do
+                                            Lua.liftIO $ do
+                                                failSave (saveBarrierRef env) requestId err
+                                                logWarn logger CatLua err
+                                                emitEvent env "save_load" "World.Save" $
+                                                    "Save failed: " <> err
+                                            Lua.pushboolean False
+                                          Right () → do
+                                            Lua.liftIO $ reachSnapshot
+                                                (saveBarrierRef env) requestId
+                                            blobs ← collectLuaBlobs logger
                                     -- Capture the timestamp at API
                                     -- (request) time so two saves
                                     -- queued back-to-back get distinct
@@ -142,23 +191,22 @@ saveWorldFn env = do
                                     -- fixed-width strings are strictly
                                     -- increasing and the lexicographic
                                     -- save-list sort is exact (#98).
-                                    nowText ← Lua.liftIO $ do
-                                        now ← getCurrentTime
-                                        -- 1 µs, matching the %6Q format
-                                        -- resolution.
-                                        let epsilon = 1e-6
-                                        ts ← atomicModifyIORef'
-                                            (lastSaveTimeRef env) $ \prev →
-                                                let next = max now
-                                                      (addUTCTime epsilon prev)
-                                                in (next, next)
-                                        return $ T.pack $ formatTime
-                                            defaultTimeLocale "%FT%T%6QZ" ts
-                                    Lua.liftIO $ Q.writeQueue
-                                        (worldQueue env)
-                                        (WorldSave pageId name
-                                            nowText blobs)
-                                    Lua.pushboolean True
+                                            nowText ← Lua.liftIO $ do
+                                                now ← getCurrentTime
+                                                -- 1 µs, matching the %6Q format
+                                                -- resolution.
+                                                let epsilon = 1e-6
+                                                ts ← atomicModifyIORef'
+                                                    (lastSaveTimeRef env) $ \prev →
+                                                        let next = max now
+                                                              (addUTCTime epsilon prev)
+                                                        in (next, next)
+                                                return $ T.pack $ formatTime
+                                                    defaultTimeLocale "%FT%T%6QZ" ts
+                                            Lua.liftIO $ Q.writeQueue
+                                                (worldQueue env)
+                                                (WorldSave pageId name nowText blobs)
+                                            Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
 

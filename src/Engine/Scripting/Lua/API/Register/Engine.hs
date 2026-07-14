@@ -43,7 +43,7 @@ import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
-import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
+import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, saveStatusFn, loadSaveFn)
 import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
                                             , emitEventForUnitFn
                                             , getEventLogFn
@@ -88,6 +88,7 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "getPreviewTarget"  (getPreviewTargetFn env)
   registerLuaFunction "setPaused"         (setPausedFn env)
   registerLuaFunction "isPaused"          (isPausedFn env)
+  registerLuaFunction "getSaveStatus"     (saveStatusFn env)
   registerLuaFunction "realTime"          realTimeFn
   registerLuaFunction "gameTime"          (gameTimeFn env)
   registerLuaFunction "loadScript"        (loadScriptFn env backendState lst)
