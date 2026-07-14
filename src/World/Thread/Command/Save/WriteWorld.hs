@@ -22,10 +22,8 @@ import Unit.Sim.Types (UnitThreadState(..))
 import World.Thread.Helpers (unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Save.Barrier (finishSave, failSave, readSaveStatus, ssRequestId)
-import World.Chunk.Types (LoadedChunk(..), chunkSize)
 import World.Edit.Types (WorldEdit(..), WorldEdits, appendEdit)
 import World.Generate.Coordinates (chunkToGlobal)
-import World.Tile.Types (WorldTileData(..))
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
@@ -251,8 +249,17 @@ failTransaction env err = do
 -- World → Sim → World writeback.
 appendFluidSnapshot ∷ WorldEdits → WorldTileData → WorldEdits
 appendFluidSnapshot edits tiles =
-    HM.foldl' appendChunk edits (wtdChunks tiles)
+    HM.foldl' appendChunk (dropReplacedSnapshots edits) (wtdChunks tiles)
   where
+    -- A snapshot is a replacement for the currently loaded chunk's old
+    -- snapshot, not another historical edit.  Preserve snapshots for chunks
+    -- that are not loaded this save: they still carry their last settled
+    -- simulation state and will be replayed if the chunk is loaded later.
+    dropReplacedSnapshots = HM.mapMaybeWithKey $ \coord chunkEdits →
+        let kept = if HM.member coord (wtdChunks tiles)
+                   then filter (not . isFluidSnapshot) chunkEdits
+                   else chunkEdits
+        in if null kept then Nothing else Just kept
     appendChunk acc lc = V.ifoldl' (appendCell (lcCoord lc)) acc (lcFluidMap lc)
     appendCell coord acc idx mCell =
         let lx = idx `mod` chunkSize
@@ -262,3 +269,8 @@ appendFluidSnapshot edits tiles =
                 Just cell → WeSetFluidSnapshot gx gy (fcType cell) (fcSurface cell)
                 Nothing   → WeClearFluidSnapshot gx gy
         in appendEdit coord edit acc
+
+isFluidSnapshot ∷ WorldEdit → Bool
+isFluidSnapshot (WeSetFluidSnapshot _ _ _ _) = True
+isFluidSnapshot (WeClearFluidSnapshot _ _)   = True
+isFluidSnapshot _                            = False

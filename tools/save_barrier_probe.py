@@ -5,6 +5,7 @@ import argparse, json, os, shutil, subprocess, sys, time, uuid
 from probelib import boot, quit_engine, send
 
 SAVE = "probe_barrier_" + uuid.uuid4().hex[:12]
+RESAVE = SAVE + "_resave"
 
 def wait(predicate, what, timeout=30):
     end = time.time() + timeout
@@ -16,7 +17,7 @@ def wait(predicate, what, timeout=30):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=9143); ap.add_argument("--seed", type=int, default=42)
-    a = ap.parse_args(); path = os.path.join("saves", SAVE); p = boot(a.port, log="/tmp/save_barrier_probe.log")
+    a = ap.parse_args(); path = os.path.join("saves", SAVE); resave_path = os.path.join("saves", RESAVE); p = boot(a.port, log="/tmp/save_barrier_probe.log")
     try:
         send(a.port, f'world.init("barrier",{a.seed},64,3)', expect_result=False); send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False)
         # This is a real World -> simulation -> World path: the edit is
@@ -71,8 +72,17 @@ def main():
         time.sleep(2)
         if area_fluid().get(spread_coord) != paused_fluid:
             raise RuntimeError("loaded world spread mutated while paused")
+        first_size = os.path.getsize(os.path.join(path, "world.synworld"))
+        if send(a.port, f'return engine.saveWorld("main_world","{RESAVE}")').strip() != "true": raise RuntimeError("resave rejected")
+        wait(lambda: os.path.isfile(os.path.join(resave_path, "world.synworld")), "resave file")
+        second_size = os.path.getsize(os.path.join(resave_path, "world.synworld"))
+        if second_size > first_size + 1024:
+            raise RuntimeError(
+                "fluid snapshot grew across an unchanged save/load/save cycle: "
+                f"first={first_size}, second={second_size}"
+            )
     finally:
-        quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True)
+        quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True); shutil.rmtree(resave_path, ignore_errors=True)
     print("PASS: save owners acknowledged and loaded session stayed paused")
 
 if __name__ == "__main__": main()
