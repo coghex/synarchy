@@ -66,7 +66,8 @@ waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
           .|. (if gridS then 12 else 0)   -- grid S → pixel SW (bits 4+8)
           .|. (if gridW then 9  else 0)   -- grid W → pixel NW (bits 1+8)
           ∷ Word8
-        -- A tile lower than all four neighbours would slope every
-        -- direction at once (raw ≡ 15, an enclosed depression, not a
-        -- lip); flatten it instead of rendering a nonsensical pyramid.
+        -- A tile with all four neighbours lower would slope every
+        -- direction at once (raw ≡ 15) — an isolated high point in the
+        -- water, not a lip; flatten it instead of rendering a
+        -- nonsensical pyramid.
     in if raw ≡ 15 then 0 else raw

@@ -152,3 +152,22 @@ spec = do
             [ (east, FluidCell River 33), (west, FluidCell River 43) ]
       in waterSlopeAt fluid816 terr816 home noChunkLookup noTerrLookup tx ty mySurf816
            `shouldBe` 7 -- bits 1+2 (N) | 2+4 (E)
+
+  -- The issue's own named counterexample at (-117, 22): river surface
+  -- 176, dry east neighbour 170 (a six-level drop), with north, south,
+  -- and west unchanged (equal height, no slope). A deterministic
+  -- fixture on the exact stated numbers, since the original dump's
+  -- seed/worldSize/plate parameters that produced this specific tile
+  -- were not recorded in the issue and could not be reproduced (see
+  -- the -55,-29 case above, pulled from a real seed-42 dump, for a
+  -- live-generated confirmation of the same bug pattern).
+  describe "issue #816 named counterexample ((-117,22): river 176, east dry 170)" $
+    it "slopes eastward only, not north/south/west (unchanged, equal height)" $
+      let mySurf816b = 176
+          -- terrMapWith's default fill is the module-level `mySurf`
+          -- (10), so north/south/west must be pinned to mySurf816b
+          -- explicitly rather than left at the default.
+          terr816b = terrMapWith
+            [ (north, 176), (south, 176), (west, 176), (east, 170) ]
+      in waterSlopeAt dryMap terr816b home noChunkLookup noTerrLookup tx ty mySurf816b
+           `shouldBe` 6 -- bits 2+4 (E) only
