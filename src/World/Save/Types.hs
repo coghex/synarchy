@@ -124,7 +124,14 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 83  -- v83: worldgen-output change, not a layout
+currentSaveVersion = 84  -- v84: worldgen-output change (#811) — Tiny(32)/
+                         --      Small(64) worlds now get the inland-origin
+                         --      river-source extension (issue #221) instead
+                         --      of the old worldSize>=128 gate, guarded by
+                         --      a new caldera/supervolcano hazard check so
+                         --      the extension can't breach a caldera and
+                         --      flood lava through the newly-carved valley.
+                         -- v83: worldgen-output change, not a layout
                          --      change (#785). Final regional climate
                          --      is now rebuilt from the completed
                          --      timeline's own evolved CO2/solar

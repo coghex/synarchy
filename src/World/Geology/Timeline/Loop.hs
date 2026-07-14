@@ -257,7 +257,7 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
 
         hydroSeed = ageSeed `xor` 0xA0CA71C
         flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
-                                       (tbsClimateState tbs)
+                                       (tbsClimateState tbs) (tbsFeatures tbs)
 
         (_hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
             hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize

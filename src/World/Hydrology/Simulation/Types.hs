@@ -5,7 +5,6 @@ module World.Hydrology.Simulation.Types
     , effRiverThreshold
     , maxGridDim
     , minLakeDepth
-    , minExtendWorld
     , FlowResult(..)
     , ElevGrid(..)
     ) where
@@ -63,15 +62,6 @@ maxGridDim = 384
 
 minLakeDepth ∷ Int
 minLakeDepth = 9
-
--- | Smallest worldSize for which river sources are extended upstream to
---   their catchment divide (issue #221, see `walkToDivide`). Worlds
---   below this are too small to host long rivers and pack volcanism
---   densely enough that the extension breaches calderas; they keep the
---   original (coastal) source behaviour. 128 is the smallest real
---   playable world; 32/64 are regression-gate sizes only.
-minExtendWorld ∷ Int
-minExtendWorld = 128
 
 -- * Types
 
