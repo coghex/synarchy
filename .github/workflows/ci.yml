@@ -260,6 +260,14 @@ jobs:
       - name: Lua module line budget
         run: python3 tools/lua_module_budget.py
 
+      # Cheap, no-engine guard (#814): fails if a scripts/ui/*.lua widget
+      # module gains a second top-level definition of an already-defined
+      # exported function, which silently overwrites the earlier one in
+      # the module table with no error (the slider.findByElementHandle
+      # regression this issue fixed).
+      - name: Lua duplicate function audit
+        run: python3 tools/lua_duplicate_function_audit.py
+
       # Cheap, no-engine guard (#787): fails if a Haskell module split
       # to stay reviewable (the input-thread facade + its dispatch
       # submodules) grows back past its agreed line budget.
