@@ -93,7 +93,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             Just params → do
                                 WorldTime h m    ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
-                                tScale    ← readIORef (wsTimeScaleRef ws)
+                                _tScale   ← readIORef (wsTimeScaleRef ws)
                                 -- Freeze ONLY the VISIBLE page's clock here, to
                                 -- match scripts/pause.lua: its prevTimeScale /
                                 -- resume dance retimes just world.getActiveWorldId(),
@@ -156,7 +156,11 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsDateYear   = y
                                     , wpsDateMonth  = mo
                                     , wpsDateDay    = d
-                                    , wpsTimeScale  = tScale
+                                    -- Positional compatibility field: retained
+                                    -- on disk, but never carries the player's
+                                    -- pre-save speed.  A loaded session always
+                                    -- resumes at the normal default scale.
+                                    , wpsTimeScale  = 1
                                     , wpsMapMode    = mapMode
                                     , wpsToolMode   = toolMode
                                     , wpsEdits      = edits
