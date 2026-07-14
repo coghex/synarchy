@@ -61,6 +61,7 @@ import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
 import Unit.Pathing.Config (PathingConfig)
 import Sim.Command.Types (SimCommand)
+import Engine.Save.Barrier (SaveBarrier)
 
 data EngineEnv = EngineEnv
   { engineConfig        ∷ EngineConfig
@@ -260,6 +261,9 @@ data EngineEnv = EngineEnv
     --   running so the player can still interact while paused. Set via
     --   `engine.setPaused` from Lua.
   , gameTimeRef        ∷ IORef Double
+  , saveBarrierRef     ∷ SaveBarrier
+    -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
+    -- and synchronization state, never part of 'SaveData'.
     -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
     --   only when `enginePausedRef` is False. All gameplay timestamps
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,

@@ -24,6 +24,7 @@ import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Combat.Types (CombatCommand(..))
@@ -85,7 +86,12 @@ combatLoop env stateRef tick = do
                 -- out while the player has the game stopped.
                 paused ← readIORef (enginePausedRef env)
                 next ← if paused
-                    then pure tick      -- preserve counter; no work
+                    then do
+                        -- A save boundary drains accepted combat commands
+                        -- before acknowledging; ordinary pause retains the
+                        -- historical no-work behaviour.
+                        acknowledgeCurrent (saveBarrierRef env) SaveCombat
+                        pure tick
                     else do
                         processAllCommands env
                         let next = (tick + 1) `mod` woundsTickEvery

@@ -17,6 +17,7 @@ import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, catch, finally)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
@@ -95,6 +96,7 @@ simLoop env stateRef simStateRef = do
               (do
                 -- Process all pending commands
                 processSimCommands env logger simStateRef
+                acknowledgeCurrent (saveBarrierRef env) SaveSimulation
 
                 ss ← readIORef simStateRef
 

@@ -20,6 +20,7 @@ import Unit.Types (UnitManager(..), unitsOnPage)
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Thread.Helpers (unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
+import Engine.Save.Barrier (finishSave, failSave, readSaveStatus, ssRequestId)
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
@@ -44,8 +45,10 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
         primaryId = pageId
     case lookup primaryId (wmWorlds mgr) of
         Nothing →
-            logWarn logger CatWorld $
-                "World not found for save: " <> unWorldPageId primaryId
+            do
+                let err = "World not found for save: " <> unWorldPageId primaryId
+                logWarn logger CatWorld err
+                failTransaction env err
         Just primaryWs → do
             -- Auto-pause BEFORE reading state so the snapshot
             -- captures pause = True (DF convention — saved worlds
@@ -74,8 +77,10 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             primaryIdentity ← readIORef (wsIdentityRef primaryWs)
             case mActiveParams of
                 Nothing →
-                    logWarn logger CatWorld
-                        "Cannot save: visible world has no gen params"
+                    do
+                        let err = "Cannot save: visible world has no gen params"
+                        logWarn logger CatWorld err
+                        failTransaction env err
                 Just activeParams → do
                     -- #216: snapshot EVERY live page in wmWorlds, not just
                     -- the active one. A page with no gen params (e.g. an
@@ -205,12 +210,24 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                     result ← saveWorld saveName sd
                     case result of
                         Right () → do
+                            completeTransaction env
                             logInfo logger CatWorld $
                                 "World saved successfully: " <> saveName
                             emitEvent env "save_load" "World.Save" $
                                 "Game saved: " <> saveName
                         Left err → do
+                            failTransaction env err
                             logError logger CatWorld $
                                 "Failed to save world: " <> err
                             emitEvent env "save_load" "World.Save" $
                                 "Save failed: " <> err
+
+completeTransaction ∷ EngineEnv → IO ()
+completeTransaction env = do
+    current ← readSaveStatus (saveBarrierRef env)
+    forM_ current $ \s → finishSave (saveBarrierRef env) (ssRequestId s)
+
+failTransaction ∷ EngineEnv → Text → IO ()
+failTransaction env err = do
+    current ← readSaveStatus (saveBarrierRef env)
+    forM_ current $ \s → failSave (saveBarrierRef env) (ssRequestId s) err

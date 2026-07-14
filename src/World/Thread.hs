@@ -20,6 +20,7 @@ import World.Thread.Cursor (pollCursorInfo)
 import World.Thread.Time (tickWorldTime)
 import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent)
 
 -- * Start World Thread
 
@@ -67,6 +68,7 @@ worldLoop env stateRef lastTimeRef = do
                 writeIORef lastTimeRef now
 
                 processAllCommands env logger
+                acknowledgeCurrent (saveBarrierRef env) SaveWorld
 
                 -- Drain initial chunk queues (progressive loading)
                 drainInitQueues env logger
