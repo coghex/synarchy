@@ -135,7 +135,7 @@ buildingFindStationFn env = do
             Lua.pushnil
             return 1
         Just opBS → do
-            let op = TE.decodeUtf8 opBS
+            let op = TE.decodeUtf8Lenient opBS
                 mFrom = case (gxArg, gyArg) of
                     (Just x, Just y) → Just (fromIntegral x ∷ Int,
                                              fromIntegral y ∷ Int)

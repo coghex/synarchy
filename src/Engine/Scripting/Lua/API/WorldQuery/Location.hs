@@ -45,7 +45,7 @@ worldListPlacedLocationsFn env = do
     mPage ← Lua.tostring 1
     (mParams, defs) ← Lua.liftIO $ do
         mWs ← case mPage of
-            Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+            Just pidBS → worldStateByPage env (TE.decodeUtf8Lenient pidBS)
             Nothing    → activeWorldState env
         mp ← case mWs of
             Just ws → readIORef (wsGenParamsRef ws)
@@ -111,7 +111,7 @@ worldHasSpawnedLocationContentsFn env = do
         (Just gx, Just gy) → do
             spawned ← Lua.liftIO $ do
                 mWs ← case pageA of
-                    Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+                    Just pidBS → worldStateByPage env (TE.decodeUtf8Lenient pidBS)
                     Nothing    → activeWorldState env
                 case mWs of
                     Nothing → pure False
@@ -146,7 +146,7 @@ worldHasStampedLocationFn env = do
         (Just gx, Just gy) → do
             stamped ← Lua.liftIO $ do
                 mWs ← case pageA of
-                    Just pidBS → worldStateByPage env (TE.decodeUtf8 pidBS)
+                    Just pidBS → worldStateByPage env (TE.decodeUtf8Lenient pidBS)
                     Nothing    → activeWorldState env
                 case mWs of
                     Nothing → pure False

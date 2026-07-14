@@ -147,17 +147,30 @@ injectAndSettle env ls stateRef timeoutMicros evs = do
     primaryOk ← injectEvents (inputBarrierNextRef env) (inputBarrierRef env)
                               (inputQueue env) timeoutMicros evs
     settled ← settle env ls stateRef timeoutMicros
-    pure $ if not primaryOk then SettlePrimaryTimedOut
+    pure $ if not primaryOk then SettleIndeterminateTimedOut
            else if settled then SettleOk
            else SettleFenceTimedOut
 
 -- | 'injectAndSettle's outcome — kept distinct from a plain 'Bool' so
---   'ackInject' can tell "nothing happened, safe to retry" apart from
---   "the action DID execute, only its trailing cleanup didn't settle
---   in time" (#727 review): folding both into one failure would let a
---   caller that retries on error double-fire an already-executed
---   click/key.
-data SettleResult = SettleOk | SettlePrimaryTimedOut | SettleFenceTimedOut
+--   'ackInject' can report a genuine success ('SettleOk') separately
+--   from a timeout. NEITHER timeout constructor means "nothing
+--   happened, safe to retry" (#773): 'injectEvents' (see
+--   "Engine.Input.Inject") enqueues the whole synthesized sequence
+--   AND its trailing barrier as one FIFO batch before it ever starts
+--   waiting, so once that wait begins the events are irretractably
+--   queued. A timeout on that wait ('SettleIndeterminateTimedOut')
+--   therefore cannot prove non-execution — the action may already
+--   have run while only the barrier itself is still pending, or it
+--   may run later when a stalled input thread resumes; the two are
+--   indistinguishable from here (both present as the same barrier
+--   wait timing out), so this single constructor covers both physical
+--   causes rather than pretending to tell them apart. A caller that
+--   retries on this result risks double-firing an already-executed
+--   click/key, exactly like retrying on 'SettleFenceTimedOut' would —
+--   the one case that IS determinate about the primary action (it
+--   definitely ran; only its deferred modifier-release cleanup didn't
+--   settle in time), which is why its message differs.
+data SettleResult = SettleOk | SettleIndeterminateTimedOut | SettleFenceTimedOut
     deriving (Eq, Show)
 
 -- | Inject a prebuilt sequence and push the ack table.
@@ -168,10 +181,12 @@ ackInject env ls stateRef evs = do
         injectAndSettle env ls stateRef consumeTimeoutMicros evs
     case result of
         SettleOk → pushOk
-        SettlePrimaryTimedOut → pushError $
+        SettleIndeterminateTimedOut → pushError $
             "input: timed out waiting for the input thread to consume "
-            <> "the synthesized events — is the engine's input thread "
-            <> "running?"
+            <> "the synthesized events — the action may have already "
+            <> "run, or may still run later once a stalled input "
+            <> "thread catches up; do NOT retry this action "
+            <> "automatically — is the engine's input thread running?"
         SettleFenceTimedOut → pushError $
             "input: the action itself completed, but its deferred "
             <> "modifier release did not settle in time — do NOT retry "
@@ -215,10 +230,10 @@ readButtonArg idx = do
             mbs ← Lua.tostring idx
             case mbs of
                 Nothing → pure (Left "input: button must be a string")
-                Just bs → case resolveButton (TE.decodeUtf8 bs) of
+                Just bs → case resolveButton (TE.decodeUtf8Lenient bs) of
                     Just b  → pure (Right b)
                     Nothing → pure . Left $
-                        "input: unknown button \"" <> TE.decodeUtf8 bs
+                        "input: unknown button \"" <> TE.decodeUtf8Lenient bs
                         <> "\" (expected left|right|middle)"
 
 -- | Optional mods argument: absent/nil → no modifiers; otherwise a
@@ -258,7 +273,7 @@ readStringList idx = do
                                 else return Nothing
                         Lua.pop 1
                         case ms of
-                            Just bs → go (i + 1) (TE.decodeUtf8 bs : acc)
+                            Just bs → go (i + 1) (TE.decodeUtf8Lenient bs : acc)
                             Nothing → return Nothing
             go (1 ∷ Lua.Integer) []
 
@@ -329,7 +344,7 @@ keyVerb buildSeq verbName env ls stateRef = headlessGuard env $ do
         Nothing → pushError $ "input." <> verbName
             <> ": key name (string) required"
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             case (resolveKeyName name, eMods) of
                 (Just k, Right mm) → ackInject env ls stateRef (buildSeq k mm)
                 (Nothing, _) → pushError $
@@ -359,7 +374,7 @@ inputTypeFn env ls stateRef = headlessGuard env $ do
     mText ← Lua.tostring 1
     case mText of
         Nothing → pushError "input.type: text (string) required"
-        Just bs → ackInject env ls stateRef (typeSequence (TE.decodeUtf8 bs))
+        Just bs → ackInject env ls stateRef (typeSequence (TE.decodeUtf8Lenient bs))
 
 pushOk ∷ Lua.LuaE Lua.Exception Lua.NumResults
 pushOk = do

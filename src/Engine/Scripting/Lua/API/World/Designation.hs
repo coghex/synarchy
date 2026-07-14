@@ -31,7 +31,7 @@ worldSetMineAnchorFn env = do
     gyArg     ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetMineAnchor pageId (round gx) (round gy)
         _ → pure ()
@@ -43,7 +43,7 @@ worldClearMineAnchorFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $ WorldClearMineAnchor pageId
         _ → pure ()
     return 0
@@ -59,7 +59,7 @@ worldDesignateMineFn env = do
     y2Arg ← Lua.tonumber 5
     case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg) of
         (Just pageIdBS, Just x1, Just y1, Just x2, Just y2) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldDesignateMine pageId (round x1) (round y1)
                                           (round x2) (round y2)
@@ -74,7 +74,7 @@ worldSetMineDesignateTextureFn env = do
     textureHandleArg ← Lua.tointeger 2
     case (pageIdArg, textureHandleArg) of
         (Just pageIdBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetMineDesignateTexture pageId texHandle
@@ -92,7 +92,7 @@ worldNearestMineDesignationFn env = do
     yArg ← Lua.tonumber 3
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just x, Just y) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 ux = realToFrac x ∷ Float
                 uy = realToFrac y ∷ Float
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -135,7 +135,7 @@ worldGetMineDesignationAtFn env = do
     gyArg ← Lua.tonumber 3
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
@@ -161,7 +161,7 @@ worldGetMineDesignationCountFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do

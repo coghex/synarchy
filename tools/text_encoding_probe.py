@@ -1,26 +1,39 @@
 #!/usr/bin/env python3
-"""Headless probe for issue #618: the four `TE.decodeUtf8` call sites in
-`Engine.Scripting.Lua.API.Text` (`loadFontFn`, `spawnTextFn`, `setTextFn`,
-`getTextWidthFn`) must not throw on a byte string that isn't valid UTF-8.
+"""Headless probe for issues #618 and #665: `TE.decodeUtf8` call sites
+across `Engine.Scripting.Lua` must not throw on a byte string that isn't
+valid UTF-8.
 
 `"caf\\195"` is Lua's decimal escape for the raw byte 0xC3 — a truncated
 UTF-8 lead byte with no continuation byte, exactly the shape produced by
 the byte-vs-codepoint bug in the five `truncateToWidth` ellipsis helpers
-this same issue fixes (`scripts/popup.lua`, `scripts/event_log.lua`,
+#618 fixes (`scripts/popup.lua`, `scripts/event_log.lua`,
 `scripts/unit_info_v2_inventory.lua`, `scripts/item_contents_panel.lua`,
 `scripts/cargo_inventory_panel.lua`).
 
-Note this is a NARROWER regression than #622's `lua_strict_msg_probe.py`,
-which already established that `engine.setText` with malformed UTF-8 no
-longer crashes the whole engine process (Strict/StrictData on
-`LuaToEngineMsg` forces the field inside `registerLuaFunction`'s catch
-guard). That fix alone still leaves `setTextFn`'s `TE.decodeUtf8` throwing
-a *caught* Lua error every single call — which is what this issue's
-requirement 1 (switch to `TE.decodeUtf8Lenient`, the codebase's established
-convention per #437/PR #492) actually eliminates. This probe asserts the
-stronger, issue-#618-specific property: no error at all, and the malformed
-text is actually stored (round-trips through `engine.getText`) rather than
-silently dropped when the call errors out before `Q.writeQueue` runs.
+Note the Text-API case is a NARROWER regression than #622's
+`lua_strict_msg_probe.py`, which already established that `engine.setText`
+with malformed UTF-8 no longer crashes the whole engine process (Strict/
+StrictData on `LuaToEngineMsg` forces the field inside
+`registerLuaFunction`'s catch guard). That fix alone still leaves
+`setTextFn`'s `TE.decodeUtf8` throwing a *caught* Lua error every single
+call — which is what #618's fix (switch to `TE.decodeUtf8Lenient`, the
+codebase's established convention per #437/PR #492) actually eliminates.
+The Text-API case below asserts the stronger, issue-#618-specific
+property: no error at all, and the malformed text is actually stored
+(round-trips through `engine.getText`) rather than silently dropped when
+the call errors out before `Q.writeQueue` runs.
+
+#665 completed the same sweep across every remaining strict
+`TE.decodeUtf8` call site under `src/Engine/Scripting/Lua/`, covering both
+Lua-argument boundaries and other byte sources in that tree. The
+`world.show` case below is the representative non-Text-API boundary for
+that broader sweep (`Engine.Scripting.Lua.API.World.Lifecycle.worldShowFn`,
+registered as Lua's `world.show`): it asserts malformed input no longer
+raises a `Haskell exception in show: ...` guard error and instead proceeds
+to `World.Thread.Command.UI.handleWorldShowCommand`'s normal semantic
+handling (an unrecognized page id just logs a warning and is a no-op —
+see `World/Thread/Command/UI.hs`), with the debug console still
+responsive afterward.
 
 Usage: python3 tools/text_encoding_probe.py [--port 9618]
 Exit 0 = pass.
@@ -77,6 +90,27 @@ def main() -> int:
             ok = False
         elif not got.startswith("caf"):
             print(f"FAIL: stored text lost its well-formed prefix: {got!r}")
+            ok = False
+
+        # world.show is the representative non-Text-API boundary (#665):
+        # a valid-but-nonexistent page id is the control case (requirement
+        # 4) -- it must reach handleWorldShowCommand's normal semantic
+        # no-op rather than error on decode.
+        result = send(port, 'world.show("no_such_page"); return "no_error"')
+        print(f"world.show(well-formed) result: {result!r}")
+        if result != "no_error":
+            print("FAIL: well-formed world.show raised an error")
+            ok = False
+
+        # The malformed repro, same truncated-byte shape as above, against
+        # a non-Text API. Pre-fix this raises "Haskell exception in show:
+        # ...bad UTF-8..." (Engine.Scripting.Lua.API.Internal's guard);
+        # post-fix it must decode leniently and proceed to
+        # handleWorldShowCommand's ordinary "nonexistent world" no-op.
+        result = send(port, 'world.show("caf\\195"); return "no_error"')
+        print(f"world.show(malformed) result: {result!r}")
+        if result != "no_error":
+            print(f"FAIL: malformed world.show raised an error: {result!r}")
             ok = False
 
         # The engine must still be alive and answering afterward, matching

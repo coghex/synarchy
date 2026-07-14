@@ -136,7 +136,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                            "the unsupported promotion; #772 demoted it)"),
     "resource_root": (TARGETED, "narrow #636 resource-root launch-contract regression "
                                 "(also runs its own small worldgen dump)"),
-    "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression"),
+    "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression, "
+                                "extended by #665 with a representative non-Text API "
+                                "(world.show) boundary from the same decodeUtf8Lenient sweep"),
     "blood_decal": (TARGETED, "narrow #604/#606 blood decal texture reuse/eviction/render regression"),
     "blood_impact": (TARGETED, "narrow #607 wound-to-impact-blood mapping regression"),
     "circadian": (TARGETED, "narrow #611 circadian urge + sleep_pressure drain regression"),

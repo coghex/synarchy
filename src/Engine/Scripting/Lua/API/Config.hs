@@ -63,7 +63,7 @@ setVideoConfigFn env = do
     case (widthArg, heightArg, fullscreenArg, uiScaleArg, vsyncArg,
          framelimitArg, msaaArg, brightnessArg, pixelSnapArg, textureFilterArg) of
         (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m, Just b, ps, Just tf) → do
-            let wm = case windowModeFromText (TE.decodeUtf8 wmBS) of
+            let wm = case windowModeFromText (TE.decodeUtf8Lenient wmBS) of
                         Just mode → mode
                         Nothing   → Windowed
             Lua.liftIO $
@@ -79,7 +79,7 @@ setVideoConfigFn env = do
                       , vcMSAA = fromIntegral m
                       , vcBrightness = fromIntegral b
                       , vcPixelSnap = ps
-                      , vcTextureFilter = case textureFilterFromText (TE.decodeUtf8 tf) of
+                      , vcTextureFilter = case textureFilterFromText (TE.decodeUtf8Lenient tf) of
                                           Just filter → filter
                                           Nothing     → vcTextureFilter oldConfig
                       }, ())
@@ -168,7 +168,7 @@ setWindowModeFn env = do
     
     case modeArg of
         Just modeBS → do
-            let modeText = TE.decodeUtf8 modeBS
+            let modeText = TE.decodeUtf8Lenient modeBS
             case windowModeFromText modeText of
                 Just wm → Lua.liftIO $ do
                     let lteq = luaToEngineQueue env
@@ -230,7 +230,7 @@ setTextureFilterFn env = do
     filterArg ← Lua.tostring 1
     case filterArg of
         Just filterBS → do
-            let filterText = TE.decodeUtf8 filterBS
+            let filterText = TE.decodeUtf8Lenient filterBS
             case textureFilterFromText filterText of
                 Just tf → Lua.liftIO $ do
                     writeIORef (textureFilterRef env) tf

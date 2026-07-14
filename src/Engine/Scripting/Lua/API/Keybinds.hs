@@ -104,7 +104,7 @@ readKeyList idx = do
                                                   else return Nothing
                       Lua.pop 1
                       case ms of
-                          Just bs → go (i + 1) (TE.decodeUtf8 bs : acc)
+                          Just bs → go (i + 1) (TE.decodeUtf8Lenient bs : acc)
                           Nothing → return Nothing
             go 1 []
 
@@ -126,9 +126,9 @@ setActionKeysFn env = do
     mkeys ← readKeyList 2
     case (actionArg, mkeys) of
         (Just actionBS, Just keys)
-          | isEditableAction (TE.decodeUtf8 actionBS)
+          | isEditableAction (TE.decodeUtf8Lenient actionBS)
           , all isBindableKey keys → do
-            let action = TE.decodeUtf8 actionBS
+            let action = TE.decodeUtf8Lenient actionBS
             Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
                 (Map.insert action keys b, ())
             Lua.pushboolean True
@@ -145,10 +145,10 @@ addActionKeyFn env = do
     keyArg ← Lua.tostring 2
     case (actionArg, keyArg) of
         (Just actionBS, Just keyBS)
-          | isEditableAction (TE.decodeUtf8 actionBS)
-          , isBindableKey (TE.decodeUtf8 keyBS) → do
-            let action = TE.decodeUtf8 actionBS
-                key    = TE.decodeUtf8 keyBS
+          | isEditableAction (TE.decodeUtf8Lenient actionBS)
+          , isBindableKey (TE.decodeUtf8Lenient keyBS) → do
+            let action = TE.decodeUtf8Lenient actionBS
+                key    = TE.decodeUtf8Lenient keyBS
             Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
                 let cur = Map.findWithDefault [] action b
                     new = if key `elem` cur then cur else cur ++ [key]
@@ -168,9 +168,9 @@ removeActionKeyFn env = do
     keyArg ← Lua.tostring 2
     case (actionArg, keyArg) of
         (Just actionBS, Just keyBS)
-          | isEditableAction (TE.decodeUtf8 actionBS) → do
-            let action = TE.decodeUtf8 actionBS
-                key    = TE.decodeUtf8 keyBS
+          | isEditableAction (TE.decodeUtf8Lenient actionBS) → do
+            let action = TE.decodeUtf8Lenient actionBS
+                key    = TE.decodeUtf8Lenient keyBS
             changed ← Lua.liftIO $ atomicModifyIORef' (keyBindingsRef env) $ \b →
                 case Map.lookup action b of
                     Just cur | key `elem` cur →
@@ -196,9 +196,9 @@ removeActionKeysMatchingFn env = do
     keyArg ← Lua.tostring 2
     case (actionArg, keyArg) of
         (Just actionBS, Just keyBS)
-          | isEditableAction (TE.decodeUtf8 actionBS) → do
-            let action = TE.decodeUtf8 actionBS
-                remove = parseKeyName (TE.decodeUtf8 keyBS)
+          | isEditableAction (TE.decodeUtf8Lenient actionBS) → do
+            let action = TE.decodeUtf8Lenient actionBS
+                remove = parseKeyName (TE.decodeUtf8Lenient keyBS)
                 -- Rewrite one stored key into the name(s) that survive the
                 -- subtraction (empty = dropped; unchanged length = kept as
                 -- its original name; otherwise re-named from the remainder).
@@ -274,8 +274,8 @@ keyMatchesActionFn env = do
     actionArg ← Lua.tostring 2
     case (keyArg, actionArg) of
         (Just keyBS, Just actionBS) → do
-            let name   = TE.decodeUtf8 keyBS
-                action = TE.decodeUtf8 actionBS
+            let name   = TE.decodeUtf8Lenient keyBS
+                action = TE.decodeUtf8Lenient actionBS
             matches ← Lua.liftIO $ do
                 bindings ← readIORef (keyBindingsRef env)
                 mKey     ← readIORef (currentKeyDownRef env)

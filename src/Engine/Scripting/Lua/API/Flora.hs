@@ -28,7 +28,7 @@ floraRegisterFn env = do
 
     case (nameArg, texArg) of
         (Just nameBS, Just texInt) → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
                 baseTex = TextureHandle (fromIntegral texInt)
                 catRef = floraCatalogRef env
 
@@ -57,7 +57,7 @@ floraSetLifecycleFn env = do
     case (fidArg, typeArg) of
         (Just fidInt, Just typeBS) → do
             let fid = FloraId (fromIntegral fidInt)
-                typeText = TE.decodeUtf8 typeBS
+                typeText = TE.decodeUtf8Lenient typeBS
                 catRef = floraCatalogRef env
                 lifecycle = case typeText of
                     "perennial" →
@@ -90,7 +90,7 @@ floraAddPhaseFn env = do
     case (fidArg, tagArg, texArg) of
         (Just fidInt, Just tagBS, Just texInt) → do
             let fid = FloraId (fromIntegral fidInt)
-                tagText = TE.decodeUtf8 tagBS
+                tagText = TE.decodeUtf8Lenient tagBS
                 tex = TextureHandle (fromIntegral texInt)
                 catRef = floraCatalogRef env
                 age = case ageArg of
@@ -127,7 +127,7 @@ floraAddCycleStageFn env = do
     case (fidArg, tagArg, dayArg, texArg) of
         (Just fidInt, Just tagBS, Just dayInt, Just texInt) → do
             let fid = FloraId (fromIntegral fidInt)
-                tagText = TE.decodeUtf8 tagBS
+                tagText = TE.decodeUtf8Lenient tagBS
                 tex = TextureHandle (fromIntegral texInt)
                 day = fromIntegral dayInt
                 catRef = floraCatalogRef env
@@ -162,8 +162,8 @@ floraAddCycleOverrideFn env = do
     case (fidArg, phaseArg, cycleArg, texArg) of
         (Just fidInt, Just phaseBS, Just cycleBS, Just texInt) → do
             let fid = FloraId (fromIntegral fidInt)
-                phaseText = TE.decodeUtf8 phaseBS
-                cycleText = TE.decodeUtf8 cycleBS
+                phaseText = TE.decodeUtf8Lenient phaseBS
+                cycleText = TE.decodeUtf8Lenient cycleBS
                 tex = TextureHandle (fromIntegral texInt)
                 catRef = floraCatalogRef env
 
@@ -201,7 +201,7 @@ readSoilNames = do
                   _ ← Lua.rawgeti 18 i
                   ms ← Lua.tostring (-1)
                   Lua.pop 1
-                  go (i + 1) (maybe acc (\bs → TE.decodeUtf8 bs : acc) ms)
+                  go (i + 1) (maybe acc (\bs → TE.decodeUtf8Lenient bs : acc) ms)
         go (1 ∷ Lua.Integer) []
 
 -- | flora.registerForWorldGen(fid, category, minTemp, maxTemp,
@@ -239,7 +239,7 @@ floraRegisterForWorldGenFn env = do
         (Just fidInt, Just catBS) → do
             registry ← Lua.liftIO $ readIORef (materialRegistryRef env)
             let fid = FloraId (fromIntegral fidInt)
-                category = TE.decodeUtf8 catBS
+                category = TE.decodeUtf8Lenient catBS
                 catRef = floraCatalogRef env
                 minTemp  = luaNum minTempArg (-40.0)
                 maxTemp  = luaNum maxTempArg 50.0

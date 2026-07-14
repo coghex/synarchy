@@ -51,8 +51,8 @@ equipmentEquipFn env = do
     case (uidArg, slotArg, itemArg) of
         (Just n, Just slotBS, Just itemBS) → do
             let uid    = UnitId (fromIntegral n)
-                slotId = TE.decodeUtf8 slotBS
-                itemNm = TE.decodeUtf8 itemBS
+                slotId = TE.decodeUtf8Lenient slotBS
+                itemNm = TE.decodeUtf8Lenient itemBS
                 wantId = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
                 itemMgr ← readIORef (itemManagerRef env)
@@ -128,7 +128,7 @@ equipmentUnequipFn env = do
     case (uidArg, slotArg) of
         (Just n, Just slotBS) → do
             let uid    = UnitId (fromIntegral n)
-                slotId = TE.decodeUtf8 slotBS
+                slotId = TE.decodeUtf8Lenient slotBS
             ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)

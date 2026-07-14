@@ -92,7 +92,7 @@ powerPlaceNodeFn env = do
                 Just (role, param) → do
                     mTarget ← case pageArg of
                         Just pidBS → do
-                            let pid = WorldPageId (TE.decodeUtf8 pidBS)
+                            let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
                             wm ← readIORef (worldManagerRef env)
                             pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                         Nothing → activeWorldPage env
@@ -430,7 +430,7 @@ powerIsStationPoweredForRecipeFn env = do
     ok ← case (bidArg, ridArg) of
         (Just b, Just ridBS) → Lua.liftIO $ do
             rm ← readIORef (recipeManagerRef env)
-            let rid     = TE.decodeUtf8 ridBS
+            let rid     = TE.decodeUtf8Lenient ridBS
                 drawW   = maybe 0 rdPowerDraw (lookupRecipe rid rm)
                 mBillId = BillId . fromIntegral ⊚ billArg
             isRecipePoweredAt env mBillId (BuildingId (fromIntegral b)) drawW

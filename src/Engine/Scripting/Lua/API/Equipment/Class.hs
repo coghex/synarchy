@@ -49,7 +49,7 @@ loadEquipmentYamlFn env backendState = do
             Lua.pushnumber 0
             return 1
         Just pathBS → do
-            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 classes ← loadEquipmentYaml logger filePath
@@ -112,7 +112,7 @@ equipmentGetClassFn env = do
             Lua.pushnil
             return 1
         Just nameBS → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             mClass ← Lua.liftIO $ do
                 mgr ← readIORef (equipmentClassManagerRef env)
                 pure (lookupEquipmentClass name mgr)

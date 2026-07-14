@@ -41,7 +41,7 @@ uiSetTooltipFn env = do
     case (elemArg, textArg) of
         (Just e, Just txtBS) → do
             let elemH  = ElementHandle (fromIntegral e)
-                txt    = TE.decodeUtf8 txtBS
+                txt    = TE.decodeUtf8Lenient txtBS
                 content = TooltipContent
                   { ttText     = Just txt
                   , ttHint     = Nothing
@@ -290,7 +290,7 @@ getOptString tbl name = do
     _ ← Lua.getfield tbl name
     ms ← Lua.tostring Lua.top
     Lua.pop 1
-    return (TE.decodeUtf8 <$> ms)
+    return (TE.decodeUtf8Lenient <$> ms)
 
 ------------------------------------------------------------
 -- Lock control

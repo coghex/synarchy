@@ -34,7 +34,7 @@ worldMarkLocationContentsSpawnedFn env = do
         (Just gx, Just gy) → do
             Lua.liftIO $ do
                 mPid ← case pageArg of
-                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8 pidBS)))
+                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8Lenient pidBS)))
                     Nothing    → (fmap fst) <$> activeWorldPage env
                 case mPid of
                     Just pid → Q.writeQueue (worldQueue env) $
@@ -57,7 +57,7 @@ worldMarkLocationStampedFn env = do
         (Just gx, Just gy) → do
             Lua.liftIO $ do
                 mPid ← case pageArg of
-                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8 pidBS)))
+                    Just pidBS → pure (Just (WorldPageId (TE.decodeUtf8Lenient pidBS)))
                     Nothing    → (fmap fst) <$> activeWorldPage env
                 case mPid of
                     Just pid → Q.writeQueue (worldQueue env) $
@@ -89,12 +89,12 @@ worldAddTileFn env = do
                         Just (MaterialId (round n))
                     (_, Just nameBS) →
                         materialIdByName registry
-                            (TE.decodeUtf8 nameBS)
+                            (TE.decodeUtf8Lenient nameBS)
                     _ → Nothing
             case mMat of
                 Nothing → Lua.pushboolean False >> return 1
                 Just mat → do
-                    let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                    let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     Lua.liftIO $ Q.writeQueue (worldQueue env) $
                         WorldAddTile pageId (round gx) (round gy) mat
                     Lua.pushboolean True
@@ -122,7 +122,7 @@ worldDigTileFn env = do
     case (pageIdArg, gxArg, gyArg, uxArg, uyArg, amtArg) of
         (Just pageIdBS, Just gx, Just gy, Just ux, Just uy, Just amt) →
             Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     skill = case skillArg of
                         Just (Lua.Number s) → realToFrac s
                         _                   → 0
@@ -148,7 +148,7 @@ worldDeleteTileFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → do
             Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 Q.writeQueue (worldQueue env)
                     (WorldDeleteTile pageId (fromIntegral gx) (fromIntegral gy))
             Lua.pushboolean True
@@ -172,14 +172,14 @@ worldSetFluidTileFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → do
             let fluidType = case kindArg of
-                    Just kBS → case TE.decodeUtf8 kBS of
+                    Just kBS → case TE.decodeUtf8Lenient kBS of
                         "lava"  → Lava
                         "river" → River
                         "ocean" → Ocean
                         _       → Lake     -- "water" / default
                     Nothing → Lake
             Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 Q.writeQueue (worldQueue env) $
                     WorldSetFluidTile pageId
                         (fromIntegral gx) (fromIntegral gy) fluidType
@@ -212,14 +212,14 @@ worldSetCellFn env = do
             let mMat = case (matNum, matName) of
                     (Just (Lua.Number n), _) | n ≥ 0 ∧ n ≤ 255 →
                         Just (MaterialId (round n))
-                    (_, Just nameBS) → case TE.decodeUtf8 nameBS of
+                    (_, Just nameBS) → case TE.decodeUtf8Lenient nameBS of
                         "air" → Just (MaterialId 0)
                         name  → materialIdByName registry name
                     _ → Nothing
             case mMat of
                 Nothing → Lua.pushboolean False >> return 1
                 Just mat → do
-                    let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                    let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     Lua.liftIO $ Q.writeQueue (worldQueue env) $
                         WorldSetCell pageId
                             (fromIntegral gx) (fromIntegral gy)
@@ -244,7 +244,7 @@ worldSetSlopeFn env = do
     case (pageIdArg, gxArg, gyArg, zArg, bitsArg) of
         (Just pageIdBS, Just gx, Just gy, Just z, Just bits) → do
             Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 Q.writeQueue (worldQueue env) $
                     WorldSetSlope pageId
                         (fromIntegral gx) (fromIntegral gy)
@@ -273,11 +273,11 @@ worldPlantRowCropAtFn env = do
     case (pageIdArg, gxArg, gyArg, cropArg) of
         (Just pageIdBS, Just gx, Just gy, Just cropBS) → do
             Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 Q.writeQueue (worldQueue env) $
                     WorldPlantRowCropAt pageId
                         (fromIntegral gx) (fromIntegral gy)
-                        (TE.decodeUtf8 cropBS)
+                        (TE.decodeUtf8Lenient cropBS)
             Lua.pushboolean True
             return 1
         _ → do
@@ -301,7 +301,7 @@ worldSetVegFn env = do
     case (pageIdArg, gxArg, gyArg, zArg, vegIdArg) of
         (Just pageIdBS, Just gx, Just gy, Just z, Just vegId) → do
             Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 Q.writeQueue (worldQueue env) $
                     WorldSetVeg pageId
                         (fromIntegral gx) (fromIntegral gy)

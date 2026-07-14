@@ -51,7 +51,7 @@ combatAttackFn env = do
     reachArg ← Lua.tonumber 4
     speedArg ← Lua.tonumber 5
     let mode = case modeArg of
-            Just bs | TE.decodeUtf8 bs == ("heavy" ∷ Text) → Heavy
+            Just bs | TE.decodeUtf8Lenient bs == ("heavy" ∷ Text) → Heavy
             _                                              → Quick
         reachBonus = case reachArg of
             Just (Lua.Number v) → realToFrac v   -- lunge strike-reach (m)
@@ -84,7 +84,7 @@ combatEmitDeathFn env = do
     case tArg of
         Just t → do
             gt ← Lua.liftIO $ readIORef (gameTimeRef env)
-            let cause = maybe "their wounds" TE.decodeUtf8 causeArg
+            let cause = maybe "their wounds" TE.decodeUtf8Lenient causeArg
                 ev = CombatEvent
                     { ceTs       = gt
                     , ceKind     = "death"
@@ -177,7 +177,7 @@ injuryEmitFn env = do
     case (vArg, kindArg) of
         (Just v, Just kindBS) → do
             gt ← Lua.liftIO $ readIORef (gameTimeRef env)
-            let opt key = maybe [] (\bs → [(key, TE.decodeUtf8 bs)])
+            let opt key = maybe [] (\bs → [(key, TE.decodeUtf8Lenient bs)])
                 payload = HM.fromList $ concat
                     [ opt "cause"     causeArg
                     , opt "part"      partArg
@@ -188,7 +188,7 @@ injuryEmitFn env = do
                     ]
                 ev = CombatEvent
                     { ceTs       = gt
-                    , ceKind     = TE.decodeUtf8 kindBS
+                    , ceKind     = TE.decodeUtf8Lenient kindBS
                     , ceAttacker = Nothing
                     , ceTarget   = Just (fromIntegral v)
                     , cePayload  = payload
@@ -217,13 +217,13 @@ thoughtEmitFn env = do
     case (uArg, textArg) of
         (Just u, Just textBS) → do
             gt ← Lua.liftIO $ readIORef (gameTimeRef env)
-            let category = maybe "random" TE.decodeUtf8 catArg
+            let category = maybe "random" TE.decodeUtf8Lenient catArg
                 ev = CombatEvent
                     { ceTs       = gt
                     , ceKind     = category
                     , ceAttacker = Nothing
                     , ceTarget   = Just (fromIntegral u)
-                    , cePayload  = HM.singleton "text" (TE.decodeUtf8 textBS)
+                    , cePayload  = HM.singleton "text" (TE.decodeUtf8Lenient textBS)
                     }
             Lua.liftIO $ atomicModifyIORef' (thoughtEventsRef env) $ \buf →
                 (buf Seq.|> ev, ())

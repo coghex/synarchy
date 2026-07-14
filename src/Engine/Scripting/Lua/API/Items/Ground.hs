@@ -78,9 +78,9 @@ itemSpawnGroundFn env = do
     mTemp ← getMaybeProp "temp"
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
-            let name = TE.decodeUtf8 nameBS
+            let name = TE.decodeUtf8Lenient nameBS
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
-            mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8 <$> pageArg)
+            mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
                     wght ← Lua.liftIO $

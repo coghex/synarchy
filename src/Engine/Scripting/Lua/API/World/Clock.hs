@@ -32,8 +32,8 @@ worldSetTextureFn env = do
 
     case (pageIdArg, textureTypeArg, textureHandleArg) of
         (Just pageIdBS, Just typeBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-                texType = parseTextureType (TE.decodeUtf8 typeBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                texType = parseTextureType (TE.decodeUtf8Lenient typeBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) (WorldSetTexture pageId texType texHandle)
         _ → pure ()
@@ -49,7 +49,7 @@ worldSetCameraFn env = do
 
     case (pageIdArg, xArg, yArg) of
         (Just pageIdBS, Just (Lua.Number x), Just (Lua.Number y)) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env)
                 (WorldSetCamera pageId (realToFrac x) (realToFrac y))
         _ → pure ()
@@ -79,7 +79,7 @@ worldSetTimeFn env = do
 
     case (pageIdArg, hourArg, minuteArg) of
         (Just pageIdBS, Just h, Just m) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env)
                 (WorldSetTime pageId (fromIntegral h) (fromIntegral m))
         _ → pure ()
@@ -97,7 +97,7 @@ worldSetDateFn env = do
 
     case (pageIdArg, yearArg, monthArg, dayArg) of
         (Just pageIdBS, Just y, Just mo, Just d) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env)
                 (WorldSetDate pageId (fromIntegral y) (fromIntegral mo) (fromIntegral d))
         _ → pure ()
@@ -116,7 +116,7 @@ worldGetDateFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
@@ -155,7 +155,7 @@ worldGetSeedFn env = do
     mWs ← Lua.liftIO $ case pageIdArg of
         Just pageIdBS → do
             mgr ← readIORef (worldManagerRef env)
-            pure (lookup (WorldPageId (TE.decodeUtf8 pageIdBS)) (wmWorlds mgr))
+            pure (lookup (WorldPageId (TE.decodeUtf8Lenient pageIdBS)) (wmWorlds mgr))
         Nothing → activeWorldState env
     mParams ← Lua.liftIO $ case mWs of
         Just ws → readIORef (wsGenParamsRef ws)
@@ -175,7 +175,7 @@ worldSetTimeScaleFn env = do
 
     case (pageIdArg, scaleArg) of
         (Just pageIdBS, Just (Lua.Number s)) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (worldQueue env)
                 (WorldSetTimeScale pageId (realToFrac s))
         _ → pure ()
@@ -191,7 +191,7 @@ worldGetTimeScaleFn env = do
     pageIdArg ← Lua.tostring 1
     case pageIdArg of
         Just pageIdBS → do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
                 Just ws → do
@@ -230,8 +230,8 @@ worldSetMapModeFn env = do
 
     case (pageIdArg, modeArg) of
         (Just pageIdBS, Just modeBS) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-                mode = textToMapMode (TE.decodeUtf8 modeBS)
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                mode = textToMapMode (TE.decodeUtf8Lenient modeBS)
             Q.writeQueue (worldQueue env)
                 (WorldSetMapMode pageId mode)
         _ → pure ()
