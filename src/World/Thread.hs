@@ -11,6 +11,7 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.List (partition)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
@@ -20,7 +21,8 @@ import World.Thread.Cursor (pollCursorInfo)
 import World.Thread.Time (tickWorldTime)
 import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent)
+import World.Command.Types (WorldCommand(..))
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 
 -- * Start World Thread
 
@@ -67,15 +69,20 @@ worldLoop env stateRef lastTimeRef = do
                 let dt = now - lastTime ∷ Double
                 writeIORef lastTimeRef now
 
-                processAllCommands env logger
-                acknowledgeCurrent (saveBarrierRef env) SaveWorld
+                locked ← captureLocked (saveBarrierRef env)
+                if locked
+                    then processAuthorizedSave env logger
+                    else do
+                        processAllCommands env logger
+                        acknowledgeCurrent (saveBarrierRef env) SaveWorld
 
                 -- Drain initial chunk queues (progressive loading)
-                drainInitQueues env logger
+                unless locked $ drainInitQueues env logger
 
-                tickWorldTime env (realToFrac dt)
-                updateChunkLoading env logger
-                pollCursorInfo env
+                unless locked $ do
+                    tickWorldTime env (realToFrac dt)
+                    updateChunkLoading env logger
+                    pollCursorInfo env
 
                 _camera ← readIORef (cameraRef env)
                 allQuads ← updateWorldTiles env
@@ -104,3 +111,16 @@ processAllCommands env logger = do
             handleWorldCommand env logger cmd
             processAllCommands env logger
         Nothing → return ()
+
+-- | The capture lock admits only its queued WorldSave command. All other
+-- commands remain ordered for later processing, so they cannot leak into the
+-- snapshot while still allowing the world owner to write it.
+processAuthorizedSave ∷ EngineEnv → LoggerState → IO ()
+processAuthorizedSave env logger = do
+    commands ← Q.flushQueue (worldQueue env)
+    let (saves, deferred) = partition isSave commands
+    forM_ saves $ handleWorldCommand env logger
+    forM_ deferred $ Q.writeQueue (worldQueue env)
+  where
+    isSave (WorldSave _ _ _ _) = True
+    isSave _                   = False
