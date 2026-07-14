@@ -160,6 +160,25 @@ applyEdit (WeSetFluidTile gx gy ft) lc
             , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, renderedSurf)]
             }
 
+applyEdit (WeSetFluidSnapshot gx gy ft surface) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let idx = columnIdx gx gy
+            cell = FluidCell { fcType = ft, fcSurface = surface }
+            renderedSurf = case ft of
+                River → surface
+                _     → max (lcTerrainSurfaceMap lc VU.! idx) surface
+        in lc { lcFluidMap = lcFluidMap lc V.// [(idx, Just cell)]
+              , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, renderedSurf)] }
+
+applyEdit (WeClearFluidSnapshot gx gy) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let idx = columnIdx gx gy
+            terrain = lcTerrainSurfaceMap lc VU.! idx
+        in lc { lcFluidMap = lcFluidMap lc V.// [(idx, Nothing)]
+              , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, terrain)] }
+
 applyEdit (WeSetSlope gx gy z bits) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =

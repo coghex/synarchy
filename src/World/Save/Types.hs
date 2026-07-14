@@ -124,7 +124,11 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 84  -- v84: worldgen-output change (#811) — Tiny(32)/
+currentSaveVersion = 85  -- v85: WorldEdit gains trailing simulation-fluid
+                         -- snapshot constructors, so a coordinated save can
+                         -- replay pre-boundary World → Sim → World fluid
+                         -- writebacks while the loaded game remains paused.
+                         -- v84: worldgen-output change (#811) — Tiny(32)/
                          --      Small(64) worlds now get the inland-origin
                          --      river-source extension (issue #221) instead
                          --      of the old worldSize>=128 gate, guarded by

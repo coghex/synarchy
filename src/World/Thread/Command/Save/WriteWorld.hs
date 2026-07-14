@@ -10,6 +10,7 @@ module World.Thread.Command.Save.WriteWorld
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
@@ -20,6 +21,9 @@ import Unit.Types (UnitManager(..), unitsOnPage)
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Thread.Helpers (unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
+import Engine.Save.Barrier (finishSave, failSave, readSaveStatus, ssRequestId)
+import World.Edit.Types (WorldEdit(..), WorldEdits, appendEdit)
+import World.Generate.Coordinates (chunkToGlobal)
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
@@ -44,8 +48,10 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
         primaryId = pageId
     case lookup primaryId (wmWorlds mgr) of
         Nothing →
-            logWarn logger CatWorld $
-                "World not found for save: " <> unWorldPageId primaryId
+            do
+                let err = "World not found for save: " <> unWorldPageId primaryId
+                logWarn logger CatWorld err
+                failTransaction env err
         Just primaryWs → do
             -- Auto-pause BEFORE reading state so the snapshot
             -- captures pause = True (DF convention — saved worlds
@@ -74,21 +80,22 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             primaryIdentity ← readIORef (wsIdentityRef primaryWs)
             case mActiveParams of
                 Nothing →
-                    logWarn logger CatWorld
-                        "Cannot save: visible world has no gen params"
+                    do
+                        let err = "Cannot save: visible world has no gen params"
+                        logWarn logger CatWorld err
+                        failTransaction env err
                 Just activeParams → do
-                    -- #216: snapshot EVERY live page in wmWorlds, not just
-                    -- the active one. A page with no gen params (e.g. an
-                    -- arena still mid-init) is not a real, persistable world
-                    -- — skip it rather than abort the whole save.
-                    pageSaves ← forM (wmWorlds mgr) $ \(pid, ws) → do
+                    -- Every page must be snapshotable.  Omitting an
+                    -- in-progress page makes a superficially successful save
+                    -- corrupt the whole session, so fail the transaction.
+                    maybePages ← forM (wmWorlds mgr) $ \(pid, ws) → do
                         mParams ← readIORef (wsGenParamsRef ws)
                         case mParams of
-                            Nothing → pure Nothing
+                            Nothing → pure $ Left ("page is not snapshotable: " <> unWorldPageId pid)
                             Just params → do
                                 WorldTime h m    ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
-                                tScale    ← readIORef (wsTimeScaleRef ws)
+                                _tScale   ← readIORef (wsTimeScaleRef ws)
                                 -- Freeze ONLY the VISIBLE page's clock here, to
                                 -- match scripts/pause.lua: its prevTimeScale /
                                 -- resume dance retimes just world.getActiveWorldId(),
@@ -106,6 +113,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 toolMode  ← readIORef (wsToolModeRef ws)
                                 edits     ← readIORef (wsEditsRef ws)
+                                tiles     ← readIORef (wsTilesRef ws)
                                 mineDesigs ← readIORef (wsMineDesignationsRef ws)
                                 constructDesigs ← readIORef
                                     (wsConstructDesignationsRef ws)
@@ -139,7 +147,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     simStates = HM.filterWithKey
                                         (\uid _ → uid `HS.member` savedUids)
                                         (utsSimStates uts)
-                                pure $ Just WorldPageSave
+                                    persistedEdits = appendFluidSnapshot edits tiles
+                                pure $ Right WorldPageSave
                                     { wpsPageId     = pid
                                     , wpsGenParams  = params
                                     , wpsCameraX    = cx
@@ -151,10 +160,14 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsDateYear   = y
                                     , wpsDateMonth  = mo
                                     , wpsDateDay    = d
-                                    , wpsTimeScale  = tScale
+                                    -- Positional compatibility field: retained
+                                    -- on disk, but never carries the player's
+                                    -- pre-save speed.  A loaded session always
+                                    -- resumes at the normal default scale.
+                                    , wpsTimeScale  = 1
                                     , wpsMapMode    = mapMode
                                     , wpsToolMode   = toolMode
-                                    , wpsEdits      = edits
+                                    , wpsEdits      = persistedEdits
                                     , wpsMineDesignations = mineDesigs
                                     , wpsConstructDesignations = constructDesigs
                                     , wpsGroundItems = groundItems
@@ -171,7 +184,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsPlantDesignations = plantDesigs
                                     , wpsIdentity    = identity
                                     }
-                    -- UTC ISO 8601 microsecond precision, captured and
+                    case sequence maybePages of
+                      Left err → do
+                        logWarn logger CatWorld err
+                        failTransaction env err
+                      Right pageSaves → do
+                        -- UTC ISO 8601 microsecond precision, captured and
                     -- monotonically clamped at the API request time (see
                     -- saveWorldFn) — NOT here, so two saves queued
                     -- back-to-back don't get the same wall-second
@@ -180,8 +198,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                     -- chronologically correct, so the
                     -- Lua-side `a.timestamp > b.timestamp` in
                     -- main_menu works without further wrapping.
-                    let meta = SaveMetadata
-                            { smName       = saveName
+                        let meta = SaveMetadata { smName       = saveName
                             , smSeed       = wgpSeed activeParams
                             , smWorldSize  = wgpWorldSize activeParams
                             , smPlateCount = wgpPlateCount activeParams
@@ -189,8 +206,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , smWorldName  = wiName ⊚ primaryIdentity
                             , smWorldGloss = wiGloss =≪ primaryIdentity
                             }
-                        sd = SaveData
-                            { sdMetadata   = meta
+                            sd = SaveData { sdMetadata   = meta
                             , sdGameTime     = gameTime
                             , sdEnginePaused = paused
                             , sdLuaModules   = luaBlobs
@@ -200,17 +216,61 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             -- Record visibility so the loaded game comes up
                             -- showing what the player last saw (#216).
                             , sdVisiblePages = wmVisible mgr
-                            , sdWorlds       = catMaybes pageSaves
+                            , sdWorlds       = pageSaves
                             }
-                    result ← saveWorld saveName sd
-                    case result of
-                        Right () → do
+                        result ← saveWorld saveName sd
+                        case result of
+                          Right () → do
+                            completeTransaction env
                             logInfo logger CatWorld $
                                 "World saved successfully: " <> saveName
                             emitEvent env "save_load" "World.Save" $
                                 "Game saved: " <> saveName
-                        Left err → do
+                          Left err → do
+                            failTransaction env err
                             logError logger CatWorld $
                                 "Failed to save world: " <> err
                             emitEvent env "save_load" "World.Save" $
                                 "Save failed: " <> err
+
+completeTransaction ∷ EngineEnv → IO ()
+completeTransaction env = do
+    current ← readSaveStatus (saveBarrierRef env)
+    forM_ current $ \s → finishSave (saveBarrierRef env) (ssRequestId s)
+
+failTransaction ∷ EngineEnv → Text → IO ()
+failTransaction env err = do
+    current ← readSaveStatus (saveBarrierRef env)
+    forM_ current $ \s → failSave (saveBarrierRef env) (ssRequestId s) err
+
+-- | The simulation owns the live fluid map and publishes it back to the
+-- world thread.  Preserve the settled state of every loaded chunk as trailing
+-- replay edits so loading a paused save does not discard a pre-boundary
+-- World → Sim → World writeback.
+appendFluidSnapshot ∷ WorldEdits → WorldTileData → WorldEdits
+appendFluidSnapshot edits tiles =
+    HM.foldl' appendChunk (dropReplacedSnapshots edits) (wtdChunks tiles)
+  where
+    -- A snapshot is a replacement for the currently loaded chunk's old
+    -- snapshot, not another historical edit.  Preserve snapshots for chunks
+    -- that are not loaded this save: they still carry their last settled
+    -- simulation state and will be replayed if the chunk is loaded later.
+    dropReplacedSnapshots = HM.mapMaybeWithKey $ \coord chunkEdits →
+        let kept = if HM.member coord (wtdChunks tiles)
+                   then filter (not . isFluidSnapshot) chunkEdits
+                   else chunkEdits
+        in if null kept then Nothing else Just kept
+    appendChunk acc lc = V.ifoldl' (appendCell (lcCoord lc)) acc (lcFluidMap lc)
+    appendCell coord acc idx mCell =
+        let lx = idx `mod` chunkSize
+            ly = idx `div` chunkSize
+            (gx, gy) = chunkToGlobal coord lx ly
+            edit = case mCell of
+                Just cell → WeSetFluidSnapshot gx gy (fcType cell) (fcSurface cell)
+                Nothing   → WeClearFluidSnapshot gx gy
+        in appendEdit coord edit acc
+
+isFluidSnapshot ∷ WorldEdit → Bool
+isFluidSnapshot (WeSetFluidSnapshot _ _ _ _) = True
+isFluidSnapshot (WeClearFluidSnapshot _ _)   = True
+isFluidSnapshot _                            = False
