@@ -28,11 +28,14 @@ import World.Types
 import World.Generate (globalToChunk)
 import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , ConstructDesignation(..)
+                             , StructurePiece(..)
                              , newConstructDesignation
                              , constructTargetCategory )
 import World.Construct.Apply ( applyConstructSlopeToChunk
                              , clearConstructSlope )
-import World.Thread.Command.Cursor.Common (maxDesignateSide)
+import World.Thread.Command.Cursor.Common
+    (maxDesignateSide, recordDesignationOutcome, recordMissingWorldOutcome)
+import Structure.Types (StructureSlot, slotFromText)
 
 handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -54,17 +57,51 @@ handleWorldClearConstructAnchorCommand env _logger pageId = do
                 (cs { constructAnchor = Nothing }, ())
         Nothing → pure ()
 
+-- | Which structure slot a designation targets, mirroring
+--   scripts/unit_ai_construct.lua's placeStructurePiece slot derivation
+--   (a wall with no recorded edge defaults to "ne", a post to "n" — the
+--   designation tool has no corner picker yet) so occupancy is checked
+--   against the exact slot the worker will eventually place into (#805).
+structurePieceSlot ∷ StructurePiece → Maybe StructureSlot
+structurePieceSlot (StructurePiece _ kind edge) = case kind of
+    "floor"   → slotFromText "floor"
+    "ceiling" → slotFromText "ceiling"
+    "wire"    → slotFromText "wire"
+    "wall"    → slotFromText ("wall_" <> fromMaybe "ne" edge)
+    "post"    → slotFromText ("post_" <> fromMaybe "n" edge)
+    _         → Nothing
+
+-- | Is a structure piece already placed at this (tile, slot)? Reads only
+--   the authoritative per-chunk overlay ('lcStructures') — this handler
+--   runs on the world thread's single command queue, so any
+--   WorldSetStructure queued earlier (e.g. a worker's prior piece
+--   placement) has already applied by the time this command runs; there
+--   is no need to also consult the Lua read-your-writes staging cache
+--   ('wsStructureStageRef'), which exists only for same-tick reads from
+--   the debug builder (#805).
+structureOccupiedAt ∷ WorldTileData → Int → Int → StructureSlot → Bool
+structureOccupiedAt tileData gx gy slot =
+    let (coord, _) = globalToChunk gx gy
+        key = (gx, gy, fromIntegral (fromEnum slot) ∷ Word8)
+    in maybe False (HM.member key . lcStructures) (lookupChunk coord tileData)
+
 -- | Commit a construction designation. Per-z-level like mining: only
 --   tiles at the anchor's surface z are taken. STRUCTURE targets fill the
---   whole rectangle (paint a floor / wall run); BUILDING targets mark
---   only the anchor tile (one footprint, not a grid of buildings).
+--   whole rectangle (paint a floor / wall run), skipping any tile whose
+--   requested slot is already occupied by a placed piece (#805 — a
+--   structure designation must never spawn a job that would overwrite an
+--   existing floor/ceiling/wall edge/post corner/wire, though compatible
+--   slots on the same tile, e.g. a floor and a wall, still coexist);
+--   BUILDING targets mark only the anchor tile (one footprint, not a
+--   grid of buildings) and are unaffected by the occupancy check.
 --   Unloaded-chunk tiles are skipped. Clears the anchor afterwards.
 handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → ConstructTarget → IO ()
 handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Nothing → pure ()
+        Nothing → recordMissingWorldOutcome env "construction.designate"
+            pageId gx1 gy1
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             let surfaceZAt gx gy = do
@@ -75,6 +112,12 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
                 yLo = min gy1 gy2
                 xHi = min (max gx1 gx2) (xLo + maxDesignateSide - 1)
                 yHi = min (max gy1 gy2) (yLo + maxDesignateSide - 1)
+                -- A building only ever targets its single anchor tile
+                -- (never the swept rectangle), so it always "requests"
+                -- exactly 1 regardless of the two-click rectangle size.
+                requested = case tgt of
+                    CtBuilding _  → 1
+                    CtStructure _ → (xHi - xLo + 1) * (yHi - yLo + 1)
                 entries = case surfaceZAt gx1 gy1 of
                     Nothing → []   -- anchor chunk unloaded: nothing
                     Just anchorZ → case tgt of
@@ -82,13 +125,16 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
                         -- anchor tile, at its own surface z.
                         CtBuilding _ →
                             [ ((gx1, gy1), newConstructDesignation anchorZ tgt) ]
-                        -- Structure pieces tile the rectangle, per-z-level.
-                        CtStructure _ →
+                        -- Structure pieces tile the rectangle, per-z-level,
+                        -- skipping any tile whose target slot is occupied.
+                        CtStructure piece →
                             [ ((gx, gy), newConstructDesignation z tgt)
                             | gx ← [xLo .. xHi]
                             , gy ← [yLo .. yHi]
                             , Just z ← [surfaceZAt gx gy]
                             , z ≡ anchorZ
+                            , maybe True (not . structureOccupiedAt tileData gx gy)
+                                        (structurePieceSlot piece)
                             ]
             atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
                 (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
@@ -97,6 +143,9 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt = do
             logDebug logger CatWorld $
                 "Construct designation: +" <> T.pack (show (length entries))
                 <> " tiles (" <> constructTargetCategory tgt <> ")"
+            recordDesignationOutcome env "construction.designate"
+                "anchor tile ineligible, unloaded, or requested slot already occupied"
+                xLo yLo requested (length entries)
 
 handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
