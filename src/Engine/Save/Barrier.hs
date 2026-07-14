@@ -8,7 +8,7 @@ module Engine.Save.Barrier
     ( SaveOwner(..), SavePhase(..), SaveOutcome(..), SaveStatus(..)
     , SaveBarrier, newSaveBarrier, beginSave, acknowledgeSave, failSave
     , reachSnapshot, finishSave, waitForOwners, readSaveStatus, acknowledgeCurrent
-    , captureLocked
+    , captureLocked, saveInProgress
     ) where
 
 import UPrelude
@@ -105,3 +105,8 @@ captureLocked ∷ SaveBarrier → IO Bool
 captureLocked barrier = do
     current ← readSaveStatus barrier
     pure $ maybe False ((≡ SaveSnapshotBoundary) ∘ ssPhase) current
+
+saveInProgress ∷ SaveBarrier → IO Bool
+saveInProgress barrier = do
+    current ← readSaveStatus barrier
+    pure $ maybe False ((≡ Nothing) ∘ ssOutcome) current

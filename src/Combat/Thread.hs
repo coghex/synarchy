@@ -24,7 +24,7 @@ import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked, saveInProgress)
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Combat.Types (CombatCommand(..))
@@ -91,7 +91,8 @@ combatLoop env stateRef tick = do
                         -- before acknowledging; ordinary pause retains the
                         -- historical no-work behaviour.
                         locked ← captureLocked (saveBarrierRef env)
-                        unless locked $ processAllCommands env
+                        saving ← saveInProgress (saveBarrierRef env)
+                        when (saving ∧ not locked) $ processAllCommands env
                         acknowledgeCurrent (saveBarrierRef env) SaveCombat
                         pure tick
                     else do
