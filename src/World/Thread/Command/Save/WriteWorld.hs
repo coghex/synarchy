@@ -10,6 +10,7 @@ module World.Thread.Command.Save.WriteWorld
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
@@ -21,6 +22,10 @@ import Unit.Sim.Types (UnitThreadState(..))
 import World.Thread.Helpers (unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Save.Barrier (finishSave, failSave, readSaveStatus, ssRequestId)
+import World.Chunk.Types (LoadedChunk(..), chunkSize)
+import World.Edit.Types (WorldEdit(..), WorldEdits, appendEdit)
+import World.Generate.Coordinates (chunkToGlobal)
+import World.Tile.Types (WorldTileData(..))
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
@@ -110,6 +115,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 mapMode   ← readIORef (wsMapModeRef ws)
                                 toolMode  ← readIORef (wsToolModeRef ws)
                                 edits     ← readIORef (wsEditsRef ws)
+                                tiles     ← readIORef (wsTilesRef ws)
                                 mineDesigs ← readIORef (wsMineDesignationsRef ws)
                                 constructDesigs ← readIORef
                                     (wsConstructDesignationsRef ws)
@@ -143,6 +149,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     simStates = HM.filterWithKey
                                         (\uid _ → uid `HS.member` savedUids)
                                         (utsSimStates uts)
+                                    persistedEdits = appendFluidSnapshot edits tiles
                                 pure $ Right WorldPageSave
                                     { wpsPageId     = pid
                                     , wpsGenParams  = params
@@ -162,7 +169,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     , wpsTimeScale  = 1
                                     , wpsMapMode    = mapMode
                                     , wpsToolMode   = toolMode
-                                    , wpsEdits      = edits
+                                    , wpsEdits      = persistedEdits
                                     , wpsMineDesignations = mineDesigs
                                     , wpsConstructDesignations = constructDesigs
                                     , wpsGroundItems = groundItems
@@ -237,3 +244,21 @@ failTransaction ∷ EngineEnv → Text → IO ()
 failTransaction env err = do
     current ← readSaveStatus (saveBarrierRef env)
     forM_ current $ \s → failSave (saveBarrierRef env) (ssRequestId s) err
+
+-- | The simulation owns the live fluid map and publishes it back to the
+-- world thread.  Preserve the settled state of every loaded chunk as trailing
+-- replay edits so loading a paused save does not discard a pre-boundary
+-- World → Sim → World writeback.
+appendFluidSnapshot ∷ WorldEdits → WorldTileData → WorldEdits
+appendFluidSnapshot edits tiles =
+    HM.foldl' appendChunk edits (wtdChunks tiles)
+  where
+    appendChunk acc lc = V.ifoldl' (appendCell (lcCoord lc)) acc (lcFluidMap lc)
+    appendCell coord acc idx mCell =
+        let lx = idx `mod` chunkSize
+            ly = idx `div` chunkSize
+            (gx, gy) = chunkToGlobal coord lx ly
+            edit = case mCell of
+                Just cell → WeSetFluidSnapshot gx gy (fcType cell) (fcSurface cell)
+                Nothing   → WeClearFluidSnapshot gx gy
+        in appendEdit coord edit acc

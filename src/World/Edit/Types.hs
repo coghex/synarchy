@@ -94,6 +94,13 @@ data WorldEdit
                                            --   world.plantRowCropAt survives
                                            --   chunk eviction + save/load like
                                            --   every other edit.
+    | WeSetFluidSnapshot !Int !Int !FluidType !Int
+                                           -- ^ Exact fluid state emitted by
+                                           --   the simulation at save time.
+    | WeClearFluidSnapshot !Int !Int
+                                           -- ^ Exact fluid state emitted by
+                                           --   the simulation at save time:
+                                           --   this column settled dry.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.

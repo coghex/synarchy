@@ -21,14 +21,31 @@ def main():
         send(a.port, f'world.init("barrier",{a.seed},64,3)', expect_result=False); send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False)
         # This is a real World -> simulation -> World path: the edit is
         # accepted by worldQueue, synchronizes its chunk into simQueue, and
-        # fluid settling publishes a WorldApplyFluids writeback.  Waiting for
-        # the visible fluid before saving makes its whole causal chain
-        # pre-boundary work.
+        # fluid settling publishes a WorldApplyFluids writeback.  The source
+        # cell itself is changed synchronously by World, so assert a distinct
+        # neighboring cell whose fluid state changes only after the sim's
+        # writeback instead.
+        def area_fluid():
+            return {
+                (cell["x"], cell["y"]): cell
+                for cell in json.loads(send(a.port, "return world.getAreaFluid(0,0,3)"))
+            }
+
+        area_before = area_fluid()
         send(a.port, 'world.setFluidTile("barrier", 0, 0, "water")', expect_result=False)
-        def fluid():
-            value = send(a.port, "return world.getFluidAt(0,0)")
-            return value if value not in ("nil", "") else None
-        fluid_before = wait(fluid, "world/simulation fluid writeback")
+
+        def spread():
+            after = area_fluid()
+            return next(
+                (
+                    (coord, cell)
+                    for coord, cell in after.items()
+                    if coord != (0, 0) and area_before.get(coord) != cell
+                ),
+                None,
+            )
+
+        spread_coord, spread_before = wait(spread, "simulation fluid spread writeback")
         if send(a.port, f'return engine.saveWorld("barrier","{SAVE}")').strip() != "true": raise RuntimeError("save rejected")
         def state():
             raw = send(a.port, "return engine.getSaveStatus()"); return json.loads(raw) if raw != "nil" else None
@@ -44,12 +61,16 @@ def main():
         if send(a.port, f'return engine.loadSave("{SAVE}")').strip() != "true": raise RuntimeError("load rejected")
         send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("main_world")', expect_result=False); time.sleep(1)
         if send(a.port, "return engine.isPaused()").strip() != "true": raise RuntimeError("load was not paused")
-        if send(a.port, "return world.getFluidAt(0,0)") != fluid_before:
-            raise RuntimeError("pre-boundary World->Sim->World fluid effect was not saved")
-        paused_fluid = send(a.port, "return world.getFluidAt(0,0)")
+        reloaded_spread = area_fluid().get(spread_coord)
+        if reloaded_spread != spread_before:
+            raise RuntimeError(
+                "pre-boundary World->Sim->World spread was not saved: "
+                f"{spread_coord}: expected {spread_before!r}, got {reloaded_spread!r}"
+            )
+        paused_fluid = reloaded_spread
         time.sleep(2)
-        if send(a.port, "return world.getFluidAt(0,0)") != paused_fluid:
-            raise RuntimeError("loaded world mutated while paused")
+        if area_fluid().get(spread_coord) != paused_fluid:
+            raise RuntimeError("loaded world spread mutated while paused")
     finally:
         quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True)
     print("PASS: save owners acknowledged and loaded session stayed paused")
