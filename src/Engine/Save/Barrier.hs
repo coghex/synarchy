@@ -13,6 +13,7 @@ module Engine.Save.Barrier
 
 import UPrelude
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import Control.Concurrent.STM
 
 data SaveOwner = SaveLua | SaveWorld | SaveUnit | SaveBuilding | SaveCombat | SaveSimulation
@@ -29,6 +30,7 @@ data SaveStatus = SaveStatus
     , ssPhase     ∷ !SavePhase
     , ssOwners    ∷ !(Set.Set SaveOwner)
     , ssAcknowledged ∷ !(Set.Set SaveOwner)
+    , ssQuiescencePasses ∷ !Int
     , ssOutcome   ∷ !(Maybe SaveOutcome)
     } deriving (Eq, Show)
 
@@ -47,7 +49,8 @@ beginSave (SaveBarrier next status) owners = atomically $ do
             writeTVar next n
             writeTVar status $ Just SaveStatus
                 { ssRequestId = n, ssPhase = SavePausing, ssOwners = owners
-                , ssAcknowledged = Set.empty, ssOutcome = Nothing }
+                , ssAcknowledged = Set.empty, ssQuiescencePasses = 0
+                , ssOutcome = Nothing }
             pure $ Right n
 
 acknowledgeSave ∷ SaveBarrier → Int → SaveOwner → IO ()
@@ -55,8 +58,17 @@ acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
     current ← readTVar status
     forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing) $ do
         let acks = Set.insert owner (ssAcknowledged s)
-            phase = if acks ≡ ssOwners s then SaveWaitingOwners else SavePausing
-        writeTVar status $ Just s { ssAcknowledged = acks, ssPhase = phase }
+        if acks ≡ ssOwners s ∧ ssQuiescencePasses s < 1
+            -- One full drain is not a boundary: a command handled by the
+            -- last owner can causally enqueue work for one that acknowledged
+            -- earlier.  Make every owner drain once more before capture.
+            then writeTVar status $ Just s
+                { ssAcknowledged = Set.empty
+                , ssQuiescencePasses = ssQuiescencePasses s + 1
+                , ssPhase = SavePausing }
+            else do
+                let phase = if acks ≡ ssOwners s then SaveWaitingOwners else SavePausing
+                writeTVar status $ Just s { ssAcknowledged = acks, ssPhase = phase }
 
 waitForOwners ∷ Int → SaveBarrier → Int → IO (Either Text ())
 waitForOwners micros (SaveBarrier _ status) n = do
@@ -70,7 +82,10 @@ waitForOwners micros (SaveBarrier _ status) n = do
             _ → do
                 timedOut ← readTVar delay
                 check timedOut
-                pure $ Left "timed out waiting for save state owners"
+                let missing = maybe [] (\s → Set.toList
+                        (ssOwners s Set.\\ ssAcknowledged s)) current
+                pure $ Left $ "timed out waiting for save state owners: "
+                    <> T.pack (show missing)
 
 reachSnapshot ∷ SaveBarrier → Int → IO ()
 reachSnapshot (SaveBarrier _ status) n = atomically $ modifyTVar' status $ fmap $ \s →

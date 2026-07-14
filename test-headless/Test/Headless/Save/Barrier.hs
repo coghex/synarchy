@@ -14,7 +14,12 @@ spec = describe "save snapshot barrier" $ do
         acknowledgeSave b n SaveLua
         acknowledgeSave b n SaveWorld
         early ← waitForOwners 1000 b n
-        early `shouldBe` Left "timed out waiting for save state owners"
+        early `shouldSatisfy` (\value → case value of Left _ → True; Right _ → False)
+        acknowledgeSave b n SaveUnit
+        -- First pass drained each owner; a second pass closes causal
+        -- follow-up work emitted by the last owner into an earlier queue.
+        acknowledgeSave b n SaveLua
+        acknowledgeSave b n SaveWorld
         acknowledgeSave b n SaveUnit
         waitForOwners 1000 b n `shouldReturn` Right ()
         reachSnapshot b n
