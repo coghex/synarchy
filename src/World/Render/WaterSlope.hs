@@ -28,10 +28,11 @@ waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
     let checkNeighbor nx ny
             | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
                 case fluidMap V.! (ny * chunkSize + nx) of
-                    Just fc → fcSurface fc ≡ mySurf - 1
-                    -- Dry neighbor: slope toward it if terrain is
-                    -- exactly 1 below water surface (river bank).
-                    Nothing → terrSurfMap VU.! (ny * chunkSize + nx) ≡ mySurf - 1
+                    Just fc → fcSurface fc < mySurf
+                    -- Dry neighbor: slope toward it if terrain is one or
+                    -- more levels below the water surface (river bank /
+                    -- waterfall lip).
+                    Nothing → terrSurfMap VU.! (ny * chunkSize + nx) < mySurf
             | otherwise =
                 -- Cross-chunk lookup
                 let ChunkCoord cx cy = coord
@@ -45,11 +46,11 @@ waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
                     Nothing → False
                     Just neighborFM →
                         case neighborFM V.! (ly' * chunkSize + lx') of
-                            Just fc → fcSurface fc ≡ mySurf - 1
+                            Just fc → fcSurface fc < mySurf
                             Nothing → case terrLookup (ChunkCoord cx' cy') of
                                 Nothing → False
                                 Just nTerrMap →
-                                    nTerrMap VU.! (ly' * chunkSize + lx') ≡ mySurf - 1
+                                    nTerrMap VU.! (ly' * chunkSize + lx') < mySurf
         -- Grid XY → UV/screen mapping. Each grid step is diagonal
         -- in UV space (u=x-y, v=x+y):
         --   Grid N (y-1) → u+, v- → pixel NE → bits 1+2 = 3
@@ -65,4 +66,8 @@ waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
           .|. (if gridS then 12 else 0)   -- grid S → pixel SW (bits 4+8)
           .|. (if gridW then 9  else 0)   -- grid W → pixel NW (bits 1+8)
           ∷ Word8
+        -- A tile with all four neighbours lower would slope every
+        -- direction at once (raw ≡ 15) — an isolated high point in the
+        -- water, not a lip; flatten it instead of rendering a
+        -- nonsensical pyramid.
     in if raw ≡ 15 then 0 else raw
