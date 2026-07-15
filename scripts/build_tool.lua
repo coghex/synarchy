@@ -88,21 +88,6 @@ buildTool.hud = nil
 local MOUSE_LEFT  = 1
 local MOUSE_RIGHT = 2
 
--- #799: construction.cancelDesignation is fire-and-forget (queued on the
--- world thread) — a paid designation is still visibly present for every
--- rapid right-click issued before the FIRST one's cancel actually
--- applies, so without a guard each of those clicks would independently
--- see paid=true and refund the same material again. Keyed by "x,y",
--- storing the gameTime of the refund. A short expiry (not "cleared on
--- the next miss") matters: nothing guarantees the player ever right-
--- clicks that exact tile again while it's briefly empty/unpaid before a
--- LATER, unrelated paid designation lands there — a sticky-until-miss
--- guard would silently swallow that later one's legitimate refund.
--- CANCEL_REFUND_DEBOUNCE only needs to outlast one world-thread tick
--- (how long the queued cancel takes to actually apply).
-local pendingCancelRefunds = {}
-local CANCEL_REFUND_DEBOUNCE = 2.0   -- seconds
-
 -- Layout (base units; uiscale applied at draw time).
 -- Padding has to clear the 9-patch border art (~16–20 px on each
 -- side at scale 1) AND leave visible breathing room around the
@@ -947,39 +932,31 @@ function buildTool.handleMouseDown(button, x, y)
             local gx, gy = world.pickTile(x, y)
             if gx and gy then
                 gx, gy = math.floor(gx), math.floor(gy)
-                -- #799 no-silent-loss policy: a structure designation
-                -- whose materials were already paid must not just vanish
-                -- on cancel — return them to the ground first. Buildings
-                -- never consume through this path (a separate delivered-
-                -- material system), so job.category filters them out.
                 local wid = buildTool.hud and buildTool.hud.worldId
-                local job = wid and construction.getDesignationAt(wid, gx, gy)
-                -- Keyed by page too (#799 review round 4): tile coords
-                -- alone collide across pages, so a paid cancellation on
-                -- a DIFFERENT page at the same (gx,gy) within the debounce
-                -- window would otherwise be wrongly swallowed.
-                local key = tostring(wid) .. ":" .. gx .. "," .. gy
-                if job and job.paid then
-                    local last = pendingCancelRefunds[key]
-                    local now = engine.gameTime()
-                    -- engine.gameTime() is RESTORED from the save on load
-                    -- (World.Thread.Command.Save.LoadWorld), so it can jump
-                    -- BACKWARD relative to a timestamp recorded pre-load
-                    -- (loading an earlier save, or the same save again
-                    -- after playing further past it) — pendingCancelRefunds
-                    -- itself isn't cleared by a within-session load (module
-                    -- state, not save data), so 'now < last' must also
-                    -- count as expired or a genuinely new payment at this
-                    -- tile could stay wrongly blocked indefinitely.
-                    if not last or now < last or now - last > CANCEL_REFUND_DEBOUNCE then
-                        pendingCancelRefunds[key] = now
-                        require("scripts.unit_ai_construct")
-                            .refundStructureMaterials(job)
+                if wid then
+                    local constructAi = require("scripts.unit_ai_construct")
+                    -- #799 review round 5: an atomic engine-side pop-and-
+                    -- return replaces the old getDesignationAt + queued
+                    -- cancelDesignation pair (and the Lua-side debounce
+                    -- table it needed) — the ATOMIC delete is what
+                    -- actually serializes competing cancellations (a
+                    -- rapid double right-click, or a new designation
+                    -- quickly replacing the old one at the same tile),
+                    -- which no Lua-side timing heuristic could replicate.
+                    local removed = construction.cancelDesignationForRefund(wid, gx, gy)
+                    -- No-silent-loss policy: a structure designation
+                    -- whose materials were already paid must not just
+                    -- vanish — return them to the ground. Buildings never
+                    -- consume through this path (a separate delivered-
+                    -- material system), so job.category filters them out.
+                    if removed and removed.paid then
+                        constructAi.refundStructureMaterials(removed)
                     end
-                else
-                    pendingCancelRefunds[key] = nil
+                    -- Interrupt any live claimant so it can't keep
+                    -- ticking progress on its own cached copy of the
+                    -- now-cancelled job and still place the piece.
+                    constructAi.abandonClaim(gx, gy)
                 end
-                construction.cancelDesignation(gx, gy)
             end
         end
         return true

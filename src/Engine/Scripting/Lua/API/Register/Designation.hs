@@ -44,6 +44,7 @@ registerDesignationAPI env = do
   registerLuaFunction "clearAnchor"        (constructClearAnchorFn env)
   registerLuaFunction "designate"          (constructDesignateFn env)
   registerLuaFunction "cancelDesignation"  (constructCancelDesignationFn env)
+  registerLuaFunction "cancelDesignationForRefund" (constructCancelDesignationForRefundFn env)
   registerLuaFunction "getPendingJobs"     (constructGetPendingJobsFn env)
   registerLuaFunction "getDesignationAt"   (constructGetDesignationAtFn env)
   registerLuaFunction "getDesignationCount" (constructGetDesignationCountFn env)

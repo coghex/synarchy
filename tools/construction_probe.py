@@ -699,6 +699,52 @@ def phase_cancel_refund(port: int) -> None:
                    for e in (logs or []))
     check("a player-observable failure notification was logged", notified)
     destroy_unit(port, poster)
+
+    # --- (d) a claimant mid-build on a PAID job must not still place the
+    # structure after the designation is cancelled out from under it
+    # (#799 review round 5): abandonClaim interrupts the claimant's own
+    # cached job immediately rather than waiting for its next decision
+    # tick to notice the designation is gone.
+    px4, py4 = 700, 180
+    ux4, uy4 = pick_tile(port, px4, py4)
+    send(port, f"construction.designate('{w}', {ux4}, {uy4}, {ux4}, {uy4}, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    builder = spawn_acolyte(port, ux4 - 3 + 0.5, uy4 + 0.5)
+    send(port, f"unit.addItem({builder}, 'steel_plate', 0); return 'ok'")
+
+    def mid_build():
+        d = designation_at(port, ux4, uy4)
+        if not isinstance(d, dict):
+            return None
+        p = d.get("progress", 0)
+        return d if d.get("paid") is True and 0 < p < 0.9 else None
+    caught = poll_fast(90, mid_build)
+    check("caught the job mid-build (paid, partial progress)", caught is not None)
+    beforePlate = ground_count(port, "steel_plate")
+    ui_right_click(px4, py4)
+    time.sleep(2.0)   # comfortably longer than the job would take to finish
+    check("mid-build cancel refunds the material",
+          ground_count(port, "steel_plate") == beforePlate + 1)
+    check("structure never placed after a mid-build cancel",
+          send(port, f"return structure.hasAt({ux4}, {uy4}, 'floor')") == "false")
+    destroy_unit(port, builder)
+
+    # --- (e) non-post placement failure (#799 review round 5 nit):
+    # structures.floor/ceiling/wall and wire.place all now propagate
+    # structure.place's own success/failure — previously only post's
+    # floorZAt-gated failure was ever detected. Tiles far outside the
+    # flat arena's 5x5 chunk footprint are never loaded, so placement
+    # there deterministically fails without needing a real mid-job race.
+    check("structures.floor returns false for an unloaded-chunk target",
+          send(port, "return require('scripts.structures').floor(500, 500)") == "false")
+    check("structures.ceiling returns false for an unloaded-chunk target",
+          send(port, "return require('scripts.structures').ceiling(501, 500)") == "false")
+    check("structures.wall returns false for an unloaded-chunk target",
+          send(port, "return require('scripts.structures').wall(502, 500, 'ne')") == "false")
+    check("wire.place returns false for an unloaded-chunk target",
+          send(port, "return require('scripts.wire').place(503, 500)") == "false")
+
     send(port, "local bt = require('scripts.build_tool'); "
                "bt.exitPlacement(); return 'ok'")
 

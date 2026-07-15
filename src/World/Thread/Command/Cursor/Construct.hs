@@ -15,6 +15,7 @@ module World.Thread.Command.Cursor.Construct
     , handleWorldSetConstructMaterialsPaidCommand
     , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
+    , popConstructDesignation
     ) where
 
 import UPrelude
@@ -153,11 +154,27 @@ handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
 handleWorldCancelConstructCommand env _logger pageId gx gy = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
-        Just worldState → do
-            mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
-                \m → (HM.delete (gx, gy) m, HM.lookup (gx, gy) m)
-            forM_ mCd $ resetConstructSlope worldState (gx, gy)
+        Just worldState → void $ popConstructDesignation worldState (gx, gy)
         Nothing → pure ()
+
+-- | Atomically remove a construction designation and reset its
+--   corner-progress display, returning the removed designation if any
+--   was present. Factored out of 'handleWorldCancelConstructCommand'
+--   so a SYNCHRONOUS caller (construction.cancelDesignationForRefund,
+--   #799 review round 5) gets the SAME atomic pop-and-return the
+--   queued command does — the atomicModifyIORef' delete is what
+--   actually serializes competing cancellations (a rapid double
+--   right-click, or a new designation quickly replacing the old one at
+--   the same tile): whichever caller's delete runs first sees Just the
+--   removed designation; every other caller (this tick or later) sees
+--   Nothing, since there is nothing left to remove. No Lua-side timing
+--   heuristic can replicate that guarantee.
+popConstructDesignation ∷ WorldState → (Int, Int) → IO (Maybe ConstructDesignation)
+popConstructDesignation worldState (gx, gy) = do
+    mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
+        \m → (HM.delete (gx, gy) m, HM.lookup (gx, gy) m)
+    forM_ mCd $ resetConstructSlope worldState (gx, gy)
+    pure mCd
 
 -- | Build AI hook (#96): set a designation's status. Complete removes it
 --   (and resets the corner-progress display back to flat ground — the

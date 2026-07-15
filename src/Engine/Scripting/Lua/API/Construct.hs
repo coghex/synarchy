@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.Construct
     , constructCancelDesignationFn
     , constructGetPendingJobsFn
     , constructGetDesignationAtFn
+    , constructCancelDesignationForRefundFn
     , constructGetDesignationCountFn
     , constructNearestDesignationFn
     , constructSetJobStatusFn
@@ -34,6 +35,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Command.Types (WorldCommand(..))
 import World.Construct.Types
+import World.Thread.Command.Cursor.Construct (popConstructDesignation)
 
 -- | construction.setAnchor(pageId, gx, gy) — first-click anchor.
 constructSetAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -169,6 +171,35 @@ constructGetDesignationAtFn env = do
                 Just ws → do
                     m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
                     case HM.lookup (gx, gy) m of
+                        Just cd → pushJobTable gx gy cd >> return 1
+                        Nothing → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
+-- | construction.cancelDesignationForRefund(pageId, gx, gy) → job table
+--   | nil. Synchronous, ATOMIC pop-and-return (#799 review round 5):
+--   unlike cancelDesignation (fire-and-forget, queued on the world
+--   thread), this removes the designation and returns its final state
+--   in ONE atomic step, so a caller computing a materials refund from
+--   the returned job's 'paid' field never races a second caller over
+--   the SAME entry — whether that's a rapid double right-click on one
+--   designation, or a genuinely new designation quickly replacing it
+--   at the same tile. See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
+constructCancelDesignationForRefundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructCancelDesignationForRefundFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gxN, Just gyN) → do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                gx = round gxN ∷ Int
+                gy = round gyN ∷ Int
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    mCd ← Lua.liftIO $ popConstructDesignation ws (gx, gy)
+                    case mCd of
                         Just cd → pushJobTable gx gy cd >> return 1
                         Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
