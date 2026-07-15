@@ -306,10 +306,11 @@ unitReviveFn env = do
             Lua.pushboolean True
             return 1
 
--- | unit.recomputeBody(uid) — re-derive strength / max_hydration /
---   max_hunger / carrying_capacity from the unit's current body_mass /
---   lean_mass / fat_mass. Call this from Lua after directly mutating
---   any body-composition stat (Phase 3 regrowth, Phase 4 catabolism).
+-- | unit.recomputeBody(uid) — re-derive strength / strength_body /
+--   max_hydration / max_hunger / carrying_capacity from the unit's
+--   current body_mass / lean_mass / fat_mass. Call this from Lua after
+--   directly mutating any body-composition stat (Phase 3 regrowth,
+--   Phase 4 catabolism).
 --   Returns true if the unit exists, false otherwise. No-op if the
 --   unit's stat map is missing body_mass / lean_mass / height.
 unitRecomputeBodyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

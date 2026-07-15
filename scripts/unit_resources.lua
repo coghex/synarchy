@@ -40,6 +40,7 @@ local energy          = require("scripts.unit_resource_energy")
 local resourceTick    = require("scripts.unit_resource_tick")
 local injuryTick      = require("scripts.unit_resource_injury")
 local failureMeters   = require("scripts.unit_resource_failure")
+local starvation      = require("scripts.starvation")
 
 -- Self-register in package.loaded so engine.loadScript (which uses
 -- dofile and creates a fresh chunk) and require return the same
@@ -139,6 +140,12 @@ function unitResources.update(dt)
                         -- stamina branch of unit_resource_tick.
                         energy.tickDigestion(uid, dt)
                         energy.tickStarvation(uid, dt)
+                        -- Calorie-store threshold effects (#806): re-derive
+                        -- "strength" from the fresh calorie fraction every
+                        -- pass, independent of recomputeBody's own mass-
+                        -- change-only cadence (see scripts/starvation.lua).
+                        -- A no-op for species with no live calorie pool.
+                        starvation.refreshStrength(uid)
                         resourceTick.checkRevive(uid, defConfig)
                     end
                 end
