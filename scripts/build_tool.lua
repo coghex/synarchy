@@ -958,7 +958,16 @@ function buildTool.handleMouseDown(button, x, y)
                 if job and job.paid then
                     local last = pendingCancelRefunds[key]
                     local now = engine.gameTime()
-                    if not last or now - last > CANCEL_REFUND_DEBOUNCE then
+                    -- engine.gameTime() is RESTORED from the save on load
+                    -- (World.Thread.Command.Save.LoadWorld), so it can jump
+                    -- BACKWARD relative to a timestamp recorded pre-load
+                    -- (loading an earlier save, or the same save again
+                    -- after playing further past it) — pendingCancelRefunds
+                    -- itself isn't cleared by a within-session load (module
+                    -- state, not save data), so 'now < last' must also
+                    -- count as expired or a genuinely new payment at this
+                    -- tile could stay wrongly blocked indefinitely.
+                    if not last or now < last or now - last > CANCEL_REFUND_DEBOUNCE then
                         pendingCancelRefunds[key] = now
                         require("scripts.unit_ai_construct")
                             .refundStructureMaterials(job)
