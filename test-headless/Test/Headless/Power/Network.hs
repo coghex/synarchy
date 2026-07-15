@@ -13,6 +13,7 @@ module Test.Headless.Power.Network (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.List (find)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Power.Types
@@ -38,6 +39,17 @@ noon     = 0.5
 midnight = 0.0
 dawn     = 0.25
 dusk     = 0.75
+
+-- | World size (chunks) passed to every 'computeSnapshots'/'tickPowerNodes'
+--   call in this file (#794 threaded per-source local phasing through
+--   both). Circumference = 4 * 'World.Chunk.Types.chunkSize' (16) = 64
+--   tiles — the #794-specific tests below build their scenarios around
+--   that number directly; every OTHER (pre-#794) test's positions keep
+--   their source nodes at u = gx - gy = 0, so their exact-value
+--   assertions hold for ANY worldSize (local angle == global angle
+--   exactly when u = 0), independent of this particular choice.
+testWorldSize ∷ Int
+testWorldSize = 4
 
 spec ∷ Spec
 spec = do
@@ -73,7 +85,7 @@ spec = do
                 (n2, batId) = addPowerNode battery PowerStorage 5000 n1
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (2, 0))]
                 wire        = HS.singleton (1, 0)
-                nets        = computeSnapshots noon HM.empty wire n2 positions HM.empty
+                nets        = computeSnapshots testWorldSize noon HM.empty wire n2 positions HM.empty
             case nets of
                 [net] → HS.fromList (pnwNodeIds net) `shouldBe` HS.fromList [srcId, batId]
                 _     → expectationFailure ("expected exactly one network, got " <> show nets)
@@ -82,7 +94,7 @@ spec = do
             let (n1, srcId) = addPowerNode panel PowerSource 400 emptyPowerNodes
                 (n2, batId) = addPowerNode battery PowerStorage 5000 n1
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (1, 0))]
-                nets        = computeSnapshots noon HM.empty HS.empty n2 positions HM.empty
+                nets        = computeSnapshots testWorldSize noon HM.empty HS.empty n2 positions HM.empty
             nets `shouldBe` []
               -- adjacent tiles, but NO wire tile between them => not networked
 
@@ -91,7 +103,7 @@ spec = do
                 (n2, farId) = addPowerNode farPanel PowerSource 400 n1
                 positions   = HM.fromList [(srcId, (0, 0)), (farId, (50, 50))]
                 wire        = HS.singleton (1, 0)
-                nets        = computeSnapshots noon HM.empty wire n2 positions HM.empty
+                nets        = computeSnapshots testWorldSize noon HM.empty wire n2 positions HM.empty
             case nets of
                 [net] → pnwNodeIds net `shouldBe` [srcId]
                 _     → expectationFailure ("expected exactly one network, got " <> show nets)
@@ -107,9 +119,9 @@ spec = do
                 (n3, batId)  = addPowerNode battery PowerStorage 5000 n2
                 positions = HM.fromList [ (srcAId, (4, 4))
                                         , (batId,  (5, 5))
-                                        , (srcBId, (7, 5)) ]
+                                        , (srcBId, (6, 6)) ]
                 wire = HS.fromList [(4, 5), (6, 5)]
-                nets = computeSnapshots noon HM.empty wire n3 positions HM.empty
+                nets = computeSnapshots testWorldSize noon HM.empty wire n3 positions HM.empty
             case nets of
                 [net] → HS.fromList (pnwNodeIds net)
                             `shouldBe` HS.fromList [srcAId, batId, srcBId]
@@ -122,13 +134,13 @@ spec = do
                 (n3, batId)  = addPowerNode battery PowerStorage 5000 n2
                 positions = HM.fromList [ (srcAId, (4, 4))
                                         , (batId,  (5, 5))
-                                        , (srcBId, (7, 5)) ]
+                                        , (srcBId, (6, 6)) ]
                 wire = HS.fromList [(4, 5), (6, 5)]
                 -- noon (full intensity), 1 hour: 100W + 100W = 200 Wh into
                 -- the one shared battery. A regression here (the battery
                 -- ending up at 100, or split across two spurious networks)
                 -- would mean one source's contribution was silently lost.
-                ticked = tickPowerNodes noon HM.empty 3600 wire positions HM.empty n3
+                ticked = tickPowerNodes testWorldSize noon HM.empty 3600 wire positions HM.empty n3
             pnStoredWh ⊚ lookupPowerNode batId ticked `shouldBe` Just 200
 
     describe "computeSnapshots — instantaneous status" $ do
@@ -137,7 +149,7 @@ spec = do
                 positions   = HM.singleton srcId (0, 0)
                 wire        = HS.singleton (1, 0)
                 drain       = HM.singleton srcId 100
-                nets        = computeSnapshots noon drain wire n1 positions HM.empty
+                nets        = computeSnapshots testWorldSize noon drain wire n1 positions HM.empty
             map pnwStatus nets `shouldBe` [Powered]
 
         it "drain exceeding generation with no storage reads Brownout" $ do
@@ -145,7 +157,7 @@ spec = do
                 positions   = HM.singleton srcId (0, 0)
                 wire        = HS.singleton (1, 0)
                 drain       = HM.singleton srcId 500
-                nets        = computeSnapshots noon drain wire n1 positions HM.empty
+                nets        = computeSnapshots testWorldSize noon drain wire n1 positions HM.empty
             map pnwStatus nets `shouldBe` [Brownout]
 
         it "a deficit is Powered as long as the battery still holds charge" $ do
@@ -155,7 +167,7 @@ spec = do
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (2, 0))]
                 wire        = HS.singleton (1, 0)
                 drain       = HM.singleton srcId 1000
-                nets        = computeSnapshots midnight drain wire seeded positions HM.empty
+                nets        = computeSnapshots testWorldSize midnight drain wire seeded positions HM.empty
             map pnwStatus nets `shouldBe` [Powered]
 
     describe "tickPowerNodes — charging" $ do
@@ -164,7 +176,7 @@ spec = do
                 (n2, batId) = addPowerNode battery PowerStorage 5000 n1
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (2, 0))]
                 wire        = HS.singleton (1, 0)
-                n3          = tickPowerNodes noon HM.empty 3600 wire positions HM.empty n2
+                n3          = tickPowerNodes testWorldSize noon HM.empty 3600 wire positions HM.empty n2
             pnStoredWh ⊚ lookupPowerNode batId n3 `shouldBe` Just 400
 
         it "charging never exceeds capacity — surplus is curtailed" $ do
@@ -173,7 +185,7 @@ spec = do
                 seeded      = seedStored batId 400 n2
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (2, 0))]
                 wire        = HS.singleton (1, 0)
-                n3          = tickPowerNodes noon HM.empty 3600 wire positions HM.empty seeded
+                n3          = tickPowerNodes testWorldSize noon HM.empty 3600 wire positions HM.empty seeded
             pnStoredWh ⊚ lookupPowerNode batId n3 `shouldBe` Just 500
 
         it "no time passing (dtGameSeconds <= 0) is a no-op" $ do
@@ -181,7 +193,7 @@ spec = do
                 (n2, batId) = addPowerNode battery PowerStorage 5000 n1
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (2, 0))]
                 wire        = HS.singleton (1, 0)
-                n3          = tickPowerNodes noon HM.empty 0 wire positions HM.empty n2
+                n3          = tickPowerNodes testWorldSize noon HM.empty 0 wire positions HM.empty n2
             pnStoredWh ⊚ lookupPowerNode batId n3 `shouldBe` Just 0
 
     describe "tickPowerNodes — discharging + brownout" $ do
@@ -194,7 +206,7 @@ spec = do
                 drain       = HM.singleton srcId 100
                 -- midnight: 0 generation, 100W drain, 1h => -100Wh from
                 -- 50Wh stored => clamped to 0
-                n3          = tickPowerNodes midnight drain 3600 wire positions HM.empty seeded
+                n3          = tickPowerNodes testWorldSize midnight drain 3600 wire positions HM.empty seeded
             pnStoredWh ⊚ lookupPowerNode batId n3 `shouldBe` Just 0
 
         it "depleting the battery reports Brownout on the next query" $ do
@@ -203,7 +215,7 @@ spec = do
                 positions   = HM.fromList [(srcId, (0, 0)), (batId, (2, 0))]
                 wire        = HS.singleton (1, 0)
                 drain       = HM.singleton srcId 100
-                nets        = computeSnapshots midnight drain wire n2 positions HM.empty
+                nets        = computeSnapshots testWorldSize midnight drain wire n2 positions HM.empty
             map pnwStatus nets `shouldBe` [Brownout]
 
         it "two batteries discharge proportionally to their own charge" $ do
@@ -218,7 +230,7 @@ spec = do
                 -- 300W drain for 1h = 300Wh demand, split 1:2 by current
                 -- charge (100 vs 200) => battery1 loses 100 (empty),
                 -- battery2 loses 200 (empty) — both exactly drained.
-                ticked = tickPowerNodes midnight drain 3600 wire positions HM.empty seeded
+                ticked = tickPowerNodes testWorldSize midnight drain 3600 wire positions HM.empty seeded
             pnStoredWh ⊚ lookupPowerNode batId1 ticked `shouldBe` Just 0
             pnStoredWh ⊚ lookupPowerNode batId2 ticked `shouldBe` Just 0
 
@@ -228,7 +240,7 @@ spec = do
                 positions   = HM.singleton srcId (0, 0)
                 wire        = HS.singleton (1, 0)
                 consumers   = HM.singleton workshop ((2, 0), 150)
-                nets        = computeSnapshots noon HM.empty wire n1 positions consumers
+                nets        = computeSnapshots testWorldSize noon HM.empty wire n1 positions consumers
             case nets of
                 [net] → do
                     pnwDrainW net `shouldBe` 150
@@ -241,7 +253,7 @@ spec = do
                 wire        = HS.singleton (1, 0)
                 consumers   = HM.fromList [ (workshop,  ((2, 0), 150))
                                           , (workshop2, ((1, 1), 75)) ]
-                nets        = computeSnapshots noon HM.empty wire n1 positions consumers
+                nets        = computeSnapshots testWorldSize noon HM.empty wire n1 positions consumers
             map pnwDrainW nets `shouldBe` [225]
 
         it "a consumer not adjacent to any wire is dropped — no network, no drain" $ do
@@ -249,7 +261,7 @@ spec = do
                 positions   = HM.singleton srcId (0, 0)
                 wire        = HS.singleton (1, 0)
                 consumers   = HM.singleton workshop ((50, 50), 150)
-                nets        = computeSnapshots noon HM.empty wire n1 positions consumers
+                nets        = computeSnapshots testWorldSize noon HM.empty wire n1 positions consumers
             case nets of
                 [net] → do
                     pnwDrainW net `shouldBe` 0
@@ -263,7 +275,7 @@ spec = do
             -- ever, the consumer could never be Powered anyway.
             let wire      = HS.singleton (1, 0)
                 consumers = HM.singleton workshop ((0, 0), 150)
-                nets      = computeSnapshots noon HM.empty wire emptyPowerNodes HM.empty consumers
+                nets      = computeSnapshots testWorldSize noon HM.empty wire emptyPowerNodes HM.empty consumers
             nets `shouldBe` []
 
         it "consumer drain actually discharges a battery over time (day/night balance)" $ do
@@ -273,7 +285,7 @@ spec = do
                 wire        = HS.singleton (1, 0)
                 consumers   = HM.singleton workshop ((2, 0), 100)
                 -- midnight: 0 generation, 100W drain, 1h => -100Wh
-                ticked = tickPowerNodes midnight HM.empty 3600 wire positions consumers seeded
+                ticked = tickPowerNodes testWorldSize midnight HM.empty 3600 wire positions consumers seeded
             pnStoredWh ⊚ lookupPowerNode batId ticked `shouldBe` Just 400
 
         it "a consumer-only network with an empty battery reads Brownout" $ do
@@ -281,7 +293,7 @@ spec = do
                 positions   = HM.singleton batId (0, 0)
                 wire        = HS.singleton (1, 0)
                 consumers   = HM.singleton workshop ((2, 0), 100)
-                nets        = computeSnapshots midnight HM.empty wire n1 positions consumers
+                nets        = computeSnapshots testWorldSize midnight HM.empty wire n1 positions consumers
             map pnwStatus nets `shouldBe` [Brownout]
 
         it "a bridging node still lets a consumer on either stub join the SAME network" $ do
@@ -294,7 +306,7 @@ spec = do
                 -- the panel at (5,5) bridges (4,5) and (6,5) into one
                 -- network, so the workshop's drain must land in it.
                 consumers   = HM.singleton workshop ((7, 5), 150)
-                nets        = computeSnapshots noon HM.empty wire n1 positions consumers
+                nets        = computeSnapshots testWorldSize noon HM.empty wire n1 positions consumers
             case nets of
                 [net] → do
                     pnwConsumerIds net `shouldBe` [workshop]
@@ -319,3 +331,64 @@ spec = do
             let active = HM.singleton workshop ((2, 0), 150)
             combineConsumers HM.empty active `shouldBe` active
             combineConsumers active HM.empty `shouldBe` active
+
+    describe "local solar phasing (#794)" $ do
+        it "two otherwise-identical panels read local noon vs. local midnight under the same global clock" $ do
+            -- testWorldSize's circumference is 64 tiles; noonId sits
+            -- exactly half of it away (u=32) from midnightId (u=0), so
+            -- under a global clock reading midnight, noonId's OWN local
+            -- angle is noon while midnightId's stays at the global angle.
+            let (n1, noonId)     = addPowerNode panel    PowerSource 400 emptyPowerNodes
+                (n2, midnightId) = addPowerNode farPanel PowerSource 400 n1
+                positions = HM.fromList [ (noonId, (32, 0)), (midnightId, (0, 0)) ]
+                wire      = HS.fromList [(33, 0), (1, 0)]  -- two disjoint single-node networks
+                nets = computeSnapshots testWorldSize midnight HM.empty wire n2 positions HM.empty
+            case ( find (elem noonId . pnwNodeIds) nets
+                 , find (elem midnightId . pnwNodeIds) nets ) of
+                (Just noonNet, Just midnightNet) → do
+                    pnwGenerationW noonNet `shouldBe` 400
+                    pnwGenerationW midnightNet `shouldBe` 0
+                _ → expectationFailure
+                        ("expected two separate single-node networks, got " <> show nets)
+
+        it "sums independently-phased sources at different longitudes, one exactly opposite the others on the cylinder" $ do
+            -- u=0 (global midnight => local midnight => 0), u=16 (a
+            -- quarter circumference away => local dawn => 0), u=32 (HALF
+            -- the circumference away — the antipodal point on the
+            -- cylinder => local noon => full output). The old bug
+            -- (applying one shared GLOBAL intensity to every source)
+            -- would report a total of 0 here, since the global angle IS
+            -- midnight — not 200.
+            let (n1, midId)  = addPowerNode panel    PowerSource 100 emptyPowerNodes
+                (n2, dawnId) = addPowerNode farPanel  PowerSource 150 n1
+                (n3, noonId) = addPowerNode battery   PowerSource 200 n2
+                positions = HM.fromList [ (midId, (0, 0)), (dawnId, (16, 0)), (noonId, (32, 0)) ]
+                wire = HS.fromList [ (x, 1) | x ← [0 .. 32] ]  -- one contiguous run touching all 3
+                nets = computeSnapshots testWorldSize midnight HM.empty wire n3 positions HM.empty
+            case nets of
+                [net] → pnwGenerationW net `shouldBe` 200
+                _     → expectationFailure ("expected exactly one network, got " <> show nets)
+
+        it "positions exactly one circumference apart (seam-aliased) agree" $ do
+            let (n1, aId) = addPowerNode panel    PowerSource 300 emptyPowerNodes
+                (n2, bId) = addPowerNode farPanel PowerSource 300 n1
+                positions = HM.fromList [ (aId, (5, 0)), (bId, (5 + 64, 0)) ]
+                wire        = HS.fromList [(6, 0), (6 + 64, 0)]
+                globalAngle = 0.375  -- an arbitrary non-breakpoint angle
+                nets = computeSnapshots testWorldSize globalAngle HM.empty wire n2 positions HM.empty
+            case (find (elem aId . pnwNodeIds) nets, find (elem bId . pnwNodeIds) nets) of
+                (Just netA, Just netB) → pnwGenerationW netA `shouldBe` pnwGenerationW netB
+                _ → expectationFailure
+                        ("expected two separate seam-aliased networks, got " <> show nets)
+
+        it "only the locally-illuminated panel's battery actually charges" $ do
+            let (n1, noonSrc) = addPowerNode panel    PowerSource 100 emptyPowerNodes
+                (n2, noonBat) = addPowerNode battery  PowerStorage 5000 n1
+                (n3, midSrc)  = addPowerNode farPanel PowerSource 100 n2
+                (n4, midBat)  = addPowerNode battery2 PowerStorage 5000 n3
+                positions = HM.fromList [ (noonSrc, (32, 0)), (noonBat, (32, 2))
+                                        , (midSrc,  (0, 0)),  (midBat,  (0, 2)) ]
+                wire   = HS.fromList [(32, 1), (0, 1)]
+                ticked = tickPowerNodes testWorldSize midnight HM.empty 3600 wire positions HM.empty n4
+            pnStoredWh ⊚ lookupPowerNode noonBat ticked `shouldBe` Just 100
+            pnStoredWh ⊚ lookupPowerNode midBat  ticked `shouldBe` Just 0

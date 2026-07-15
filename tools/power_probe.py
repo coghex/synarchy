@@ -48,6 +48,16 @@ What it does:
   8. Save -> quit -> fresh restart -> reload defs -> load: every placed
      building, its power node, AND the battery's charged storedWh survive,
      reconnected by BuildingId.
+  9. Longitude-local generation (#794), on a SEPARATE small real world
+     (worldSize=8) rather than the arena above (whose synthetic
+     wgpWorldSize=100000 makes any two in-arena tiles' longitudes
+     practically identical): two solar panels at the meridian and the
+     EXACT antipodal point of the cylinder (u=0 vs u=64) each land on
+     their own isolated network, and each network's generationW tracks
+     ITS OWN tile's world.getSunAngleAt reading — and the two panels'
+     generationW differ by a wide margin, not one shared global value.
+     Runs after the arena's save (step 8) completes, so this second page
+     never rides along in that save file.
 
 Usage: python3 tools/power_probe.py [--port 9358]
 Exit 0 = every check passed.
@@ -57,6 +67,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import shutil
 import socket
@@ -284,6 +295,92 @@ def main() -> int:
             time.sleep(0.1)
         passed = check(passed, os.path.exists(save_file),
                        f"save file appeared at {save_file}")
+
+        # --- 9. Per-source longitude-local generation at REAL,
+        # meaningfully-separated positions (#794). The arena above (#358/
+        # #360's existing home) carries a synthetic wgpWorldSize of 100000
+        # chunks (World.Thread.Command.Init) so its whole loaded footprint
+        # spans a tiny fraction of that circumference — nowhere near enough
+        # separation for a comparison against world.getSunAngleAt to
+        # actually distinguish per-source local phasing from the pre-#794
+        # bug (one shared global sun angle applied to every source). A
+        # dedicated small REAL world (worldSize=8, circumference 128 tiles)
+        # gives two ordinary tiles a genuinely different longitude: (10,10)
+        # sits at the meridian (u=0) while (64,0) is EXACTLY the antipodal
+        # point (u=64, half the circumference) — the "opposite sides of the
+        # cylinder" case the issue calls out by name. Seed 42 + these exact
+        # coordinates are pre-verified flat, dry, loaded land. This runs on
+        # the SAME engine A instance, AFTER the arena's save already
+        # completed above, so this second page never rides along in it.
+        send(port, "world.init('longitude_check', 42, 8, 3); return 'ok'")
+        send(port, "return world.waitForInit(120)", timeout=125)
+        send(port, "world.show('longitude_check'); return 'ok'")
+        if not wait_active(port, "longitude_check"):
+            sys.exit("FAIL: longitude_check world never became active")
+        # (64,0) is far from the default spawn/camera area and its chunk
+        # won't load on demand without a camera nearby — load both target
+        # chunks explicitly before placing anything there.
+        send(port, "return world.loadChunksInRegion(-1, -1, 5, 1)")
+        send(port, "return world.waitForChunks(60)", timeout=65)
+
+        lc_uid = as_int(send(port, "return unit.spawn('technomule', 10, 10)"))
+        if lc_uid is None:
+            sys.exit("FAIL: longitude_check technomule spawn rejected")
+        for _ in range(50):
+            if count_item(port, lc_uid, "solar_panel") >= 2:
+                break
+            time.sleep(0.1)
+        send(port, f"unit.select({lc_uid}); return 'ok'")
+
+        meridian_bid = as_int(send(port,
+            "return require('scripts.build_tool').commitPlacement("
+            "'solar_panel', 10, 10)"))
+        antipodal_bid = as_int(send(port,
+            "return require('scripts.build_tool').commitPlacement("
+            "'solar_panel', 64, 0)"))
+        passed = check(passed, meridian_bid is not None and antipodal_bid is not None,
+                       "both longitude-check solar panels placed",
+                       {"meridian": meridian_bid, "antipodal": antipodal_bid})
+
+        # Wire each panel into its OWN isolated network.
+        send(port, "require('scripts.wire').place(11, 10); return 'ok'")
+        send(port, "require('scripts.wire').place(65, 0); return 'ok'")
+
+        send(port, "world.setTimeScale('longitude_check', 0); return 'ok'")
+        send(port, "world.setTime('longitude_check', 9, 37); return 'ok'")
+        time.sleep(0.3)
+
+        generation = {}
+        for label, node_bid, gx, gy in [
+            ("meridian panel", meridian_bid, 10, 10),
+            ("antipodal panel", antipodal_bid, 64, 0),
+        ]:
+            node = jget(port, f"return power.getNodeForBuilding({node_bid})")
+            net = (jget(port, f"return power.getNetworkForNode({node['id']})")
+                   if isinstance(node, dict) else None)
+            sun_angle = jget(port, f"return world.getSunAngleAt({gx}, {gy})")
+            expected_gen = (400.0 * max(0.0, -math.cos(2 * math.pi * float(sun_angle)))
+                            if isinstance(sun_angle, (int, float)) else None)
+            generation[label] = net.get("generationW") if isinstance(net, dict) else None
+            passed = check(passed,
+                isinstance(net, dict) and expected_gen is not None
+                and abs(net.get("generationW", -1.0) - expected_gen) < 0.5,
+                f"{label} ({gx},{gy}) network generationW tracks its own "
+                "world.getSunAngleAt-derived local intensity",
+                {"net": net, "sunAngle": sun_angle, "expected": expected_gen})
+
+        # The bug this guards against: one shared global sun angle applied
+        # to every source regardless of position would report the SAME
+        # generationW for both panels. At u=0 vs u=64 (half the
+        # circumference apart, the maximum possible separation) the two
+        # panels' true local intensities are as far apart as they can get
+        # (full peak vs. fully clamped to 0 at this clock time), so this
+        # catches the regression with a wide margin.
+        passed = check(passed,
+            all(isinstance(v, (int, float)) for v in generation.values())
+            and abs(generation["meridian panel"] - generation["antipodal panel"]) > 50.0,
+            "meridian and antipodal panels report meaningfully DIFFERENT "
+            "generationW, not one shared global value", generation)
 
         quit_engine(port, procA)
         procA = None

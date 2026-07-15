@@ -286,11 +286,24 @@ liveConsumersOn env exclude pageId now bm ws = do
     pure $ combineConsumers (consumersOn pageId now bm)
                 (activeCraftConsumersOn exclude pageId now bm rm bills)
 
+-- | A page's world size (in chunks), for resolving each solar source's
+--   OWN longitude-local sun angle (#794, 'Power.Network.computeSnapshots'/
+--   'tickPowerNodes') alongside the page's global clock angle — the same
+--   'wsGenParamsRef' 'World.getSunAngleAt' itself reads
+--   ('Engine.Scripting.Lua.API.WorldQuery.Lookup.getWorldGenParams'), so
+--   every power query agrees with it on that page. 0 (not a 128-ish
+--   fallback) matches 'placeNodeOn's existing convention just above:
+--   'World.Time.Local.localSunAngle's own ≤0 fallback (a 1-chunk
+--   circumference) already covers an arena/not-yet-generated page.
+pageWorldSize ∷ WorldState → IO Int
+pageWorldSize ws = maybe 0 wgpWorldSize ⊚ readIORef (wsGenParamsRef ws)
+
 -- | Gather the active world's current network snapshots (#360):
 --   connectivity + generation/drain/stored/capacity/status, recomputed
---   live from this instant's sun angle, folding in every requires_power
---   building's drain (#361) plus every active craft job's draw (#590)
---   via 'liveConsumersOn'. A plain read — no bill excluded.
+--   live from each source's own longitude-local sun angle (#794),
+--   folding in every requires_power building's drain (#361) plus every
+--   active craft job's draw (#590) via 'liveConsumersOn'. A plain
+--   read — no bill excluded.
 activeNetworkSnapshots ∷ EngineEnv → IO [PN.PowerNetworkSnapshot]
 activeNetworkSnapshots env = do
     mPage ← activeWorldPage env
@@ -302,11 +315,12 @@ activeNetworkSnapshots env = do
             td    ← readIORef (wsTilesRef ws)
             bm    ← readIORef (buildingManagerRef env)
             now   ← readIORef (gameTimeRef env)
+            worldSize ← pageWorldSize ws
             let sunAngle   = worldTimeToSunAngle wt
                 wireTiles  = wireTilesOn td
                 positions  = positionsOf pageId bm nodes
             consumers ← liveConsumersOn env Nothing pageId now bm ws
-            pure (computeSnapshots sunAngle HM.empty wireTiles nodes
+            pure (computeSnapshots worldSize sunAngle HM.empty wireTiles nodes
                                     positions consumers)
 
 -- | Whether a building's OWN power requirement (#361), if any, is
@@ -340,10 +354,11 @@ isBuildingPowered env bid = do
                             td    ← readIORef (wsTilesRef ws)
                             now   ← readIORef (gameTimeRef env)
                             consumers ← liveConsumersOn env Nothing (biPage inst) now bm ws
+                            worldSize ← pageWorldSize ws
                             let sunAngle   = worldTimeToSunAngle wt
                                 wireTiles  = wireTilesOn td
                                 positions  = positionsOf (biPage inst) bm nodes
-                                nets = computeSnapshots sunAngle HM.empty
+                                nets = computeSnapshots worldSize sunAngle HM.empty
                                             wireTiles nodes positions consumers
                             pure $ case find (elem bid . PN.pnwConsumerIds) nets of
                                 Just net → PN.pnwStatus net ≡ PN.Powered
@@ -390,13 +405,14 @@ isRecipePoweredAt env mBillId bid drawW
                         td    ← readIORef (wsTilesRef ws)
                         now   ← readIORef (gameTimeRef env)
                         othersOnly ← liveConsumersOn env mBillId (biPage inst) now bm ws
+                        worldSize ← pageWorldSize ws
                         let sunAngle  = worldTimeToSunAngle wt
                             wireTiles = wireTilesOn td
                             positions = positionsOf (biPage inst) bm nodes
                             tile      = (biAnchorX inst, biAnchorY inst)
                             consumers = HM.insertWith (\(_, new) (_, old) → (tile, new + old))
                                             bid (tile, drawW) othersOnly
-                            nets = computeSnapshots sunAngle HM.empty
+                            nets = computeSnapshots worldSize sunAngle HM.empty
                                         wireTiles nodes positions consumers
                         pure $ case find (elem bid . PN.pnwConsumerIds) nets of
                             Just net → PN.pnwStatus net ≡ PN.Powered
