@@ -118,7 +118,7 @@ spec = do
                     aoHandler r `shouldBe` Just "moveUp"
                 _ → expectationFailure ("expected one record, got " ⧺ show recs)
 
-        it "an unbound gameplay key still drains one accepted record (domain fallback)" $ \env → do
+        it "an unbound gameplay key drains one noop record (ignored route, #771)" $ \env → do
             resetAll env
             push env [InputKeyEvent GLFW.Key'F1 GLFW.KeyState'Pressed noMods]
             inputTick env
@@ -126,8 +126,9 @@ spec = do
             case recs of
                 [r] → do
                     aoKind r `shouldBe` "input.key"
-                    aoOutcome r `shouldBe` "accepted"
+                    aoOutcome r `shouldBe` "noop"
                     aoHandler r `shouldBe` Just "gameplay_key"
+                    aoReason r `shouldSatisfy` (≢ Nothing)
                 _ → expectationFailure ("expected one record, got " ⧺ show recs)
 
         it "a bare modifier key press never gets its own record (#730 review)" $ \env → do

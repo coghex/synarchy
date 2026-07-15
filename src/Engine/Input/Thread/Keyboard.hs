@@ -58,9 +58,10 @@ recordKeyOutcome env domain matched target = do
 --   attribution is the contract (#730 review: "consumed-vs-ignored
 --   distinction derivable from the engine-side keybind registry";
 --   per-Lua-script onKeyDown-subscriber attribution is NOT required).
---   'Nothing' when no editable action binds this key — still a real,
---   accepted broadcast (every onKeyDown fires regardless of binding),
---   just with no identifiable bound consumer.
+--   'Nothing' when no editable action binds this key — the broadcast
+--   still fires (every onKeyDown fires regardless of binding), but
+--   with no identifiable bound consumer, so #771 records it as
+--   ignored/noop rather than a false "accepted".
 gameplayKeyHandler ∷ GLFW.Key → KeyBindings → Maybe Text
 gameplayKeyHandler glfwKey bindings = case
     [ action | (action, keyNames) ← Map.toList bindings
@@ -218,20 +219,21 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
             logDebug logger CatInput "Action triggered: escape"
             Q.writeQueue (luaQueue env) LuaUIEscape
             markMatched "escape"
-        -- Gameplay-domain keys always dispatch (onKeyDown always
-        -- broadcasts here, Grave excepted above) — "accepted" is
-        -- unconditional; the handler resolves to the bound action
-        -- name when the keybind registry has one, else falls back
-        -- to the domain itself (still a real, consumed broadcast —
-        -- see 'gameplayKeyHandler').
+        -- Gameplay-domain keys always broadcast onKeyDown (Grave
+        -- excepted above), but "accepted" (#771) is conditional on an
+        -- actual consumer: a matched built-in route (escape,
+        -- openShell — highest priority, set via markMatched above) or
+        -- a bound keybind-registry action. A key with neither is
+        -- passed through as genuine 'Nothing', letting
+        -- 'recordKeyOutcome' emit its ignored/noop record (domain
+        -- "gameplay_key", descriptive reason) instead of a false
+        -- "accepted".
         when shouldRecord $ do
             bindings ← readIORef (keyBindingsRef env)
             matched ← readIORef matchedRef
             let handler = case matched of
                     Just m  → Just m
-                    Nothing → case gameplayKeyHandler glfwKey bindings of
-                        Just b  → Just b
-                        Nothing → Just "gameplay_key"
+                    Nothing → gameplayKeyHandler glfwKey bindings
             recordKeyOutcome env "gameplay_key" handler Nothing
 
     -- While text input has focus, normal key presses are not

@@ -258,8 +258,9 @@ def main() -> int:
     tx, ty = geom["txtX"], geom["txtY"]
 
     # 4a. Gameplay-domain key (no UI focus): drains ONE "input.key"
-    # record, always "accepted" (every onKeyDown broadcasts regardless
-    # of binding — see Engine.Input.Thread.recordKeyOutcome).
+    # record. W is bound to moveUp, so it's "accepted" naming the
+    # bound action; an UNBOUND gameplay key instead drains a "noop"
+    # record (#771) — see Engine.Input.Thread.Keyboard.recordKeyOutcome.
     lua('require("scripts.input_check_fixture").unfocusText(); return true')
     drain()
     lua('return input.key("W")')
