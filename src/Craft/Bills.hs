@@ -91,7 +91,15 @@ data CraftBill = CraftBill
       --   (not even via a dead/stale-claimant takeover — see
       --   'claimAvailable'), but a claimant already on it when it's
       --   paused keeps working to the end of the current cycle rather
-      --   than being ripped off mid-craft.
+      --   than being ripped off mid-craft. #796 draws the actual stop
+      --   line at that cycle's completion: 'completeBillCycle' clears
+      --   'cbClaimant' (not just 'cbWorking') on a paused bill instead
+      --   of rolling into the next cycle, so a finite bill queues idle
+      --   and a repeat-forever bill stops instead of running forever
+      --   while visibly paused. The craft AI enforces the other half —
+      --   a claimant still fetching or walking (not yet 'cbWorking')
+      --   aborts and releases as soon as it observes the pause, rather
+      --   than starting a cycle it would never be allowed to finish.
     , cbWorking   ∷ !Bool
       -- ^ #590: is the current claimant ACTIVELY pouring work into this
       --   cycle right now, as opposed to still fetching materials or
@@ -171,7 +179,10 @@ billsForStation station =
 --   via the dead-claimant or stale-timeout takeover paths — but the
 --   worker who already holds it may keep refreshing: pausing stops new
 --   work from starting, it doesn't rip an in-progress craft away
---   mid-cycle.
+--   mid-cycle. That refresh window is bounded, not indefinite —
+--   'completeBillCycle' clears the claimant on a paused bill once the
+--   in-flight cycle ends, so refreshing here only ever carries a
+--   holder through to that one boundary (#796).
 claimAvailable ∷ Double → Double → (UnitId → Bool) → UnitId → CraftBill
                → Bool
 claimAvailable now timeout alive uid bill = case cbClaimant bill of
@@ -243,16 +254,25 @@ addBillProgress bid delta bills = case lookupBill bid bills of
 -- | One craft cycle finished: reset progress and decrement the count.
 --   A finite bill that reaches 0 is removed; a repeat bill stays at
 --   -1 forever. Returns the new remaining count (0 = bill done and
---   gone), or Nothing for an unknown bill. The claim is kept so the
---   crafter rolls straight into the next cycle without re-claiming,
---   but 'cbWorking' resets to False either way — the next cycle (if
---   any) starts back at fetching/walking, not already mid-work.
+--   gone), or Nothing for an unknown bill. 'cbWorking' resets to False
+--   either way — the next cycle (if any) starts back at
+--   fetching/walking, not already mid-work. For a CONTINUING bill
+--   (finite with cycles left, or repeat-forever), the claim itself is
+--   kept ONLY when the bill is unpaused, so the same crafter rolls
+--   straight into the next cycle without re-claiming (#796's "normal
+--   unpaused cycle chaining"); a bill that was paused before this
+--   cycle completed instead has 'cbClaimant' cleared here too, so it
+--   goes idle rather than starting another cycle — the enforced half
+--   of "finish the current cycle, then stop" (the other half, aborting
+--   before an in-flight-but-not-yet-working cycle starts, is the craft
+--   AI's job; see 'cbPaused').
 completeBillCycle ∷ BillId → CraftBills → (CraftBills, Maybe Int)
 completeBillCycle bid bills = case lookupBill bid bills of
     Nothing → (bills, Nothing)
     Just bill
         | cbRemaining bill < 0 →
-            let bill' = bill { cbProgress = 0, cbWorking = False }
+            let bill' = bill { cbProgress = 0, cbWorking = False
+                             , cbClaimant = stoppedIfPaused bill }
             in ( bills { cbsBills = HM.insert bid bill' (cbsBills bills) }
                , Just (-1) )
         | cbRemaining bill ≤ 1 →
@@ -260,13 +280,18 @@ completeBillCycle bid bills = case lookupBill bid bills of
         | otherwise →
             let bill' = bill { cbProgress = 0
                              , cbRemaining = cbRemaining bill - 1
-                             , cbWorking = False }
+                             , cbWorking = False
+                             , cbClaimant = stoppedIfPaused bill }
             in ( bills { cbsBills = HM.insert bid bill' (cbsBills bills) }
                , Just (cbRemaining bill') )
+  where
+    stoppedIfPaused bill = if cbPaused bill then Nothing else cbClaimant bill
 
--- | Toggle a bill's paused flag. Claim/progress are untouched — pause
---   only gates future claims (see 'claimAvailable'). False for an
---   unknown id.
+-- | Toggle a bill's paused flag. Claim/progress are untouched by the
+--   toggle itself — pausing just gates future claims (see
+--   'claimAvailable') and marks the bill for 'completeBillCycle' to
+--   stop rolling into a further cycle once whatever's in flight right
+--   now finishes (#796). False for an unknown id.
 setBillPaused ∷ BillId → Bool → CraftBills → (CraftBills, Bool)
 setBillPaused bid paused bills = case lookupBill bid bills of
     Nothing → (bills, False)

@@ -785,7 +785,13 @@ claimant, so a new holder never inherits a stale "working" state from
 whoever it replaced. Pausing (`cbPaused`, #330) is orthogonal: per
 `claimAvailable`'s existing rule that a paused bill's existing holder
 keeps working to the end of the cycle, pausing never touches
-`cbWorking` either — a paused-but-still-held bill keeps drawing.
+`cbWorking` either — a paused-but-still-held bill keeps drawing for
+that one remaining cycle. It stops there: `completeBillCycle` (#796)
+clears the claimant on a paused bill instead of rolling into another
+cycle, and the craft_job AI aborts and releases on its own if it
+notices the pause before it ever reaches "working" (fetching/walking
+never drew power to begin with), so a paused bill can't run — or
+draw — indefinitely.
 `Power.Network.activeCraftConsumersOn` derives a station's tile + drain
 fresh from every bill that is BOTH claimed AND `cbWorking`, whose
 recipe demands power — an unclaimed bill, a claimed-but-not-yet-working

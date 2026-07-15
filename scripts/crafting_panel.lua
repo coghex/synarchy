@@ -35,7 +35,12 @@
 --
 -- Pause and manual reorder are real backend features (Craft.Bills'
 -- cbPaused / cbSeq, save v74) — see craft.setBillPaused /
--- craft.reorderBill.
+-- craft.reorderBill. Pause stops the bill after its current cycle
+-- (#796): a claimant already ACTIVELY WORKING rides through to that
+-- cycle's end, then the bill goes idle rather than starting another
+-- one; a claimant still fetching/walking (not yet working) aborts and
+-- releases immediately, and no fresh claimant can pick it up while
+-- paused.
 --
 -- Recipes and bills both paginate (Prev/Next) rather than hard-cap,
 -- so every recipe and every queued bill stays reachable regardless of
@@ -647,7 +652,9 @@ renderQueue = function()
             font = h.menuFont, fontSize = NAME_FONT, color = rowNameCol,
             page = h.page, uiscale = uiscale,
             x = x, y = rowY + math.floor(NAME_FONT * uiscale),
-            tooltip = bill.paused and "Paused -- won't draw a new worker" or nil,
+            tooltip = bill.paused and (bill.working
+                and "Paused -- finishes the current cycle, then stops"
+                or "Paused -- stopped, won't draw a worker") or nil,
         })
         table.insert(s.queueElements, { kind = "label", id = nameId })
 
