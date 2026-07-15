@@ -237,11 +237,11 @@ local function unitConditions(uid)
             out[#out + 1] = { name = "Dehydrated", icon = "hydration",
                 hint = "Water below 25%. Collapses near empty; find a water source." }
         end
-        local cal = stats.get(uid, "calories")
-        if cal and cal <= 0 then
-            out[#out + 1] = { name = "Starving", icon = "hunger",
-                hint = "Out of energy — burning fat then muscle reserves to survive." }
-        end
+        -- Hungry/Starving (#806): scripts.starvation's fraction bands
+        -- (distinct from the "is starving" empty-store popup).
+        local band = require("scripts.starvation").band(uid)
+        local hint = ({ starving = "Energy store critical — measurably weaker, and burning fat then muscle.", hungry = "Energy store low — measurably slower until it refills." })[band]
+        if hint then out[#out + 1] = { name = band:sub(1, 1):upper() .. band:sub(2), icon = "hunger", hint = hint } end
     end
 
     return out
