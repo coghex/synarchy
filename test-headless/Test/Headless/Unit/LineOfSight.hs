@@ -239,3 +239,19 @@ spec = beforeAll initEnv $ do
             tiles `shouldBe` []
             aw ← unitAwareness env ghost other
             aw `shouldBe` 0
+
+        it "a HIDDEN page (registered in wmWorlds, absent from wmVisible) yields empty vision and zero awareness" $ \env → do
+            -- pageB keeps a full WorldState in wmWorlds (world.hide only
+            -- ever drops a page from wmVisible, never from wmWorlds) but
+            -- is NOT in the visible list — units on it must not get a
+            -- free pass just because their page still exists.
+            wm ← setupPages [pageA]
+            writeIORef (worldManagerRef env) wm
+            let defender = testUnit pageB 5 8 5 DirE
+                attacker = testUnit pageB 11 8 5 DirE   -- same-page pair,
+                                                          -- in range/cone
+            putUnits env [(UnitId 1, defender), (UnitId 2, attacker)]
+            tiles ← unitVisibleTiles env (UnitId 1)
+            tiles `shouldBe` []
+            aw ← unitAwareness env defender attacker
+            aw `shouldBe` 0

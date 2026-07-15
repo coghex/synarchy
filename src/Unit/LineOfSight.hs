@@ -49,7 +49,8 @@ unitVisibleTiles env uid = do
         Nothing → return []
         Just inst → do
             wm ← readIORef (worldManagerRef env)
-            case lookup (uiPage inst) (wmWorlds wm) of
+            if uiPage inst `notElem` wmVisible wm then return []
+            else case lookup (uiPage inst) (wmWorlds wm) of
                 Nothing → return []
                 Just ws → do
                     wtd ← readIORef (wsTilesRef ws)
@@ -102,7 +103,9 @@ unitVisibleTiles env uid = do
 --   incoming blow less reliably in the dark (#315).
 --
 --   Zero (no dodge) when attacker and defender are on different world
---   pages, or when the defender's own page can't be resolved — a unit
+--   pages, or when the defender's own page can't be resolved — missing,
+--   destroyed, or registered but currently HIDDEN (removed from
+--   wmVisible by world.hide while still present in wmWorlds) — a unit
 --   never gains awareness from another page's geometry, clock, or
 --   world-size (#797).
 unitAwareness ∷ EngineEnv → UnitInstance → UnitInstance → IO Float
@@ -110,7 +113,8 @@ unitAwareness env defender attacker
     | uiPage defender ≠ uiPage attacker = pure 0.0
     | otherwise = do
         wm ← readIORef (worldManagerRef env)
-        case lookup (uiPage defender) (wmWorlds wm) of
+        if uiPage defender `notElem` wmVisible wm then pure 0.0
+        else case lookup (uiPage defender) (wmWorlds wm) of
             Nothing → pure 0.0
             Just ws → do
                 let defX = uiGridX defender
@@ -146,7 +150,8 @@ unitAwareness env defender attacker
 activeWorldSizeChunks ∷ EngineEnv → WorldPageId → IO Int
 activeWorldSizeChunks env pageId = do
     wm ← readIORef (worldManagerRef env)
-    case lookup pageId (wmWorlds wm) of
+    if pageId `notElem` wmVisible wm then pure 128
+    else case lookup pageId (wmWorlds wm) of
         Nothing → pure 128
         Just ws → do
             mParams ← readIORef (wsGenParamsRef ws)
@@ -173,11 +178,16 @@ nightPerceptionFloor = 0.5
 
 -- | Terrain line-of-sight between two units (true ⇒ a hill/wall blocks
 --   the sightline, the units are on different pages, or the defender's
---   page can't be resolved — a cross-page or unresolvable pair is
---   treated as blocked, never as an unearned clear sightline, #797).
---   Falls back to "clear" only when NO world page exists at all (the
---   pre-boot / legacy no-page state), matching 'notBlocked''s
---   chunk-missing assumption — unchanged single-world behavior.
+--   page can't be resolved — missing, destroyed, or hidden — a
+--   cross-page or unresolvable pair is treated as blocked, never as an
+--   unearned clear sightline, #797). Falls back to "clear" only when NO
+--   world page exists at all (the pre-boot / legacy no-page state),
+--   matching 'notBlocked''s chunk-missing assumption — unchanged
+--   single-world behavior. That empty-wmWorlds check must run BEFORE
+--   the visibility check below: a genuinely page-less world also has an
+--   empty wmVisible, and only the wmWorlds-empty case gets the "clear"
+--   fallback — a page that's merely hidden (registered in wmWorlds,
+--   removed from wmVisible by world.hide) must still come out blocked.
 losBlockedBetween ∷ EngineEnv → UnitInstance → UnitInstance → IO Bool
 losBlockedBetween env defender attacker
     | uiPage defender ≠ uiPage attacker = pure True
@@ -185,16 +195,18 @@ losBlockedBetween env defender attacker
         wm ← readIORef (worldManagerRef env)
         case wmWorlds wm of
             [] → pure False
-            worlds → case lookup (uiPage defender) worlds of
-                Nothing → pure True
-                Just ws → do
-                    wtd ← readIORef (wsTilesRef ws)
-                    let ux   = floor (uiGridX defender) ∷ Int
-                        uy   = floor (uiGridY defender) ∷ Int
-                        gx   = floor (uiGridX attacker) ∷ Int
-                        gy   = floor (uiGridY attacker) ∷ Int
-                        eyeZ = fromIntegral (uiGridZ defender + 1) ∷ Double
-                    pure (not (notBlocked wtd ux uy eyeZ gx gy))
+            worlds
+                | uiPage defender `notElem` wmVisible wm → pure True
+                | otherwise → case lookup (uiPage defender) worlds of
+                    Nothing → pure True
+                    Just ws → do
+                        wtd ← readIORef (wsTilesRef ws)
+                        let ux   = floor (uiGridX defender) ∷ Int
+                            uy   = floor (uiGridY defender) ∷ Int
+                            gx   = floor (uiGridX attacker) ∷ Int
+                            gy   = floor (uiGridY attacker) ∷ Int
+                            eyeZ = fromIntegral (uiGridZ defender + 1) ∷ Double
+                        pure (not (notBlocked wtd ux uy eyeZ gx gy))
 
 -- | Vision/awareness radius per point of perception (tiles).
 awareRangeTiles ∷ Double
