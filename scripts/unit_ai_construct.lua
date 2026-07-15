@@ -228,6 +228,20 @@ local function constructStandPos(job, px, py)
     return bestX, bestY
 end
 
+-- The structure.hasAt slot this job will place into — mirrors
+-- placeStructurePiece's own kind/edge → slot derivation (#805) so the
+-- pre-payment occupancy revalidation below checks the EXACT slot the
+-- worker is about to write, not just "is this tile occupied at all".
+local function jobSlot(job)
+    if job.kind == "floor" then return "floor"
+    elseif job.kind == "ceiling" then return "ceiling"
+    elseif job.kind == "wall" then return "wall_" .. (job.edge or "ne")
+    elseif job.kind == "post" then return "post_" .. (job.edge or "n")
+    elseif job.kind == "wire" then return "wire"
+    end
+    return nil
+end
+
 -- Place the finished piece via the structures module (same programmatic
 -- builders locations.lua uses; they read the active world's terrain).
 -- Posts designated without a floor are filtered at scan time, but the
@@ -364,6 +378,24 @@ local function constructExecute(uid, s, params)
            <= params.construct_arrival_tiles then
             unit.stop(uid)
             if not job.consumed then
+                -- Revalidate the requested slot immediately before the
+                -- irreversible material payment (#805): a race can fill
+                -- it between claim and arrival (another worker's piece,
+                -- or a re-designation). Cancel rather than pay and
+                -- overwrite — no material lost, no stuck designation.
+                local slot = jobSlot(job)
+                if slot and structure.hasAt(job.x, job.y, slot) then
+                    reportFailure(uid,
+                        "Construction site is already built")
+                    debug.recordOutcome{
+                        kind = "construction.designate", outcome = "rejected",
+                        where = { x = job.x, y = job.y },
+                        reason = "requested structure slot filled before material payment",
+                    }
+                    construction.cancelDesignation(job.x, job.y)
+                    releaseConstructJob(s, uid)
+                    return
+                end
                 for matType, need in pairs(job.need) do
                     for _ = 1, need do
                         if not unit.removeItem(uid, matType) then
