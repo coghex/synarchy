@@ -936,6 +936,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Flatness
                    Test.Headless.WorldGen.SoilGate
                    Test.Headless.WorldGen.SoilShed
+                   Test.Headless.WorldGen.SoilRedistribution
                    Test.Headless.WorldGen.Exposure
                    Test.Headless.WorldGen.ZoomParity
                    Test.Headless.WorldGen.BorderProbe
