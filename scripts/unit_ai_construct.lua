@@ -245,37 +245,38 @@ local function jobSlot(job)
 end
 
 -- Place the finished piece via the structures module (same programmatic
--- builders locations.lua uses; they read the active world's terrain).
--- Posts designated without a floor are filtered at scan time, but the
--- floor can vanish mid-job — placement then fails and we log rather than
--- strand the job (the designation still completes); returns false so the
--- caller can apply the #799 no-silent-loss material policy.
+-- builders locations.lua uses). Every kind can fail mid-job (its target
+-- chunk unloads, not just a post's vanished floor, #799) — log rather
+-- than strand the job; returns false so the caller applies the refund.
 local function placeStructurePiece(job)
     local structures = require("scripts.structures")
+    local ok
     if job.kind == "floor" then
-        structures.floor(job.x, job.y)
+        ok = structures.floor(job.x, job.y)
     elseif job.kind == "ceiling" then
-        structures.ceiling(job.x, job.y)
+        ok = structures.ceiling(job.x, job.y)
     elseif job.kind == "wall" then
-        structures.wall(job.x, job.y, job.edge or "ne")
+        ok = structures.wall(job.x, job.y, job.edge or "ne")
     elseif job.kind == "post" then
-        -- Designations carry no corner (the tool's hover pick does);
-        -- default to "n" until the tool grows a corner picker.
-        if not structures.post(job.x, job.y, job.edge or "n") then
-            engine.logWarn("construct: post at " .. job.x .. "," .. job.y
-                .. " lost its floor mid-job — skipping placement")
-            return false
-        end
+        -- No corner in the designation (the tool's hover pick does);
+        -- default "n" until the tool grows a corner picker.
+        ok = structures.post(job.x, job.y, job.edge or "n")
     elseif job.kind == "wire" then
-        require("scripts.wire").place(job.x, job.y)
+        ok = require("scripts.wire").place(job.x, job.y)
+    else
+        ok = false
     end
-    return true
+    if not ok then
+        engine.logWarn("construct: " .. tostring(job.kind) .. " at " .. job.x
+            .. "," .. job.y .. " failed to place mid-job — skipping placement")
+    end
+    return ok
 end
 
 -- Refund a structure designation's ALREADY-PAID materials to the ground
--- (#799 no-silent-loss policy): the FULL pack cost, not this call's own
+-- (#799 no-silent-loss): the FULL pack cost, not this call's own
 -- (possibly empty, if resumed) job.need delta — 'paid' means the full
--- amount already left SOME unit's inventory. No-op for a building.
+-- amount already left some unit's inventory.
 local function refundStructureMaterials(job)
     if job.category ~= "structure" then return end
     local build = job.build or packBuildInfo(job.pack, job.kind)

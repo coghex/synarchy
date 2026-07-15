@@ -144,7 +144,7 @@ local function placeWall(gx, gy, e, worldId, baseZ, variant)
             gx, gy, e, suffix, tostring(capL), ends[1], tostring(capR), ends[2]))
     end
     local w = h.walls[e]
-    structure.place(gx, gy, "wall_" .. e, w.tex, w.face[suffix], z,
+    return structure.place(gx, gy, "wall_" .. e, w.tex, w.face[suffix], z,
                     w.texPath, w.facePath[suffix], worldId)
 end
 
@@ -215,37 +215,43 @@ end
 -- The optional trailing `variant` (#91) selects the pack's variant art
 -- (e.g. "damaged"); nil → the default. The chosen texture PATH is what the
 -- piece persists (structure palette), so a variant survives save/load.
+-- All four return structure.place's own bool (#799 review round 4):
+-- it can fail — the target chunk unloaded, no active world, etc.
+-- (Engine.Scripting.Lua.API.Structure.structurePlaceFn) — not just
+-- "did I bother to call it", which the construct AI's placement-failure
+-- material-refund policy needs to actually detect a failed piece.
 function M.floor(gx, gy, worldId, baseZ, variant)
     local h = handles(variant)
     local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 1
-    structure.place(gx, gy, "floor", h.floor.tex, h.floor.face, z,
+    return structure.place(gx, gy, "floor", h.floor.tex, h.floor.face, z,
                     h.floor.texPath, h.floor.facePath, worldId)
 end
 
 function M.ceiling(gx, gy, worldId, baseZ, variant)
     local h = handles(variant)
     local z = (baseZ or world.getTerrainAt(gx, gy, worldId) or 0) + 2   -- one level above the floor
-    structure.place(gx, gy, "ceiling", h.ceiling.tex, h.ceiling.face, z,
+    return structure.place(gx, gy, "ceiling", h.ceiling.tex, h.ceiling.face, z,
                     h.ceiling.texPath, h.ceiling.facePath, worldId)
 end
 
 -- corner ∈ "n"/"e"/"s"/"w". Gated to a floor (like click placement); re-caps
--- this tile's walls touching the corner. Returns true if placed. The post z
--- comes from the existing floor (read from the same page), so it needs no
--- terrain read.
+-- this tile's walls touching the corner only once actually placed. Returns
+-- structure.place's own bool.
 function M.post(gx, gy, corner, worldId, baseZ, variant)
     local fz = structure.floorZAt(gx, gy, worldId)
     if not fz then return false end
     local h = handles(variant)
-    structure.place(gx, gy, "post_" .. corner, h.post.tex, h.post.face, fz,
+    local ok = structure.place(gx, gy, "post_" .. corner, h.post.tex, h.post.face, fz,
                     h.post.texPath, h.post.facePath, worldId)
-    recapTileCorner(gx, gy, corner, worldId, baseZ, variant)
-    return true
+    if ok then
+        recapTileCorner(gx, gy, corner, worldId, baseZ, variant)
+    end
+    return ok
 end
 
 -- edge ∈ "ne"/"nw"/"se"/"sw". Caps to existing posts on this tile.
 function M.wall(gx, gy, edge, worldId, baseZ, variant)
-    placeWall(gx, gy, edge, worldId, baseZ, variant)
+    return placeWall(gx, gy, edge, worldId, baseZ, variant)
 end
 
 function M.clear() structure.clearAll() end

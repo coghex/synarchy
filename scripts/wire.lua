@@ -140,6 +140,7 @@ function M.place(gx, gy)
             placeSelf(nx, ny)
         end
     end
+    return ok
 end
 
 return M

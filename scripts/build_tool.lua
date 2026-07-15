@@ -954,7 +954,11 @@ function buildTool.handleMouseDown(button, x, y)
                 -- material system), so job.category filters them out.
                 local wid = buildTool.hud and buildTool.hud.worldId
                 local job = wid and construction.getDesignationAt(wid, gx, gy)
-                local key = gx .. "," .. gy
+                -- Keyed by page too (#799 review round 4): tile coords
+                -- alone collide across pages, so a paid cancellation on
+                -- a DIFFERENT page at the same (gx,gy) within the debounce
+                -- window would otherwise be wrongly swallowed.
+                local key = tostring(wid) .. ":" .. gx .. "," .. gy
                 if job and job.paid then
                     local last = pendingCancelRefunds[key]
                     local now = engine.gameTime()
