@@ -168,6 +168,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "construction_blueprint_footprint": (NEEDS_GPU, "offscreen boot: proves the "
                            "committed building-blueprint footprint via real "
                            "screenshot diffing (#807) — no GPU on the CI runner"),
+    "portal_ghost": (NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
+                                "rendered tint via real screenshots — no GPU on the CI runner (#778)"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),
@@ -175,6 +177,7 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "multiworld_save": (SLOW_WORLDGEN, "generates two real world pages"),
     "location_overlay": (SLOW_WORLDGEN, "needs real worldgen for overlay placement"),
     "location_stamp_idempotent": (SLOW_WORLDGEN, "needs real worldgen plus a save/restart/reload round-trip"),
+    "portal_location": (SLOW_WORLDGEN, "needs real worldgen for a placed ruin_small to test starting-building exclusion against (#778)"),
     "thermo_altitude": (SLOW_WORLDGEN, "needs a real generated world (worldSize 128) for elevation data, ~1 min runtime"),
     "crop": (SLOW_WORLDGEN, "needs a real generated world for natural row-crop placement + "
                             "groundcover planting, plus a save/load round-trip"),

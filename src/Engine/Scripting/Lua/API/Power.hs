@@ -35,12 +35,13 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), activeWorldPage)
 import World.Page.Types (WorldPageId(..))
 import World.Time.Types (worldTimeToSunAngle)
-import World.Types (WorldManager(..), WorldState(..))
+import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Tile.Types (WorldTileData)
 import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
+import Location.Overlay.Types (emptyLocationOverlay)
 import Craft.Bills (BillId(..))
 import Craft.Types (RecipeDef(..), lookupRecipe)
 import Unit.Types (UnitId(..), UnitManager(..), UnitInstance(..))
@@ -138,11 +139,16 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                 Nothing → do
                     rollback item ix
                     pure (Left ("no building def for " <> defName))
-                Just def →
+                Just def → do
+                    locs ← readIORef (locationDefsRef env)
+                    mParams ← readIORef (wsGenParamsRef ws)
+                    let overlay = maybe emptyLocationOverlay
+                                        wgpLocationOverlay mParams
+                        worldSizeChunks = maybe 0 wgpWorldSize mParams
                     case canPlaceAt
                             (bm { bmInstances =
                                     buildingsOnPage pid (bmInstances bm) })
-                            wtd def gx gy of
+                            wtd locs overlay worldSizeChunks def gx gy of
                         NotPlaceable reason → do
                             rollback item ix
                             pure (Left reason)
