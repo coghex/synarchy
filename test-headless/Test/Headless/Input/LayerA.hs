@@ -21,7 +21,7 @@ import Test.Hspec
 import Engine.ActionOutcome (ActionOutcome(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Input.Bindings (defaultKeyBindings)
-import Engine.Input.Inject (noMods)
+import Engine.Input.Inject (noMods, fbToWindow)
 import Engine.Input.Thread (processInputs)
 import Engine.Input.Types
 import qualified Engine.Core.Queue as Q
@@ -440,3 +440,65 @@ spec = do
                     aoHandler r `shouldBe` Just "camera_drag"
                     aoReason r `shouldBe` Just "release swallowed (focus loss / minimize)"
                 _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+    -- #774: on a scaled (Retina/HiDPI) display the recorded `where`
+    -- must land in F1/F2/F3's framebuffer-pixel oracle space, not the
+    -- window-space coordinates the input pipeline dispatches
+    -- internally — a click injected at framebuffer pixel (800, 400)
+    -- used to record window-space (400, 200) on a 2x display, breaking
+    -- the join with the screenshot/widget evidence it exists to
+    -- ground.
+    describe "Layer-A locations share the F1/F2/F3 framebuffer-pixel oracle space on a scaled display (#774)" $ do
+        it "an engine-recorded route (press-time recordRouteOutcome) records the injected framebuffer pixel, not the window-scaled one" $ \env → do
+            resetAll env
+            -- 2x window→framebuffer scale, same as a real Retina boot.
+            writeIORef (windowSizeRef env) (1280, 720)
+            writeIORef (framebufferSizeRef env) (2560, 1440)
+            -- A real input.click(800, 400) (F1/F2/F3 framebuffer space)
+            -- is delivered to the input thread as the window-space
+            -- event 'Engine.Input.Inject.fbToWindow' computes — mirror
+            -- that here instead of hand-picking an already-halved
+            -- coordinate.
+            let (winX, winY) = fromMaybe (800, 400) $
+                    fbToWindow (1280, 720) (2560, 1440) (800, 400)
+            -- MouseButton'4 (an unmapped side button) reaches the
+            -- "unmapped_button" route, which records immediately at
+            -- press via 'recordRouteOutcome' — no release/threshold
+            -- machinery to thread through this assertion.
+            push env [InputMouseEvent GLFW.MouseButton'4 (winX, winY) GLFW.MouseButtonState'Pressed]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.click"
+                    aoHandler r `shouldBe` Just "unmapped_button"
+                    aoWhereX r `shouldBe` Just 800
+                    aoWhereY r `shouldBe` Just 400
+                _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+        it "a deferred UI click's recorded location converts to framebuffer while the drag threshold stays in window pixels" $ \env → do
+            resetAll env
+            writeIORef (windowSizeRef env) (1280, 720)
+            writeIORef (framebufferSizeRef env) (2560, 1440)
+            -- focusedUIElement's rect (100,50)-(200,80) is framebuffer-
+            -- space (routePointer hit-tests against the already-scaled
+            -- mouse position) — window-space (75, 32) lands inside it
+            -- once doubled to framebuffer (150, 64).
+            _ ← focusedUIElement env
+            push env [InputMouseEvent GLFW.MouseButton'1 (75, 32) GLFW.MouseButtonState'Pressed]
+            -- 3 window-pixel move: under uiDragThresholdPx (4), so this
+            -- must still classify as a click even though 3 * 2 = 6
+            -- window-equivalent framebuffer pixels would read as a
+            -- drag if the threshold were wrongly compared in
+            -- framebuffer space.
+            push env [InputMouseEvent GLFW.MouseButton'1 (78, 32) GLFW.MouseButtonState'Released]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.click"
+                    aoOutcome r `shouldBe` "accepted"
+                    aoHandler r `shouldBe` Just "onFieldClick"
+                    aoWhereX r `shouldBe` Just 150
+                    aoWhereY r `shouldBe` Just 64
+                _ → expectationFailure ("expected one record (still a click, not a drag), got " ⧺ show recs)

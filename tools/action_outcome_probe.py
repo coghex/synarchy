@@ -387,6 +387,58 @@ def main():
                   f"with no reason and actually spawns the building: "
                   f"{drained5}, buildings {before_count}->{after_count}")
 
+        # --- 9: the Lua-recorded game-world F4 producer shares F1/F2/F3's
+        # framebuffer-pixel oracle space (#774) ---
+        #
+        # scripts/unit_drag_select.lua's recordDeferredClick/
+        # recordDragOutcome are the real producers behind every
+        # game-world click/drag Layer-A record (scripts/init_mouse.lua's
+        # own recordClick just forwards into dragSelect.deferClick). The
+        # engine-recorded half of this contract already has a synthetic
+        # 2x-scale regression in the Input.LayerA hspec suite; that
+        # harness can't cover this half (it boots neither the input nor
+        # the Lua thread, so these Lua producers never run there). A real
+        # headless engine always boots window==framebuffer 1:1 with no
+        # live resize path to diverge them, so this monkey-patches
+        # engine.getWindowSize/getFramebufferSize for one check — saving
+        # the originals first and restoring them immediately after, so
+        # nothing later in this probe (or a real player session) is
+        # affected — to prove the conversion this module performs, not
+        # just its arithmetic in isolation.
+        send(port, "engine.loadScript('scripts/unit_drag_select.lua', 0.0); "
+                   "return 'ok'")
+        send(port, "return debug.drainActionOutcomes()")  # clear noise
+        send(port,
+             "_G._probe774OrigWS = engine.getWindowSize; "
+             "_G._probe774OrigFS = engine.getFramebufferSize; "
+             "engine.getWindowSize = function() return 1280, 720 end; "
+             "engine.getFramebufferSize = function() return 2560, 1440 end; "
+             "return 'ok'")
+        send(port,
+             "local ds = require('scripts.unit_drag_select'); "
+             "ds.handleMouseDown(1, 100, 50); "
+             "ds.deferClick(1, 'probe774_handler', 'accepted', 100, 50, nil); "
+             "ds.onMouseUp(1, 100, 50, 'game'); "
+             "return 'ok'")
+        drained_lua_scale = jget(port, "return debug.drainActionOutcomes()")
+        send(port,
+             "engine.getWindowSize = _G._probe774OrigWS; "
+             "engine.getFramebufferSize = _G._probe774OrigFS; "
+             "_G._probe774OrigWS = nil; _G._probe774OrigFS = nil; "
+             "return 'ok'")
+        lua_rec = (drained_lua_scale[0]
+                   if isinstance(drained_lua_scale, list) and drained_lua_scale
+                   else {})
+        ok9 = bool(lua_rec.get("kind") == "input.click"
+                   and lua_rec.get("handler") == "probe774_handler"
+                   and lua_rec.get("where") == {"x": 200, "y": 100})
+        passed &= ok9
+        print(f"  [{'PASS' if ok9 else 'FAIL'}] the Lua-recorded game-world "
+              f"click producer (unit_drag_select's recordDeferredClick) "
+              f"converts a window-space (100,50) click to framebuffer "
+              f"(200,100) at a 2x window-to-framebuffer scale: "
+              f"{drained_lua_scale}")
+
         print("\n" + ("ALL ACTION-OUTCOME CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
     finally:
