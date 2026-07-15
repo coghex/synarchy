@@ -144,7 +144,13 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   isn't stuck reporting no location, same convention as
               --   LuaMouseDownEvent's own trailing x/y.
             | LuaUIRightClickEvent ElementHandle Text Double Double
-            | LuaUIScrollEvent ElementHandle Double Double
+            | LuaUIScrollEvent ElementHandle Double Double Bool
+              -- ^ Element, deltas, and whether Shift was held (#744) —
+              --   lets 'uiManager.onUIScroll' and any future UI scroll
+              --   handler distinguish modified from unmodified wheel
+              --   input, the same way ordinary wheel and Shift-wheel
+              --   now share one routing decision
+              --   ('Engine.Input.Thread.Scroll.dispatchScrollEvent').
             | LuaUICharInput Char
             | LuaUIBackspace
             | LuaUIDelete

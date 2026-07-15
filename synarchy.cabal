@@ -978,6 +978,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Inject
                    Test.Headless.Input.Followup
                    Test.Headless.Input.LayerA
+                   Test.Headless.Input.WheelPolicy
                    Test.Headless.Graphics.VideoConfig
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
