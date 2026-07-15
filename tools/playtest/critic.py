@@ -469,6 +469,22 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
     cur_frames: list[tuple[int, str]] = []
     warnings: list[str] = []
 
+    # A single candidate can need up to two frames of its own — its
+    # pre-step screenshot and that SAME turn's post-step frame (#775).
+    # A budget below that floor could never show both for even one
+    # candidate no matter how batches are split, so clamp rather than
+    # accept a configuration that provably can't satisfy the
+    # per-candidate evidence contract (pr-review round 2). Combined
+    # with the total-need flush check below, this GUARANTEES every
+    # candidate's own+post pair lands together in some call — the
+    # per-candidate warning further down is now unreachable, kept only
+    # as a documented invariant, not a live code path.
+    if max_frames < 2:
+        warnings.append(f"--max-frames {max_frames} is below the 2-frame "
+                        "floor a single candidate's own pre+post pair "
+                        "needs; raised to 2")
+        max_frames = 2
+
     def flush():
         nonlocal cur, cur_frames
         if cur:
@@ -494,7 +510,8 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
         if own and own_needed and len(cur_frames) < max_frames:
             cur_frames.append((c["turn"], own))
         elif own and own_needed:
-            # only possible when max_frames < 1
+            # unreachable now that max_frames is clamped to >= 2 above;
+            # kept as a defensive invariant guard, not a live path
             warnings.append(f"frame budget too small: candidate {c['cid']}"
                             f" adjudicated WITHOUT its turn-{c['turn']} "
                             "screenshot")
@@ -502,8 +519,8 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
         if eff and eff_needed and len(cur_frames) < max_frames:
             cur_frames.append((-c["turn"], eff))
         elif eff and eff_needed:
-            # only possible when max_frames < 2 (a lone candidate's own
-            # + post frame can never both fit)
+            # unreachable now that max_frames is clamped to >= 2 above;
+            # kept as a defensive invariant guard, not a live path
             warnings.append(f"frame budget too small: candidate {c['cid']}"
                             f" adjudicated WITHOUT its turn-{c['turn']} "
                             "post-step screenshot")
@@ -1221,26 +1238,27 @@ def selftest() -> int:
         check("no starvation warnings needed once batched",
               not bwarn, str(bwarn))
 
-        # #775 (pr-review round 1): a budget too small to fit even one
-        # candidate's own+post pair must not silently drop the post
-        # frame — it must warn honestly, same as the own-frame case
-        # already did. max_frames=1 is the sharpest case (a lone
-        # candidate can never fit both), but the same starvation can
-        # happen mid-batch at any budget once a candidate's own frame
-        # exactly fills the remaining capacity.
+        # #775 (pr-review rounds 1-2): a single candidate can need up to
+        # two frames of its own (pre + post-step, #775) — a budget
+        # below that floor could never show both for even one
+        # candidate, so an under-budget request is CLAMPED to 2 (with
+        # an honest warning), guaranteeing every candidate's own+post
+        # pair lands together rather than merely warning when one is
+        # dropped.
         batches1, bwarn1 = plan_batches(tdir, turns, cands, max_frames=1)
-        check("max_frames=1 warns about every dropped post-step frame "
-              "instead of silently omitting it",
-              len(bwarn1) == len(cands)
-              and all("post-step screenshot" in w for w in bwarn1),
-              str(bwarn1))
-        check("max_frames=1 still shows every candidate its own pre-step "
-              "frame despite dropping the post-step one",
+        check("max_frames below the 2-frame floor is clamped, with a "
+              "warning explaining why",
+              any("raised to 2" in w for w in bwarn1), str(bwarn1))
+        check("every candidate still gets BOTH its own pre-step and "
+              "post-step frame even when max_frames was requested as 1",
               all(any(n == c["turn"] for n, _ in frames)
+                  and any(n == -c["turn"] for n, _ in frames)
                   for subset, frames in batches1 for c in subset))
-        check("max_frames=1 never claims to have shown a post-step frame "
-              "it didn't",
-              not any(n < 0 for subset, frames in batches1 for n, _ in frames))
+        check("no per-candidate frame-starvation warning fires once "
+              "clamped (the clamp itself is the only warning)",
+              not any("post-step screenshot" in w or "adjudicated WITHOUT"
+                      in w for w in bwarn1),
+              str(bwarn1))
 
         # #775: the fixture's LAST turn (7) still gets its own post-step
         # frame shown to the critic — impossible before this fix, which
