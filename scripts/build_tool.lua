@@ -931,7 +931,19 @@ function buildTool.handleMouseDown(button, x, y)
             -- both a non-starting building and a structure target).
             local gx, gy = world.pickTile(x, y)
             if gx and gy then
-                construction.cancelDesignation(math.floor(gx), math.floor(gy))
+                gx, gy = math.floor(gx), math.floor(gy)
+                -- #799 no-silent-loss policy: a structure designation
+                -- whose materials were already paid must not just vanish
+                -- on cancel — return them to the ground first. Buildings
+                -- never consume through this path (a separate delivered-
+                -- material system), so job.category filters them out.
+                local wid = buildTool.hud and buildTool.hud.worldId
+                local job = wid and construction.getDesignationAt(wid, gx, gy)
+                if job and job.paid then
+                    require("scripts.unit_ai_construct")
+                        .refundStructureMaterials(job)
+                end
+                construction.cancelDesignation(gx, gy)
             end
         end
         return true

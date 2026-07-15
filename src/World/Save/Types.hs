@@ -124,7 +124,13 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 86  -- v86: worldgen-output change (#812) — final-age
+currentSaveVersion = 87  -- v87: ConstructDesignation gains cdMaterialsPaid
+                         -- (#799) — a durable payment marker so a structure
+                         -- designation's material cost, once taken from a
+                         -- claimant's inventory, is never charged a second
+                         -- time to a replacement worker after the original
+                         -- claimant dies or the world is reloaded.
+                         -- v86: worldgen-output change (#812) — final-age
                          -- mountain soil shed is now redistributed to the
                          -- adjacent lower/gentler receiving terrain instead
                          -- of simply deleted (World.Geology.Erosion.Math

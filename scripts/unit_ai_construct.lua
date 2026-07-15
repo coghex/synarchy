@@ -167,11 +167,13 @@ local function findConstructJob(uid, fromX, fromY, params)
                 viable = true
             else
                 build = packBuildInfo(job.pack, job.kind)
+                -- A durably-paid job (#799) needs no materials from THIS
+                -- worker, so only an unpaid job is gated on sourceability.
                 if build
                    and (job.kind ~= "post"
                         or structure.floorZAt(job.x, job.y))
-                   and constructMaterialsAvailable(uid, fromX, fromY,
-                           build.materials, params) then
+                   and (job.paid or constructMaterialsAvailable(uid, fromX, fromY,
+                           build.materials, params)) then
                     viable = true
                 end
             end
@@ -245,9 +247,9 @@ end
 -- Place the finished piece via the structures module (same programmatic
 -- builders locations.lua uses; they read the active world's terrain).
 -- Posts designated without a floor are filtered at scan time, but the
--- floor can vanish mid-job — placement then fails and we log rather
--- than strand the job (materials are already spent; the designation
--- still completes, mirroring "no partial-wall visuals" simplicity).
+-- floor can vanish mid-job — placement then fails and we log rather than
+-- strand the job (the designation still completes); returns false so the
+-- caller can apply the #799 no-silent-loss material policy.
 local function placeStructurePiece(job)
     local structures = require("scripts.structures")
     if job.kind == "floor" then
@@ -262,11 +264,29 @@ local function placeStructurePiece(job)
         if not structures.post(job.x, job.y, job.edge or "n") then
             engine.logWarn("construct: post at " .. job.x .. "," .. job.y
                 .. " lost its floor mid-job — skipping placement")
+            return false
         end
     elseif job.kind == "wire" then
         require("scripts.wire").place(job.x, job.y)
     end
+    return true
 end
+
+-- Refund a structure designation's ALREADY-PAID materials to the ground
+-- (#799 no-silent-loss policy): the FULL pack cost, not this call's own
+-- (possibly empty, if resumed) job.need delta — 'paid' means the full
+-- amount already left SOME unit's inventory. No-op for a building.
+local function refundStructureMaterials(job)
+    if job.category ~= "structure" then return end
+    local build = job.build or packBuildInfo(job.pack, job.kind)
+    if not build then return end
+    for matType, need in pairs(build.materials or {}) do
+        for _ = 1, need do
+            item.spawnGround(matType, job.x + 0.5, job.y + 0.5)
+        end
+    end
+end
+M.refundStructureMaterials = refundStructureMaterials
 
 local function constructExecute(uid, s, params)
     local wid = world.getActiveWorldId()
@@ -295,18 +315,22 @@ local function constructExecute(uid, s, params)
         if cand.category ~= "building" then
             cand.need = {}
             cand.fromGround, cand.fromMule = {}, {}
-            local mule = findTechnomule(info.gridX, info.gridY)
-            for matType, need in pairs(cand.build.materials or {}) do
-                cand.need[matType] = need
-                local have = inventoryCountOf(uid, matType)
-                local short = need - have
-                if short > 0 then
-                    local ground = math.min(short,
-                        groundCountOf(info.gridX, info.gridY, matType,
-                                      params.construct_scan_range))
-                    if ground > 0 then cand.fromGround[matType] = ground end
-                    if short - ground > 0 and mule then
-                        cand.fromMule[matType] = short - ground
+            -- A durably-paid job (#799) needs nothing fetched — leave
+            -- cand.need empty so the walking phase's payment loop no-ops.
+            if not cand.paid then
+                local mule = findTechnomule(info.gridX, info.gridY)
+                for matType, need in pairs(cand.build.materials or {}) do
+                    cand.need[matType] = need
+                    local have = inventoryCountOf(uid, matType)
+                    local short = need - have
+                    if short > 0 then
+                        local ground = math.min(short,
+                            groundCountOf(info.gridX, info.gridY, matType,
+                                          params.construct_scan_range))
+                        if ground > 0 then cand.fromGround[matType] = ground end
+                        if short - ground > 0 and mule then
+                            cand.fromMule[matType] = short - ground
+                        end
                     end
                 end
             end
@@ -407,6 +431,11 @@ local function constructExecute(uid, s, params)
                     end
                 end
                 job.consumed = true
+                -- Durably mark the designation paid (#799) — a no-op
+                -- re-affirmation when already paid, but for a fresh
+                -- payment this is what a replacement worker (or this
+                -- unit after a save/load) sees as "already spent".
+                construction.setMaterialsPaid(wid, job.x, job.y, true)
             end
             job.phase = "building"
             s.lastConstructAt = now
@@ -433,7 +462,13 @@ local function constructExecute(uid, s, params)
             construction.addJobProgress(wid, job.x, job.y, delta)
         end
         if (job.progress or 0) >= 1.0 then
-            placeStructurePiece(job)
+            if not placeStructurePiece(job) then
+                -- #799: the paid material can't go down but was already
+                -- spent — return it to the ground, not the void.
+                refundStructureMaterials(job)
+                reportFailure(uid,
+                    "Construction site changed — materials returned to the ground")
+            end
             construction.setJobStatus(wid, job.x, job.y, "complete")
             grantWorkXP(uid, "construction",
                         params.construct_xp_per_piece or 0)

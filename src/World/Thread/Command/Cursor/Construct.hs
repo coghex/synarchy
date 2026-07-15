@@ -12,6 +12,7 @@ module World.Thread.Command.Cursor.Construct
     , handleWorldCancelConstructCommand
     , handleWorldSetConstructStatusCommand
     , handleWorldAddConstructProgressCommand
+    , handleWorldSetConstructMaterialsPaidCommand
     , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
     ) where
@@ -199,6 +200,23 @@ handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
             forM_ mUpd $ \(prevProgress, cd') →
                 withConstructChunk worldState (gx, gy) $
                     applyConstructSlopeToChunk (gx, gy) prevProgress cd'
+        Nothing → pure ()
+
+-- | Build AI hook (#799): durably record whether a structure
+--   designation's material cost has been paid. The durable counterpart
+--   to the AI's in-memory @job.consumed@ — surviving claimant death and
+--   save/load is the whole point, so a replacement worker never
+--   re-sources and re-pays a cost some earlier (possibly now-dead)
+--   claimant already spent. No-op on a designation that no longer
+--   exists (completed/cancelled out from under a delayed command).
+handleWorldSetConstructMaterialsPaidCommand ∷ EngineEnv → LoggerState
+    → WorldPageId → Int → Int → Bool → IO ()
+handleWorldSetConstructMaterialsPaidCommand env _logger pageId gx gy paid = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+                (HM.adjust (\cd → cd { cdMaterialsPaid = paid }) (gx, gy) m, ())
         Nothing → pure ()
 
 -- | Run a chunk transform for the designation tile's loaded chunk and

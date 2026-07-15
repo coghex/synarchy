@@ -23,6 +23,25 @@ next phase's utility scan is clean):
                  (coexistence), and a slot that fills in AFTER
                  designation but BEFORE a claimant pays materials is
                  cancelled rather than paid for.
+  6. paid_death: #799 — a claimant that dies AFTER paying (progress > 0)
+                 leaves the designation's durable 'paid' marker set; a
+                 materials-less replacement still finishes the job,
+                 proving the cost isn't charged a second time.
+  7. preemption: #799 — an ordinary mid-build interruption (the same
+                 reset constructOnExit performs) must not re-attempt
+                 payment; the claimant carries exactly the required
+                 amount with no ground/mule fallback, so a duplicate
+                 charge would stall the job outright.
+  8. save_load : #799 — a paid, partially-built designation survives a
+                 save/load round-trip (paid + progress intact) even
+                 though the paying unit does NOT survive to reload with
+                 it; a materials-less unit finishes it after load.
+  9. cancel    : #799 — the build-tool's right-click cancel refunds an
+                 already-PAID structure's materials to the ground (and
+                 never fabricates materials for an unpaid one); a
+                 placement failure (a post's floor pulled out from under
+                 it) refunds too, plus a player-observable notification,
+                 instead of completing with the materials simply gone.
   5. stake     : a building designation; the acolyte walks up and stakes
                  it (building.spawn) and the blueprint completes. Runs
                  LAST: the staked portal spawns its roster, which would
@@ -70,8 +89,14 @@ def bootstrap(port: int) -> None:
     if not poll_until(port, 30, lambda: wid(port)):
         sys.exit("arena page never became the active world")
     # Make sure the chunks around the test sites exist before designating
-    # (designation skips unloaded-chunk tiles).
-    send(port, "return world.loadChunksInRegion(-1, -1, 2, 2)")
+    # (designation skips unloaded-chunk tiles). The flat arena's footprint
+    # is a fixed 5x5 chunk grid centred on the origin (arenaRadius = 2,
+    # World.Generate.Arena) — chunks -2..2 (tiles -32..47). Requesting
+    # chunks OUTSIDE that footprint falls through to the real terrain
+    # generator against the arena's synthetic gen params and crashes the
+    # world thread, so this loads the arena's FULL footprint (needed for
+    # the #799 phases' negative-Y sites below) and no further.
+    send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)")
     send(port, "return world.waitForChunks(60)", timeout=65.0)
 
 
@@ -97,6 +122,13 @@ def pick_tile(port: int, sx: int, sy: int) -> tuple[int, int]:
     raw = send(port, f"return world.pickTile({sx}, {sy})")
     parts = raw.split()
     return int(float(parts[0])), int(float(parts[1]))
+
+
+def ground_count(port: int, def_name: str) -> int:
+    raw = send(port,
+                "local n=0; for _,g in ipairs(item.listGround() or {}) do "
+                f"if g.defName=='{def_name}' then n=n+1 end end; return n")
+    return int(float(raw))
 
 
 def spawn_acolyte(port: int, x: float, y: float) -> int:
@@ -133,6 +165,19 @@ def poll_until(port: int, seconds: float, fn):
         if v:
             return v
         time.sleep(0.3)
+    return None
+
+
+def poll_fast(seconds: float, fn):
+    """Like poll_until, but at a 0.05 s cadence — for the #799
+    cancel/placement-failure checks that must act on the FIRST tick a
+    designation shows paid=true, before further build progress lands."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        v = fn()
+        if v:
+            return v
+        time.sleep(0.05)
     return None
 
 
@@ -406,6 +451,236 @@ def phase_release(port: int) -> None:
     destroy_unit(port, scout)
 
 
+def phase_paid_death(port: int) -> None:
+    """#799: a claimant that dies AFTER paying leaves the durable 'paid'
+    marker on the designation — a materials-less replacement must still
+    finish the job, proving it's never charged the cost a second time.
+
+    (phase_release above already covers a claimant dying BEFORE payment;
+    once #799's fix makes a paid job claimable by a materials-less
+    worker too, the intermediate 'released to pending, not yet
+    re-claimed' window is too transient to reliably poll for, so this
+    phase asserts the durable facts — payment survives death, the job
+    still completes — rather than that transient status value.)"""
+    print("\n[phase 6] paid-then-dead claimant: no second payment (floor)")
+    w = wid(port)
+    send(port, f"construction.designate('{w}', 8, -8, 8, -8, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    check("tile designated", designation_at(port, 8, -8) is not None)
+
+    a = spawn_acolyte(port, 5.5, -7.5)
+    send(port, f"unit.addItem({a}, 'steel_plate', 0); return 'ok'")
+    paid = poll_until(port, 30, lambda: (
+        (designation_at(port, 8, -8) or {}).get("paid") is True
+        and (designation_at(port, 8, -8) or {}).get("progress", 0) > 0))
+    check("materials paid and progress accrued before death", paid is not None)
+    check("payer's inventory shows the material spent",
+          send(port, f"local n=0; for _,it in ipairs(unit.getInventory({a}) "
+                     "or {}) do if it.defName=='steel_plate' then "
+                     "n=n+1 end end; return n") == "0")
+
+    destroy_unit(port, a)
+
+    # Replacement carries ZERO materials, with no ground/mule stock
+    # anywhere nearby — it must still claim and finish the job.
+    b = spawn_acolyte(port, 12.5, -7.5)
+    done = poll_until(port, 60, lambda: (
+        send(port, "return structure.hasAt(8, -8, 'floor')") == "true"
+        and designation_at(port, 8, -8) is None))
+    check("materials-less replacement finished the already-paid job "
+          "after the original claimant died", done is not None)
+    destroy_unit(port, b)
+
+
+def phase_preemption(port: int) -> None:
+    """#799: an ordinary mid-build interruption (constructOnExit resets
+    phase back to 'walking' for thirst / combat / a player order) must
+    not re-attempt payment. The claimant carries EXACTLY the required
+    material with no ground/mule fallback, so a duplicate charge attempt
+    would stall the job outright rather than silently succeed."""
+    print("\n[phase 7] preempted mid-build: no duplicate consumption (floor)")
+    w = wid(port)
+    send(port, f"construction.designate('{w}', 8, -16, 8, -16, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    check("tile designated", designation_at(port, 8, -16) is not None)
+
+    uid = spawn_acolyte(port, 5.5, -15.5)
+    send(port, f"unit.addItem({uid}, 'steel_plate', 0); return 'ok'")
+    building = poll_until(port, 30, lambda: (
+        (designation_at(port, 8, -16) or {}).get("progress", 0) > 0))
+    check("payment made and progress underway", building is not None)
+    check("exactly one payment taken (inventory now empty)",
+          send(port, f"local n=0; for _,it in ipairs(unit.getInventory({uid}) "
+                     "or {}) do if it.defName=='steel_plate' then "
+                     "n=n+1 end end; return n") == "0")
+
+    # Simulate the exact reset constructOnExit performs on preemption,
+    # without needing to engineer a real interrupt.
+    send(port, f"local s = require('scripts.unit_ai').getState({uid}); "
+               f"s.constructJob.phase = 'walking'; return s.constructJob.phase")
+
+    done = poll_until(port, 60, lambda: (
+        send(port, "return structure.hasAt(8, -16, 'floor')") == "true"
+        and designation_at(port, 8, -16) is None))
+    check("job completed after preemption with no re-payment attempt "
+          "(a duplicate charge would stall: no spare material, no "
+          "ground/mule stock)", done is not None)
+    destroy_unit(port, uid)
+
+
+def phase_save_load(port: int) -> None:
+    """#799: the durable payment marker (and progress) must survive a
+    save/load round-trip, even when the paying unit does not."""
+    print("\n[phase 8] paid designation survives save/load (floor)")
+    w = wid(port)
+    send(port, f"construction.designate('{w}', 8, -24, 8, -24, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    check("tile designated", designation_at(port, 8, -24) is not None)
+
+    a = spawn_acolyte(port, 5.5, -23.5)
+    send(port, f"unit.addItem({a}, 'steel_plate', 0); return 'ok'")
+    paid = poll_until(port, 30, lambda: (
+        (designation_at(port, 8, -24) or {}).get("paid") is True
+        and (designation_at(port, 8, -24) or {}).get("progress", 0) > 0))
+    check("materials paid and progress accrued before save", paid is not None)
+    destroy_unit(port, a)   # the paying unit does NOT survive to save
+
+    send(port, f"engine.saveWorld('{w}', 'construct_payment_check'); "
+               "return 'ok'")
+    time.sleep(3.0)
+    send(port, "engine.loadSave('construct_payment_check'); return 'ok'")
+    time.sleep(15.0)
+    send(port, "world.show('main_world'); return 'ok'")
+    send(port, "engine.setPaused(false); return 'ok'")
+    send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)", timeout=30)
+    send(port, "return world.waitForChunks(60)", timeout=65)
+
+    reloaded = designation_at(port, 8, -24)
+    check("designation survives load with paid=true and progress intact",
+          isinstance(reloaded, dict) and reloaded.get("paid") is True
+          and reloaded.get("progress", 0) > 0)
+
+    b = spawn_acolyte(port, 12.5, -23.5)   # zero materials
+    done = poll_until(port, 60, lambda: (
+        send(port, "return structure.hasAt(8, -24, 'floor')") == "true"
+        and designation_at(port, 8, -24) is None))
+    check("materials-less unit finished the reloaded paid job", done is not None)
+    destroy_unit(port, b)
+
+
+def phase_cancel_refund(port: int) -> None:
+    """#799 no-silent-loss policy: the build-tool's right-click cancel
+    refunds an already-PAID structure's materials to the ground and
+    never fabricates materials for an unpaid one; a placement failure
+    (a post's floor pulled out from under it mid-job) refunds too,
+    alongside a player-observable notification, instead of completing
+    with the paid materials simply gone."""
+    print("\n[phase 9] cancellation / placement-failure material policy")
+    w = wid(port)
+    send(port, "camera.setPosition(0, 0); return 'ok'")
+    send(port, "local bt = require('scripts.build_tool'); "
+               f"bt.hud = {{ worldId = '{w}' }}; return 'ok'")
+
+    def ui_right_click(px: int, py: int) -> None:
+        send(port, "local bt = require('scripts.build_tool'); "
+                   "bt.enterPlacement({kind='structure', pack='dungeon_1', "
+                   "piece='floor', edge=nil, displayName='Floor'}); "
+                   "return bt.state.mode")
+        send(port, f"local bt = require('scripts.build_tool'); "
+                   f"return bt.handleMouseDown(2, {px}, {py})")
+
+    # --- (a) an UNPAID designation cancelled via the UI creates no
+    # ground item — the refund gate must not fire for free.
+    px1, py1 = 200, 500
+    ux1, uy1 = pick_tile(port, px1, py1)
+    send(port, f"construction.designate('{w}', {ux1}, {uy1}, {ux1}, {uy1}, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    check("unpaid fixture tile designated", designation_at(port, ux1, uy1) is not None)
+    before1 = ground_count(port, "steel_plate")
+    ui_right_click(px1, py1)
+    time.sleep(0.5)
+    check("UI cancel of an unpaid designation creates no ground item",
+          designation_at(port, ux1, uy1) is None
+          and ground_count(port, "steel_plate") == before1)
+
+    # --- (b) a PAID designation cancelled via the UI refunds its
+    # material to the ground instead of deleting it. Acts on the FIRST
+    # tick 'paid' is observed, before further progress could complete
+    # the job out from under the cancel.
+    px2, py2 = 500, 800
+    ux2, uy2 = pick_tile(port, px2, py2)
+    send(port, f"construction.designate('{w}', {ux2}, {uy2}, {ux2}, {uy2}, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    # Slow game time so the poll below has real wall-clock room to catch
+    # 'paid' before the job races on to completion (mirrors sub-case (c)).
+    send(port, f"world.setTimeScale('{w}', 0.2); return 'ok'")
+    payer = spawn_acolyte(port, ux2 - 3 + 0.5, uy2 + 0.5)
+    send(port, f"unit.addItem({payer}, 'steel_plate', 0); return 'ok'")
+    paid2 = poll_fast(60, lambda: (
+        (designation_at(port, ux2, uy2) or {}).get("paid") is True))
+    check("second fixture tile paid before cancel", paid2 is not None)
+    send(port, f"world.setTimeScale('{w}', 1); return 'ok'")
+    before2 = ground_count(port, "steel_plate")
+    ui_right_click(px2, py2)
+    time.sleep(0.5)
+    check("UI cancel of a PAID designation refunds the material to the "
+          "ground (not placed, not deleted)",
+          designation_at(port, ux2, uy2) is None
+          and send(port, f"return structure.hasAt({ux2}, {uy2}, 'floor')") == "false"
+          and ground_count(port, "steel_plate") == before2 + 1)
+    destroy_unit(port, payer)
+
+    # --- (c) placement failure: a post's floor vanishes mid-job. The
+    # already-paid wood_log is refunded, the post never lands, and the
+    # existing "site changed" warning is player-observable in the event
+    # log (#799 adds the refund; the warning itself predates it).
+    px3, py3 = 1400, 500
+    ux3, uy3 = pick_tile(port, px3, py3)
+    send(port, f"require('scripts.structures').floor({ux3}, {uy3}); return 'ok'")
+    built = poll_until(port, 10, lambda: send(
+        port, f"return structure.hasAt({ux3}, {uy3}, 'floor')") == "true")
+    check("placement-failure fixture floor placed", built is not None)
+    send(port, f"construction.designate('{w}', {ux3}, {uy3}, {ux3}, {uy3}, "
+               "'structure', 'dungeon_1', 'post'); return 'ok'")
+    time.sleep(0.5)
+    check("post job designated (floor present)",
+          designation_at(port, ux3, uy3) is not None)
+
+    # A post's build_work (2.0) is lower than a floor's (3.0), so it has
+    # LESS real-time margin between "paid" and "placed" than sub-case (b)
+    # above — slow game time down so the poll below has real wall-clock
+    # room to observe 'paid' before the job races on to completion.
+    send(port, f"world.setTimeScale('{w}', 0.2); return 'ok'")
+    poster = spawn_acolyte(port, ux3 - 3 + 0.5, uy3 + 0.5)
+    send(port, f"unit.addItem({poster}, 'wood_log', 0); return 'ok'")
+    paid3 = poll_fast(60, lambda: (
+        (designation_at(port, ux3, uy3) or {}).get("paid") is True))
+    check("post job paid before its floor is pulled", paid3 is not None)
+    send(port, f"world.setTimeScale('{w}', 1); return 'ok'")
+
+    beforeLogs = ground_count(port, "wood_log")
+    send(port, f"structure.clear({ux3}, {uy3}, 'floor'); return 'ok'")
+    done3 = poll_until(port, 60, lambda: designation_at(port, ux3, uy3) is None)
+    check("job resolved (removed) after the placement failure", done3 is not None)
+    check("post was never actually placed",
+          send(port, f"return structure.hasAt({ux3}, {uy3}, 'post_n')") == "false")
+    check("its material was refunded to the ground, not lost",
+          ground_count(port, "wood_log") == beforeLogs + 1)
+    logs = send_json(port, "return engine.getEventLog()")
+    notified = any(isinstance(e, dict)
+                   and "returned to the ground" in (e.get("text") or "")
+                   for e in (logs or []))
+    check("a player-observable failure notification was logged", notified)
+    destroy_unit(port, poster)
+    send(port, "local bt = require('scripts.build_tool'); "
+               "bt.exitPlacement(); return 'ok'")
+
+
 # Order matters: the stake phase runs LAST — the staked portal spawns
 # its starting roster (building_spawn.lua auto-loads at boot), and six
 # fresh acolytes + a stocked technomule would contaminate any phase
@@ -414,6 +689,10 @@ PHASES = {
     "inventory": phase_inventory,
     "ground": phase_ground,
     "release": phase_release,
+    "paid_death": phase_paid_death,
+    "preemption": phase_preemption,
+    "save_load": phase_save_load,
+    "cancel": phase_cancel_refund,
     "occupied": phase_occupied,
     "stake": phase_stake,
 }

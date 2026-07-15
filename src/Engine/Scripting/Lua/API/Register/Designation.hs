@@ -50,6 +50,7 @@ registerDesignationAPI env = do
   registerLuaFunction "nearestDesignation" (constructNearestDesignationFn env)
   registerLuaFunction "setJobStatus"       (constructSetJobStatusFn env)
   registerLuaFunction "addJobProgress"     (constructAddJobProgressFn env)
+  registerLuaFunction "setMaterialsPaid"   (constructSetMaterialsPaidFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn env)
   registerLuaFunction "setLineMode"        (constructSetLineModeFn env)
   Lua.setglobal (Lua.Name "construction")

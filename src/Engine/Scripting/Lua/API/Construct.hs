@@ -15,6 +15,7 @@ module Engine.Scripting.Lua.API.Construct
     , constructNearestDesignationFn
     , constructSetJobStatusFn
     , constructAddJobProgressFn
+    , constructSetMaterialsPaidFn
     , constructSetDesignateTextureFn
     , constructSetLineModeFn
     ) where
@@ -264,6 +265,28 @@ constructAddJobProgressFn env = do
         _ → pure ()
     return 0
 
+-- | construction.setMaterialsPaid(pageId, gx, gy, paid) — build AI (#799)
+--   durably marks a structure designation's material cost as taken from a
+--   claimant's inventory. The durable counterpart to the AI's in-memory
+--   job.consumed: it rides the designation (and so survives claimant
+--   death and save/load), so a replacement worker is never charged the
+--   same cost twice. Silently ignored if the designation no longer
+--   exists by the time the command runs.
+constructSetMaterialsPaidFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetMaterialsPaidFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    paidArg ← Lua.toboolean 4
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldSetConstructMaterialsPaid pageId (round gx) (round gy)
+                    paidArg
+        _ → pure ()
+    return 0
+
 -- | construction.setDesignateTexture(pageId, category, texHandle) — ghost
 --   texture for committed designations, keyed by category ("structure" |
 --   "building").
@@ -318,6 +341,8 @@ pushJobTable gx gy cd = do
     Lua.setfield (Lua.nth 2) "status"
     Lua.pushnumber (Lua.Number (realToFrac (cdProgress cd)))
     Lua.setfield (Lua.nth 2) "progress"
+    Lua.pushboolean (cdMaterialsPaid cd)
+    Lua.setfield (Lua.nth 2) "paid"
     case cdTarget cd of
         CtStructure (StructurePiece pack kind edge) → do
             Lua.pushstring (TE.encodeUtf8 pack)
