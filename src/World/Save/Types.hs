@@ -124,7 +124,13 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 85  -- v85: WorldEdit gains trailing simulation-fluid
+currentSaveVersion = 86  -- v86: worldgen-output change (#812) — final-age
+                         -- mountain soil shed is now redistributed to the
+                         -- adjacent lower/gentler receiving terrain instead
+                         -- of simply deleted (World.Geology.Erosion.Math
+                         -- shedCredit), closing out #225's redistribution
+                         -- requirement that PR #279 left undone.
+                         -- v85: WorldEdit gains trailing simulation-fluid
                          -- snapshot constructors, so a coordinated save can
                          -- replay pre-boundary World → Sim → World fluid
                          -- writebacks while the loaded game remains paused.
