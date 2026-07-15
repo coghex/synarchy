@@ -135,8 +135,9 @@ uiIsPageInScopeFn env = do
 -- | Push a table with one element's info fields onto the Lua stack:
 --   { handle, x, y (absolute framebuffer-pixel position), width,
 --     height, visible, clickable, interactive (has an onClick or
---     onRightClick callback), zIndex, name, text, page (page name),
---     pageVisible, hovered, focused }. Shared by 'uiGetElementInfoFn'
+--     onRightClick callback), zIndex, paintKey, paintOrder, name, text,
+--     page (page name), pageVisible, hovered, focused }. Shared by
+--   'uiGetElementInfoFn'
 --   (one element by handle) and 'uiGetVisibleElementsFn' (every
 --   element on every visible page) so both report identical fields.
 --
@@ -160,6 +161,17 @@ uiIsPageInScopeFn env = do
 --   'elementBlocksPointer'/'elementCapturesScroll' predicates — the
 --   authoritative "does this element actually consume a click/wheel
 --   event right now" answer, not just the raw opt-in flags.
+--
+--   paintKey (#783) is 'elementPaintKey' — the page-band + accumulated-
+--   zIndex ordering key 'topHitBy' actually resolves overlapping hits
+--   with, unlike the raw per-element 'zIndex' below (which ignores the
+--   page's band and every ancestor's own zIndex). It is NOT a total
+--   order on its own (ordinary same-band, same-zIndex siblings tie);
+--   paintOrder is 'elementPaintOrder', the traversal-position tiebreak
+--   'topHitBy' itself uses at equal keys ("later-painted wins"). An
+--   offline consumer (ui.dumpWidgets) ranks overlapping controls by
+--   @(paintKey, paintOrder)@, both descending, to match a real click's
+--   resolution exactly, without re-deriving the page/element tree.
 pushElementInfoTable ∷ ElementHandle → UIElement → UIPageManager → Lua.LuaE Lua.Exception ()
 pushElementInfoTable handle el mgr = do
     let (ax, ay) = fromMaybe (0, 0) (getElementAbsolutePosition handle mgr)
@@ -173,9 +185,15 @@ pushElementInfoTable handle el mgr = do
         mText = elementText el mgr
         pointerBlocking = elementBlocksPointer el
         scrollCapturing = elementCapturesScroll el
+        paintKey = fromMaybe 0 (elementPaintKey handle mgr)
+        paintOrder = fromMaybe 0 (elementPaintOrder handle mgr)
     Lua.newtable
     Lua.pushinteger (fromIntegral (unElementHandle handle))
     Lua.setfield (Lua.nth 2) "handle"
+    Lua.pushinteger (fromIntegral paintKey)
+    Lua.setfield (Lua.nth 2) "paintKey"
+    Lua.pushinteger (fromIntegral paintOrder)
+    Lua.setfield (Lua.nth 2) "paintOrder"
     Lua.pushnumber (realToFrac ax)
     Lua.setfield (Lua.nth 2) "x"
     Lua.pushnumber (realToFrac ay)

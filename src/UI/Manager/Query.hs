@@ -17,13 +17,15 @@ module UI.Manager.Query
   , elementCapturesScroll
   , isElementPointerBlocking
   , isElementScrollCapturing
+  , elementPaintKey
+  , elementPaintOrder
   ) where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
-import Data.List (sortOn)
+import Data.List (sortOn, elemIndex)
 import UI.Types
 import UI.Manager.Page (getVisiblePages)
 
@@ -244,6 +246,73 @@ elementBlocksPointer el = ueBlocksPointer el
 --   policies are independent, per the #743 contract.
 elementCapturesScroll ∷ UIElement → Bool
 elementCapturesScroll = ueCapturesScroll
+
+-- | The paint/hit-test ordering key for one element — its page's
+--   'uiLayerBand' plus the accumulated zIndex of every ancestor up to
+--   the page root, i.e. exactly the @key@ 'hitsAtPointBy'/'topHitBy'
+--   compare when picking a topmost hit (computed here bottom-up from a
+--   single handle instead of top-down while walking the tree; the sum
+--   is the same either way). 'Nothing' for a detached (never added to
+--   a page) or deleted element/page, mirroring
+--   'getElementAbsolutePosition'.
+--
+--   NOT a total order on its own: ordinary siblings sharing a band and
+--   zIndex (the common case — most elements never set an explicit
+--   zIndex) tie. 'topHitBy' breaks that tie by picking the
+--   LATER-painted element ('hitsAtPointBy''s fold — see its haddock);
+--   'elementPaintOrder' is that same tiebreak exposed standalone, for
+--   an offline caller that needs router-parity even among tied keys.
+--   Exposed to Lua as @paintKey@
+--   ('Engine.Scripting.Lua.API.UI.Property.pushElementInfoTable') so an
+--   offline oracle (@ui.dumpWidgets@, #783) can rank overlapping
+--   controls exactly like a real click would resolve them, without
+--   re-deriving the page/element tree itself — paired with
+--   @paintOrder@ ('elementPaintOrder') to resolve ties the same way.
+elementPaintKey ∷ ElementHandle → UIPageManager → Maybe Int
+elementPaintKey handle mgr = do
+    el ← Map.lookup handle (upmElements mgr)
+    page ← Map.lookup (uePage el) (upmPages mgr)
+    pure (uiLayerBand (upLayer page) (upZIndex page) + accumulatedZIndex (0 ∷ Int) el)
+  where
+    accumulatedZIndex depth element =
+        ueZIndex element +
+        case ueParent element of
+            _ | depth ≥ 64 → 0
+            Nothing → 0
+            Just parentHandle → case Map.lookup parentHandle (upmElements mgr) of
+                Nothing → 0
+                Just parent → accumulatedZIndex (depth + 1) parent
+
+-- | This element's position within the FULL paint/hit-test traversal
+--   'hitsAtPointBy' walks — page order ('getVisiblePages'), then each
+--   page's root elements in list order, then children sorted by
+--   zIndex, recursively — independent of any query point (the point
+--   only ever gates SELF-inclusion in 'hitsAtPointBy', never the
+--   recursion/traversal order itself). A strictly later position means
+--   'topHitBy' would treat it as the later-painted element at an equal
+--   'elementPaintKey', so @(paintKey, paintOrder)@ compared
+--   lexicographically (both descending) reproduces 'topHitBy''s exact
+--   selection rule — the missing piece 'elementPaintKey' alone can't
+--   provide when ordinary same-band, same-zIndex siblings tie.
+--   'Nothing' for a hidden element or one pruned by a hidden ancestor
+--   (mirrors 'hitsAtPointBy''s own subtree pruning — such an element
+--   could never be a real hit anyway).
+elementPaintOrder ∷ ElementHandle → UIPageManager → Maybe Int
+elementPaintOrder handle mgr = elemIndex handle (paintTraversalOrder mgr)
+
+-- | Every visible element, in exactly the order 'hitsAtPointBy' visits
+--   them (see 'elementPaintOrder').
+paintTraversalOrder ∷ UIPageManager → [ElementHandle]
+paintTraversalOrder mgr = concatMap perPage (getVisiblePages mgr)
+  where
+    perPage page = concatMap go (upRootElements page)
+    go h = case Map.lookup h (upmElements mgr) of
+        Nothing → []
+        Just el
+            | not (ueVisible el) → []
+            | otherwise →
+                let kids = sortOn (childZIndex mgr) (ueChildren el)
+                in h : concatMap go kids
 
 -- | Handle-based lookup of 'elementBlocksPointer' — an unknown/deleted
 -- handle never blocks.
