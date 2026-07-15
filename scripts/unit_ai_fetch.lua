@@ -65,6 +65,34 @@ local function groundCountOf(fromX, fromY, defName, range)
     return n
 end
 
+-- Ground stock of a defName across the WHOLE active world, no range
+-- limit (#795) — the one authoritative scope an until-stock craft
+-- bill's target counts against: ground-only, unbounded, same as
+-- crafting_panel.lua's groundStockTally(). A thin unbounded-range call
+-- into groundCountOf so the craft AI (unit_ai_craft.lua) and the #330
+-- panel compute the identical count from the identical formula.
+local function groundStockCountOf(defName)
+    return groundCountOf(0, 0, defName, math.huge)
+end
+
+-- Is an UNTIL-STOCK craft bill (#795, Craft.Bills.BillMode) already at
+-- its target? Such a bill sits idle/condition-satisfied instead of
+-- drawing a fresh claim, and becomes claimable again the instant a
+-- later rescan sees stock drop back below target. Always false for
+-- fixed-count/repeat-forever bills (bill.mode ~= "until"), which have
+-- no stock target.
+--
+-- This live re-check — at claim time (unit_ai_craft.lua's
+-- findCraftBill) and again after every completed cycle (craftExecute)
+-- — is also what bounds overproduction when two separate bills target
+-- the same output: neither can run forever, since each stops within
+-- one cycle of the (shared, global) stock actually reaching its own
+-- target, without ever discarding a cycle already in flight.
+local function untilStockSatisfied(bill)
+    if bill.mode ~= "until" then return false end
+    return groundStockCountOf(bill.outputItem) >= (bill.target or 0)
+end
+
 -- Fetch loop against GROUND items: walk to the nearest instance of a
 -- wanted def and pick it up (item.pickupGround preserves the instance),
 -- one item per execute tick. `wants` = {defName → count}; entries are
@@ -162,6 +190,7 @@ M.inventoryCountOf       = inventoryCountOf
 M.deliverItemWeight      = deliverItemWeight
 M.findTechnomule         = findTechnomule
 M.groundCountOf          = groundCountOf
+M.untilStockSatisfied    = untilStockSatisfied
 M.fetchWantsFromGround   = fetchWantsFromGround
 M.fetchWantsFromMule     = fetchWantsFromMule
 

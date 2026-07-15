@@ -652,10 +652,10 @@ on a Built station offering the recipe's station kind with the unit on
 or adjacent to the footprint (Chebyshev ≤ 1).
 
 Craft bills (#329) are per-station standing orders driving production:
-`craft.addBill(bid, recipeId[, count])` (count omitted/<1 = repeat
-forever) validates the station offers the recipe's operation and
-returns a bill id; `craft.getBill(s)`/`cancelBill` are the queue
-surface (UI = #330), `claimBill(billId, uid, timeout)` /
+`craft.addBill(bid, recipeId[, count[, untilTarget]])` (count
+omitted/<1 = repeat forever) validates the station offers the recipe's
+operation and returns a bill id; `craft.getBill(s)`/`cancelBill` are
+the queue surface (UI = #330), `claimBill(billId, uid, timeout)` /
 `releaseBill` / `addBillProgress` / `completeBillCycle` the worker
 lifecycle. The queue lives per world page (`Craft.Bills`, engine-side
 atomic claims — no Lua claim registry) and persists in saves (v70).
@@ -674,6 +674,47 @@ the crafter (#343): the skill level, blended 70/30 with the knowledge
 level when the recipe is knowledge-gated
 (`Craft.Execute.craftQuality`); untagged recipes keep the item-def
 quality roll. Applies to both `craft.execute` and `craft.executeAt`.
+
+Until-stock bills (#795) are a third persisted `CraftBill` mode
+(`Craft.Bills.BillMode`: `FixedCount` | `RepeatForever` | `UntilStock`)
+alongside the count-based ones — a real standing order that crafts
+`recipeId` while the LIVE ground stock of its first output stays below
+a target, rather than #330's original client-side PR #507 snapshot
+that converted a target into an ordinary fixed cycle count once at Add
+time and never revisited it. `craft.addBill`'s optional 4th arg
+(`untilTarget`, a positive integer) requests this mode:
+`Craft.Bills.addUntilStockBill` stores `cbMode`/`cbTarget`/
+`cbOutputItem` (the recipe's first output, resolved once at add time)
+and runs `cbRemaining` at -1 forever, exactly like repeat-forever — an
+until-stock bill is never deleted by `completeBillCycle`, it goes idle
+(condition-satisfied) instead and becomes claimable again the moment a
+later scan sees stock drop back below target. `craft.getBill`/
+`getBills` expose `mode` ("fixed"|"repeat"|"until") plus, for `"until"`
+only, `target` and `outputItem`. The one authoritative stock scope
+(ground-only, unbounded — no fetch-ladder inventory/mule/cargo rungs)
+is evaluated LIVE in Lua at two checkpoints, never persisted as its own
+flag: `scripts/unit_ai_craft.lua`'s `findCraftBill` (before a fresh
+claim) and the `craftExecute` working-phase completion branch (between
+finished cycles) both call `unit_ai_fetch.lua`'s
+`untilStockSatisfied`/`groundStockCountOf`, the SAME formula
+`crafting_panel.lua`'s `groundStockTally()` already used for the
+readiness dot and the queue's target/current display — so the AI and
+the #330 panel can never disagree on whether a bill is satisfied. This
+two-checkpoint re-evaluation (never continuously mid-cycle) is also
+what bounds overproduction when two separate bills target the same
+output without a dedicated in-flight reservation system: neither can
+run forever, since each stops within one cycle of stock reaching its
+own target, at the cost of a small, bounded (not unbounded) overshoot
+when two bills race. Turnkey harness: **`python3 tools/craft_bill_probe.py`**
+(extended for #795) — bill shape, crafting up to (never short of or
+past) a multi-item-per-cycle target, replenishing after consumption, a
+bill added while already satisfied never being claimed, and the
+bounded-overshoot race between two bills on the same output. Save
+version 88 (`cbMode`/`cbTarget`/`cbOutputItem` appended after
+`cbWorking`); the pure roundtrip lives in
+`Test.Headless.Craft.Bills`'s "until-stock (#795)" block, since this
+probe's ARENA fixture can't itself exercise a save/load round-trip
+(#365).
 
 ### Testing power nodes headless (#358)
 

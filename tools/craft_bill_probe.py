@@ -40,6 +40,26 @@ machinery, then checks:
      "working") aborts and releases it outright, with the sourced
      material neither lost nor duplicated. Both resume production once
      unpaused.
+  6. Until-stock bills (#795), AI live: craft.addBill(bid, recipe, nil,
+     target) persists a real stock-target order (mode/target/output
+     shape on getBill). At zero stock, the AI crafts up to (never
+     fewer/more than) the target, correctly accounting for a
+     multi-item-per-cycle recipe, then goes idle (claim released,
+     condition-satisfied) with no further production. Removing output
+     below the target makes the SAME bill eligible again and it
+     replenishes; a NEW bill queued while stock already covers its
+     target is never claimed at all. Two bills racing toward the same
+     target on two different crafters settle to a BOUNDED overshoot
+     (never unbounded runaway production) and both end up idle.
+
+     Not covered here: a real save/quit/restart/load round-trip for an
+     until-stock bill — this probe's fixture is an ARENA world, which
+     per CLAUDE.md's #365 note hangs the world thread on load, so
+     arenas can't be a save-test page. The new persisted fields
+     (cbMode/cbTarget/cbOutputItem) round-trip through the exact same
+     generic Serialize derivation every other CraftBill field already
+     relies on, proven directly by the pure hspec roundtrip test in
+     Test.Headless.Craft.Bills.
 
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
@@ -70,6 +90,14 @@ recipes:
     work: 1
     outputs:
       - item: granite_chunk
+  - id: bill_probe_until
+    station: smelt
+    inputs:
+      - item: steel_bar
+    work: 1
+    outputs:
+      - item: bronze_bar
+        count: 2
 """
 
 
@@ -193,11 +221,31 @@ def add_bill(port, bid, recipe, count=None):
     return None, raw
 
 
+def add_until_bill(port, bid, recipe, target):
+    """→ (billId or None, err) for an until-stock bill (#795)."""
+    raw = send(port,
+               f"local id,err = craft.addBill({bid}, '{recipe}', nil, {target}); "
+               f"return id and ('ID:'..id) or ('ERR:'..tostring(err))"
+               ).strip('"')
+    if raw.startswith("ID:"):
+        return int(float(raw[3:])), ""
+    return None, raw
+
+
 def ground_count_near(port, name, gx, gy, radius):
     return int(float(send(port,
         f"local n=0; for _,g in ipairs(item.listGround() or {{}}) do "
         f"if g.defName=='{name}' and math.abs(g.x-{gx})<={radius} "
         f"and math.abs(g.y-{gy})<={radius} then n=n+1 end end; return n")))
+
+
+def ground_stock(port, name):
+    """Global ground count of `name`, no range limit -- the until-stock
+    target's authoritative scope (mirrors groundStockTally/
+    groundStockCountOf)."""
+    return int(float(send(port,
+        f"local n=0; for _,g in ipairs(item.listGround() or {{}}) do "
+        f"if g.defName=='{name}' then n=n+1 end end; return n")))
 
 
 def check(passed, ok, label, detail=""):
@@ -233,7 +281,7 @@ def main():
         with open(TEST_YAML, "w") as f:
             f.write(TEST_RECIPES)
         n = int(float(send(port, f"return engine.loadRecipeYaml('{TEST_YAML}')")))
-        passed = check(passed, n == 2, "probe recipes loaded", f"count={n}")
+        passed = check(passed, n == 3, "probe recipes loaded", f"count={n}")
 
         # Backend phase runs with the AI off so no acolyte races the
         # scripted claim/progress calls.
@@ -536,6 +584,126 @@ def main():
             ).strip('"') == "n")
         passed = check(passed, finished7,
                        "unpausing lets bill7 finish once reclaimed")
+
+        # --- 6. Until-stock bills (#795) ---
+        # 6a. Backend shape + AI-driven completion at zero stock,
+        # correctly accounting for a multi-item-per-cycle recipe: target
+        # 5 at 2 bronze_bar/cycle needs ceil(5/2)=3 cycles -- stops at
+        # 6, never fewer (short of target) or more (a 4th cycle).
+        ai_off(port)
+        base_bronze = ground_stock(port, "bronze_bar")
+        passed = check(passed, base_bronze == 0,
+                       "fixture: no bronze_bar on the ground yet",
+                       f"found={base_bronze}")
+        for i in range(4):
+            send(port, f"item.spawnGround('steel_bar', {7.5 + 0.3*i}, 4.5); "
+                       f"return 'ok'")
+        bill_u1, msg = add_until_bill(port, bid_f, "bill_probe_until", 5)
+        passed = check(passed, bill_u1 is not None,
+                       "#795 until-stock bill queued", msg)
+        shape = jget(port, f"return craft.getBill({bill_u1})")
+        ok = (isinstance(shape, dict) and shape.get("mode") == "until"
+              and shape.get("target") == 5
+              and shape.get("outputItem") == "bronze_bar"
+              and shape.get("remaining") == -1
+              and "claimant" not in shape)
+        passed = check(passed, ok,
+                       "until-stock bill shape (mode/target/outputItem)", shape)
+
+        uid5 = spawn_acolyte(port, 3, 4)
+        ai_on(port)
+        time.sleep(1.5)
+        clear_find_water(port, uid5)
+        reached = poll(port, 90, lambda: ground_stock(port, "bronze_bar") >= 5)
+        passed = check(passed, reached, "AI crafts up to the target (>=5 bronze_bar)")
+        stock_at_target = ground_stock(port, "bronze_bar")
+        passed = check(passed, stock_at_target == 6,
+                       "exactly 3 cycles run (2/cycle) -- stops at 6, not fewer/more",
+                       f"stock={stock_at_target}")
+        idled = poll(port, 20, lambda: jget(
+            port, f"return craft.getBill({bill_u1})").get("claimant") is None)
+        passed = check(passed, idled,
+                       "bill goes idle (claim released) once condition-satisfied")
+        poll(port, 8, lambda: False)   # observation window, no player action
+        stock_after_wait = ground_stock(port, "bronze_bar")
+        passed = check(passed, stock_after_wait == stock_at_target,
+                       "no further crafting while condition-satisfied",
+                       f"{stock_at_target} -> {stock_after_wait}")
+
+        # 6b. Consuming output below target makes the SAME bill eligible
+        # again and it replenishes (one more cycle to cover the deficit).
+        removed = int(float(send(port,
+            "local n=0; for _,g in ipairs(item.listGround() or {}) do "
+            "if g.defName=='bronze_bar' and n<3 then "
+            "item.removeGround(g.id); n=n+1 end end; return n")))
+        passed = check(passed, removed == 3, "removed 3 bronze_bar (stock -> 3)",
+                       f"removed={removed}")
+        stock_after_removal = ground_stock(port, "bronze_bar")
+        passed = check(passed, stock_after_removal == 3,
+                       "stock now below target (3 < 5)",
+                       f"stock={stock_after_removal}")
+        replenished = poll(port, 90, lambda: ground_stock(port, "bronze_bar") >= 5)
+        passed = check(passed, replenished,
+                       "the same bill automatically resumes and replenishes")
+
+        # A NEW bill queued while stock already covers its target is
+        # never claimed at all -- "added output while pending" case.
+        stock_now = ground_stock(port, "bronze_bar")
+        bill_u4, msg = add_until_bill(port, bid_f, "bill_probe_until",
+                                      max(1, stock_now - 1))
+        passed = check(passed, bill_u4 is not None,
+                       "already-satisfied until-bill queued", msg)
+        poll(port, 8, lambda: False)   # let the AI tick, unpaused
+        untouched = jget(port, f"return craft.getBill({bill_u4})")
+        passed = check(passed,
+                       isinstance(untouched, dict)
+                       and untouched.get("claimant") is None,
+                       "a bill already at/above target is never claimed",
+                       untouched)
+        send(port, f"craft.cancelBill({bill_u4}); return 'ok'")
+
+        # 6c. Two bills, same output, same target, worked by two
+        # DIFFERENT crafters -- bounded overshoot, never unbounded
+        # runaway production (#795).
+        ai_off(port)
+        for i in range(6):
+            send(port, f"item.spawnGround('steel_bar', {7.5 + 0.3*i}, 6.5); "
+                       f"return 'ok'")
+        base3 = ground_stock(port, "bronze_bar")
+        target3 = base3 + 3
+        bill_u2, msg = add_until_bill(port, bid_f, "bill_probe_until", target3)
+        passed = check(passed, bill_u2 is not None, "racing bill A queued", msg)
+        bill_u3, msg = add_until_bill(port, bid_f, "bill_probe_until", target3)
+        passed = check(passed, bill_u3 is not None, "racing bill B queued", msg)
+        uid6 = spawn_acolyte(port, 3, 6)
+        uid7 = spawn_acolyte(port, 4, 6)
+        ai_on(port)
+        time.sleep(1.5)
+        clear_find_water(port, uid6)
+        clear_find_water(port, uid7)
+
+        def both_idle():
+            bA = jget(port, f"return craft.getBill({bill_u2})")
+            bB = jget(port, f"return craft.getBill({bill_u3})")
+            return (isinstance(bA, dict) and bA.get("claimant") is None
+                    and isinstance(bB, dict) and bB.get("claimant") is None)
+
+        settled = poll(port, 120, both_idle)
+        passed = check(passed, settled,
+                       "both racing until-bills settle to idle (no perpetual claim)")
+        final_stock = ground_stock(port, "bronze_bar")
+        # Each bill can overshoot the shared target by at most one
+        # in-flight cycle (2 bronze_bar) before it notices the OTHER
+        # bill already pushed stock to target -- bounded, never
+        # unbounded, duplicate production.
+        overshoot_bound = target3 + 2 * 2
+        passed = check(passed, target3 <= final_stock <= overshoot_bound,
+                       f"bounded overshoot, not unbounded ({target3} <= "
+                       f"stock <= {overshoot_bound})",
+                       f"stock={final_stock}")
+        poll(port, 8, lambda: False)
+        passed = check(passed, ground_stock(port, "bronze_bar") == final_stock,
+                       "production has genuinely stopped (stable across a wait)")
 
         print("\n" + ("ALL CRAFT BILL CHECKS PASSED" if passed
                       else "SOME FAILED"))

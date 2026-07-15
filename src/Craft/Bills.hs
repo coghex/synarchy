@@ -20,11 +20,13 @@
 --   makes a claim race between two crafters resolve atomically.
 module Craft.Bills
     ( BillId(..)
+    , BillMode(..)
     , CraftBill(..)
     , CraftBills(..)
     , ReorderDirection(..)
     , emptyCraftBills
     , addBill
+    , addUntilStockBill
     , removeBill
     , lookupBill
     , billsForStation
@@ -54,6 +56,14 @@ import Unit.Types (UnitId(..))
 newtype BillId = BillId { unBillId ∷ Word32 }
     deriving stock (Show, Eq, Ord, Generic)
     deriving anyclass (Hashable, Serialize)
+
+-- | #795: which of the three standing-order modes a bill runs.
+--   FixedCount/RepeatForever are 'addBill's existing count-based
+--   modes (unchanged); UntilStock is the new persisted "craft while
+--   stock stays below a target" order — see 'addUntilStockBill'.
+data BillMode = FixedCount | RepeatForever | UntilStock
+    deriving stock (Show, Eq, Generic)
+    deriving anyclass (Serialize)
 
 -- | One standing craft order. Field order is load-bearing (positional
 --   Generic Serialize — append, don't reorder).
@@ -114,6 +124,19 @@ data CraftBill = CraftBill
       --   for as long as its existing holder keeps working it (pausing
       --   never touches this flag, only blocks fresh claims). False
       --   (not working) whenever unclaimed. Appended field — save v80.
+    , cbMode       ∷ !BillMode
+      -- ^ #795: FixedCount/RepeatForever for an ordinary 'addBill'
+      --   (mirrors the sign of the count that produced it); UntilStock
+      --   for a standing stock-target order from 'addUntilStockBill'.
+      --   Appended field — save v88.
+    , cbTarget     ∷ !Int
+      -- ^ #795: the stock level an UntilStock bill crafts toward.
+      --   Meaningless (0) for FixedCount/RepeatForever.
+    , cbOutputItem ∷ !Text
+      -- ^ #795: the item def name an UntilStock bill's target counts
+      --   against — the recipe's first output, captured at add time so
+      --   a live bill doesn't depend on the recipe catalogue staying
+      --   unchanged. Empty for FixedCount/RepeatForever.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | The per-world bill set. The id counter lives inside so it
@@ -144,6 +167,45 @@ addBill station recipe count bills =
             , cbSeq       = fromIntegral (cbsNextId bills)
             , cbPaused    = False
             , cbWorking   = False
+            , cbMode      = if count ≤ 0 then RepeatForever else FixedCount
+            , cbTarget    = 0
+            , cbOutputItem = ""
+            }
+    in ( bills { cbsBills  = HM.insert bid bill (cbsBills bills)
+               , cbsNextId = cbsNextId bills + 1 }
+       , bid )
+
+-- | Queue a standing UNTIL-STOCK order (#795): craft @recipe@ at
+--   @station@ while the live stock of @outputItem@ stays below
+--   @target@. Runs the "-1" (never auto-decrements/removes) cycle
+--   accounting 'completeBillCycle' already gives repeat-forever bills
+--   — an until-stock bill is a repeat-forever bill whose ELIGIBILITY
+--   is additionally gated on a live stock check the craft AI performs
+--   before a fresh claim and between completed cycles (findCraftBill /
+--   craftExecute in scripts/unit_ai_craft.lua), not on anything this
+--   pure layer tracks. Reaching the target therefore never deletes the
+--   bill — it goes idle (condition-satisfied) and becomes claimable
+--   again the moment stock drops back below @target@. The Lua verb
+--   layer owns validating the station/recipe pairing and resolving
+--   @outputItem@ from the recipe's outputs.
+addUntilStockBill ∷ BuildingId → Text → Int → Text → CraftBills
+                  → (CraftBills, BillId)
+addUntilStockBill station recipe target outputItem bills =
+    let bid   = BillId (cbsNextId bills)
+        bill  = CraftBill
+            { cbId        = bid
+            , cbStation   = station
+            , cbRecipe    = recipe
+            , cbRemaining = -1
+            , cbClaimant  = Nothing
+            , cbClaimedAt = 0
+            , cbProgress  = 0
+            , cbSeq       = fromIntegral (cbsNextId bills)
+            , cbPaused    = False
+            , cbWorking   = False
+            , cbMode      = UntilStock
+            , cbTarget    = max 0 target
+            , cbOutputItem = outputItem
             }
     in ( bills { cbsBills  = HM.insert bid bill (cbsBills bills)
                , cbsNextId = cbsNextId bills + 1 }
