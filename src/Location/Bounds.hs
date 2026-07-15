@@ -25,6 +25,8 @@ module Location.Bounds
     , boundsIntersect
     , distancePointToBounds
     , distanceBoundsToBounds
+    , nearestBoundsDistance
+    , remotePortalThresholdTiles
     ) where
 
 import UPrelude
@@ -127,3 +129,23 @@ distancePointToBounds worldSize b p =
 distanceBoundsToBounds ∷ Int → AbsBounds → AbsBounds → Int
 distanceBoundsToBounds worldSize a b =
     minimum (map (`rawDistanceBounds` b) (seamAliases worldSize a))
+
+-- | The seam-aware nearest distance from a footprint to any of a list
+--   of bounds boxes (#779) — 'Nothing' when the list is empty, since
+--   "no placed locations" is itself the remote condition rather than a
+--   degenerate minimum.
+nearestBoundsDistance ∷ Int → AbsBounds → [AbsBounds] → Maybe Int
+nearestBoundsDistance _ _ [] = Nothing
+nearestBoundsDistance worldSize footprint boxes =
+    Just (minimum (map (distanceBoundsToBounds worldSize footprint) boxes))
+
+-- | #779: the minimum footprint-to-nearest-placed-location distance
+--   (tiles, seam-aware Chebyshev) beyond which a starting-portal
+--   placement is classified remote and needs an explicit
+--   remote-settlement confirmation before it spawns. Eight 16-tile
+--   chunks ('World.Chunk.Types.chunkSize') — the single named,
+--   documented source; nothing else should hardcode 128 for this
+--   purpose. A placement exactly at this distance is NOT remote — the
+--   warning begins only strictly beyond it.
+remotePortalThresholdTiles ∷ Int
+remotePortalThresholdTiles = 128
