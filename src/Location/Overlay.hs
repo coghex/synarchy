@@ -239,21 +239,29 @@ idSalt = T.foldl' (\acc c → (acc `xor` fromIntegral (fromEnum c)) * 0x10000000
 wantsWater ∷ [Text] → Bool
 wantsWater = any (`elem` (["coast", "coastal", "waterside"] ∷ [Text]))
 
--- | Does a chunk satisfy ALL of a def's anchor tags? Unknown tags
---   impose no constraint (a soft no-op; #88 only ships the "flat" tag,
---   and removing this would let one typo'd tag suppress all placement).
+-- | Does a chunk satisfy ALL of a def's anchor tags? Every tag in the
+--   authoritative vocabulary ('Engine.Asset.YamlLocations.validAnchorTags',
+--   #801) is listed explicitly, including "waterside" (the #414
+--   water-proximity opt-out modifier: tolerate nearby water, no terrain
+--   constraint of its own). The catch-all fallback is defensive only —
+--   'Engine.Asset.YamlLocations' rejects any tag outside that vocabulary
+--   at YAML load time, so a def registered through the normal content
+--   pipeline never reaches this function carrying an unknown tag; only a
+--   directly-constructed 'LocationDef' (e.g. a test) that bypasses YAML
+--   validation could.
 anchorOk ∷ Cuts → [Text] → ChunkMetrics → Bool
 anchorOk cuts tags cm = all ok tags
   where
     ok tag = case tag of
-        "flat"     → cmElevRange  cm ≤ flatCut cuts
-        "mountain" → cmMedianElev cm ≥ mountainCut cuts
-        "highland" → cmMedianElev cm ≥ highlandCut cuts
-        "lowland"  → cmMedianElev cm ≤ lowlandCut cuts
-        "coast"    → cmOceanDist  cm ≡ 1
-        "coastal"  → cmOceanDist  cm ≡ 1
-        "inland"   → cmOceanDist  cm ≥ 4
-        _          → True
+        "flat"      → cmElevRange  cm ≤ flatCut cuts
+        "mountain"  → cmMedianElev cm ≥ mountainCut cuts
+        "highland"  → cmMedianElev cm ≥ highlandCut cuts
+        "lowland"   → cmMedianElev cm ≤ lowlandCut cuts
+        "coast"     → cmOceanDist  cm ≡ 1
+        "coastal"   → cmOceanDist  cm ≡ 1
+        "inland"    → cmOceanDist  cm ≥ 4
+        "waterside" → True
+        _           → True
 
 -- | p-quantile of a pre-sorted list (0 for the empty list).
 pctl ∷ [Int] → Double → Int

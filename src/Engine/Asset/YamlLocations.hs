@@ -75,6 +75,22 @@ relBoundsContains ∷ LocationYamlBounds → Int → Int → Bool
 relBoundsContains b x y =
     x ≥ lybMinX b ∧ x ≤ lybMaxX b ∧ y ≥ lybMinY b ∧ y ≤ lybMaxY b
 
+-- | The authoritative anchor-tag vocabulary (#801): terrain/height
+--   (flat/mountain/highland/lowland), ocean-distance
+--   (coast/coastal/inland), and the #414 water-proximity opt-out
+--   modifier (waterside — tolerates nearby water, no terrain
+--   constraint of its own; see 'Location.Overlay.anchorOk'). Every tag
+--   outside this set — a typo or an unimplemented climate/biome name —
+--   is rejected below rather than silently matching every chunk.
+--   Duplicated (not imported) in 'Location.Overlay.anchorOk' for the
+--   same zero-local-dependency reason as 'relBoundsContains' above.
+validAnchorTags ∷ [Text]
+validAnchorTags =
+    [ "flat", "mountain", "highland", "lowland"
+    , "coast", "coastal", "inland"
+    , "waterside"
+    ]
+
 -- | The YAML shape of a location definition. Converted to
 --   'Location.Types.LocationDef' by the API loader.
 data LocationYamlDef = LocationYamlDef
@@ -112,6 +128,7 @@ instance FromJSON LocationYamlDef where
         bounds   ← requireField lid "bounds" v
         margin   ← requireField lid "discovery_margin" v
         contents ← v .:? "contents" .!= []
+        anchor   ← v .:? "anchor" .!= []
         -- Reject inverted bounds / a negative margin / an out-of-bounds
         -- fixed content position HERE, at the only entry point for this
         -- def's spatial contract, so a bad YAML fails the whole file's
@@ -136,11 +153,16 @@ instance FromJSON LocationYamlDef where
                     <> T.pack (show (lypX p)) <> ","
                     <> T.pack (show (lypY p))
                     <> ") lies outside declared bounds"))
+        forM_ anchor $ \tag →
+            unless (tag `elem` validAnchorTags) $
+                fail (T.unpack ("location '" <> lid <> "': unsupported anchor tag '"
+                    <> tag <> "' (expected one of: "
+                    <> T.intercalate ", " validAnchorTags <> ")"))
         LocationYamlDef lid
             ⊚ v .:? "label"       .!= ""
             ⊛ v .:? "type"        .!= "natural"
             ⊛ v .:  "builder"
-            ⊛ v .:? "anchor"      .!= []
+            ⊛ pure anchor
             ⊛ v .:? "max_count"   .!= 4
             ⊛ v .:? "min_spacing" .!= 4
             ⊛ pure contents
