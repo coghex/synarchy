@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.NightPerception as NightPerception
+import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.Temperature as ItemTemp
@@ -142,6 +143,7 @@ main = hspec $ do
     describe "Unit.Fall" FallTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "Unit.NightPerception" NightPerception.spec
+    describe "Unit.LineOfSight (multi-world page ownership)" LineOfSightTest.spec
     describe "World.TimeLocal" TimeLocal.spec
     describe "Item.Temperature" ItemTemp.spec
     describe "Item.BuffYaml" ItemBuffYaml.spec

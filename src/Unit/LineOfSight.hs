@@ -7,6 +7,17 @@
 --
 -- Used by the AI to discover water sources, locate allies, and (in the
 -- future) drive fog of war.
+--
+-- Every query below resolves terrain/clock/world-size against the
+-- OWNING unit's own world page ('Unit.Types.uiPage'), never
+-- 'World.Types.wmVisible's list order (#797) — each visible page has
+-- its own 'wsTilesRef'\/'wsTimeRef'\/'wsGenParamsRef', so reading
+-- "whichever page happens to be first" let a secondary page's units
+-- see through the ACTIVE page's hills and dodge on the active page's
+-- time of day. A unit (or defender\/attacker pair) whose own page can't
+-- be resolved — missing, destroyed, not visible, or simply different
+-- pages — gets a safe empty\/zero result rather than silently falling
+-- back to an unrelated page.
 module Unit.LineOfSight
     ( unitVisibleTiles
     , unitAwareness
@@ -20,15 +31,17 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Unit.Direction (Direction(..))
-import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
+import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..),
+                    WorldPageId)
+import World.Time.Types (worldTimeToSunAngle)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Tile.Types (lookupChunk, WorldTileData(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Time.Local (localSunAngle)
 
 -- | All tiles the unit can currently see. Empty list if the unit
---   doesn't exist or no world is visible. Includes the unit's own
---   tile (always visible).
+--   doesn't exist or its own page isn't loaded/visible. Includes the
+--   unit's own tile (always visible).
 unitVisibleTiles ∷ EngineEnv → UnitId → IO [(Int, Int)]
 unitVisibleTiles env uid = do
     um ← readIORef (unitManagerRef env)
@@ -36,40 +49,38 @@ unitVisibleTiles env uid = do
         Nothing → return []
         Just inst → do
             wm ← readIORef (worldManagerRef env)
-            case wmVisible wm of
-                [] → return []
-                (pageId:_) → case lookup pageId (wmWorlds wm) of
-                    Nothing → return []
-                    Just ws → do
-                        wtd ← readIORef (wsTilesRef ws)
-                        let perception = HM.lookupDefault 1.0 "perception"
-                                            (uiStats inst)
-                            radius = max 1 (floor (realToFrac perception
-                                                   * awareRangeTiles) ∷ Int)
-                            ux = floor (uiGridX inst) ∷ Int
-                            uy = floor (uiGridY inst) ∷ Int
-                            uz = uiGridZ inst
-                            -- Eye Z is one tile above the unit's footing.
-                            eyeZ = fromIntegral (uz + 1) ∷ Double
-                            (fx, fy) = facingVector (uiFacing inst)
+            case lookup (uiPage inst) (wmWorlds wm) of
+                Nothing → return []
+                Just ws → do
+                    wtd ← readIORef (wsTilesRef ws)
+                    let perception = HM.lookupDefault 1.0 "perception"
+                                        (uiStats inst)
+                        radius = max 1 (floor (realToFrac perception
+                                               * awareRangeTiles) ∷ Int)
+                        ux = floor (uiGridX inst) ∷ Int
+                        uy = floor (uiGridY inst) ∷ Int
+                        uz = uiGridZ inst
+                        -- Eye Z is one tile above the unit's footing.
+                        eyeZ = fromIntegral (uz + 1) ∷ Double
+                        (fx, fy) = facingVector (uiFacing inst)
 
-                            inFOV (dx, dy)
-                              | dx ≡ 0 ∧ dy ≡ 0 = True   -- own tile
-                              | otherwise =
-                                  let dd = dx * dx + dy * dy
-                                  in dd ≤ radius * radius
-                                     ∧ inCone fx fy dx dy
+                        inFOV (dx, dy)
+                          | dx ≡ 0 ∧ dy ≡ 0 = True   -- own tile
+                          | otherwise =
+                              let dd = dx * dx + dy * dy
+                              in dd ≤ radius * radius
+                                 ∧ inCone fx fy dx dy
 
-                            visible =
-                                [ (ux + dx, uy + dy)
-                                | dx ← [-radius .. radius]
-                                , dy ← [-radius .. radius]
-                                , inFOV (dx, dy)
-                                , (dx ≡ 0 ∧ dy ≡ 0)
-                                  ∨ notBlocked wtd ux uy eyeZ
-                                              (ux + dx) (uy + dy)
-                                ]
-                        return visible
+                        visible =
+                            [ (ux + dx, uy + dy)
+                            | dx ← [-radius .. radius]
+                            , dy ← [-radius .. radius]
+                            , inFOV (dx, dy)
+                            , (dx ≡ 0 ∧ dy ≡ 0)
+                              ∨ notBlocked wtd ux uy eyeZ
+                                          (ux + dx) (uy + dy)
+                            ]
+                    return visible
 
 -- | How aware is @defender@ of @attacker@ right now (0..1)? Used by
 --   combat to gate the active DODGE — you can't slip a blow you never
@@ -89,47 +100,57 @@ unitVisibleTiles env uid = do
 --   heading (set by movement — a unit that walked up to its foe faces it).
 --   Result is scaled by 'nightPerceptionFactor': a defender senses an
 --   incoming blow less reliably in the dark (#315).
+--
+--   Zero (no dodge) when attacker and defender are on different world
+--   pages, or when the defender's own page can't be resolved — a unit
+--   never gains awareness from another page's geometry, clock, or
+--   world-size (#797).
 unitAwareness ∷ EngineEnv → UnitInstance → UnitInstance → IO Float
-unitAwareness env defender attacker = do
-    let defX = uiGridX defender
-        defY = uiGridY defender
-        atkX = uiGridX attacker
-        atkY = uiGridY attacker
-        dxF  = realToFrac (atkX - defX) ∷ Double
-        dyF  = realToFrac (atkY - defY) ∷ Double
-        dist = sqrt (dxF * dxF + dyF * dyF)
-        perception = HM.lookupDefault 1.0 "perception" (uiStats defender)
-        perceptionRange = max 1.5 (realToFrac perception * awareRangeTiles)
-        (fvx, fvy) = facingVector (uiFacing defender)
-        dot   = dxF * fvx + dyF * fvy
-        lenSq = dxF * dxF + dyF * dyF
-        -- Same half-angle-60° cone test as the vision FOV (cos²60 = 0.25).
-        inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
-    blocked ← losBlockedBetween env defender attacker
-    sunAngle ← readIORef (sunAngleRef env)
-    worldSize ← activeWorldSizeChunks env
-    let localAngle = localSunAngle worldSize (floor defX) (floor defY) sunAngle
-    pure $! nightPerceptionFactor localAngle *
-            if dist > perceptionRange ∨ blocked
-            then 0.0
-            else if inFacingCone           then 1.0
-            else if dist ≤ awareCloseRadius then awarePeripheral
-            else 0.0
+unitAwareness env defender attacker
+    | uiPage defender ≠ uiPage attacker = pure 0.0
+    | otherwise = do
+        wm ← readIORef (worldManagerRef env)
+        case lookup (uiPage defender) (wmWorlds wm) of
+            Nothing → pure 0.0
+            Just ws → do
+                let defX = uiGridX defender
+                    defY = uiGridY defender
+                    atkX = uiGridX attacker
+                    atkY = uiGridY attacker
+                    dxF  = realToFrac (atkX - defX) ∷ Double
+                    dyF  = realToFrac (atkY - defY) ∷ Double
+                    dist = sqrt (dxF * dxF + dyF * dyF)
+                    perception = HM.lookupDefault 1.0 "perception" (uiStats defender)
+                    perceptionRange = max 1.5 (realToFrac perception * awareRangeTiles)
+                    (fvx, fvy) = facingVector (uiFacing defender)
+                    dot   = dxF * fvx + dyF * fvy
+                    lenSq = dxF * dxF + dyF * dyF
+                    -- Same half-angle-60° cone test as the vision FOV (cos²60 = 0.25).
+                    inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
+                blocked ← losBlockedBetween env defender attacker
+                wt ← readIORef (wsTimeRef ws)
+                let sunAngle = worldTimeToSunAngle wt
+                worldSize ← activeWorldSizeChunks env (uiPage defender)
+                let localAngle = localSunAngle worldSize (floor defX) (floor defY) sunAngle
+                pure $! nightPerceptionFactor localAngle *
+                        if dist > perceptionRange ∨ blocked
+                        then 0.0
+                        else if inFacingCone           then 1.0
+                        else if dist ≤ awareCloseRadius then awarePeripheral
+                        else 0.0
 
--- | The active world's size (in chunks), for 'localSunAngle'. Falls back
+-- | The given page's size (in chunks), for 'localSunAngle'. Falls back
 --   to 128 (the same default 'World.Render.Quads' uses when gen params
 --   aren't loaded yet) rather than failing — a defender's local time of
 --   day just degrades to the world-default circumference in that window.
-activeWorldSizeChunks ∷ EngineEnv → IO Int
-activeWorldSizeChunks env = do
+activeWorldSizeChunks ∷ EngineEnv → WorldPageId → IO Int
+activeWorldSizeChunks env pageId = do
     wm ← readIORef (worldManagerRef env)
-    case wmVisible wm of
-        [] → pure 128
-        (pageId:_) → case lookup pageId (wmWorlds wm) of
-            Nothing → pure 128
-            Just ws → do
-                mParams ← readIORef (wsGenParamsRef ws)
-                pure (maybe 128 wgpWorldSize mParams)
+    case lookup pageId (wmWorlds wm) of
+        Nothing → pure 128
+        Just ws → do
+            mParams ← readIORef (wsGenParamsRef ws)
+            pure (maybe 128 wgpWorldSize mParams)
 
 -- | Multiplier on awareness from time of day: 1.0 at noon, dipping to
 --   'nightPerceptionFloor' at midnight, ramping smoothly through
@@ -151,23 +172,29 @@ nightPerceptionFloor ∷ Float
 nightPerceptionFloor = 0.5
 
 -- | Terrain line-of-sight between two units (true ⇒ a hill/wall blocks
---   the sightline). Falls back to "clear" when no world is loaded (the
---   flat arena), matching 'notBlocked''s chunk-missing assumption.
+--   the sightline, the units are on different pages, or the defender's
+--   page can't be resolved — a cross-page or unresolvable pair is
+--   treated as blocked, never as an unearned clear sightline, #797).
+--   Falls back to "clear" only when NO world page exists at all (the
+--   pre-boot / legacy no-page state), matching 'notBlocked''s
+--   chunk-missing assumption — unchanged single-world behavior.
 losBlockedBetween ∷ EngineEnv → UnitInstance → UnitInstance → IO Bool
-losBlockedBetween env defender attacker = do
-    wm ← readIORef (worldManagerRef env)
-    case wmVisible wm of
-        [] → pure False
-        (pageId:_) → case lookup pageId (wmWorlds wm) of
-            Nothing → pure False
-            Just ws → do
-                wtd ← readIORef (wsTilesRef ws)
-                let ux   = floor (uiGridX defender) ∷ Int
-                    uy   = floor (uiGridY defender) ∷ Int
-                    gx   = floor (uiGridX attacker) ∷ Int
-                    gy   = floor (uiGridY attacker) ∷ Int
-                    eyeZ = fromIntegral (uiGridZ defender + 1) ∷ Double
-                pure (not (notBlocked wtd ux uy eyeZ gx gy))
+losBlockedBetween env defender attacker
+    | uiPage defender ≠ uiPage attacker = pure True
+    | otherwise = do
+        wm ← readIORef (worldManagerRef env)
+        case wmWorlds wm of
+            [] → pure False
+            worlds → case lookup (uiPage defender) worlds of
+                Nothing → pure True
+                Just ws → do
+                    wtd ← readIORef (wsTilesRef ws)
+                    let ux   = floor (uiGridX defender) ∷ Int
+                        uy   = floor (uiGridY defender) ∷ Int
+                        gx   = floor (uiGridX attacker) ∷ Int
+                        gy   = floor (uiGridY attacker) ∷ Int
+                        eyeZ = fromIntegral (uiGridZ defender + 1) ∷ Double
+                    pure (not (notBlocked wtd ux uy eyeZ gx gy))
 
 -- | Vision/awareness radius per point of perception (tiles).
 awareRangeTiles ∷ Double

@@ -32,6 +32,14 @@ import Unit.Thread.Movement.Timers
 arrivalEpsilon ∷ Float
 arrivalEpsilon = 0.1
 
+-- | KNOWN FOLLOW-UP (#797 audit clause): like the pre-#797 LOS code,
+--   this snapshots wmVisible's HEAD page rather than each unit's own
+--   uiPage — a unit on a secondary visible page paths against the
+--   ACTIVE page's terrain. Left unfixed here deliberately: this feeds
+--   the batched PER-TICK movement update for every moving unit, so a
+--   per-unit-page fix is materially larger in scope than #797's LOS
+--   change (a per-caller WorldTileData lookup, not a single shared
+--   snapshot). Tracked as a deferred follow-up, not fixed in #797.
 snapshotVisibleWorldTiles ∷ EngineEnv → IO (Maybe WorldTileData)
 snapshotVisibleWorldTiles env = do
     wm ← readIORef (worldManagerRef env)
