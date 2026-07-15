@@ -190,21 +190,51 @@ def _file_hash(path: str) -> str | None:
 
 
 def widget_at(widgets, x, y):
-    """The first visible widget whose bounds contain (x, y) — the F3
-    join used to tell phantom-affordance from discoverability."""
+    """The topmost eligible control whose bounds contain (x, y) — the F3
+    join used to tell phantom-affordance from discoverability (#783).
+
+    Eligible means `control` is not explicitly False — passive context
+    geometry (F3's label/panel records) is marked `control=False` and
+    can never satisfy this join, even when it covers the click, so a
+    dead click behind only a passive record still reads as "hit no
+    widget". A record with no `control` key (older traces predating
+    this field, or a hand-built fixture) defaults eligible for
+    backward compatibility. `visible` is treated the same way — an
+    explicit False excludes, a missing key defaults visible. A
+    shown-but-disabled control (`enabled: False`) is NOT excluded here;
+    disabled-ness explains why a click didn't activate anything, it
+    doesn't remove the control from correlation.
+
+    Among eligible matches, the one with the highest `paintKey` wins —
+    the same page-band + accumulated-zIndex ordering
+    UI.Manager.Query.topHitBy resolves overlapping hits with — so an
+    overlapping click resolves to the control the real UI input router
+    would pick, independent of the dump list's own (Lua-table-derived)
+    order. A missing `paintKey` defaults to 0.
+    """
     if not isinstance(widgets, list):
         return None
+    best = None
+    best_key = None
     for w in widgets:
-        b = w.get("bounds") if isinstance(w, dict) else None
+        if not isinstance(w, dict):
+            continue
+        if w.get("control") is False or w.get("visible") is False:
+            continue
+        b = w.get("bounds")
         if not isinstance(b, dict):
             continue
         try:
-            if (b["x"] <= x <= b["x"] + b["w"]
-                    and b["y"] <= y <= b["y"] + b["h"]):
-                return w
+            hit = (b["x"] <= x <= b["x"] + b["w"]
+                   and b["y"] <= y <= b["y"] + b["h"])
         except (KeyError, TypeError):
             continue
-    return None
+        if not hit:
+            continue
+        key = w.get("paintKey", 0)
+        if best is None or key >= best_key:
+            best, best_key = w, key
+    return best
 
 
 BAD_OUTCOMES = ("rejected", "noop", "deadclick", "partial")
@@ -1075,6 +1105,50 @@ def selftest() -> int:
     check("widget_at miss", widget_at([{"bounds": {"x": 0, "y": 0, "w": 10, "h": 10}}],
                                       50, 5) is None)
 
+    # #783: passive label/panel records (control=False) can never
+    # satisfy correlation, even covering the click.
+    passive_panel = {"id": "panel:p1", "type": "panel", "control": False,
+                      "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    check("a passive panel record alone does not correlate to a click over it (#783)",
+          widget_at([passive_panel], 10, 10) is None)
+    passive_label = {"id": "label:l1", "type": "label", "control": False,
+                      "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    check("a passive label record alone does not correlate to a click over it (#783)",
+          widget_at([passive_label], 10, 10) is None)
+
+    # #783: a shown-but-disabled control (enabled=False) is still
+    # correlation-eligible — disabled-ness explains a dead click, it
+    # doesn't remove the control.
+    disabled_button = {"id": "button:b1", "type": "button", "control": True,
+                        "enabled": False, "visible": True,
+                        "bounds": {"x": 0, "y": 0, "w": 50, "h": 50}, "paintKey": 5}
+    check("a shown-but-disabled control is still identified at its bounds (#783)",
+          widget_at([disabled_button], 10, 10) is disabled_button)
+
+    # #783: overlapping controls resolve by paintKey (the engine's own
+    # page-band + accumulated-zIndex hit-test key), not by list order.
+    lo_control = {"id": "button:lo", "control": True, "paintKey": 10,
+                  "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    hi_control = {"id": "button:hi", "control": True, "paintKey": 20000,
+                  "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    check("overlapping controls resolve to the higher paintKey (#783)",
+          widget_at([lo_control, hi_control], 10, 10) is hi_control)
+    check("...independent of the dump list's own order (#783)",
+          widget_at([hi_control, lo_control], 10, 10) is hi_control)
+
+    # #783: a normal, non-overlapping enabled control resolves on its
+    # own bounds; a hidden/inactive record never shadows a real hit and
+    # is ineligible on its own.
+    normal_control = {"id": "button:n1", "control": True, "paintKey": 0,
+                       "visible": True, "bounds": {"x": 200, "y": 200, "w": 50, "h": 50}}
+    check("a normal non-overlapping enabled control resolves normally (#783)",
+          widget_at([normal_control], 210, 210) is normal_control)
+    hidden_control = {"id": "button:h1", "control": True, "paintKey": 999,
+                       "visible": False, "bounds": {"x": 200, "y": 200, "w": 50, "h": 50}}
+    check("a hidden control alone is ineligible, and never shadows a visible one at the same spot (#783)",
+          widget_at([hidden_control], 210, 210) is None
+          and widget_at([hidden_control, normal_control], 210, 210) is normal_control)
+
     with tempfile.TemporaryDirectory() as tmp:
         tdir = build_canned_trace(os.path.join(tmp, "trace"))
         meta = load_meta(tdir)
@@ -1215,6 +1289,67 @@ def selftest() -> int:
                       or r.startswith("bad-outcome-join")
                       for r in key_cands[0]["reasons"]),
               str(key_cands and key_cands[0]["reasons"]))
+
+        # #783: a dead click covered ONLY by a passive panel/label
+        # record — through the real build_signals -> friction_candidates
+        # path — must still join phantom-affordance-join, not be
+        # suppressed by the passive record satisfying the old
+        # first-match join.
+        def _click_turn(x, y, widgets, outcome):
+            return {"turn": 1, "screenshot": "missing.png",
+                    "player": {"action": {"do": "click", "x": x, "y": y},
+                               "note": "", "observation": "", "expectation": ""},
+                    "oracle": {"widgets": widgets,
+                               "action_outcomes": [{"kind": "click",
+                                                     "outcome": outcome}]}}
+
+        dead_behind_panel_sig = build_signals(tmp, [_click_turn(
+            10, 10,
+            [{"id": "panel:p1", "type": "panel", "control": False,
+              "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}],
+            "deadclick")])
+        dead_behind_panel_cands = friction_candidates({}, dead_behind_panel_sig)
+        check("dead click covered only by a passive panel still joins "
+              "phantom-affordance-join (#783)",
+              dead_behind_panel_sig[0]["clicked_widget"] is None
+              and len(dead_behind_panel_cands) == 1
+              and any(r.startswith("phantom-affordance-join")
+                      for r in dead_behind_panel_cands[0]["reasons"]),
+              str(dead_behind_panel_sig[0]["clicked_widget"]))
+
+        dead_behind_label_sig = build_signals(tmp, [_click_turn(
+            10, 10,
+            [{"id": "label:l1", "type": "label", "control": False,
+              "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}],
+            "deadclick")])
+        dead_behind_label_cands = friction_candidates({}, dead_behind_label_sig)
+        check("dead click covered only by a passive label still joins "
+              "phantom-affordance-join (#783)",
+              dead_behind_label_sig[0]["clicked_widget"] is None
+              and len(dead_behind_label_cands) == 1
+              and any(r.startswith("phantom-affordance-join")
+                      for r in dead_behind_label_cands[0]["reasons"]),
+              str(dead_behind_label_sig[0]["clicked_widget"]))
+
+        # #783: overlapping controls/pages through the real join — the
+        # click lands on the topmost (higher-paintKey) control, and
+        # correlates it (no phantom-affordance-join), independent of
+        # which order the dump listed them in.
+        overlap_widgets = [
+            {"id": "button:hi", "type": "button", "control": True,
+             "paintKey": 20000, "enabled": True,
+             "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}},
+            {"id": "button:lo", "type": "button", "control": True,
+             "paintKey": 10, "enabled": True,
+             "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}},
+        ]
+        overlap_sig = build_signals(tmp, [_click_turn(
+            10, 10, overlap_widgets, "accepted")])
+        check("an overlapping click correlates to the topmost (higher "
+              "paintKey) control regardless of dump order (#783)",
+              overlap_sig[0]["clicked_widget"] is not None
+              and overlap_sig[0]["clicked_widget"]["id"] == "button:hi",
+              str(overlap_sig[0]["clicked_widget"]))
 
         # widget STATE changes must not dedupe as \"unchanged\"
         s_a = dict(base_click, widgets=[{"id": "toggle:x", "value": False}])

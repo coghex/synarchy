@@ -17,6 +17,7 @@ module UI.Manager.Query
   , elementCapturesScroll
   , isElementPointerBlocking
   , isElementScrollCapturing
+  , elementPaintKey
   ) where
 
 import UPrelude
@@ -244,6 +245,33 @@ elementBlocksPointer el = ueBlocksPointer el
 --   policies are independent, per the #743 contract.
 elementCapturesScroll ∷ UIElement → Bool
 elementCapturesScroll = ueCapturesScroll
+
+-- | The exact paint/hit-test ordering key for one element — its page's
+--   'uiLayerBand' plus the accumulated zIndex of every ancestor up to
+--   the page root, i.e. exactly the @key@ 'hitsAtPointBy'/'topHitBy'
+--   compare when picking a topmost hit (computed here bottom-up from a
+--   single handle instead of top-down while walking the tree; the sum
+--   is the same either way). 'Nothing' for a detached (never added to
+--   a page) or deleted element/page, mirroring
+--   'getElementAbsolutePosition'. Exposed to Lua as @paintKey@
+--   ('Engine.Scripting.Lua.API.UI.Property.pushElementInfoTable') so an
+--   offline oracle (@ui.dumpWidgets@, #783) can rank overlapping
+--   controls exactly like a real click would resolve them, without
+--   re-deriving the page/element tree itself.
+elementPaintKey ∷ ElementHandle → UIPageManager → Maybe Int
+elementPaintKey handle mgr = do
+    el ← Map.lookup handle (upmElements mgr)
+    page ← Map.lookup (uePage el) (upmPages mgr)
+    pure (uiLayerBand (upLayer page) (upZIndex page) + accumulatedZIndex (0 ∷ Int) el)
+  where
+    accumulatedZIndex depth element =
+        ueZIndex element +
+        case ueParent element of
+            _ | depth ≥ 64 → 0
+            Nothing → 0
+            Just parentHandle → case Map.lookup parentHandle (upmElements mgr) of
+                Nothing → 0
+                Just parent → accumulatedZIndex (depth + 1) parent
 
 -- | Handle-based lookup of 'elementBlocksPointer' — an unknown/deleted
 -- handle never blocks.
