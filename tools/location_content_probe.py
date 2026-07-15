@@ -212,6 +212,29 @@ def spawn_counts(port: int) -> dict:
     }
 
 
+def registered_item_names(port: int) -> set[str]:
+    """The live item registry (item.listDefs()) — #800 replaces the stale
+    hardcoded loot_names allowlist with this as the authoritative source,
+    so a valid new loot entry (e.g. quinoa_sack, #458) is accepted without
+    the probe needing to be updated by hand."""
+    raw = send(port, "return item.listDefs()").strip()
+    if not raw or raw in ("nil", "null", "{}", "[]"):
+        return set()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return set()
+    return {d["name"] for d in data if isinstance(d, dict) and "name" in d}
+
+
+def unregistered_item_ids(names: set[str], registered: set[str]) -> set[str]:
+    """Pure check: which of `names` aren't in the live item registry.
+    Kept as a standalone function so it can be exercised directly against
+    a synthetic id, independent of whatever a real spawn happens to
+    produce (#800)."""
+    return set(names) - registered
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
@@ -280,15 +303,15 @@ def main() -> int:
                 else:
                     failures.append(f"expected >= {len(ruins)} '{fixed}', got {n}")
 
-            loot_names = {"rations", "first_aid_kit", "shovel_steel",
-                          "steel_hardware", "steel_dagger",
-                          "radio", "canteen_steel_2l"}
-            unexpected = set(counts1["ground_by_name"]) - loot_names
+            registered = registered_item_names(args.port)
+            unexpected = unregistered_item_ids(set(counts1["ground_by_name"]), registered)
             if not unexpected:
-                print("PASS: all spawned ground items resolve to known ids "
-                      "(fixed items + loot table entries)")
+                print("PASS: all spawned ground items resolve to registered "
+                      "item definitions (item.listDefs(), fixed items + loot "
+                      "table entries)")
             else:
-                failures.append(f"unexpected ground item id(s): {unexpected}")
+                failures.append(
+                    f"unexpected ground item id(s) not in the item registry: {unexpected}")
 
             # #91 geometry: a ruin is a BREACHED room — all 25 floors,
             # some but not all of the 20 perimeter wall segments, and
@@ -395,11 +418,40 @@ def main() -> int:
             "  - id: item_that_does_not_exist\n"
             "    weight: 1\n"
         )
+    # A single-entry loot table forces quinoa_sack to spawn deterministically
+    # through the real content-spawn path (locations.spawnContents ->
+    # loot.roll -> item.spawnGround), rather than depending on whether
+    # ruin_common's random 2/12-weight roll happens to select it (#800).
+    quinoa_yaml = "/tmp/loc_content_probe_quinoa.yaml"
+    with open(quinoa_yaml, "w") as fh:
+        fh.write(
+            "locations:\n"
+            "  - id: probe_quinoa_ruin\n"
+            "    label: Quinoa Probe Ruin\n"
+            "    type: ruin\n"
+            "    builder: room_small\n"
+            "    anchor: []\n"
+            "    max_count: 0\n"
+            "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+            "    discovery_margin: 6\n"
+            "    contents:\n"
+            "      - { kind: loot_table, id: probe_quinoa_table, rolls: 1 }\n"
+        )
+    quinoa_loot_yaml = "/tmp/loc_content_probe_quinoa_loot.yaml"
+    with open(quinoa_loot_yaml, "w") as fh:
+        fh.write(
+            "id: probe_quinoa_table\n"
+            "entries:\n"
+            "  - id: quinoa_sack\n"
+            "    weight: 1\n"
+        )
     proc = boot(args.port, log=LOG)
     try:
         load_defs(args.port)
         send(args.port, f"engine.loadLocationYaml('{bogus_yaml}'); return 'ok'")
         send(args.port, f"engine.loadLootTableYaml('{bogus_loot_yaml}'); return 'ok'")
+        send(args.port, f"engine.loadLocationYaml('{quinoa_yaml}'); return 'ok'")
+        send(args.port, f"engine.loadLootTableYaml('{quinoa_loot_yaml}'); return 'ok'")
         gen_world(args.port, "wc", args.seed, args.size)
         # Stamp directly (bogus_ruin has max_count 0, so it never places via
         # the overlay) — content-spawning is the concern here, not overlay
@@ -424,6 +476,52 @@ def main() -> int:
             failures.append(
                 "expected warnings for unknown unit id, unknown content "
                 f"kind, AND unknown loot roll not all found in {LOG}")
+
+        # #800: the registry-based validation replacing the old hardcoded
+        # loot_names allowlist. First, force quinoa_sack through the real
+        # content-spawn path via the single-entry loot table above.
+        # world.hasSpawnedLocationContents/markLocationContentsSpawned track
+        # a one-time flag per CHUNK (chunkSize=16 tiles), not per exact tile
+        # — this anchor must land in a different chunk than bogus_ruin's
+        # (40,40) (chunk 2,2), or it would see that chunk already marked
+        # spawned and silently no-op.
+        send(args.port,
+             "local locations = require('scripts.locations'); "
+             "locations.spawnContents('probe_quinoa_ruin', 400, 400, 'wc'); "
+             "return 'ok'")
+        registered = registered_item_names(args.port)
+        counts3 = spawn_counts(args.port)
+        got_quinoa = counts3["ground_by_name"].get("quinoa_sack", 0)
+        if got_quinoa >= 1:
+            print(f"PASS: a forced single-entry loot table deterministically "
+                  f"spawned quinoa_sack ({got_quinoa}), independent of "
+                  f"ruin_common's random 2/12-weight roll")
+        else:
+            failures.append(
+                f"probe_quinoa_ruin's loot table did not spawn quinoa_sack: {counts3}")
+        accepted = unregistered_item_ids(set(counts3["ground_by_name"]), registered)
+        if not accepted:
+            print("PASS: the registry check accepts the deterministically "
+                  "forced quinoa_sack (data/items/quinoa_sack.yaml is a "
+                  "registered def)")
+        else:
+            failures.append(
+                f"registry check rejected valid spawned item(s): {accepted}")
+
+        # The engine already skips + warns an unregistered loot roll before
+        # it becomes a ground item (asserted above), so a real spawn can
+        # never surface one for the new registry check to reject — drive
+        # the check function directly with a synthetic unregistered id
+        # instead (issue #800 review amendment).
+        bogus_name = "item_that_does_not_exist"
+        rejected = unregistered_item_ids({bogus_name}, registered)
+        if rejected == {bogus_name}:
+            print(f"PASS: the registry check rejects a synthetic "
+                  f"unregistered item id ({bogus_name!r})")
+        else:
+            failures.append(
+                f"registry check did not reject synthetic unregistered id "
+                f"{bogus_name!r}: got {rejected}")
     finally:
         quit_engine(args.port, proc)
 
