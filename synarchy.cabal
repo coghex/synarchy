@@ -979,6 +979,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
                    Test.Headless.Construct.Corners
+                   Test.Headless.Construct.Footprint
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Power.Types

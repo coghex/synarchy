@@ -83,6 +83,9 @@ PROBES = [
      "_default.yaml templates never dirties git (#638)"),
     ("construction", "construction_probe.py",
      "construct_job AI end-to-end: claim/source/progress/place/stake/release (#96)"),
+    ("construction_blueprint_footprint", "construction_blueprint_footprint_probe.py",
+     "offscreen: committed CtBuilding blueprint renders its full def footprint "
+     "while staying one designation job (#807)"),
     ("consumable_effects", "consumable_effects_probe.py",
      "drink effects scaled by item quality/temperature: hydration/caffeine/mood/warmth (#347)"),
     ("cooking", "cooking_probe.py",
