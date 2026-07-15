@@ -458,10 +458,15 @@ def phase_paid_death(port: int) -> None:
 
     (phase_release above already covers a claimant dying BEFORE payment;
     once #799's fix makes a paid job claimable by a materials-less
-    worker too, the intermediate 'released to pending, not yet
-    re-claimed' window is too transient to reliably poll for, so this
-    phase asserts the durable facts — payment survives death, the job
-    still completes — rather than that transient status value.)"""
+    worker too, a normal nearby scout would sweep AND re-claim the job
+    in close succession, too transient to poll for reliably — so the
+    release is instead observed via a scout placed OUTSIDE
+    construct_scan_range (30 tiles) but still INSIDE construct_scan_chunks
+    (getPendingJobs' wider chunk-radius query, ~2 chunks/32 tiles): its
+    scan triggers the sweep (releasing the stale claim) but it can never
+    be picked as the claim's own 'best' candidate, since that requires
+    distance <= construct_scan_range. This holds 'pending' stationary
+    long enough to observe before a real, nearby replacement claims it.)"""
     print("\n[phase 6] paid-then-dead claimant: no second payment (floor)")
     w = wid(port)
     send(port, f"construction.designate('{w}', 8, -8, 8, -8, "
@@ -481,6 +486,19 @@ def phase_paid_death(port: int) -> None:
                      "n=n+1 end end; return n") == "0")
 
     destroy_unit(port, a)
+
+    # Far scout: 32 tiles out (> construct_scan_range=30, so it can never
+    # claim) but still inside construct_scan_chunks' getPendingJobs query,
+    # so its scan sweeps the dead claim back to "pending" without racing
+    # to re-claim it itself.
+    farScout = spawn_acolyte(port, 40.5, -7.5)
+    released = poll_until(port, 60, lambda: (
+        (designation_at(port, 8, -8) or {}).get("status") == "pending"))
+    check("claim released back to 'pending' after claimant death",
+          released is not None)
+    check("payment marker survives the claimant's death",
+          (designation_at(port, 8, -8) or {}).get("paid") is True)
+    destroy_unit(port, farScout)
 
     # Replacement carries ZERO materials, with no ground/mule stock
     # anywhere nearby — it must still claim and finish the job.

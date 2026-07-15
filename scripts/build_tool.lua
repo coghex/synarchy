@@ -93,9 +93,15 @@ local MOUSE_RIGHT = 2
 -- rapid right-click issued before the FIRST one's cancel actually
 -- applies, so without a guard each of those clicks would independently
 -- see paid=true and refund the same material again. Keyed by "x,y",
--- cleared once a later check on that tile sees it's no longer a paid
--- designation (cancelled, or a fresh unpaid one designated in its place).
+-- storing the gameTime of the refund. A short expiry (not "cleared on
+-- the next miss") matters: nothing guarantees the player ever right-
+-- clicks that exact tile again while it's briefly empty/unpaid before a
+-- LATER, unrelated paid designation lands there — a sticky-until-miss
+-- guard would silently swallow that later one's legitimate refund.
+-- CANCEL_REFUND_DEBOUNCE only needs to outlast one world-thread tick
+-- (how long the queued cancel takes to actually apply).
 local pendingCancelRefunds = {}
+local CANCEL_REFUND_DEBOUNCE = 2.0   -- seconds
 
 -- Layout (base units; uiscale applied at draw time).
 -- Padding has to clear the 9-patch border art (~16–20 px on each
@@ -950,8 +956,10 @@ function buildTool.handleMouseDown(button, x, y)
                 local job = wid and construction.getDesignationAt(wid, gx, gy)
                 local key = gx .. "," .. gy
                 if job and job.paid then
-                    if not pendingCancelRefunds[key] then
-                        pendingCancelRefunds[key] = true
+                    local last = pendingCancelRefunds[key]
+                    local now = engine.gameTime()
+                    if not last or now - last > CANCEL_REFUND_DEBOUNCE then
+                        pendingCancelRefunds[key] = now
                         require("scripts.unit_ai_construct")
                             .refundStructureMaterials(job)
                     end
