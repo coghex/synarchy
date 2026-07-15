@@ -128,7 +128,7 @@ closeTo eps a b = abs (a - b) < eps
 spec ∷ Spec
 spec = beforeAll initEnv $ do
 
-    describe "unitAwareness resolves terrain from the OWNING unit's page (#797)" $ do
+    describe "unitAwareness and unitVisibleTiles resolve terrain from the OWNING unit's page (#797)" $ do
         it "a unit on the open page sees clearly even when the walled page is wmVisible's head" $ \env → do
             wm ← setupPages [pageB, pageA]   -- pageB (walled) is HEAD
             writeIORef (worldManagerRef env) wm
@@ -137,6 +137,8 @@ spec = beforeAll initEnv $ do
             putUnits env [(UnitId 1, defender), (UnitId 2, attacker)]
             aw ← unitAwareness env defender attacker
             aw `shouldSatisfy` (> 0)   -- pageA has no wall: not blocked
+            tiles ← unitVisibleTiles env (UnitId 1)
+            tiles `shouldSatisfy` elem (11, 8)   -- reads pageA's OWN clear terrain
 
         it "a unit on the walled page is blocked even when the open page is wmVisible's head" $ \env → do
             wm ← setupPages [pageA, pageB]   -- pageA (open) is HEAD
@@ -146,8 +148,10 @@ spec = beforeAll initEnv $ do
             putUnits env [(UnitId 1, defender), (UnitId 2, attacker)]
             aw ← unitAwareness env defender attacker
             aw `shouldBe` 0   -- pageB's wall blocks the sightline
+            tiles ← unitVisibleTiles env (UnitId 1)
+            tiles `shouldNotSatisfy` elem (11, 8)   -- reads pageB's OWN wall
 
-        it "reordering wmVisible changes neither unit's result" $ \env → do
+        it "reordering wmVisible changes neither unitAwareness nor unitVisibleTiles" $ \env → do
             let defenderA = testUnit pageA 5 8 5 DirE
                 attackerA = testUnit pageA 11 8 5 DirE
                 defenderB = testUnit pageB 5 8 5 DirE
@@ -157,18 +161,24 @@ spec = beforeAll initEnv $ do
             writeIORef (worldManagerRef env) wm1
             putUnits env [(UnitId 1, defenderA), (UnitId 2, attackerA)]
             awA1 ← unitAwareness env defenderA attackerA
+            tilesA1 ← unitVisibleTiles env (UnitId 1)
             putUnits env [(UnitId 1, defenderB), (UnitId 2, attackerB)]
             awB1 ← unitAwareness env defenderB attackerB
+            tilesB1 ← unitVisibleTiles env (UnitId 1)
 
             wm2 ← setupPages [pageB, pageA]
             writeIORef (worldManagerRef env) wm2
             putUnits env [(UnitId 1, defenderA), (UnitId 2, attackerA)]
             awA2 ← unitAwareness env defenderA attackerA
+            tilesA2 ← unitVisibleTiles env (UnitId 1)
             putUnits env [(UnitId 1, defenderB), (UnitId 2, attackerB)]
             awB2 ← unitAwareness env defenderB attackerB
+            tilesB2 ← unitVisibleTiles env (UnitId 1)
 
             awA1 `shouldBe` awA2
             awB1 `shouldBe` awB2
+            tilesA1 `shouldMatchList` tilesA2
+            tilesB1 `shouldMatchList` tilesB2
 
     describe "unitAwareness reads the defender's own page clock (#797)" $ do
         it "the same relative geometry reads noon on page A and midnight on page B" $ \env → do
