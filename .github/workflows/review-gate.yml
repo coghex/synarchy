@@ -9,8 +9,14 @@
 #   - PR opened / updated → "review-approved" check FAILS
 #     (red = "review verdict pending", merging blocked)
 #   - reviewer applies `reviewed:approve`  → check PASSES
-#   - new commits after approval          → label auto-removed
+#   - new commits that touch a file this PR owns → label auto-removed
 #     (stale approvals don't carry a changed PR through; re-approve)
+#   - a synchronize push that touches NO file this PR owns (a "merge
+#     base into head" branch update, e.g. from strict branch
+#     protection's up-to-date-with-base requirement being satisfied by
+#     a human clicking "Update branch", or equivalent automation, after
+#     an unrelated sibling PR merges) → label is KEPT (#801 review, the
+#     original review-pr.py flakiness this caused)
 name: review-gate
 
 on:
@@ -31,19 +37,63 @@ jobs:
             exit 1
           fi
 
-  # New commits invalidate a prior approval: strip the label so the
-  # gate closes until the reviewer re-approves the updated code. The
-  # removal fires an `unlabeled` event, which re-runs review-approved.
+  # New commits that touch this PR's own files invalidate a prior
+  # approval: strip the label so the gate closes until the reviewer
+  # re-approves the updated code. The removal fires an `unlabeled`
+  # event, which re-runs review-approved. A synchronize push that
+  # touches none of this PR's own files -- a base-branch update merged
+  # forward with no overlapping content -- leaves the label alone: the
+  # reviewed code hasn't actually changed, only the branch's ancestry
+  # has, and stripping it anyway causes exactly the kind of race that
+  # made review-pr.py report a spurious failure (#801 review).
   dismiss-stale-approval:
     if: github.event.action == 'synchronize'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
-      - name: Remove reviewed:approve after new commits
+      - name: Check out the pushed branch with full history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Remove reviewed:approve unless this push is a no-op branch update
         env:
           GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --remove-label reviewed:approve || true
+          strip() {
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label reviewed:approve || true
+          }
+          # Any case where staleness can't be positively ruled out keeps
+          # the historical unconditional-strip behavior -- this only ever
+          # SKIPS a strip when it can prove the push is content-free for
+          # this PR, never the reverse.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "no usable 'before' SHA -- can't confirm this is a no-op update, stripping"
+            strip
+            exit 0
+          fi
+          if ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "'before' SHA not reachable in this checkout -- can't confirm, stripping"
+            strip
+            exit 0
+          fi
+          drifted_files=$(git diff --name-only "$BEFORE" "$AFTER")
+          if [ -z "$drifted_files" ]; then
+            echo "push introduced no file changes -- stripping (unexpected, be safe)"
+            strip
+            exit 0
+          fi
+          pr_files=$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only)
+          overlap=$(comm -12 <(printf '%s\n' "$pr_files" | sort -u) <(printf '%s\n' "$drifted_files" | sort -u))
+          if [ -n "$overlap" ]; then
+            echo "push touched PR-owned file(s): $overlap -- stripping"
+            strip
+          else
+            echo "push touched no PR-owned files (branch-update merge) -- keeping reviewed:approve"
+          fi
