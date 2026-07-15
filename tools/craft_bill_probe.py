@@ -33,6 +33,13 @@ machinery, then checks:
      hold (no loose/mule stock), the crafter withdraws it from storage
      (the last rung of the sourcing ladder) and works the bill to
      completion, emptying the store.
+  5. Pause boundary (#796), AI live: pausing a multi-cycle bill while
+     it's actively worked lets exactly the in-flight cycle finish, then
+     clears the claim so the bill sits idle (no second cycle) until
+     unpaused; pausing a bill still fetching/walking (never reached
+     "working") aborts and releases it outright, with the sourced
+     material neither lost nor duplicated. Both resume production once
+     unpaused.
 
 Usage: python3 tools/craft_bill_probe.py [--port 9319]
 """
@@ -429,6 +436,106 @@ def main():
         passed = check(passed, done and emptied == 0,
                        "bill sourced from cargo storage worked to completion",
                        f"done={done} left_in_store={emptied}")
+
+        # --- 5. Pause boundary through the real craft AI (#796) ---
+        # 5a. Pause a multi-cycle bill while it's actively being worked:
+        # exactly the in-flight cycle finishes, then the bill sits idle
+        # (claim cleared, no second cycle) until unpaused.
+        for i in range(3):
+            send(port, f"item.spawnGround('steel_bar', {7.5 + 0.3*i}, 3.5); "
+                       f"return 'ok'")
+        uid3 = spawn_acolyte(port, 3, 3)
+        bill6, msg = add_bill(port, bid_f, "bill_probe_smelt", 3)
+        passed = check(passed, bill6 is not None,
+                       "#796 pause-during-work bill queued (3-count)", msg)
+
+        reached_working = poll(port, 60, lambda: send(port,
+            f"local b=craft.getBill({bill6}); "
+            f"return (b and b.working) and 'y' or 'n'").strip('"') == "y")
+        passed = check(passed, reached_working,
+                       "AI reaches the working phase on the new bill")
+
+        send(port, f"craft.setBillPaused({bill6}, true); return 'ok'")
+        cycle_done = poll(port, 30, lambda: send(port,
+            f"local b=craft.getBill({bill6}); "
+            f"return (b and b.remaining==2 and not b.claimant) and 'y' or 'n'"
+            ).strip('"') == "y")
+        passed = check(passed, cycle_done,
+                       "exactly the in-flight cycle finishes; claim clears")
+
+        # Observation window, engine kept unpaused: no second cycle
+        # should start while still paused.
+        poll(port, 8, lambda: False)
+        still_idle = send(port,
+            f"local b=craft.getBill({bill6}); "
+            f"return (b and b.remaining==2 and not b.claimant "
+            f"and not b.working) and 'y' or 'n'").strip('"') == "y"
+        passed = check(passed, still_idle,
+                       "no second cycle begins during the observation window")
+
+        send(port, f"craft.setBillPaused({bill6}, false); return 'ok'")
+        finished = poll(port, 90, lambda: send(
+            port, f"return craft.getBill({bill6}) and 'y' or 'n'"
+            ).strip('"') == "n")
+        passed = check(passed, finished,
+                       "unpausing lets a fresh claim finish the remaining cycles")
+
+        # 5b. Pause BEFORE the claimant ever reaches "working" (still
+        # fetching/walking): the job must abort and release outright —
+        # no craft executes, and the fetched material is neither lost
+        # nor duplicated. The material sits a SHORT walk from the
+        # crafter (not the station) — far enough to reliably observe
+        # "claimed but not working" via polling, but short enough to
+        # resolve within a sane timeout: unit_ai.lua's dispatcher only
+        # re-invokes an action's execute function (where the pause
+        # check lives) once the unit's activity drops back to "idle"
+        # (arrival) or the chosen action changes — never mid-walk,
+        # so it doesn't clobber in-flight pathing every tick. A pause
+        # noticed mid-walk therefore takes effect at the NEXT arrival,
+        # not necessarily the instant it's set; a long walk (e.g. to a
+        # station tens of tiles off) would blow past any reasonable
+        # test timeout despite the fix working correctly, so this
+        # fixture deliberately stays close instead of stress-testing
+        # that unrelated, pre-existing dispatch behavior.
+        send(port, f"unit.destroy({uid}); unit.destroy({uid3}); return 'ok'")
+        uid4 = spawn_acolyte(port, 2, 2)
+        send(port, "item.spawnGround('steel_bar', 2, 9); return 'ok'")
+        outs_before = ground_count_near(port, "granite_chunk", 6, 2, 3)
+        bill7, msg = add_bill(port, bid_f, "bill_probe_smelt", 1)
+        passed = check(passed, bill7 is not None,
+                       "#796 pause-during-fetch/walk bill queued", msg)
+
+        claimed_not_working = poll(port, 30, lambda: send(port,
+            f"local b=craft.getBill({bill7}); "
+            f"return (b and b.claimant=={uid4} and not b.working) "
+            f"and 'y' or 'n'").strip('"') == "y")
+        passed = check(passed, claimed_not_working,
+                       "AI claims bill7 while still fetching/walking")
+
+        send(port, f"craft.setBillPaused({bill7}, true); return 'ok'")
+        released = poll(port, 30, lambda: send(port,
+            f"local b=craft.getBill({bill7}); "
+            f"return (b and not b.claimant and not b.working) "
+            f"and 'y' or 'n'").strip('"') == "y")
+        passed = check(passed, released,
+                       "pausing before 'working' aborts + releases the claim")
+
+        outs_after = ground_count_near(port, "granite_chunk", 6, 2, 3)
+        passed = check(passed, outs_after == outs_before,
+                       "no craft executed for bill7 (no new outputs)",
+                       f"{outs_before} -> {outs_after}")
+        ground_left = ground_count_near(port, "steel_bar", 2, 9, 5)
+        inv_left = len(inv_instance_ids(port, uid4, "steel_bar"))
+        passed = check(passed, ground_left + inv_left == 1,
+                       "the fetched steel_bar is neither lost nor duplicated",
+                       f"ground={ground_left} inv={inv_left}")
+
+        send(port, f"craft.setBillPaused({bill7}, false); return 'ok'")
+        finished7 = poll(port, 90, lambda: send(
+            port, f"return craft.getBill({bill7}) and 'y' or 'n'"
+            ).strip('"') == "n")
+        passed = check(passed, finished7,
+                       "unpausing lets bill7 finish once reclaimed")
 
         print("\n" + ("ALL CRAFT BILL CHECKS PASSED" if passed
                       else "SOME FAILED"))

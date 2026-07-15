@@ -10,13 +10,17 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
   2. Inspection: world.getFloraGrowthAt reports per-instance derived
      state (age / health / phase / stage / generation).
   3. Season window: a fruiting species is harvestable only inside its
-     fruiting window; a leaves species (white_clover) stays open in the
-     dormant season. Poked via world.setDate. The fruiting species is a
-     probe-registered `probe_berry` (raspberry-shaped, max-tolerance
-     worldGen so it places on any seed's geography — real raspberries
-     are climate-gated and absent from many spawn regions); it is
-     appended AFTER the data/flora species so their placement rolls
-     stay untouched.
+     fruiting window; a leaves species with no fruiting stage stays open
+     in the dormant season. Poked via world.setDate. Both species under
+     test are probe-registered, max-tolerance worldGen fixtures so they
+     place reliably on any seed's geography: `probe_berry` (raspberry-
+     shaped, fruiting) and `probe_clover` (white-clover-shaped, no
+     fruiting stage — mirrors the real white_clover's phases/annual
+     cycle rather than depending on natural white_clover placement,
+     which isn't guaranteed inside the probe's fixed scan region). Both
+     are appended AFTER the data/flora species, in that order, so the
+     real species' placement rolls AND probe_berry's own index stay
+     untouched.
   4. Aging + reseed: jumping the date years ahead grows ages; far
      enough out a perennial has wrapped to generation >= 1 (the old
      plant died through the dead window and reseeded).
@@ -83,6 +87,62 @@ PROBE_BERRY_YAML = """flora:
       footprint: 0
 """
 
+# The probe's own no-fruiting-stage species, standing in for natural
+# white_clover so the year-round-harvest assertion doesn't depend on it
+# being placed inside the fixed scan region. Phases/annualCycle mirror
+# real white_clover (data/flora/temperate_wildflowers.yaml) — no
+# `fruiting` stage anywhere in annualCycle. Same wide min/max tolerance
+# as probe_berry (still places reliably anywhere), but a DIFFERENT ideal
+# niche (cold/wet/humid/highland vs. probe_berry's temperate lowland) —
+# a shared ideal point would make World.Flora.Placement.speciesFitness
+# score both species near-identically at every tile, so on a
+# climate-uniform region (some seeds' loaded chunks) BOTH would place on
+# EVERY eligible tile with near-certainty, leaving no tile with a
+# harvestable raspberry and no co-located clover for the harvest-action
+# test (below) to target unambiguously.
+PROBE_CLOVER_YAML = """flora:
+  - name: probe_clover
+    type: perennial_flower
+    texDir: "assets/textures/flora/white_clover"
+    lifecycle: perennial
+    minLife: 1080
+    maxLife: 3600
+    deathChance: 0.1
+    phases:
+      - {tag: sprout, texture: "sprout.png", age: 0}
+      - {tag: matured, texture: "budding.png", age: 30}
+      - {tag: dead, texture: "dead.png", age: 3600}
+    annualCycle:
+      - {tag: dormant, startDay: 0, texture: "dormant.png"}
+      - {tag: budding, startDay: 60, texture: "budding.png"}
+      - {tag: flowering, startDay: 100, texture: "flowering.png"}
+      - {tag: senescing, startDay: 200, texture: "senescing.png"}
+    harvestable:
+      tags: [leaves]
+      yield:
+        - id: wild_greens
+          count: [1, 2]
+      regrowth_time: 43200
+      harvested_texture: "senescing.png"
+    worldGen:
+      category: wildflower
+      minTemp: -60
+      maxTemp: 60
+      idealTemp: -20
+      minPrecip: 0.0
+      maxPrecip: 5.0
+      idealPrecip: 3.0
+      minAlt: -100
+      maxAlt: 3000
+      idealAlt: 1200
+      minHumidity: 0.0
+      maxHumidity: 1.0
+      idealHumidity: 0.85
+      maxSlope: 7
+      density: 1.0
+      footprint: 0
+"""
+
 
 def bootstrap(port):
     for pattern, fn in [
@@ -100,6 +160,14 @@ def bootstrap(port):
     with open(berry_path, "w") as f:
         f.write(PROBE_BERRY_YAML)
     send(port, f"engine.loadFloraYaml('{berry_path}'); return 'ok'")
+    # The probe's own no-fruiting-stage species — appended AFTER
+    # probe_berry so both the real flora's indices and probe_berry's
+    # own index stay untouched. Max-tolerance worldGen: places on any
+    # seed, same as probe_berry.
+    clover_path = f"{SPROOT}/probe_clover.yaml"
+    with open(clover_path, "w") as f:
+        f.write(PROBE_CLOVER_YAML)
+    send(port, f"engine.loadFloraYaml('{clover_path}'); return 'ok'")
 
 
 def set_date(port, page, y, mo, d):
@@ -115,19 +183,38 @@ def set_date(port, page, y, mo, d):
     sys.exit(f"setDate({y},{mo},{d}) never landed")
 
 
-def find_species_tile(port, species, harvestable=None, lo=-64, hi=64):
-    """Scan the loaded region for the first tile carrying an instance of
-    the given species (optionally requiring its harvestable flag).
-    Returns (gx, gy) or None."""
+def find_species_tile(port, species, harvestable=None, exclude=None,
+                       extra_cond=None, lo=-64, hi=64):
+    """Scan the loaded region for the first tile whose FIRST-listed
+    instance of `species` (array order — the same instance
+    growth_entry's plain species-id lookup below reads back, so search
+    and read always agree on which individual they mean even when a
+    placement rolls more than one onto a tile) satisfies the given
+    condition: `harvestable` flag and/or an arbitrary extra Lua boolean
+    expression over that instance (`e`).
+
+    `exclude` additionally requires NO instance anywhere on the tile
+    (not just the first-listed one) carry the named species. Matters
+    for a species pair whose max-tolerance worldGen makes them commonly
+    share a tile: world.harvestFlora resolves a shared tile's "first
+    harvestable" pick by internal list order, not registration order,
+    so a harvest-action test on one owned fixture must land on a tile
+    the other owned fixture isn't also standing on. Returns (gx, gy) or
+    None."""
     cond = f"e.id=='{species}'"
     if harvestable is not None:
         cond += f" and e.harvestable=={'true' if harvestable else 'false'}"
+    if extra_cond is not None:
+        cond += f" and ({extra_cond})"
+    bad_cond = f"x.id=='{exclude}'" if exclude is not None else "false"
     r = send(
         port,
         f"for gx={lo},{hi} do for gy={lo},{hi} do "
         f"local t=world.getFloraGrowthAt(gx,gy); "
-        f"if t then for _,e in ipairs(t) do "
-        f"if {cond} then return gx..','..gy end end end "
+        f"if t then local e,bad=nil,false; for _,x in ipairs(t) do "
+        f"if e==nil and x.id=='{species}' then e=x end; "
+        f"if {bad_cond} then bad=true end end; "
+        f"if e and ({cond}) and not bad then return gx..','..gy end end "
         f"end end return 'none'",
         timeout=60.0)
     r = r.strip('"')
@@ -138,11 +225,15 @@ def find_species_tile(port, species, harvestable=None, lo=-64, hi=64):
 
 
 def growth_entry(port, gx, gy, species):
+    """Read the tile's FIRST-listed instance of `species` — matches
+    find_species_tile's own selection above, so a caller tracks the
+    same individual across both."""
     t = jget(port, f"return world.getFloraGrowthAt({gx},{gy})")
-    if isinstance(t, list):
-        for e in t:
-            if e.get("id") == species:
-                return e
+    if not isinstance(t, list):
+        return None
+    for e in t:
+        if e.get("id") == species:
+            return e
     return None
 
 
@@ -187,11 +278,16 @@ def main():
         # window is actually open for — a random raspberry could
         # legitimately be a sprout or inside its dead window.
         set_date(port, "probe", 2, 7, 21)
-        rasp = find_species_tile(port, "probe_berry", harvestable=True)
-        clov = find_species_tile(port, "white_clover")
-        if not rasp or not clov:
-            print(f"  [FAIL] species not found in region (probe_berry={rasp}, "
-                  f"clover={clov}) — try another seed")
+        # Excludes probe_clover from the raspberry tile: both are
+        # max-tolerance fixtures that commonly share a tile, and a
+        # shared tile's harvestFlora pick (test 3d below) must
+        # unambiguously resolve to the raspberry under test.
+        rasp = find_species_tile(port, "probe_berry", harvestable=True,
+                                  exclude="probe_clover")
+        if not rasp:
+            print(f"  [FAIL] probe_berry fixture not found in scan region "
+                  f"— this is a fixture-placement regression, not a "
+                  f"seed issue")
             return 1
         ef = growth_entry(port, *rasp, "probe_berry")
         ok2 = ef is not None and all(
@@ -216,17 +312,33 @@ def main():
         passed &= ok3b
         print(f"  [{'PASS' if ok3b else 'FAIL'}] the same raspberry NOT "
               f"harvestable in the dormant season: {ed}")
-        ec = growth_entry(port, *clov, "white_clover")
-        ok3c = ec is not None and ec.get("harvestable") is True
+        # probe_clover: searched fresh AT this dormant date, not reused
+        # from the earlier fruiting-date scan — age is a pure function
+        # of the current absolute day, and this date is well before the
+        # earlier one within year 2, so an instance matured there isn't
+        # guaranteed still matured here.
+        clov = find_species_tile(
+            port, "probe_clover",
+            extra_cond="e.dead==false and e.phase=='matured'")
+        ec = clov and growth_entry(port, *clov, "probe_clover")
+        ok3c = clov is not None and ec is not None \
+            and ec.get("harvestable") is True \
+            and ec.get("dead") is False \
+            and ec.get("phase") == "matured"
         passed &= ok3c
-        print(f"  [{'PASS' if ok3c else 'FAIL'}] clover (no fruiting stage) "
-              f"still open in the dormant season: {ec}")
-        # And the harvest itself respects the window on a fruiting date.
+        print(f"  [{'PASS' if ok3c else 'FAIL'}] probe_clover (no fruiting "
+              f"stage, alive, matured) still open in the dormant season: {ec}")
+        # And the harvest itself respects the window on a fruiting date —
+        # specifically the raspberry's own yield (wild_berries), not
+        # whatever else might be on the tile (rasp was found excluding
+        # probe_clover above precisely so this is unambiguous).
         set_date(port, "probe", 2, 7, 21)
         y = jget(port, f"return world.harvestFlora({rasp[0]},{rasp[1]})")
-        ok3d = isinstance(y, list) and len(y) >= 1
+        ok3d = isinstance(y, list) and len(y) >= 1 \
+            and all(item.get("id") == "wild_berries" for item in y)
         passed &= ok3d
-        print(f"  [{'PASS' if ok3d else 'FAIL'}] harvest yields in season: {y}")
+        print(f"  [{'PASS' if ok3d else 'FAIL'}] harvest yields raspberry's "
+              f"fruit in season: {y}")
 
         # --- 4. Aging + generational reseed ---
         # +4 years: the plant aged (or, if its lifespan fell in between,

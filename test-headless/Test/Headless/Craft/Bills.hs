@@ -253,6 +253,67 @@ spec = do
                 (b3, _) = setBillPaused bid True b2
             cbWorking ⊚ lookupBill bid b3 `shouldBe` Just True
 
+    describe "pause boundary at cycle completion (#796)" $ do
+        it "completeBillCycle keeps the claimant on an UNPAUSED continuing bill" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = completeBillCycle bid b2
+            cbRemaining ⊚ lookupBill bid b3 `shouldBe` Just 2
+            cbClaimant  ⊚ lookupBill bid b3 `shouldBe` Just (Just worker1)
+
+        it "completeBillCycle clears the claimant on a PAUSED finite continuing bill" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, r) = completeBillCycle bid b3
+            r `shouldBe` Just 2
+            cbRemaining ⊚ lookupBill bid b4 `shouldBe` Just 2
+            cbClaimant  ⊚ lookupBill bid b4 `shouldBe` Just Nothing
+            cbWorking   ⊚ lookupBill bid b4 `shouldBe` Just False
+            cbPaused    ⊚ lookupBill bid b4 `shouldBe` Just True
+
+        it "completeBillCycle clears the claimant on a PAUSED repeat-forever bill" $ do
+            let (bills, bid) = addBill station1 "r" (-1) emptyCraftBills
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, r) = completeBillCycle bid b3
+            r `shouldBe` Just (-1)
+            cbRemaining ⊚ lookupBill bid b4 `shouldBe` Just (-1)
+            cbClaimant  ⊚ lookupBill bid b4 `shouldBe` Just Nothing
+
+        it "the retained, now-unclaimed bill still refuses a fresh claim while paused" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, _) = completeBillCycle bid b3
+                (_, ok) = claimBill 20 30 everyoneAlive bid worker2 b4
+            ok `shouldBe` False
+
+        it "unpausing the retained bill lets a fresh claimant resume it" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, _) = completeBillCycle bid b3
+                (b5, _) = setBillPaused bid False b4
+                (b6, ok) = claimBill 20 30 everyoneAlive bid worker2 b5
+            ok `shouldBe` True
+            cbClaimant ⊚ lookupBill bid b6 `shouldBe` Just (Just worker2)
+            cbRemaining ⊚ lookupBill bid b6 `shouldBe` Just 2
+
+        it "a finite bill reaching zero is removed regardless of pause" $ do
+            let (bills, bid) = addBill station1 "r" 1 emptyCraftBills
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, r) = completeBillCycle bid b3
+            r `shouldBe` Just 0
+            lookupBill bid b4 `shouldBe` Nothing
+
     describe "reorder (#330)" $ do
         it "moving a bill up swaps cbSeq with its predecessor" $ do
             let (b1, i1) = addBill station1 "a" 1 emptyCraftBills

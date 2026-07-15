@@ -108,8 +108,14 @@ craftReleaseBillFn env = withBillId env $ \ws billId →
     atomicModifyIORef' (wsCraftBillsRef ws) (releaseBill billId)
 
 -- | craft.setBillPaused(billId, paused) → true | false. Pausing blocks
---   fresh claims (Craft.Bills.claimAvailable) without touching a
---   claimant already mid-cycle — the #330 panel's pause control.
+--   fresh claims (Craft.Bills.claimAvailable) without ripping a
+--   claimant already mid-cycle off its work — the #330 panel's pause
+--   control. That claimant still only rides through to the end of the
+--   in-flight cycle: the craft_job AI (scripts/unit_ai_craft.lua)
+--   aborts on its own if it observes the pause before reaching its
+--   "working" phase, and Craft.Bills.completeBillCycle releases the
+--   claim on cycle completion rather than rolling into another one
+--   (#796).
 craftSetBillPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftSetBillPausedFn env = do
     idArg     ← Lua.tointeger 1

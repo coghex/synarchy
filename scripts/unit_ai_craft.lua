@@ -13,6 +13,11 @@
 -- Skill: the recipe's `skill` tag when present, else "smithing".
 -- Material races are NOT reserved cross-unit — same self-heal as
 -- construction.
+--
+-- Pause (#796): stops after the current cycle, not instantly. Not yet
+-- working (still fetching/walking) → abort + release now. Already
+-- working → finish this cycle; completeBillCycle then drops the claim
+-- itself instead of chaining into another one.
 -----------------------------------------------------------
 
 local core = require("scripts.unit_ai_core")
@@ -357,6 +362,14 @@ local function craftExecute(uid, s, params)
         s.craftJob = nil
         return
     end
+    -- Paused (#796) but not yet working (bill.working mirrors the
+    -- engine's cbWorking boundary exactly): abort now — fetched inputs
+    -- are already real inventory on this unit, so nothing strands.
+    -- Already working falls through to finish the in-flight cycle.
+    if bill.paused and not bill.working then
+        releaseCraftJob(s, uid, true)
+        return
+    end
     -- Keep the claim fresh (claimBill by the holder is a refresh).
     craft.claimBill(job.billId, uid, params.craft_claim_timeout)
 
@@ -454,10 +467,13 @@ local function craftExecute(uid, s, params)
             end
             grantWorkXP(uid, job.skill, params.craft_xp_per_craft or 0)
             local remaining = craft.completeBillCycle(job.billId)
-            if remaining and remaining ~= 0 then
+            if remaining and remaining ~= 0 and not bill.paused then
                 job.phase = "fetch"      -- next cycle: source again
             else
-                releaseCraftJob(s, uid)  -- bill done and gone
+                -- Bill done and gone, OR (#796) paused right up to this
+                -- completion — either way completeBillCycle already
+                -- cleared the claim engine-side; just drop our state.
+                releaseCraftJob(s, uid)
             end
         end
         return

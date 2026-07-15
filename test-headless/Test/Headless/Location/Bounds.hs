@@ -4,7 +4,12 @@
 --   translate/contain/intersect/expand/distance operations later
 --   location work (#778/#779/#780) shares, cylindrical-seam behavior,
 --   and the shipped ruin_small's exact 5x5 contract.
-module Test.Headless.Location.Bounds (spec) where
+module Test.Headless.Location.Bounds
+    ( spec
+    , decodeDef
+    , rejectedNaming
+    , isRight'
+    ) where
 
 import UPrelude
 import Test.Hspec

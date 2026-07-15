@@ -2,6 +2,7 @@
 module Building.Render
     ( renderBuildingQuads
     , renderGhostQuad
+    , ghostTint
     ) where
 
 import UPrelude
@@ -232,10 +233,19 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             , sqLayer   = worldLayer
             }
 
+-- | The ghost preview's validity → RGBA tint (#778): neutral white
+--   translucent when valid, red-dominant translucent when invalid —
+--   the one place RGB tinting is allowed by design (see the
+--   no-tinting rule). A standalone pure function (not inlined into
+--   'renderGhostQuad') so the decision is Hspec-testable without a
+--   texture system / GPU.
+ghostTint ∷ Bool → Vec4
+ghostTint valid
+    | valid     = Vec4 1.0 1.0 1.0 0.6
+    | otherwise = Vec4 1.0 0.4 0.4 0.6
+
 -- | Render the ghost preview if one is set. Returns at most one quad,
---   in a vector for caller convenience. Tinted: valid → soft-white
---   semi-transparent, invalid → red semi-transparent. This is the one
---   place RGB tinting is allowed by design (see the no-tinting rule).
+--   in a vector for caller convenience. Tinted via 'ghostTint'.
 renderGhostQuad ∷ EngineEnv → CameraFacing → Int → IO (V.Vector SortableQuad)
 renderGhostQuad env facing zSlice = do
     mGhost ← readIORef (buildingGhostRef env)
@@ -290,9 +300,7 @@ renderGhostQuad env facing zSlice = do
                                 drawY = rawY - heightOffset
                                       + tileHalfDiamondHeight - quadH
                                       + anchorOffset
-                                tint = if bgValid ghost
-                                       then Vec4 1.0 1.0 1.0 0.6
-                                       else Vec4 1.0 0.4 0.4 0.6
+                                tint = ghostTint (bgValid ghost)
                                 actualSlot = lookupSlot texHandle
                                 sortKey = (faF + fbF) + quadH / tileHalfDiamondHeight * 0.5 + 0.01
                                 wuv = packWorldUV (bgGridX ghost) (bgGridY ghost)

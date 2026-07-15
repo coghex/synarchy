@@ -8,6 +8,7 @@ module Test.Headless.WorldGen (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.List (isInfixOf)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as Cereal
@@ -31,6 +32,7 @@ import Location.Types (LocationDef(..))
 import Location.Bounds (RelBounds(..))
 import Location.Overlay
     ( computeLocationOverlay, chunkMetricsAt, ChunkMetrics(..) )
+import Test.Headless.Location.Bounds (decodeDef, rejectedNaming, isRight')
 -- chunkSeamChebyshev comes in via World.Types (World.Chunk.Types, #423)
 
 spec ∷ SpecWith EngineEnv
@@ -268,3 +270,42 @@ spec = do
                                , i < j ] $ \(a, b) →
                     chunkSeamChebyshev ws a b
                         `shouldSatisfy` (≥ ldMinSpacing def)
+
+        -- #801: an unsupported or misspelled anchor tag must not silently
+        -- impose no constraint. Validation lives at the YAML load layer
+        -- ('Engine.Asset.YamlLocations'), not in 'anchorOk' above, so
+        -- these decode a def straight from a YAML fragment rather than
+        -- going through 'computeLocationOverlay'. Nested here (rather
+        -- than alongside the #777 YAML tests in
+        -- Test.Headless.Location.Bounds) so `--match="Location overlay"`
+        -- runs them.
+        describe "anchor vocabulary (#801)" $ do
+            let anchorDef anchorYaml =
+                    "{ id: t, builder: b, discovery_margin: 6,\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  anchor: " <> anchorYaml <> " }"
+
+            it "accepts every tag in the supported vocabulary" $ \_env →
+                forM_ [ "flat", "mountain", "highland", "lowland"
+                      , "coast", "coastal", "inland", "waterside" ] $ \tag →
+                    decodeDef (anchorDef ("[" <> tag <> "]")) `shouldSatisfy` isRight'
+
+            it "accepts a definition with no anchor tags at all" $ \_env →
+                decodeDef (anchorDef "[]") `shouldSatisfy` isRight'
+
+            it "rejects an unknown anchor tag, naming the definition" $ \_env →
+                decodeDef (anchorDef "[jungle]") `shouldSatisfy` rejectedNaming "t"
+
+            it "rejects a misspelled anchor tag, naming the definition" $ \_env →
+                decodeDef (anchorDef "[mountian]") `shouldSatisfy` rejectedNaming "t"
+
+            it "rejects an unsupported climate/biome anchor tag" $ \_env →
+                decodeDef (anchorDef "[tundra]") `shouldSatisfy` rejectedNaming "t"
+
+            it "rejects a list mixing valid and invalid anchor tags" $ \_env →
+                decodeDef (anchorDef "[flat, jungle]") `shouldSatisfy` rejectedNaming "t"
+
+            it "names the offending tag itself, not just the definition" $ \_env →
+                case decodeDef (anchorDef "[jungle]") of
+                    Left err → err `shouldSatisfy` ("jungle" `isInfixOf`)
+                    Right _  → expectationFailure "expected a decode failure"
