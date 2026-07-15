@@ -652,7 +652,9 @@ renderQueue = function()
             font = h.menuFont, fontSize = NAME_FONT, color = rowNameCol,
             page = h.page, uiscale = uiscale,
             x = x, y = rowY + math.floor(NAME_FONT * uiscale),
-            tooltip = bill.paused and "Paused -- finishes the current cycle, then stops" or nil,
+            tooltip = bill.paused and (bill.working
+                and "Paused -- finishes the current cycle, then stops"
+                or "Paused -- stopped, won't draw a worker") or nil,
         })
         table.insert(s.queueElements, { kind = "label", id = nameId })
 
