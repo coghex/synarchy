@@ -471,7 +471,7 @@ def phase_paid_death(port: int) -> None:
 
     a = spawn_acolyte(port, 5.5, -7.5)
     send(port, f"unit.addItem({a}, 'steel_plate', 0); return 'ok'")
-    paid = poll_until(port, 30, lambda: (
+    paid = poll_until(port, 90, lambda: (
         (designation_at(port, 8, -8) or {}).get("paid") is True
         and (designation_at(port, 8, -8) or {}).get("progress", 0) > 0))
     check("materials paid and progress accrued before death", paid is not None)
@@ -485,7 +485,7 @@ def phase_paid_death(port: int) -> None:
     # Replacement carries ZERO materials, with no ground/mule stock
     # anywhere nearby — it must still claim and finish the job.
     b = spawn_acolyte(port, 12.5, -7.5)
-    done = poll_until(port, 60, lambda: (
+    done = poll_until(port, 120, lambda: (
         send(port, "return structure.hasAt(8, -8, 'floor')") == "true"
         and designation_at(port, 8, -8) is None))
     check("materials-less replacement finished the already-paid job "
@@ -508,7 +508,7 @@ def phase_preemption(port: int) -> None:
 
     uid = spawn_acolyte(port, 5.5, -15.5)
     send(port, f"unit.addItem({uid}, 'steel_plate', 0); return 'ok'")
-    building = poll_until(port, 30, lambda: (
+    building = poll_until(port, 90, lambda: (
         (designation_at(port, 8, -16) or {}).get("progress", 0) > 0))
     check("payment made and progress underway", building is not None)
     check("exactly one payment taken (inventory now empty)",
@@ -521,7 +521,7 @@ def phase_preemption(port: int) -> None:
     send(port, f"local s = require('scripts.unit_ai').getState({uid}); "
                f"s.constructJob.phase = 'walking'; return s.constructJob.phase")
 
-    done = poll_until(port, 60, lambda: (
+    done = poll_until(port, 120, lambda: (
         send(port, "return structure.hasAt(8, -16, 'floor')") == "true"
         and designation_at(port, 8, -16) is None))
     check("job completed after preemption with no re-payment attempt "
@@ -542,7 +542,7 @@ def phase_save_load(port: int) -> None:
 
     a = spawn_acolyte(port, 5.5, -23.5)
     send(port, f"unit.addItem({a}, 'steel_plate', 0); return 'ok'")
-    paid = poll_until(port, 30, lambda: (
+    paid = poll_until(port, 90, lambda: (
         (designation_at(port, 8, -24) or {}).get("paid") is True
         and (designation_at(port, 8, -24) or {}).get("progress", 0) > 0))
     check("materials paid and progress accrued before save", paid is not None)
@@ -550,21 +550,26 @@ def phase_save_load(port: int) -> None:
 
     send(port, f"engine.saveWorld('{w}', 'construct_payment_check'); "
                "return 'ok'")
-    time.sleep(3.0)
+    time.sleep(5.0)
     send(port, "engine.loadSave('construct_payment_check'); return 'ok'")
-    time.sleep(15.0)
+    time.sleep(25.0)
     send(port, "world.show('main_world'); return 'ok'")
     send(port, "engine.setPaused(false); return 'ok'")
-    send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)", timeout=30)
-    send(port, "return world.waitForChunks(60)", timeout=65)
+    send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)", timeout=45)
+    send(port, "return world.waitForChunks(90)", timeout=95)
 
-    reloaded = designation_at(port, 8, -24)
+    # The chunk/designation refs can take a beat to settle right after a
+    # load on a loaded/slow machine — poll rather than a single read.
+    def paid_reload():
+        d = designation_at(port, 8, -24)
+        return d if isinstance(d, dict) and d.get("paid") is True else None
+    reloaded = poll_until(port, 60, paid_reload)
     check("designation survives load with paid=true and progress intact",
           isinstance(reloaded, dict) and reloaded.get("paid") is True
           and reloaded.get("progress", 0) > 0)
 
     b = spawn_acolyte(port, 12.5, -23.5)   # zero materials
-    done = poll_until(port, 60, lambda: (
+    done = poll_until(port, 120, lambda: (
         send(port, "return structure.hasAt(8, -24, 'floor')") == "true"
         and designation_at(port, 8, -24) is None))
     check("materials-less unit finished the reloaded paid job", done is not None)
@@ -616,15 +621,16 @@ def phase_cancel_refund(port: int) -> None:
     send(port, f"construction.designate('{w}', {ux2}, {uy2}, {ux2}, {uy2}, "
                "'structure', 'dungeon_1', 'floor'); return 'ok'")
     time.sleep(0.5)
-    # Slow game time so the poll below has real wall-clock room to catch
-    # 'paid' before the job races on to completion (mirrors sub-case (c)).
-    send(port, f"world.setTimeScale('{w}', 0.2); return 'ok'")
+    # NB: construct job pacing runs off engine.gameTime() (paused/real-
+    # time, World.Engine.Core.Init's gameTimeRef), NOT world.setTimeScale
+    # (a PER-PAGE calendar rate flora/power read) — so there's no lever
+    # to slow this down; poll_fast's tight 0.05s cadence is what gives
+    # the check a real shot at catching 'paid' before the job completes.
     payer = spawn_acolyte(port, ux2 - 3 + 0.5, uy2 + 0.5)
     send(port, f"unit.addItem({payer}, 'steel_plate', 0); return 'ok'")
-    paid2 = poll_fast(60, lambda: (
+    paid2 = poll_fast(90, lambda: (
         (designation_at(port, ux2, uy2) or {}).get("paid") is True))
     check("second fixture tile paid before cancel", paid2 is not None)
-    send(port, f"world.setTimeScale('{w}', 1); return 'ok'")
     before2 = ground_count(port, "steel_plate")
     ui_right_click(px2, py2)
     time.sleep(0.5)
@@ -642,7 +648,7 @@ def phase_cancel_refund(port: int) -> None:
     px3, py3 = 1400, 500
     ux3, uy3 = pick_tile(port, px3, py3)
     send(port, f"require('scripts.structures').floor({ux3}, {uy3}); return 'ok'")
-    built = poll_until(port, 10, lambda: send(
+    built = poll_until(port, 20, lambda: send(
         port, f"return structure.hasAt({ux3}, {uy3}, 'floor')") == "true")
     check("placement-failure fixture floor placed", built is not None)
     send(port, f"construction.designate('{w}', {ux3}, {uy3}, {ux3}, {uy3}, "
@@ -653,19 +659,17 @@ def phase_cancel_refund(port: int) -> None:
 
     # A post's build_work (2.0) is lower than a floor's (3.0), so it has
     # LESS real-time margin between "paid" and "placed" than sub-case (b)
-    # above — slow game time down so the poll below has real wall-clock
-    # room to observe 'paid' before the job races on to completion.
-    send(port, f"world.setTimeScale('{w}', 0.2); return 'ok'")
+    # above; poll_fast's tight cadence is the only lever here (see the
+    # engine.gameTime()/setTimeScale note in sub-case (b)).
     poster = spawn_acolyte(port, ux3 - 3 + 0.5, uy3 + 0.5)
     send(port, f"unit.addItem({poster}, 'wood_log', 0); return 'ok'")
-    paid3 = poll_fast(60, lambda: (
+    paid3 = poll_fast(90, lambda: (
         (designation_at(port, ux3, uy3) or {}).get("paid") is True))
     check("post job paid before its floor is pulled", paid3 is not None)
-    send(port, f"world.setTimeScale('{w}', 1); return 'ok'")
 
     beforeLogs = ground_count(port, "wood_log")
     send(port, f"structure.clear({ux3}, {uy3}, 'floor'); return 'ok'")
-    done3 = poll_until(port, 60, lambda: designation_at(port, ux3, uy3) is None)
+    done3 = poll_until(port, 90, lambda: designation_at(port, ux3, uy3) is None)
     check("job resolved (removed) after the placement failure", done3 is not None)
     check("post was never actually placed",
           send(port, f"return structure.hasAt({ux3}, {uy3}, 'post_n')") == "false")

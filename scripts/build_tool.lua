@@ -88,6 +88,15 @@ buildTool.hud = nil
 local MOUSE_LEFT  = 1
 local MOUSE_RIGHT = 2
 
+-- #799: construction.cancelDesignation is fire-and-forget (queued on the
+-- world thread) — a paid designation is still visibly present for every
+-- rapid right-click issued before the FIRST one's cancel actually
+-- applies, so without a guard each of those clicks would independently
+-- see paid=true and refund the same material again. Keyed by "x,y",
+-- cleared once a later check on that tile sees it's no longer a paid
+-- designation (cancelled, or a fresh unpaid one designated in its place).
+local pendingCancelRefunds = {}
+
 -- Layout (base units; uiscale applied at draw time).
 -- Padding has to clear the 9-patch border art (~16–20 px on each
 -- side at scale 1) AND leave visible breathing room around the
@@ -939,9 +948,15 @@ function buildTool.handleMouseDown(button, x, y)
                 -- material system), so job.category filters them out.
                 local wid = buildTool.hud and buildTool.hud.worldId
                 local job = wid and construction.getDesignationAt(wid, gx, gy)
+                local key = gx .. "," .. gy
                 if job and job.paid then
-                    require("scripts.unit_ai_construct")
-                        .refundStructureMaterials(job)
+                    if not pendingCancelRefunds[key] then
+                        pendingCancelRefunds[key] = true
+                        require("scripts.unit_ai_construct")
+                            .refundStructureMaterials(job)
+                    end
+                else
+                    pendingCancelRefunds[key] = nil
                 end
                 construction.cancelDesignation(gx, gy)
             end
