@@ -50,8 +50,17 @@ identical no-change turns. `--help` lists everything.
 
 Per turn: **pause → screenshot (F1 `debug.captureScreenshot`) → the
 player decides from pixels alone → inject its action (F2 `input.*`) →
-record the oracle snapshot → unpause for a wall-clock `dt` → re-pause.**
-Wall-clock stepping is a deliberate simplicity tradeoff: `--replay`
+record the pre-step oracle context → unpause for a wall-clock `dt` →
+re-pause → record the post-step oracle evidence.** Splitting the oracle
+capture around the step (#775) matters: the widgets/menu/pause state a
+click actually acted on has to be read BEFORE the step (a step can
+change the UI underneath it), while the event-log delta, F4 action
+outcomes, and visible-change comparison the step itself produces have
+to be read AFTER it — otherwise they get drained onto the FOLLOWING
+turn's pre-step read instead (or, on the session's last turn, lost
+outright, since there is no following turn to (mis)capture them). Both
+halves are recorded together as one turn's `oracle`. Wall-clock
+stepping is a deliberate simplicity tradeoff: `--replay`
 replays every recorded turn — pre-step inputs before the `dt` step,
 post-step inputs (held-key release) after it, empty turns included —
 so the **input sequence and pacing** are faithful, but turns are not
@@ -166,9 +175,23 @@ gitignored):
   post-step entries and `step_phase` is `"not_started"` /
   `"interrupted"` / `"completed"` — whether the unpause-dt-repause sim
   step never began, began but was interrupted before repause
-  confirmed, or fully completed, #698/#728), and the **oracle
-  snapshot** (`ui.dumpWidgets`, `engine.getEventLog` delta, current
-  menu, pause state), flagged `player_invisible: true`.
+  confirmed, or fully completed, #698/#728), and the **oracle** record
+  (`ui.dumpWidgets`, `engine.getEventLog` delta, current menu, pause
+  state), flagged `player_invisible: true`. Since #775, the oracle is
+  assembled from two reads: `widgets`/`current_menu`/`paused`/
+  `world_seed` are the PRE-step affordance context (the state the
+  player actually acted on, read once after inject+settle);
+  `event_log_new`/`action_outcomes` are the union of that same
+  pre-step read (whatever the action produced synchronously, while
+  still paused) and — when the turn's sim step actually ran — a SECOND
+  read taken right after it (whatever the unpaused `dt` interval
+  itself produced), both credited to this turn's action rather than
+  the next turn's pre-step read. `visual_change` (bool) and
+  `post_screenshot` (path, or null) are this turn's own before/after
+  comparison and post-step frame — populated only when a step ran, so
+  never for a `done`/stuck terminal turn, but always for an ordinary
+  turn INCLUDING the session's last one (previously lost outright, for
+  want of a following turn to capture it on).
 - `replay.jsonl` — one line **per turn** (no-input turns included, so
   replay pacing is faithful): `{"turn": N, "pre": [lua...], "post":
   [lua...], "step_phase": "not_started"|"interrupted"|"completed"}` —
@@ -183,28 +206,32 @@ gitignored):
   superseded by #728's tri-state field — a legacy trace's missing or
   boolean `stepped` field loads with the historical mapping:
   missing/`true` → `"completed"`, `false` → `"not_started"`).
-- `frames/turn_NNNN.png` — the F1 captures.
+- `frames/turn_NNNN.png` — the F1 captures, plus `turn_NNNN_post.png`
+  (#775) for every turn whose sim step actually ran — that turn's own
+  post-step frame, never a following turn's.
 - `engine.log` — engine output, copied at session end (an engine crash
   mid-session is a **finding**: the partial trace + logs are retained
   and `stop_reason` is `engine_crash`).
 
 Notes on trace contents:
 - **World seed:** `world.getSeed()` (added with this harness) is
-  polled in every oracle snapshot; the first non-null value — the seed
-  the player actually got, typed or randomized — is promoted into
-  `meta.world_seed`. `--replay` **pins that seed**: until the replayed
-  world exists, it forces the recorded seed into the create-world
-  form state the Generate button reads (the same field the seed box's
-  onChange writes, so typed-seed sessions replay identically too), so
-  randomized-seed sessions rebuild the same world. `replay_seed_match`
-  is recorded as a verification backstop, with a warning if the replay
-  diverged before world creation.
-- **F4 outcomes** (#646): each turn's oracle snapshot includes
-  `action_outcomes` — the result of draining `debug.drainActionOutcomes()`
-  since the last turn (a destructive read, like `combat.drainEvents`; no
-  "_seen" index needed). `meta.f4_outcomes_total` is a running count
-  across the whole session, for a quick session-level glance without
-  walking every turn's oracle.
+  polled in every turn's pre-step oracle context; the first non-null
+  value — the seed the player actually got, typed or randomized — is
+  promoted into `meta.world_seed`. `--replay` **pins that seed**: until
+  the replayed world exists, it forces the recorded seed into the
+  create-world form state the Generate button reads (the same field
+  the seed box's onChange writes, so typed-seed sessions replay
+  identically too), so randomized-seed sessions rebuild the same
+  world. `replay_seed_match` is recorded as a verification backstop,
+  with a warning if the replay diverged before world creation.
+- **F4 outcomes** (#646): each turn's oracle includes `action_outcomes`
+  — the union of draining `debug.drainActionOutcomes()` once after
+  inject+settle and, when the turn stepped, again right after (#775) —
+  a destructive read, like `combat.drainEvents`; no "_seen" index
+  needed, since each drain's records are disjoint from the next.
+  `meta.f4_outcomes_total` is a running count across the whole
+  session, for a quick session-level glance without walking every
+  turn's oracle.
 - **Scenario-jump** (pre-set mid-game state) is explicitly out of
   scope for H1 — cold-boot only. The trace/runner leave room for it
   (a future mode would only add setup calls before turn 1 and a
