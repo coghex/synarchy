@@ -477,11 +477,20 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
 
     for c in candidates:
         own = _frame_path(trace_dir, by_turn, c["turn"])
+        eff = _post_frame_path(trace_dir, by_turn, c["turn"])
         own_needed = (1 if own and all(n != c["turn"] for n, _ in cur_frames)
                       else 0)
-        if cur and len(cur_frames) + own_needed > max_frames:
+        eff_needed = (1 if eff and all(n != -c["turn"] for n, _ in cur_frames)
+                      else 0)
+        # Flush on the candidate's FULL need (own + its own post-step
+        # frame, #775), not just the own frame — otherwise a candidate
+        # whose own frame just barely fits a near-full batch loses its
+        # post frame to the same starvation the own-frame flush already
+        # guards against, silently and with no warning.
+        if cur and len(cur_frames) + own_needed + eff_needed > max_frames:
             flush()
             own_needed = 1 if own else 0
+            eff_needed = 1 if eff else 0
         if own and own_needed and len(cur_frames) < max_frames:
             cur_frames.append((c["turn"], own))
         elif own and own_needed:
@@ -490,10 +499,14 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
                             f" adjudicated WITHOUT its turn-{c['turn']} "
                             "screenshot")
         cur.append(c)
-        eff = _post_frame_path(trace_dir, by_turn, c["turn"])
-        if eff and len(cur_frames) < max_frames \
-                and all(n != -c["turn"] for n, _ in cur_frames):
+        if eff and eff_needed and len(cur_frames) < max_frames:
             cur_frames.append((-c["turn"], eff))
+        elif eff and eff_needed:
+            # only possible when max_frames < 2 (a lone candidate's own
+            # + post frame can never both fit)
+            warnings.append(f"frame budget too small: candidate {c['cid']}"
+                            f" adjudicated WITHOUT its turn-{c['turn']} "
+                            "post-step screenshot")
     flush()
 
     if not batches:
@@ -1207,6 +1220,27 @@ def selftest() -> int:
                   for subset, frames in batches for c in subset))
         check("no starvation warnings needed once batched",
               not bwarn, str(bwarn))
+
+        # #775 (pr-review round 1): a budget too small to fit even one
+        # candidate's own+post pair must not silently drop the post
+        # frame — it must warn honestly, same as the own-frame case
+        # already did. max_frames=1 is the sharpest case (a lone
+        # candidate can never fit both), but the same starvation can
+        # happen mid-batch at any budget once a candidate's own frame
+        # exactly fills the remaining capacity.
+        batches1, bwarn1 = plan_batches(tdir, turns, cands, max_frames=1)
+        check("max_frames=1 warns about every dropped post-step frame "
+              "instead of silently omitting it",
+              len(bwarn1) == len(cands)
+              and all("post-step screenshot" in w for w in bwarn1),
+              str(bwarn1))
+        check("max_frames=1 still shows every candidate its own pre-step "
+              "frame despite dropping the post-step one",
+              all(any(n == c["turn"] for n, _ in frames)
+                  for subset, frames in batches1 for c in subset))
+        check("max_frames=1 never claims to have shown a post-step frame "
+              "it didn't",
+              not any(n < 0 for subset, frames in batches1 for n, _ in frames))
 
         # #775: the fixture's LAST turn (7) still gets its own post-step
         # frame shown to the critic — impossible before this fix, which
