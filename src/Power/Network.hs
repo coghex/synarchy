@@ -79,6 +79,7 @@ import Structure.Types (StructureSlot(..))
 import World.Chunk.Types (LoadedChunk(..))
 import World.Page.Types (WorldPageId)
 import World.Tile.Types (WorldTileData(..))
+import World.Time.Local (localSunAngle)
 import Power.Types
 
 -- | Whether a network's demand was fully met this instant.
@@ -244,17 +245,33 @@ dischargeBatteries wh batteries =
             | (b, s) ← zip batteries stores ]
 
 -- | One network's aggregate numbers plus its batteries' updated charge
---   after @dtHours@ of the given solar intensity vs. registered drain
---   (both node-synthetic 'drainByNode' AND #361's real consumer
---   buildings — the two sum together into one drainW; a caller with no
---   consumers on this network just passes @[]@). @dtHours = 0@ is a
---   pure read — no mutation, current numbers only (what
---   'computeSnapshots' uses for a live query between ticks).
-tickGroup ∷ Float → HM.HashMap PowerNodeId Float → Float
+--   after @dtHours@ of solar generation vs. registered drain (both
+--   node-synthetic 'drainByNode' AND #361's real consumer buildings —
+--   the two sum together into one drainW; a caller with no consumers on
+--   this network just passes @[]@). @dtHours = 0@ is a pure read — no
+--   mutation, current numbers only (what 'computeSnapshots' uses for a
+--   live query between ticks).
+--
+--   Generation (#794) is summed PER SOURCE at that source's own
+--   longitude-local sun angle ('World.Time.Local.localSunAngle',
+--   resolved from @positions@) rather than one shared intensity for the
+--   whole network — a network can legitimately span multiple
+--   longitudes (wire has no length limit), and each panel's output must
+--   track the daylight actually falling on ITS tile, not whatever tile
+--   a caller happened to compute a scalar angle from. A source missing
+--   from @positions@ contributes nothing — shouldn't happen, since
+--   every node reaching this function was already resolved into a
+--   group via that same map (see 'groupByComponent'), but cheap to
+--   default defensively rather than assume.
+tickGroup ∷ Int → Float → HM.HashMap PowerNodeId (Int, Int)
+          → HM.HashMap PowerNodeId Float → Float
           → [PowerNode] → [(BuildingId, Float)]
           → ([PowerNode], PowerNetworkSnapshot)
-tickGroup intensity drainByNode dtHours nodes consumers =
-    let generationW      = sum [ pnPeakWatts n * intensity
+tickGroup worldSize globalSunAngle positions drainByNode dtHours nodes consumers =
+    let sourceIntensity n = case HM.lookup (pnId n) positions of
+            Just (gx, gy) → solarIntensity (localSunAngle worldSize gx gy globalSunAngle)
+            Nothing       → 0
+        generationW      = sum [ pnPeakWatts n * sourceIntensity n
                                 | n ← nodes, pnRole n ≡ PowerSource ]
         nodeDrainW       = sum [ HM.lookupDefault 0 (pnId n) drainByNode | n ← nodes ]
         consumerDrainW   = sum (map snd consumers)
@@ -283,15 +300,19 @@ tickGroup intensity drainByNode dtHours nodes consumers =
 
 -- | Every connected network's current numbers, read-only (no charge
 --   mutation) — what a Lua query reports at any instant between ticks.
+--   @worldSize@ (in chunks) + @globalSunAngle@ resolve each source's own
+--   longitude-local sun angle (#794) — pass the same per-page
+--   'World.Generate.Types.wgpWorldSize' / clock-derived angle that
+--   'World.getSunAngleAt' itself reads, so a live query agrees with it.
 --   @consumers@ is #361's requires_power buildings (position + drain),
 --   gathered by the caller (see 'consumersOn'); pass 'HM.empty' when
 --   there are none to consider.
-computeSnapshots ∷ Float → HM.HashMap PowerNodeId Float → HS.HashSet (Int, Int)
+computeSnapshots ∷ Int → Float → HM.HashMap PowerNodeId Float → HS.HashSet (Int, Int)
                  → PowerNodes → HM.HashMap PowerNodeId (Int, Int)
                  → HM.HashMap BuildingId ((Int, Int), Float)
                  → [PowerNetworkSnapshot]
-computeSnapshots sunAngle drainByNode wireTiles nodes positions consumers =
-    [ snd (tickGroup (solarIntensity sunAngle) drainByNode 0 grp cons)
+computeSnapshots worldSize globalSunAngle drainByNode wireTiles nodes positions consumers =
+    [ snd (tickGroup worldSize globalSunAngle positions drainByNode 0 grp cons)
     | (grp, cons) ← groupByComponent (wireComponents wireTiles) nodes
                                       positions consumers ]
 
@@ -300,19 +321,21 @@ computeSnapshots sunAngle drainByNode wireTiles nodes positions consumers =
 --   buildings), folding each network's updated battery charge back into
 --   the node registry. Nodes not attached to any wire network are
 --   untouched. A no-op for @dtGameSeconds ≤ 0@ (paused / no time passed).
-tickPowerNodes ∷ Float → HM.HashMap PowerNodeId Float → Float
+--   @worldSize@ + @globalSunAngle@ are threaded straight to 'tickGroup'
+--   (see 'computeSnapshots' — same source of truth as 'world.getSunAngleAt').
+tickPowerNodes ∷ Int → Float → HM.HashMap PowerNodeId Float → Float
               → HS.HashSet (Int, Int) → HM.HashMap PowerNodeId (Int, Int)
               → HM.HashMap BuildingId ((Int, Int), Float)
               → PowerNodes → PowerNodes
-tickPowerNodes sunAngle drainByNode dtGameSeconds wireTiles positions consumers nodes
+tickPowerNodes worldSize globalSunAngle drainByNode dtGameSeconds wireTiles positions consumers nodes
     | dtGameSeconds ≤ 0 = nodes
     | otherwise =
-        let intensity = solarIntensity sunAngle
-            dtHours   = dtGameSeconds / 3600
+        let dtHours   = dtGameSeconds / 3600
             groups    = groupByComponent (wireComponents wireTiles) nodes
                                           positions consumers
             updates   = concatMap (\(grp, cons) →
-                            fst (tickGroup intensity drainByNode dtHours grp cons))
+                            fst (tickGroup worldSize globalSunAngle positions
+                                            drainByNode dtHours grp cons))
                                    groups
         in nodes { pnsNodes = foldl' (\m n → HM.insert (pnId n) n m)
                                      (pnsNodes nodes) updates }

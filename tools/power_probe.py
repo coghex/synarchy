@@ -45,7 +45,12 @@ What it does:
      panel reports no network at all.
   7. Fast-forwarding the world clock (world.setTimeScale) over real
      daylight hours shows the wired battery's storedWh actually rise.
-  8. Save -> quit -> fresh restart -> reload defs -> load: every placed
+  8. Longitude-local generation (#794): wiring the previously-unwired
+     second panel into its own isolated network and pinning the clock to
+     a fixed time shows EACH panel's network generationW tracks its OWN
+     tile's world.getSunAngleAt reading, not one shared global value —
+     the two panels sit at different longitudes (gx - gy).
+  9. Save -> quit -> fresh restart -> reload defs -> load: every placed
      building, its power node, AND the battery's charged storedWh survive,
      reconnected by BuildingId.
 
@@ -57,6 +62,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import shutil
 import socket
@@ -273,7 +279,37 @@ def main() -> int:
             "battery storedWh rose over simulated daylight "
             f"({stored_before} -> {stored_after})")
 
-        # --- 8. Save -> quit -> fresh restart -> load ---
+        # --- 8. Per-source longitude-local generation (#794): wire the
+        # previously-unwired second panel into its OWN isolated network,
+        # pin the clock to a fixed non-breakpoint time, and check that
+        # EACH panel's network generation matches world.getSunAngleAt at
+        # THAT panel's own tile — not one shared global value. (7,5) and
+        # (10,5) sit at different longitudes (u = gx - gy); a regression
+        # to the pre-#794 bug (one global sun angle applied to every
+        # source regardless of its own tile) would diverge from this
+        # per-panel comparison for whichever panel isn't at the meridian.
+        send(port, "require('scripts.wire').place(10, 6); return 'ok'")
+        send(port, "world.setTime('power_probe', 9, 37); return 'ok'")
+        time.sleep(0.3)
+
+        for label, node_bid, gx, gy in [
+            ("first solar panel", panel_bid, 7, 5),
+            ("second solar panel", second_panel_bid, 10, 5),
+        ]:
+            node = jget(port, f"return power.getNodeForBuilding({node_bid})")
+            net = (jget(port, f"return power.getNetworkForNode({node['id']})")
+                   if isinstance(node, dict) else None)
+            sun_angle = jget(port, f"return world.getSunAngleAt({gx}, {gy})")
+            expected_gen = (400.0 * max(0.0, -math.cos(2 * math.pi * float(sun_angle)))
+                            if isinstance(sun_angle, (int, float)) else None)
+            passed = check(passed,
+                isinstance(net, dict) and expected_gen is not None
+                and abs(net.get("generationW", -1.0) - expected_gen) < 0.5,
+                f"{label} ({gx},{gy}) network generationW tracks its own "
+                "world.getSunAngleAt-derived local intensity",
+                {"net": net, "sunAngle": sun_angle, "expected": expected_gen})
+
+        # --- 9. Save -> quit -> fresh restart -> load ---
         saved = send(port, f"return engine.saveWorld('power_probe', '{save_name}')")
         passed = check(passed, saved.strip() == "true",
                        "engine.saveWorld returned true", saved)

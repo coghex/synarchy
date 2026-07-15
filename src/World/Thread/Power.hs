@@ -28,7 +28,7 @@ import Power.Types (PowerNodes(..))
 import Power.Network (tickPowerNodes, wireTilesOn, positionsOf, consumersOn,
                       activeCraftConsumersOn, combineConsumers)
 import World.Time.Types (WorldTime, worldTimeToSunAngle)
-import World.Types (WorldPageId, WorldState(..))
+import World.Types (WorldPageId, WorldState(..), WorldGenParams(..))
 
 -- | Advance one page's power networks by @dtGame@ game-seconds. No-op
 --   when the page has no power nodes at all (the common case while the
@@ -43,13 +43,21 @@ tickPowerNetworks ∷ EngineEnv → WorldPageId → WorldState → Float → IO 
 tickPowerNetworks env pageId ws dtGame = do
     nodes0 ← readIORef (wsPowerNodesRef ws)
     when (not (HM.null (pnsNodes nodes0))) $ do
-        wt    ← readIORef (wsTimeRef ws)
-        td    ← readIORef (wsTilesRef ws)
-        bm    ← readIORef (buildingManagerRef env)
-        now   ← readIORef (gameTimeRef env)
-        rm    ← readIORef (recipeManagerRef env)
-        bills ← readIORef (wsCraftBillsRef ws)
+        wt      ← readIORef (wsTimeRef ws)
+        td      ← readIORef (wsTilesRef ws)
+        bm      ← readIORef (buildingManagerRef env)
+        now     ← readIORef (gameTimeRef env)
+        rm      ← readIORef (recipeManagerRef env)
+        bills   ← readIORef (wsCraftBillsRef ws)
+        mParams ← readIORef (wsGenParamsRef ws)
         let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)
+            -- Same wsGenParamsRef world.getSunAngleAt itself reads
+            -- (Engine.Scripting.Lua.API.WorldQuery.Lookup.getWorldGenParams),
+            -- so this tick's per-source local phasing (#794) agrees with
+            -- a live Lua query on the same page. 0 when generation
+            -- hasn't populated params yet — localSunAngle's own ≤0
+            -- fallback (a 1-chunk circumference) covers it.
+            worldSize   = maybe 0 wgpWorldSize mParams
             wireTiles   = wireTilesOn td
             drainByNode = HM.empty
             consumers   = combineConsumers (consumersOn pageId now bm)
@@ -62,6 +70,6 @@ tickPowerNetworks env pageId ws dtGame = do
         -- as Combat.Wounds.tickAllWounds / Unit.Thread.publishToRender.
         atomicModifyIORef' (wsPowerNodesRef ws) $ \current →
             let positions = positionsOf pageId bm current
-            in ( tickPowerNodes sunAngle drainByNode dtGame
+            in ( tickPowerNodes worldSize sunAngle drainByNode dtGame
                                  wireTiles positions consumers current
                , () )
