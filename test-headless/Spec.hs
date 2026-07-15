@@ -54,6 +54,7 @@ import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Construct.Corners as ConstructCorners
+import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Power.Types as PowerTypes
@@ -166,6 +167,7 @@ main = hspec $ do
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
     describe "Construct.Corners" ConstructCorners.spec
+    describe "Construct.Footprint" ConstructFootprint.spec
     describe "Craft.Execute" CraftExecute.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec

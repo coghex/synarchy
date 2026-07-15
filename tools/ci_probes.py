@@ -87,11 +87,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                        "an ally instead of engaging combat, failing "
                                        "'combat reached over a pending move' "
                                        "(1/3 solo runs, #724)"),
-    "location_content": (FLAKY, "quinoa_sack (data/loot_tables/ruin_common.yaml, "
-                                "weight 2/12) is a real loot roll the probe's "
-                                "hardcoded loot_names allowlist omits, failing 'all "
-                                "spawned ground items resolve to known ids' whenever "
-                                "it rolls (2/3 solo runs, #724)"),
     "repair_ai": (FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
                          "failing-check set each run (3/3 solo runs failed, no two "
                          "alike, #724) — not #489 (whetstone), which is long fixed "
@@ -109,6 +104,13 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                                      "~123-168s solo); 14/14 checks passed all 3 "
                                      "solo runs (#724)"),
     "infection": (SCENARIO_HEAVY, "timed infection/sepsis scenario with deliberate sleeps"),
+    "location_content": (SCENARIO_HEAVY, "four real-engine-boot scenario: ruin content "
+                                         "spawn + geometry, save/quit/restart/load "
+                                         "round-trip, bogus/valid content-registry "
+                                         "validation, and hidden-page multiworld "
+                                         "building/unit spawn (#800 replaced the stale "
+                                         "loot_names allowlist with the live item "
+                                         "registry, resolving the prior quinoa_sack flake)"),
     "item_instance": (SCENARIO_HEAVY, "real worldgen plus save/load identity regression"),
     "item_temp": (SCENARIO_HEAVY, "real worldgen, cooling waits, and save/load round-trip"),
     "power_workshop": (SCENARIO_HEAVY, "long powered-workshop AI plus day/night balance scenario"),
@@ -163,6 +165,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "preview": (NEEDS_GPU, "real preview boot creates a GLFW window and calls "
                            "initializeVulkan (app/App/Preview.hs), same as the "
                            "graphical boot path — no GPU on the CI runner (#722)"),
+    "construction_blueprint_footprint": (NEEDS_GPU, "offscreen boot: proves the "
+                           "committed building-blueprint footprint via real "
+                           "screenshot diffing (#807) — no GPU on the CI runner"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),
