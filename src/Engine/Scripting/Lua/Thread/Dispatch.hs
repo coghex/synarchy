@@ -96,12 +96,13 @@ processLuaMsg env ls stateRef msg = case msg of
     let (ElementHandle h) = elemHandle
     -- F4 (#730 review round 2): see LuaUIClickEvent above.
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
-  LuaUIScrollEvent elemHandle dx dy → do
+  LuaUIScrollEvent elemHandle dx dy shiftHeld → do
     let (ElementHandle h) = elemHandle
     broadcastToModules ls "onUIScroll"
       [ ScriptNumber (fromIntegral h)
       , ScriptNumber (realToFrac dx)
       , ScriptNumber (realToFrac dy)
+      , ScriptBool shiftHeld
       ]
   LuaUICharInput c →
     broadcastToModules ls "onUICharInput" [ScriptString (T.singleton c)]

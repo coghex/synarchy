@@ -123,7 +123,11 @@ end
 -- Mouse Wheel Scroll (UI elements)
 -----------------------------------------------------------
 
-function uiManager.onUIScroll(elemHandle, dx, dy)
+-- shiftHeld (#744) is the modifier state routing already resolved --
+-- this element won the scroll-capture search regardless of Shift, but
+-- the flag rides along so a handler that cares CAN tell modified from
+-- unmodified wheel input. No current handler needs to.
+function uiManager.onUIScroll(elemHandle, dx, dy, shiftHeld)
     local handled = dropdown.onScroll(elemHandle, dx, dy)
     if handled then return end
 
@@ -182,16 +186,16 @@ end
 -- Game Scroll (no UI element under cursor, no shift)
 -----------------------------------------------------------
 
--- #742: a wheel miss that was actually stopped at a modal boundary
--- (routePointer/UI.InputOwnership on the engine side) still reaches
--- here as an ordinary game-scroll broadcast — the modal-page hit-test
--- scope only keeps a LOWER UI element from capturing it, not gameplay
--- itself. Gate on the same UI.isInputBlocked() predicate
--- isGameplayInputActive() folds in, so camera zoom can't act behind a
--- visible modal (a pause/settings/log/... page open over currentMenu
--- staying "world_view" previously left this ungated).
+-- #744: the engine (Engine.Input.Thread.Scroll.dispatchScrollEvent)
+-- now decides modal-boundary blocking itself, upstream of this
+-- broadcast — a wheel miss stopped at a modal boundary (no
+-- scroll-capturing element in scope AND isGameplayBlocked) never
+-- reaches here at all, on top of a game-scroll AND a z-slice event
+-- alike. Pre-#744 this function carried its own UI.isInputBlocked()
+-- re-check to cover exactly that case; keeping it here too, now that
+-- the engine already guarantees it, would just be the same rule
+-- enforced in two places that could drift apart.
 function uiManager.onScroll(dx, dy)
-    if UI.isInputBlocked() then return end
     local currentMenu = uiManager.currentMenu
     if currentMenu == "world_view" then
         worldView.onScroll(dx, dy)
@@ -206,14 +210,17 @@ end
 -- Z-Slice Scroll (shift+scroll)
 -----------------------------------------------------------
 
--- #742 review round 1: shift+wheel bypasses UI hit-testing entirely on
--- the engine side (Engine.Input.Thread routes it before ever touching
--- routePointer, same as before #742 — see the issue's own out-of-scope
--- carve-out), so this is the one place that must consult
--- UI.isInputBlocked() itself, or a Shift-wheel over a visible modal's
--- empty space would still change the gameplay z-slice behind it.
+-- #744: Shift+wheel now shares the exact same engine-side routing as
+-- plain wheel (Engine.Input.Thread.Scroll.dispatchScrollEvent) —
+-- cursor conversion, the degenerate-viewport guard, scroll-capture,
+-- AND the modal-boundary check, all before this broadcast ever fires.
+-- Pre-#744, Shift+wheel bypassed routing entirely on the engine side,
+-- so this function carried its own compensating UI.isInputBlocked()
+-- check to keep a Shift-wheel over a visible modal's empty space from
+-- changing the z-slice behind it. That compensating check is gone now
+-- that the engine enforces it once, upstream, for both wheel kinds
+-- alike — see uiManager.onScroll above for the same reasoning.
 function uiManager.onZSliceScroll(dx, dy)
-    if UI.isInputBlocked() then return end
     local currentMenu = uiManager.currentMenu
     if currentMenu == "world_view" then
         worldView.onZSliceScroll(dx, dy)

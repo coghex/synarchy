@@ -433,7 +433,8 @@ spec = do
                     ]
                 inputTick env
                 msgs ← drainLuaMsgs env
-                msgs `shouldSatisfy` elem (LuaUIScrollEvent eh 0 1)
+                -- No Shift held (#744) — the trailing flag reads False.
+                msgs `shouldSatisfy` elem (LuaUIScrollEvent eh 0 1 False)
                 msgs `shouldSatisfy` all (not ∘ isScrollEvent)
 
             it "wheel over empty space still routes to game scroll (camera zoom)" $ \env → do

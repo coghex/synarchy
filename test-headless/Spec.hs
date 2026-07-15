@@ -51,6 +51,7 @@ import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Input.LayerA as InputLayerA
+import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
@@ -167,6 +168,7 @@ main = hspec $ do
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec
+    describe "Input.WheelPolicy" InputWheelPolicy.spec
     describe "Graphics.VideoConfig" VideoConfig.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec

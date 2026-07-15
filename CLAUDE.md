@@ -309,6 +309,26 @@ no-op-click-callback-just-for-wheel-routing workarounds
 `scripts/settings_menu.lua`, `scripts/create_world/log_panel.lua`) for
 the explicit contract.
 
+A3 (#744) finishes Phase A: `Engine.Input.Thread.Scroll`'s
+`dispatchScrollEvent` now routes an ordinary wheel event and a
+Shift-held one through the IDENTICAL pipeline — framebuffer-coordinate
+conversion, the degenerate-viewport guard, and `routeScroll`'s
+modal-scoped `elementCapturesScroll` search — before either can become
+a gameplay action. Pre-#744, Shift-wheel bypassed all of that and went
+straight to z-slice paging, so a scroll-capturing UI element under the
+cursor was invisible to it and a visible modal's empty space didn't
+block it either. Now a capturing element always wins the event
+regardless of Shift state (dispatched as `LuaUIScrollEvent`, which
+carries the Shift flag so `uiManager.onUIScroll` can tell modified from
+unmodified wheel input); short of that, a visible modal boundary
+(`isGameplayBlocked`) consumes the event outright — neither zoom nor
+z-slice reaches gameplay — and only past both checks does Shift select
+z-slice (`onZSliceScroll`) or its absence select camera-zoom
+(`onScroll`). Both Lua handlers dropped the `UI.isInputBlocked()`
+self-gate they used to carry as a compensating stopgap for exactly the
+empty-modal case, now that the engine decides it once, upstream,
+instead of the two enforcing the same rule with room to drift apart.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)
