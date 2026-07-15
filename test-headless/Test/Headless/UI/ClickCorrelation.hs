@@ -1,14 +1,20 @@
 {-# LANGUAGE UnicodeSyntax, OverloadedStrings #-}
 -- | #783 gate: the F3 click-correlation contract. Two halves:
 --
---   1. A pure proof that 'UI.Manager.Query.elementPaintKey' — the
---      field 'ui.dumpWidgets' exposes as @paintKey@ — agrees with
+--   1. A pure proof that 'UI.Manager.Query.elementPaintKey' —
+--      'ui.dumpWidgets's @paintKey@ field — agrees with
 --      'UI.Manager.Query.topHitBy', the engine's own topmost-hit
 --      selection, for overlapping elements within one layer, across
---      layers, and through a nested ancestor chain. This is the
---      "shared ordering contract" the issue calls for: an offline
---      consumer ranking dump records by paintKey picks the exact same
---      control a real click would.
+--      layers, and through a nested ancestor chain. paintKey alone is
+--      NOT a total order (ordinary siblings sharing a band/zIndex
+--      tie — the common case, since most elements never set an
+--      explicit zIndex), so a further test proves
+--      'UI.Manager.Query.elementPaintOrder' — @paintOrder@ — resolves
+--      that exact tie the same way topHitBy's own fold does
+--      (later-painted wins, round-1 review). This is the "shared
+--      ordering contract" the issue calls for: an offline consumer
+--      ranking dump records by @(paintKey, paintOrder)@ picks the
+--      exact same control a real click would, ties included.
 --   2. Real-Lua coverage (mirrors 'Test.Headless.UI.Slider') that
 --      'scripts/ui/registry.lua's ui.dumpWidgets() actually carries
 --      that contract into the dump: control records (button) are
@@ -105,6 +111,19 @@ spec = do
                 Just w  → fromMaybe 0 (elementPaintKey w m6) `shouldBe` maxKey
                 Nothing → expectationFailure "expected a hit"
 
+        it "paintKey alone ties for ordinary same-band, same-zIndex siblings; paintOrder breaks it exactly like topHitBy (later wins)" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (firstH, m2) = boxAt "first" pt (100, 100) hudH m1
+                (secondH, m3) = boxAt "second" pt (100, 100) hudH m2
+            in do
+                -- Neither sets an explicit zIndex — the common case —
+                -- so their paintKey is identical: elementPaintOrder is
+                -- the only thing that can distinguish them.
+                elementPaintKey firstH m3 `shouldBe` elementPaintKey secondH m3
+                topHitBy (const True) sized pt m3 `shouldBe` Just secondH
+                fromMaybe 0 (elementPaintOrder secondH m3)
+                    `shouldSatisfy` (> fromMaybe 0 (elementPaintOrder firstH m3))
+
     around withHeadlessEngine $
         describe "ui.dumpWidgets control/paintKey contract (real Lua, #783)" $ do
             it "marks button records control=true and label/panel records control=false" $ \env → do
@@ -156,6 +175,24 @@ spec = do
                     \  if w.id=='button:'..tostring(_G.__modalBtn) then modalKey=w.paintKey end; \
                     \end; \
                     \return modalKey ~= nil and hudKey ~= nil and modalKey > hudKey"
+                out `shouldBe` "true"
+
+            it "two same-page, same-zIndex buttons tie on paintKey; paintOrder ranks the later-created one higher" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls
+                    "local page = UI.newPage('t_tie', 'hud'); UI.showPage(page); \
+                    \local button = require('scripts.ui.button'); button.init(); \
+                    \_G.__firstBtn = button.new({name='first_btn', page=page, textureSet=1, x=0, y=0, width=50, height=50}); \
+                    \_G.__secondBtn = button.new({name='second_btn', page=page, textureSet=1, x=0, y=0, width=50, height=50})"
+                setup `shouldNotSatisfy` isLuaError
+                out ← evalDebug ls
+                    "local ui=require('scripts.ui.registry'); local widgets=ui.dumpWidgets(); \
+                    \local firstKey,firstOrder,secondKey,secondOrder=nil,nil,nil,nil; \
+                    \for _,w in ipairs(widgets) do \
+                    \  if w.id=='button:'..tostring(_G.__firstBtn) then firstKey=w.paintKey; firstOrder=w.paintOrder end; \
+                    \  if w.id=='button:'..tostring(_G.__secondBtn) then secondKey=w.paintKey; secondOrder=w.paintOrder end; \
+                    \end; \
+                    \return firstKey == secondKey and secondOrder ~= nil and firstOrder ~= nil and secondOrder > firstOrder"
                 out `shouldBe` "true"
 
 -- | One page with a real button, panel, and label — the three module

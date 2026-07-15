@@ -205,12 +205,20 @@ def widget_at(widgets, x, y):
     disabled-ness explains why a click didn't activate anything, it
     doesn't remove the control from correlation.
 
-    Among eligible matches, the one with the highest `paintKey` wins —
-    the same page-band + accumulated-zIndex ordering
-    UI.Manager.Query.topHitBy resolves overlapping hits with — so an
-    overlapping click resolves to the control the real UI input router
+    Among eligible matches, the one with the highest `(paintKey,
+    paintOrder)` pair (compared lexicographically) wins. `paintKey` is
+    the page-band + accumulated-zIndex ordering
+    UI.Manager.Query.topHitBy resolves overlapping hits with — but it
+    is NOT a total order on its own: ordinary siblings sharing a band
+    and zIndex (the common case — most elements never set an explicit
+    zIndex) tie on it. `paintOrder` is the element's position in the
+    engine's own paint traversal (UI.Manager.Query.elementPaintOrder),
+    exactly the tiebreak topHitBy itself applies at equal keys
+    ("later-painted wins" — see its haddock). Comparing the pair
+    reproduces topHitBy's exact selection, so an overlapping click
+    (even a tied one) resolves to the control the real UI input router
     would pick, independent of the dump list's own (Lua-table-derived)
-    order. A missing `paintKey` defaults to 0.
+    order. A missing `paintKey`/`paintOrder` defaults to 0.
     """
     if not isinstance(widgets, list):
         return None
@@ -231,7 +239,7 @@ def widget_at(widgets, x, y):
             continue
         if not hit:
             continue
-        key = w.get("paintKey", 0)
+        key = (w.get("paintKey", 0), w.get("paintOrder", 0))
         if best is None or key >= best_key:
             best, best_key = w, key
     return best
@@ -1135,6 +1143,20 @@ def selftest() -> int:
           widget_at([lo_control, hi_control], 10, 10) is hi_control)
     check("...independent of the dump list's own order (#783)",
           widget_at([hi_control, lo_control], 10, 10) is hi_control)
+
+    # #783 (round-1 review): paintKey alone is NOT a total order —
+    # ordinary siblings sharing a band and zIndex tie on it, exactly
+    # like two default-zIndex buttons on the same page. topHitBy
+    # breaks that tie by paint order (later wins); widget_at must
+    # match, using paintOrder, regardless of the dump list's order.
+    early_tied = {"id": "button:early", "control": True, "paintKey": 10,
+                  "paintOrder": 1, "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    later_tied = {"id": "button:later", "control": True, "paintKey": 10,
+                  "paintOrder": 2, "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    check("equal paintKey resolves by the higher paintOrder (later-painted wins) (#783)",
+          widget_at([early_tied, later_tied], 10, 10) is later_tied)
+    check("...independent of the dump list's own (reversed) order (#783)",
+          widget_at([later_tied, early_tied], 10, 10) is later_tied)
 
     # #783: a normal, non-overlapping enabled control resolves on its
     # own bounds; a hidden/inactive record never shadows a real hit and

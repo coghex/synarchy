@@ -45,18 +45,23 @@ local PASSIVE_MODULES = { [label] = true, [panel] = true }
 -- dump() already excludes widgets on a currently-hidden page or that
 -- are themselves (or through a hidden ancestor) not visible.
 --
--- Every record carries two fields for click-to-control correlation
+-- Every record carries three fields for click-to-control correlation
 -- (#783, repairing #645's original contract): `control` is false ONLY
 -- for passive label/panel records — they stay in the dump for critic
 -- CONTEXT but must never satisfy a click join, explicit rather than
 -- inferred from `type` so a caller can't mistake one for an input
--- surface. `paintKey` is the element's engine-side paint/hit-test
--- ordering key (UI.getElementInfo's `paintKey` — page-layer-band plus
--- accumulated zIndex, exactly what UI.Manager.Query.topHitBy resolves
--- overlapping hits with), so a caller can pick the same topmost
--- control the UI input router would for a given point, independent of
--- Lua table/module iteration order. Records with no handle (can't
--- happen for a rendered widget, but kept defensive) get paintKey 0.
+-- surface. `paintKey`/`paintOrder` are the element's engine-side
+-- paint/hit-test ordering (UI.getElementInfo's fields of the same
+-- name — page-layer-band plus accumulated zIndex, and this element's
+-- position in the full paint traversal), exactly what
+-- UI.Manager.Query.topHitBy resolves overlapping hits with — including
+-- ties, since ordinary same-band/same-zIndex siblings share a
+-- `paintKey` and topHitBy breaks that tie by paint order (later wins).
+-- A caller ranks by `(paintKey, paintOrder)`, both descending, to pick
+-- the same topmost control the UI input router would for a given
+-- point, independent of Lua table/module iteration order. Records
+-- with no handle (can't happen for a rendered widget, but kept
+-- defensive) get paintKey/paintOrder 0.
 --
 -- Some screens (the main menu, notably) build their clickable elements
 -- with raw UI.newBox/UI.setOnClick calls instead of going through a
@@ -81,6 +86,7 @@ function registry.dumpWidgets()
             widget.control = isControl
             local info = widget.handle and UI.getElementInfo(widget.handle)
             widget.paintKey = (info and info.paintKey) or 0
+            widget.paintOrder = (info and info.paintOrder) or 0
             table.insert(out, widget)
             if widget.handle then known[widget.handle] = true end
         end
@@ -102,6 +108,7 @@ function registry.dumpWidgets()
                 handle = el.handle,
                 control = true,
                 paintKey = el.paintKey or 0,
+                paintOrder = el.paintOrder or 0,
             })
         end
     end

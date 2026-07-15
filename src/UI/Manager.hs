@@ -68,6 +68,7 @@ module UI.Manager
   , isElementPointerBlocking
   , isElementScrollCapturing
   , elementPaintKey
+  , elementPaintOrder
     -- * Tooltips
   , setElementTooltip
   , clearElementTooltip
