@@ -343,6 +343,20 @@ function slider.findByElementHandle(elemHandle)
     return nil
 end
 
+-- Hover-eligible target: track and knob only. The caps are recognized
+-- by the full-assembly findByElementHandle above (for ownership/
+-- introspection lookups) but must never become hover-interactive, so
+-- the hover path below resolves through this narrower predicate
+-- instead of the public lookup (#814).
+local function findHoverTargetId(elemHandle)
+    for id, sl in pairs(sliders) do
+        if sl.knobSpriteId == elemHandle or sl.trackSpriteId == elemHandle then
+            return id
+        end
+    end
+    return nil
+end
+
 function slider.isSliderCallback(callbackName)
     return callbackName == TRACK_CALLBACK
         or callbackName == KNOB_CALLBACK
@@ -425,19 +439,12 @@ end
 -- Hover (visual feedback)
 -----------------------------------------------------------
 
--- Resolve a slider id from the knob or track element handle. Hovering
--- either part highlights the knob — the grabbable affordance.
-function slider.findByElementHandle(elemHandle)
-    for id, sl in pairs(sliders) do
-        if sl.knobSpriteId == elemHandle or sl.trackSpriteId == elemHandle then
-            return id
-        end
-    end
-    return nil
-end
-
+-- Hovering the track or the knob highlights the knob — the grabbable
+-- affordance. Resolved via findHoverTargetId (above), NOT the public
+-- findByElementHandle, so cap ownership never makes a cap hover-
+-- interactive (#814).
 function slider.onHoverEnter(elemHandle)
-    local id = slider.findByElementHandle(elemHandle)
+    local id = findHoverTargetId(elemHandle)
     if id then
         local sl = sliders[id]
         sl.hovered = true
@@ -446,7 +453,7 @@ function slider.onHoverEnter(elemHandle)
 end
 
 function slider.onHoverLeave(elemHandle)
-    local id = slider.findByElementHandle(elemHandle)
+    local id = findHoverTargetId(elemHandle)
     if id then
         local sl = sliders[id]
         sl.hovered = false

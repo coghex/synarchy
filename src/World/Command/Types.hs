@@ -78,11 +78,13 @@ data WorldCommand
     | WorldSelectTileByCoord WorldPageId Int Int (Maybe Int)
         -- ^ Atomically set worldSelectedTile to the column at (gx, gy).
         --   The @Maybe Int@ is the z to select: @Just z@ pins the exact
-        --   tile (the live-picked z from a left-click, so a click below
-        --   the surface selects the clicked tile, not the column top —
+        --   tile (the live-picked z from a left-click or a right-click
+        --   → Info context-menu selection, so a click below the
+        --   surface selects the clicked tile, not the column top —
         --   issue #367); @Nothing@ falls back to the loaded chunk's
-        --   surface z (the right-click context-menu "Info" path, which
-        --   has no live pick). Bypasses the hover-then-select dance so
+        --   surface z, a latent API affordance no current UI path
+        --   exercises (both live callers always resolve a pick and
+        --   pass its z). Bypasses the hover-then-select dance so
         --   the caller doesn't have to fight the continuous mouse-hover
         --   overwrites for one-shot selections.
     | WorldSelectChunkByCoord WorldPageId Int Int
