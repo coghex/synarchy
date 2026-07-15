@@ -5,6 +5,9 @@
 module Building.Placement
     ( canPlaceAt
     , PlacementResult(..)
+    , RemoteCheck(..)
+    , remoteCheck
+    , isRemote
     ) where
 
 import UPrelude
@@ -16,8 +19,8 @@ import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Generate (globalToChunk)
 import Location.Types (LocationRegistry)
 import Location.Overlay.Types (LocationOverlay)
-import Location.Placement (placedLocationBounds)
-import Location.Bounds (AbsBounds(..), boundsIntersect)
+import Location.Placement (placedLocationBounds, nearestLocationDistance)
+import Location.Bounds (AbsBounds(..), boundsIntersect, remotePortalThresholdTiles)
 
 data PlacementResult
     = Placeable
@@ -87,6 +90,39 @@ overlapsAnyLocation worldSize locs overlay def gx gy =
     any (boundsIntersect worldSize footprint) (placedLocationBounds locs overlay)
   where
     footprint = AbsBounds gx gy (gx + bdTileW def - 1) (gy + bdTileH def - 1)
+
+-- | #779: remote-settlement distance classification for a placement.
+--   Only a starting building (the acolyte portal) ever receives the
+--   warning — mirrors 'canPlaceAt's own #778 gate on 'bdIsStarting',
+--   so ordinary construction is unaffected. A page with no placed
+--   locations at all reports 'RemoteDistance Nothing'
+--   (still remote — see 'isRemote'), distinct from a placement that
+--   simply couldn't find a nearer location than the threshold.
+data RemoteCheck
+    = NotStartingBuilding
+    | RemoteDistance (Maybe Int)
+    deriving (Show, Eq)
+
+-- | Classify a def's placement at (gx, gy) against every location
+--   placed on this page's overlay.
+remoteCheck
+    ∷ LocationRegistry → LocationOverlay → Int → BuildingDef → Int → Int
+    → RemoteCheck
+remoteCheck locs overlay worldSize def gx gy
+    | not (bdIsStarting def) = NotStartingBuilding
+    | otherwise = RemoteDistance
+        (nearestLocationDistance worldSize locs overlay footprint)
+  where
+    footprint = AbsBounds gx gy (gx + bdTileW def - 1) (gy + bdTileH def - 1)
+
+-- | True when a 'RemoteCheck' warrants the remote-settlement
+--   confirmation: no placed locations at all, or the nearest one is
+--   strictly beyond 'remotePortalThresholdTiles'. A non-starting
+--   building never warrants it, regardless of distance.
+isRemote ∷ RemoteCheck → Bool
+isRemote NotStartingBuilding      = False
+isRemote (RemoteDistance Nothing) = True
+isRemote (RemoteDistance (Just d)) = d > remotePortalThresholdTiles
 
 -- | Surface Z = top of whatever's there (terrain, ice, frozen fluid).
 --   This is what units walk on, and the right reference for "flat

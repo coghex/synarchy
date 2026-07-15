@@ -29,7 +29,12 @@
 --     selected fails without leaving placement mode.
 --   * Starting building (the portal)   → single click → building.spawn
 --     (instant; ghost preview via building.setGhost), then exits back to
---     the default tool.
+--     the default tool — UNLESS the position is remote from every placed
+--     location (#779, building.remoteCheck): a valid remote click opens
+--     scripts.build_tool_remote_warning's confirmation modal instead of
+--     spawning, and placement stays armed until the player confirms
+--     ("Establish Here", which re-validates and then spawns) or cancels
+--     ("Choose Another Site" / Escape).
 --   * Non-starting building            → single click →
 --     construction.designate(..., "building", def) (one footprint;
 --     still previewed with building.setGhost). Stays armed so the
@@ -749,6 +754,39 @@ function buildTool.commitPlacement(defName, gx, gy)
     return buildingIdOrErr
 end
 
+-- Commit the starting building (portal) at an already hit-tested,
+-- already-canPlaceAt-validated tile: spawn it, record the outcome,
+-- and exit placement back to the default tool. Shared by the direct
+-- single-click path below AND the remote-settlement confirmation
+-- modal's "Establish Here" handler (#779) — the SAME code runs
+-- exactly once regardless of which path reached it, so a successful
+-- confirmation follows the ordinary successful-placement path exactly
+-- once, per the issue's own requirement.
+function buildTool.commitStartingPlacement(defName, gx, gy)
+    local id = building.spawn(defName, gx, gy)
+    if id then
+        engine.logInfo("BuildTool: placed " .. defName ..
+            " (id=" .. tostring(id) ..
+            ") at " .. gx .. "," .. gy)
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement",
+            outcome = "accepted",
+            where = { x = gx, y = gy },
+        }
+    else
+        debug.recordOutcome{
+            kind = "buildTool.commitPlacement",
+            outcome = "rejected",
+            where = { x = gx, y = gy },
+            reason = "building.spawn failed",
+        }
+    end
+    buildTool.exitPlacement()
+    if buildTool.hud and buildTool.hud.selectDefaultTool then
+        buildTool.hud.selectDefaultTool()
+    end
+end
+
 -----------------------------------------------------------
 -- Mouse hooks. Called from init.lua's onMouseDown.
 -- Return true if we consumed the click.
@@ -810,35 +848,24 @@ function buildTool.handleMouseDown(button, x, y)
                             target.def .. (err and (": " .. tostring(err)) or ""))
                     end
                 elseif target.isStarting then
-                    -- The portal: bootstrap building, still instant. Two
-                    -- separate outcome calls below (not one shared call
-                    -- with `id and nil or "building.spawn failed"`-style
-                    -- reason): that idiom always selects the constant
-                    -- fallback regardless of id, because `id and nil`
-                    -- collapses to a falsy value either way (review
-                    -- round 7 — a successful spawn recorded a failure
-                    -- reason).
-                    local id = building.spawn(target.def, igx, igy)
-                    if id then
-                        engine.logInfo("BuildTool: placed " .. target.def ..
-                            " (id=" .. tostring(id) ..
-                            ") at " .. igx .. "," .. igy)
-                        debug.recordOutcome{
-                            kind = "buildTool.commitPlacement",
-                            outcome = "accepted",
-                            where = { x = igx, y = igy },
-                        }
+                    -- The portal. #779: a valid position more than the
+                    -- remote threshold from every placed location on
+                    -- this page (or with no placed locations at all)
+                    -- pauses for an explicit confirmation instead of
+                    -- spawning instantly — placement stays armed, no
+                    -- exitPlacement/selectDefaultTool here, matching
+                    -- "opening the warning does not exit placement
+                    -- mode". A non-remote position keeps the old
+                    -- single-click instant-spawn behavior via the
+                    -- shared commitStartingPlacement helper.
+                    local remote, distance, thresholdTiles =
+                        building.remoteCheck(target.def, igx, igy)
+                    if remote then
+                        require("scripts.build_tool_remote_warning").open(
+                            target.def, igx, igy, distance, thresholdTiles)
                     else
-                        debug.recordOutcome{
-                            kind = "buildTool.commitPlacement",
-                            outcome = "rejected",
-                            where = { x = igx, y = igy },
-                            reason = "building.spawn failed",
-                        }
-                    end
-                    buildTool.exitPlacement()
-                    if buildTool.hud and buildTool.hud.selectDefaultTool then
-                        buildTool.hud.selectDefaultTool()
+                        buildTool.commitStartingPlacement(
+                            target.def, igx, igy)
                     end
                 else
                     -- Everything else designates a job for the build AI

@@ -19,6 +19,20 @@ GLFW, no swapchain) and asserts the mode end to end:
 5. (unless --skip-worldgen) End-to-end to the in-game HUD: click
    "Generate World", wait for generation to finish, and assert a
    third, again-different screenshot plus a working world query.
+6. (unless --skip-worldgen) Remote portal warning (#779), against the
+   SAME generated world from phase 5, located dynamically via
+   building.canPlaceAt/building.remoteCheck (never hardcoded world
+   coordinates — worldgen is unseeded here, same "oracle, not guessed
+   coordinates" rule the issue asks the UI half of this probe to
+   follow too): a valid remote position renders a normal (white, not
+   red) ghost; clicking it presents the remote-settlement modal
+   (located via ui.dumpWidgets, not hardcoded coordinates) without
+   spawning anything; a second click while it's open cannot stack a
+   second modal; "Choose Another Site" closes it, spawns nothing, and
+   leaves placement armed; clicking a nearby valid position (close to
+   a real placed location) commits instantly with no modal; re-opening
+   and clicking "Establish Here" revalidates and spawns exactly one
+   portal, exiting placement.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated.
 
@@ -108,6 +122,248 @@ def screenshot(port: int, path: str) -> bool:
     return isinstance(got, dict) and got.get("path") == path
 
 
+# --------------------------------------------------------------------------
+# Remote portal warning (#779) helpers
+# --------------------------------------------------------------------------
+PORTAL = "acolyte_portal"
+
+
+def can_place_at(port: int, def_name: str, gx: int, gy: int) -> tuple[bool, str | None]:
+    r = send(port,
+              f"local v,r = building.canPlaceAt('{def_name}', {gx}, {gy}); "
+              f"return tostring(v) .. '|' .. tostring(r)").strip('"')
+    valid_s, _, reason_s = r.partition("|")
+    return valid_s == "true", (None if reason_s in ("nil", "") else reason_s)
+
+
+def remote_check(port: int, def_name: str, gx: int, gy: int):
+    """(remote: bool, distance: int|None, thresholdTiles: int)."""
+    r = send(port,
+              f"local rem,d,t = building.remoteCheck('{def_name}', {gx}, {gy}); "
+              f"return tostring(rem) .. '|' .. tostring(d) .. '|' .. tostring(t)"
+              ).strip('"')
+    rem_s, _, rest = r.partition("|")
+    dist_s, _, thr_s = rest.partition("|")
+    distance = None if dist_s == "nil" else int(float(dist_s))
+    threshold = int(float(thr_s)) if thr_s not in ("", "nil") else None
+    return rem_s == "true", distance, threshold
+
+
+def load_region_around(port: int, gx: int, gy: int, radius_chunks: int = 2) -> None:
+    cx, cy = gx // 16, gy // 16
+    send(port, f"return world.loadChunksInRegion("
+               f"{cx - radius_chunks},{cy - radius_chunks},"
+               f"{cx + radius_chunks},{cy + radius_chunks})")
+    send(port, "return world.waitForChunks(30)", timeout=35)
+
+
+def goto_and_resolve(port: int, gx: int, gy: int, screen_x: int, screen_y: int):
+    """Points the camera at (gx, gy) and returns whatever tile ACTUALLY
+    resolves under (screen_x, screen_y) via world.pickTile. The
+    isometric projection plus that tile's own terrain height mean the
+    screen-centre tile is essentially never exactly (gx, gy) (verified
+    empirically in tools/portal_ghost_probe.py's center_on_tile) — worse,
+    iteratively CORRECTING toward an exact match assumes a roughly
+    linear pixel-to-tile shift, which rough/varied terrain around an
+    arbitrary guessed coordinate can violate badly enough to diverge.
+    So every caller here works with the RESOLVED tile instead of
+    assuming convergence onto a specific guess. Navigating to the SAME
+    (gx, gy) again is deterministic (fixed terrain + fixed camera
+    target), so re-issuing this exact call later reliably reproduces
+    the same resolved tile — that's what re-positions the camera before
+    each click below, rather than a fragile iterative correction."""
+    send(port, f"camera.goToTile({gx}, {gy}); return 'ok'")
+    time.sleep(0.4)
+    picked = send_json(port, f"return {{world.pickTile({screen_x}, {screen_y})}}")
+    return (picked[0], picked[1]) if picked else None
+
+
+def find_buildable(port: int, def_name: str, seed_targets, want_remote: bool,
+                    screen_x: int, screen_y: int):
+    """For each seed (gx, gy), resolve the tile ACTUALLY under the
+    screen centre (goto_and_resolve) and classify THAT tile with the
+    engine's own oracle (building.canPlaceAt / building.remoteCheck)
+    rather than the seed coordinates themselves — an oracle-driven
+    search, matching how ruin/location probes (e.g.
+    tools/portal_ghost_probe.py) locate real worldgen features, robust
+    to the seed itself landing on unbuildable or off-target terrain.
+    Returns (seed_gx, seed_gy, resolved_gx, resolved_gy, distance,
+    thresholdTiles) — re-navigating with the SEED coordinates
+    (goto_and_resolve) later reliably reproduces the resolved tile."""
+    for gx, gy in seed_targets:
+        resolved = goto_and_resolve(port, gx, gy, screen_x, screen_y)
+        if not resolved:
+            continue
+        rgx, rgy = resolved
+        load_region_around(port, rgx, rgy)
+        valid, _ = can_place_at(port, def_name, rgx, rgy)
+        if not valid:
+            continue
+        remote, distance, threshold = remote_check(port, def_name, rgx, rgy)
+        if remote == want_remote:
+            return gx, gy, rgx, rgy, distance, threshold
+    return None
+
+
+def arm_portal_placement(port: int) -> None:
+    send(port,
+         "require('scripts.build_tool').enterPlacement("
+         "{kind='building', def='" + PORTAL + "', isStarting=true}); "
+         "return 'ok'")
+
+
+def placement_mode(port: int) -> str:
+    return send(port,
+                "return require('scripts.build_tool').state.mode").strip('"')
+
+
+def building_count(port: int, def_name: str) -> int:
+    r = send(port, "return building.list()")
+    return r.count(def_name)
+
+
+def click_at_seed(port: int, seed_gx: int, seed_gy: int, resolved_gx: int,
+                   resolved_gy: int, screen_x: int, screen_y: int) -> bool:
+    """Re-navigates to the seed tile (deterministically reproducing the
+    same resolved tile — see goto_and_resolve) and clicks screen centre.
+    Returns whether the re-resolved tile still matches the one the
+    caller already classified; the click always fires regardless (a
+    mismatch is a probe-environment anomaly worth surfacing via the
+    caller's own check, not a reason to skip exercising the feature)."""
+    resolved = goto_and_resolve(port, seed_gx, seed_gy, screen_x, screen_y)
+    send(port, f"return input.moveMouse({screen_x}, {screen_y})")
+    send(port, f"return input.click({screen_x}, {screen_y})")
+    return resolved == (resolved_gx, resolved_gy)
+
+
+def remote_warning_phase(port: int, cx0: int, cy0: int, shots: str) -> None:
+    print("== remote portal warning (#779) ==")
+
+    located = send_json(port, "return world.listPlacedLocations()", timeout=10.0)
+    located = located if isinstance(located, list) else []
+
+    # -- find a valid, remote position: seed points scattered across the
+    # world, resolved + oracle-classified rather than assumed (see
+    # find_buildable/goto_and_resolve).
+    remote_seeds = [
+        (400, 400), (900, 300), (300, 900), (1400, 1400), (1700, 500),
+        (500, 1700), (100, 1200), (1200, 100), (1900, 900), (900, 1900),
+    ]
+    remote_hit = find_buildable(port, PORTAL, remote_seeds, want_remote=True,
+                                 screen_x=cx0, screen_y=cy0)
+    if not check("found a valid remote buildable position", bool(remote_hit)):
+        return
+    rseed_gx, rseed_gy, rgx, rgy, rdist, rthr = remote_hit
+    print(f"  remote position ({rgx},{rgy}) distance={rdist} threshold={rthr}")
+
+    # -- find a valid, NON-remote position near an actual placed
+    # location (needs at least one placed location to be meaningful).
+    nearby_hit = None
+    if located:
+        loc = located[0]
+        lgx, lgy = loc.get("gx", 0), loc.get("gy", 0)
+        nearby_seeds = [
+            (lgx + dx, lgy + dy)
+            for dx, dy in ((40, 0), (-40, 0), (0, 40), (0, -40),
+                           (60, 20), (-60, -20), (20, 60), (-20, -60),
+                           (90, 0), (-90, 0), (0, 90), (0, -90))
+        ]
+        nearby_hit = find_buildable(port, PORTAL, nearby_seeds, want_remote=False,
+                                     screen_x=cx0, screen_y=cy0)
+    check("world has at least one placed location", bool(located))
+    if not check("found a valid nearby (non-remote) buildable position",
+                 bool(nearby_hit)):
+        nearby_hit = None
+    if nearby_hit:
+        nseed_gx, nseed_gy, ngx, ngy, ndist, nthr = nearby_hit
+        print(f"  nearby position ({ngx},{ngy}) distance={ndist} threshold={nthr}")
+
+    before = building_count(port, PORTAL)
+
+    # -- valid remote position renders a normal (white) ghost: hover it
+    # while armed and confirm canPlaceAt (which drives the ghost tint)
+    # still reports valid — remote is never coloured invalid/red.
+    arm_portal_placement(port)
+    hover_resolved = goto_and_resolve(port, rseed_gx, rseed_gy, cx0, cy0)
+    check("camera resolves the remote position", hover_resolved == (rgx, rgy),
+          f"got {hover_resolved}")
+    send(port, f"return input.moveMouse({cx0}, {cy0})")
+    time.sleep(0.3)
+    valid_now, _ = can_place_at(port, PORTAL, rgx, rgy)
+    check("remote position still reports canPlaceAt=true (white ghost, "
+          "never red)", valid_now)
+    shot_ghost = os.path.join(shots, "remote_ghost.png")
+    check("remote-ghost screenshot answers", screenshot(port, shot_ghost))
+
+    # -- clicking it presents the modal without spawning anything.
+    check("click lands on the remote position",
+          click_at_seed(port, rseed_gx, rseed_gy, rgx, rgy, cx0, cy0))
+    time.sleep(0.3)
+    modal_up = poll_until(5.0, lambda: find_widget(port, "Establish Here"))
+    check("clicking the remote position presents the modal", bool(modal_up))
+    check("no portal spawned while the modal is open",
+          building_count(port, PORTAL) == before)
+    shot_modal = os.path.join(shots, "remote_modal.png")
+    check("modal screenshot answers", screenshot(port, shot_modal))
+
+    # -- a second click while it's open cannot stack a second modal
+    # (world clicks don't even pass through the modal boundary, so this
+    # click is expected to land on the modal itself, not the world).
+    send(port, f"return input.click({cx0}, {cy0})")
+    time.sleep(0.3)
+    establish_widgets = [w for w in widgets(port)
+                         if (w.get("label") or "").strip().lower()
+                         == "establish here"]
+    check("repeated clicks do not stack a second modal",
+          len(establish_widgets) == 1, f"found {len(establish_widgets)}")
+
+    # -- "Choose Another Site" closes it, spawns nothing, placement
+    # stays armed.
+    check("click 'Choose Another Site'",
+          click_widget(port, "Choose Another Site"))
+    time.sleep(0.3)
+    check("modal closed after Choose Another Site",
+          not find_widget(port, "Establish Here"))
+    check("still no portal spawned after cancel",
+          building_count(port, PORTAL) == before)
+    check("placement remains armed after cancel",
+          placement_mode(port) == "placement")
+    shot_cancelled = os.path.join(shots, "remote_cancelled.png")
+    if check("post-cancel screenshot answers",
+             screenshot(port, shot_cancelled)):
+        check("post-cancel frame differs from the open-modal frame "
+              "(modal gone, placement context unchanged underneath)",
+              png_differs(shot_modal, shot_cancelled))
+
+    # -- re-open, then "Establish Here" revalidates and spawns exactly
+    # one portal, exiting placement.
+    click_at_seed(port, rseed_gx, rseed_gy, rgx, rgy, cx0, cy0)
+    modal_up2 = poll_until(5.0, lambda: find_widget(port, "Establish Here"))
+    check("re-clicking the remote position re-presents the modal",
+          bool(modal_up2))
+    check("click 'Establish Here'", click_widget(port, "Establish Here"))
+    time.sleep(0.5)
+    check("exactly one portal placed after confirming",
+          building_count(port, PORTAL) == before + 1,
+          f"before={before} after={building_count(port, PORTAL)}")
+    check("modal closed after confirming", not find_widget(port, "Establish Here"))
+    check("placement mode exited after a confirmed remote placement",
+          placement_mode(port) == "off")
+
+    # -- a nearby valid position commits instantly, no modal.
+    if nearby_hit:
+        before2 = building_count(port, PORTAL)
+        arm_portal_placement(port)
+        click_at_seed(port, nseed_gx, nseed_gy, ngx, ngy, cx0, cy0)
+        time.sleep(0.5)
+        check("clicking a nearby valid position never presents the modal",
+              not find_widget(port, "Establish Here"))
+        check("clicking a nearby valid position commits instantly "
+              "(single click, no confirmation)",
+              building_count(port, PORTAL) == before2 + 1,
+              f"before={before2} after={building_count(port, PORTAL)}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9418)
@@ -193,6 +449,9 @@ def main() -> int:
                   png_differs(shot_create, shot_hud))
         got = send_json(args.port, "return world.getChunkInfo(0, 0)", timeout=10.0)
         check("world query answers in-game", isinstance(got, dict))
+
+        # -- 6. remote portal warning (#779), against this same world.
+        remote_warning_phase(args.port, w // 2, h // 2, shots)
 
     quit_engine(args.port, proc)
 

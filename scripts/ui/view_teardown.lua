@@ -133,6 +133,18 @@ local registry = {
     { name = "build_tool_placement",
       zoomBand = function() require("scripts.build_tool").exitPlacement() end },
 
+    -- Remote-settlement confirmation modal (#779): its own page +
+    -- module-level pending state, opened mid-placement from
+    -- build_tool.lua's starting-building click branch. A stray modal
+    -- surviving a band/HUD/menu transition would keep blocking input
+    -- (LayerModal is input-exclusive by default) over whatever's now on
+    -- screen. closeIfOpen() is idempotent and records no outcome (a
+    -- teardown sweep isn't a player cancel decision).
+    { name = "build_tool_remote_warning",
+      zoomBand = function() require("scripts.build_tool_remote_warning").closeIfOpen() end,
+      hudHide  = function() require("scripts.build_tool_remote_warning").closeIfOpen() end,
+      menu     = function() require("scripts.build_tool_remote_warning").closeIfOpen() end },
+
     -- Arena tile-editor popup (#138): lives on hud.world_page and was
     -- only torn down on empty tile-info broadcasts, tool changes, or
     -- arena exit — zoom-map chunk selection produces non-empty HUD info

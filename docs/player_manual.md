@@ -24,7 +24,9 @@ corner. Your colonists don't exist yet. Open the build tool, pick the
 **Acolyte Portal**, and click somewhere sensible — flat ground, near
 fresh water. The portal appears at once and your colony walks out of
 it: five acolytes, then a technomule, a pack robot hauling your
-starting supplies.
+starting supplies. If the spot you clicked is far from anywhere already
+mapped, the game pauses first to make sure — confirm **Establish Here**
+to proceed, or **Choose Another Site** to pick somewhere else.
 
 ## Getting around
 

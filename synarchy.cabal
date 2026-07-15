@@ -1019,6 +1019,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
                    Test.Headless.Building.Placement
+                   Test.Headless.Building.RemoteWarning
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers
