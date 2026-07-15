@@ -247,20 +247,42 @@ applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
            -- downhill drop the column exposes rock instead of a soil cap;
            -- gentler ground keeps soil, thinned by steepness. Flat biomes
            -- (drop 0) and valley floors / cliff bases (the LOW side of a
-           -- step, drop ≤ 0) are unaffected — the eroded soil still
-           -- accumulates there (and via the deposition branch). (#225)
+           -- step, drop ≤ 0) are unaffected by 'exposeRock' itself, and
+           -- (#812) actually gain the credit the shedding neighbour no
+           -- longer caps — see 'shedCredit' below. (#225)
            soilShedRelief = 3 ∷ Int
            exposeRock = isLastAge ∧ maxDrop ≥ soilShedRelief
+
+           -- Local soil redistribution (#812, closing out #225's
+           -- redistribution requirement that PR #279 left undone): a
+           -- neighbour standing 'soilShedRelief' or more tiles ABOVE this
+           -- one is guaranteed to expose rock itself — its own maxDrop
+           -- toward THIS tile alone already clears the threshold,
+           -- whatever its other neighbours look like — so this tile can
+           -- recognise a shedding donor from its OWN 1-ring stencil alone,
+           -- with no wider lookahead and no drainage/flow model. Counting
+           -- qualifying uphill neighbours (instead of just the downhill
+           -- 'maxDrop') is exactly what a plain reliefNorm/maxDrop read
+           -- misses: an uphill neighbour never raises maxDrop, so today
+           -- a receiver's soil is identical whether or not that neighbour
+           -- sheds. Capped at 'soilShedRelief' so a tile boxed in by
+           -- shedding faces on every side still gets a bounded veneer,
+           -- not an unbounded soil tower.
+           shedNeighbors = length
+               [ () | n ← [nN, nS, nE, nW], n - elev ≥ soilShedRelief ]
+           shedCredit = min soilShedRelief shedNeighbors ∷ Int
 
            -- Soil depth for last-age: continuous function of relief
            -- instead of discrete thresholds (avoids visible contour lines).
            -- Steep faces (≥ soilShedRelief) get no soil; flat terrain gets
-           -- full depth; in between it tapers with relief.
+           -- full depth plus any shed credit from a steeper neighbour; in
+           -- between it tapers with relief.
            soilDepth
                | not isLastAge = 0
                | exposeRock    = 0
                | otherwise     = max 1 (round
                    (4.0 * erodability * (1.0 - reliefNorm) ∷ Float))
+                   + shedCredit
 
            -- Strata thickness bonus: longer ages deposit thicker layers.
            -- A 15-MY age adds 5 bonus tiles, a 1-MY age adds 0.
