@@ -73,7 +73,12 @@ What it does (all against a single flat arena):
      bill of its own) for a SECOND, 300W recipe at the SAME station
      must see the full 150+300=450W combined demand against the 400W
      panel (0Wh stored) and refuse — proving the query correctly SUMS
-     with an already-active consumer instead of displacing it.
+     with an already-active consumer instead of displacing it. (#796)
+     Pausing a CONTINUING (multi-cycle) bill mid-work doesn't touch
+     drainW either — but completing that permitted cycle then clears
+     the claim itself (not just cbWorking), so drainW falls to 0 and a
+     fresh claim (even by the same unit) is refused until unpaused,
+     unlike the single-cycle bill above which just vanishes at count 0.
   6. AI end-to-end at midnight: craft_job claims, fetches, and walks up
      to the built station (drainW stays 0 through fetch/walking), then
      marks itself working (drainW reads 150W) but pours NO bill progress
@@ -533,6 +538,51 @@ def main() -> int:
             "drainW back to 0 the instant a working bill is released "
             "(releaseBill itself clears cbWorking)", drain_of(port))
         send(port, f"craft.cancelBill({bill_id}); return 'ok'")
+
+        # --- 4b (#796): pausing a CONTINUING (multi-cycle) bill mid-work
+        # only carries its holder through to that ONE cycle's completion
+        # — completeBillCycle then clears the claim itself instead of
+        # chaining into cycle 2, so drainW must drop to 0 right there and
+        # STAY 0 (no fresh claim possible while still paused), unlike the
+        # single-cycle bill_id above which simply vanishes at count 0.
+        bill_cont, msg = add_bill(port, bid_w, PROBE_RECIPE, 2)
+        passed = check(passed, bill_cont is not None,
+                       "continuing (2-count) bill queued for #796 pause test",
+                       msg)
+        send(port, f"craft.claimBill({bill_cont}, {uid}, 60); "
+                   f"craft.setBillWorking({bill_cont}, true); return 'ok'")
+        passed = check(passed, drain_of(port) == PROBE_DRAIN_W,
+                       "drainW == 150W once the continuing bill is working",
+                       drain_of(port))
+        send(port, f"craft.setBillPaused({bill_cont}, true); return 'ok'")
+        passed = check(passed, drain_of(port) == PROBE_DRAIN_W,
+                       "drainW still 150W: pausing mid-cycle doesn't cut "
+                       "the in-flight cycle's draw", drain_of(port))
+        remaining = jget(port, f"return craft.completeBillCycle({bill_cont})")
+        passed = check(passed, remaining == 1,
+                       "paused continuing bill retains its count (2 -> 1) "
+                       "at cycle completion", remaining)
+        after = jget(port, f"return craft.getBill({bill_cont})")
+        ok = (isinstance(after, dict) and "claimant" not in after
+              and after.get("working") is False and after.get("paused") is True)
+        passed = check(passed, ok,
+                       "cycle completion clears the claimant on a paused "
+                       "bill instead of chaining into cycle 2", after)
+        passed = check(passed, drain_of(port) == 0,
+                       "drainW back to 0 the instant the permitted cycle "
+                       "finishes", drain_of(port))
+        refused = send(port,
+            f"return craft.claimBill({bill_cont}, {uid}, 60)").strip('"')
+        passed = check(passed, refused == "false",
+                       "no fresh claim (even by the same unit) while still "
+                       "paused", refused)
+        send(port, f"craft.setBillPaused({bill_cont}, false); return 'ok'")
+        resumed = send(port,
+            f"return craft.claimBill({bill_cont}, {uid}, 60)").strip('"')
+        passed = check(passed, resumed == "true",
+                       "unpausing lets a fresh claim resume the retained bill",
+                       resumed)
+        send(port, f"craft.cancelBill({bill_cont}); return 'ok'")
 
         # --- 5. AI end-to-end: fetch/walking draws nothing, working
         # shows drain, stall at midnight, resume at noon, drain returns
