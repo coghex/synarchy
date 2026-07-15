@@ -96,12 +96,17 @@ end
 -- deliver (see the coordinate note at the top of this file). Box-select
 -- geometry (pastThreshold, startX/startY/currX/currY, updateRectVisual's
 -- own scale) stays in window space untouched — only the recorded
--- location converts, mirroring updateRectVisual's own degenerate
--- fallback (scale 1 when the window size isn't usable).
+-- location converts. Falls back to the raw coordinate when EITHER side
+-- of the ratio is unusable (review round 1: a minimized/hidden window
+-- can report a zero framebuffer while the window size itself stays
+-- positive, and checking only the window side silently collapsed every
+-- recorded location to (0,0) instead of falling back) — mirrors the
+-- engine-side windowToFb's all-four-dimensions guard.
 local function toFbCoords(x, y)
     local ww, wh = engine.getWindowSize()
     local fbW, fbH = engine.getFramebufferSize()
-    if not ww or ww <= 0 or not wh or wh <= 0 then
+    if not ww or ww <= 0 or not wh or wh <= 0
+       or not fbW or fbW <= 0 or not fbH or fbH <= 0 then
         return x, y
     end
     return x * (fbW / ww), y * (fbH / wh)
