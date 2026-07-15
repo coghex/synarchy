@@ -11,6 +11,7 @@ module Building.Types
     , currentActivity
     , materialsSatisfied
     , footprintDist
+    , footprintTiles
     , buildingsOnPage
     , buildingsOnPages
     ) where
@@ -229,6 +230,16 @@ materialsSatisfied ∷ BuildingInstance → BuildingDef → Bool
 materialsSatisfied inst def =
     all (\(t, n) → length (HM.lookupDefault [] t (biMaterialsDelivered inst)) >= n)
         (HM.toList (bdMaterials def))
+
+-- | The tile rectangle an anchor + tile_size footprint covers:
+--   @[ax..ax+w-1] x [ay..ay+h-1]@. The single anchor/tile_size
+--   convention shared by placement validation ('Building.Placement.
+--   checkFlatGround'), 'building.spawn', and — since #807 — the
+--   committed-blueprint render pass ('World.Construct.Types.
+--   constructDesignationFootprint'), so none of them can drift apart.
+footprintTiles ∷ Int → Int → Int → Int → [(Int, Int)]
+footprintTiles ax ay w h =
+    [(x, y) | x ← [ax .. ax + w - 1], y ← [ay .. ay + h - 1]]
 
 -- | Chebyshev distance from a tile to the nearest tile of a
 --   building's footprint. 0 = standing on it; 1 = adjacent (incl.

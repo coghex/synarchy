@@ -163,6 +163,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
     "preview": (NEEDS_GPU, "real preview boot creates a GLFW window and calls "
                            "initializeVulkan (app/App/Preview.hs), same as the "
                            "graphical boot path — no GPU on the CI runner (#722)"),
+    "construction_blueprint_footprint": (NEEDS_GPU, "offscreen boot: proves the "
+                           "committed building-blueprint footprint via real "
+                           "screenshot diffing (#807) — no GPU on the CI runner"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),

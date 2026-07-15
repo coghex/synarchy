@@ -5,18 +5,22 @@ module World.Render.CursorQuads
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Log (logWarn, LogCategory(..))
 import Engine.Asset.Handle (toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
+import Building.Types (BuildingManager(..))
 import World.Types
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Mine.Types (MineDesignation(..))
-import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
+import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
+                            , constructDesignationFootprint)
 import World.Chop.Types (ChopDesignation(..))
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
@@ -194,6 +198,36 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- mine markers, visible in every tool mode. Each renders with the
     -- ghost texture for its target category (structure vs building).
     constructDesigns ← readIORef (wsConstructDesignationsRef worldState)
+    bm ← readIORef (buildingManagerRef env)
+
+    -- #807: a CtBuilding designation is stored as ONE anchor-only map
+    -- entry regardless of footprint size (one durable job), so it must
+    -- be expanded here into the def's full footprint — the ghost used
+    -- to render only the anchor tile. A designation naming a def
+    -- missing from bmDefs (a broken save/mod) falls back to that
+    -- anchor-only tile instead of guessing geometry
+    -- (constructDesignationFootprint); since this pass runs every
+    -- frame, warn about it only ONCE per distinct missing name per
+    -- session rather than flooding the log.
+    let missingBuildingDefs = HS.fromList
+            [ defName
+            | (_, cd) ← HM.toList constructDesigns
+            , CtBuilding defName ← [cdTarget cd]
+            , not (HM.member defName (bmDefs bm))
+            ]
+        newlyMissingDefs = HS.difference missingBuildingDefs
+                                          (constructMissingDefsWarned cs')
+    unless (HS.null newlyMissingDefs) $ do
+        logger ← readIORef (loggerRef env)
+        forM_ (HS.toList newlyMissingDefs) $ \defName →
+            logWarn logger CatRender $
+                "construction blueprint: unknown building def '"
+                <> defName <> "' — rendering anchor tile only"
+        atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+            ( cs { constructMissingDefsWarned =
+                     HS.union newlyMissingDefs (constructMissingDefsWarned cs) }
+            , () )
+
     let constructTexFor cd = case cdTarget cd of
             CtStructure _ → constructStructTexture cs'
             CtBuilding  _ → constructBuildingTexture cs'
@@ -202,18 +236,21 @@ renderWorldCursorQuads env worldState tileAlpha = do
         -- at 45 % alpha and ramps to opaque at progress 1.0 (the piece
         -- itself then replaces the ghost). The mining analogue carves
         -- terrain slopes per corner; construction ADDS material, so the
-        -- ramp is the marker-level equivalent.
+        -- ramp is the marker-level equivalent. Applied uniformly across
+        -- every footprint tile of a building designation, same as the
+        -- texture — one job, one consistent tint/alpha (#807 req 3).
         constructAlphaFor cd =
             tileAlpha * (0.45 + 0.55 * max 0.0 (min 1.0 (cdProgress cd)))
         constructDesignQuads
             | HM.null constructDesigns = V.empty
             | otherwise = V.fromList
                 [ worldCursorToQuad lookupSlot lookupFmSlot textures
-                      facing dgx dgy (cdZ cd) zSlice effectiveDepth
+                      facing fx fy (cdZ cd) zSlice effectiveDepth
                       (constructAlphaFor cd) xOff tex
-                | ((dgx, dgy), cd) ← HM.toList constructDesigns
+                | (anchor, cd) ← HM.toList constructDesigns
                 , Just tex ← [constructTexFor cd]
-                , let (chunkCoord, _) = globalToChunk dgx dgy
+                , (fx, fy) ← constructDesignationFootprint (bmDefs bm) anchor cd
+                , let (chunkCoord, _) = globalToChunk fx fy
                 , Just xOff ← [isChunkVisibleWrapped facing worldSize
                                    vb camX chunkCoord]
                 ]

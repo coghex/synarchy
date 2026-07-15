@@ -48,8 +48,7 @@ checkFlatGround
     → Int
     → PlacementResult
 checkFlatGround bm wtd def gx gy =
-    let tiles = [(x, y) | x ← [gx .. gx + bdTileW def - 1]
-                       , y ← [gy .. gy + bdTileH def - 1]]
+    let tiles = footprintTiles gx gy (bdTileW def) (bdTileH def)
         zs    = traverse (lookupSurfaceZ wtd) tiles
     in case zs of
         Nothing → NotPlaceable "chunk not loaded"
