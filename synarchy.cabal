@@ -954,6 +954,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.Stats
                    Test.Headless.Unit.NightPerception
+                   Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier

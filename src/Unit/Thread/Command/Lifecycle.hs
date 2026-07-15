@@ -121,6 +121,17 @@ handleUnitReGroundCommand env utsRef gx gy = do
                             in (um { umInstances =
                                     HM.insert uid inst' (umInstances um) }, ())
 
+-- | KNOWN FOLLOW-UP (#797 audit clause): scans wmVisible in order and
+--   returns the first page with a loaded chunk at (gx, gy), rather than
+--   resolving a specific page's own tiles — the same head/order
+--   assumption #797 fixed in Unit.LineOfSight. Left unfixed here
+--   deliberately: one caller (handleUnitTeleportCommand) has a uid and
+--   could pass its page, but the other (handleUnitReGroundCommand)
+--   takes only a bare (gx, gy) with no page context at all — the tile
+--   edit that triggers it isn't page-tagged either — so giving this
+--   helper page ownership needs signature changes up through BOTH call
+--   chains, materially larger in scope than #797's LOS change. Tracked
+--   as a deferred follow-up.
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do
     wm ← readIORef (worldManagerRef env)
