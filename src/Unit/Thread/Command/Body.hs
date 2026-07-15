@@ -17,9 +17,9 @@ import Unit.Types
 --   from the map (they're spawn-time inputs, not live stats).
 --
 --   Finally re-runs `recomputeBodyDerivedStats` to fill in strength /
---   max_hydration / max_hunger / carrying_capacity / strength_base.
---   No-op if any of height/bulk/bodyfat is missing (e.g. for unit
---   types that don't declare a body block).
+--   strength_body / max_hydration / max_hunger / carrying_capacity /
+--   strength_base. No-op if any of height/bulk/bodyfat is missing
+--   (e.g. for unit types that don't declare a body block).
 -- | Spawn-time blood-volume seed in litres ('bloodMassRatio' of
 --   body_mass) — applied via the rolled stats map so units without a
 --   body block (no body_mass) start at 0 and won't bleed.
@@ -127,8 +127,8 @@ seedBodyComposition rolled =
 
 -- | Recompute body-driven derived stats from live body composition.
 --   Reads height + body_mass + lean_mass + strength_base, writes
---   strength / max_hydration / max_hunger / max_calories /
---   carrying_capacity.
+--   strength / strength_body / max_hydration / max_hunger /
+--   max_calories / carrying_capacity.
 --
 --   strength_base is the un-scaled potential rolled at spawn; on the
 --   first call (no strength_base yet) we promote the rolled "strength"
@@ -136,6 +136,21 @@ seedBodyComposition rolled =
 --   is what makes "a wasted unit physically weakens" emergent —
 --   Phase 4 catabolism shrinks lean_mass, this recompute drops the
 --   strength derived from it, and carrying_capacity follows.
+--
+--   strength_body mirrors strength at the moment of this recompute —
+--   the untainted, pre-calorie-penalty value. This recompute only
+--   runs on a body-composition CHANGE (spawn, catabolism, regrowth),
+--   but the calorie-store threshold effect (#806) needs to track the
+--   store's fraction every resource tick, far more often than mass
+--   changes. scripts/starvation.lua's per-tick refresh reads
+--   strength_body (never strength_base) as the anchor it scales by
+--   the current starving multiplier and writes back into "strength" —
+--   the actual stat every consumer (combat resolution, Lua AI) reads.
+--   Keeping strength_body separate from "strength" is what lets that
+--   refresh be idempotent (always re-derived from the same untainted
+--   source, never compounding) and fully recoverable (a refilled store
+--   scales strength_body back to 1×, with strength_base itself never
+--   touched).
 --
 --   avg_skeletal_muscle_at_height(h) = 22 · h² · 0.8 · 0.5 = 8.8 · h²
 --   assumes acolyte-like means (bulk=1, bodyfat=0.2). Different
@@ -180,6 +195,7 @@ recomputeBodyDerivedStats s =
                 carryCap     = 3.2 * ((lm * strength) ** 0.6)
             in HM.insert "strength_base"     strBase
              $ HM.insert "strength"          strength
+             $ HM.insert "strength_body"     strength
              $ HM.insert "max_hydration"     maxHydration
              $ HM.insert "max_hunger"        maxHunger
              $ HM.insert "max_calories"      maxCalories

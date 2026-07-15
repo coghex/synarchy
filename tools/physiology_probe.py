@@ -514,6 +514,116 @@ def hunger_section(port, seconds):
     return passed
 
 
+def _strength(port, uid):
+    r = send(port, f"return unit.getStat({uid},'strength') or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def _strength_body(port, uid):
+    r = send(port, f"return unit.getStat({uid},'strength_body') or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def starvation_bands_section(port, seconds):
+    """Calorie-store hungry/starving threshold effects (#806 — the two
+    effects #92/#93 specified but #296 omitted when it closed #92):
+      * Hungry band (calories/max_calories fraction < 0.35): measurably
+        slower sprint/comfort movement (scripts.starvation.speedMultiplier,
+        composed into movement_speed.lua's M.sprint).
+      * Starving band (fraction < 0.15): measurably lower "strength" in
+        the SAME stat the engine combat resolver (statOr "strength") and
+        every Lua strength consumer (unit.getStat(uid,'strength')) read —
+        not just a display label.
+      * Both recover when the store is replenished.
+      * A species with no live calorie pool (bear_brown) is unaffected.
+    Full-store, hungry-band, and starving-band are measured as three
+    successive states of ONE otherwise-untouched acolyte rather than three
+    separate spawns — each spawn independently rolls carrying_capacity /
+    starting-kit weight, so encumbranceMultiplier (also composed into
+    M.sprint) would otherwise swamp the modest hungry-band cut with
+    unrelated per-spawn noise. A single unit's own body/kit never changes
+    across the states, so any sprint delta is attributable ONLY to the
+    calorie band. The strength assertions independently compare each
+    reading against that SAME unit's own untainted "strength_body" anchor,
+    sidestepping strength_base's roll variance entirely."""
+    passed = True
+
+    uid = spawn_batch(port, 1, "acolyte", x0=26)[0]
+    send(port, f"local u={uid}; unit.setStat(u,'hunger',0); return 'ok'")
+
+    def set_frac(frac):
+        send(port, f"local u={uid}; unit.setStat(u,'calories',"
+                   f"unit.getStat(u,'max_calories')*{frac}); return 'ok'")
+        # Give the physiology tick (0.2s interval) several passes to run
+        # the per-tick strength refresh (scripts.starvation.refreshStrength).
+        # Sprint needs no wait — movement_speed.sprint reads calories live.
+        time.sleep(min(max(seconds, 1.5), 4.0))
+        return (_sprint_speed(port, uid), _strength(port, uid), _strength_body(port, uid))
+
+    sp_full, str_full, strb_full = set_frac(1.0)
+    sp_hungry, str_hungry, strb_hungry = set_frac(0.20)
+    sp_starving, str_starving, strb_starving = set_frac(0.05)
+
+    ok1 = (None not in (sp_full, sp_hungry, sp_starving) and sp_full > 0
+           and sp_hungry < sp_full * 0.95)
+    passed &= ok1
+    print(f"  [{'PASS' if ok1 else 'FAIL'}] hungry-band unit sprints slower than full-store: "
+          f"full {sp_full:.2f} vs hungry {sp_hungry:.2f} vs starving {sp_starving:.2f} tiles/s")
+
+    ok2 = (None not in (str_full, strb_full, str_hungry, strb_hungry,
+                         str_starving, strb_starving)
+           and abs(str_full - strb_full) < 1e-3
+           and abs(str_hungry - strb_hungry) < 1e-3          # hungry: unpenalized
+           and str_starving < strb_starving * 0.95)          # starving: penalized
+    passed &= ok2
+    print(f"  [{'PASS' if ok2 else 'FAIL'}] starving-band unit has reduced strength "
+          f"(engine consumer stat), hungry-band unit does not: "
+          f"full {str_full:.2f}/{strb_full:.2f}, hungry {str_hungry:.2f}/{strb_hungry:.2f}, "
+          f"starving {str_starving:.2f}/{strb_starving:.2f} (strength/strength_body)")
+
+    # --- Replenish: refill the store and confirm both effects recover. ---
+    sp_recovered, str_recovered, strb_recovered = set_frac(0.9)
+    ok3 = (sp_recovered is not None and sp_recovered > sp_starving
+           and str_recovered is not None and strb_recovered is not None
+           and abs(str_recovered - strb_recovered) < 1e-3)
+    passed &= ok3
+    print(f"  [{'PASS' if ok3 else 'FAIL'}] replenishing the store restores both effects: "
+          f"sprint {sp_starving:.2f}->{sp_recovered:.2f}, "
+          f"strength {str_starving:.2f}->{str_recovered:.2f} (body {strb_recovered:.2f})")
+
+    # --- Wildlife guard: bear_brown has no live calorie pool, so both
+    #     multipliers must stay neutral regardless of the store fractions
+    #     above (requirement 4). ---
+    bear = spawn_batch(port, 1, "bear_brown", x0=35)
+    ok4 = False
+    if bear:
+        b = bear[0]
+        cal_wild = send(port, f"return unit.getCalories({b}) and 'num' or 'nil'").strip().strip('"')
+        speed_mult = send(port, f"return require('scripts.starvation').speedMultiplier({b})").strip()
+        str_mult   = send(port, f"return require('scripts.starvation').strengthMultiplier({b})").strip()
+        try:
+            sm, stm = float(speed_mult), float(str_mult)
+        except ValueError:
+            sm, stm = -1, -1
+        ok4 = cal_wild == "nil" and abs(sm - 1.0) < 1e-6 and abs(stm - 1.0) < 1e-6
+        print(f"  [{'PASS' if ok4 else 'FAIL'}] wildlife (no calorie pool) unaffected: "
+              f"getCalories={cal_wild} speedMult={sm:.3f} strengthMult={stm:.3f}")
+    else:
+        print("  [WARN] starvation bands wildlife guard: could not spawn bear_brown")
+        bear = []
+    passed &= ok4
+
+    for u in [uid] + bear:
+        send(port, f"unit.destroy({u}); return 'ok'")
+    return passed
+
+
 # ---- Scenario definitions ----
 # Each: name, ambient °C, humidity 0..1, and an assert(m)->(ok, detail) on the
 # measured aggregate.
@@ -593,6 +703,7 @@ def main():
         # / hydration drain gets starved if it runs after dozens of units
         # have piled up across the climate scenarios.
         passed &= hunger_section(port, args.seconds)
+        passed &= starvation_bands_section(port, args.seconds)
         passed &= exhaustion_section(port, args.seconds)
         for name, ambient, humidity, check in SCENARIOS:
             set_climate(port, ambient, humidity)
