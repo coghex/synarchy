@@ -7,36 +7,45 @@ offline against known ground truth:
   turn 1  — GENUINE SILENT FAILURE: the player clicks a real "Place
             Marker" button expecting success; the action-outcome
             record says rejected, no user-facing event fires, and the
-            next frame is pixel-identical. The critic must flag this
-            as a missing-feedback defect.
+            turn's own post-step frame is pixel-identical to its
+            pre-step one. The critic must flag this as a
+            missing-feedback defect.
   turn 2  — the player repeats the click (stuck-ish follow-up noise).
   turn 3  — WORKING AS DESIGNED: the player clicks "Save Notes" and
             claims nothing happened — but the outcome is accepted, an
-            event-log entry fired, and the frame visibly changed. The
-            critic must adjudicate this intended (player missed the
-            feedback; at most a minor discoverability note).
+            event-log entry fired, and the turn's own post-step frame
+            visibly differs from its pre-step one. The critic must
+            adjudicate this intended (player missed the feedback; at
+            most a minor discoverability note).
   turn 4  — PHANTOM AFFORDANCE: the player clicks empty space
             expecting an inventory; no widget is there, the outcome is
             a deadclick, nothing changes.
   turn 5  — quiet turn (no friction) — must NOT become a finding.
   turn 6  — SILENT FAILURE MASKED BY UNRELATED FEEDBACK: another
             rejected Place Marker click, but this time an unrelated
-            survival warning fires in the same window and the frame
-            changes (live-world motion). Naive "any feedback = fed
-            back" gating would suppress this; the critic must still
-            see the rejected outcome as a candidate and judge whether
-            the feedback actually informed the player.
+            survival warning fires in the same window and the turn's
+            own post-step frame changes (live-world motion). Naive
+            "any feedback = fed back" gating would suppress this; the
+            critic must still see the rejected outcome as a candidate
+            and judge whether the feedback actually informed the
+            player.
   turn 7  — NOTE-ONLY FRICTION: the player writes a lost/confused note
             while doing nothing; there are no outcome/event/widget
             records at all. The candidate's oracle anchors are the
             ABSENCE fragments (events=[], outcomes=[], ...) — a critic
             asserting invented oracle facts for it must be rejected.
+            Also the FIXTURE'S OWN LAST TURN (#775): it still carries a
+            real post-step screenshot/oracle record of its own, never
+            borrowed from (nonexistent) turn 8.
 
 The oracle snapshots carry live-shaped F4 action-outcome records under
 `action_outcomes` (#646) — the same key and record fields
-(`kind`, `outcome`, optional `reason`) PlaytestEngine.oracle_snapshot
+(`kind`, `outcome`, optional `reason`) PlaytestEngine.oracle_events
 writes from `debug.drainActionOutcomes()` — so this fixture protects
-the real critic read path, not a critic-only spelling.
+the real critic read path, not a critic-only spelling. Likewise every
+turn's `visual_change`/`post_screenshot` (#775) is that turn's OWN
+before/after comparison and post-step frame, matching what the real
+runner now records instead of inferring from the following turn.
 """
 from __future__ import annotations
 
@@ -66,7 +75,7 @@ SAVE_NOTES = {
 WIDGETS = [PLACE_MARKER, SAVE_NOTES]
 
 
-def _oracle(events=None, action_outcomes=None):
+def _oracle(events=None, action_outcomes=None, visual_change=False):
     return {
         "player_invisible": True,
         "widgets": WIDGETS,
@@ -75,10 +84,16 @@ def _oracle(events=None, action_outcomes=None):
         "event_log_new": events or [],
         "world_seed": 123,
         "action_outcomes": action_outcomes or [],
+        # #775: this turn's OWN post-step evidence — every turn below
+        # takes a real (non-terminal) action, so a live trace would
+        # always have retained this, right down to the final turn 7.
+        "visual_change": visual_change,
+        "post_screenshot": "frames/turn_{n:04d}_post.png",  # filled in by _turn()
     }
 
 
-def _turn(n, frame, player, injected, oracle, stuck=False):
+def _turn(n, frame, player, injected, oracle, stuck=False, post_frame=None):
+    oracle = dict(oracle, post_screenshot=oracle["post_screenshot"].format(n=n))
     return {
         "turn": n, "ts": 1000.0 + n,
         "screenshot": f"frames/turn_{n:04d}.png",
@@ -88,6 +103,7 @@ def _turn(n, frame, player, injected, oracle, stuck=False):
         "post_injected": 0, "stepped": True,
         "oracle": oracle, "stuck": stuck,
         "_frame_bytes": frame,  # stripped before writing
+        "_post_frame_bytes": post_frame or frame,  # stripped before writing
     }
 
 
@@ -123,7 +139,9 @@ def build_canned_trace(trace_dir: str) -> str:
                "raw": "", "usage": None},
               ['return input.click(200.0, 230.0)'],
               _oracle(events=[{"cat": "ui", "text": "Notes saved"}],
-                      action_outcomes=[{"kind": "notes.save", "outcome": "accepted"}])),
+                      action_outcomes=[{"kind": "notes.save", "outcome": "accepted"}],
+                      visual_change=True),
+              post_frame=PNG_WHITE),
         _turn(4, PNG_WHITE,
               {"observation": "There is a bag-looking shape in the corner.",
                "action": {"do": "click", "x": 600, "y": 400},
@@ -150,7 +168,9 @@ def build_canned_trace(trace_dir: str) -> str:
               _oracle(events=[{"cat": "survival_warning",
                                "text": "Acolyte Renn is thirsty"}],
                       action_outcomes=[{"kind": "marker.place", "outcome": "rejected",
-                                        "reason": "insufficient materials"}])),
+                                        "reason": "insufficient materials"}],
+                      visual_change=True),
+              post_frame=PNG_WHITE),
         _turn(7, PNG_BLACK,
               {"observation": "Same screen as before, as far as I can tell.",
                "action": {"do": "wait"},
@@ -165,8 +185,12 @@ def build_canned_trace(trace_dir: str) -> str:
     with open(os.path.join(trace_dir, "turns.jsonl"), "w") as f:
         for t in turns:
             frame = t.pop("_frame_bytes")
+            post_frame = t.pop("_post_frame_bytes")
             with open(os.path.join(trace_dir, t["screenshot"]), "wb") as pf:
                 pf.write(frame)
+            with open(os.path.join(trace_dir, t["oracle"]["post_screenshot"]),
+                     "wb") as pf:
+                pf.write(post_frame)
             f.write(json.dumps(t, sort_keys=True) + "\n")
 
     with open(os.path.join(trace_dir, "replay.jsonl"), "w") as f:

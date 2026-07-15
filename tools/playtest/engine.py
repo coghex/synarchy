@@ -4,10 +4,16 @@ Owns the game-instance lifecycle — windowed (the original substrate,
 steals focus) or offscreen (#650: GPU on, window off, unattended /
 parallel-safe) — and every debug-console interaction the lockstep
 loop needs: pause control, F1 screenshots, F2 input injection, and the
-oracle snapshot (F3 widgets, event-log delta, menu state) that is
-recorded in the trace but NEVER shown to the player agent. Both modes
-serve the identical render + input pipeline, so everything below the
-launch flags is mode-blind.
+oracle reads (F3 widgets, event-log delta, menu state) that are
+recorded in the trace but NEVER shown to the player agent. The oracle
+is split into `oracle_context()` (widgets/menu/pause/seed — cheap,
+non-destructive, safe to call once per turn) and `oracle_events()`
+(event-log delta + F4 action-outcome drain — cursor/destructive reads
+the runner calls once after settle and again after a sim step, so a
+turn's action gets credit for both what it produced synchronously and
+what the step itself produced, #775). Both render modes serve the
+identical render + input pipeline, so everything below the launch
+flags is mode-blind.
 
 Also owns the action->input.* translation: the player acts in
 screenshot pixel space (F1's framebuffer pixels), which is exactly the
@@ -252,14 +258,39 @@ class PlaytestEngine:
         return acks
 
     # -- oracle (recorded, never shown to the player) ------------------
+    #
+    # Split in two (#775) so a turn's record can correctly attribute
+    # BOTH the synchronous consequences of injecting an action (while
+    # still paused, during `settle`) and whatever the unpaused `dt` sim
+    # interval itself produces to that SAME turn, instead of losing the
+    # latter to whichever turn happens to query it next:
+    #   oracle_context() — the affordance state the player interacted
+    #     with (widgets/menu/pause/seed). Read-only, non-destructive,
+    #     safe to call once per turn regardless of whether a sim step
+    #     follows.
+    #   oracle_events() — the event-log delta + F4 action-outcome
+    #     drain. Both are cursor/destructive reads, so calling this
+    #     TWICE in one turn (once after settle, once after the step)
+    #     yields two disjoint slices that the caller concatenates —
+    #     never a double-count, never a drop.
 
-    def oracle_snapshot(self) -> dict:
+    def oracle_context(self) -> dict:
         snap: dict = {"player_invisible": True}
         widgets = self.lua('return require("scripts.ui.registry").dumpWidgets()')
         snap["widgets"] = widgets if isinstance(widgets, list) else {"error": str(widgets)}
         menu = self.lua('return require("scripts.ui_manager").currentMenu')
         snap["current_menu"] = menu if isinstance(menu, str) else None
         snap["paused"] = self.lua("return engine.isPaused()") is True
+        # The active world's generation seed (world.getSeed, added for
+        # this harness) — nil until the player has created a world.
+        # The runner promotes the first non-null value into meta so a
+        # randomized-seed session is still reproducible/diagnosable.
+        seed = self.lua("return world.getSeed()")
+        snap["world_seed"] = seed if isinstance(seed, int) else None
+        return snap
+
+    def oracle_events(self) -> dict:
+        snap: dict = {}
         log = self.lua("return engine.getEventLog()")
         if isinstance(log, list):
             snap["event_log_new"] = _event_log_delta(
@@ -267,16 +298,10 @@ class PlaytestEngine:
             self._event_log_snapshot = log
         else:
             snap["event_log_new"] = []
-        # The active world's generation seed (world.getSeed, added for
-        # this harness) — nil until the player has created a world.
-        # The runner promotes the first non-null value into meta so a
-        # randomized-seed session is still reproducible/diagnosable.
-        seed = self.lua("return world.getSeed()")
-        snap["world_seed"] = seed if isinstance(seed, int) else None
         # F4 (#646): drains the action-outcome ring — a destructive read,
         # like combat.drainEvents/injury.drainEvents, so no "_seen" index
         # is needed the way event_log_new above needs one; whatever
-        # accumulated since the last snapshot comes back once and the
+        # accumulated since the last drain comes back once and the
         # engine-side buffer is empty again immediately after.
         outcomes = self.lua("return debug.drainActionOutcomes()")
         snap["action_outcomes"] = outcomes if isinstance(outcomes, list) else []
@@ -323,9 +348,12 @@ class FakeEngine(PlaytestEngine):
         self.injected.extend(calls)
         return [{"ok": True} for _ in calls]
 
-    def oracle_snapshot(self) -> dict:
+    def oracle_context(self) -> dict:
         return {"player_invisible": True, "widgets": [], "current_menu": "main",
-                "paused": self.paused, "event_log_new": [], "world_seed": 4242}
+                "paused": self.paused, "world_seed": 4242}
+
+    def oracle_events(self) -> dict:
+        return {"event_log_new": [], "action_outcomes": []}
 
     def lua(self, code: str, timeout: float = 0):
         return {"ok": True}

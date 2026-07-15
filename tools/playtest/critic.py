@@ -163,7 +163,7 @@ for each covered candidate. Naming a harness join tag does NOT count; \
 free prose that references nothing recorded is rejected as \
 unverifiable. When a candidate has NO outcome/event/widget records, \
 state the absence by quoting the digest's oracle-line fragments \
-verbatim (e.g. "events=[]", "outcomes=[]", "visual_change_next=False") \
+verbatim (e.g. "events=[]", "outcomes=[]", "visual_change=False") \
 — never assert facts the record doesn't contain;
 - NO ungrounded findings: a hunch without oracle backing is either \
 dropped or explicitly confidence=low with the gap named;
@@ -221,7 +221,7 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
         oracle = t.get("oracle") or {}
         events = oracle.get("event_log_new") or []
         # F4 (#646) action outcomes. The live producer
-        # (PlaytestEngine.oracle_snapshot) writes them under
+        # (PlaytestEngine.oracle_events) writes them under
         # `action_outcomes`; only the pre-live canned fixture ever used
         # the legacy `outcomes` spelling. Treat `action_outcomes` as
         # authoritative whenever the key is present — even when it is an
@@ -236,8 +236,18 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
         acks = t.get("acks") or []
         ack_errors = [a for a in acks
                       if isinstance(a, dict) and "error" in a]
-        # the action's visible effect shows up in the NEXT frame
-        changed = (hashes[i + 1] != hashes[i]) if i + 1 < len(turns) else None
+        # This turn's own visible effect (#775): the runner now records
+        # a before/after comparison scoped to THIS turn's own sim step
+        # (oracle.visual_change) rather than smearing it across the
+        # NEXT turn's frame — which misattributed a step's effect to
+        # whatever action happened to come after it, and had nothing at
+        # all to compare against on the final turn. A trace recorded
+        # before #775 carries no `visual_change` key; fall back to the
+        # old cross-turn frame comparison for those.
+        if "visual_change" in oracle:
+            changed = oracle.get("visual_change")
+        else:
+            changed = (hashes[i + 1] != hashes[i]) if i + 1 < len(turns) else None
         clicked = None
         if action.get("do") in ("click", "drag") and action.get("x") is not None:
             clicked = widget_at(oracle.get("widgets"),
@@ -258,7 +268,7 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
             "outcomes": outcomes,
             "bad_outcomes": bad,
             "ack_errors": ack_errors,
-            "visual_change_next": changed,
+            "visual_change": changed,
             "clicked_widget": clicked,
             "widgets": widgets if isinstance(widgets, list) else [],
             "current_menu": oracle.get("current_menu"),
@@ -291,11 +301,11 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
         feedback_bits = []
         if s["events"]:
             feedback_bits.append(f"events fired: {json.dumps(s['events'])}")
-        if s["visual_change_next"]:
-            feedback_bits.append("the next frame differs visibly")
+        if s["visual_change"]:
+            feedback_bits.append("the frame changed after the step")
         feedback = ("; ".join(feedback_bits)
                     if feedback_bits else "NO feedback of any kind "
-                    "(no events, next frame byte-identical)")
+                    "(no events, frame byte-identical after the step)")
         if s["bad_outcomes"]:
             kind = s["bad_outcomes"][0].get("outcome")
             if not feedback_bits:
@@ -338,7 +348,7 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
             add(s["turn"], reasons, {
                 "events": s["events"], "outcomes": s["outcomes"],
                 "clicked_widget": s["clicked_widget"],
-                "visual_change_next": s["visual_change_next"],
+                "visual_change": s["visual_change"],
             }, player_note=s["note"],
                 player_words=(s["note"] or s["observation"]
                               or s["expectation"]))
@@ -395,7 +405,7 @@ def build_digest(meta: dict, signals: list[dict],
                      f"events={json.dumps(s['events'])} "
                      f"outcomes={json.dumps(s['outcomes'])} "
                      f"clicked_widget={json.dumps(s['clicked_widget'])} "
-                     f"visual_change_next={s['visual_change_next']} "
+                     f"visual_change={s['visual_change']} "
                      f"stuck={s['stuck']}")
     lines.append("")
     lines.append("FRICTION CANDIDATES (adjudicate every id; quote the "
@@ -421,6 +431,21 @@ def _frame_path(trace_dir: str, by_turn: dict, n: int) -> str | None:
     return p if os.path.isfile(p) else None
 
 
+def _post_frame_path(trace_dir: str, by_turn: dict, n: int) -> str | None:
+    """Turn n's OWN post-step frame (#775) — the visible result of
+    THIS turn's action, retained even on the final turn (which has no
+    following turn to have ever borrowed one from). None for a turn
+    whose sim step never ran (terminal, or a trace predating #775)."""
+    t = by_turn.get(n)
+    if not t:
+        return None
+    rel = (t.get("oracle") or {}).get("post_screenshot")
+    if not rel:
+        return None
+    p = os.path.join(trace_dir, rel)
+    return p if os.path.isfile(p) else None
+
+
 def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
                  max_frames: int
                  ) -> tuple[list[tuple[list[dict], list[tuple[int, str]]]],
@@ -429,15 +454,36 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
     own-turn screenshot is actually shown in the call that adjudicates
     it (the H2 multimodal-evidence requirement) — a warning about an
     unseen frame is not a substitute. Greedy: pack candidates into a
-    batch while their frames (own turn, then the following turn for
-    the visible effect) fit --max-frames; overflow starts a new call.
-    A candidate-free session gets one call with the session bookends.
-    Returns (batches, warnings)."""
+    batch while their frames (own pre-step turn, then that SAME turn's
+    own post-step frame for the visible effect, #775 — never a
+    following turn's, which the last candidate has none of) fit
+    --max-frames; overflow starts a new call. A candidate-free session
+    gets one call with the session bookends. A post-step frame is
+    tracked under `-turn` in the returned frame lists — distinct from
+    that turn's own pre-step `turn` key — so both can coexist and later
+    be told apart when attaching screenshots to a finding. Returns
+    (batches, warnings)."""
     by_turn = {t.get("turn"): t for t in turns}
     batches: list[tuple[list[dict], list[tuple[int, str]]]] = []
     cur: list[dict] = []
     cur_frames: list[tuple[int, str]] = []
     warnings: list[str] = []
+
+    # A single candidate can need up to two frames of its own — its
+    # pre-step screenshot and that SAME turn's post-step frame (#775).
+    # A budget below that floor could never show both for even one
+    # candidate no matter how batches are split, so clamp rather than
+    # accept a configuration that provably can't satisfy the
+    # per-candidate evidence contract (pr-review round 2). Combined
+    # with the total-need flush check below, this GUARANTEES every
+    # candidate's own+post pair lands together in some call — the
+    # per-candidate warning further down is now unreachable, kept only
+    # as a documented invariant, not a live code path.
+    if max_frames < 2:
+        warnings.append(f"--max-frames {max_frames} is below the 2-frame "
+                        "floor a single candidate's own pre+post pair "
+                        "needs; raised to 2")
+        max_frames = 2
 
     def flush():
         nonlocal cur, cur_frames
@@ -447,23 +493,37 @@ def plan_batches(trace_dir: str, turns: list[dict], candidates: list[dict],
 
     for c in candidates:
         own = _frame_path(trace_dir, by_turn, c["turn"])
+        eff = _post_frame_path(trace_dir, by_turn, c["turn"])
         own_needed = (1 if own and all(n != c["turn"] for n, _ in cur_frames)
                       else 0)
-        if cur and len(cur_frames) + own_needed > max_frames:
+        eff_needed = (1 if eff and all(n != -c["turn"] for n, _ in cur_frames)
+                      else 0)
+        # Flush on the candidate's FULL need (own + its own post-step
+        # frame, #775), not just the own frame — otherwise a candidate
+        # whose own frame just barely fits a near-full batch loses its
+        # post frame to the same starvation the own-frame flush already
+        # guards against, silently and with no warning.
+        if cur and len(cur_frames) + own_needed + eff_needed > max_frames:
             flush()
             own_needed = 1 if own else 0
+            eff_needed = 1 if eff else 0
         if own and own_needed and len(cur_frames) < max_frames:
             cur_frames.append((c["turn"], own))
         elif own and own_needed:
-            # only possible when max_frames < 1
+            # unreachable now that max_frames is clamped to >= 2 above;
+            # kept as a defensive invariant guard, not a live path
             warnings.append(f"frame budget too small: candidate {c['cid']}"
                             f" adjudicated WITHOUT its turn-{c['turn']} "
                             "screenshot")
         cur.append(c)
-        nxt = _frame_path(trace_dir, by_turn, c["turn"] + 1)
-        if nxt and len(cur_frames) < max_frames \
-                and all(n != c["turn"] + 1 for n, _ in cur_frames):
-            cur_frames.append((c["turn"] + 1, nxt))
+        if eff and eff_needed and len(cur_frames) < max_frames:
+            cur_frames.append((-c["turn"], eff))
+        elif eff and eff_needed:
+            # unreachable now that max_frames is clamped to >= 2 above;
+            # kept as a defensive invariant guard, not a live path
+            warnings.append(f"frame budget too small: candidate {c['cid']}"
+                            f" adjudicated WITHOUT its turn-{c['turn']} "
+                            "post-step screenshot")
     flush()
 
     if not batches:
@@ -506,7 +566,11 @@ class Critic:
         for n, path in frames:
             with open(path, "rb") as f:
                 data = base64.standard_b64encode(f.read()).decode()
-            content.append({"type": "text", "text": f"[screenshot of turn {n}]"})
+            # a negative n is that same turn's OWN post-step frame
+            # (#775), not a different turn — see plan_batches
+            label = (f"[screenshot of turn {n}]" if n > 0
+                     else f"[screenshot of turn {-n}, after that turn's step]")
+            content.append({"type": "text", "text": label})
             content.append({"type": "image",
                             "source": {"type": "base64",
                                        "media_type": "image/png", "data": data}})
@@ -656,7 +720,7 @@ def _anchor_strings(cand: dict) -> set[str]:
         if not (o.get("outcomes") or []):
             anchors.add(_norm("outcomes=[]"))
         anchors.add(_norm(
-            f"visual_change_next={o.get('visual_change_next')}"))
+            f"visual_change={o.get('visual_change')}"))
     return anchors
 
 
@@ -958,12 +1022,22 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
     for f in data["findings"]:
         # attach only screenshots the model was actually shown in the
         # call that produced this finding — a report must never imply
-        # the critic saw a frame it didn't (review finding 3)
+        # the critic saw a frame it didn't (review finding 3). A cited
+        # turn can contribute up to two: its own pre-step screenshot
+        # (key `n`) and, when it was shown, that SAME turn's own
+        # post-step frame (#775, key `-n` — see plan_batches) rather
+        # than borrowing a following turn's.
         shown = frames_by_call.get(f.get("adjudication_call"), set())
-        f["screenshots"] = [ref for n, ref in
-                            ((n, (turns_by_n.get(n) or {}).get("screenshot"))
-                             for n in f["evidence"]["turns"])
-                            if ref and n in shown]
+        refs = []
+        for n in f["evidence"]["turns"]:
+            t = turns_by_n.get(n) or {}
+            if n in shown and t.get("screenshot"):
+                refs.append(t["screenshot"])
+            if -n in shown:
+                post_ref = (t.get("oracle") or {}).get("post_screenshot")
+                if post_ref:
+                    refs.append(post_ref)
+        f["screenshots"] = refs
         f["evidence"]["screenshots"] = f["screenshots"]
     data["critic_model"] = getattr(critic, "model", "fake")
     data["candidates"] = candidates  # the full pre-analysis, for audit
@@ -1007,6 +1081,18 @@ def selftest() -> int:
         turns = load_turns(tdir)
         signals = build_signals(tdir, turns)
         cands = friction_candidates(meta, signals)
+
+        # #775: the expectation-vs-reality join must consume the
+        # correctly associated visible-change for each turn — the
+        # runner's own per-turn `oracle.visual_change` (turns 3 and 6
+        # visibly change; every other turn in the fixture does not) —
+        # not a cross-turn hashes[i+1] guess.
+        by_turn_signal = {s["turn"]: s for s in signals}
+        check("build_signals derives visual_change from this turn's own "
+              "oracle field for every planted turn",
+              [by_turn_signal[n]["visual_change"] for n in range(1, 8)]
+              == [False, False, True, False, False, True, False],
+              str({n: by_turn_signal[n]["visual_change"] for n in range(1, 8)}))
 
         def cand_for(turn):
             return next((c for c in cands if c["turn"] == turn), None)
@@ -1053,7 +1139,7 @@ def selftest() -> int:
             "injected": ["return input.click(5.0, 5.0)"],
             "acks": [{"ok": True}], "events": [], "outcomes": [],
             "bad_outcomes": [], "ack_errors": [],
-            "visual_change_next": True, "clicked_widget": None,
+            "visual_change": True, "clicked_widget": None,
             "widgets": [], "current_menu": "world_view", "paused": True,
             "stuck": False,
         }
@@ -1065,7 +1151,7 @@ def selftest() -> int:
               friction_candidates({}, [base_click]) == [])
 
         # F4 oracle-key regression (#726): the live producer
-        # (PlaytestEngine.oracle_snapshot) writes action outcomes under
+        # (PlaytestEngine.oracle_events) writes action outcomes under
         # `action_outcomes`; a stale critic read of `outcomes` dropped
         # every real F4 record before candidate generation. Drive the
         # issue's own repro through the real build_signals +
@@ -1152,6 +1238,36 @@ def selftest() -> int:
         check("no starvation warnings needed once batched",
               not bwarn, str(bwarn))
 
+        # #775 (pr-review rounds 1-2): a single candidate can need up to
+        # two frames of its own (pre + post-step, #775) — a budget
+        # below that floor could never show both for even one
+        # candidate, so an under-budget request is CLAMPED to 2 (with
+        # an honest warning), guaranteeing every candidate's own+post
+        # pair lands together rather than merely warning when one is
+        # dropped.
+        batches1, bwarn1 = plan_batches(tdir, turns, cands, max_frames=1)
+        check("max_frames below the 2-frame floor is clamped, with a "
+              "warning explaining why",
+              any("raised to 2" in w for w in bwarn1), str(bwarn1))
+        check("every candidate still gets BOTH its own pre-step and "
+              "post-step frame even when max_frames was requested as 1",
+              all(any(n == c["turn"] for n, _ in frames)
+                  and any(n == -c["turn"] for n, _ in frames)
+                  for subset, frames in batches1 for c in subset))
+        check("no per-candidate frame-starvation warning fires once "
+              "clamped (the clamp itself is the only warning)",
+              not any("post-step screenshot" in w or "adjudicated WITHOUT"
+                      in w for w in bwarn1),
+              str(bwarn1))
+
+        # #775: the fixture's LAST turn (7) still gets its own post-step
+        # frame shown to the critic — impossible before this fix, which
+        # had no turn 8 to borrow "the visible result" from.
+        check("the final turn's own post-step frame is offered to the "
+              "critic (no following turn needed)",
+              any(n == -c7["turn"] for subset, frames in batches
+                  for n, _ in frames))
+
         report_path, findings_path = run_critic(tdir, FakeCritic())
         with open(findings_path) as f:
             data = json.load(f)
@@ -1180,9 +1296,24 @@ def selftest() -> int:
                       for a in data["adjudication_calls"]))
         fbc = {a["call"]: set(a["frames"])
                for a in data["adjudication_calls"]}
+        # a ref is either a turn's pre-step "screenshot" (positive key)
+        # or that SAME turn's post-step "post_screenshot" (#775,
+        # negative key — see plan_batches) — map back by matching
+        # against the known trace records rather than parsing
+        # filenames, since "..._post.png" doesn't fit the old
+        # trailing-number convention.
+        by_turn_ref = {t.get("turn"): t for t in turns}
+
+        def _ref_key(ref):
+            for n, t in by_turn_ref.items():
+                if t.get("screenshot") == ref:
+                    return n
+                if (t.get("oracle") or {}).get("post_screenshot") == ref:
+                    return -n
+            return None
+
         check("findings only attach screenshots their call actually saw",
-              all(int(ref.rsplit("_", 1)[1].split(".")[0])
-                  in fbc.get(f_["adjudication_call"], set())
+              all(_ref_key(ref) in fbc.get(f_["adjudication_call"], set())
                   for f_ in data["findings"]
                   for ref in f_.get("screenshots", [])))
 
@@ -1209,8 +1340,17 @@ def selftest() -> int:
                     return {"summary": "lazy", "findings": []}
                 return FakeCritic.adjudicate(self, digest, manual, frames)
 
+        # max_frames generous enough for ONE main-pass call (#775: each
+        # candidate now needs its own pre AND post frame, no more
+        # sharing with a neighboring candidate's own frame, so the
+        # fixture's 6 candidates need up to 12 distinct frames) — these
+        # critics gate their behavior on `ask is None`, which is only
+        # true when the main pass is a single call.
+        ONE_CALL_FRAMES = 20
+
         lazy = LazyCritic()
-        rp, fp = run_critic(tdir, lazy, out_dir=os.path.join(tmp, "lazy"))
+        rp, fp = run_critic(tdir, lazy, out_dir=os.path.join(tmp, "lazy"),
+                           max_frames=ONE_CALL_FRAMES)
         with open(fp) as f:
             lazy_data = json.load(f)
         check("repair pass recovers unadjudicated candidates",
@@ -1236,7 +1376,8 @@ def selftest() -> int:
                 return FakeCritic.adjudicate(self, digest, manual, frames)
 
         ug = UngroundedCritic()
-        rp2, fp2 = run_critic(tdir, ug, out_dir=os.path.join(tmp, "ungrounded"))
+        rp2, fp2 = run_critic(tdir, ug, out_dir=os.path.join(tmp, "ungrounded"),
+                             max_frames=ONE_CALL_FRAMES)
         with open(fp2) as f:
             ug_data = json.load(f)
         ug_report = open(rp2).read()
@@ -1265,7 +1406,8 @@ def selftest() -> int:
                         "evidence": {"turns": [999], "candidate_ids": ["C1"],
                                      "player_quote": "q", "oracle": "made up"},
                         "root_cause_hypothesis": ""})
-        rp3, fp3 = run_critic(tdir, mm, out_dir=os.path.join(tmp, "mismatch"))
+        rp3, fp3 = run_critic(tdir, mm, out_dir=os.path.join(tmp, "mismatch"),
+                             max_frames=ONE_CALL_FRAMES)
         with open(fp3) as f:
             mm_data = json.load(f)
         check("nonexistent-turn evidence rejected, repair recovers",
@@ -1282,7 +1424,8 @@ def selftest() -> int:
                                      "player_quote": "",
                                      "oracle": "outcome rejected"},
                         "root_cause_hypothesis": ""})
-        rp5, fp5 = run_critic(tdir, ql, out_dir=os.path.join(tmp, "quoteless"))
+        rp5, fp5 = run_critic(tdir, ql, out_dir=os.path.join(tmp, "quoteless"),
+                             max_frames=ONE_CALL_FRAMES)
         with open(fp5) as f:
             ql_data = json.load(f)
         check("player-noted candidate without the player's quote is not "
@@ -1300,7 +1443,8 @@ def selftest() -> int:
                                       "player_quote": "words the player never said",
                                       "oracle": "made-up oracle fact"},
                          "root_cause_hypothesis": ""})
-        rp6, fp6 = run_critic(tdir, fab, out_dir=os.path.join(tmp, "fabricated"))
+        rp6, fp6 = run_critic(tdir, fab, out_dir=os.path.join(tmp, "fabricated"),
+                             max_frames=ONE_CALL_FRAMES)
         with open(fp6) as f:
             fab_data = json.load(f)
         fab_report = open(rp6).read()

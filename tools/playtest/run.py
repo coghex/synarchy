@@ -13,11 +13,15 @@ graphical instance IS the system under test.
 
 The lockstep loop per turn: pause -> screenshot (F1) -> player agent
 decides from pixels alone -> inject its action (F2) -> record the
-oracle snapshot (F3 widgets, event-log delta — stored for the critic,
-never shown to the player) -> unpause for a fixed wall-clock dt ->
-re-pause. Everything lands in a session-trace directory H2 consumes
-(see trace.py). Wall-clock dt is a deliberate simplicity tradeoff:
---replay reproduces the input sequence, not bit-identical turns.
+pre-step oracle context (F3 widgets, menu, pause state — stored for
+the critic, never shown to the player) -> unpause for a fixed
+wall-clock dt -> re-pause -> record the post-step oracle evidence
+(event-log delta, F4 action outcomes, and the visible-change frame the
+step itself produced, #775 — credited to THIS turn's action, never the
+next turn's). Everything lands in a session-trace directory H2
+consumes (see trace.py). Wall-clock dt is a deliberate simplicity
+tradeoff: --replay reproduces the input sequence, not bit-identical
+turns.
 
 Usage:
   python3 tools/playtest/run.py                       # LLM player, defaults
@@ -106,9 +110,43 @@ def _promote_seed(trace: SessionTrace, oracle: dict) -> None:
 def _count_f4_outcomes(trace: SessionTrace, oracle: dict) -> None:
     """Running total of F4 (#646) action-outcome records seen this
     session — a quick session-level summary; the per-turn records
-    themselves live in each turn's oracle.action_outcomes."""
+    themselves live in each turn's oracle.action_outcomes. Callable
+    with any dict carrying an `action_outcomes` key — including just
+    one of a turn's two drains (#775) — since each drain's records are
+    disjoint and the running total only needs to see each once."""
     trace.meta["f4_outcomes_total"] = (
         trace.meta.get("f4_outcomes_total", 0) + len(oracle.get("action_outcomes") or []))
+
+
+def _merge_oracle(pre_ctx: dict, pre_events: dict, post_events: dict | None,
+                  post_screenshot: str | None, visual_change: bool) -> dict:
+    """Combine a turn's pre-step affordance context (widgets/menu/
+    paused/seed, captured once after inject+settle — #775) with its
+    event-log/action-outcome drains into the single oracle record the
+    trace stores for that turn. `pre_events` is the drain taken at that
+    same pre-step moment (whatever the action produced synchronously
+    while still paused); `post_events` is the second drain taken right
+    after the sim step, when one actually ran (whatever the unpaused
+    `dt` interval itself produced) — concatenating rather than
+    replacing keeps BOTH attributed to this turn: nothing synchronous
+    is lost, and nothing step-produced leaks onto the next turn. `None`
+    for `post_events`/`post_screenshot` (a terminal turn with no step)
+    leaves the merge as pre-only, matching there being no post-step
+    evidence to report."""
+    post_events = post_events or {}
+    return {
+        "player_invisible": True,
+        "widgets": pre_ctx.get("widgets"),
+        "current_menu": pre_ctx.get("current_menu"),
+        "paused": pre_ctx.get("paused"),
+        "world_seed": pre_ctx.get("world_seed"),
+        "event_log_new": (pre_events.get("event_log_new") or [])
+                         + (post_events.get("event_log_new") or []),
+        "action_outcomes": (pre_events.get("action_outcomes") or [])
+                           + (post_events.get("action_outcomes") or []),
+        "visual_change": visual_change,
+        "post_screenshot": post_screenshot,
+    }
 
 
 def _run_step(eng: PlaytestEngine, dt: float, phase: list) -> None:
@@ -234,8 +272,18 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             if calls:
                 time.sleep(settle)  # let the Lua-side click/key consequences land
 
-            # 5. oracle snapshot — recorded, never shown to the player
-            oracle = eng.oracle_snapshot()
+            # 5. pre-step oracle (#775): the affordance context the
+            # player actually acted on (widgets/menu/paused/seed) plus
+            # whatever event/outcome evidence the action already
+            # produced synchronously, while still paused — recorded
+            # regardless of whether a sim step follows, never shown to
+            # the player. Built into `oracle` immediately so a turn
+            # that gets interrupted before its own step completes still
+            # retains at least this much (rather than losing everything
+            # to a step-scoped local that's never assigned).
+            pre_ctx = eng.oracle_context()
+            pre_events = eng.oracle_events()
+            oracle = _merge_oracle(pre_ctx, pre_events, None, None, False)
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
 
@@ -268,6 +316,22 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 for call in post_calls:
                     post_acks.extend(eng.inject([call]))
                     post_sent.append(call)
+
+                # 7. post-step oracle (#775): whatever the unpaused dt
+                # interval itself produced, attributed to THIS turn's
+                # action — never deferred to the next turn's pre-step
+                # capture (which is what silently misattributed it
+                # before, and dropped it outright on a budget-limited
+                # final turn, since there was no "next" iteration left
+                # to do the deferred capture at all).
+                post_events = eng.oracle_events()
+                _count_f4_outcomes(trace, post_events)
+                post_frame = trace.post_frame_path(turn)
+                eng.screenshot(post_frame)
+                visual_change = _file_hash(post_frame) != frame_hash
+                oracle = _merge_oracle(
+                    pre_ctx, pre_events, post_events,
+                    os.path.relpath(post_frame, trace.dir), visual_change)
         finally:
             trace.record_turn({
                 "turn": turn,
@@ -345,6 +409,7 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                 f'.pending.seed = "{force_seed:x}" end)')
         frame = trace.frame_path(turn)
         fb_size = eng.screenshot(frame)
+        frame_hash = _file_hash(frame)
         ts = time.time()
         # Step only when the ORIGINAL turn actually began one (#728):
         # step_phase "not_started" (done/stuck, or interrupted before a
@@ -373,7 +438,12 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                 sent.append(call)
             if entry["pre"]:
                 time.sleep(settle)
-            oracle = eng.oracle_snapshot()
+            # Pre-step oracle (#775) — see run_session's identical
+            # comment: built into `oracle` immediately so an interrupted
+            # step still retains at least this much.
+            pre_ctx = eng.oracle_context()
+            pre_events = eng.oracle_events()
+            oracle = _merge_oracle(pre_ctx, pre_events, None, None, False)
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
             if entry["step_phase"] != "not_started":
@@ -382,6 +452,17 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                     for call in entry["post"]:
                         post_acks.extend(eng.inject([call]))
                         post_sent.append(call)
+                # Post-step oracle (#775): what THIS replay's own step
+                # produced, attributed to this turn — same reasoning as
+                # run_session.
+                post_events = eng.oracle_events()
+                _count_f4_outcomes(trace, post_events)
+                post_frame = trace.post_frame_path(turn)
+                eng.screenshot(post_frame)
+                visual_change = _file_hash(post_frame) != frame_hash
+                oracle = _merge_oracle(
+                    pre_ctx, pre_events, post_events,
+                    os.path.relpath(post_frame, trace.dir), visual_change)
         finally:
             trace.record_turn({
                 "turn": turn, "ts": ts,
@@ -789,7 +870,7 @@ def selftest() -> int:
         # the acked keyDown must still land in both trace and replay,
         # with no step and a null oracle.
         class CrashOnOracle(FakeEngine):
-            def oracle_snapshot(self):
+            def oracle_context(self):
                 raise EngineCrash("console died at oracle snapshot")
 
         odir = os.path.join(tmp, "crash_oracle")
@@ -1037,16 +1118,8 @@ def selftest() -> int:
             def lua(self, code, timeout=0):
                 if code == "return engine.getEventLog()":
                     return next(self.logs)
-                if code == "return world.getSeed()":
-                    return None
                 if code == "return debug.drainActionOutcomes()":
                     return []
-                if code == "return engine.isPaused()":
-                    return False
-                if "dumpWidgets" in code:
-                    return []
-                if "currentMenu" in code:
-                    return "main"
                 raise AssertionError(f"unexpected oracle call: {code}")
 
         repeat = {"text": "repeat", "gameTime": 1, "count": 1}
@@ -1063,7 +1136,7 @@ def selftest() -> int:
             [coalesced, rollover, appended],
         ]
         event_eng = EventLogEngine(logs)
-        deltas = [event_eng.oracle_snapshot()["event_log_new"]
+        deltas = [event_eng.oracle_events()["event_log_new"]
                   for _ in logs]
         check("event-log first snapshot explicitly reports its full baseline",
               deltas[0] == [repeat, stable], str(deltas[0]))
@@ -1077,6 +1150,90 @@ def selftest() -> int:
               deltas[4] == [rollover], str(deltas[4]))
         check("event-log rollover detects a new row matching an evicted row",
               deltas[5] == [appended], str(deltas[5]))
+
+        # 8. #775: an event-log row and an F4 outcome that only become
+        # readable once the sim step has genuinely run must land on the
+        # turn whose action caused them, not the following turn. Planted
+        # on turn 1's SECOND oracle_events() call — the post-step drain,
+        # never the first (pre-step/settle) drain nor any later turn's.
+        class StepEvidenceEngine(FakeEngine):
+            def __init__(self):
+                super().__init__()
+                self._events_calls = 0
+
+            def oracle_events(self):
+                self._events_calls += 1
+                if self._events_calls == 2:
+                    return {"event_log_new": [{"cat": "world", "text": "step landed"}],
+                            "action_outcomes": [{"kind": "probe", "outcome": "accepted"}]}
+                return {"event_log_new": [], "action_outcomes": []}
+
+        sedir = os.path.join(tmp, "step_evidence")
+        setrace = SessionTrace(sedir, {"mode": "selftest-step-evidence"})
+        seeng = StepEvidenceEngine()
+        run_session(seeng, agent_mod.ScriptedAgent(
+            [{"do": "wait"}, {"do": "wait"}]), setrace,
+            turns=2, dt=0.0, max_seconds=None, memory_turns=4,
+            stuck_k=99, settle=0.0)
+        setrace.finish("turn_budget_exhausted")
+        seturns = load_turns(sedir)
+        check("event/outcome available only once the step ran lands on "
+              "the producing turn, not the next",
+              seturns[0]["oracle"]["event_log_new"]
+              == [{"cat": "world", "text": "step landed"}]
+              and seturns[0]["oracle"]["action_outcomes"]
+              == [{"kind": "probe", "outcome": "accepted"}]
+              and seturns[1]["oracle"]["event_log_new"] == []
+              and seturns[1]["oracle"]["action_outcomes"] == [],
+              str([t["oracle"] for t in seturns]))
+
+        # 9. #775: a budget-limited final action must retain its OWN
+        # post-step screenshot/oracle evidence — not lose it outright
+        # for want of a "next turn" to (mis)capture it on. Writes
+        # distinct bytes on exactly the 2nd screenshot call (turn 1's
+        # post-step frame) so visual_change is checked against real
+        # differing bytes, not FakeEngine's one constant PNG (always
+        # equal to itself).
+        class ChangingFrameEngine(FakeEngine):
+            def __init__(self):
+                super().__init__()
+                self._shots = 0
+
+            def screenshot(self, path):
+                self._shots += 1
+                data = self._PNG + (b"\x00" if self._shots == 2 else b"")
+                with open(path, "wb") as f:
+                    f.write(data)
+                self.fb_size = (1280, 720)
+                return self.fb_size
+
+        fdir = os.path.join(tmp, "final_turn_evidence")
+        ftrace = SessionTrace(fdir, {"mode": "selftest-final-turn-evidence"})
+        feng = ChangingFrameEngine()
+        freason = run_session(feng, agent_mod.ScriptedAgent(
+            [{"do": "wait"}, {"do": "wait"}]), ftrace,
+            turns=2, dt=0.0, max_seconds=None, memory_turns=4,
+            stuck_k=99, settle=0.0)
+        ftrace.finish(freason)
+        fturns = load_turns(fdir)
+        check("budget-limited final turn retains its own post-step "
+              "screenshot and oracle evidence",
+              freason == "turn_budget_exhausted"
+              and fturns[-1]["oracle"].get("post_screenshot") is not None
+              and os.path.isfile(os.path.join(
+                  fdir, fturns[-1]["oracle"]["post_screenshot"])),
+              str(fturns[-1]["oracle"]))
+        check("visual_change is derived from THIS turn's own before/after "
+              "frames, not a following turn that may not exist",
+              fturns[0]["oracle"]["visual_change"] is True
+              and fturns[-1]["oracle"]["visual_change"] is False,
+              str([t["oracle"].get("visual_change") for t in fturns]))
+
+        # replay gets the same fix: its own last turn must retain its
+        # own post-step evidence too (reusing the scripted session's
+        # trace already built in step 1/2 above).
+        check("replay's own final turn also retains post-step evidence",
+              load_turns(rdir)[-1]["oracle"].get("post_screenshot") is not None)
 
     if failures:
         print(f"selftest: FAILED ({len(failures)}): {', '.join(failures)}")

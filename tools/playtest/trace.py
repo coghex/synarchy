@@ -31,7 +31,14 @@ consumes. H1 records; it never analyzes.
     │                    False -> "not_started" (its true start state is
     │                    unrecoverable, so it conservatively keeps the
     │                    old no-step replay behavior)
-    ├── frames/          turn_0001.png ... (F1 captures)
+    ├── frames/          turn_0001.png ... (F1 captures) and, for every
+    │                    turn whose sim step actually ran,
+    │                    turn_0001_post.png ... (#775: the frame right
+    │                    after that turn's own unpause-dt-repause step,
+    │                    so even the last, budget-limited turn has its
+    │                    own retained visible-result evidence — never
+    │                    borrowed from a following turn that might not
+    │                    exist)
     └── engine.log       engine stdout/stderr copied at session end
 
 Per-turn record (turns.jsonl):
@@ -55,7 +62,24 @@ Per-turn record (turns.jsonl):
                     fully completed (#728)
     oracle          {..., "player_invisible": true}  — captured for the
                     critic, NEVER shown to the player; null when the
-                    turn was interrupted before the snapshot completed
+                    turn was interrupted before the snapshot completed.
+                    `widgets`/`current_menu`/`paused`/`world_seed` are
+                    the pre-step affordance context (the state the
+                    player actually acted on, captured once after
+                    inject+settle). `event_log_new`/`action_outcomes`
+                    are the UNION of two drains — one taken at that
+                    same pre-step point (whatever the action produced
+                    synchronously while still paused) and, when the
+                    turn's sim step actually ran, a second taken right
+                    after it (whatever the unpaused `dt` interval
+                    itself produced) — both credited to THIS turn's
+                    action, never deferred to the next turn (#775).
+                    `visual_change` (bool) and `post_screenshot` (path,
+                    relative to the trace dir, or null) are this turn's
+                    OWN before/after comparison and post-step frame;
+                    both are only populated when a step ran (never for
+                    a `done`/stuck terminal turn, which has no step to
+                    produce them)
     stuck           bool  (this turn tripped the stuck-loop detector)
 """
 from __future__ import annotations
@@ -84,6 +108,12 @@ class SessionTrace:
 
     def frame_path(self, turn: int) -> str:
         return os.path.join(self.dir, "frames", f"turn_{turn:04d}.png")
+
+    def post_frame_path(self, turn: int) -> str:
+        """The frame captured right after turn N's own sim step (#775)
+        — this turn's OWN visible-result evidence, never the next
+        turn's pre-step frame."""
+        return os.path.join(self.dir, "frames", f"turn_{turn:04d}_post.png")
 
     def record_turn(self, record: dict) -> None:
         self.turns += 1
