@@ -74,13 +74,22 @@ data ConstructDesignation = ConstructDesignation
     , cdProgress ∷ !Float
       -- ^ Build progress 0.0 → 1.0, filled by the build AI (#96). 0 at
       --   designation time.
+    , cdMaterialsPaid ∷ !Bool
+      -- ^ #799: has the piece's full material cost already been taken
+      --   from SOME claimant's inventory? This is the durable payment
+      --   marker — unlike the build AI's in-memory @job.consumed@ (lost
+      --   when its claimant dies), it rides the designation itself, so
+      --   a replacement worker (or the same worker after a save/load)
+      --   never re-sources and re-pays a cost that was already spent.
+      --   False at designation time; append-only field (positional
+      --   Generic Serialize).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 type ConstructDesignations = HM.HashMap (Int, Int) ConstructDesignation
 
--- | Fresh designation: pending, no progress.
+-- | Fresh designation: pending, no progress, unpaid.
 newConstructDesignation ∷ Int → ConstructTarget → ConstructDesignation
-newConstructDesignation z tgt = ConstructDesignation z tgt CsPending 0.0
+newConstructDesignation z tgt = ConstructDesignation z tgt CsPending 0.0 False
 
 -- | Corner-progress state derived from a designation's build progress
 --   (#96) — the input 'World.Mine.Types.digSlopeMask' expects, so a

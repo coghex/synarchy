@@ -962,7 +962,32 @@ function buildTool.handleMouseDown(button, x, y)
             -- both a non-starting building and a structure target).
             local gx, gy = world.pickTile(x, y)
             if gx and gy then
-                construction.cancelDesignation(math.floor(gx), math.floor(gy))
+                gx, gy = math.floor(gx), math.floor(gy)
+                local wid = buildTool.hud and buildTool.hud.worldId
+                if wid then
+                    local constructAi = require("scripts.unit_ai_construct")
+                    -- #799 review round 5: an atomic engine-side pop-and-
+                    -- return replaces the old getDesignationAt + queued
+                    -- cancelDesignation pair (and the Lua-side debounce
+                    -- table it needed) — the ATOMIC delete is what
+                    -- actually serializes competing cancellations (a
+                    -- rapid double right-click, or a new designation
+                    -- quickly replacing the old one at the same tile),
+                    -- which no Lua-side timing heuristic could replicate.
+                    local removed = construction.cancelDesignationForRefund(wid, gx, gy)
+                    -- No-silent-loss policy: a structure designation
+                    -- whose materials were already paid must not just
+                    -- vanish — return them to the ground. Buildings never
+                    -- consume through this path (a separate delivered-
+                    -- material system), so job.category filters them out.
+                    if removed and removed.paid then
+                        constructAi.refundStructureMaterials(removed)
+                    end
+                    -- Interrupt any live claimant so it can't keep
+                    -- ticking progress on its own cached copy of the
+                    -- now-cancelled job and still place the piece.
+                    constructAi.abandonClaim(gx, gy)
+                end
             end
         end
         return true

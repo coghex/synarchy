@@ -11,10 +11,12 @@ module Engine.Scripting.Lua.API.Construct
     , constructCancelDesignationFn
     , constructGetPendingJobsFn
     , constructGetDesignationAtFn
+    , constructCancelDesignationForRefundFn
     , constructGetDesignationCountFn
     , constructNearestDesignationFn
     , constructSetJobStatusFn
     , constructAddJobProgressFn
+    , constructSetMaterialsPaidFn
     , constructSetDesignateTextureFn
     , constructSetLineModeFn
     ) where
@@ -23,7 +25,7 @@ import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -33,6 +35,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Command.Types (WorldCommand(..))
 import World.Construct.Types
+import World.Thread.Command.Cursor.Construct (popConstructDesignation)
 
 -- | construction.setAnchor(pageId, gx, gy) — first-click anchor.
 constructSetAnchorFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -172,6 +175,35 @@ constructGetDesignationAtFn env = do
                         Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
+-- | construction.cancelDesignationForRefund(pageId, gx, gy) → job table
+--   | nil. Synchronous, ATOMIC pop-and-return (#799 review round 5):
+--   unlike cancelDesignation (fire-and-forget, queued on the world
+--   thread), this removes the designation and returns its final state
+--   in ONE atomic step, so a caller computing a materials refund from
+--   the returned job's 'paid' field never races a second caller over
+--   the SAME entry — whether that's a rapid double right-click on one
+--   designation, or a genuinely new designation quickly replacing it
+--   at the same tile. See 'World.Thread.Command.Cursor.Construct.popConstructDesignation'.
+constructCancelDesignationForRefundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructCancelDesignationForRefundFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gxN, Just gyN) → do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                gx = round gxN ∷ Int
+                gy = round gyN ∷ Int
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    mCd ← Lua.liftIO $ popConstructDesignation ws (gx, gy)
+                    case mCd of
+                        Just cd → pushJobTable gx gy cd >> return 1
+                        Nothing → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
 -- | construction.getDesignationCount(pageId) → n.
 constructGetDesignationCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 constructGetDesignationCountFn env = do
@@ -264,6 +296,43 @@ constructAddJobProgressFn env = do
         _ → pure ()
     return 0
 
+-- | construction.setMaterialsPaid(pageId, gx, gy, paid) — build AI (#799)
+--   durably marks a structure designation's material cost as taken from a
+--   claimant's inventory. The durable counterpart to the AI's in-memory
+--   job.consumed: it rides the designation (and so survives claimant
+--   death and save/load), so a replacement worker is never charged the
+--   same cost twice. Silently ignored if the designation no longer
+--   exists.
+--
+--   SYNCHRONOUS (direct atomicModifyIORef', not queued — review round 6):
+--   a queued write raced construction.cancelDesignationForRefund's
+--   synchronous atomic pop — a cancel issued between "materials just
+--   consumed" and "the queued paid=true command finally drains" would
+--   pop cdMaterialsPaid still False, refunding nothing for a cost the
+--   worker's inventory had already lost for good. Lua callbacks
+--   (the AI tick that pays, and any UI click that cancels) run one at a
+--   time on the single scripting thread, so making this write happen
+--   the instant Lua calls it — instead of some later, unspecified world-
+--   thread tick — is what actually closes the window; queuing can't.
+constructSetMaterialsPaidFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetMaterialsPaidFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    paidArg ← Lua.toboolean 4
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws →
+                    atomicModifyIORef' (wsConstructDesignationsRef ws) $ \m →
+                        (HM.adjust (\cd → cd { cdMaterialsPaid = paidArg })
+                                   (round gx, round gy) m, ())
+                Nothing → pure ()
+        _ → pure ()
+    return 0
+
 -- | construction.setDesignateTexture(pageId, category, texHandle) — ghost
 --   texture for committed designations, keyed by category ("structure" |
 --   "building").
@@ -318,6 +387,8 @@ pushJobTable gx gy cd = do
     Lua.setfield (Lua.nth 2) "status"
     Lua.pushnumber (Lua.Number (realToFrac (cdProgress cd)))
     Lua.setfield (Lua.nth 2) "progress"
+    Lua.pushboolean (cdMaterialsPaid cd)
+    Lua.setfield (Lua.nth 2) "paid"
     case cdTarget cd of
         CtStructure (StructurePiece pack kind edge) → do
             Lua.pushstring (TE.encodeUtf8 pack)

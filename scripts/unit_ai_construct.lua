@@ -1,31 +1,27 @@
 -- Unit AI construction jobs (#538 split from unit_ai.lua).
 --
---
 -- Executes construction designations (#95). Two job categories:
 --   * "building": walk to the blueprint and STAKE it — building.spawn
 --     places the Appearing ghost, the designation completes, and the
 --     existing deliver_to_build_site + build_nearby machinery takes
 --     over (materials gate + worker-rate progress, unchanged).
 --   * "structure": the full job — source the piece's materials
---     (inventory → ground → mule, same ladder as delivery), walk
---     beside the tile, pour work into the designation
---     (construction.addJobProgress; the blueprint ghost solidifies as
---     progress accrues), and at 1.0 place the piece via
---     scripts/structures.lua and mark the job complete.
+--     (inventory → ground → mule, same ladder as delivery), walk beside
+--     the tile, pour work into the designation (construction.
+--     addJobProgress; the ghost solidifies as progress accrues), and at
+--     1.0 place the piece via scripts/structures.lua, job complete.
 --
--- Claims: one worker per tile. The synchronous guard is a module-local
--- registry (constructClaims, same shape as digClaims); the engine-side
--- designation status ("claimed") is the durable/observable layer —
--- getPendingJobs carries it, and the sweep below releases a dead or
--- expired claimant's job back to "pending" so another acolyte picks it
--- up. Claims from a save (or a Lua reload) arrive with no registry
--- entry; they're adopted with an anonymous timer and released the same
--- way if nobody refreshes them.
+-- Claims: one worker per tile via a module-local registry (constructClaims,
+-- same shape as digClaims); the engine-side "claimed" status is the
+-- durable/observable layer — getPendingJobs carries it, and the sweep
+-- below releases a dead or expired claimant back to "pending". Claims
+-- from a save/Lua reload arrive with no registry entry; adopted with an
+-- anonymous timer, released the same way if nobody refreshes them.
 --
--- Material races between construct jobs (and against deliveries) are
--- NOT reserved cross-unit: the fetch fails gracefully for the loser,
--- the post-fetch inventory check releases the job back to pending, and
--- the next scan re-plans — same self-heal as the mule-stock race.
+-- Material races (construct jobs vs. deliveries) are NOT reserved
+-- cross-unit: the fetch fails gracefully for the loser, the post-fetch
+-- inventory check releases the job to pending, and the next scan
+-- re-plans — same self-heal as the mule-stock race.
 -----------------------------------------------------------
 
 local core = require("scripts.unit_ai_core")
@@ -60,10 +56,9 @@ local function constructClaimedByOther(key, uid, now, timeout)
     return true
 end
 
--- Structure-pack build costs, lazily loaded from the pack YAML's
--- build: block (keyed by piece KIND — wall edges share one entry).
--- false = pack has no build block (debug/stamp-only pack): its
--- designations are skipped, nothing to cost the job with.
+-- Structure-pack build costs, lazily loaded from the pack YAML's build:
+-- block (keyed by piece KIND — wall edges share one entry). false = no
+-- build block (debug/stamp-only pack): its designations are skipped.
 local packBuildCache = {}
 local function packBuildInfo(pack, kind)
     local p = packBuildCache[pack]
@@ -76,9 +71,8 @@ local function packBuildInfo(pack, kind)
     return p[kind]
 end
 
--- Release the unit's hold on its construct job. toPending flips the
--- engine-side status back so another worker can take the tile;
--- omitted = the designation is already gone (completed / cancelled).
+-- Release the unit's hold on its job. toPending flips engine-side status
+-- back so another worker can take the tile; omitted = already gone.
 local function releaseConstructJob(s, uid, toPending)
     local job = s.constructJob
     if job then
@@ -96,11 +90,28 @@ local function releaseConstructJob(s, uid, toPending)
     s.constructCandidate = nil
 end
 
+-- Externally interrupt a live claimant on (gx,gy) — e.g. a cancelled
+-- paid job (#799): s.constructJob is a LOCAL copy that keeps ticking
+-- regardless of the engine-side designation, and constructUtility only
+-- notices on that unit's own next decision tick — too late to stop it
+-- placing the piece. This clears the claim immediately instead.
+local function abandonClaim(gx, gy)
+    local key = constructKey(gx, gy)
+    local c = constructClaims[key]
+    constructClaims[key] = nil
+    if not (c and c.uid) then return end
+    local s = require("scripts.unit_ai").getState(c.uid)
+    if s and s.constructJob and s.constructJob.x == gx and s.constructJob.y == gy then
+        s.constructJob = nil
+        s.constructCandidate = nil
+    end
+end
+M.abandonClaim = abandonClaim
+
 -- Stale-claim sweep over the scanned job list: a "claimed" job whose
--- claimant died is released immediately; one whose claim went
--- unrefreshed past the timeout (stuck worker, adopted orphan from a
--- save/reload) is released when the clock runs out. Any scanning
--- acolyte runs this, so release doesn't depend on the claimant.
+-- claimant died is released immediately; one unrefreshed past the
+-- timeout (stuck worker, adopted orphan from a save/reload) releases
+-- when the clock runs out. Any scanning acolyte runs this.
 local function sweepConstructClaims(wid, jobs, now, timeout)
     for _, job in ipairs(jobs) do
         if job.status == "claimed" then
@@ -119,9 +130,9 @@ local function sweepConstructClaims(wid, jobs, now, timeout)
     end
 end
 
--- Can this unit source every material the piece needs right now?
--- (inventory + nearby ground + mule stock). Races lose gracefully at
--- fetch time; this is only the "worth claiming" filter.
+-- Can this unit source every material the piece needs (inventory +
+-- ground + mule)? Races lose gracefully at fetch time; this is only
+-- the "worth claiming" filter.
 local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
     for matType, need in pairs(mats or {}) do
         local have = inventoryCountOf(uid, matType)
@@ -139,11 +150,10 @@ local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
     return true
 end
 
--- Nearest viable pending job within construct_scan_range, or nil.
--- Also runs the stale-claim sweep (the scan already paid for the job
--- list). Buildings are always viable (staking needs no materials);
--- structure jobs need a costed pack, a floor under a post, and
--- sourceable materials.
+-- Nearest viable pending job within construct_scan_range, or nil. Also
+-- runs the stale-claim sweep (the scan already paid for the job list).
+-- Buildings are always viable (staking needs no materials); structure
+-- jobs need a costed pack, a floor under a post, and sourceable materials.
 local function findConstructJob(uid, fromX, fromY, params)
     local wid = world.getActiveWorldId()
     if not wid then return nil end
@@ -167,11 +177,12 @@ local function findConstructJob(uid, fromX, fromY, params)
                 viable = true
             else
                 build = packBuildInfo(job.pack, job.kind)
+                -- A durably-paid job (#799) needs no sourceability check.
                 if build
                    and (job.kind ~= "post"
                         or structure.floorZAt(job.x, job.y))
-                   and constructMaterialsAvailable(uid, fromX, fromY,
-                           build.materials, params) then
+                   and (job.paid or constructMaterialsAvailable(uid, fromX, fromY,
+                           build.materials, params)) then
                     viable = true
                 end
             end
@@ -214,9 +225,8 @@ local function constructUtility(uid, s, params)
          * roles.weight(s, "construct_job")
 end
 
--- Stand position: centre of the neighbouring tile nearest the unit —
--- beside the job tile, never on it (the piece appears in the air cell
--- on top; a wall materialising around the builder's ankles is wrong).
+-- Stand position: nearest neighbouring tile's centre — beside the job
+-- tile, never on it (a wall materialising around the builder is wrong).
 local function constructStandPos(job, px, py)
     local bestX, bestY, bestD = nil, nil, math.huge
     for _, o in ipairs({ {1, 0}, {-1, 0}, {0, 1}, {0, -1} }) do
@@ -228,10 +238,9 @@ local function constructStandPos(job, px, py)
     return bestX, bestY
 end
 
--- The structure.hasAt slot this job will place into — mirrors
--- placeStructurePiece's own kind/edge → slot derivation (#805) so the
--- pre-payment occupancy revalidation below checks the EXACT slot the
--- worker is about to write, not just "is this tile occupied at all".
+-- The structure.hasAt slot this job places into — mirrors
+-- placeStructurePiece's kind/edge → slot derivation (#805) so the
+-- pre-payment occupancy check below targets the EXACT slot.
 local function jobSlot(job)
     if job.kind == "floor" then return "floor"
     elseif job.kind == "ceiling" then return "ceiling"
@@ -242,31 +251,48 @@ local function jobSlot(job)
     return nil
 end
 
--- Place the finished piece via the structures module (same programmatic
--- builders locations.lua uses; they read the active world's terrain).
--- Posts designated without a floor are filtered at scan time, but the
--- floor can vanish mid-job — placement then fails and we log rather
--- than strand the job (materials are already spent; the designation
--- still completes, mirroring "no partial-wall visuals" simplicity).
+-- Place via the structures module. Every kind can fail mid-job (its
+-- target chunk unloads, not just a post's vanished floor, #799) — log
+-- rather than strand the job; false lets the caller apply the refund.
 local function placeStructurePiece(job)
     local structures = require("scripts.structures")
+    local ok
     if job.kind == "floor" then
-        structures.floor(job.x, job.y)
+        ok = structures.floor(job.x, job.y)
     elseif job.kind == "ceiling" then
-        structures.ceiling(job.x, job.y)
+        ok = structures.ceiling(job.x, job.y)
     elseif job.kind == "wall" then
-        structures.wall(job.x, job.y, job.edge or "ne")
+        ok = structures.wall(job.x, job.y, job.edge or "ne")
     elseif job.kind == "post" then
-        -- Designations carry no corner (the tool's hover pick does);
-        -- default to "n" until the tool grows a corner picker.
-        if not structures.post(job.x, job.y, job.edge or "n") then
-            engine.logWarn("construct: post at " .. job.x .. "," .. job.y
-                .. " lost its floor mid-job — skipping placement")
-        end
+        -- No corner in the designation (the tool's hover pick does);
+        -- default "n" until the tool grows a corner picker.
+        ok = structures.post(job.x, job.y, job.edge or "n")
     elseif job.kind == "wire" then
-        require("scripts.wire").place(job.x, job.y)
+        ok = require("scripts.wire").place(job.x, job.y)
+    else
+        ok = false
+    end
+    if not ok then
+        engine.logWarn("construct: " .. tostring(job.kind) .. " at " .. job.x
+            .. "," .. job.y .. " failed to place mid-job — skipping placement")
+    end
+    return ok
+end
+
+-- Refund a structure job's ALREADY-PAID materials to the ground (#799):
+-- the FULL pack cost, not this call's own (possibly empty, if resumed)
+-- job.need delta — 'paid' means the full amount already left inventory.
+local function refundStructureMaterials(job)
+    if job.category ~= "structure" then return end
+    local build = job.build or packBuildInfo(job.pack, job.kind)
+    if not build then return end
+    for matType, need in pairs(build.materials or {}) do
+        for _ = 1, need do
+            item.spawnGround(matType, job.x + 0.5, job.y + 0.5)
+        end
     end
 end
+M.refundStructureMaterials = refundStructureMaterials
 
 local function constructExecute(uid, s, params)
     local wid = world.getActiveWorldId()
@@ -295,18 +321,22 @@ local function constructExecute(uid, s, params)
         if cand.category ~= "building" then
             cand.need = {}
             cand.fromGround, cand.fromMule = {}, {}
-            local mule = findTechnomule(info.gridX, info.gridY)
-            for matType, need in pairs(cand.build.materials or {}) do
-                cand.need[matType] = need
-                local have = inventoryCountOf(uid, matType)
-                local short = need - have
-                if short > 0 then
-                    local ground = math.min(short,
-                        groundCountOf(info.gridX, info.gridY, matType,
-                                      params.construct_scan_range))
-                    if ground > 0 then cand.fromGround[matType] = ground end
-                    if short - ground > 0 and mule then
-                        cand.fromMule[matType] = short - ground
+            -- A durably-paid job (#799) needs nothing fetched — cand.need
+            -- stays empty so the walking phase's payment loop no-ops.
+            if not cand.paid then
+                local mule = findTechnomule(info.gridX, info.gridY)
+                for matType, need in pairs(cand.build.materials or {}) do
+                    cand.need[matType] = need
+                    local have = inventoryCountOf(uid, matType)
+                    local short = need - have
+                    if short > 0 then
+                        local ground = math.min(short,
+                            groundCountOf(info.gridX, info.gridY, matType,
+                                          params.construct_scan_range))
+                        if ground > 0 then cand.fromGround[matType] = ground end
+                        if short - ground > 0 and mule then
+                            cand.fromMule[matType] = short - ground
+                        end
                     end
                 end
             end
@@ -407,6 +437,10 @@ local function constructExecute(uid, s, params)
                     end
                 end
                 job.consumed = true
+                -- Durably mark paid (#799): a no-op re-affirmation when
+                -- already paid, else what a replacement (or this unit
+                -- post-save/load) sees as "already spent".
+                construction.setMaterialsPaid(wid, job.x, job.y, true)
             end
             job.phase = "building"
             s.lastConstructAt = now
@@ -433,7 +467,12 @@ local function constructExecute(uid, s, params)
             construction.addJobProgress(wid, job.x, job.y, delta)
         end
         if (job.progress or 0) >= 1.0 then
-            placeStructurePiece(job)
+            if not placeStructurePiece(job) then
+                -- #799: already spent — return to the ground, not the void.
+                refundStructureMaterials(job)
+                reportFailure(uid,
+                    "Construction site changed — materials returned to the ground")
+            end
             construction.setJobStatus(wid, job.x, job.y, "complete")
             grantWorkXP(uid, "construction",
                         params.construct_xp_per_piece or 0)
@@ -453,7 +492,6 @@ local function constructOnExit(uid, s, params)
         job.phase = "walking"
     end
 end
-
 
 M.constructUtility = constructUtility
 M.constructExecute = constructExecute
