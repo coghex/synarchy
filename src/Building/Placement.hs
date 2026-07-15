@@ -14,6 +14,10 @@ import Building.Types
 import World.Tile.Types (WorldTileData, lookupChunk)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Generate (globalToChunk)
+import Location.Types (LocationRegistry)
+import Location.Overlay.Types (LocationOverlay)
+import Location.Placement (placedLocationBounds)
+import Location.Bounds (AbsBounds(..), boundsIntersect)
 
 data PlacementResult
     = Placeable
@@ -26,28 +30,40 @@ data PlacementResult
 --     2. share the same terrain surface Z (flat footprint)
 --     3. have no fluid (water / lava / river)
 --     4. not be occupied by an existing building
---   For the "flat_ground" placement kind, all four. Other kinds may
+--     5. for a `bdIsStarting` def only (#778): not intersect the
+--        absolute bounds of any location placed on this world page —
+--        the starting portal can't land inside a ruin. Ordinary
+--        construction is unaffected, so locations remain occupiable/
+--        repairable/incorporable later.
+--   For the "flat_ground" placement kind, all five. Other kinds may
 --   come later (water-only for docks, sheer cliffs for towers, etc).
 canPlaceAt
     ∷ BuildingManager
     → WorldTileData
+    → LocationRegistry  -- ^ registered location defs (for #778 bounds)
+    → LocationOverlay   -- ^ this world page's placed-location overlay
+    → Int               -- ^ world size in chunks (seam-aware bounds check)
     → BuildingDef
     → Int           -- ^ anchor gx
     → Int           -- ^ anchor gy
     → PlacementResult
-canPlaceAt bm wtd def gx gy
-    | bdPlacement def ≡ "flat_ground" = checkFlatGround bm wtd def gx gy
+canPlaceAt bm wtd locs overlay worldSize def gx gy
+    | bdPlacement def ≡ "flat_ground" =
+        checkFlatGround bm wtd locs overlay worldSize def gx gy
     | otherwise = NotPlaceable
         ("unknown placement kind: " <> bdPlacement def)
 
 checkFlatGround
     ∷ BuildingManager
     → WorldTileData
+    → LocationRegistry
+    → LocationOverlay
+    → Int
     → BuildingDef
     → Int
     → Int
     → PlacementResult
-checkFlatGround bm wtd def gx gy =
+checkFlatGround bm wtd locs overlay worldSize def gx gy =
     let tiles = footprintTiles gx gy (bdTileW def) (bdTileH def)
         zs    = traverse (lookupSurfaceZ wtd) tiles
     in case zs of
@@ -55,8 +71,22 @@ checkFlatGround bm wtd def gx gy =
         Just (z0:rest)
             | any (≠ z0) rest → NotPlaceable "ground is uneven"
             | any (tileHasBuilding bm) tiles → NotPlaceable "tile already occupied"
+            | bdIsStarting def ∧ overlapsAnyLocation worldSize locs overlay def gx gy →
+                NotPlaceable "inside a location's bounds"
             | otherwise → Placeable
         Just [] → NotPlaceable "empty footprint"   -- defensive; tileW/H≥1
+
+-- | True if the def's footprint, anchored at (gx, gy), intersects any
+--   placed location's absolute bounds on this page (#778). A separate
+--   top-level function (not a `where`-bound value) so it's only
+--   evaluated when 'bdIsStarting' short-circuits to it — this module's
+--   Strict pragma would otherwise force it unconditionally.
+overlapsAnyLocation
+    ∷ Int → LocationRegistry → LocationOverlay → BuildingDef → Int → Int → Bool
+overlapsAnyLocation worldSize locs overlay def gx gy =
+    any (boundsIntersect worldSize footprint) (placedLocationBounds locs overlay)
+  where
+    footprint = AbsBounds gx gy (gx + bdTileW def - 1) (gy + bdTileH def - 1)
 
 -- | Surface Z = top of whatever's there (terrain, ice, frozen fluid).
 --   This is what units walk on, and the right reference for "flat
