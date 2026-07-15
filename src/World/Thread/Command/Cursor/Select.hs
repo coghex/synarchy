@@ -176,13 +176,15 @@ handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId tid = do
 
 -- | Directly select the column at (gx, gy) on the given world. The
 --   @Maybe Int@ picks the z: @Just z@ selects that exact tile (the
---   live-picked z from a left-click, so clicking below the surface
---   selects the clicked tile rather than the column top — issue #367);
---   @Nothing@ falls back to the loaded chunk's surface z (the
---   context-menu "Info" path, which has no live pick). Used so a tile
---   can be selected without going through the hover-then-select cursor
---   flow (which races with the per-tick mouse-hover updates from
---   hud.update). No-op if the chunk isn't loaded.
+--   live-picked z from a left-click or a right-click → Info
+--   context-menu selection, so clicking below the surface selects the
+--   clicked tile rather than the column top — issue #367); @Nothing@
+--   falls back to the loaded chunk's surface z, a latent API
+--   affordance no current UI path exercises (both live callers always
+--   resolve a pick and pass its z). Used so a tile can be selected
+--   without going through the hover-then-select cursor flow (which
+--   races with the per-tick mouse-hover updates from hud.update).
+--   No-op if the chunk isn't loaded.
 handleWorldSelectTileByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Maybe Int → IO ()
 handleWorldSelectTileByCoordCommand env _logger pageId gx gy mz = do

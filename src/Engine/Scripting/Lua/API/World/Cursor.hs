@@ -127,11 +127,15 @@ worldClearWorldCursorSelectFn env = do
 -- | world.selectTile(pageId, gx, gy[, z]) — atomically mark the column
 --   at (gx, gy) as the world's selected tile. With @z@ (the live-picked
 --   z from @world.pickTile@) the exact clicked tile is selected — below
---   the surface that is NOT the column top (issue #367). Omit @z@ to use
---   the chunk's surface z (the right-click → Info context-menu path,
---   which has no live pick). Unlike setWorldCursorSelect (which races
---   with per-tick mouse hover updates), this is direct: a one-shot
---   selection that doesn't touch the cursor position.
+--   the surface that is NOT the column top (issue #367). Both live UI
+--   callers (the Info-tool left-click in scripts/hud.lua and the
+--   right-click → Info context-menu callback in
+--   scripts/init_context_menu.lua) resolve a live pick and always pass
+--   its z; omitting @z@ falls back to the chunk's surface z, a latent
+--   API affordance no current UI path exercises. Unlike
+--   setWorldCursorSelect (which races with per-tick mouse hover
+--   updates), this is direct: a one-shot selection that doesn't touch
+--   the cursor position.
 worldSelectTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSelectTileFn env = do
     pageIdArg ← Lua.tostring 1
