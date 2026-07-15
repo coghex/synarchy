@@ -14,6 +14,12 @@ function M.onKeyDown(key)
     -- there's nothing to dismiss is a safe no-op — this is purely a
     -- widening of when the (unchanged) cascade can fire, not new logic.
     if key == "Escape" then
+        -- Remote-settlement confirmation modal (#779) is a real
+        -- input-exclusive modal (LayerModal), not a transient popup —
+        -- dismiss it first, as "Choose Another Site".
+        local remoteWarning = require("scripts.build_tool_remote_warning")
+        if remoteWarning.handleKeyDown(key) then return end
+
         -- Context menu takes priority — close it before any popup /
         -- selection-cleanup runs. Matches "Escape cancels the topmost
         -- transient UI thing" intuition.

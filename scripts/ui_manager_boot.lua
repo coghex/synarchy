@@ -38,6 +38,7 @@ local saveBrowser     = require("scripts.save_browser")
 local hud             = require("scripts.hud")
 local testArena       = require("scripts.test_arena")
 local pauseMenu       = require("scripts.pause_menu")
+local buildToolRemoteWarning = require("scripts.build_tool_remote_warning")
 
 local boxTexSet = nil
 local btnTexSet = nil
@@ -243,6 +244,12 @@ function uiManager.ensurePauseMenu()
     uiManager.moduleReady.pauseMenu = true
 end
 
+function uiManager.ensureBuildToolRemoteWarning()
+    if uiManager.moduleReady.buildToolRemoteWarning then return end
+    buildToolRemoteWarning.init(boxTexSet, menuFont, titleFont, uiManager.fbW, uiManager.fbH)
+    uiManager.moduleReady.buildToolRemoteWarning = true
+end
+
 function uiManager.ensurePopupsAndLogs()
     if uiManager.moduleReady.popupsAndLogs then return end
     popup.bootstrap(boxTexSet, btnTexSet, menuFont, uiManager.fbW, uiManager.fbH)
@@ -257,6 +264,7 @@ function uiManager.ensureGameplayUI()
     uiManager.ensureTooltipStyle()
     uiManager.ensureHUD()
     uiManager.ensurePauseMenu()
+    uiManager.ensureBuildToolRemoteWarning()
     uiManager.ensurePopupsAndLogs()
 end
 
@@ -299,6 +307,9 @@ function uiManager.onFramebufferResize(width, height)
         unitLog.onFramebufferResize(width, height)
     end
     if uiManager.moduleReady.pauseMenu then pauseMenu.onFramebufferResize(width, height) end
+    if uiManager.moduleReady.buildToolRemoteWarning then
+        buildToolRemoteWarning.onFramebufferResize(width, height)
+    end
 
     local currentMenu = uiManager.currentMenu
     if currentMenu == "main" then
@@ -418,6 +429,7 @@ function uiManager.shutdown()
     loadingScreen.shutdown()
     testArena.shutdown()
     pauseMenu.shutdown()
+    buildToolRemoteWarning.shutdown()
     popup.shutdown()
     eventLog.shutdown()
     combatLog.shutdown()

@@ -15,6 +15,7 @@ registerBuildingAPI env = do
   registerLuaFunction "spawn"               (buildingSpawnFn env)
   registerLuaFunction "destroy"             (buildingDestroyFn env)
   registerLuaFunction "canPlaceAt"          (buildingCanPlaceAtFn env)
+  registerLuaFunction "remoteCheck"         (buildingRemoteCheckFn env)
   registerLuaFunction "setGhost"            (buildingSetGhostFn env)
   registerLuaFunction "clearGhost"          (buildingClearGhostFn env)
   registerLuaFunction "getStartingBuildings" (buildingGetStartingBuildingsFn env)

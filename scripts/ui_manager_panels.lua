@@ -18,6 +18,7 @@ local injuryLog   = require("scripts.injury_log_panel")
 local unitLog     = require("scripts.unit_log")
 local popup       = require("scripts.popup")
 local settingsMenu = require("scripts.settings_menu")
+local buildToolRemoteWarning = require("scripts.build_tool_remote_warning")
 
 -- Dispatched when a row in the event-log panel is clicked. Routes
 -- to event_log.onRowClick which re-pops the popup for that entry.
@@ -168,6 +169,12 @@ function uiManager.onBuildMenuIconClick(elemHandle)
         return mod.handleIconClick(elemHandle)
     end
     return false
+end
+
+-- Remote-settlement confirmation modal (#779): "Establish Here" /
+-- "Choose Another Site" buttons.
+function uiManager.onBuildToolRemoteWarningClick(elemHandle)
+    return buildToolRemoteWarning.handleClick(elemHandle)
 end
 
 -- Cargo inventory popup tab strip + per-row right-click. The popup

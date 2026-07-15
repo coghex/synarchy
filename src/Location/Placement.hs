@@ -9,12 +9,13 @@
 --   been visited or its geometry stamped.
 module Location.Placement
     ( placedLocationBounds
+    , nearestLocationDistance
     ) where
 
 import UPrelude
 import Location.Types (LocationRegistry, lookupLocation, ldBounds)
 import Location.Overlay.Types (LocationOverlay, overlayToList)
-import Location.Bounds (AbsBounds, translateBounds)
+import Location.Bounds (AbsBounds, translateBounds, nearestBoundsDistance)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 
 -- | Absolute bounds for every placed location whose def is currently
@@ -30,3 +31,12 @@ placedLocationBounds registry overlay =
           gx   = cx * chunkSize + half
           gy   = cy * chunkSize + half
     ]
+
+-- | Nearest seam-aware footprint→placed-location distance across
+--   every location placed on this page's overlay (#779); 'Nothing'
+--   when the page has none.
+nearestLocationDistance
+    ∷ Int → LocationRegistry → LocationOverlay → AbsBounds → Maybe Int
+nearestLocationDistance worldSize registry overlay footprint =
+    nearestBoundsDistance worldSize footprint
+        (placedLocationBounds registry overlay)

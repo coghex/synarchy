@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.Buildings.Spawn
     ( buildingSpawnFn
     , buildingDestroyFn
     , buildingCanPlaceAtFn
+    , buildingRemoteCheckFn
     , buildingSetGhostFn
     , buildingClearGhostFn
     ) where
@@ -17,7 +18,10 @@ import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
-import Building.Placement (canPlaceAt, PlacementResult(..))
+import Building.Placement
+    ( canPlaceAt, PlacementResult(..), RemoteCheck(..), remoteCheck, isRemote
+    )
+import Location.Bounds (remotePortalThresholdTiles)
 import Unit.Pathing.Cost (lookupTerrainZ)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Tile.Types (WorldTileData)
@@ -151,6 +155,47 @@ buildingCanPlaceAtFn env = do
             Lua.pushboolean False
             Lua.pushstring "bad arguments"
             return 2
+
+-- * Remote-settlement check (#779)
+
+-- | building.remoteCheck(defName, gx, gy) — (remote, distance,
+--   thresholdTiles). For a starting building, `distance` is the
+--   seam-aware nearest footprint→placed-location distance among every
+--   location placed on the ACTIVE world page, or nil when that page
+--   has none at all (still `remote = true` in that case — see
+--   'Building.Placement.RemoteCheck'). Always @(false, nil,
+--   thresholdTiles)@ for a non-starting def, an unknown def, or when
+--   there's no active world — mirrors 'canPlaceAt's own #778 gate on
+--   `bdIsStarting`. Cheap enough to call once per click, unlike
+--   'canPlaceAt' which runs every ghost-preview frame.
+buildingRemoteCheckFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingRemoteCheckFn env = do
+    nameArg ← Lua.tostring 1
+    xArg    ← Lua.tointeger 2
+    yArg    ← Lua.tointeger 3
+    check ← case (nameArg, xArg, yArg) of
+        (Just nameBS, Just x, Just y) → Lua.liftIO $ do
+            let defName = TE.decodeUtf8Lenient nameBS
+                gx      = fromIntegral x
+                gy      = fromIntegral y
+            bm ← readIORef (buildingManagerRef env)
+            mActive ← activeWorldPage env
+            case (HM.lookup defName (bmDefs bm), mActive) of
+                (Just def, Just (_pid, ws)) → do
+                    locs ← readIORef (locationDefsRef env)
+                    mParams ← readIORef (wsGenParamsRef ws)
+                    let overlay = maybe emptyLocationOverlay
+                                        wgpLocationOverlay mParams
+                        worldSizeChunks = maybe 0 wgpWorldSize mParams
+                    pure (remoteCheck locs overlay worldSizeChunks def gx gy)
+                _ → pure NotStartingBuilding
+        _ → pure NotStartingBuilding
+    Lua.pushboolean (isRemote check)
+    case check of
+        RemoteDistance (Just d) → Lua.pushinteger (fromIntegral d)
+        _                       → Lua.pushnil
+    Lua.pushinteger (fromIntegral remotePortalThresholdTiles)
+    return 3
 
 -- * Ghost preview
 
