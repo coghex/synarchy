@@ -23,6 +23,7 @@ import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
+import Engine.Input.Inject (windowToFb)
 import qualified Engine.Core.Queue as Q
 import UI.Types (ElementHandle(..))
 import UI.InputOwnership (routeScroll, isGameplayBlocked)
@@ -35,6 +36,9 @@ dispatchScrollEvent env inpSt x y = do
     logger ← readIORef (loggerRef env)
     logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
 
+    (winW, winH) ← readIORef (windowSizeRef env)
+    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+
     -- Check both shifts independently: released keys keep a map
     -- entry with keyPressed=False, so a nested left-then-right
     -- lookup would stop consulting RightShift after the first
@@ -43,25 +47,34 @@ dispatchScrollEvent env inpSt x y = do
         shiftHeld = shiftDown GLFW.Key'LeftShift ∨ shiftDown GLFW.Key'RightShift
         (rawX, rawY) = inpMousePos inpSt
 
+        -- F4 (#774): the recorded `where` must share F1/F2/F3's
+        -- framebuffer-pixel space — 'windowToFb' is the inverse of
+        -- 'Engine.Input.Inject.fbToWindow', falling back to the raw
+        -- window coordinate on a degenerate viewport.
+        toFb ∷ (Double, Double) → (Double, Double)
+        toFb wp = case windowToFb (winW, winH) (fbW, fbH) wp of
+            Just fb → fb
+            Nothing → wp
+
         -- F4 (#730) Layer A: exactly one record per H1 `scroll`
         -- action — InputScrollEvent carries no bracketing internal
         -- events (unlike key taps/types), so no batching is
         -- needed. Coordinates are the CURRENT cursor position
         -- (#730 review — a scroll event carries no position of
-        -- its own), in the same window-space 'recordRouteOutcome'
-        -- above uses for clicks.
+        -- its own), converted to framebuffer space (#774) same as
+        -- 'Engine.Input.Thread.Mouse.dispatchMouseEvent's
+        -- recordRouteOutcome.
         recordScrollOutcome ∷ Text → Text → Maybe Word32 → IO ()
         recordScrollOutcome outcome domain target = do
             gt ← readIORef (gameTimeRef env)
+            let (whereX, whereY) = toFb (rawX, rawY)
             pushActionOutcome (actionOutcomeRef env) ActionOutcome
                 { aoTs = gt, aoKind = "input.scroll", aoOutcome = outcome
-                , aoWhereX = Just rawX, aoWhereY = Just rawY, aoTarget = target
+                , aoWhereX = Just whereX, aoWhereY = Just whereY, aoTarget = target
                 , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
                 , aoReason = Nothing, aoHandler = Just domain
                 }
 
-    (winW, winH) ← readIORef (windowSizeRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
     let scaleX = fromIntegral fbW / fromIntegral winW
         scaleY = fromIntegral fbH / fromIntegral winH
         mouseX = realToFrac rawX * scaleX

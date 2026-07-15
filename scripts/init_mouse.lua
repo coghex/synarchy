@@ -17,6 +17,11 @@ local MOUSE_RIGHT = 2
 -- (e.g. "deadclick"/"noop"). Debug-only armed-spawn/item/fluid/terrain/
 -- location/structure branches below are deliberately NOT instrumented —
 -- they're developer tooling the naive playtest persona never drives.
+--
+-- Unreachable (#774 review): every call below is inside M.onMouseDown,
+-- which shadows this name with a version forwarding through
+-- unit_drag_select.lua's deferClick — THAT converts window→framebuffer
+-- for the F4 oracle; this dead copy never runs.
 local function recordClick(handler, outcome, x, y, reason)
     debug.recordOutcome{
         kind = "input.click",

@@ -54,6 +54,7 @@ module Engine.Input.Inject
   , resolveMods
   , resolveKeyName
   , fbToWindow
+  , windowToFb
   , noMods
   , moveSequence
   , clickSequence
@@ -130,6 +131,23 @@ fbToWindow (winW, winH) (fbW, fbH) (x, y)
     | otherwise = Just
         ( x * fromIntegral winW / fromIntegral fbW
         , y * fromIntegral winH / fromIntegral fbH )
+
+-- | Window coordinates (the input pipeline's space) → framebuffer
+--   pixels (F1/F2/F3's oracle space, #774). The inverse of 'fbToWindow'
+--   — used by the F4 Layer-A recorders ("Engine.Input.Thread.Mouse",
+--   "Engine.Input.Thread.Scroll") to convert a recorded click/scroll
+--   location, never the routing/hit-test coordinates those modules
+--   dispatch to Lua or the UI hit-tester. Nothing when either size is
+--   degenerate (minimized window / headless zeros); callers fall back
+--   to the raw window coordinate rather than propagate NaN into a
+--   recorded outcome.
+windowToFb ∷ (Int, Int) → (Int, Int) → (Double, Double)
+           → Maybe (Double, Double)
+windowToFb (winW, winH) (fbW, fbH) (x, y)
+    | winW ≤ 0 ∨ winH ≤ 0 ∨ fbW ≤ 0 ∨ fbH ≤ 0 = Nothing
+    | otherwise = Just
+        ( x * fromIntegral fbW / fromIntegral winW
+        , y * fromIntegral fbH / fromIntegral winH )
 
 modDowns ∷ ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 modDowns (ks, m) = [ InputKeyEvent k GLFW.KeyState'Pressed m | k ← ks ]

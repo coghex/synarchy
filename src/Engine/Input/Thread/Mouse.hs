@@ -22,6 +22,7 @@ import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
+import Engine.Input.Inject (windowToFb)
 import qualified Engine.Core.Queue as Q
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
@@ -46,6 +47,20 @@ dispatchMouseEvent env inpSt btn pos state = do
         (x, y) = pos
     logger ← readIORef (loggerRef env)
 
+    (winW, winH) ← readIORef (windowSizeRef env)
+    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    -- F4 (#774): the oracle's recorded `where` must share F1/F2/F3's
+    -- framebuffer-pixel space, not the window coords the routing/
+    -- hit-test math below (mouseX/mouseY) and every Lua-dispatched
+    -- event still use — 'windowToFb' is the inverse of
+    -- 'Engine.Input.Inject.fbToWindow'. Falls back to the raw window
+    -- coordinate on a degenerate viewport, same as every other
+    -- degenerate-guarded conversion in this module.
+    let toFb ∷ (Double, Double) → (Double, Double)
+        toFb wp = case windowToFb (winW, winH) (fbW, fbH) wp of
+            Just fb → fb
+            Nothing → wp
+
     -- F4 (#646, #730 review round 2) Layer A: routes that consume a
     -- press WITHOUT ever queuing a Lua event (ClickSwallowed, and a
     -- ClickUI whose widget has no handler for this button) are
@@ -67,15 +82,18 @@ dispatchMouseEvent env inpSt btn pos state = do
     let recordRouteOutcome ∷ Text → Maybe Text → IO ()
         recordRouteOutcome outcome handler = do
             gt ← readIORef (gameTimeRef env)
+            let (whereX, whereY) = toFb (x, y)
             pushActionOutcome (actionOutcomeRef env) ActionOutcome
                 { aoTs = gt, aoKind = "input.click", aoOutcome = outcome
                 -- The real click position (review round 9 — these
                 -- routes previously hard-coded Nothing/Nothing,
                 -- losing the location entirely; the critic needs it
-                -- to identify a phantom affordance). Window coords,
-                -- matching what scripts/init_mouse.lua's recordClick
-                -- records for the game-chain routes.
-                , aoWhereX = Just x, aoWhereY = Just y, aoTarget = Nothing
+                -- to identify a phantom affordance). Framebuffer
+                -- coords (#774 — converted from the window-space x/y
+                -- used for routing/Lua dispatch below), matching
+                -- scripts/init_mouse.lua's recordClick for the
+                -- game-chain routes.
+                , aoWhereX = Just whereX, aoWhereY = Just whereY, aoTarget = Nothing
                 , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
                 , aoReason = Nothing, aoHandler = handler
                 }
@@ -90,9 +108,6 @@ dispatchMouseEvent env inpSt btn pos state = do
     mRoute ← if state ≢ GLFW.MouseButtonState'Pressed then return Nothing else fmap Just $ do
         logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
                                 <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
-
-        (winW, winH) ← readIORef (windowSizeRef env)
-        (fbW, fbH) ← readIORef (framebufferSizeRef env)
 
         let scaleX = fromIntegral fbW / fromIntegral winW
             scaleY = fromIntegral fbH / fromIntegral winH
@@ -361,13 +376,20 @@ dispatchMouseEvent env inpSt btn pos state = do
                 Nothing → return ()
                 Just (clickKind, callback, px, py) → do
                     gt ← readIORef (gameTimeRef env)
+                    -- The threshold compare stays in window pixels
+                    -- (dx/dy/movedPx) — uiDragThresholdPx is defined
+                    -- to match scripts/unit_drag_select.lua's window-
+                    -- space DRAG_THRESHOLD; only the chosen location is
+                    -- converted to framebuffer space (#774) for the
+                    -- recorded outcome.
                     let dx = x - px
                         dy = y - py
                         movedPx = sqrt (dx * dx + dy * dy)
-                        (kind, whereX, whereY) =
+                        (kind, whereXWin, whereYWin) =
                             if movedPx ≥ uiDragThresholdPx
                                 then ("input.drag", x, y)
                                 else (clickKind, px, py)
+                        (whereX, whereY) = toFb (whereXWin, whereYWin)
                     pushActionOutcome (actionOutcomeRef env) ActionOutcome
                         { aoTs = gt, aoKind = kind, aoOutcome = "accepted"
                         , aoWhereX = Just whereX, aoWhereY = Just whereY

@@ -13,7 +13,10 @@
 -- Coordinate notes: mouse events deliver window-pixel coords; the
 -- selection rect is rendered as a UI element which lives in
 -- framebuffer-pixel coords. We store window coords and scale them
--- to FB at render and at the Haskell hit-test boundary.
+-- to FB at render and at the Haskell hit-test boundary. The F4
+-- (#774) action-outcome records this module pushes are the one
+-- other place that needs framebuffer coords — see toFbCoords below —
+-- so they share F1/F2/F3's oracle coordinate space.
 --
 -- The module self-registers in package.loaded so engine.loadScript
 -- and require see the same instance — same reason as scripts/debug.lua.
@@ -86,6 +89,27 @@ local EDGE_THICKNESS = 2
 
 local function isShiftHeld()
     return engine.isKeyDown("LeftShift") or engine.isKeyDown("RightShift")
+end
+
+-- F4 (#774): the recorded Layer-A `where` must share F1/F2/F3's
+-- framebuffer-pixel oracle space, not the window coords mouse events
+-- deliver (see the coordinate note at the top of this file). Box-select
+-- geometry (pastThreshold, startX/startY/currX/currY, updateRectVisual's
+-- own scale) stays in window space untouched — only the recorded
+-- location converts. Falls back to the raw coordinate when EITHER side
+-- of the ratio is unusable (review round 1: a minimized/hidden window
+-- can report a zero framebuffer while the window size itself stays
+-- positive, and checking only the window side silently collapsed every
+-- recorded location to (0,0) instead of falling back) — mirrors the
+-- engine-side windowToFb's all-four-dimensions guard.
+local function toFbCoords(x, y)
+    local ww, wh = engine.getWindowSize()
+    local fbW, fbH = engine.getFramebufferSize()
+    if not ww or ww <= 0 or not wh or wh <= 0
+       or not fbW or fbW <= 0 or not fbH or fbH <= 0 then
+        return x, y
+    end
+    return x * (fbW / ww), y * (fbH / wh)
 end
 
 -- Merge two ID arrays into a deduped array.
@@ -257,10 +281,11 @@ end
 -- primary Layer A record per H1 action). Only fires once the drag
 -- actually reached "dragging" (crossed DRAG_THRESHOLD).
 local function recordDragOutcome(outcome, x, y, requested, applied, reason)
+    local fx, fy = toFbCoords(x, y)
     debug.recordOutcome{
         kind = "input.drag",
         outcome = outcome,
-        where = { x = x, y = y },
+        where = { x = fx, y = fy },
         handler = "unit_drag_select",
         requested = requested,
         applied = applied,
@@ -274,10 +299,11 @@ end
 -- gesture is known to have stayed a plain click (never reached
 -- "dragging").
 local function recordDeferredClick(pc)
+    local fx, fy = toFbCoords(pc.x, pc.y)
     debug.recordOutcome{
         kind = "input.click",
         outcome = pc.outcome or "accepted",
-        where = { x = pc.x, y = pc.y },
+        where = { x = fx, y = fy },
         handler = pc.handler,
         reason = pc.reason,
     }
