@@ -791,7 +791,7 @@ function buildTool.handleMouseDown(button, x, y)
         buildTool.state.lastHoverTile = { igx, igy }
 
         if target.kind == "building" then
-            local valid = building.canPlaceAt(target.def, igx, igy)
+            local valid, invalidReason = building.canPlaceAt(target.def, igx, igy)
             if valid then
                 if power.isPlaceable(target.def) then
                     local id, err = buildTool.commitPlacement(target.def, igx, igy)
@@ -865,11 +865,15 @@ function buildTool.handleMouseDown(button, x, y)
             else
                 -- F4 (#646): building.canPlaceAt refused the tile —
                 -- previously silent beyond the placement mode simply
-                -- staying open (review round 1).
+                -- staying open (review round 1). #778: forward the
+                -- specific reason (e.g. "inside a location's bounds")
+                -- instead of a generic placeholder, so it distinguishes
+                -- location overlap from uneven ground / unloaded terrain
+                -- / existing occupation.
                 debug.recordOutcome{
                     kind = "buildTool.commitPlacement", outcome = "rejected",
                     where = { x = igx, y = igy },
-                    reason = "invalid placement tile",
+                    reason = invalidReason or "invalid placement tile",
                 }
             end
         else -- "structure": DF-style two-click rectangle (or, for wire, a

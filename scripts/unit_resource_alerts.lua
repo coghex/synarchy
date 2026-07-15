@@ -96,6 +96,15 @@ function M.checkSurvivalAlerts(uid, resourceName, value, maxVal, pose, info)
     local state = unitAlertState[uid] or {}
 
     if resourceName == "calories" then
+        -- "is starving" here fires only once the store is FULLY EMPTY —
+        -- a narrower death-clock warning tied to Phase 4 organ failure
+        -- (unit_resource_energy.tickStarvation only catabolizes body
+        -- mass once calories <= 0 too). This is deliberately a
+        -- DIFFERENT, later signal than scripts.starvation's hungry/
+        -- starving movement+strength bands (#806), which trigger well
+        -- above 0 so the player gets advance warning before this alert
+        -- (and the death clock behind it) ever fires — see the module
+        -- comment there for the shared threshold definitions.
         local rearm = maxVal * STARVATION_REARM_FRAC
         if not state.starvation then
             if value <= 0 then

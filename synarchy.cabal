@@ -478,6 +478,7 @@ library
                      Location.Bounds
                      Location.Overlay.Types
                      Location.Overlay
+                     Location.Placement
                      Engine.Asset.YamlLocations
                      Engine.Scripting.Lua.API.Locations
                      LootTable.Types
@@ -1017,6 +1018,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scene.BatchMerge
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
+                   Test.Headless.Building.Placement
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 , containers
