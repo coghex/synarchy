@@ -83,13 +83,31 @@ jobs:
             strip
             exit 0
           fi
-          drifted_files=$(git diff --name-only "$BEFORE" "$AFTER")
+          if [ -z "$AFTER" ] || [ "$AFTER" = "0000000000000000000000000000000000000000" ]; then
+            echo "no usable 'after' SHA -- can't confirm this is a no-op update, stripping"
+            strip
+            exit 0
+          fi
+          if ! git cat-file -e "$AFTER^{commit}" 2>/dev/null; then
+            echo "'after' SHA not reachable in this checkout -- can't confirm, stripping"
+            strip
+            exit 0
+          fi
+          if ! drifted_files=$(git diff --name-only "$BEFORE" "$AFTER"); then
+            echo "couldn't diff 'before'..'after' -- can't confirm, stripping"
+            strip
+            exit 0
+          fi
           if [ -z "$drifted_files" ]; then
             echo "push introduced no file changes -- stripping (unexpected, be safe)"
             strip
             exit 0
           fi
-          pr_files=$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only)
+          if ! pr_files=$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only); then
+            echo "couldn't fetch this PR's own file list -- can't confirm, stripping"
+            strip
+            exit 0
+          fi
           overlap=$(comm -12 <(printf '%s\n' "$pr_files" | sort -u) <(printf '%s\n' "$drifted_files" | sort -u))
           if [ -n "$overlap" ]; then
             echo "push touched PR-owned file(s): $overlap -- stripping"
