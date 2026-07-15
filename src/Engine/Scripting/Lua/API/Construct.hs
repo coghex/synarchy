@@ -25,7 +25,7 @@ import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), activeWorldState, activeWorldPage)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -302,7 +302,18 @@ constructAddJobProgressFn env = do
 --   job.consumed: it rides the designation (and so survives claimant
 --   death and save/load), so a replacement worker is never charged the
 --   same cost twice. Silently ignored if the designation no longer
---   exists by the time the command runs.
+--   exists.
+--
+--   SYNCHRONOUS (direct atomicModifyIORef', not queued — review round 6):
+--   a queued write raced construction.cancelDesignationForRefund's
+--   synchronous atomic pop — a cancel issued between "materials just
+--   consumed" and "the queued paid=true command finally drains" would
+--   pop cdMaterialsPaid still False, refunding nothing for a cost the
+--   worker's inventory had already lost for good. Lua callbacks
+--   (the AI tick that pays, and any UI click that cancels) run one at a
+--   time on the single scripting thread, so making this write happen
+--   the instant Lua calls it — instead of some later, unspecified world-
+--   thread tick — is what actually closes the window; queuing can't.
 constructSetMaterialsPaidFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 constructSetMaterialsPaidFn env = do
     pageIdArg ← Lua.tostring 1
@@ -312,9 +323,13 @@ constructSetMaterialsPaidFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (worldQueue env) $
-                WorldSetConstructMaterialsPaid pageId (round gx) (round gy)
-                    paidArg
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws →
+                    atomicModifyIORef' (wsConstructDesignationsRef ws) $ \m →
+                        (HM.adjust (\cd → cd { cdMaterialsPaid = paidArg })
+                                   (round gx, round gy) m, ())
+                Nothing → pure ()
         _ → pure ()
     return 0
 

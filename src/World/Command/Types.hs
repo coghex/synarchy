@@ -141,14 +141,6 @@ data WorldCommand
         --   ghost marker's alpha ramps with it. Completion (placing
         --   the piece + removing the designation) stays Lua-side —
         --   the AI resolves art/materials, so it owns final placement.
-    | WorldSetConstructMaterialsPaid WorldPageId Int Int Bool
-        -- ^ Build AI (#799): durably mark a structure designation's full
-        --   material cost as already taken from a claimant's inventory
-        --   (or, in principle, un-mark it). This is the DURABLE payment
-        --   record — it rides the designation itself, unlike the AI's
-        --   in-memory @job.consumed@, which a dead claimant takes with
-        --   it — so a replacement worker (or the same worker after a
-        --   save/load) is never charged the cost a second time.
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
         -- ^ Ghost texture for committed construction designations, keyed
         --   by target category ("structure" | "building").

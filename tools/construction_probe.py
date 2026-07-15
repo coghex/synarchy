@@ -745,6 +745,24 @@ def phase_cancel_refund(port: int) -> None:
     check("wire.place returns false for an unloaded-chunk target",
           send(port, "return require('scripts.wire').place(503, 500)") == "false")
 
+    # --- (f) the exact race a review round found: setMaterialsPaid
+    # immediately followed by cancelDesignationForRefund must observe
+    # paid=true, not a stale queued write that hasn't landed yet.
+    # construction.setMaterialsPaid is now a SYNCHRONOUS direct write
+    # (not queued), so this can never race the atomic cancel pop.
+    px6, py6 = 1600, 700
+    ux6, uy6 = pick_tile(port, px6, py6)
+    send(port, f"construction.designate('{w}', {ux6}, {uy6}, {ux6}, {uy6}, "
+               "'structure', 'dungeon_1', 'floor'); return 'ok'")
+    time.sleep(0.5)
+    send(port, f"construction.setMaterialsPaid('{w}', {ux6}, {uy6}, true); "
+               "return 'ok'")
+    popped = send_json(port,
+        f"return construction.cancelDesignationForRefund('{w}', {ux6}, {uy6})")
+    check("setMaterialsPaid immediately followed by a cancel pop "
+          "observes paid=true, not a stale queued write",
+          isinstance(popped, dict) and popped.get("paid") is True)
+
     send(port, "local bt = require('scripts.build_tool'); "
                "bt.exitPlacement(); return 'ok'")
 
