@@ -161,6 +161,23 @@ function unitResources.shutdown()
     engine.logInfo("Unit resources tick shut down")
 end
 
+-- Backfill "strength_body" (#806) for units loaded from a save
+-- predating it: recomputeBodyDerivedStats only ever ran again on a
+-- body-composition CHANGE, so a unit that was never mass-changed after
+-- load would otherwise carry no strength_body and starvation.
+-- refreshStrength would silently no-op on it forever. Recomputing here
+-- is idempotent (height/body_mass/lean_mass/strength_base are all
+-- persisted, so it re-derives the SAME "strength" a unit already had)
+-- and safely no-ops on a bodyless unit, so it's simplest to run for
+-- every survivor rather than special-case the missing-key check. A
+-- loaded unit that was saved mid-discount briefly reads full strength
+-- until the next physiology tick reapplies its current calorie band.
+function unitResources.onSaveLoaded(survUnitIds, _survBuildingIds)
+    for _, uid in ipairs(survUnitIds or {}) do
+        unit.recomputeBody(uid)
+    end
+end
+
 -- Exposed for debug console: inspect what a unit's drain/regen
 -- numbers are. Returns nil if the def isn't configured.
 function unitResources.getConfig(defName)
