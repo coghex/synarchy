@@ -24,6 +24,7 @@ module World.Construct.Types
     , constructStatusToText
     , textToConstructStatus
     , constructTargetCategory
+    , constructDesignationFootprint
     ) where
 
 import UPrelude
@@ -31,6 +32,7 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
+import Building.Types (BuildingDef(..), footprintTiles)
 
 -- | Abstract structure-piece descriptor: pack + kind (+ wall edge).
 --   Deliberately art-free — the build AI (#96) resolves this to the
@@ -110,3 +112,26 @@ textToConstructStatus _          = Nothing
 constructTargetCategory ∷ ConstructTarget → Text
 constructTargetCategory (CtStructure _) = "structure"
 constructTargetCategory (CtBuilding  _) = "building"
+
+-- | Tile footprint one designation renders across (#95 blueprint ghost
+--   requirement, completed by #807). A structure piece is already one
+--   map entry PER TILE — the designation tool tiles the whole
+--   rectangle at commit time (Construct.hs's handleWorldDesignateConstructCommand),
+--   so it renders as just its own anchor here. A building target is
+--   the opposite: ALWAYS one anchor-only map entry, one durable job,
+--   regardless of the def's footprint size — this is what expands
+--   that single entry into the full 'footprintTiles' rectangle using
+--   the SAME anchor/tile_size convention 'Building.Placement.canPlaceAt'
+--   and 'building.spawn' use, so the render pass can't drift from
+--   placement. A def missing from the supplied map (a broken save or
+--   mod) falls back to the anchor tile alone rather than guessing
+--   geometry — the caller is responsible for surfacing that
+--   observably (see 'World.Render.CursorQuads').
+constructDesignationFootprint
+    ∷ HM.HashMap Text BuildingDef → (Int, Int) → ConstructDesignation
+    → [(Int, Int)]
+constructDesignationFootprint defs (ax, ay) cd = case cdTarget cd of
+    CtStructure _      → [(ax, ay)]
+    CtBuilding defName → case HM.lookup defName defs of
+        Just def → footprintTiles ax ay (bdTileW def) (bdTileH def)
+        Nothing  → [(ax, ay)]

@@ -4,6 +4,7 @@ module World.Cursor.Types
     ) where
 
 import UPrelude
+import qualified Data.HashSet as HS
 import Engine.Asset.Handle (TextureHandle)
 
 data CursorState = CursorState
@@ -76,6 +77,12 @@ data CursorState = CursorState
     --   info panel). Mutually exclusive with unit/building selection
     --   (enforced by the Lua click routing).
     , selectedGroundItem ∷ Maybe Int
+    -- | Building def names already warned about after a committed
+    --   CtBuilding designation referenced one missing from bmDefs
+    --   (#807). renderWorldCursorQuads runs every frame, so this dedups
+    --   the log to one warning per distinct missing name per session
+    --   instead of flooding it.
+    , constructMissingDefsWarned ∷ HS.HashSet Text
     }
 
 emptyCursorState ∷ CursorState
@@ -107,4 +114,5 @@ emptyCursorState =
         , tillDesignTexture = Nothing
         , plantDesignTexture = Nothing
         , selectedGroundItem = Nothing
+        , constructMissingDefsWarned = HS.empty
         }
