@@ -278,11 +278,18 @@ spec = do
 
                 -- Flipped ABOVE the display box (100+40=140 down to
                 -- 200 has no room for 2*36=72px) and NOT flipped
-                -- horizontally, at the exact placePopup-resolved rect.
+                -- horizontally. #747 review round 2: the PLACED rect
+                -- accounts for the scrollbar's own minimum-track floor,
+                -- not just the row-based listHeight — with 2 rows the
+                -- scrollbar's real total height is 40*2+4*2+20=108 (its
+                -- 20px track floor exceeds 72-80-8), so the popup places
+                -- as if 108px tall (clamped to y=0, since 100px above
+                -- isn't enough for 108 either) even though the list BOX
+                -- itself stays row-sized (72px).
                 listInfo ← evalDebug ls
                     "local i = UI.getElementInfo(_G.__findByName('test_dd_list')); \
                     \return i.x, i.y, i.width, i.height"
-                listInfo `shouldBe` "50.0\t28.0\t100.0\t72.0"
+                listInfo `shouldBe` "50.0\t0.0\t100.0\t72.0"
 
                 -- Scrolling: row 1's TEXT label shows option 1 before,
                 -- option 2 after.
@@ -296,14 +303,26 @@ spec = do
 
                 -- Final hit bounds: a point at the HAND-COMPUTED centre
                 -- of row 1's clickable hit-sprite (derived independently
-                -- from the placePopup rect above: listX=50, listY=28,
-                -- row 1 spans y∈[28,64), x∈[50,150)) resolves to that
+                -- from the placePopup rect above: listX=50, listY=0,
+                -- row 1 spans y∈[0,36), x∈[50,150)) resolves to that
                 -- same row's hit handle — proving the resolved
                 -- placement, not just an internal field, is what a real
                 -- click would land on.
                 hitMatches ← evalDebug ls
-                    "return UI.findElementAt(100, 46) == _G.__findByName('test_dd_opt_hit_1')"
+                    "return UI.findElementAt(100, 18) == _G.__findByName('test_dd_opt_hit_1')"
                 hitMatches `shouldBe` "true"
+
+                -- #747 review round 2 regression: the scrollbar's own
+                -- lower controls (its bottom button sits within
+                -- listY..listY+dd.listHeight=0..108, well past the list
+                -- box's own 72px) must be reachable — a click there must
+                -- resolve to the scrollbar, not be swallowed by
+                -- onClickOutside as "outside the dropdown".
+                scrollbarBottomReachable ← evalDebug ls
+                    "local sbDownBtn = _G.__findByName('test_dd_scrollbar_down'); \
+                    \local i = UI.getElementInfo(sbDownBtn); \
+                    \return UI.findElementAt(i.x + i.width / 2, i.y + i.height / 2) == sbDownBtn"
+                scrollbarBottomReachable `shouldBe` "true"
 
                 -- Resize: close, grow the framebuffer so all 8 rows now
                 -- fit below, reopen — re-placement re-derives from the

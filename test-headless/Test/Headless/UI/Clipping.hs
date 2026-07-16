@@ -11,6 +11,9 @@ module Test.Headless.UI.Clipping (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.Text as T
+import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
@@ -19,11 +22,14 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Data.IORef (newIORef)
 import Engine.Graphics.Font.Data (GlyphInstance(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
+import Engine.Scene.Base (LayerId(..))
+import Engine.Scene.Types.Batch (RenderBatch(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import UI.Clipping
 import UI.InputOwnership (routePointer, routeScroll, PointerKind(..), InputRoute(..))
 import UI.Manager
-import UI.Render (clipGlyphInstance)
+import UI.Render (clipGlyphInstance, makeBoxBatches, renderSpriteBatch)
 import UI.Types
 
 -- * Pure fixtures (mirrors Test.Headless.UI.ElementInputPolicy)
@@ -74,6 +80,24 @@ rootHitAt name (x, y) (w, h) cb pageH mgr =
         m3 = setElementClickable eh True m2
         m4 = setElementOnClick eh cb m3
     in (eh, m4)
+
+-- | The (min, max) position of every vertex in a render batch — an
+--   axis-aligned bounding box, order-independent, so it doesn't assume
+--   anything about how makeQuadVertices orders its 6 vertices.
+vertexBounds ∷ VS.Vector Vertex → ((Float, Float), (Float, Float))
+vertexBounds vs =
+    let ps = map pos (VS.toList vs)
+        xs = map x ps
+        ys = map y ps
+    in ((minimum xs, minimum ys), (maximum xs, maximum ys))
+
+-- | Same, but for the UV (texture-coordinate) attribute.
+uvBounds ∷ VS.Vector Vertex → ((Float, Float), (Float, Float))
+uvBounds vs =
+    let ts = map tex (VS.toList vs)
+        us = map x ts
+        vvs = map y ts
+    in ((minimum us, minimum vvs), (maximum us, maximum vvs))
 
 spec ∷ Spec
 spec = do
@@ -241,6 +265,72 @@ spec = do
 
         it "drops a glyph that falls entirely outside the clip" $
             clipGlyphInstance (Just (1000, 1000, 10, 10)) glyph `shouldBe` Nothing
+
+    -- #747 review round 2 (concern 3): boxTileRects/clipGlyphInstance
+    -- above prove the underlying geometry, but a reviewer correctly
+    -- noted that removing the clip call from the ACTUAL RenderBox/
+    -- RenderSprite branches in UI.Render would still leave those green
+    -- (they never call through UI.Render's own render-batch
+    -- functions). makeBoxBatches/renderSpriteBatch ARE those actual
+    -- functions (BindlessTextureSystem was dead weight — #747 dropped
+    -- it, see UI.Render — so they're now pure and callable directly
+    -- with no Vulkan/GPU), so these tests gate real call-site wiring:
+    -- deleting the clip there breaks batch count/vertex/UV output here.
+    describe "makeBoxBatches — the real RenderBox call site (UI.Render)" $ do
+        let texSet = BoxTextureSet
+                { btsCenter = TextureHandle 5, btsN = TextureHandle 2
+                , btsS = TextureHandle 8, btsE = TextureHandle 6
+                , btsW = TextureHandle 4, btsNE = TextureHandle 3
+                , btsNW = TextureHandle 1, btsSE = TextureHandle 9
+                , btsSW = TextureHandle 7
+                }
+            findByTex t bs = [b | b ← V.toList bs, rbTexture b ≡ TextureHandle t]
+
+        it "unclipped: nine batches, textures matching the nine tiles" $
+            let batches = makeBoxBatches texSet 0 0 40 40 10 (1, 1, 1, 1) (LayerId 0) Nothing
+            in V.length batches `shouldBe` 9
+
+        it "a partial clip drops the excluded tiles' batches and clips a straddling tile's vertices/UVs" $
+            let batches = makeBoxBatches texSet 0 0 40 40 10 (1, 1, 1, 1) (LayerId 0) (Just (0, 0, 25, 40))
+            in do
+                V.length batches `shouldBe` 6
+                -- NE (texture 3) sits entirely at x∈[30,40) — dropped.
+                length (findByTex 3 batches) `shouldBe` 0
+                -- Center (texture 5) is clipped from (10,10,20,20) to
+                -- (10,10,15,20) — vertex bounds and UV bounds must
+                -- reflect exactly that, not the unclipped tile.
+                case findByTex 5 batches of
+                    [b] → do
+                        vertexBounds (rbVertices b) `shouldBe` ((10, 10), (25, 30))
+                        uvBounds (rbVertices b) `shouldBe` ((0, 0), (0.75, 1))
+                    other → expectationFailure ("expected exactly one center batch, got " ⧺ show (length other))
+
+        it "a clip disjoint from the box produces zero batches" $
+            makeBoxBatches texSet 0 0 40 40 10 (1, 1, 1, 1) (LayerId 0) (Just (1000, 1000, 10, 10))
+                `shouldSatisfy` V.null
+
+    describe "renderSpriteBatch — the real RenderSprite call site (UI.Render)" $ do
+        it "unclipped: one batch spanning the sprite's full rect and UV" $
+            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) 10 10 50 50 (LayerId 0) Nothing
+            in do
+                V.length batches `shouldBe` 1
+                V.length items `shouldBe` 1
+                vertexBounds (rbVertices (V.head batches)) `shouldBe` ((10, 10), (60, 60))
+                uvBounds (rbVertices (V.head batches)) `shouldBe` ((0, 0), (1, 1))
+
+        it "a partial clip produces one batch with clipped vertex bounds and a proportionally shrunk UV rect" $
+            let (batches, _) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) 50 0 100 50 (LayerId 0) (Just (0, 0, 100, 100))
+            in case V.toList batches of
+                [b] → do
+                    vertexBounds (rbVertices b) `shouldBe` ((50, 0), (100, 50))
+                    uvBounds (rbVertices b) `shouldBe` ((0, 0), (0.5, 1))
+                other → expectationFailure ("expected exactly one batch, got " ⧺ show (length other))
+
+        it "a clip fully excluding the sprite produces no batch at all" $
+            let (batches, items) = renderSpriteBatch (TextureHandle 42) (1, 1, 1, 1) 200 200 50 50 (LayerId 0) (Just (0, 0, 100, 100))
+            in do
+                batches `shouldSatisfy` V.null
+                items `shouldSatisfy` V.null
 
     describe "hover clipping (findElementAt — backs tooltip hover detection)" $ do
         it "does not return a row clipped out of view" $

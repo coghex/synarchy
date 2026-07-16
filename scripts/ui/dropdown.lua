@@ -531,6 +531,28 @@ end
 -- Option List Management
 -----------------------------------------------------------
 
+-- #747 review round 2: the scrollbar's own clamped track height —
+-- single source of truth shared by the placement/click-outside height
+-- calc (dropdownScrollbarHeight below) and the scrollbar.new call
+-- itself, so the two can never drift apart.
+local function dropdownScrollTrackHeight(dd, listHeight)
+    local capHeight = math.floor(4 * dd.uiscale)
+    local trackHeight = listHeight - (dd.arrowSize * 2) - (capHeight * 2)
+    local minTrackHeight = math.floor(20 * dd.uiscale)
+    if trackHeight < minTrackHeight then
+        trackHeight = minTrackHeight
+    end
+    return trackHeight
+end
+
+-- The scrollbar's real total on-screen height (two buttons + two caps
+-- + the clamped track) — can exceed listHeight once the track hits its
+-- minimum floor on a heavily row-reduced list.
+local function dropdownScrollbarHeight(dd, listHeight)
+    local capHeight = math.floor(4 * dd.uiscale)
+    return dd.arrowSize * 2 + capHeight * 2 + dropdownScrollTrackHeight(dd, listHeight)
+end
+
 function dropdown.openList(id)
     local dd = dropdowns[id]
     if not dd then return end
@@ -571,19 +593,33 @@ function dropdown.openList(id)
     local listHeight = visibleCount * dd.optionHeight
     local scrollWidth = dd.needsScroll and dd.arrowSize or 0
 
+    -- #747 review round 2: the scrollbar (created below, mirrored here)
+    -- has its own minimum track floor (scrollbarMinTrackHeight) — on an
+    -- aggressively row-reduced list, the scrollbar's real total height
+    -- can EXCEED listHeight. The full interactive popup height must
+    -- cover whichever is taller, or a click on the scrollbar's own
+    -- lower controls would fall outside the placed/stored bounds and
+    -- onClickOutside would wrongly treat it as "outside" and close the
+    -- list before the click reaches the scrollbar.
+    local popupHeight = listHeight
+    if dd.needsScroll then
+        popupHeight = math.max(listHeight, dropdownScrollbarHeight(dd, listHeight))
+    end
+
     -- #747: one shared framebuffer-coordinate placement contract —
     -- prefer opening below the display box, flip above when there
-    -- isn't room, and always end up fully on-screen. contentW includes
-    -- the scrollbar strip so it stays reachable too. The option list
-    -- itself is always root-mounted (below), regardless of dd.parent —
-    -- floating content escapes the trigger's own clip ancestry.
+    -- isn't room, and always end up fully on-screen. contentW/contentH
+    -- include the scrollbar strip so it stays reachable too. The
+    -- option list itself is always root-mounted (below), regardless of
+    -- dd.parent — floating content escapes the trigger's own clip
+    -- ancestry.
     local listX, listY = UI.placePopup(
         anchorX, anchorY, dd.displayWidth, dd.height,
-        dd.displayWidth + scrollWidth, listHeight,
+        dd.displayWidth + scrollWidth, popupHeight,
         "below")
     dd.listX = listX
     dd.listY = listY
-    dd.listHeight = listHeight
+    dd.listHeight = popupHeight
 
     dd.listBoxId = UI.newBox(
         dd.name .. "_list",
@@ -665,11 +701,8 @@ function dropdown.openList(id)
     
     -- Create scrollbar if needed
     if dd.needsScroll then
-        local scrollTrackHeight = listHeight - (dd.arrowSize * 2) - (math.floor(4 * dd.uiscale) * 2)
-        if scrollTrackHeight < math.floor(20 * dd.uiscale) then
-            scrollTrackHeight = math.floor(20 * dd.uiscale)
-        end
-        
+        local scrollTrackHeight = dropdownScrollTrackHeight(dd, listHeight)
+
         dd.scrollbarId = scrollbar.new({
             name = dd.name .. "_scrollbar",
             page = dd.page,

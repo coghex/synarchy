@@ -3,6 +3,8 @@ module UI.Render
   ( renderUIPages
   , uiLayerToLayerId
   , clipGlyphInstance
+  , makeBoxBatches
+  , renderSpriteBatch
   ) where
 
 import UPrelude
@@ -54,9 +56,13 @@ uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $
 --   shader resolves it to a live slot at draw time via the handle→slot
 --   table, exactly like the world path — so UI quads can't encode a stale
 --   slot. (Was: resolve to the bindless slot here, which now mismatches
---   the shader and sampled the wrong texture.)
-lookupTextureSlot ∷ BindlessTextureSystem → TextureHandle → Float
-lookupTextureSlot _ texHandle = fromIntegral (toInt texHandle)
+--   the shader and sampled the wrong texture.) Never actually depended
+--   on the 'BindlessTextureSystem' itself (only ever called 'toInt' on
+--   the handle) — #747 review round 2 drops that dead parameter so
+--   'makeBoxBatches'/'renderSpriteBatch' are genuinely pure and
+--   directly Hspec-testable, not just the clip geometry they call.
+lookupTextureSlot ∷ TextureHandle → Float
+lookupTextureSlot texHandle = fromIntegral (toInt texHandle)
 
 mergeLayeredTextItems ∷ Map.Map LayerId (V.Vector RenderItem)
                       → Map.Map LayerId (V.Vector RenderItem)
@@ -105,12 +111,12 @@ renderUIPages = do
         Just bindless → do
             logDebugM CatUI $ "UI rendering with bindless texture system containing " <> T.pack (show $ Map.size (btsHandleMap bindless)) <> " textures"
             fontCache ← liftIO $ readIORef (fontCacheRef env)
-            
+
             let visiblePages = getVisiblePages mgr
-            
-            results ← forM visiblePages $ \page → 
-                renderPage mgr bindless fontCache page
-            
+
+            results ← forM visiblePages $ \page →
+                renderPage mgr fontCache page
+
             let allBatches = V.concat $ map fst results
                 allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
                 -- Merge text batches that share a font within each layer
@@ -119,24 +125,24 @@ renderUIPages = do
             pure (allBatches, mergedLayered)
 
 -- | Render a single page
-renderPage ∷ UIPageManager → BindlessTextureSystem → FontCache → UIPage 
+renderPage ∷ UIPageManager → FontCache → UIPage
            → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
-renderPage mgr bindless fontCache page = do
+renderPage mgr fontCache page = do
     let layerId = uiLayerToLayerId (upLayer page) (upZIndex page)
         rootElems = upRootElements page
-    
+
     results ← forM rootElems $ \elemHandle →
-        renderElement mgr bindless fontCache layerId elemHandle
-    
+        renderElement mgr fontCache layerId elemHandle
+
     let allBatches = V.concat $ map fst results
         allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
-    
+
     pure (allBatches, allLayered)
 
-renderElement ∷ UIPageManager → BindlessTextureSystem → FontCache
+renderElement ∷ UIPageManager → FontCache
               → LayerId → ElementHandle
               → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
-renderElement mgr bindless fontCache baseLayerId handle = do
+renderElement mgr fontCache baseLayerId handle = do
     case Map.lookup handle (upmElements mgr) of
         Nothing → pure (V.empty, Map.empty)
         Just elem
@@ -153,13 +159,13 @@ renderElement mgr bindless fontCache baseLayerId handle = do
 
                 let elemLayerId = LayerId $ unLayerId baseLayerId + fromIntegral (ueZIndex elem)
 
-                (selfBatches, selfItems) ← renderElementData mgr bindless fontCache
+                (selfBatches, selfItems) ← renderElementData mgr fontCache
                                               elemLayerId elem absX absY clip
 
                 let sortedChildren = sortOn (getChildZIndex mgr) (ueChildren elem)
                 childResults ← forM sortedChildren $ \childHandle →
-                    renderElement mgr bindless fontCache elemLayerId childHandle
-                
+                    renderElement mgr fontCache elemLayerId childHandle
+
                 let childBatches = V.concat $ map fst childResults
                     childLayered = foldr (Map.unionWith (<>)) Map.empty (map snd childResults)
                 
@@ -178,10 +184,10 @@ getChildZIndex mgr handle =
         Nothing → 0
         Just elem → ueZIndex elem
 
-renderElementData ∷ UIPageManager → BindlessTextureSystem → FontCache
+renderElementData ∷ UIPageManager → FontCache
                   → LayerId → UIElement → Float → Float → Maybe ClipRect
                   → EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
-renderElementData mgr bindless fontCache layerId elem absX absY clip =
+renderElementData mgr fontCache layerId elem absX absY clip =
     case ueRenderData elem of
         RenderNone → pure (V.empty, V.empty)
 
@@ -201,7 +207,7 @@ renderElementData mgr bindless fontCache layerId elem absX absY clip =
                         vy = absY - overflow
                         vw = w + overflow * 2
                         vh = h + overflow * 2
-                        batches = makeBoxBatches bindless texSet vx vy vw vh tileSize color layerId clip
+                        batches = makeBoxBatches texSet vx vy vw vh tileSize color layerId clip
                         items = V.map SpriteItem batches
                     pure (batches, items)
 
@@ -239,22 +245,35 @@ renderElementData mgr bindless fontCache layerId elem absX absY clip =
 
         RenderSprite style → do
             let (w, h) = ueSize elem
-                color = ussColor style
-                tex = ussTexture style
-                atlasId = lookupTextureSlot bindless tex
-            case clipQuadUV clip (absX, absY, w, h) (0, 0, 1, 1) of
-                Nothing → pure (V.empty, V.empty)
-                Just ((cx, cy, cw, ch), uv) → do
-                    let vertices = makeQuadVertices cx cy cw ch color atlasId uv
-                        batch = RenderBatch
-                            { rbTexture  = tex
-                            , rbLayer    = layerId
-                            , rbVertices = vertices
-                            , rbObjects  = V.empty
-                            , rbDirty    = True
-                            , rbAvgZ     = 0.0
-                            }
-                    pure (V.singleton batch, V.singleton (SpriteItem batch))
+                (batches, items) = renderSpriteBatch (ussTexture style) (ussColor style)
+                                       absX absY w h layerId clip
+            pure (batches, items)
+
+-- | Pure: a sprite element's render batch, clipped. This is the ACTUAL
+--   function 'renderElementData''s 'RenderSprite' branch calls (#747
+--   review round 2) — not just the underlying 'clipQuadUV' helper in
+--   isolation — so a test exercising it gates real call-site wiring:
+--   removing the clip here would show up as a batch/vertex mismatch,
+--   not just a passing geometry-only test. 'Nothing'-equivalent (empty
+--   vectors) when the clip excludes the sprite entirely.
+renderSpriteBatch ∷ TextureHandle → (Float, Float, Float, Float)
+                  → Float → Float → Float → Float → LayerId → Maybe ClipRect
+                  → (V.Vector RenderBatch, V.Vector RenderItem)
+renderSpriteBatch tex color absX absY w h layerId clip =
+    case clipQuadUV clip (absX, absY, w, h) (0, 0, 1, 1) of
+        Nothing → (V.empty, V.empty)
+        Just ((cx, cy, cw, ch), uv) →
+            let atlasId = lookupTextureSlot tex
+                vertices = makeQuadVertices cx cy cw ch color atlasId uv
+                batch = RenderBatch
+                    { rbTexture  = tex
+                    , rbLayer    = layerId
+                    , rbVertices = vertices
+                    , rbObjects  = V.empty
+                    , rbDirty    = True
+                    , rbAvgZ     = 0.0
+                    }
+            in (V.singleton batch, V.singleton (SpriteItem batch))
 
 -- | Clip one glyph instance's quad + UV rect against the effective
 --   clip; 'Nothing' drops a glyph that falls entirely outside it.
@@ -283,21 +302,27 @@ tileTexture texSet tile = case tile of
     TileS      → btsS texSet
     TileSE     → btsSE texSet
 
-makeBoxBatches ∷ BindlessTextureSystem → BoxTextureSet
+-- | Pure: the nine box-tile render batches, clipped. This is the
+--   ACTUAL function 'renderElementData''s 'RenderBox' branch calls
+--   (#747 review round 2) — not just 'UI.Clipping.boxTileRects' in
+--   isolation — so a test exercising it gates real call-site wiring:
+--   removing the clip here would show up as a batch/vertex mismatch
+--   (wrong count, wrong rect, wrong UV), not just a passing
+--   geometry-only test. 'UI.Clipping.boxTileRects' supplies the
+--   already-clipped per-tile geometry (a tile fully outside the
+--   effective clip is omitted, one straddling the boundary keeps only
+--   its visible rect + UV slice); this is pure glue turning each
+--   surviving tile into a RenderBatch.
+makeBoxBatches ∷ BoxTextureSet
                → Float → Float → Float → Float → Float
                → (Float, Float, Float, Float) → LayerId → Maybe ClipRect
                → V.Vector RenderBatch
-makeBoxBatches bindless texSet x y w h tileSize color layerId clip =
-    -- #747: 'UI.Clipping.boxTileRects' is the actual per-tile geometry
-    -- (already clipped — a tile fully outside the effective clip is
-    -- omitted, one straddling the boundary keeps only its visible
-    -- rect + UV slice); this is now pure glue turning each surviving
-    -- tile into a RenderBatch.
+makeBoxBatches texSet x y w h tileSize color layerId clip =
     V.fromList $ map toBatch (boxTileRects x y w h tileSize clip)
   where
     toBatch (tile, (cx, cy, cw, ch), uv) =
         let tex = tileTexture texSet tile
-            atlasId = lookupTextureSlot bindless tex
+            atlasId = lookupTextureSlot tex
             vertices = makeQuadVertices cx cy cw ch color atlasId uv
         in RenderBatch
             { rbTexture  = tex
