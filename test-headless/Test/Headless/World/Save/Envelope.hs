@@ -445,6 +445,28 @@ spec = do
                 Right _  → expectationFailure
                     "expected a session-component version mismatch rejection"
 
+        it "rejects an unsupported metadata component schema version -- \
+           \even though its bytes still happen to decode as the current \
+           \SaveMetadata shape" $ do
+            let specs = [ (metadataComponentId, 999999, True
+                          , S.encode minimalSaveMetadata)
+                        , (sessionComponentId, sessionComponentVersion, True
+                          , S.encode minimalSaveData)
+                        ]
+                bytes = unsafeEncode defaultEnvelopeLimits currentEnvelopeVersion
+                            specs
+            case decodeSaveEnvelopeMetadata bytes of
+                Left msg → msg `shouldSatisfy`
+                    T.isInfixOf "expected metadata component"
+                Right _  → expectationFailure
+                    "expected a metadata-component version mismatch rejection"
+            case decodeSaveEnvelope bytes of
+                Left msg → msg `shouldSatisfy`
+                    T.isInfixOf "expected metadata component"
+                Right _  → expectationFailure
+                    "expected decodeSaveEnvelope to also reject an \
+                    \unsupported metadata component version"
+
         it "rejects a pre-#759 flat-format file with a clear \
            \incompatibility diagnostic (the v82-and-earlier clean \
            \break) -- no heuristic positional decoding is attempted" $ do

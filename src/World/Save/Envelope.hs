@@ -114,40 +114,69 @@ encodeSaveData sd = case encodeSaveEnvelope defaultEnvelopeLimits sd of
 -- | Decode + validate the envelope structure, then decode ONLY the
 --   "metadata" component — the "session" component's (much larger)
 --   payload is never even cereal-decoded (requirement 4: "Metadata
---   inspection without gameplay decoding").
+--   inspection without gameplay decoding"). Its own schema version is
+--   checked exactly like the "session" component's (below) — a
+--   structurally valid envelope declaring an unsupported metadata
+--   schema version is rejected before 'S.decode' ever runs, not
+--   trusted merely because its bytes happen to still parse as the
+--   CURRENT 'SaveMetadata' shape.
 decodeSaveEnvelopeMetadata ∷ BS.ByteString → Either Text SaveMetadata
 decodeSaveEnvelopeMetadata bytes = do
     decoded ← decodeValidatedEnvelope bytes
-    payload ← maybe (Left "envelope missing metadata component payload \
-                          \(unreachable — already required)") Right
-                    (HM.lookup metadataComponentId (dePayloads decoded))
-    either (Left . ("Failed to decode save metadata: " <>) . T.pack)
-           Right (S.decode payload)
+    decodeComponent "metadata" metadataComponentId metadataComponentVersion decoded
 
 -- | Decode + validate the envelope structure, then decode the
 --   "session" component into the (unchanged) 'SaveData' shape existing
---   callers already expect.
+--   callers already expect. Also validates "metadata"'s own schema
+--   version (though its CONTENT is never needed here) — a save
+--   incompatible enough to fail 'decodeSaveEnvelopeMetadata' must not
+--   silently succeed loading merely because loading never touches that
+--   component's payload.
 decodeSaveEnvelope ∷ BS.ByteString → Either Text SaveData
 decodeSaveEnvelope bytes = do
     decoded ← decodeValidatedEnvelope bytes
-    desc ← maybe (Left "envelope missing session component descriptor \
-                       \(unreachable — already required)") Right
-                 (findDescriptor sessionComponentId (deManifest decoded))
-    when (cdVersion desc ≢ sessionComponentVersion) $
-        Left ("Save format incompatible: expected session component v"
-              <> T.pack (show sessionComponentVersion) <> ", got v"
-              <> T.pack (show (cdVersion desc)))
-    payload ← maybe (Left "envelope missing session component payload \
-                          \(unreachable — already required)") Right
-                    (HM.lookup sessionComponentId (dePayloads decoded))
-    either (Left . ("Failed to decode save: " <>) . T.pack)
-           Right (S.decode payload)
+    checkComponentVersion "metadata" metadataComponentId
+                          metadataComponentVersion decoded
+    decodeComponent "session" sessionComponentId sessionComponentVersion decoded
 
 decodeValidatedEnvelope ∷ BS.ByteString → Either Text DecodedEnvelope
 decodeValidatedEnvelope =
     either (Left . renderEnvelopeError) Right
         . decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
                           knownComponentIds readerRequiredComponentIds
+
+-- | Look up one component's descriptor in an already
+--   structurally-validated envelope and reject a schema-version
+--   mismatch (this codebase's per-component compatibility contract,
+--   requirement 3) — without needing that component's payload at all.
+--   The "descriptor missing" case is unreachable in practice: both
+--   component ids are in 'readerRequiredComponentIds', so
+--   'decodeValidatedEnvelope' already refused any envelope missing it.
+checkComponentVersion ∷ Text → ComponentId → Word32 → DecodedEnvelope
+                     → Either Text ()
+checkComponentVersion label cid expectedVersion decoded = do
+    desc ← maybe (Left (label <> " component descriptor missing \
+                              \(unreachable — already required)")) Right
+                 (findDescriptor cid (deManifest decoded))
+    when (cdVersion desc ≢ expectedVersion) $
+        Left ("Save format incompatible: expected " <> label
+              <> " component v" <> T.pack (show expectedVersion)
+              <> ", got v" <> T.pack (show (cdVersion desc)))
+
+-- | 'checkComponentVersion' plus the payload lookup + cereal decode.
+--   The "payload missing" case is unreachable for the same reason as
+--   above.
+decodeComponent ∷ S.Serialize a
+                ⇒ Text → ComponentId → Word32 → DecodedEnvelope
+                → Either Text a
+decodeComponent label cid expectedVersion decoded = do
+    checkComponentVersion label cid expectedVersion decoded
+    payload ← maybe (Left (label <> " component payload missing \
+                                 \(unreachable — already required)")) Right
+                    (HM.lookup cid (dePayloads decoded))
+    either (Left . (("Failed to decode " <> label <> " component: ") <>)
+                 . T.pack)
+           Right (S.decode payload)
 
 findDescriptor ∷ ComponentId → EnvelopeManifest → Maybe ComponentDescriptor
 findDescriptor cid manifest =
