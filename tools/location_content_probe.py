@@ -419,9 +419,9 @@ def main() -> int:
                     f"player presence did not discover the ruin: uid={player_uid}")
 
             evs = discovery_events(args.port, ruin_label)
-            if len(evs) == 1 and evs[0].get("uid") == player_uid:
+            if len(evs) == 1 and evs[0].get("uid") == player_uid and evs[0].get("page") == "wa":
                 print(f"PASS: exactly one location_discovery event, attributed to "
-                      f"unit {player_uid}")
+                      f"unit {player_uid} on page 'wa'")
             else:
                 failures.append(
                     f"expected exactly one attributed discovery event, got {evs}")

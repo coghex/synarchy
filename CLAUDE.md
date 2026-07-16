@@ -1107,10 +1107,17 @@ those flags — all three booleans persist independently in
 A successful first transition emits one player event
 (category `location_discovery`) via the normal
 `engine.emitEventForUnit`-style surface — `"Discovered: <label>"`,
-carrying the location's anchor tile as clickable coords and the
-discovering unit's id — so it shows up through `engine.getEventLog()`
-like any other event. Repeated entry (leaving and returning, or simply
-still standing there next tick) never emits a duplicate.
+carrying the discovering unit's id — so it shows up through
+`engine.getEventLog()` like any other event. Repeated entry (leaving
+and returning, or simply still standing there next tick) never emits a
+duplicate. Because the tick runs on every loaded page rather than only
+the active one, every discovery event also names its source page
+(`peSourcePage` / the query's `page` field) — but only carries the
+location's anchor tile as clickable coords
+(`Engine.PlayerEvent.Emit.emitEventFullOnPage`) when the discovery
+happened on the page that's CURRENTLY active; a hidden-page discovery
+omits coords entirely so its popup can never silently pan the visible
+page's camera to a different page's tile.
 
 ```bash
 # Per placed location: cx, cy, gx, gy, id, discovered, and (when the

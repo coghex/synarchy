@@ -85,9 +85,15 @@ emitEventForUnitFn env = do
 
 -- | @engine.getEventLog()@ — return the event-log ring buffer as a
 --   Lua array of @{category, text, gameTime, source, uid, count,
---   coords}@ tables, oldest-first. @coords@ is either @{x, y}@ or
---   @nil@. Sufficient payload for the event-log panel to re-pop the
---   popup from a row click without a second engine round-trip.
+--   coords, page}@ tables, oldest-first. @coords@ is either @{x, y}@ or
+--   @nil@. @page@ is the source world-page id string, or @nil@ for the
+--   vast majority of events that don't set 'peSourcePage' (#780 —
+--   emitters whose event can fire on a page other than whichever is
+--   active/visible, e.g. location discovery, tag it so a hidden-page
+--   event stays attributable even though it can't safely carry
+--   pannable coords). Sufficient payload for the event-log panel to
+--   re-pop the popup from a row click without a second engine
+--   round-trip.
 getEventLogFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getEventLogFn env = do
     events ← Lua.liftIO $ readEventLog env
@@ -126,6 +132,13 @@ getEventLogFn env = do
             Nothing → do
                 Lua.pushnil
                 Lua.setfield (-2) "coords"
+
+        -- page: the source world-page id (#780), or nil for every
+        -- event that doesn't set peSourcePage.
+        case peSourcePage ev of
+            Just pg → Lua.pushstring (TE.encodeUtf8 pg)
+            Nothing → Lua.pushnil
+        Lua.setfield (-2) "page"
 
         Lua.rawseti (-2) i
     return 1

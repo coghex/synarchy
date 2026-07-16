@@ -34,6 +34,25 @@ data PlayerEvent = PlayerEvent
                                   --   Lets the per-unit log panel filter
                                   --   event-log entries to one unit.
                                   --   'Nothing' for world/global events.
+    , peSourcePage ∷ !(Maybe Text)
+                                  -- ^ Optional world page (raw
+                                  --   'World.Page.Types.WorldPageId'
+                                  --   text) this event concerns — set
+                                  --   by emitters whose event can fire
+                                  --   on a page other than whichever is
+                                  --   currently active/visible (e.g.
+                                  --   location discovery, #780, which
+                                  --   ticks every loaded page, including
+                                  --   hidden ones). Every other emitter
+                                  --   leaves this 'Nothing'. A caller
+                                  --   that also sets 'peCoords' MUST
+                                  --   only do so when this page is the
+                                  --   one currently active — a popup
+                                  --   click pans the camera on the
+                                  --   ACTIVE page, so coords for a
+                                  --   hidden-page event would silently
+                                  --   pan to the wrong place; omit
+                                  --   'peCoords' instead for those.
     , peCount    ∷ !Int
                                   -- ^ How many identical emits (same
                                   --   category + text + uid) have

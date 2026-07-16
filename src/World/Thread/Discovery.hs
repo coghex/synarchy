@@ -18,11 +18,11 @@ import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
-import Engine.PlayerEvent.Emit (emitEventFull)
+import Engine.Core.State (EngineEnv(..), activeWorldPage)
+import Engine.PlayerEvent.Emit (emitEventFullOnPage)
 import Location.Discovery (DiscoveryHit(..), findDiscoveries)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
-import World.Types (WorldGenParams(..), WorldPageId, WorldState(..))
+import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 
 -- | Check one page's placed locations against every currently-known
 --   PLAYER-faction unit on it, mark any newly-qualifying location
@@ -33,15 +33,26 @@ import World.Types (WorldGenParams(..), WorldPageId, WorldState(..))
 --   "player" (portal-spawned units use this tag) — hostile, wildlife,
 --   neutral, and unrelated debug factions never discover a location by
 --   moving through it.
+--
+--   Every emitted event names its 'peSourcePage' (#780) since this
+--   tick runs on every loaded page, not just the active one — but a
+--   discovery on a page other than the currently active one omits
+--   'peCoords' entirely rather than risk the popup's click-to-pan
+--   silently panning the ACTIVE page's camera to a hidden page's
+--   coordinates.
 tickLocationDiscovery ∷ EngineEnv → WorldPageId → WorldState → IO ()
-tickLocationDiscovery env pageId ws = do
+tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     mParams ← readIORef (wsGenParamsRef ws)
     case mParams of
         Nothing → pure ()
         Just p → do
             registry ← readIORef (locationDefsRef env)
             um ← readIORef (unitManagerRef env)
-            let pageUnits =
+            mActive ← activeWorldPage env
+            let isActivePage = case mActive of
+                    Just (activePageId, _) → activePageId ≡ pageId
+                    Nothing → False
+                pageUnits =
                     [ (uid, uiFactionId inst, floor (uiGridX inst), floor (uiGridY inst))
                     | (uid, inst) ← sortOn fst (HM.toList (umInstances um))
                     , uiPage inst ≡ pageId
@@ -60,7 +71,8 @@ tickLocationDiscovery env pageId ws = do
                         , ()
                         )
                     Nothing → (mP, ())
-                emitEventFull env "location_discovery" "World.Thread.Discovery"
+                emitEventFullOnPage env "location_discovery" "World.Thread.Discovery"
                     ("Discovered: " <> dhLabel hit)
-                    (Just (dhAnchor hit))
+                    (if isActivePage then Just (dhAnchor hit) else Nothing)
                     (Just (unUnitId (dhUnit hit)))
+                    (Just pageText)

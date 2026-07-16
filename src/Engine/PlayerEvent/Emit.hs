@@ -6,6 +6,7 @@ module Engine.PlayerEvent.Emit
     , emitEvent
     , emitEventAt
     , emitEventFull
+    , emitEventFullOnPage
     , readEventLog
     ) where
 
@@ -68,7 +69,28 @@ emitEventFull ∷ EngineEnv
               → Maybe (Int, Int)      -- ^ optional grid coords
               → Maybe Word32          -- ^ optional unit this is about
               → IO ()
-emitEventFull env category source eventText mCoords mUid = do
+emitEventFull env category source eventText mCoords mUid =
+    emitEventFullOnPage env category source eventText mCoords mUid Nothing
+
+-- | Like 'emitEventFull', but also tags the stored event with the WORLD
+--   PAGE it concerns ('peSourcePage', #780) — for an emitter whose
+--   event can fire on a page other than whichever is currently active/
+--   visible (location discovery ticks every loaded page, including
+--   hidden ones, so its discovering unit/location may not be on the
+--   page the player is looking at). A caller passing 'Just' coords
+--   here MUST only do so when @mSourcePage@ names the currently ACTIVE
+--   page (or is 'Nothing') — the popup click-to-pan targets the active
+--   page, so a hidden page's coords would silently pan to the wrong
+--   place; pass 'Nothing' coords instead for those.
+emitEventFullOnPage ∷ EngineEnv
+                    → Text                  -- ^ category id
+                    → Text                  -- ^ source tag (dev debug)
+                    → Text                  -- ^ player-visible text
+                    → Maybe (Int, Int)      -- ^ optional grid coords
+                    → Maybe Word32          -- ^ optional unit this is about
+                    → Maybe Text            -- ^ optional source world page
+                    → IO ()
+emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
     cfgMap ← readIORef (notificationCfgRef env)
     case HM.lookup category cfgMap of
         Nothing → do
@@ -86,6 +108,7 @@ emitEventFull env category source eventText mCoords mUid = do
                     , peSource   = source
                     , peCoords   = mCoords
                     , peUid      = mUid
+                    , peSourcePage = mSourcePage
                     , peCount    = 1
                     }
             when (ccLog cfg) $
@@ -126,6 +149,7 @@ pushBounded window ref ev = modifyTVar' ref $ \s →
     sameEntry a b = peCategory a == peCategory b
                   ∧ peText a == peText b
                   ∧ peUid a == peUid b
+                  ∧ peSourcePage a == peSourcePage b
 
 -- | Snapshot of the event log. Returns events oldest-first; the Lua
 --   side reverses if it wants newest-on-top.

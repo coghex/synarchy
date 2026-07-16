@@ -112,6 +112,7 @@ spec = beforeAll initEnv $
             map peCategory evs1 `shouldBe` ["location_discovery"]
             map peText evs1 `shouldBe` ["Discovered: Small Ruin"]
             map peCoords evs1 `shouldBe` [Just (8, 8)]
+            map peSourcePage evs1 `shouldBe` [Just "disc_player"]
 
             -- Re-tick: the unit hasn't moved, the location is already
             -- discovered — no second event, no change to the set.
@@ -134,3 +135,47 @@ spec = beforeAll initEnv $
             (wgpLocationDiscovered ⊚ mp) `shouldBe` Just HS.empty
             evs ← eventsFor env 202
             evs `shouldBe` []
+
+        it "a location discovered on a HIDDEN page is attributed to that \
+           \page and carries no pannable coords, even when another (active) \
+           \page places a location at the very same chunk coordinate" $ \env → do
+            let pageActive = WorldPageId "disc_active"
+                pageHidden = WorldPageId "disc_hidden"
+            wsActive ← emptyWorldState
+            writeIORef (wsGenParamsRef wsActive) $ Just defaultWorldGenParams
+                { wgpLocationOverlay = overlay1 }
+            wsHidden ← emptyWorldState
+            writeIORef (wsGenParamsRef wsHidden) $ Just defaultWorldGenParams
+                { wgpLocationOverlay = overlay1 }
+            -- Only pageActive is visible/active; pageHidden is loaded
+            -- (simulated) but not shown — mirrors a second live world
+            -- page kept around while the player looks at the first.
+            writeIORef (worldManagerRef env) $
+                WorldManager [(pageActive, wsActive), (pageHidden, wsHidden)]
+                             [pageActive]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 301, testUnit pageActive "player" 8 8)
+                    , (UnitId 302, testUnit pageHidden "player" 8 8)
+                    ]
+                }
+
+            tickLocationDiscovery env pageActive wsActive
+            tickLocationDiscovery env pageHidden wsHidden
+
+            mpActive ← readIORef (wsGenParamsRef wsActive)
+            mpHidden ← readIORef (wsGenParamsRef wsHidden)
+            (wgpLocationDiscovered ⊚ mpActive)
+                `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+            (wgpLocationDiscovered ⊚ mpHidden)
+                `shouldBe` Just (HS.singleton (ChunkCoord 0 0))
+
+            evsActive ← eventsFor env 301
+            evsHidden ← eventsFor env 302
+            -- Same chunk coordinate on both pages, but each event is
+            -- attributed to ITS OWN page and only the active page's
+            -- event carries pannable coords.
+            map peSourcePage evsActive `shouldBe` [Just "disc_active"]
+            map peCoords evsActive `shouldBe` [Just (8, 8)]
+            map peSourcePage evsHidden `shouldBe` [Just "disc_hidden"]
+            map peCoords evsHidden `shouldBe` [Nothing]
