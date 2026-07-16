@@ -1335,6 +1335,76 @@ guard that fails when a new root state owner or registered Lua save module has n
 Read the contract before changing anything that adds state to `EngineEnv`, `WorldState`,
 `World.Save.Types`, or `scripts/lib/save_modules.lua`'s registry.
 
+**Session snapshot (#758, save-overhaul A3):** `World.Save.Snapshot` is the immutable,
+validated in-memory capture of an entire session — `SessionSnapshot`/`PageSnapshot`,
+built by the pure `captureSessionSnapshot` (globals + a `[PageSnapshot]` list in, `Either
+[SnapshotError] SessionSnapshot` out — no IO, callable straight from hspec with synthetic
+managers). This is deliberately NOT `SaveData`/`WorldPageSave` (`World.Save.Types`): those
+stay the positional cereal WIRE SCHEMA, append-only and version-bumped on every layout
+change; the snapshot has no `Serialize` instance and no such constraint, since it's built
+once, validated once, and handed to a serializer rather than written to disk itself.
+`World.Save.Snapshot.Adapter`'s `snapshotToSaveData` is the TEMPORARY bridge that encodes a
+captured snapshot through the unchanged save format (`currentSaveVersion` is untouched by
+this — B1 owns the real new envelope); it fabricates the handful of v88-only fields the
+snapshot deliberately excludes (`wpsTimeScale` always `1`, `wpsToolMode` always
+`DefaultTool`, `sdEnginePaused` always `True` — all three are load POLICY per the contract,
+never captured gameplay state) and duplicates the one global live camera's zoom/facing into
+every page the same lossy way v88 always has (no per-page zoom/facing exists in that
+format). `World.Thread.Command.Save.WriteWorld.handleWorldSaveCommand` still owns every
+`readIORef`, but now calls `captureSessionSnapshot` and — critically — releases the #757
+barrier's CAPTURE LOCK (`Engine.Save.Barrier.releaseCaptureLock`, transitioning to a
+non-terminal `SaveEncoding` phase) as soon as the snapshot is captured, validated, AND fully
+FORCED, **before** the disk write runs; previously the barrier stayed held through the
+entire encode+write, and before that (review round 2) the transaction was declared
+terminally complete (`finishSave`) at the same too-early point, so a disk-write failure
+after release could no longer flip the outcome and `engine.getSaveStatus()` would report a
+save that was never written. Fixed two ways: (1) `releaseCaptureLock` only unblocks
+`captureLocked` for other state owners — `ssOutcome` stays `Nothing` (`saveInProgress`
+still `True`) until the real disk write resolves via `finishSave`/`failSave`, so a write
+failure surfaces as a genuine `SaveFailed`; (2) `World.Save.Serialize.encodeSaveData` (pure
+— splits what used to be one `saveWorld` into an encode step and a `writeSaveFiles` I/O
+step) is forced via `evaluate` **before** `releaseCaptureLock` runs, not after — cereal
+cannot produce a `ByteString` without visiting every field, so this either fully succeeds or
+throws right there, catching a bug hiding in an unevaluated thunk (the snapshot/adapter's
+record fields are only forced to WHNF, not deeply — Strict/`HashMap.Strict` forces the
+outer shape and each value at ONE level, never recursively) as a capture failure while the
+barrier still blocks everyone, instead of letting it surface later during the write after
+owners have already resumed. `World.Save.Serialize.writeSaveFiles` (the actual disk I/O,
+run after the release) wraps its own directory-creation/`BS.writeFile`/YAML-write in `try`
+and converts any exception to `Left` (review round 2 follow-up): this runs on the world
+thread AFTER the capture lock has already released, so an uncaught exception there would
+otherwise escape all the way to `World.Thread`'s top-level crash handler instead of
+reaching `failSave` — crashing the whole world thread AND leaving the barrier stuck open
+(`saveInProgress` permanently `True`) rather than surfacing a `SaveFailed` outcome. A
+validation, encode, OR write failure fails the transaction and writes nothing beyond
+whatever the failed write itself left behind — no partial `SaveData` is ever serialized as
+a reported success. Pure coverage:
+`Test.Headless.Save.Snapshot` (construction, all ~10 referential-integrity validators,
+camera representation, adapter field-mapping, and a "full-encode forcing" pair proving
+`encodeSaveData` forces a deferred exploding thunk buried in a page's edit list that
+capture/validation silently pass — no engine boot); `Test.Headless.Save.Barrier` covers
+`SaveEncoding`/`releaseCaptureLock` directly (unblocks `captureLocked` without completing
+the transaction, ignores a stray ack during that phase, `finishSave`/`failSave` finalize
+correctly after it). Real multi-thread coverage:
+**`python3 tools/save_barrier_probe.py`** — extended for #758 to also prove a mutation
+issued the instant the barrier releases (i.e. once the save file has already appeared)
+never reaches the save that already captured it, that a later save captures that mutation
+as its own, distinct boundary, and (review round 2 follow-up) that a genuine disk-level
+write failure (the save's own directory path pre-occupied by a plain file) surfaces as a
+real `SaveFailed` via `engine.getSaveStatus()` — never crashing the world thread or wedging
+the barrier open — with an immediate follow-up save proving it's accepted right after,
+alongside the pre-existing #757 checks (owners fully acknowledged before capture, a
+pre-boundary World→Sim→World fluid writeback surviving the save, and the loaded session
+staying paused). `NoPersistablePages`/`ActivePageMissing`/
+etc. (`SnapshotError`) deliberately do NOT include a craft-bill-station or power-node
+dangling-reference check — a demolished station's bills "lingering, visible + cancellable"
+is documented, tolerated gameplay behaviour (see the craft-bills section above), not
+corruption; hard-failing on it would reject otherwise-valid saves. Likewise no "Lua capture
+succeeded" check: an empty Lua-blob map is indistinguishable, from the snapshot's own data,
+between a real capture failure and a legitimate Lua-less engine-only save (exercised by
+`Test.Headless.World.Identity`'s save/load-mapping test, which drives `WorldSave` directly
+with an empty blob map).
+
 Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) plus a human-readable `world_gen.yaml` alongside.
 
 ```bash

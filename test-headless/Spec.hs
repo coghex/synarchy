@@ -94,6 +94,7 @@ import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.Barrier as SaveBarrier
+import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 
@@ -157,6 +158,7 @@ main = hspec $ do
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
     describe "Save.Barrier" SaveBarrier.spec
+    describe "Save.Snapshot" SaveSnapshot.spec
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec

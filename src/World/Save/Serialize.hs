@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Save.Serialize
-    ( saveWorld
+    ( encodeSaveData
+    , writeSaveFiles
     , loadWorld
     , listSaves
     , savesDirectory
@@ -11,6 +12,7 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
+import Control.Exception (SomeException, try)
 import Data.Char (isControl)
 import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
@@ -63,36 +65,72 @@ binaryFileName = "world" <> saveExtension
 yamlFileName ∷ String
 yamlFileName = "world_gen.yaml"
 
--- | Save a world to disk.
+-- | Serialize a 'SaveData' into on-disk bytes (header + body). Pure —
+--   but producing the final 'BS.ByteString' requires 'Data.Serialize'
+--   to actually visit and encode every field, so forcing this value to
+--   WHNF (a strict 'ByteString' cannot exist half-built) fully forces
+--   the ENTIRE 'SaveData', including anything left as an unevaluated
+--   thunk by 'World.Save.Snapshot'/'World.Save.Snapshot.Adapter''s
+--   partial (WHNF-only) strictness.
+--
+--   #758 requirement 7 ("capture must be complete before the #757
+--   barrier releases") depends on this being forced — via
+--   'Control.Exception.evaluate' — BEFORE
+--   'Engine.Save.Barrier.releaseCaptureLock' runs, so a bug that only
+--   manifests when some deeply-nested captured value is finally
+--   touched is caught as a capture failure while the barrier still
+--   blocks other owners, not discovered later during 'writeSaveFiles'
+--   after they have already resumed. See
+--   'World.Thread.Command.Save.WriteWorld'.
+encodeSaveData ∷ SaveData → BS.ByteString
+encodeSaveData saveData =
+    let header = SaveHeader { shMagic = saveMagic, shVersion = currentSaveVersion }
+    in S.encode header <> S.encode saveData
+
+-- | Write already-encoded save bytes (see 'encodeSaveData') plus the
+--   human-readable companion YAML to disk.
+--
 --   Creates saves/{name}/ directory with:
 --     - world.synworld  (binary save data, header + body)
 --     - world_gen.yaml  (human-readable generation params)
 --
---   File layout: [SaveHeader (magic + version)][SaveData].
---   The header is decoded first on load so we can reject incompatible
---   files before attempting to parse the body — which would fail with
---   a cryptic cereal error if the schema diverges.
-saveWorld ∷ Text → SaveData → IO (Either Text ())
-saveWorld rawName saveData = case sanitizeSaveName rawName of
+--   Every pure computation already ran to produce @encoded@ — the only
+--   work left here is genuine, unpredictable-until-attempted I/O
+--   (directory creation, disk space, permissions), which is why this
+--   is safe to run AFTER the #757 barrier releases (#758): a failure
+--   here is a real write failure, not a capture bug. That I/O is
+--   wrapped in 'try' (review round 2 follow-up): the caller
+--   ('World.Thread.Command.Save.WriteWorld') runs on the world thread
+--   AFTER the barrier's capture lock has already released, so an
+--   uncaught exception here would escape all the way to
+--   "World.Thread"'s top-level crash handler instead of reaching
+--   'failSave' — crashing the whole world thread AND leaving the save
+--   barrier stuck open (non-terminal) forever, permanently refusing
+--   every subsequent save.
+writeSaveFiles ∷ Text → BS.ByteString → SaveData → IO (Either Text ())
+writeSaveFiles rawName encoded saveData = case sanitizeSaveName rawName of
     Left err   → return (Left ("Invalid save name: " <> err))
     Right name → do
-        let saveDir = savesDirectory </> T.unpack name
-        createDirectoryIfMissing True saveDir
-        let binaryPath = saveDir </> binaryFileName
-            yamlPath   = saveDir </> yamlFileName
-            header     = SaveHeader { shMagic   = saveMagic
-                                    , shVersion = currentSaveVersion
-                                    }
-            encoded    = S.encode header <> S.encode saveData
-        BS.writeFile binaryPath encoded
-        -- The human-readable companion describes the primary (active)
-        -- world; per-world gen params now live in sdWorlds (#215). A
-        -- well-formed save always has an active page, but tolerate an
-        -- empty one by skipping the yaml rather than crashing the save.
-        case activeWorldPage saveData of
-            Just wps → saveWorldGenYaml yamlPath (wpsGenParams wps)
-            Nothing  → return ()
-        return (Right ())
+        outcome ← try (writeSaveFilesUnsafe name encoded saveData)
+        case outcome of
+            Right () → return (Right ())
+            Left (e ∷ SomeException) →
+                return (Left ("Failed to write save to disk: " <> T.pack (show e)))
+
+writeSaveFilesUnsafe ∷ Text → BS.ByteString → SaveData → IO ()
+writeSaveFilesUnsafe name encoded saveData = do
+    let saveDir = savesDirectory </> T.unpack name
+    createDirectoryIfMissing True saveDir
+    let binaryPath = saveDir </> binaryFileName
+        yamlPath   = saveDir </> yamlFileName
+    BS.writeFile binaryPath encoded
+    -- The human-readable companion describes the primary (active)
+    -- world; per-world gen params now live in sdWorlds (#215). A
+    -- well-formed save always has an active page, but tolerate an
+    -- empty one by skipping the yaml rather than crashing the save.
+    case activeWorldPage saveData of
+        Just wps → saveWorldGenYaml yamlPath (wpsGenParams wps)
+        Nothing  → return ()
 
 -- | Load a world from disk.
 --   Tries directory format first (saves/{name}/world.synworld),
