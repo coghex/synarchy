@@ -139,7 +139,8 @@ spec = do
                 { ldId = lid, ldLabel = lid, ldType = "test"
                 , ldBuilder = "noop", ldAnchor = anchors
                 , ldMaxCount = 8, ldMinSpacing = 3, ldContents = []
-                , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6 }
+                , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6
+                , ldMapIcons = Nothing }
             flatDef = mkDef "flat_test"     ["flat"]
             mtnDef  = mkDef "mountain_test" ["mountain"]
             overlayFor p defs = computeLocationOverlay

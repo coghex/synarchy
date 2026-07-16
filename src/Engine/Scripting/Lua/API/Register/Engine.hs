@@ -137,7 +137,7 @@ registerEngineAPI lst env backendState = do
   registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
   registerLuaFunction "loadInfectionYaml" (loadInfectionYamlFn env)
   registerLuaFunction "loadRecipeYaml" (loadRecipeYamlFn env)
-  registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env)
+  registerLuaFunction "loadLocationYaml" (loadLocationYamlFn env backendState)
   registerLuaFunction "listLocationDefs" (locationListDefsFn env)
   registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn env)
 

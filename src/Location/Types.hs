@@ -7,6 +7,7 @@ module Location.Types
     , registerLocation
     , lookupLocation
     , allLocations
+    , locationIconTextureName
     ) where
 
 import UPrelude
@@ -67,6 +68,11 @@ data LocationDef = LocationDef
     , ldDiscoveryMargin ∷ !Int        -- ^ non-negative tile halo around
                                       --   'ldBounds' later discovery-
                                       --   trigger work (#780) expands by.
+    , ldMapIcons ∷ !(Maybe (Text, Text))
+                                      -- ^ zoom-map annotation texture
+                                      --   paths, (undiscovered, discovered)
+                                      --   (#781). 'Nothing' = this location
+                                      --   places no map annotation at all.
     } deriving (Show, Eq, Generic)
 
 -- | Engine-wide registry of location defs loaded from data/locations/.
@@ -99,3 +105,15 @@ lookupLocation lid (LocationRegistry defs) =
 -- | All defs, sorted by id (deterministic; see 'LocationRegistry').
 allLocations ∷ LocationRegistry → [LocationDef]
 allLocations = sortOn ldId . lrDefs
+
+-- | Deterministic 'Engine.Asset.YamlTextures.TextureNameRegistry' key
+--   for one state of a location's map-icon pair (#781) — shared between
+--   the YAML loader ('Engine.Scripting.Lua.API.Locations', which
+--   registers under this name) and the zoom-map renderer
+--   ('World.Render.Zoom.Icons', which looks it up under the same name),
+--   mirroring the @mat_tile_\<name\>@-style convention
+--   'Engine.Asset.YamlTextures' already documents.
+locationIconTextureName ∷ Text → Bool → Text
+locationIconTextureName lid isDiscovered =
+    "loc_icon_" <> lid <> "_"
+        <> (if isDiscovered then "discovered" else "undiscovered")

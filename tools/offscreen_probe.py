@@ -33,6 +33,20 @@ GLFW, no swapchain) and asserts the mode end to end:
    a real placed location) commits instantly with no modal; re-opening
    and clicking "Establish Here" revalidates and spawns exactly one
    portal, exiting placement.
+7. (unless --skip-worldgen) Location discovery-state map icons (#781),
+   against the same generated world, located via
+   world.listPlacedLocations() (never a hardcoded seed/coordinate): a
+   placed ruin shows its undiscovered icon before any player unit
+   approaches; loading its chunks (structure physically visible) alone
+   does not change the icon; spawning a player-faction unit at the ruin
+   flips ONLY that ruin's icon to discovered (a second, un-approached
+   ruin's stays undiscovered); the icon stays legible at a second map
+   zoom level; rotating the camera keeps the pipeline rendering (the
+   icon's screen-upright invariant across all 4 facings is proven
+   exactly, at the math level, by the pure Hspec group "Location map
+   icons" — this phase only proves the GPU path renders SOMETHING that
+   updates on rotation); and the discovered state survives a real
+   save -> quit -> fresh restart -> load.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated.
 
@@ -364,6 +378,180 @@ def remote_warning_phase(port: int, cx0: int, cy0: int, shots: str) -> None:
               f"before={before2} after={building_count(port, PORTAL)}")
 
 
+# --------------------------------------------------------------------------
+# Location discovery-state map icons (#781) helpers
+# --------------------------------------------------------------------------
+def list_locations(port: int, page: str = "main_world") -> list[dict]:
+    got = send_json(port, f"return world.listPlacedLocations('{page}')", timeout=10.0)
+    return got if isinstance(got, list) else []
+
+
+def zoom_fade_end(port: int) -> float:
+    r = send(port, "return camera.getZoomFadeEnd()")
+    return float(r)
+
+
+def set_zoom(port: int, zoom: float) -> None:
+    send(port, f"camera.setZoom({zoom}); return 'ok'")
+
+
+def center_on(port: int, gx: int, gy: int) -> None:
+    send(port, f"camera.goToTile({gx}, {gy}); return 'ok'")
+    time.sleep(0.3)
+
+
+def spawn_player_unit(port: int, gx: int, gy: int, page: str = "main_world") -> int:
+    r = send(port,
+              f"return unit.spawn('acolyte', {gx}, {gy}, nil, 'player', '{page}')")
+    try:
+        return int(float(r.strip('"')))
+    except ValueError:
+        return -1
+
+
+def location_map_icons_phase(port: int, w: int, h: int, shots: str):
+    """The #781 gate: paired discovery-state zoom-map icons, verified
+    through screenshots + the world.listPlacedLocations() oracle against
+    THIS run's real (unseeded) worldgen — never a hardcoded seed, map
+    coordinate, or click position. The precise wrap/seam/duplicate-icon
+    geometry is exhaustively covered by the pure, GPU-free Hspec group
+    'Location map icons' (Test.Headless.Location.MapIcons) — this phase
+    proves the full GPU render pipeline actually surfaces that same
+    behaviour on screen, not a second derivation of the wrap math."""
+    print("== location map icons (#781) ==")
+    cx0, cy0 = w // 2, h // 2
+
+    locations = list_locations(port)
+    if not check("world has at least two placed locations "
+                 "(need one to approach, one to leave alone)",
+                 len(locations) >= 2, f"found {len(locations)}"):
+        return None
+    target, control = locations[0], locations[1]
+    tgx, tgy = target["gx"], target["gy"]
+    ccx, ccy = control["gx"], control["gy"]
+
+    fade_end = zoom_fade_end(port)
+    full_zoom = fade_end * 1.5
+
+    # -- full map visibility, centred on the target ruin, BEFORE any
+    # player unit has approached: undiscovered icon. camera.goToTile
+    # itself resets zoom (its "zoomSafe" branch, Engine.Scripting.Lua.
+    # API.Camera.cameraGotoTileFn), so it must run BEFORE setZoom, never
+    # after, or the map-visibility zoom gets clobbered back to 0.5.
+    center_on(port, tgx, tgy)
+    set_zoom(port, full_zoom)
+    time.sleep(0.3)
+    check("target ruin starts undiscovered per world.listPlacedLocations()",
+          not list_locations(port)[0].get("discovered")
+          if list_locations(port) else False)
+    shot_undiscovered = os.path.join(shots, "icon_undiscovered.png")
+    check("undiscovered-icon screenshot answers",
+          screenshot(port, shot_undiscovered))
+
+    # -- the terrain/structure being physically visible (chunks around
+    # the ruin loaded) must not, by itself, change the icon: load the
+    # region and re-shoot before any unit is near it. This is checked at
+    # the STATE level (world.listPlacedLocations' discovered flag), not
+    # by pixel-diffing against 'shot_undiscovered' — loading a 2-chunk
+    # radius legitimately repaints most of the frame with newly-visible
+    # terrain, which would swamp any icon-sized pixel delta and make a
+    # full-frame diff meaningless here. 'shot_loaded' below instead
+    # becomes the TERRAIN-STABLE baseline the discovery comparison uses.
+    load_region_around(port, tgx, tgy, radius_chunks=2)
+    time.sleep(0.3)
+    still_undiscovered = next(
+        (loc for loc in list_locations(port)
+         if loc.get("gx") == tgx and loc.get("gy") == tgy), None)
+    check("loading the ruin's chunks (structure visible) does not "
+          "discover it", bool(still_undiscovered)
+          and not still_undiscovered.get("discovered"))
+    shot_loaded = os.path.join(shots, "icon_loaded_not_discovered.png")
+    check("post-load screenshot answers", screenshot(port, shot_loaded))
+
+    # -- approaching the target ruin (a player-faction unit inside its
+    # discovery margin) flips ONLY that ruin to discovered.
+    player_uid = spawn_player_unit(port, tgx, tgy)
+    check("player unit spawned at the target ruin", player_uid >= 0)
+    target_discovered = poll_until(10.0, lambda: next(
+        (loc.get("discovered") for loc in list_locations(port)
+         if loc.get("gx") == tgx and loc.get("gy") == tgy), False))
+    check("approaching the target ruin flips it to discovered",
+          bool(target_discovered))
+    control_still_hidden = next(
+        (loc for loc in list_locations(port)
+         if loc.get("gx") == ccx and loc.get("gy") == ccy), None)
+    check("the un-approached control ruin stays undiscovered",
+          bool(control_still_hidden)
+          and not control_still_hidden.get("discovered"))
+
+    time.sleep(0.3)
+    shot_discovered = os.path.join(shots, "icon_discovered.png")
+    if check("discovered-icon screenshot answers",
+             screenshot(port, shot_discovered)):
+        # Compared against 'shot_loaded' (same loaded terrain, taken
+        # right before this unit spawned) rather than 'shot_undiscovered'
+        # — see the note above on why a terrain-stable baseline is the
+        # only pixel-diff pair that isolates the discovery-driven change.
+        check("the icon frame visibly changes once the ruin is discovered",
+              png_differs(shot_loaded, shot_discovered, min_fraction=0.001))
+
+    # -- readable at a second, different map zoom level.
+    set_zoom(port, full_zoom * 1.6)
+    time.sleep(0.3)
+    shot_zoom2 = os.path.join(shots, "icon_zoom2.png")
+    if check("second-zoom-level screenshot answers",
+             screenshot(port, shot_zoom2)):
+        st = png_stats(shot_zoom2)
+        check("second-zoom-level frame is not blank",
+              bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
+    # -- rotating the map moves the icon with its location (the frame
+    # changes) while the render pipeline keeps working; upright-ness
+    # itself is proven exactly by the Hspec group's axis-aligned-square
+    # assertion across all four facings, not re-derived from pixels here.
+    # (goToTile-before-setZoom again — see the note above.)
+    center_on(port, tgx, tgy)
+    set_zoom(port, full_zoom)
+    time.sleep(0.3)
+    shot_pre_rotate = os.path.join(shots, "icon_pre_rotate.png")
+    screenshot(port, shot_pre_rotate)
+    send(port, "camera.rotateCW(); return 'ok'")
+    time.sleep(0.5)
+    shot_rotated = os.path.join(shots, "icon_rotated.png")
+    if check("post-rotation screenshot answers", screenshot(port, shot_rotated)):
+        check("the frame changes after rotating the camera",
+              png_differs(shot_pre_rotate, shot_rotated))
+    send(port, "camera.rotateCCW(); return 'ok'")
+    time.sleep(0.3)
+
+    # -- save (quit -> fresh restart -> load happens back in main(), the
+    # same shape every other save-persistence check in this probe suite
+    # uses — see 'location_map_icons_reload_check').
+    check("save the world", "true" in send(
+        port, "engine.saveWorld('main_world', 'offscreen_icon_test'); "
+              "return 'true'").lower())
+    time.sleep(0.5)
+    return (tgx, tgy)
+
+
+def location_map_icons_reload_check(port: int, tgx: int, tgy: int) -> None:
+    """Continuation of 'location_map_icons_phase' after a fresh restart +
+    load (run against a NEW engine instance, mirroring how the rest of
+    this probe's own quit/restart pattern works elsewhere)."""
+    send(port, "engine.loadSave('offscreen_icon_test'); return 'queued'")
+    # world.waitForInit blocks until the load's world-thread work is done
+    # (the same barrier tools/multiworld_save_probe.py uses after a load —
+    # engine.loadSave itself only QUEUES the load; getInitProgress tracks
+    # fresh generation, not a load, so it never reaches phase 3 here).
+    send(port, "return world.waitForInit(120)", timeout=125.0)
+    send(port, "world.show('main_world'); return 'ok'")
+    time.sleep(0.5)
+    reloaded = next(
+        (loc for loc in list_locations(port)
+         if loc.get("gx") == tgx and loc.get("gy") == tgy), None)
+    check("the discovered icon state survives save -> quit -> restart -> load",
+          bool(reloaded) and bool(reloaded.get("discovered")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9418)
@@ -453,7 +641,23 @@ def main() -> int:
         # -- 6. remote portal warning (#779), against this same world.
         remote_warning_phase(args.port, w // 2, h // 2, shots)
 
+        # -- 7. location discovery-state map icons (#781), against this
+        # same world.
+        icon_target = location_map_icons_phase(args.port, w, h, shots)
+    else:
+        icon_target = None
+
     quit_engine(args.port, proc)
+
+    # -- 7 (cont'd): fresh restart -> load, proving the discovered icon
+    # state (not the one-off in-process view) actually round-trips.
+    if icon_target:
+        print("== fresh restart -> load (icon persistence, #781) ==")
+        proc3 = boot(args.port, mode=("--offscreen",),
+                     args=["--size", args.size],
+                     label="offscreen engine (icon reload)")
+        location_map_icons_reload_check(args.port, *icon_target)
+        quit_engine(args.port, proc3)
 
     print(f"\nscreenshots kept in {shots}")
     if failures:

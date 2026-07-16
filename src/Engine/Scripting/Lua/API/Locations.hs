@@ -12,17 +12,28 @@ import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlLocations
 import Location.Types
 import Location.Bounds (RelBounds(..))
+
+-- | Fallback texture substituted when a location def's declared
+--   @map_icons@ path doesn't exist on disk (#781) — the same generic
+--   undefined-texture placeholder 'Engine.Scripting.Lua.API.YamlTextures'
+--   already substitutes for a missing material texture, logged via
+--   'resolveTexturePath' rather than failing the whole YAML load.
+missingLocationIconTexture ∷ FilePath
+missingLocationIconTexture = "assets/textures/utility/notexture.png"
 
 -- | engine.loadLocationYaml(path) — parses a YAML file of location
 --   defs, registers each into the LocationRegistry, returns the count.
 --   Mirrors engine.loadBuildingYaml / engine.loadSubstanceYaml.
 --   Locations load LAST at boot (after items / units / buildings) so a
 --   future cross-registry validation pass (#90) can resolve content ids.
-loadLocationYamlFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-loadLocationYamlFn env = do
+loadLocationYamlFn ∷ EngineEnv → LuaBackendState
+                   → Lua.LuaE Lua.Exception Lua.NumResults
+loadLocationYamlFn env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
         Nothing → do
@@ -33,7 +44,26 @@ loadLocationYamlFn env = do
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 defs ← loadLocationYaml logger filePath
+                let (lteq, _) = lbsMsgQueues backendState
                 total ← foldM (\acc d → do
+                    -- Register + queue the def's paired zoom-map icon
+                    -- textures (#781), if it declares any. Named via
+                    -- 'locationIconTextureName' so 'World.Render.Zoom.
+                    -- Icons' can look them back up by the same
+                    -- convention at render time.
+                    forM_ (lydMapIcons d) $ \(undiscPath, discPath) → do
+                        undiscResolved ← resolveTexturePath env
+                            "Location map icon" missingLocationIconTexture
+                            (T.unpack undiscPath)
+                        discResolved ← resolveTexturePath env
+                            "Location map icon" missingLocationIconTexture
+                            (T.unpack discPath)
+                        void $ loadAndRegister env backendState lteq
+                            (locationIconTextureName (lydId d) False)
+                            undiscResolved
+                        void $ loadAndRegister env backendState lteq
+                            (locationIconTextureName (lydId d) True)
+                            discResolved
                     let def = LocationDef
                             { ldId         = lydId d
                             , ldLabel      = if T.null (lydLabel d)
@@ -46,6 +76,7 @@ loadLocationYamlFn env = do
                             , ldContents   = map toContent (lydContents d)
                             , ldBounds     = toBounds (lydBounds d)
                             , ldDiscoveryMargin = lydDiscoveryMargin d
+                            , ldMapIcons   = lydMapIcons d
                             }
                     atomicModifyIORef' (locationDefsRef env) $ \reg →
                         (registerLocation def reg, ())

@@ -35,6 +35,7 @@ import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
+import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
@@ -99,6 +100,7 @@ import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
+import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 
 main ∷ IO ()
 main = hspec $ do
@@ -159,6 +161,7 @@ main = hspec $ do
     describe "Item.QualityTier" ItemQualityTier.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
+    describe "save envelope" SaveEnvelope.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "World.CursorInfo" CursorInfo.spec
@@ -218,5 +221,6 @@ main = hspec $ do
     describe "Render.PanMargin" PanMargin.spec
     LocationBounds.spec
     LocationDiscovery.spec
+    LocationMapIcons.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec
