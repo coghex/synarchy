@@ -135,6 +135,22 @@ data UIElement = UIElement
     --   'UI.InputOwnership.routeScroll'. Unlike 'ueBlocksPointer' this
     --   has no callback-derived fallback: nothing about registering a
     --   click callback implies scroll capture. Defaults to 'False'.
+  , ueDragActivation ∷ Bool
+    -- ^ #745: opt-out from the discrete release-activation contract
+    --   ('UI.ControlActivation') — this control fires its click
+    --   callback immediately on press, exactly like every control did
+    --   before #745, because the press itself starts a drag (a slider
+    --   knob, a scrollbar thumb). Defaults to 'False': an ordinary
+    --   discrete control activates on a validated release instead.
+  , ueSteppable ∷ Bool
+    -- ^ #745: this control responds to arrow-key stepping while it
+    --   holds keyboard control focus (a slider — see
+    --   'Engine.Input.Thread.Keyboard'). Defaults to 'False'.
+  , ueTabIndex ∷ Maybe Int
+    -- ^ #745: explicit Tab-traversal order — see
+    --   'UI.FocusNavigation.focusableElements'. 'Nothing' (the
+    --   default) uses this element's own paint-traversal position, so
+    --   most controls never need to set this at all.
   , ueTextBuffer  ∷ Maybe TextBuffer
   , ueTooltip     ∷ Maybe TooltipContent
     -- ^ Optional hover tooltip. When set and the cursor lingers over
@@ -363,6 +379,10 @@ data UIPageManager = UIPageManager
   , upmBoxTextures   ∷ Map.Map BoxTextureHandle BoxTextureSet
   , upmNextBoxTexId  ∷ Word32
   , upmGlobalFocus ∷ Maybe ElementHandle
+  , upmControlFocus ∷ Maybe ElementHandle
+    -- ^ #745: keyboard CONTROL focus (Tab/Shift+Tab traversal,
+    --   Enter/Space activation) — independent of 'upmGlobalFocus',
+    --   which is text-input focus only. See 'UI.FocusNavigation'.
   , upmTooltip     ∷ TooltipState
   } deriving (Show)
 
@@ -377,5 +397,6 @@ emptyUIPageManager = UIPageManager
   , upmBoxTextures  = Map.empty
   , upmNextBoxTexId = 1
   , upmGlobalFocus = Nothing
+  , upmControlFocus = Nothing
   , upmTooltip     = emptyTooltipState
   }

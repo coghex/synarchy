@@ -6,6 +6,9 @@ module UI.Manager.Property
   , setElementClickable
   , setElementBlocksPointer
   , setElementCapturesScroll
+  , setElementDragActivation
+  , setElementSteppable
+  , setElementTabIndex
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -54,6 +57,24 @@ setElementBlocksPointer handle blocks = modifyElement handle `flip`
 setElementCapturesScroll ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementCapturesScroll handle captures = modifyElement handle `flip`
     (\elem → elem { ueCapturesScroll = captures })
+
+-- | #745: opt this control OUT of the discrete release-activation
+--   contract — see 'ueDragActivation'. Only slider knobs and
+--   scrollbar thumbs should ever set this.
+setElementDragActivation ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementDragActivation handle dragActivation = modifyElement handle `flip`
+    (\elem → elem { ueDragActivation = dragActivation })
+
+-- | #745: opt this control in to arrow-key stepping while it holds
+--   keyboard control focus — see 'ueSteppable'.
+setElementSteppable ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementSteppable handle steppable = modifyElement handle `flip`
+    (\elem → elem { ueSteppable = steppable })
+
+-- | #745: explicit Tab-traversal order — see 'ueTabIndex'.
+setElementTabIndex ∷ ElementHandle → Int → UIPageManager → UIPageManager
+setElementTabIndex handle idx = modifyElement handle `flip`
+    (\elem → elem { ueTabIndex = Just idx })
 
 setElementOnClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
 setElementOnClick handle callbackName = modifyElement handle `flip`

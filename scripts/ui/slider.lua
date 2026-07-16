@@ -160,6 +160,10 @@ function slider.new(params)
     UI.addToPage(sl.page, sl.trackSpriteId, sl.x + capWidth, sl.y)
     UI.setClickable(sl.trackSpriteId, true)
     UI.setOnClick(sl.trackSpriteId, TRACK_CALLBACK)
+    -- #745: a track click jumps the value AND immediately starts a
+    -- drag (onTrackClick below) — it must fire on press like every
+    -- control did before #745, not defer to a validated release.
+    UI.setDragActivation(sl.trackSpriteId, true)
 
     -- Right cap
     sl.rightCapId = UI.newSprite(
@@ -184,6 +188,12 @@ function slider.new(params)
     UI.addToPage(sl.page, sl.knobSpriteId, cx - knobWidth / 2, sl.y)
     UI.setClickable(sl.knobSpriteId, true)
     UI.setOnClick(sl.knobSpriteId, KNOB_CALLBACK)
+    -- #745: the knob starts a drag on press (onKnobClick below) —
+    -- retains press-and-drag behavior exactly like every control did
+    -- before #745. It's also the slider's keyboard control-focus
+    -- target (steppable via Left/Right arrows — see slider.onStep).
+    UI.setDragActivation(sl.knobSpriteId, true)
+    UI.setSteppable(sl.knobSpriteId, true)
 
     -- Hover highlight: a non-clickable overlay parented to the knob so
     -- it tracks the knob automatically and resolves its hover target up
@@ -433,6 +443,17 @@ end
 -- Called on any mouse-up; clears drag state
 function slider.onMouseUp()
     draggingId = nil
+end
+
+-- #745: arrow-key step while the knob holds keyboard control focus
+-- (Engine.Input.Thread.Keyboard fires LuaUIStepEvent for a
+-- UI.setSteppable element; direction is +1/-1). One step = one unit,
+-- matching setValue's own integer rounding/clamping.
+function slider.onStep(elemHandle, direction)
+    local id = slider.findByElementHandle(elemHandle)
+    if not id then return end
+    local sl = sliders[id]
+    slider.setValue(id, sl.value + direction)
 end
 
 -----------------------------------------------------------

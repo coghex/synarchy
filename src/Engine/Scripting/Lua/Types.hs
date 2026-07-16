@@ -144,6 +144,26 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   isn't stuck reporting no location, same convention as
               --   LuaMouseDownEvent's own trailing x/y.
             | LuaUIRightClickEvent ElementHandle Text Double Double
+            | LuaUIPressBeginEvent ElementHandle Text
+              -- ^ #745: a discrete (non-drag-activation) control was
+              --   just pressed — the callback has NOT fired (that's
+              --   deferred to a validated release; see
+              --   'LuaUIClickEvent' above), this is purely the signal a
+              --   widget module needs to show a pending/pressed visual.
+              --   Carries the callback name so a shared dispatcher can
+              --   route it by widget family the same way
+              --   'uiManager.onHoverEnter'/'onHoverLeave' already do.
+            | LuaUIControlFocusChanged (Maybe ElementHandle)
+              -- ^ #745: keyboard CONTROL focus moved (Tab/Shift+Tab) or
+              --   cleared (Escape, invalidation) — distinct from the
+              --   pre-existing text-focus 'LuaUIFocusLost'. Lets a
+              --   widget module render a focus indicator; the engine
+              --   itself already owns the focus state this reports.
+            | LuaUIStepEvent ElementHandle Int
+              -- ^ #745: arrow-key step on a steppable control (a
+              --   slider) that holds keyboard control focus. Direction
+              --   is +1/-1; magnitude of one step is the widget's own
+              --   concern.
             | LuaUIScrollEvent ElementHandle Double Double Bool
               -- ^ Element, deltas, and whether Shift was held (#744) —
               --   lets 'uiManager.onUIScroll' and any future UI scroll

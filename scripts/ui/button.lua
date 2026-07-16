@@ -183,14 +183,24 @@ function button.handleClickByElement(elemHandle)
     local id = button.findByElementHandle(elemHandle)
     if id then
         local btn = buttons[id]
-        -- Show clicked texture
-        button.setState(id, "clicked")
         if btn.onClick then
             btn.onClick(id, btn.name)
         end
         return true
     end
     return false
+end
+
+-- #745: fired at PRESS (LuaUIPressBeginEvent → onUIPressBegin), before
+-- the discrete-activation contract knows whether this gesture will
+-- actually activate — visual-only, no callback. handleClickByElement
+-- above now only fires at a VALIDATED RELEASE (or immediately, for a
+-- drag-activation control — buttons never opt into that).
+function button.onPressBegin(elemHandle)
+    local id = button.findByElementHandle(elemHandle)
+    if id then
+        button.setState(id, "clicked")
+    end
 end
 
 function button.handleCallback(callbackName, elemHandle)

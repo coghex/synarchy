@@ -332,6 +332,60 @@ self-gate they used to carry as a compensating stopgap for exactly the
 empty-modal case, now that the engine decides it once, upstream,
 instead of the two enforcing the same rule with room to drift apart.
 
+B1 (#745) starts Phase B on top of Phase A: discrete-control pointer
+activation and keyboard control focus. Before B1 every discrete
+control (button, checkbox, toggle, tab, list row, dropdown, scroll
+arrow, hand-built menu control) fired its callback the instant a press
+routed to it (`Engine.Input.Thread.Mouse` queued `LuaUIClickEvent`
+immediately) — press-drag-away-to-cancel was impossible. Now a press
+against a non-`ueDragActivation` control only records a
+`UI.ControlActivation.PendingActivation` and fires
+`LuaUIPressBeginEvent` (pending-visual signal only, no callback); the
+matching release re-runs the SAME `routePointer` decision the press
+used, and only activates (fires `LuaUIClickEvent`/`LuaUIRightClickEvent`
+with the freshly re-resolved callback) when it still resolves to the
+same element — one re-check that uniformly covers hidden/deleted/
+disabled/detached/a-modal-now-on-top/dragged-outside-and-released-
+outside, all as `UI.ControlActivation.Cancel`. F4's `aoOutcome` reports
+this truthfully (`"accepted"`/`"rejected"`, the existing vocabulary —
+see `Engine.ActionOutcome`), orthogonal to the pre-existing movement-
+based `"input.click"`/`"input.drag"` `aoKind` classification. Slider
+knobs, the slider track, and scrollbar thumbs opt out via
+`UI.setDragActivation` (`ueDragActivation`) — they still fire
+immediately on press and start a drag, unchanged from before B1; scroll
+arrows and every other discrete control get the new contract for free
+via `UI.setOnClick`, no per-widget Lua change needed.
+
+Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
+second, independent focus system alongside the pre-existing TEXT-input
+focus (`upmGlobalFocus`) — a non-text clickable control (anything with
+`ueOnClick` and no `ueTextBuffer`) can hold it, distinct from a focused
+textbox. `Engine.Input.Thread.Keyboard`'s `(GameInputMode, Nothing)`
+branch (reached only when neither shell-text nor UI-text focus is
+active, so both retain their pre-existing priority automatically)
+drives it directly: Tab/Shift+Tab traverse `focusableElements`
+(`UI.InputOwnership.pagesInScope`-scoped, so a modal traps traversal
+exactly like it traps pointer routing, while `LayerDebug` stays
+reachable above it — same paint-traversal order `topHitBy` hit-tests
+with, `UI.Manager.Query.paintTraversalOrder`) with wraparound and a
+first-Tab/first-Shift+Tab entry default; Escape clears it; Enter/Space
+fire the focused control's `ueOnClick` callback through the IDENTICAL
+`LuaUIClickEvent` dispatch a real click uses ("their logical action" —
+so every widget family gets keyboard activation for free, no Lua
+change); arrow keys step a `ueSteppable` focused control (only a
+slider's knob sets this) via a new `LuaUIStepEvent`. Every key the
+control-focus layer actually consumes is withheld from `inpKeyStates`
+(camera-pan/gameplay polling) the same way a text-focused key already
+is, so e.g. arrow-stepping a focused slider doesn't also pan the
+camera; an unconsumed key (an arrow with no steppable control focused)
+reaches gameplay exactly as before. `upmControlFocus` is validated
+(repaired-or-cleared) on every keyboard dispatch, mirroring
+`UI.Manager.Focus.validateFocus`'s exact contract for text focus.
+`UI.getElementInfo`'s pre-existing `focused` field stays TEXT-focus-only
+(every existing consumer — `ui.dumpWidgets`, the F3 oracle — keeps its
+meaning); control focus is reported through the new, separate
+`controlFocused` field instead of overloading it.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

@@ -17,6 +17,9 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiIsPointerBlockingFn
   , uiSetScrollCaptureFn
   , uiIsScrollCapturingFn
+  , uiSetDragActivationFn
+  , uiSetSteppableFn
+  , uiSetTabIndexFn
   , uiSetOnClickFn
   , uiSetOnRightClickFn
   , uiSetZIndexFn
@@ -136,8 +139,8 @@ uiIsPageInScopeFn env = do
 --   { handle, x, y (absolute framebuffer-pixel position), width,
 --     height, visible, clickable, interactive (has an onClick or
 --     onRightClick callback), zIndex, paintKey, paintOrder, name, text,
---     page (page name), pageVisible, hovered, focused }. Shared by
---   'uiGetElementInfoFn'
+--     page (page name), pageVisible, hovered, focused, controlFocused }.
+--   Shared by 'uiGetElementInfoFn'
 --   (one element by handle) and 'uiGetVisibleElementsFn' (every
 --   element on every visible page) so both report identical fields.
 --
@@ -156,6 +159,13 @@ uiIsPageInScopeFn env = do
 --   elements out of raw UI.newBox/UI.newText instead of a
 --   scripts/ui/*.lua widget module (e.g. the main menu), where there's
 --   no Lua-side cache of the label to fall back on.
+--
+--   focused (pre-existing) is TEXT-input focus only
+--   ('upmGlobalFocus') — every widget dump feeding ui.dumpWidgets and
+--   the F3/#645 oracle already consume it with that meaning, so #745
+--   reports keyboard CONTROL focus ('upmControlFocus', non-text
+--   controls — buttons, checkboxes, tabs, ...) through the separate
+--   controlFocused field instead of overloading this one.
 --
 --   pointerBlocking/scrollCapturing (#743) are the EFFECTIVE
 --   'elementBlocksPointer'/'elementCapturesScroll' predicates — the
@@ -180,6 +190,7 @@ pushElementInfoTable handle el mgr = do
         pageVisible = uePage el `Set.member` upmVisiblePages mgr
         isHovered = upmHovered mgr ≡ Just handle
         isFocused = upmGlobalFocus mgr ≡ Just handle
+        isControlFocused = upmControlFocus mgr ≡ Just handle
         isInteractive = isJust (ueOnClick el) ∨ isJust (ueOnRightClick el)
         visible = isEffectivelyVisible handle mgr
         mText = elementText el mgr
@@ -224,6 +235,8 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "hovered"
     Lua.pushboolean isFocused
     Lua.setfield (Lua.nth 2) "focused"
+    Lua.pushboolean isControlFocused
+    Lua.setfield (Lua.nth 2) "controlFocused"
     Lua.pushboolean pointerBlocking
     Lua.setfield (Lua.nth 2) "pointerBlocking"
     Lua.pushboolean scrollCapturing
@@ -331,6 +344,49 @@ uiIsScrollCapturingFn env = do
             Lua.pushboolean (isElementScrollCapturing (ElementHandle $ fromIntegral e) mgr)
         Nothing → Lua.pushboolean False
     return 1
+
+-- | UI.setDragActivation(elementHandle, dragActivation) (#745) — opt a
+--   control OUT of the discrete release-activation contract: only a
+--   slider knob or scrollbar thumb should ever set this true.
+uiSetDragActivationFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetDragActivationFn env = do
+    elemArg ← Lua.tointeger 1
+    dragArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementDragActivation (ElementHandle $ fromIntegral e) dragArg mgr, ())
+        Nothing → pure ()
+
+    return 0
+
+-- | UI.setSteppable(elementHandle, steppable) (#745) — opt a control in
+--   to arrow-key stepping while it holds keyboard control focus.
+uiSetSteppableFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetSteppableFn env = do
+    elemArg ← Lua.tointeger 1
+    stepArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementSteppable (ElementHandle $ fromIntegral e) stepArg mgr, ())
+        Nothing → pure ()
+
+    return 0
+
+-- | UI.setTabIndex(elementHandle, index) (#745) — explicit Tab-
+--   traversal order; unset elements sort by paint-traversal position.
+uiSetTabIndexFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetTabIndexFn env = do
+    elemArg ← Lua.tointeger 1
+    idxArg  ← Lua.tointeger 2
+
+    case (elemArg, idxArg) of
+        (Just e, Just idx) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementTabIndex (ElementHandle $ fromIntegral e) (fromIntegral idx) mgr, ())
+        _ → pure ()
+
+    return 0
 
 -- | UI.setOnClick(elementHandle, callbackName)
 uiSetOnClickFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

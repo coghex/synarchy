@@ -67,6 +67,7 @@ clearHeldInput state = state
     , inpMouseBtns      = Map.empty
     , inpMouseRoutes    = Map.empty
     , inpPendingUIClick = Map.empty
+    , inpPendingActivation = Map.empty
     }
 
 -- | Emit the mouse-up events the OS swallows on a focus-loss / minimize

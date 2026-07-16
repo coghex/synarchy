@@ -365,6 +365,8 @@ library
                      UI.Types
                      UI.Focus
                      UI.InputOwnership
+                     UI.ControlActivation
+                     UI.FocusNavigation
                      UI.Manager
                      UI.Manager.Core
                      UI.Manager.Page
@@ -1004,6 +1006,8 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ElementInputPolicy
+                   Test.Headless.UI.ControlActivation
+                   Test.Headless.UI.FocusNavigation
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.ClickCorrelation

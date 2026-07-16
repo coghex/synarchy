@@ -59,6 +59,26 @@ function uiManager.onMouseUp(button_num, x, y)
     button.onMouseUp()
 end
 
+-- #745: a discrete (non-drag-activation) control was just pressed —
+-- visual-only pending state, the click callback itself is deferred to
+-- a validated release (or never fires at all, if the release cancels).
+-- Dispatches by callback name, mirroring onHoverEnter/onHoverLeave
+-- below. Widget families with no handler here simply show no pending
+-- visual yet (their release-activation is still correct — this is
+-- pending-state polish, tracked per family as it's added).
+function uiManager.onUIPressBegin(elemHandle, callbackName)
+    if callbackName == "onButtonClick" then
+        button.onPressBegin(elemHandle)
+    end
+end
+
+-- #745: arrow-key step on a steppable control (currently only
+-- sliders opt in via UI.setSteppable) that holds keyboard control
+-- focus.
+function uiManager.onUIStep(elemHandle, direction)
+    slider.onStep(elemHandle, direction)
+end
+
 function uiManager.onHoverEnter(elemHandle, callbackName)
     if callbackName == "onButtonClick" then
         button.onHoverEnter(elemHandle)

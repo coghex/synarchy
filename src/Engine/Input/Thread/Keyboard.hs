@@ -24,9 +24,11 @@ import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import qualified Engine.Core.Queue as Q
-import UI.Manager (validateFocus)
-import UI.Types (ElementHandle(..))
+import UI.Manager (validateFocus, validateControlFocusIn, setControlFocus
+                  , clearControlFocus, getElement)
+import UI.Types (ElementHandle(..), UIElement(..))
 import UI.Focus (getInputMode, InputMode(..), FocusId(..))
+import UI.FocusNavigation (nextFocus, prevFocus)
 
 -- | F4 (#730) Layer A: one primary keyboard record per real key press
 --   ('processInput's caller only invokes this via 'dispatchInput' for
@@ -100,6 +102,13 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
     -- below actually queues a Lua message, so the recorded
     -- handler can never drift from the real dispatch decision.
     matchedRef ← newIORef (Nothing ∷ Maybe Text)
+    -- #745: set only when THIS key was actually consumed by the
+    -- control-focus layer (Tab/Shift+Tab, Enter/Space, or an arrow on
+    -- a steppable focused control) — distinct from 'matchedRef', which
+    -- also gets set by "openShell"/"escape" without those withholding
+    -- key-state polling. Drives the same withholding text focus
+    -- already gets, at the bottom of this function.
+    controlFocusConsumedRef ← newIORef False
     let markMatched name = writeIORef matchedRef (Just name)
         shouldRecord = keyState ≡ GLFW.KeyState'Pressed
                      ∧ not (isModifierKey glfwKey)
@@ -201,6 +210,58 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
       (GameInputMode, Nothing) → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
+
+        -- #745: keyboard CONTROL focus — Tab/Shift+Tab traversal,
+        -- Enter/Space activation, Escape clears, and arrow-key
+        -- stepping on a steppable (slider) focused control. Only
+        -- reachable here — neither shell text mode nor UI text mode
+        -- above ever runs this, so text focus keeps its pre-existing
+        -- priority automatically. Validated the same way text focus
+        -- already is (belt-and-suspenders repair against a
+        -- hidden/deleted/disabled/detached/out-of-scope control).
+        mgr0 ← readIORef (uiManagerRef env)
+        let (mgr1, controlFocus) = validateControlFocusIn mgr0
+        writeIORef (uiManagerRef env) mgr1
+
+        when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
+            let step = if GLFW.modifierKeysShift mods then prevFocus else nextFocus
+                newFocus = step mgr1 controlFocus
+            when (isJust newFocus) $ do
+                atomicModifyIORef' (uiManagerRef env) $ \m →
+                    (maybe (clearControlFocus m) (`setControlFocus` m) newFocus, ())
+                Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+                markMatched "controlFocusTab"
+                writeIORef controlFocusConsumedRef True
+
+        when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed ∧ isJust controlFocus) $ do
+            atomicModifyIORef' (uiManagerRef env) $ \m → (clearControlFocus m, ())
+            Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged Nothing)
+            markMatched "controlFocusEscape"
+            writeIORef controlFocusConsumedRef True
+
+        case controlFocus of
+            Nothing → return ()
+            Just elemHandle → do
+                when ((key ≡ KeyEnter ∨ key ≡ KeySpace) ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                    case ueOnClick =≪ getElement elemHandle mgr1 of
+                        Nothing → return ()
+                        Just callback → do
+                            -- Enter/Space activates through the SAME
+                            -- callback a real click fires — "their
+                            -- logical action" — so every widget family
+                            -- already wired via UI.setOnClick gets
+                            -- keyboard activation with no widget-side
+                            -- change at all.
+                            Q.writeQueue (luaQueue env) (LuaUIClickEvent elemHandle callback 0 0)
+                            markMatched "controlFocusActivate"
+                            writeIORef controlFocusConsumedRef True
+                let steppable = maybe False ueSteppable (getElement elemHandle mgr1)
+                when ((key ≡ KeyLeft ∨ key ≡ KeyRight) ∧ keyState ≡ GLFW.KeyState'Pressed ∧ steppable) $ do
+                    Q.writeQueue (luaQueue env)
+                        (LuaUIStepEvent elemHandle (if key ≡ KeyLeft then (-1) else 1))
+                    markMatched "controlFocusStep"
+                    writeIORef controlFocusConsumedRef True
+
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             Q.writeQueue (luaQueue env) LuaShellToggle
             markMatched "openShell"
@@ -249,6 +310,13 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
           (TextInputMode _, _) → True
           (_, Just _)          → True
           _                    → False
-    return $ if textFocused ∧ not (shouldTrackKeyStateWhileTextFocused glfwKey keyState)
+    -- #745: a key the control-focus layer itself consumed this
+    -- dispatch (Tab/Shift+Tab, Enter/Space, or an arrow on a
+    -- steppable focused control) is withheld from inpKeyStates the
+    -- same way a text-focused key already is — see
+    -- 'controlFocusConsumedRef' above.
+    controlFocusConsumed ← readIORef controlFocusConsumedRef
+    return $ if (textFocused ∨ controlFocusConsumed)
+                ∧ not (shouldTrackKeyStateWhileTextFocused glfwKey keyState)
         then inpSt
         else updateKeyState inpSt glfwKey keyState mods

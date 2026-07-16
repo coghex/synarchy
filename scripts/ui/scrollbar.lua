@@ -214,6 +214,11 @@ function scrollbar.new(params)
     UI.setClickable(sb.tabId, true)
     UI.setOnClick(sb.tabId, TAB_CALLBACK)
     UI.setScrollCapture(sb.tabId, true)
+    -- #745: the scrollbar thumb starts a drag on press (onTabGrab
+    -- below) — retains press-and-drag behavior exactly like every
+    -- control did before #745, unlike the up/down buttons above
+    -- (ordinary discrete controls, now release-activated).
+    UI.setDragActivation(sb.tabId, true)
 
     -- Apply z-indices
     UI.setZIndex(sb.upButtonId, zButton)

@@ -4,6 +4,7 @@ module Engine.Input.Types where
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Graphics.UI.GLFW as GLFW
+import UI.ControlActivation (PendingActivation)
 
 data InputState = InputState
     { inpKeyStates ∷ Map.Map GLFW.Key KeyState
@@ -23,6 +24,18 @@ data InputState = InputState
       --   synthetic text, and 'scripts/unit_drag_select.lua' uses for
       --   game-world box-selection. Removed on release regardless of
       --   outcome.
+    , inpPendingActivation ∷ Map.Map GLFW.MouseButton PendingActivation
+      -- ^ #745: present only for a DISCRETE (non-'ueDragActivation')
+      --   'UI.InputOwnership.RouteElement' press — the click callback
+      --   has NOT fired yet ('inpPendingUIClick' above still records
+      --   the F4 bookkeeping tuple exactly as before #745, but no
+      --   Lua event rides with it any more for this route). The
+      --   matching release resolves this via
+      --   'UI.ControlActivation.resolveActivation' and fires
+      --   'Engine.Scripting.Lua.Types.LuaUIClickEvent'/
+      --   'LuaUIRightClickEvent' only on 'UI.ControlActivation.Activate'.
+      --   Removed on release regardless of outcome, same lifecycle as
+      --   'inpPendingUIClick'.
     , inpCharBatch ∷ Maybe CharBatch
       -- ^ F4 (#730) Layer A: running tally of 'InputCharEvent's seen
       --   since the last flush, so a synthetic multi-character
@@ -354,5 +367,6 @@ defaultInputState = InputState
     , inpMouseRoutes = Map.empty
     , inpWindowFocused = True
     , inpPendingUIClick = Map.empty
+    , inpPendingActivation = Map.empty
     , inpCharBatch = Nothing
     }
