@@ -12,7 +12,7 @@ import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value, Object)
+import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value(..), Object)
 import Data.Aeson.Types (parseEither, Parser)
 import qualified Data.Aeson.Key as Key
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
@@ -104,6 +104,9 @@ data LocationYamlDef = LocationYamlDef
     , lydContents   ∷ ![LocationYamlContent]
     , lydBounds     ∷ !LocationYamlBounds
     , lydDiscoveryMargin ∷ !Int
+    , lydMapIcons   ∷ !(Maybe (Text, Text))
+                      -- ^ (undiscovered, discovered) zoom-map annotation
+                      --   texture paths (#781); 'Nothing' = no annotation.
     } deriving (Show, Eq, Generic)
 
 -- | Fetch a required field as a raw 'Value' first (which never fails to
@@ -122,11 +125,33 @@ requireField lid fieldName v = do
                 <> fieldName <> "' field (" <> T.pack err <> ")"))
             Right a  → pure a
 
+-- | Parse the optional @map_icons: { undiscovered, discovered }@ block
+--   (#781). Absent entirely → 'Nothing' (this location places no zoom-map
+--   annotation). Present → BOTH sub-fields are required; a missing or
+--   wrong-shaped sub-field, or a @map_icons@ value that isn't an object
+--   at all, fails with a message naming the location and the offending
+--   field — the same location-id-attributed contract 'requireField'
+--   already gives 'bounds' / 'discovery_margin'.
+parseMapIcons ∷ Text → Object → Parser (Maybe (Text, Text))
+parseMapIcons lid v = do
+    mRaw ← v .:? "map_icons"
+    case mRaw of
+        Nothing → pure Nothing
+        Just raw → case raw of
+            Object iconsObj → do
+                undisc ← requireField lid "undiscovered" iconsObj
+                disc   ← requireField lid "discovered" iconsObj
+                pure (Just (undisc, disc))
+            _ → fail (T.unpack ("location '" <> lid
+                <> "': 'map_icons' must be an object with 'undiscovered' "
+                <> "and 'discovered' fields"))
+
 instance FromJSON LocationYamlDef where
     parseJSON = withObject "LocationYamlDef" $ \v → do
         lid      ← v .: "id"
         bounds   ← requireField lid "bounds" v
         margin   ← requireField lid "discovery_margin" v
+        mapIcons ← parseMapIcons lid v
         contents ← v .:? "contents" .!= []
         anchor   ← v .:? "anchor" .!= []
         -- Reject inverted bounds / a negative margin / an out-of-bounds
@@ -168,6 +193,7 @@ instance FromJSON LocationYamlDef where
             ⊛ pure contents
             ⊛ pure bounds
             ⊛ pure margin
+            ⊛ pure mapIcons
 
 newtype LocationYamlFile = LocationYamlFile
     { lyfLocations ∷ [LocationYamlDef]

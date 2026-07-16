@@ -70,6 +70,7 @@ baseLoc lid bounds = LocationDef
     , ldContents        = []
     , ldBounds          = bounds
     , ldDiscoveryMargin = 6
+    , ldMapIcons        = Nothing
     }
 
 -- | Registers one location "loc" at chunk (0,0) (anchor tile (8,8)),

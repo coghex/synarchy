@@ -97,6 +97,7 @@ import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
+import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 
 main ∷ IO ()
 main = hspec $ do
@@ -214,5 +215,6 @@ main = hspec $ do
     describe "Render.PanMargin" PanMargin.spec
     LocationBounds.spec
     LocationDiscovery.spec
+    LocationMapIcons.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec

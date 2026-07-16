@@ -29,6 +29,8 @@ import World.Render.Zoom.Climate (tempToColorAt, pressureToColorAt, humidityToCo
                                  , seaTempToColorAt)
 import World.Render.Zoom.Cursor (makeCursorQuad)
 import World.Render.Zoom.Textures (getZoomTexture)
+import World.Render.Zoom.Icons (locationIconTargetPixels, iconWorldSize
+                               , buildLocationIconMap, makeLocationIconQuads)
 
 -- * Generate Zoom Map Quads
 
@@ -74,16 +76,28 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
         Just params → do
             baked ← ensureBakedAtlas bakedRef rawCache textures facing
                         mAtlas texturePicker lookupSlot defFmSlot
+            registry ← readIORef (locationDefsRef env)
+            nameReg  ← readIORef (textureNameRegistryRef env)
             let vb = computeZoomViewBounds camera fbW fbH
                 ws = wgpWorldSize params
                 (camX, camY) = camPosition camera
 
                 !visibleQuads = makeMapQuads params mapMode baked facing
                                              vb camX camY alpha layer
+                -- Discovery-state map icons (#781): a dedicated overlay
+                -- above every terrain/climate mode, texture-selected
+                -- live from 'params' each frame — never routed through
+                -- 'mapMode's color function, so it's never tinted/dimmed
+                -- by whichever climate palette is active.
+                iconMap  = buildLocationIconMap registry nameReg (wtNoTexture textures)
+                iconSize = iconWorldSize locationIconTargetPixels (camZoom camera)
+                                          (fromIntegral winH)
+                !iconQuads = makeLocationIconQuads params iconMap facing vb
+                                 camX camY alpha iconSize layer lookupSlot defFmSlot
             cursorQuad ← makeCursorQuad facing camera winW winH
                                         fbW fbH ws (wsCursorRef worldState)
                                         lookupSlot defFmSlot
-            return $ visibleQuads <> cursorQuad
+            return $ visibleQuads <> iconQuads <> cursorQuad
 
 -- * Map Quads by Mode
 

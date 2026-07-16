@@ -583,6 +583,7 @@ library
                      World.Render.Zoom.Textures
                      World.Render.Zoom.Quads
                      World.Render.Zoom.Cursor
+                     World.Render.Zoom.Icons
                      World.Render.Zoom.Background
                      World.Generate
                      World.Generate.Arena
@@ -1027,6 +1028,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
                    Test.Headless.Location.Discovery
+                   Test.Headless.Location.MapIcons
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
     build-depends: base >=4.20 && <5

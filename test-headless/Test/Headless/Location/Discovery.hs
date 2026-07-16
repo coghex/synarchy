@@ -42,6 +42,7 @@ locDef lid = LocationDef
     , ldContents        = []
     , ldBounds          = RelBounds (-2) (-2) 2 2
     , ldDiscoveryMargin = 6
+    , ldMapIcons        = Nothing
     }
 
 registry1 ∷ LocationRegistry
