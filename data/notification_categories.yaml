@@ -100,6 +100,12 @@ categories:
     default_settings: { log: true,  popup: false, pause: false }
     log_coalesce_window: 1.0
 
+  - id: location_discovery
+    display_name: Location Discovery
+    description: A previously unknown placed location has been discovered.
+    text_color: [0.9, 0.8, 0.3, 1.0]
+    default_settings: { log: true,  popup: true,  pause: false }
+
   - id: debug
     display_name: Debug
     description: Development events surfaced to the in-game log.

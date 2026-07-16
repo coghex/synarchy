@@ -94,6 +94,8 @@ import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.Barrier as SaveBarrier
+import qualified Test.Headless.Location.Discovery as LocationDiscovery
+import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 
 main ∷ IO ()
 main = hspec $ do
@@ -158,6 +160,7 @@ main = hspec $ do
     describe "World.CursorInfo" CursorInfo.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
+    WorldLocationDiscovery.spec
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "WorldGen.SoilShed" SoilShed.spec
     describe "WorldGen.SoilRedistribution" SoilRedistribution.spec
@@ -208,5 +211,6 @@ main = hspec $ do
     describe "Scene.BatchMerge" BatchMerge.spec
     describe "Render.PanMargin" PanMargin.spec
     LocationBounds.spec
+    LocationDiscovery.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec

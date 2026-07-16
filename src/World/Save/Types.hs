@@ -124,7 +124,13 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 88  -- v88: CraftBill gains cbMode/cbTarget/cbOutputItem
+currentSaveVersion = 89  -- v89: WorldGenParams gains trailing
+                         -- 'wgpLocationDiscovered' (#780) — a per-chunk
+                         -- one-time discovery flag (player-faction unit
+                         -- has entered a placed location's discovery-
+                         -- margin halo), independent of
+                         -- wgpLocationStamped/wgpLocationContentsSpawned.
+                         -- v88: CraftBill gains cbMode/cbTarget/cbOutputItem
                          -- (#795) — the persisted until-stock craft-bill
                          -- mode (Craft.Bills.addUntilStockBill), appended
                          -- after cbWorking.

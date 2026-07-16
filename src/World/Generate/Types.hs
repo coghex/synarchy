@@ -90,6 +90,22 @@ data WorldGenParams = WorldGenParams
       --   marker, set once on first stamp and never revisited by
       --   player structure edits, so it stays true even after the
       --   anchor tile is cleared.
+    , wgpLocationDiscovered ∷ !(HS.HashSet ChunkCoord)
+      -- ^ Player-knowledge flag (#780): chunks whose placed location
+      --   has transitioned undiscovered → discovered — a player-
+      --   faction unit has entered its 'Location.Bounds.expandBounds'
+      --   discovery-margin halo at least once. Deliberately INDEPENDENT
+      --   of 'wgpLocationStamped' / 'wgpLocationContentsSpawned' above:
+      --   a location can be discovered before or after its geometry
+      --   stamps or its contents spawn, and stamping/spawning must
+      --   never itself mark a location discovered. Checked + mutated
+      --   every world tick by 'World.Thread.Discovery.
+      --   tickLocationDiscovery' against every page in 'wmWorlds' (not
+      --   just the visible one — discovery must fire on a hidden
+      --   page a player unit is simulated on), independent of the
+      --   pause flag so a freshly loaded, auto-paused save with a unit
+      --   already standing in a location's margin discovers it
+      --   immediately.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -123,6 +139,7 @@ instance Serialize WorldGenParams where
         put (wgpLocationOverlay p)
         put (wgpLocationContentsSpawned p)
         put (wgpLocationStamped p)
+        put (wgpLocationDiscovered p)
     get = do
         seed       ← get
         ws         ← get
@@ -146,6 +163,7 @@ instance Serialize WorldGenParams where
         locOverlay ← get
         locSpawned ← get
         locStamped ← get
+        locDiscovered ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -170,6 +188,7 @@ instance Serialize WorldGenParams where
             , wgpLocationOverlay  = locOverlay
             , wgpLocationContentsSpawned = locSpawned
             , wgpLocationStamped  = locStamped
+            , wgpLocationDiscovered = locDiscovered
             , wgpVolcanoCtx       = vc
             }
 
@@ -202,6 +221,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpLocationOverlay = emptyLocationOverlay
     , wgpLocationContentsSpawned = HS.empty
     , wgpLocationStamped = HS.empty
+    , wgpLocationDiscovered = HS.empty
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 
