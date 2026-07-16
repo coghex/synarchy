@@ -33,7 +33,7 @@ import UI.ControlActivation (PendingActivation(..), ActivationOutcome(..)
                              , activationOutcomeName, beginActivation)
 import Engine.Input.Thread.Mouse.Activation (resolvePendingActivation)
 import UI.FocusNavigation (isEligibleControl)
-import UI.Manager (setControlFocus, clearControlFocus)
+import UI.Manager (setControlFocus, clearControlFocus, getControlFocus)
 
 -- | F4 (#730 review round 2): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
@@ -236,18 +236,24 @@ dispatchMouseEvent env inpSt btn pos state = do
                   -- unchanged from the pre-#742 global search.
                   GLFW.MouseButton'1 → do
                     let leftRoute = routePointer PointerLeftClick mousePos uiMgr'
-                    -- #745 review round 1: a left click also moves
+                    -- #745 review rounds 1 & 2: a left click also moves
                     -- keyboard CONTROL focus — landing on an eligible
-                    -- non-text control focuses it, anything else
-                    -- (a text field, a blocked/consumed route, a
-                    -- miss) clears it, mirroring how this same click
-                    -- already clears the pre-existing TEXT focus
-                    -- (LuaUIFocusLost) on those same non-focusing
-                    -- routes below.
-                    atomicModifyIORef' (uiManagerRef env) $ \m →
-                        (case leftRoute of
-                            RouteElement eh _ | isEligibleControl eh m → setControlFocus eh m
-                            _ → clearControlFocus m, ())
+                    -- non-text control focuses it, anything else (a
+                    -- text field, a blocked/consumed route, a miss)
+                    -- clears it, mirroring how this same click already
+                    -- clears the pre-existing TEXT focus (LuaUIFocusLost)
+                    -- on those same non-focusing routes below. Reports
+                    -- an actual transition the same way Tab/Escape/
+                    -- validation-repair already do.
+                    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \m →
+                        let target = case leftRoute of
+                                RouteElement eh _ | isEligibleControl eh m → Just eh
+                                _ → Nothing
+                        in ( maybe (clearControlFocus m) (`setControlFocus` m) target
+                           , if target ≡ getControlFocus m then Nothing else Just target )
+                    case mChanged of
+                        Just newFocus → Q.writeQueue lq (LuaUIControlFocusChanged newFocus)
+                        Nothing → return ()
                     case leftRoute of
                         RouteElement elemHandle callback → do
                             -- #745: a drag-activation control (slider

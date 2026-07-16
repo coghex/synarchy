@@ -25,7 +25,7 @@ import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import qualified Engine.Core.Queue as Q
 import UI.Manager (validateFocus, validateControlFocusIn, setControlFocus
-                  , clearControlFocus, getElement)
+                  , clearControlFocus, getElement, getControlFocus)
 import UI.Types (ElementHandle(..), UIElement(..))
 import UI.Focus (getInputMode, InputMode(..), FocusId(..))
 import UI.FocusNavigation (nextFocus, prevFocus)
@@ -222,6 +222,12 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         mgr0 ← readIORef (uiManagerRef env)
         let (mgr1, controlFocus) = validateControlFocusIn mgr0
         writeIORef (uiManagerRef env) mgr1
+        -- #745 review round 2: report a repair-triggered clear too —
+        -- not just the explicit Tab/Escape transitions below — so a
+        -- Lua focus-ring consumer never sees a stale handle linger
+        -- after the control it names went invalid.
+        when (controlFocus ≢ getControlFocus mgr0) $
+            Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged controlFocus)
 
         when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             let step = if GLFW.modifierKeysShift mods then prevFocus else nextFocus
@@ -265,7 +271,18 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             Q.writeQueue (luaQueue env) LuaShellToggle
             markMatched "openShell"
-        when (key ≠ KeyGrave) $ do
+        -- #745 review round 2: a key the control-focus layer above
+        -- just consumed (Tab/Shift+Tab, Enter/Space, or a steppable
+        -- arrow) must take precedence over gameplay dispatch, exactly
+        -- like text focus already does by never reaching this
+        -- broadcast at all for the keys ITS branches handle (compare
+        -- the TextInputMode/UITextInput cases above, which have no
+        -- unconditional onKeyDown broadcast of their own). Mirror that
+        -- here: skip the broadcast for a consumed key so no gameplay
+        -- onKeyDown handler can also act on it; every unconsumed key
+        -- keeps reaching gameplay exactly as before #745.
+        controlFocusConsumed ← readIORef controlFocusConsumedRef
+        when (key ≠ KeyGrave ∧ not controlFocusConsumed) $ do
             let lq = luaQueue env
             -- Carry the exact GLFW key alongside the merged logical key:
             -- onKeyDown still gets the merged name string, but

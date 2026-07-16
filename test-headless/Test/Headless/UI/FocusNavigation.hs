@@ -168,7 +168,7 @@ spec = do
 
     around withHeadlessEngine $
         describe "wire integration (Engine.Input.Thread) — #745" $ do
-            it "clicking an eligible control also moves keyboard control focus to it (review round 1)" $ \env → do
+            it "clicking an eligible control also moves keyboard control focus to it, notifying Lua of each real transition (review rounds 1 & 2)" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                     (a, m2) = focusableAt "a" 0 hudH m1
@@ -177,16 +177,27 @@ spec = do
                 click env (5, 5)
                 mgrAfterA ← readIORef (uiManagerRef env)
                 getControlFocus mgrAfterA `shouldBe` Just a
+                msgsA ← drainLuaMsgs env
+                msgsA `shouldSatisfy` elem (LuaUIControlFocusChanged (Just a))
+                -- Clicking the SAME already-focused control again is
+                -- not a real transition — no redundant notification.
+                click env (5, 5)
+                msgsARepeat ← drainLuaMsgs env
+                msgsARepeat `shouldSatisfy` all (not ∘ isControlFocusChanged)
                 -- Clicking a DIFFERENT eligible control moves focus to
                 -- it, not just the first Tab default.
                 click env (35, 5)
                 mgrAfterB ← readIORef (uiManagerRef env)
                 getControlFocus mgrAfterB `shouldBe` Just b
+                msgsB ← drainLuaMsgs env
+                msgsB `shouldSatisfy` elem (LuaUIControlFocusChanged (Just b))
                 -- Clicking empty space clears it (mirrors how the same
                 -- click already clears the pre-existing text focus).
                 click env (900, 900)
                 mgrAfterMiss ← readIORef (uiManagerRef env)
                 getControlFocus mgrAfterMiss `shouldBe` Nothing
+                msgsMiss ← drainLuaMsgs env
+                msgsMiss `shouldSatisfy` elem (LuaUIControlFocusChanged Nothing)
 
             it "clicking a text field clears control focus rather than leaving it stale" $ \env → do
                 resetAll env
@@ -212,6 +223,10 @@ spec = do
                 pressKey env GLFW.Key'Tab (shiftMods)
                 mgrAfterShiftTab ← readIORef (uiManagerRef env)
                 getControlFocus mgrAfterShiftTab `shouldBe` Just c
+                -- Tab is consumed here too — never also broadcast to
+                -- gameplay onKeyDown (review round 2).
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isKeyDownEvent)
 
             it "Tab traverses forward across repeated presses, wrapping back to the first" $ \env → do
                 resetAll env
@@ -272,7 +287,7 @@ spec = do
                 mgr ← readIORef (uiManagerRef env)
                 getControlFocus mgr `shouldBe` Nothing
 
-            it "Enter activates the focused control through its onClick callback (LuaUIClickEvent), and withholds Enter from gameplay key-state polling" $ \env → do
+            it "Enter activates the focused control through its onClick callback (LuaUIClickEvent), withholds Enter from gameplay key-state polling, and never also broadcasts it to gameplay onKeyDown (review round 2)" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                     (a, m2) = focusableAt "a" 0 hudH m1
@@ -280,8 +295,19 @@ spec = do
                 pressKey env GLFW.Key'Enter noMods
                 msgs ← drainLuaMsgs env
                 msgs `shouldSatisfy` elem (LuaUIClickEvent a "aClick" 0 0)
+                -- Mirrors the pre-existing text-focus precedent (its
+                -- branches never reach the onKeyDown broadcast either)
+                -- — a control-focus-consumed key must not ALSO reach
+                -- gameplay's onKeyDown handlers.
+                msgs `shouldSatisfy` all (not ∘ isKeyDownEvent)
                 st ← readIORef (inputStateRef env)
                 Map.lookup GLFW.Key'Enter (inpKeyStates st) `shouldBe` Nothing
+
+            it "an unconsumed key (nothing control-focused) still reaches gameplay onKeyDown exactly as before #745" $ \env → do
+                resetAll env
+                pressKey env GLFW.Key'Enter noMods
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` any isKeyDownEvent
 
             it "Space also activates the focused control" $ \env → do
                 resetAll env
@@ -301,6 +327,7 @@ spec = do
                 pressKey env GLFW.Key'Right noMods
                 msgs ← drainLuaMsgs env
                 msgs `shouldSatisfy` elem (LuaUIStepEvent a 1)
+                msgs `shouldSatisfy` all (not ∘ isKeyDownEvent)
                 st ← readIORef (inputStateRef env)
                 Map.lookup GLFW.Key'Right (inpKeyStates st) `shouldBe` Nothing
 
@@ -452,6 +479,14 @@ isTabPressed _ = False
 isStepEvent ∷ LuaMsg → Bool
 isStepEvent (LuaUIStepEvent _ _) = True
 isStepEvent _ = False
+
+isControlFocusChanged ∷ LuaMsg → Bool
+isControlFocusChanged (LuaUIControlFocusChanged _) = True
+isControlFocusChanged _ = False
+
+isKeyDownEvent ∷ LuaMsg → Bool
+isKeyDownEvent (LuaKeyDownEvent _ _) = True
+isKeyDownEvent _ = False
 
 newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
 newBareLuaBackend env = do
