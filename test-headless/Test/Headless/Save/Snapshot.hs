@@ -325,7 +325,10 @@ spec = do
                     minimalGlobals { sgNextBuildingId = 42, sgNextUnitId = 42 }
                     [page]
                 sdStale = snapshotToSaveData req snapStale
-                [wps] = sdWorlds sdStale
+                wps = case sdWorlds sdStale of
+                    [w]   → w
+                    other → error ("expected exactly one WorldPageSave, got "
+                                   <> show (length other))
             bsnNextId (wpsBuildings wps) `shouldBe` 42
             usnNextId (wpsUnits wps) `shouldBe` 42
 
@@ -387,7 +390,9 @@ spec = do
                 explodingEdits = HM.singleton (ChunkCoord 0 0)
                     [error "deferred nested payload boom" ∷ WorldEdit]
                 page = (minimalPage page1) { pgsEdits = explodingEdits }
-                Right snap = captureSessionSnapshot minimalGlobals [page]
+                snap = case captureSessionSnapshot minimalGlobals [page] of
+                    Right s   → s
+                    Left errs → error ("expected acceptance, got " <> show errs)
                 sd = snapshotToSaveData req snap
             evaluate (encodeSaveData sd)
                 `shouldThrow` errorCall "deferred nested payload boom"
