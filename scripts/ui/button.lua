@@ -220,15 +220,26 @@ end
 -- onHoverLeave/onMouseUp on the SAME button must not clobber it).
 local focusedId = nil
 
--- The button's correct visual for its CURRENT state, independent of
--- which specific event just fired: "clicked" always wins (an in-flight
--- press), otherwise "hovered" whenever the button holds keyboard
--- control focus (real mouse hover uses the identical placeholder
--- texture — see button.onUIControlFocusChanged), else "normal".
+-- The button's resting visual once nothing is actively pressed:
+-- "hovered" whenever the button holds keyboard control focus (real
+-- mouse hover uses the identical placeholder texture — see
+-- button.onUIControlFocusChanged), else "normal". Unconditional — the
+-- caller decides whether "clicked" should keep winning instead (see
+-- refreshVisualState vs. onMouseUp below).
+local function applyRestingState(id)
+    button.setState(id, id == focusedId and "hovered" or "normal")
+end
+
+-- Like applyRestingState, but leaves an in-flight "clicked" press
+-- alone — for callers (hover leaving) that must never interrupt a
+-- press already in progress. #745 review round 5: onMouseUp below
+-- must NOT go through this guard — mouse-up is exactly what ENDS a
+-- click, so gating on "still clicked" there left every pressed button
+-- stuck clicked forever.
 local function refreshVisualState(id)
     local btn = buttons[id]
     if not btn or btn.state == "clicked" then return end
-    button.setState(id, id == focusedId and "hovered" or "normal")
+    applyRestingState(id)
 end
 
 function button.onHoverEnter(elemHandle)
@@ -255,9 +266,12 @@ end
 function button.onMouseUp()
     for id, btn in pairs(buttons) do
         if btn.state == "clicked" then
-            -- If mouse is still over the button, go to hovered; otherwise normal
-            -- For simplicity, go to normal — the next hover poll will fix it
-            refreshVisualState(id)
+            -- Unconditionally ends the press — refreshVisualState's
+            -- clicked-guard would refuse to touch it (round 5 fix).
+            -- If mouse is still over the button, go to hovered;
+            -- otherwise normal — for simplicity always resolve via
+            -- applyRestingState; the next hover poll corrects it.
+            applyRestingState(id)
         end
     end
 end

@@ -112,6 +112,14 @@ spec = do
                 (inDebug, m6) = focusableAt "inDebug" 0 debugH m5
             focusableElements m6 `shouldBe` [inModal, inDebug]
 
+        it "excludes a non-steppable drag-activation control (a dead Tab stop with no keyboard action) but keeps a steppable one (review round 5)" $ do
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (track, m2') = focusableAt "track" 0 hudH m1
+                m2 = setElementDragActivation track True m2'
+                (knob, m3') = focusableAt "knob" 30 hudH m2
+                m3 = setElementSteppable knob True (setElementDragActivation knob True m3')
+            focusableElements m3 `shouldBe` [knob]
+
         it "next/prev traverse forward/backward and wrap at either end" $ do
             let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                 (a, m2) = focusableAt "a" 0 hudH m1

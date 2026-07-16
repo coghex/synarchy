@@ -243,10 +243,17 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
 
         when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
             let step = if GLFW.modifierKeysShift mods then prevFocus else nextFocus
-                newFocus = step mgr1 controlFocus
+            -- #745 review round 5: traverse AND assign in the SAME
+            -- atomic transition, computed from whatever is actually
+            -- current at mutation time (not the earlier validation
+            -- snapshot) — otherwise a concurrent Lua-thread mutation
+            -- between that snapshot and this write could invalidate
+            -- the chosen target before it's installed.
+            newFocus ← atomicModifyIORef' (uiManagerRef env) $ \m →
+                case step m (getControlFocus m) of
+                    Nothing     → (m, Nothing)
+                    Just target → (setControlFocus target m, Just target)
             when (isJust newFocus) $ do
-                atomicModifyIORef' (uiManagerRef env) $ \m →
-                    (maybe (clearControlFocus m) (`setControlFocus` m) newFocus, ())
                 Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
                 markMatched "controlFocusTab"
                 writeIORef controlFocusConsumedRef True

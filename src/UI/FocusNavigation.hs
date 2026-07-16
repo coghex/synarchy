@@ -40,12 +40,22 @@ import UI.Manager.Query (paintTraversalOrder)
 --   adds. A text-input field (`ueTextBuffer` set) is deliberately
 --   excluded: it keeps using the pre-existing text-focus system, never
 --   this one.
+--
+--   A drag-activation control ('UI.Types.ueDragActivation' — a slider
+--   knob/track, a scrollbar thumb) is excluded UNLESS it's also
+--   steppable ('UI.Types.ueSteppable'): Enter/Space deliberately never
+--   fires a drag-starting callback (#745 review round 3), so a
+--   non-steppable one (the slider TRACK, the scrollbar thumb — neither
+--   has a keyboard-reachable action at all) would be a dead Tab stop.
+--   A steppable one (the slider KNOB) stays focusable — arrow-key
+--   stepping is its real keyboard action.
 eligibleControl ∷ UIPageManager → UIElement → Bool
 eligibleControl mgr el =
     ueVisible el
     ∧ ueClickable el
     ∧ isJust (ueOnClick el)
     ∧ isNothing (ueTextBuffer el)
+    ∧ (not (ueDragActivation el) ∨ ueSteppable el)
     ∧ isPageInScope (uePage el) mgr
 
 -- | Every keyboard-focusable control, in stable traversal order.
