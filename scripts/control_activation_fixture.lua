@@ -12,6 +12,21 @@
 local M = package.loaded["scripts.control_activation_fixture"] or {}
 package.loaded["scripts.control_activation_fixture"] = M
 
+-- #745 review round 6: also proxy the REAL production widget modules'
+-- own registered callback names (onCheckboxClick, onSliderKnobClick/
+-- onSliderTrackClick, onUIStep) to their real handlers, so a test can
+-- drive a genuine checkbox.new()/slider.new() instance through the
+-- real keyboard-activation path and assert real state changes
+-- (checkbox.isChecked, slider.getValue) — not just that a callback
+-- name got invoked, per the review's ask for real widget-family
+-- coverage alongside the family-agnostic mechanism test above.
+local checkbox = require("scripts.ui.checkbox")
+local slider = require("scripts.ui.slider")
+
+function M.onCheckboxClick(elemHandle)
+    return checkbox.handleClickByElement(elemHandle)
+end
+
 function M.resetState()
     M.state = {
         checkboxClicks = 0,
@@ -51,6 +66,9 @@ end
 
 function M.onUIStep(elemHandle, direction)
     table.insert(M.state.stepEvents, { handle = elemHandle, direction = direction })
+    -- No-op for a fixture-created generic element (findByElementHandle
+    -- returns nil); forwards for real slider.new() instances.
+    slider.onStep(elemHandle, direction)
 end
 
 return M

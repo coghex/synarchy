@@ -21,6 +21,7 @@ local randbox  = require("scripts.ui.randbox")
 local toggle   = require("scripts.ui.toggle")
 local uiList   = require("scripts.ui.list")
 local contextMenu = require("scripts.ui.context_menu")
+local focusIndicator = require("scripts.ui.focus_indicator")
 local hud      = require("scripts.hud")
 
 function M.handleNonTextBoxClick()
@@ -79,12 +80,15 @@ function uiManager.onUIStep(elemHandle, direction)
     slider.onStep(elemHandle, direction)
 end
 
--- #745 review round 3: keyboard control focus moved or cleared.
--- elemHandle may be nil (cleared/nothing focused). button.lua is the
--- reference visual consumer; other families are unaffected (correct
--- activation behavior does not depend on this notification at all).
+-- #745 review round 3/6: keyboard control focus moved or cleared.
+-- elemHandle may be nil (cleared/nothing focused). focusIndicator is
+-- the GENERIC visual consumer covering every focusable control family
+-- uniformly (correct activation behavior never depended on this
+-- notification at all); button ALSO reacts for its own richer
+-- pressed/hover-aware state composition.
 function uiManager.onUIControlFocusChanged(elemHandle)
     button.onUIControlFocusChanged(elemHandle)
+    focusIndicator.onUIControlFocusChanged(elemHandle)
 end
 
 function uiManager.onHoverEnter(elemHandle, callbackName)

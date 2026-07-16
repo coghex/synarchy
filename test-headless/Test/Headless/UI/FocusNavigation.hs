@@ -428,6 +428,32 @@ spec = do
                 controlFocused `shouldBe` "true"
                 textFocused `shouldBe` "false"
 
+            it "the REAL ui.dumpWidgets() oracle (scripts/ui/registry.lua), not just UI.getElementInfo, reports controlFocused distinctly per widget (#745 review round 6)" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local cb = require('scripts.ui.checkbox'); cb.init(); \
+                    \local pg = UI.newPage('t_dump', 'hud'); UI.showPage(pg); \
+                    \_G.__focusedId = cb.new({name='focused_cb', x=0, y=0, page=pg, default=false}); \
+                    \_G.__otherId = cb.new({name='other_cb', x=60, y=0, page=pg, default=false}); \
+                    \UI.setControlFocus(cb.getElementHandle(_G.__focusedId)); \
+                    \return true"
+                let findControlFocused ∷ Text
+                    findControlFocused =
+                        "local registry = require('scripts.ui.registry'); \
+                        \local cb = require('scripts.ui.checkbox'); \
+                        \local target = cb.getElementHandle(%ID%); \
+                        \for _, w in ipairs(registry.dumpWidgets()) do \
+                        \  if w.handle == target then return w.controlFocused end \
+                        \end; \
+                        \return 'NOT_FOUND'"
+                focusedEntry ← evalDebug ls
+                    (T.replace "%ID%" "_G.__focusedId" findControlFocused)
+                focusedEntry `shouldBe` "true"
+                otherEntry ← evalDebug ls
+                    (T.replace "%ID%" "_G.__otherId" findControlFocused)
+                otherEntry `shouldBe` "false"
+
             it "Phase A regression: the modal boundary still blocks pointer clicks exactly as #742/#743 established" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
@@ -514,6 +540,49 @@ spec = do
                 -- never reached, or double-fired) would move this off
                 -- 5 in either direction.
                 out `shouldBe` "5"
+
+            it "Enter activates a REAL checkbox.new() instance's onClick, actually flipping checkbox.isChecked (#745 review round 6)" $ \env → do
+                resetAll env
+                (ls, stateRef) ← newFixtureLuaBackend env
+                _ ← evalDebugFixture ls
+                    "local cb = require('scripts.ui.checkbox'); cb.init(); \
+                    \local pg = UI.newPage('t_cb', 'hud'); UI.showPage(pg); \
+                    \local id = cb.new({name='test_cb', x=0, y=0, page=pg, default=false}); \
+                    \_G.__cbId = id; _G.__cbEh = cb.getElementHandle(id); \
+                    \return true"
+                beforeChecked ← evalDebugFixture ls
+                    "return require('scripts.ui.checkbox').isChecked(_G.__cbId)"
+                beforeChecked `shouldBe` "false"
+                cbHandleText ← evalDebugFixture ls "return _G.__cbEh"
+                let cbHandle = ElementHandle (read (T.unpack cbHandleText))
+                mgr' ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setControlFocus cbHandle mgr')
+                pressKey env GLFW.Key'Enter noMods
+                processLuaMsgs env ls stateRef
+                afterChecked ← evalDebugFixture ls
+                    "return require('scripts.ui.checkbox').isChecked(_G.__cbId)"
+                afterChecked `shouldBe` "true"
+
+            it "an arrow key steps a REAL slider.new() knob's own UI.setSteppable wiring, actually changing slider.getValue (#745 review round 6)" $ \env → do
+                resetAll env
+                (ls, stateRef) ← newFixtureLuaBackend env
+                _ ← evalDebugFixture ls
+                    "local sl = require('scripts.ui.slider'); sl.init(); \
+                    \local pg = UI.newPage('t_sl', 'hud'); UI.showPage(pg); \
+                    \local id = sl.new({name='test_sl', x=0, y=0, width=200, height=24, \
+                    \  min=0, max=100, default=50, page=pg}); \
+                    \_G.__slId = id; _G.__slKnobEh = sl.getKnobHandle(id); \
+                    \return true"
+                beforeValue ← evalDebugFixture ls "return require('scripts.ui.slider').getValue(_G.__slId)"
+                beforeValue `shouldBe` "50"
+                knobHandleText ← evalDebugFixture ls "return _G.__slKnobEh"
+                let knobHandle = ElementHandle (read (T.unpack knobHandleText))
+                mgr' ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setControlFocus knobHandle mgr')
+                pressKey env GLFW.Key'Right noMods
+                processLuaMsgs env ls stateRef
+                afterValue ← evalDebugFixture ls "return require('scripts.ui.slider').getValue(_G.__slId)"
+                afterValue `shouldBe` "51"
 
 -- * Wire-integration helpers (mirrors Test.Headless.UI.ElementInputPolicy)
 

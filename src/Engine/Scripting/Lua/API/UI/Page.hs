@@ -19,6 +19,25 @@ import qualified Engine.Core.Queue as Q
 import UI.Types
 import UI.Manager
 
+-- | Apply a manager mutation that may proactively clear
+--   'upmControlFocus' as a side effect (hidePage/deletePage) and
+--   report the transition via 'LuaUIControlFocusChanged' when it
+--   actually changes — #745 review rounds 4/6: a pure mutation the
+--   calling script may have no idea also moved the keyboard focus it
+--   owns (mirrored in 'Engine.Scripting.Lua.API.UI.Hierarchy' for
+--   delete/detach).
+applyAndNotifyControlFocus ∷ EngineEnv → (UIPageManager → UIPageManager) → IO ()
+applyAndNotifyControlFocus env f = do
+    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        let mgr' = f mgr
+        in ( mgr'
+           , if getControlFocus mgr' ≡ getControlFocus mgr
+             then Nothing else Just (getControlFocus mgr')
+           )
+    case mChanged of
+        Just newFocus → Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+        Nothing → pure ()
+
 -- | UI.newPage(name, layer) -> pageHandle
 uiNewPageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiNewPageFn env = do
@@ -39,13 +58,17 @@ uiNewPageFn env = do
 
     return 1
 
--- | UI.deletePage(pageHandle)
+-- | UI.deletePage(pageHandle) — #745 review round 6: deletePage
+--   recursively deletes every element it owns (deleteElementTree),
+--   which already clears upmControlFocus for whichever handle it
+--   matches; report it the same way uiHidePageFn/the Hierarchy
+--   delete/detach bindings do.
 uiDeletePageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiDeletePageFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
-        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (deletePage (PageHandle $ fromIntegral n) mgr, ())
+        Just n → Lua.liftIO $ applyAndNotifyControlFocus env $
+            deletePage (PageHandle $ fromIntegral n)
         Nothing → pure ()
     return 0
 
@@ -70,16 +93,8 @@ uiHidePageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiHidePageFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
-        Just n → Lua.liftIO $ do
-            mChanged ← atomicModifyIORef' (uiManagerRef env) $ \mgr →
-                let mgr' = hidePage (PageHandle $ fromIntegral n) mgr
-                in ( mgr'
-                   , if getControlFocus mgr' ≡ getControlFocus mgr
-                     then Nothing else Just (getControlFocus mgr')
-                   )
-            case mChanged of
-                Just newFocus → Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
-                Nothing → pure ()
+        Just n → Lua.liftIO $ applyAndNotifyControlFocus env $
+            hidePage (PageHandle $ fromIntegral n)
         Nothing → pure ()
     return 0
 
