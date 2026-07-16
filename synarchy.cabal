@@ -285,6 +285,7 @@ library
                      Engine.Scripting.Lua.API.UI.TextInput
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
+                     Engine.Scripting.Lua.API.UI.Placement
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.Yaml
                      Engine.Scripting.Lua.API.Units.Spawn
@@ -365,6 +366,8 @@ library
                      UI.Types
                      UI.Focus
                      UI.InputOwnership
+                     UI.Clipping
+                     UI.PopupPlacement
                      UI.Manager
                      UI.Manager.Core
                      UI.Manager.Page
@@ -1009,6 +1012,8 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ElementInputPolicy
+                   Test.Headless.UI.Clipping
+                   Test.Headless.UI.PopupPlacement
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.ClickCorrelation

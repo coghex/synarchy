@@ -17,6 +17,9 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiIsPointerBlockingFn
   , uiSetScrollCaptureFn
   , uiIsScrollCapturingFn
+  , uiSetClipChildrenFn
+  , uiIsClipChildrenFn
+  , uiGetEffectiveClipFn
   , uiSetOnClickFn
   , uiSetOnRightClickFn
   , uiSetZIndexFn
@@ -37,6 +40,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
 import UI.Manager
 import UI.InputOwnership (isGameplayBlocked, isPageInScope)
+import UI.Clipping (effectiveClip)
 
 -- | UI.setPosition(elementHandle, x, y)
 uiSetPositionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -185,6 +189,7 @@ pushElementInfoTable handle el mgr = do
         mText = elementText el mgr
         pointerBlocking = elementBlocksPointer el
         scrollCapturing = elementCapturesScroll el
+        clipsChildren = ueClipChildren el
         paintKey = fromMaybe 0 (elementPaintKey handle mgr)
         paintOrder = fromMaybe 0 (elementPaintOrder handle mgr)
     Lua.newtable
@@ -228,6 +233,29 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "pointerBlocking"
     Lua.pushboolean scrollCapturing
     Lua.setfield (Lua.nth 2) "scrollCapturing"
+    Lua.pushboolean clipsChildren
+    Lua.setfield (Lua.nth 2) "clipsChildren"
+    pushEffectiveClipField handle mgr
+    Lua.setfield (Lua.nth 2) "effectiveClip"
+
+-- | Push the #747 effective-clip value for 'pushElementInfoTable': a
+--   @{x, y, w, h}@ table when an ancestor clips this element, or
+--   Lua @nil@ when it's unclipped — mirrors 'UI.Clipping.effectiveClip'
+--   exactly so introspection (@ui.dumpWidgets@) can't disagree with
+--   what rendering/hit-testing actually used.
+pushEffectiveClipField ∷ ElementHandle → UIPageManager → Lua.LuaE Lua.Exception ()
+pushEffectiveClipField handle mgr = case effectiveClip handle mgr of
+    Nothing → Lua.pushnil
+    Just (x, y, w, h) → do
+        Lua.newtable
+        Lua.pushnumber (realToFrac x)
+        Lua.setfield (Lua.nth 2) "x"
+        Lua.pushnumber (realToFrac y)
+        Lua.setfield (Lua.nth 2) "y"
+        Lua.pushnumber (realToFrac w)
+        Lua.setfield (Lua.nth 2) "w"
+        Lua.pushnumber (realToFrac h)
+        Lua.setfield (Lua.nth 2) "h"
 
 -- | UI.getElementInfo(elementHandle) -> table or nil (see
 --   'pushElementInfoTable' for the field list) — the authoritative
@@ -330,6 +358,49 @@ uiIsScrollCapturingFn env = do
             mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
             Lua.pushboolean (isElementScrollCapturing (ElementHandle $ fromIntegral e) mgr)
         Nothing → Lua.pushboolean False
+    return 1
+
+-- | UI.setClipChildren(elementHandle, clips) (#747) — opt-in that this
+--   element clips its DESCENDANTS to its own current bounds; see
+--   'ueClipChildren'. Does not clip the element itself.
+uiSetClipChildrenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetClipChildrenFn env = do
+    elemArg  ← Lua.tointeger 1
+    clipsArg ← Lua.toboolean 2
+
+    case elemArg of
+        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (setElementClipChildren (ElementHandle $ fromIntegral e) clipsArg mgr, ())
+        Nothing → pure ()
+
+    return 0
+
+-- | UI.isClipChildren(elementHandle) -> boolean (#747) — the raw
+--   'ueClipChildren' opt-in on THIS element (whether it clips its own
+--   children), not the clip it is itself subject to — see
+--   'UI.getEffectiveClip' for that.
+uiIsClipChildrenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsClipChildrenFn env = do
+    elemArg ← Lua.tointeger 1
+    case elemArg of
+        Just e → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            Lua.pushboolean (isElementClipChildren (ElementHandle $ fromIntegral e) mgr)
+        Nothing → Lua.pushboolean False
+    return 1
+
+-- | UI.getEffectiveClip(elementHandle) -> {x, y, w, h} or nil (#747) —
+--   the clip this element is actually SUBJECT TO right now (the
+--   intersection of every clipping ancestor's bounds), the same value
+--   'UI.Render' and hit-testing consult. Nil means unclipped.
+uiGetEffectiveClipFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiGetEffectiveClipFn env = do
+    elemArg ← Lua.tointeger 1
+    case elemArg of
+        Just e → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            pushEffectiveClipField (ElementHandle $ fromIntegral e) mgr
+        Nothing → Lua.pushnil
     return 1
 
 -- | UI.setOnClick(elementHandle, callbackName)

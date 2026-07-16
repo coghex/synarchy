@@ -12,6 +12,7 @@ function sprite.new(params)
         id      = id,
         name    = params.name or ("sprite_" .. id),
         page    = params.page,
+        parent  = params.parent,
         x       = params.x or 0,
         y       = params.y or 0,
         width   = params.width or 100,
@@ -21,7 +22,7 @@ function sprite.new(params)
         zIndex  = params.zIndex or 0,
         uiscale = params.uiscale or 1.0,
     }
-    
+
     -- Create sprite element using UI.newSprite
     s.elementHandle = UI.newSprite(
         s.name,
@@ -31,10 +32,15 @@ function sprite.new(params)
         s.color[1], s.color[2], s.color[3], s.color[4],
         s.page
     )
-    
+
     if s.elementHandle then
-        -- Add to page and set properties
-        UI.addToPage(s.page, s.elementHandle, s.x, s.y)
+        -- #747: opt-in parenting (e.g. a clipping viewport) instead of
+        -- always attaching directly to the page.
+        if s.parent then
+            UI.addChild(s.parent, s.elementHandle, s.x, s.y)
+        else
+            UI.addToPage(s.page, s.elementHandle, s.x, s.y)
+        end
         UI.setZIndex(s.elementHandle, s.zIndex)
     end
     

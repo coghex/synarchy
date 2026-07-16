@@ -6,6 +6,7 @@ module UI.Manager.Property
   , setElementClickable
   , setElementBlocksPointer
   , setElementCapturesScroll
+  , setElementClipChildren
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -54,6 +55,12 @@ setElementBlocksPointer handle blocks = modifyElement handle `flip`
 setElementCapturesScroll ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementCapturesScroll handle captures = modifyElement handle `flip`
     (\elem → elem { ueCapturesScroll = captures })
+
+-- | #747: explicit opt-in that this element clips its DESCENDANTS to
+--   its own current bounds — see 'ueClipChildren'.
+setElementClipChildren ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementClipChildren handle clips = modifyElement handle `flip`
+    (\elem → elem { ueClipChildren = clips })
 
 setElementOnClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
 setElementOnClick handle callbackName = modifyElement handle `flip`

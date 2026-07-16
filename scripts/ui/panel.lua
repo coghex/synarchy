@@ -102,6 +102,11 @@ function panel.new(params)
         name = params.name or ("panel_" .. id),
         page = params.page,
         parentPanel = params.parent,
+        -- #747: a raw ElementHandle to attach to (e.g. a clipping
+        -- viewport that isn't itself a panel) — distinct from
+        -- `parent`, which names another PANEL's id looked up in the
+        -- `panels` table below. Only one of the two should be given.
+        parentElement = params.parentElement,
         x = params.x or 0,
         y = params.y or 0,
         width = params.width or 400,
@@ -133,7 +138,9 @@ function panel.new(params)
         p.page
     )
     
-    if p.parentPanel then
+    if p.parentElement then
+        UI.addChild(p.parentElement, p.boxId, p.x, p.y)
+    elseif p.parentPanel then
         local parentPanelData = panels[p.parentPanel]
         if parentPanelData then
             UI.addChild(parentPanelData.boxId, p.boxId, p.x, p.y)
@@ -146,7 +153,15 @@ function panel.new(params)
     end
     
     UI.setZIndex(p.boxId, p.zIndex)
-    
+
+    -- #747: opt-in clipping — content placed via panel.place/placeRow/
+    -- placeColumn (all real children of p.boxId) is clipped to the
+    -- panel's own bounds when requested. Off by default so every
+    -- existing panel keeps its current (unclipped) behavior.
+    if params.clipChildren then
+        UI.setClipChildren(p.boxId, true)
+    end
+
     panels[id] = p
     
     engine.logDebug("Panel created: " .. p.name .. " (" .. p.width .. "x" .. p.height .. ")")

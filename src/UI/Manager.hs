@@ -42,6 +42,7 @@ module UI.Manager
   , setElementClickable
   , setElementBlocksPointer
   , setElementCapturesScroll
+  , setElementClipChildren
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -67,6 +68,7 @@ module UI.Manager
   , elementCapturesScroll
   , isElementPointerBlocking
   , isElementScrollCapturing
+  , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder
     -- * Tooltips
