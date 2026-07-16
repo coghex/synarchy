@@ -47,6 +47,7 @@ registry1 = registerLocation LocationDef
     , ldBuilder = "room_small", ldAnchor = [], ldMaxCount = 0
     , ldMinSpacing = 0, ldContents = []
     , ldBounds = RelBounds (-2) (-2) 2 2, ldDiscoveryMargin = 6
+    , ldMapIcons = Nothing
     } emptyLocationRegistry
 
 overlay1 ∷ LocationOverlay
