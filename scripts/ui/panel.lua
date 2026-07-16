@@ -146,7 +146,15 @@ function panel.new(params)
     end
     
     UI.setZIndex(p.boxId, p.zIndex)
-    
+
+    -- #747: opt-in clipping — content placed via panel.place/placeRow/
+    -- placeColumn (all real children of p.boxId) is clipped to the
+    -- panel's own bounds when requested. Off by default so every
+    -- existing panel keeps its current (unclipped) behavior.
+    if params.clipChildren then
+        UI.setClipChildren(p.boxId, true)
+    end
+
     panels[id] = p
     
     engine.logDebug("Panel created: " .. p.name .. " (" .. p.width .. "x" .. p.height .. ")")

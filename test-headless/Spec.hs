@@ -71,6 +71,8 @@ import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
+import qualified Test.Headless.UI.Clipping as UIClipping
+import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
@@ -194,6 +196,8 @@ main = hspec $ do
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
+    describe "UI.Clipping" UIClipping.spec
+    describe "UI.PopupPlacement" UIPopupPlacement.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     UISlider.spec
     UIClickCorrelation.spec

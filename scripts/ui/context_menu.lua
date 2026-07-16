@@ -179,16 +179,16 @@ end
 -- Panel builder — used for both root and submenu
 -----------------------------------------------------------
 
--- Position the panel at (anchorX, anchorY), clamped to the screen.
+-- Position the panel at (anchorX, anchorY), clamped to the screen via
+-- the #747 shared placement contract ("anchored" — no directional
+-- preference, place exactly at the point, then clamp both axes).
 -- `namePrefix` distinguishes element names so root and sub don't
 -- collide (sprite names need to be unique within a page).
 local function buildPanel(items, anchorX, anchorY, namePrefix)
     local uiscale = scale.get()
     local m = measure(items, uiscale)
 
-    local fbW, fbH = engine.getFramebufferSize()
-    local x = math.max(0, math.min(anchorX, fbW - m.totalW))
-    local y = math.max(0, math.min(anchorY, fbH - m.totalH))
+    local x, y = UI.placePopup(anchorX, anchorY, 0, 0, m.totalW, m.totalH, "anchored")
 
     local boxId = UI.newBox(
         namePrefix .. "_box", m.totalW, m.totalH,
@@ -393,8 +393,10 @@ local function closeSubMenu()
 end
 
 -- Open a submenu adjacent to the parent row at `parentIndex` in the
--- root panel. The submenu opens to the right of the root by default;
--- if that would clip the screen, it flips and opens to the left.
+-- root panel. #747: uses the shared placement contract — prefers the
+-- right of the root panel, flips left when that would clip the
+-- screen, and clamps vertically only (the row-aligned Y is never
+-- flipped, since the preferred axis here is horizontal).
 local function openSubMenu(parentIndex)
     if not cm.rootPanel then return end
     local r = cm.rootPanel.rows[parentIndex]
@@ -405,21 +407,23 @@ local function openSubMenu(parentIndex)
 
     local rootM = cm.rootPanel.m
     local rootRowYTop = cm.rootPanel.y + rootM.rowYs[parentIndex]
-    -- Try right of root first
-    local subX = cm.rootPanel.x + rootM.totalW + SUBMENU_GAP
     local subY = rootRowYTop - rootM.menuPad  -- align sub's top with parent row
 
-    -- If the submenu's preferred position would push it off the right
-    -- edge, flip to open on the left side of the root panel.
     local items = r.submenu
     local uiscale = scale.get()
     local subM = measure(items, uiscale)
-    local fbW, _ = engine.getFramebufferSize()
-    if subX + subM.totalW > fbW then
-        subX = cm.rootPanel.x - subM.totalW - SUBMENU_GAP
-    end
 
-    cm.subPanel = buildPanel(items, subX, subY, "context_menu_sub")
+    -- The anchor is the root panel's rect widened by SUBMENU_GAP on
+    -- both sides, so the generic right/left fallback reproduces the
+    -- exact gap on whichever side is actually used (right = anchor's
+    -- right edge, left fallback = anchor's left edge minus content).
+    local subX, subYPlaced = UI.placePopup(
+        cm.rootPanel.x - SUBMENU_GAP, subY,
+        rootM.totalW + 2 * SUBMENU_GAP, 0,
+        subM.totalW, subM.totalH,
+        "right")
+
+    cm.subPanel = buildPanel(items, subX, subYPlaced, "context_menu_sub")
     cm.subParentIndex = parentIndex
 end
 

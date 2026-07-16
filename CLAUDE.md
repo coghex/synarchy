@@ -332,6 +332,84 @@ self-gate they used to carry as a compensating stopgap for exactly the
 empty-modal case, now that the engine decides it once, upstream,
 instead of the two enforcing the same rule with room to drift apart.
 
+C1 (#747, Phase C child of #741) adds two independent contracts on top
+of Phase A's ownership/policy layer: opt-in rectangular clipping and
+shared viewport-aware floating placement.
+
+**Clipping** (`UI.Clipping`, pure — no Vulkan/window/Lua engine, see
+`Test.Headless.UI.Clipping`): a container opts in via
+`UI.setClipChildren(el, true)` (`UI.Types.ueClipChildren`, default
+`False`) to clip its DESCENDANTS to its own current absolute bounds —
+overflow:hidden semantics; the container's own bounds are never
+restricted by its own flag. `UI.Clipping.effectiveClip` is the ONE
+shared helper both `UI.Render` (rendering) and
+`UI.Manager.Query.isPointInElement` (hit-testing — reached from every
+click/hover/scroll/tooltip entry point via `hitsAtPointBy`) consult, so
+paint and hit-test can never drift apart — the same discipline
+`uiLayerBand` already enforces for z-order. The effective clip is the
+intersection of every `ueClipChildren`-opted ancestor's own bounds
+(nested clips intersect; no clipping ancestor ⇒ `Nothing`, unclipped);
+it's recomputed fresh on every call from live `uePosition`/`ueSize`, so
+a move/resize takes effect immediately with nothing cached to go
+stale. Rendering clips for real: `UI.Clipping.clipQuadUV` intersects an
+element's screen rect against the effective clip and proportionally
+adjusts its UV rect, so a box tile, sprite, or glyph straddling the
+clip boundary draws only its visible slice (its overflow-expanded
+visual rect for boxes) rather than being culled all-or-nothing; a
+quad with no overlap at all is dropped. `UI.getEffectiveClip(el)` (a
+`{x,y,w,h}` table or `nil`) and `UI.isClipChildren(el)` expose the
+state to Lua and to `ui.dumpWidgets`-style introspection
+(`pointerBlocking`/`scrollCapturing`-style fields added to
+`UI.getElementInfo`'s table: `clipsChildren`, `effectiveClip`).
+Floating root-mounted content (dropdown option lists, context menus —
+already added via `UI.addToPage`, never as a real child of their
+trigger) is naturally unaffected by a trigger's clip, since clipping
+only walks REAL ancestors. Adopted on `scripts/ui/list.lua` (the
+reusable list widget, transitively covering `scripts/save_browser.lua`
+and `scripts/plant_panel.lua`): every visible slot is now a child of a
+per-list clipping viewport element instead of a page-root element at
+absolute coordinates, so `list.setPosition` collapses to moving the
+one viewport (descendants follow automatically, textAlign offset
+included) and a resize/rounding edge case can't leave a row visible or
+clickable outside the list's own bounds even if virtualization ever
+has a gap. `scripts/ui/panel.lua` gained an opt-in `clipChildren`
+constructor param (`UI.setClipChildren` on the panel's own box) for any
+panel-based screen that nests content via `panel.place`/`placeRow`/
+`placeColumn`. Adoption for the settings tabs / create-world content /
+event-combat-injury-unit log panels remains a follow-up: those build
+their scrollable regions as page-root elements positioned by
+hand-computed layout rather than real parent/child nesting, so turning
+on the clip contract there needs a real reparenting migration per
+panel, not a one-line flag flip.
+
+**Floating placement** (`UI.PopupPlacement`, also pure, see
+`Test.Headless.UI.PopupPlacement`): one framebuffer-coordinate
+placement algorithm — `UI.placePopup(anchorX, anchorY, anchorW,
+anchorH, contentW, contentH, direction)` returns `x, y, flipped` —
+replacing two divergent implementations. `direction` is
+`"below"`/`"above"`/`"right"`/`"left"` (preferred side, tries the
+opposite side if the preferred one doesn't fit, then a final two-axis
+clamp regardless of which side won) or `"anchored"` (no directional
+preference — place exactly at the anchor point, then clamp; the
+context-menu-root shape). `contentW`/`contentH` must be the FULL
+interactive size including any scrollbar strip, so the scrollbar stays
+reachable too. `UI.fitVisibleRows(preferredCount, rowHeight,
+availableHeight)` backs oversized-list row reduction (never below 1).
+`scripts/ui/dropdown.lua`'s `openList` now calls both: it fits the
+option-list row count against whichever of above/below has more room,
+then places with `"below"` (flips to `"above"` automatically) — the
+resolved `dd.listX`/`dd.listY`/`dd.listHeight` are stored and reused by
+`onClickOutside`'s bounds check instead of assuming a fixed
+below-the-display-box stack, so it stays correct even when flipped.
+`scripts/ui/context_menu.lua`'s `buildPanel` (root panel) now places
+via `"anchored"`; `openSubMenu` places via `"right"` with the root
+panel's rect (widened by `SUBMENU_GAP` on both sides so the generic
+left-fallback reproduces the same gap) as the anchor — Y stays
+row-aligned and only clamped, never flipped, since the preferred axis
+there is horizontal. Tooltip placement (`UI.Tooltip.Layout`/`Render`)
+deliberately stays on its own separate cursor-relative clamp,
+untouched by this change.
+
 ## Project Layout
 
 - `src/` — Library source (360+ modules)

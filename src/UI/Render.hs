@@ -16,13 +16,14 @@ import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logWarnM)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
+import Engine.Graphics.Font.Data (FontCache(..), fcFonts, GlyphInstance(..))
 import Engine.Graphics.Font.Draw (layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatch(..))
 import UI.Types
+import UI.Clipping (ClipRect, effectiveClip, clipQuadUV)
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
 import World.Grid (uiLayerThreshold)
 
@@ -132,7 +133,7 @@ renderPage mgr bindless fontCache page = do
     pure (allBatches, allLayered)
 
 renderElement ∷ UIPageManager → BindlessTextureSystem → FontCache
-              → LayerId → ElementHandle 
+              → LayerId → ElementHandle
               → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderElement mgr bindless fontCache baseLayerId handle = do
     case Map.lookup handle (upmElements mgr) of
@@ -143,12 +144,17 @@ renderElement mgr bindless fontCache baseLayerId handle = do
                 let (absX, absY) = case getElementAbsolutePosition handle mgr of
                         Just pos → pos
                         Nothing  → (0, 0)
-                
+                    -- #747: the clip THIS element is subject to, from its
+                    -- own ancestors' 'ueClipChildren' opt-ins — the same
+                    -- shared helper 'isPointInElement' consults for
+                    -- hit-testing, so paint and hit-test can't drift apart.
+                    clip = effectiveClip handle mgr
+
                 let elemLayerId = LayerId $ unLayerId baseLayerId + fromIntegral (ueZIndex elem)
-                
-                (selfBatches, selfItems) ← renderElementData mgr bindless fontCache 
-                                              elemLayerId elem absX absY
-                
+
+                (selfBatches, selfItems) ← renderElementData mgr bindless fontCache
+                                              elemLayerId elem absX absY clip
+
                 let sortedChildren = sortOn (getChildZIndex mgr) (ueChildren elem)
                 childResults ← forM sortedChildren $ \childHandle →
                     renderElement mgr bindless fontCache elemLayerId childHandle
@@ -171,13 +177,13 @@ getChildZIndex mgr handle =
         Nothing → 0
         Just elem → ueZIndex elem
 
-renderElementData ∷ UIPageManager → BindlessTextureSystem → FontCache 
-                  → LayerId → UIElement → Float → Float 
+renderElementData ∷ UIPageManager → BindlessTextureSystem → FontCache
+                  → LayerId → UIElement → Float → Float → Maybe ClipRect
                   → EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
-renderElementData mgr bindless fontCache layerId elem absX absY = 
+renderElementData mgr bindless fontCache layerId elem absX absY clip =
     case ueRenderData elem of
         RenderNone → pure (V.empty, V.empty)
-        
+
         RenderBox style → do
             case getBoxTextureSet (ubsTextures style) mgr of
                 Nothing → do
@@ -194,10 +200,10 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                         vy = absY - overflow
                         vw = w + overflow * 2
                         vh = h + overflow * 2
-                        batches = makeBoxBatches bindless texSet vx vy vw vh tileSize color layerId
+                        batches = makeBoxBatches bindless texSet vx vy vw vh tileSize color layerId clip
                         items = V.map SpriteItem batches
                     pure (batches, items)
-        
+
         RenderText style → do
             let fontHandle = utsFont style
             case Map.lookup fontHandle (fcFonts fontCache) of
@@ -210,10 +216,15 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                         (cr, cg, cb, ca) = utsColor style
                         color = (cr, cg, cb, ca)
                         size = utsSize style
-                        instances = layoutTextUI atlas size absX absY text color
-                    
+                        rawInstances = layoutTextUI atlas size absX absY text color
+                        -- #747: clip each glyph quad independently — a
+                        -- glyph straddling the clip boundary shows only
+                        -- its visible slice, and a glyph fully outside
+                        -- the clip is dropped entirely.
+                        instances = V.mapMaybe (clipGlyphInstance clip) rawInstances
+
                     logDebugM CatFont $ "UI text layout generated " <> T.pack (show $ V.length instances) <> " vertices"
-                    
+
                     if V.null instances
                         then pure (V.empty, V.empty)
                         else do
@@ -224,28 +235,45 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                                     , trbObjects   = V.empty
                                     }
                             pure (V.empty, V.singleton (TextItem textBatch))
-        
+
         RenderSprite style → do
             let (w, h) = ueSize elem
                 color = ussColor style
                 tex = ussTexture style
                 atlasId = lookupTextureSlot bindless tex
-                vertices = makeQuadVertices absX absY w h color atlasId
-                batch = RenderBatch
-                    { rbTexture  = tex
-                    , rbLayer    = layerId
-                    , rbVertices = vertices
-                    , rbObjects  = V.empty
-                    , rbDirty    = True
-                    , rbAvgZ     = 0.0
-                    }
-            pure (V.singleton batch, V.singleton (SpriteItem batch))
+            case clipQuadUV clip (absX, absY, w, h) (0, 0, 1, 1) of
+                Nothing → pure (V.empty, V.empty)
+                Just ((cx, cy, cw, ch), uv) → do
+                    let vertices = makeQuadVertices cx cy cw ch color atlasId uv
+                        batch = RenderBatch
+                            { rbTexture  = tex
+                            , rbLayer    = layerId
+                            , rbVertices = vertices
+                            , rbObjects  = V.empty
+                            , rbDirty    = True
+                            , rbAvgZ     = 0.0
+                            }
+                    pure (V.singleton batch, V.singleton (SpriteItem batch))
 
-makeBoxBatches ∷ BindlessTextureSystem → BoxTextureSet 
-               → Float → Float → Float → Float → Float 
-               → (Float, Float, Float, Float) → LayerId
+-- | Clip one glyph instance's quad + UV rect against the effective
+--   clip; 'Nothing' drops a glyph that falls entirely outside it.
+clipGlyphInstance ∷ Maybe ClipRect → GlyphInstance → Maybe GlyphInstance
+clipGlyphInstance clip gi =
+    let (px, py) = instancePosition gi
+        (w, h)   = instanceSize gi
+    in case clipQuadUV clip (px, py, w, h) (instanceUVRect gi) of
+        Nothing → Nothing
+        Just ((cx, cy, cw, ch), uv) →
+            Just gi { instancePosition = (cx, cy)
+                    , instanceSize     = (cw, ch)
+                    , instanceUVRect   = uv
+                    }
+
+makeBoxBatches ∷ BindlessTextureSystem → BoxTextureSet
+               → Float → Float → Float → Float → Float
+               → (Float, Float, Float, Float) → LayerId → Maybe ClipRect
                → V.Vector RenderBatch
-makeBoxBatches bindless texSet x y w h tileSize color layerId =
+makeBoxBatches bindless texSet x y w h tileSize color layerId clip =
     let ts = tileSize
         
         -- When the element is smaller than 2*tileSize, let the tiles
@@ -279,19 +307,26 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         seX = x + ts + midW
         seY = y + ts + midH
         
-        makeBatch tex px py pw ph = 
-            let atlasId = lookupTextureSlot bindless tex
-                vertices = makeQuadVertices px py pw ph color atlasId
-            in RenderBatch
-                { rbTexture  = tex
-                , rbLayer    = layerId
-                , rbVertices = vertices
-                , rbObjects  = V.empty
-                , rbDirty    = True
-                , rbAvgZ     = 0.0
-                }
-        
-    in V.fromList
+        -- #747: each of the nine tiles is clipped independently against
+        -- the same effective clip — a tile fully outside it is dropped
+        -- ('Nothing'), one straddling the boundary shows only its
+        -- visible slice (rect + UV both adjusted by 'clipQuadUV').
+        makeBatch tex px py pw ph =
+            case clipQuadUV clip (px, py, pw, ph) (0, 0, 1, 1) of
+                Nothing → Nothing
+                Just ((cx, cy, cw, ch), uv) →
+                    let atlasId = lookupTextureSlot bindless tex
+                        vertices = makeQuadVertices cx cy cw ch color atlasId uv
+                    in Just RenderBatch
+                        { rbTexture  = tex
+                        , rbLayer    = layerId
+                        , rbVertices = vertices
+                        , rbObjects  = V.empty
+                        , rbDirty    = True
+                        , rbAvgZ     = 0.0
+                        }
+
+    in V.fromList ∘ catMaybes $
         [ makeBatch (btsNW texSet) nwX nwY ts ts
         , makeBatch (btsN texSet)  nX  nY  midW ts
         , makeBatch (btsNE texSet) neX neY ts ts
@@ -303,25 +338,32 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         , makeBatch (btsSE texSet) seX seY ts ts
         ]
 
--- | Generate quad vertices for a UI element.
+-- | Generate quad vertices for a UI element. The UV rect is a
+--   parameter (rather than always the full 0..1 texture) so a
+--   #747-clipped partial quad can sample only its visible texture
+--   slice instead of stretching the whole texture across a smaller
+--   screen rect — every caller passes @(0, 0, 1, 1)@ through
+--   'UI.Clipping.clipQuadUV', which returns that unchanged when there
+--   is no clip in effect.
 --   faceMapId is always 0 because the UI pipeline ignores face-map lighting.
-makeQuadVertices ∷ Float → Float → Float → Float 
-                 → (Float, Float, Float, Float) 
+makeQuadVertices ∷ Float → Float → Float → Float
+                 → (Float, Float, Float, Float)
                  → Float
+                 → (Float, Float, Float, Float)
                  → VS.Vector Vertex
-makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
+makeQuadVertices x y w h (cr, cg, cb, ca) atlasId (u0, v0, u1, v1) =
     let x0 = x
         y0 = y
         x1 = x + w
         y1 = y + h
-        
+
         col = Vec4 cr cg cb ca
         fmId = 0
-        
-        v1' = mkVertex (Vec2 x0 y0) (Vec2 0 0) col atlasId fmId
-        v2' = mkVertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
-        v3' = mkVertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
-        v4' = mkVertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
-        v5' = mkVertex (Vec2 x1 y1) (Vec2 1 1) col atlasId fmId
-        v6' = mkVertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
-    in VS.fromList [v1', v2', v3', v4', v5', v6']
+
+        vtx1 = mkVertex (Vec2 x0 y0) (Vec2 u0 v0) col atlasId fmId
+        vtx2 = mkVertex (Vec2 x1 y0) (Vec2 u1 v0) col atlasId fmId
+        vtx3 = mkVertex (Vec2 x0 y1) (Vec2 u0 v1) col atlasId fmId
+        vtx4 = mkVertex (Vec2 x1 y0) (Vec2 u1 v0) col atlasId fmId
+        vtx5 = mkVertex (Vec2 x1 y1) (Vec2 u1 v1) col atlasId fmId
+        vtx6 = mkVertex (Vec2 x0 y1) (Vec2 u0 v1) col atlasId fmId
+    in VS.fromList [vtx1, vtx2, vtx3, vtx4, vtx5, vtx6]

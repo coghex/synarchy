@@ -535,15 +535,34 @@ function dropdown.openList(id)
     dd.scrollOffset = 0
     dd.hoveredOptionIndex = nil
     UI.setSpriteTexture(dd.arrowSpriteId, texArrowClicked)
-    
+
     local totalOptions = #dd.options
-    local visibleCount = math.min(totalOptions, dd.maxVisibleOptions)
-    dd.needsScroll = totalOptions > dd.maxVisibleOptions
-    
+    local idealCount = math.min(totalOptions, dd.maxVisibleOptions)
+    -- #747: reduce the visible row count only when NEITHER opening
+    -- below nor above has room for the ideal count, so an oversized
+    -- option list still ends up fully on-screen instead of overflowing
+    -- the framebuffer.
+    local fbW, fbH = engine.getFramebufferSize()
+    local availBelow = fbH - (dd.y + dd.height)
+    local availAbove = dd.y
+    local visibleCount = UI.fitVisibleRows(idealCount, dd.optionHeight, math.max(availBelow, availAbove))
+    dd.needsScroll = totalOptions > visibleCount
+
     local listHeight = visibleCount * dd.optionHeight
-    local listX = dd.x
-    local listY = dd.y + dd.height
-    
+    local scrollWidth = dd.needsScroll and dd.arrowSize or 0
+
+    -- #747: one shared framebuffer-coordinate placement contract —
+    -- prefer opening below the display box, flip above when there
+    -- isn't room, and always end up fully on-screen. contentW includes
+    -- the scrollbar strip so it stays reachable too.
+    local listX, listY = UI.placePopup(
+        dd.x, dd.y, dd.displayWidth, dd.height,
+        dd.displayWidth + scrollWidth, listHeight,
+        "below")
+    dd.listX = listX
+    dd.listY = listY
+    dd.listHeight = listHeight
+
     dd.listBoxId = UI.newBox(
         dd.name .. "_list",
         dd.displayWidth,
@@ -632,7 +651,7 @@ function dropdown.openList(id)
         dd.scrollbarId = scrollbar.new({
             name = dd.name .. "_scrollbar",
             page = dd.page,
-            x = dd.x + dd.displayWidth,
+            x = listX + dd.displayWidth,
             y = listY,
             buttonSize = dd.arrowSize,
             trackHeight = scrollTrackHeight,
@@ -673,7 +692,10 @@ function dropdown.closeList(id)
         dd.listBoxId = nil
     end
     dd.optionElements = {}
-    
+    dd.listX = nil
+    dd.listY = nil
+    dd.listHeight = nil
+
     engine.logDebug("Dropdown list closed: " .. dd.name)
 end
 
@@ -970,15 +992,22 @@ function dropdown.onClickOutside(mouseX, mouseY)
         -- treat this as an ordinary "clicked elsewhere".
         if UI.isPageInScope(dd.page) then
             if dd.open then
+                -- #747: the list may have flipped above the display box
+                -- (or been clamped) rather than always sitting directly
+                -- below it, so "outside" is the union of the display
+                -- box's own rect and the list's ACTUAL placed rect
+                -- (dd.listX/listY, stored by openList), not an assumed
+                -- vertical stack starting at dd.y.
                 local scrollWidth = 0
                 if dd.scrollbarId then
                     scrollWidth = scrollbar.getTrackWidth(dd.scrollbarId)
                 end
-                local visibleCount = math.min(#dd.options, dd.maxVisibleOptions)
-                local totalHeight = dd.height + (visibleCount * dd.optionHeight)
-                local totalWidth = dd.displayWidth + scrollWidth
-                if mouseX < dd.x or mouseX > dd.x + totalWidth
-                    or mouseY < dd.y or mouseY > dd.y + totalHeight then
+                local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
+                    and mouseY >= dd.y and mouseY <= dd.y + dd.height
+                local inList = dd.listX ~= nil
+                    and mouseX >= dd.listX and mouseX <= dd.listX + dd.displayWidth + scrollWidth
+                    and mouseY >= dd.listY and mouseY <= dd.listY + dd.listHeight
+                if not inDisplay and not inList then
                     dropdown.closeList(id)
                 end
             end

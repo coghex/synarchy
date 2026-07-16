@@ -17,6 +17,7 @@ module UI.Manager.Query
   , elementCapturesScroll
   , isElementPointerBlocking
   , isElementScrollCapturing
+  , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder
   ) where
@@ -27,6 +28,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn, elemIndex)
 import UI.Types
+import UI.Clipping (effectiveClip, pointInClip)
 import UI.Manager.Page (getVisiblePages)
 
 -- * Queries
@@ -111,7 +113,12 @@ getElementChildren handle mgr =
 
 -- * Click Detection
 
--- | Check if a point is inside an element's bounds (in screen coordinates)
+-- | Check if a point is inside an element's bounds (in screen
+--   coordinates) AND inside every ancestor's effective clip (#747 —
+--   see "UI.Clipping"). This is the ONE shared clip check every
+--   hit-test entry point below goes through via 'hitsAtPointBy', so a
+--   clipped-out row can never register a click/hover/tooltip/scroll
+--   hit even though its own bounds still overlap the point.
 isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
 isPointInElement (px, py) element mgr =
     if not (ueVisible element) then False
@@ -120,17 +127,22 @@ isPointInElement (px, py) element mgr =
         Just (ex, ey) →
             let (w, h) = ueSize element
             in px ≥ ex ∧ px ≤ (ex + w) ∧
-               py ≥ ey ∧ py ≤ (ey + h)
+               py ≥ ey ∧ py ≤ (ey + h) ∧
+               pointInClip (effectiveClip (ueHandle element) mgr) (px, py)
 
 -- | Walk every visible element in paint order, yielding the elements
 --   that contain the point together with their paint key (page band +
 --   accumulated element zIndex — exactly the key 'UI.Render' draws
 --   with, see 'uiLayerBand'). All hit-test queries below share this
 --   walk, so the element you SEE on top is the element the cursor
---   interacts with. Deliberately does NOT clip children to parent
---   bounds — the renderer doesn't either (dropdown option lists
---   extend past their display box). An invisible element prunes its
---   whole subtree, matching the renderer.
+--   interacts with. Respects #747 opt-in clipping via
+--   'isPointInElement' (a point outside every 'ueClipChildren'
+--   ancestor's bounds hits nothing), but this is OPT-IN — an ordinary
+--   element with no clipping ancestor is unaffected, so e.g. a
+--   dropdown option list (root-mounted, not a descendant of its
+--   trigger — see "UI.Clipping") still isn't clipped by its display
+--   box. An invisible element prunes its whole subtree, matching the
+--   renderer.
 --
 --   @pageOk@ is a plain filter here, not a modal-boundary decision —
 --   callers that need the #742 modal-input-exclusive boundary (a miss
@@ -325,3 +337,12 @@ isElementPointerBlocking h mgr =
 isElementScrollCapturing ∷ ElementHandle → UIPageManager → Bool
 isElementScrollCapturing h mgr =
     maybe False elementCapturesScroll (Map.lookup h (upmElements mgr))
+
+-- | Handle-based lookup of the raw 'ueClipChildren' opt-in (#747) — an
+--   unknown/deleted handle never clips. Distinct from
+--   'UI.Clipping.effectiveClip', which reports the clip a given
+--   element is SUBJECT TO (its ancestors' opt-ins), not whether it
+--   clips its own children.
+isElementClipChildren ∷ ElementHandle → UIPageManager → Bool
+isElementClipChildren h mgr =
+    maybe False ueClipChildren (Map.lookup h (upmElements mgr))

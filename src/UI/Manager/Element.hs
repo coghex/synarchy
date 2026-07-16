@@ -65,6 +65,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueOnRightClick = Nothing
           , ueBlocksPointer = False
           , ueCapturesScroll = False
+          , ueClipChildren = False
           , ueTextBuffer  = Nothing
           , ueTooltip     = Nothing
           }
