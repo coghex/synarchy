@@ -126,8 +126,14 @@ persistence-inventory audit](#the-persistence-inventory-audit)), a
   per-page IORef hangs off `WorldState`; every page hangs off
   `WorldManager`.
 - `SaveData`, `WorldPageSave`, `SaveMetadata`, `SaveHeader`
-  (`src/World/Save/Types.hs`) — the current serialized envelope, i.e.
-  the ground truth of what v82 already persists.
+  (`src/World/Save/Types.hs`) — the ground truth of what a save
+  persists. Since #759 (save-overhaul B1), `SaveData`/`WorldPageSave`
+  ride as the "session" component's payload inside the tagged
+  `World.Save.Envelope` container rather than being the whole file
+  themselves, and `SaveHeader` describes that container's fixed
+  16-byte framing header (magic + envelope version + manifest length)
+  rather than a raw `[header][SaveData]` pair — but all four remain
+  the root-owner records this contract's audit tracks.
 - Registered Lua persistence modules (`scripts/lib/save_modules.lua`'s
   `saveModules.register` call sites).
 
@@ -214,10 +220,13 @@ dropping the in-progress stamp.
 
 ## 5. Format-version policy
 
-- `currentSaveVersion` (`src/World/Save/Types.hs`) is 82 as of this
-  issue. The new envelope increments it when it lands.
-- **No v82→new-format migration is implemented.** Existing local saves
-  and obsolete old-format test fixtures may simply be deleted.
+- `currentSaveVersion` (`src/World/Save/Types.hs`, bumped frequently —
+  don't trust any number written down here) identifies the "session"
+  component's own schema; B1 (#759) landed the new tagged envelope
+  (`World.Save.Envelope`) with an independent framing version
+  (`World.Save.Envelope.currentEnvelopeVersion`).
+- **No pre-B1→new-format migration is implemented.** Existing local
+  saves and obsolete old-format test fixtures may simply be deleted.
 - The **first completed new-format save becomes the compatibility
   baseline** — i.e. the format is not required to be stable *before*
   that point, only from it forward.
@@ -243,7 +252,7 @@ persistence envelope itself:
 
 | Probe | Covers | Disposition | Responsible future child |
 |---|---|---|---|
-| `tools/multiworld_save_probe.py` | Multi-page save/load (#214/#219), world-identity round-trip (#707), the gold-standard save→quit→restart→load pattern | **Rewrite, and extend.** Its assertions (per-page unit/building survival, cross-page isolation, identity round-trip) are exactly what B1's new format must still guarantee, but it currently asserts against v82's field layout and will need updating. It also needs a genuinely new case: every run today starts from a fresh restart with zero pre-load pages, so it cannot observe the merge-vs-replace divergence documented in §1 ("Divergence: current loading merges, it does not replace") — a same-process load with an unrelated live page already present must be added once that divergence is implemented. | B1 (field layout); A2 (session-replacement test case) |
+| `tools/multiworld_save_probe.py` | Multi-page save/load (#214/#219), world-identity round-trip (#707), the gold-standard save→quit→restart→load pattern | **Retained as-is by #759 (B1).** The probe drives only the Lua `engine.saveWorld`/`engine.loadSave`/`engine.listSaves` surface — it never asserted against `SaveData`'s internal field layout, so it needed no changes at all to prove the new tagged envelope end to end (re-run and green against #759). It still needs the genuinely new merge-vs-replace case described below once that divergence is implemented. | A2 (session-replacement test case) |
 | `tools/save_pause_probe.py` | Pause/timescale invariant across save and load (#42) | **Rewrite by A2/#757.** A coordinated save keeps the engine paused and must not restore a prior simulation speed; the positional compatibility field remains decode-compatible until format work. | A2/#757 |
 | `tools/lua_orphan_prune_probe.py` | Post-load reconcile of orphaned per-id Lua AI/spawn state (#195) | **Retain as-is.** Tests a Lua-side invariant (`onSaveLoaded` reconcile) orthogonal to the envelope's wire format; nothing in this contract changes it. | — |
 
