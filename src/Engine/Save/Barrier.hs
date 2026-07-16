@@ -7,8 +7,8 @@
 module Engine.Save.Barrier
     ( SaveOwner(..), SavePhase(..), SaveOutcome(..), SaveStatus(..)
     , SaveBarrier, newSaveBarrier, beginSave, acknowledgeSave, failSave
-    , reachSnapshot, finishSave, waitForOwners, readSaveStatus, acknowledgeCurrent
-    , captureLocked, saveInProgress
+    , reachSnapshot, releaseCaptureLock, finishSave, waitForOwners
+    , readSaveStatus, acknowledgeCurrent, captureLocked, saveInProgress
     ) where
 
 import UPrelude
@@ -19,8 +19,13 @@ import Control.Concurrent.STM
 data SaveOwner = SaveLua | SaveWorld | SaveUnit | SaveBuilding | SaveCombat | SaveSimulation
     deriving (Eq, Ord, Show, Enum, Bounded)
 
+-- | 'SaveEncoding' (#758) is the window between "the snapshot is
+--   captured and validated, state owners may resume" and "the encoded
+--   save has actually landed on disk (or failed to)" — see
+--   'releaseCaptureLock'.
 data SavePhase = SaveRequested | SavePausing | SaveWaitingOwners
-               | SaveSnapshotBoundary | SaveCaptureComplete | SaveFailed
+               | SaveSnapshotBoundary | SaveEncoding
+               | SaveCaptureComplete | SaveFailed
     deriving (Eq, Show)
 
 data SaveOutcome = SaveSucceeded | SaveAborted Text deriving (Eq, Show)
@@ -63,7 +68,7 @@ acknowledgeSave ∷ SaveBarrier → Int → SaveOwner → IO ()
 acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
     current ← readTVar status
     forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
-            ∧ ssPhase s ≠ SaveSnapshotBoundary) $ do
+            ∧ ssPhase s ≠ SaveSnapshotBoundary ∧ ssPhase s ≠ SaveEncoding) $ do
         let acks = Set.insert owner (ssAcknowledged s)
         if acks ≡ ssOwners s ∧ ssQuiescencePasses s + 1 < requiredQuiescencePasses
             -- One full drain is not a boundary: a command handled by the
@@ -104,6 +109,24 @@ reachSnapshot ∷ SaveBarrier → Int → IO ()
 reachSnapshot (SaveBarrier _ status) n = atomically $ modifyTVar' status $ fmap $ \s →
     if ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
        then s { ssPhase = SaveSnapshotBoundary } else s
+
+-- | #758: unblock 'captureLocked' — every state owner may resume
+--   ordinary work — the instant the snapshot is captured and
+--   validated, WITHOUT yet declaring the save transaction terminally
+--   complete. Deliberately does not touch 'ssOutcome': 'saveInProgress'
+--   must stay True (so a second, overlapping 'beginSave' is still
+--   refused, and 'engine.getSaveStatus()' doesn't report a premature
+--   success) until 'finishSave'/'failSave' actually runs once encoding
+--   and disk I/O finish — a disk-write failure after this point must
+--   still surface as a real 'SaveFailed' outcome, not be silently
+--   swallowed. 'acknowledgeSave' explicitly ignores 'SaveEncoding' too
+--   (same as 'SaveSnapshotBoundary'), so a worker thread's routine
+--   per-tick 'acknowledgeCurrent' call can't reopen or corrupt this
+--   window while the encode/write step is in flight.
+releaseCaptureLock ∷ SaveBarrier → Int → IO ()
+releaseCaptureLock (SaveBarrier _ status) n = atomically $ modifyTVar' status $ fmap $ \s →
+    if ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
+       then s { ssPhase = SaveEncoding } else s
 
 finishSave ∷ SaveBarrier → Int → IO ()
 finishSave (SaveBarrier _ status) n = atomically $ modifyTVar' status $ fmap $ \s →

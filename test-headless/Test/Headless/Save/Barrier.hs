@@ -49,3 +49,56 @@ spec = describe "save snapshot barrier" $ do
         finishSave b first
         Right second ← beginSave b Set.empty
         second `shouldBe` first + 1
+
+    -- #758: releaseCaptureLock lets state owners resume (captureLocked
+    -- False) the instant the snapshot is captured, WITHOUT declaring the
+    -- transaction terminally complete -- so a later disk-write failure
+    -- can still surface as a real SaveFailed outcome.
+    it "unblocks captureLocked without completing the transaction" $ do
+        b ← newSaveBarrier
+        Right n ← beginSave b Set.empty
+        reachSnapshot b n
+        captureLocked b `shouldReturn` True
+        releaseCaptureLock b n
+        captureLocked b `shouldReturn` False
+        status ← readSaveStatus b
+        ssPhase <$> status `shouldBe` Just SaveEncoding
+        ssOutcome <$> status `shouldBe` Just Nothing
+        -- Still open: a second overlapping save is still refused, and a
+        -- status reader must not see a premature success.
+        saveInProgress b `shouldReturn` True
+        beginSave b Set.empty `shouldReturn` Left "a save transaction is already active"
+
+    it "ignores a stray acknowledgement during SaveEncoding" $ do
+        b ← newSaveBarrier
+        Right n ← beginSave b (Set.singleton SaveWorld)
+        reachSnapshot b n
+        releaseCaptureLock b n
+        acknowledgeSave b n SaveWorld
+        status ← readSaveStatus b
+        ssPhase <$> status `shouldBe` Just SaveEncoding
+        ssAcknowledged <$> status `shouldBe` Just Set.empty
+
+    it "finishSave finalizes a success after releaseCaptureLock" $ do
+        b ← newSaveBarrier
+        Right n ← beginSave b Set.empty
+        reachSnapshot b n
+        releaseCaptureLock b n
+        finishSave b n
+        status ← readSaveStatus b
+        ssPhase <$> status `shouldBe` Just SaveCaptureComplete
+        ssOutcome <$> status `shouldBe` Just (Just SaveSucceeded)
+        saveInProgress b `shouldReturn` False
+
+    it "failSave finalizes a disk-write failure discovered after releaseCaptureLock" $ do
+        b ← newSaveBarrier
+        Right n ← beginSave b Set.empty
+        reachSnapshot b n
+        releaseCaptureLock b n
+        -- State owners have already resumed at this point; the write
+        -- itself is what fails.
+        failSave b n "disk full"
+        status ← readSaveStatus b
+        ssPhase <$> status `shouldBe` Just SaveFailed
+        ssOutcome <$> status `shouldBe` Just (Just (SaveAborted "disk full"))
+        saveInProgress b `shouldReturn` False

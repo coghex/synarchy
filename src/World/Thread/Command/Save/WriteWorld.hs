@@ -2,9 +2,13 @@
 
 -- | The save path: capture every live world page into an immutable,
 --   validated 'SessionSnapshot' (#758), release the coordinated #757
---   barrier, THEN encode the snapshot through the temporary v88
---   adapter and write it to disk. Split out of
---   "World.Thread.Command.Save" (issue #561).
+--   barrier's capture lock so every state owner resumes, THEN encode
+--   the snapshot through the temporary v88 adapter and write it to
+--   disk — the transaction itself stays open ('SaveEncoding') and only
+--   reaches its terminal outcome once that write actually resolves, so
+--   a disk failure after release still surfaces as a real failure
+--   rather than a save the barrier already called a success. Split out
+--   of "World.Thread.Command.Save" (issue #561).
 module World.Thread.Command.Save.WriteWorld
     ( handleWorldSaveCommand
     ) where
@@ -27,7 +31,8 @@ import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Thread.Helpers (unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
-import Engine.Save.Barrier (finishSave, failSave, readSaveStatus, ssRequestId)
+import Engine.Save.Barrier
+    (releaseCaptureLock, finishSave, failSave, readSaveStatus, ssRequestId)
 import World.Edit.Types (WorldEdit(..), WorldEdits, appendEdit)
 import World.Generate.Coordinates (chunkToGlobal)
 
@@ -198,14 +203,18 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             logWarn logger CatWorld msg
                             failTransaction env msg
                           Right snap → do
-                            -- The coordinated barrier's job ends here: every
-                            -- state owner may resume as soon as the snapshot
-                            -- is fully captured and validated (#758 requirement
-                            -- 10). Encoding and disk I/O below run AFTER
-                            -- release and touch only 'snap' — never live state
-                            -- again — so a mutation the instant after release
-                            -- can never change what gets written.
-                            completeTransaction env
+                            -- Every state owner may resume as soon as the
+                            -- snapshot is fully captured and validated (#758
+                            -- requirement 10) — but the save TRANSACTION
+                            -- stays open (non-terminal 'SaveEncoding') until
+                            -- the disk write below actually resolves, so a
+                            -- write failure still surfaces as a real
+                            -- 'SaveFailed' outcome instead of the barrier
+                            -- having already declared success. Encoding and
+                            -- disk I/O touch only 'snap' — never live state
+                            -- again — so a mutation the instant after
+                            -- release can never change what gets written.
+                            releaseCaptureLock' env
                             -- UTC ISO 8601 microsecond precision, captured and
                             -- monotonically clamped at the API request time
                             -- (see saveWorldFn) — NOT here, so two saves
@@ -224,16 +233,25 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             case result of
                               Right () →
                                 do
+                                    completeTransaction env
                                     logInfo logger CatWorld $
                                         "World saved successfully: " <> saveName
                                     emitEvent env "save_load" "World.Save" $
                                         "Game saved: " <> saveName
                               Left err →
                                 do
+                                    failTransaction env err
                                     logError logger CatWorld $
                                         "Failed to save world: " <> err
                                     emitEvent env "save_load" "World.Save" $
                                         "Save failed: " <> err
+
+-- | #758: release the barrier so state owners resume WITHOUT declaring
+--   the transaction terminally complete yet — see 'releaseCaptureLock'.
+releaseCaptureLock' ∷ EngineEnv → IO ()
+releaseCaptureLock' env = do
+    current ← readSaveStatus (saveBarrierRef env)
+    forM_ current $ \s → releaseCaptureLock (saveBarrierRef env) (ssRequestId s)
 
 completeTransaction ∷ EngineEnv → IO ()
 completeTransaction env = do
