@@ -1284,12 +1284,32 @@ never captured gameplay state) and duplicates the one global live camera's zoom/
 every page the same lossy way v88 always has (no per-page zoom/facing exists in that
 format). `World.Thread.Command.Save.WriteWorld.handleWorldSaveCommand` still owns every
 `readIORef`, but now calls `captureSessionSnapshot` and — critically — releases the #757
-barrier (`finishSave`) as soon as the snapshot is captured and validated, **before** the
-adapter/`saveWorld` encode+disk-I/O step runs; previously the barrier stayed held through
-the entire encode+write. A validation failure (`captureSessionSnapshot`'s `Left`) fails the
-transaction and writes nothing — no partial `SaveData` is ever serialized. Pure coverage:
+barrier's CAPTURE LOCK (`Engine.Save.Barrier.releaseCaptureLock`, transitioning to a
+non-terminal `SaveEncoding` phase) as soon as the snapshot is captured, validated, AND fully
+FORCED, **before** the disk write runs; previously the barrier stayed held through the
+entire encode+write, and before that (review round 2) the transaction was declared
+terminally complete (`finishSave`) at the same too-early point, so a disk-write failure
+after release could no longer flip the outcome and `engine.getSaveStatus()` would report a
+save that was never written. Fixed two ways: (1) `releaseCaptureLock` only unblocks
+`captureLocked` for other state owners — `ssOutcome` stays `Nothing` (`saveInProgress`
+still `True`) until the real disk write resolves via `finishSave`/`failSave`, so a write
+failure surfaces as a genuine `SaveFailed`; (2) `World.Save.Serialize.encodeSaveData` (pure
+— splits what used to be one `saveWorld` into an encode step and a `writeSaveFiles` I/O
+step) is forced via `evaluate` **before** `releaseCaptureLock` runs, not after — cereal
+cannot produce a `ByteString` without visiting every field, so this either fully succeeds or
+throws right there, catching a bug hiding in an unevaluated thunk (the snapshot/adapter's
+record fields are only forced to WHNF, not deeply — Strict/`HashMap.Strict` forces the
+outer shape and each value at ONE level, never recursively) as a capture failure while the
+barrier still blocks everyone, instead of letting it surface later during the write after
+owners have already resumed. A validation OR encode failure fails the transaction and
+writes nothing — no partial `SaveData` is ever serialized. Pure coverage:
 `Test.Headless.Save.Snapshot` (construction, all ~10 referential-integrity validators,
-camera representation, adapter field-mapping — no engine boot). Real multi-thread coverage:
+camera representation, adapter field-mapping, and a "full-encode forcing" pair proving
+`encodeSaveData` forces a deferred exploding thunk buried in a page's edit list that
+capture/validation silently pass — no engine boot); `Test.Headless.Save.Barrier` covers
+`SaveEncoding`/`releaseCaptureLock` directly (unblocks `captureLocked` without completing
+the transaction, ignores a stray ack during that phase, `finishSave`/`failSave` finalize
+correctly after it). Real multi-thread coverage:
 **`python3 tools/save_barrier_probe.py`** — extended for #758 to also prove a mutation
 issued the instant the barrier releases (i.e. once the save file has already appeared)
 never reaches the save that already captured it, and that a later save captures that

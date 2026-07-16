@@ -11,9 +11,11 @@ module Test.Headless.Save.Snapshot (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (evaluate)
 import qualified Data.HashMap.Strict as HM
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter
+import World.Save.Serialize (encodeSaveData)
 import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
@@ -29,7 +31,8 @@ import Item.Types (ItemInstance(..))
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Flora.CropPlot (emptyCropPlots)
-import World.Edit.Types (emptyWorldEdits)
+import World.Edit.Types (WorldEdit, emptyWorldEdits)
+import World.Chunk.Types (ChunkCoord(..))
 import Craft.Bills (emptyCraftBills)
 import Power.Types (emptyPowerNodes)
 import Building.Types (BuildingId(..))
@@ -354,3 +357,37 @@ spec = do
             smTimestamp (sdMetadata sd) `shouldNotBe` smTimestamp (sdMetadata sd2)
             sdGameTime sd `shouldBe` sdGameTime sd2
             map wpsPageId (sdWorlds sd) `shouldBe` map wpsPageId (sdWorlds sd2)
+
+    -- #758 review round 2 follow-up: capture/validation must not silently
+    -- pass a snapshot that still hides an unevaluated exception somewhere
+    -- deep inside its captured data -- 'World.Save.Snapshot'/'.Adapter''s
+    -- record fields are only forced to WHNF (via Strict/HashMap.Strict),
+    -- never deeply, so a thunk buried inside a LIST stored as a HashMap
+    -- VALUE survives every construction step untouched.
+    -- 'World.Save.Serialize.encodeSaveData' is what
+    -- 'World.Thread.Command.Save.WriteWorld' forces (via 'evaluate') BEFORE
+    -- releasing the #757 barrier -- this proves it actually reaches, and
+    -- forces, a payload this deeply nested.
+    describe "full-encode forcing (review round 2 follow-up)" $ do
+        it "captureSessionSnapshot accepts a snapshot with a deferred, \
+           \deeply-nested exploding thunk buried in a page's edit log \
+           \(capture/validation never touches list ELEMENTS, only \
+           \top-level shape)" $ do
+            let explodingEdits = HM.singleton (ChunkCoord 0 0)
+                    [error "deferred nested payload boom" ∷ WorldEdit]
+                page = (minimalPage page1) { pgsEdits = explodingEdits }
+            case captureSessionSnapshot minimalGlobals [page] of
+                Right _   → pure ()
+                Left errs → expectationFailure (show errs)
+
+        it "encodeSaveData forces that same deferred thunk and throws -- \
+           \proving the #758 fix catches it BEFORE the barrier would \
+           \release, rather than later during the disk write" $ do
+            let req = SaveRequestMeta { srmSlotName = "my_save", srmTimestamp = "ts" }
+                explodingEdits = HM.singleton (ChunkCoord 0 0)
+                    [error "deferred nested payload boom" ∷ WorldEdit]
+                page = (minimalPage page1) { pgsEdits = explodingEdits }
+                Right snap = captureSessionSnapshot minimalGlobals [page]
+                sd = snapshotToSaveData req snap
+            evaluate (encodeSaveData sd)
+                `shouldThrow` errorCall "deferred nested payload boom"

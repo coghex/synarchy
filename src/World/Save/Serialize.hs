@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Save.Serialize
-    ( saveWorld
+    ( encodeSaveData
+    , writeSaveFiles
     , loadWorld
     , listSaves
     , savesDirectory
@@ -63,27 +64,48 @@ binaryFileName = "world" <> saveExtension
 yamlFileName ∷ String
 yamlFileName = "world_gen.yaml"
 
--- | Save a world to disk.
+-- | Serialize a 'SaveData' into on-disk bytes (header + body). Pure —
+--   but producing the final 'BS.ByteString' requires 'Data.Serialize'
+--   to actually visit and encode every field, so forcing this value to
+--   WHNF (a strict 'ByteString' cannot exist half-built) fully forces
+--   the ENTIRE 'SaveData', including anything left as an unevaluated
+--   thunk by 'World.Save.Snapshot'/'World.Save.Snapshot.Adapter''s
+--   partial (WHNF-only) strictness.
+--
+--   #758 requirement 7 ("capture must be complete before the #757
+--   barrier releases") depends on this being forced — via
+--   'Control.Exception.evaluate' — BEFORE
+--   'Engine.Save.Barrier.releaseCaptureLock' runs, so a bug that only
+--   manifests when some deeply-nested captured value is finally
+--   touched is caught as a capture failure while the barrier still
+--   blocks other owners, not discovered later during 'writeSaveFiles'
+--   after they have already resumed. See
+--   'World.Thread.Command.Save.WriteWorld'.
+encodeSaveData ∷ SaveData → BS.ByteString
+encodeSaveData saveData =
+    let header = SaveHeader { shMagic = saveMagic, shVersion = currentSaveVersion }
+    in S.encode header <> S.encode saveData
+
+-- | Write already-encoded save bytes (see 'encodeSaveData') plus the
+--   human-readable companion YAML to disk.
+--
 --   Creates saves/{name}/ directory with:
 --     - world.synworld  (binary save data, header + body)
 --     - world_gen.yaml  (human-readable generation params)
 --
---   File layout: [SaveHeader (magic + version)][SaveData].
---   The header is decoded first on load so we can reject incompatible
---   files before attempting to parse the body — which would fail with
---   a cryptic cereal error if the schema diverges.
-saveWorld ∷ Text → SaveData → IO (Either Text ())
-saveWorld rawName saveData = case sanitizeSaveName rawName of
+--   Every pure computation already ran to produce @encoded@ — the only
+--   work left here is genuine, unpredictable-until-attempted I/O
+--   (directory creation, disk space, permissions), which is why this
+--   is safe to run AFTER the #757 barrier releases (#758): a failure
+--   here is a real write failure, not a capture bug.
+writeSaveFiles ∷ Text → BS.ByteString → SaveData → IO (Either Text ())
+writeSaveFiles rawName encoded saveData = case sanitizeSaveName rawName of
     Left err   → return (Left ("Invalid save name: " <> err))
     Right name → do
         let saveDir = savesDirectory </> T.unpack name
         createDirectoryIfMissing True saveDir
         let binaryPath = saveDir </> binaryFileName
             yamlPath   = saveDir </> yamlFileName
-            header     = SaveHeader { shMagic   = saveMagic
-                                    , shVersion = currentSaveVersion
-                                    }
-            encoded    = S.encode header <> S.encode saveData
         BS.writeFile binaryPath encoded
         -- The human-readable companion describes the primary (active)
         -- world; per-world gen params now live in sdWorlds (#215). A
