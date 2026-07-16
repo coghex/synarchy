@@ -29,6 +29,11 @@ deleteElementTree handle mgr =
                 , upmGlobalFocus = if upmGlobalFocus mgrWithoutChildren ≡ Just handle
                                    then Nothing
                                    else upmGlobalFocus mgrWithoutChildren
+                -- #745 review round 3: same hygiene for keyboard
+                -- CONTROL focus.
+                , upmControlFocus = if upmControlFocus mgrWithoutChildren ≡ Just handle
+                                    then Nothing
+                                    else upmControlFocus mgrWithoutChildren
                 }
 
 removeElementReference ∷ ElementHandle → UIElement → UIPageManager → UIPageManager

@@ -79,6 +79,19 @@ hidePage handle mgr =
                         Just fh | Just el ← Map.lookup fh (upmElements mgr)
                                 , uePage el ≡ handle → Nothing
                         other → other
+                -- #745 review round 3: keyboard CONTROL focus needs
+                -- the exact same hide-time hygiene as TEXT focus above
+                -- — otherwise a control focused before its page is
+                -- hidden sits stale in upmControlFocus (unnoticed
+                -- until the next keyboard dispatch's lazy validation)
+                -- and, if the page is shown again before any key
+                -- reaches that validation, reads as still-focused with
+                -- no intervening "clear" ever having been observed.
+                , upmControlFocus =
+                    case upmControlFocus mgr of
+                        Just fh | Just el ← Map.lookup fh (upmElements mgr)
+                                , uePage el ≡ handle → Nothing
+                        other → other
                 }
 
 getPage ∷ PageHandle → UIPageManager → Maybe UIPage

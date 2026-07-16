@@ -3,6 +3,7 @@ module Engine.Input.State where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef)
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
@@ -68,6 +69,11 @@ clearHeldInput state = state
     , inpMouseRoutes    = Map.empty
     , inpPendingUIClick = Map.empty
     , inpPendingActivation = Map.empty
+    -- #745 review round 3: a key held mid-consumption across a
+    -- focus-loss/minimize gets no synthetic release from GLFW (only
+    -- mouse buttons get one, via releaseHeldButtons below) — clear the
+    -- tracking set too, or it leaks that key suppressed forever.
+    , inpControlFocusConsumedKeys = Set.empty
     }
 
 -- | Emit the mouse-up events the OS swallows on a focus-loss / minimize

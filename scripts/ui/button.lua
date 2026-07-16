@@ -246,6 +246,27 @@ function button.onMouseUp()
 end
 
 -----------------------------------------------------------
+-- Keyboard Control Focus (#745)
+-----------------------------------------------------------
+
+local focusedId = nil
+
+-- Reference implementation proving LuaUIControlFocusChanged drives
+-- real visible state (#745 review round 3) — reuses the existing
+-- hovered texture as a functional placeholder for a dedicated focus
+-- ring (no such asset exists yet; a distinct texture is a follow-up
+-- art pass, same convention as this epic's other placeholder assets).
+function button.onUIControlFocusChanged(elemHandle)
+    if focusedId and buttons[focusedId] and buttons[focusedId].state ~= "clicked" then
+        button.setState(focusedId, "normal")
+    end
+    focusedId = button.findByElementHandle(elemHandle)
+    if focusedId and buttons[focusedId].state ~= "clicked" then
+        button.setState(focusedId, "hovered")
+    end
+end
+
+-----------------------------------------------------------
 -- In-place mutation (used by the keybind editor for live key
 -- updates and the settings scroll/tab-hide model)
 -----------------------------------------------------------

@@ -3,6 +3,7 @@ module Engine.Input.Types where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Graphics.UI.GLFW as GLFW
 import UI.ControlActivation (PendingActivation)
 
@@ -49,6 +50,22 @@ data InputState = InputState
       --   event between characters (GLFW fires key-down, char,
       --   key-up per keystroke), so it naturally flushes once per
       --   real character.
+    , inpControlFocusConsumedKeys ∷ Set.Set GLFW.Key
+      -- ^ #745 review round 3: GLFW keys currently mid-hold that the
+      --   keyboard control-focus layer consumed at their initial
+      --   Pressed dispatch (Tab/Shift+Tab, Enter/Space, a steppable
+      --   arrow). 'GLFW.KeyState'Pressed'/'Repeating'/'Released' each
+      --   arrive as a SEPARATE 'Engine.Input.Thread.Keyboard.
+      --   dispatchKeyEvent' call with its own fresh local "consumed
+      --   this dispatch" tracking, so without this the layer's
+      --   suppression of the gameplay onKeyDown broadcast and
+      --   inpKeyStates withholding would only cover the initial press
+      --   — a HELD steppable arrow would leak Repeating events to
+      --   gameplay/camera-pan, and Released would broadcast an
+      --   unpaired LuaKeyUpEvent with no matching key-down. Inserted
+      --   on a freshly-consumed press, consulted (in addition to that
+      --   dispatch's own fresh consumption) on every dispatch for the
+      --   same key, and removed on release regardless of outcome.
     } deriving (Show, Eq)
 
 -- | One in-flight aggregate of 'InputCharEvent' outcomes — see
@@ -369,4 +386,5 @@ defaultInputState = InputState
     , inpPendingUIClick = Map.empty
     , inpPendingActivation = Map.empty
     , inpCharBatch = Nothing
+    , inpControlFocusConsumedKeys = Set.empty
     }

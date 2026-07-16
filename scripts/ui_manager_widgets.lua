@@ -79,6 +79,14 @@ function uiManager.onUIStep(elemHandle, direction)
     slider.onStep(elemHandle, direction)
 end
 
+-- #745 review round 3: keyboard control focus moved or cleared.
+-- elemHandle may be nil (cleared/nothing focused). button.lua is the
+-- reference visual consumer; other families are unaffected (correct
+-- activation behavior does not depend on this notification at all).
+function uiManager.onUIControlFocusChanged(elemHandle)
+    button.onUIControlFocusChanged(elemHandle)
+end
+
 function uiManager.onHoverEnter(elemHandle, callbackName)
     if callbackName == "onButtonClick" then
         button.onHoverEnter(elemHandle)

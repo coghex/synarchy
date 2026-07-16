@@ -78,7 +78,9 @@ advance ∷ Int → UIPageManager → Maybe ElementHandle → Maybe ElementHandl
 advance direction mgr current = case focusableElements mgr of
     [] → Nothing
     xs → Just $ case current ⌦ (`elemIndex` xs) of
-        Nothing → if direction ≥ 0 then head xs else last xs
+        -- Total indexing throughout (never 'head'/'last') — 'xs' is
+        -- already proven non-empty by the outer match.
+        Nothing → xs !! (if direction ≥ 0 then 0 else length xs - 1)
         Just i  → xs !! wrapIndex (i + signum direction) (length xs)
   where
     wrapIndex i n = ((i `mod` n) + n) `mod` n

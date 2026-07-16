@@ -58,11 +58,15 @@ removeElement handle mgr =
         Nothing → mgr
         Just element →
             let mgr' = removeElementReference handle element mgr
-            -- A detached element is unreachable for rendering and
-            -- hit-testing; it must not keep the keyboard either.
-            in if upmGlobalFocus mgr' ≡ Just handle
-               then mgr' { upmGlobalFocus = Nothing }
-               else mgr'
+                -- A detached element is unreachable for rendering and
+                -- hit-testing; it must not keep the keyboard either.
+                mgr'' = if upmGlobalFocus mgr' ≡ Just handle
+                        then mgr' { upmGlobalFocus = Nothing }
+                        else mgr'
+            -- #745 review round 3: same hygiene for CONTROL focus.
+            in if upmControlFocus mgr'' ≡ Just handle
+               then mgr'' { upmControlFocus = Nothing }
+               else mgr''
 
 -- | Remove an element from its page's root list (without deleting it).
 -- This detaches the element so its sprites disappear, but the handle
@@ -73,7 +77,11 @@ removeFromPage pageHandle elemHandle mgr =
             page { upRootElements = filter (/= elemHandle) (upRootElements page) }
         mgr'' = modifyElement elemHandle mgr' $ \elem →
             elem { ueParent = Nothing }
-    -- Same focus hygiene as removeElement: detached ⇒ no keyboard.
-    in if upmGlobalFocus mgr'' ≡ Just elemHandle
-       then mgr'' { upmGlobalFocus = Nothing }
-       else mgr''
+        -- Same focus hygiene as removeElement: detached ⇒ no keyboard.
+        mgr''' = if upmGlobalFocus mgr'' ≡ Just elemHandle
+                 then mgr'' { upmGlobalFocus = Nothing }
+                 else mgr''
+    -- #745 review round 3: same hygiene for CONTROL focus.
+    in if upmControlFocus mgr''' ≡ Just elemHandle
+       then mgr''' { upmControlFocus = Nothing }
+       else mgr'''

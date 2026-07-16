@@ -20,6 +20,7 @@ import Test.Hspec
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
 import qualified Data.Sequence as Seq
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import Control.Concurrent.STM (atomically, modifyTVar')
 import Engine.Core.State (EngineEnv(..))
@@ -152,19 +153,28 @@ spec = do
             validateControlFocus (deleteElement a m2) (Just a) `shouldBe` Nothing
             validateControlFocus (setElementClickable a False m2) (Just a) `shouldBe` Nothing
 
-        it "showing a hidden page back up never resurrects stale focus on its own — only the next validation's CURRENT eligibility counts" $ do
+        it "deleting or detaching a focused control proactively clears control focus, mirroring upmGlobalFocus's own hygiene (review round 3)" $ do
             let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
                 (a, m2) = focusableAt "a" 0 hudH m1
-                m3 = hidePage hudH m2
-                -- Focus is invalid while the page is hidden...
-                invalidWhileHidden = validateControlFocus m3 (Just a)
-                m4 = showPage hudH m3
-                -- ...and becomes eligible again once the page is
-                -- visible again, purely because it's eligible NOW, not
-                -- because anything "remembered" it across the hide.
-                validWhenShownAgain = validateControlFocus m4 (Just a)
-            invalidWhileHidden `shouldBe` Nothing
-            validWhenShownAgain `shouldBe` Just a
+                (b, m3) = focusableAt "b" 30 hudH m2
+            getControlFocus (deleteElement a (setControlFocus a m3)) `shouldBe` Nothing
+            getControlFocus (removeFromPage hudH b (setControlFocus b m3)) `shouldBe` Nothing
+            getControlFocus (removeElement b (setControlFocus b m3)) `shouldBe` Nothing
+
+        it "hiding a focused control's page proactively clears control focus (mirrors upmGlobalFocus's own hidePage hygiene); showing it again never resurrects it (review round 3)" $ do
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (a, m2) = focusableAt "a" 0 hudH m1
+                m3 = setControlFocus a m2
+            getControlFocus m3 `shouldBe` Just a
+            -- hidePage clears it immediately — not lazily, at the next
+            -- keyboard dispatch's validation pass.
+            let m4 = hidePage hudH m3
+            getControlFocus m4 `shouldBe` Nothing
+            -- Showing the page again never restores it: nothing
+            -- remembers "a was focused before the hide", so it stays
+            -- cleared even though `a` is eligible again.
+            let m5 = showPage hudH m4
+            getControlFocus m5 `shouldBe` Nothing
 
     around withHeadlessEngine $
         describe "wire integration (Engine.Input.Thread) — #745" $ do
@@ -342,6 +352,53 @@ spec = do
                 st ← readIORef (inputStateRef env)
                 Map.lookup GLFW.Key'Right (inpKeyStates st) `shouldSatisfy` isJust
 
+            it "a held steppable arrow stays suppressed through Repeating and Released — no leaked gameplay onKeyDown/onKeyUp or resumed key-state polling (review round 3)" $ \env → do
+                resetAll env
+                let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                    (a, m2') = focusableAt "knob" 0 hudH m1
+                    m2 = setElementSteppable a True m2'
+                writeIORef (uiManagerRef env) (setControlFocus a m2)
+                push env [InputKeyEvent GLFW.Key'Right GLFW.KeyState'Pressed noMods]
+                inputTick env
+                msgsPress ← drainLuaMsgs env
+                msgsPress `shouldSatisfy` elem (LuaUIStepEvent a 1)
+                msgsPress `shouldSatisfy` all (not ∘ isKeyDownEvent)
+                st1 ← readIORef (inputStateRef env)
+                inpControlFocusConsumedKeys st1 `shouldBe` Set.singleton GLFW.Key'Right
+                -- Held: GLFW's own auto-repeat, a SEPARATE dispatch —
+                -- must stay suppressed (no gameplay leak, no resumed
+                -- camera-pan polling) even though it doesn't re-fire
+                -- its own step (only a fresh Pressed does that).
+                push env [InputKeyEvent GLFW.Key'Right GLFW.KeyState'Repeating noMods]
+                inputTick env
+                msgsRepeat ← drainLuaMsgs env
+                msgsRepeat `shouldSatisfy` all (not ∘ isKeyDownEvent)
+                st2 ← readIORef (inputStateRef env)
+                Map.lookup GLFW.Key'Right (inpKeyStates st2) `shouldBe` Nothing
+                -- Release: no unpaired LuaKeyUpEvent (its matching
+                -- key-down never reached gameplay either), and the
+                -- tracking set clears so a later, unrelated press on
+                -- this key isn't permanently suppressed.
+                push env [InputKeyEvent GLFW.Key'Right GLFW.KeyState'Released noMods]
+                inputTick env
+                msgsRelease ← drainLuaMsgs env
+                msgsRelease `shouldSatisfy` all (not ∘ isKeyUpEvent)
+                st3 ← readIORef (inputStateRef env)
+                inpControlFocusConsumedKeys st3 `shouldSatisfy` Set.null
+
+            it "Enter/Space never activates a drag-activation control's onClick (it would latch a keyboard-triggered drag); arrow stepping on the same control still works (review round 3)" $ \env → do
+                resetAll env
+                let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                    (knob, m2') = focusableAt "knob" 0 hudH m1
+                    m2 = setElementSteppable knob True (setElementDragActivation knob True m2')
+                writeIORef (uiManagerRef env) (setControlFocus knob m2)
+                pressKey env GLFW.Key'Enter noMods
+                msgsEnter ← drainLuaMsgs env
+                msgsEnter `shouldSatisfy` all (not ∘ isUIClickEvent)
+                pressKey env GLFW.Key'Right noMods
+                msgsArrow ← drainLuaMsgs env
+                msgsArrow `shouldSatisfy` elem (LuaUIStepEvent knob 1)
+
             it "introspection: UI.getElementInfo reports controlFocused distinctly from the pre-existing text-focus field" $ \env → do
                 resetAll env
                 ls ← newBareLuaBackend env
@@ -487,6 +544,10 @@ isControlFocusChanged _ = False
 isKeyDownEvent ∷ LuaMsg → Bool
 isKeyDownEvent (LuaKeyDownEvent _ _) = True
 isKeyDownEvent _ = False
+
+isKeyUpEvent ∷ LuaMsg → Bool
+isKeyUpEvent (LuaKeyUpEvent _) = True
+isKeyUpEvent _ = False
 
 newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
 newBareLuaBackend env = do
