@@ -526,6 +526,32 @@ spec = do
                 evalDebug ls "return UI.findElementAt(150, 130)" ≫= (`shouldBe` "null")
                 evalDebug ls "return UI.findElementAt(150, 150)" ≫= (`shouldBe` "null")
 
+    -- #857 review round 6: list.setVisible(id, false) hid every slot
+    -- and the scrollbar but left the clipping viewport itself visible —
+    -- a real, sized element, so it kept winning findElementAt/hover
+    -- over whatever sat behind a "hidden" list. Proves the viewport now
+    -- follows the list's own visibility, so a hidden list falls through
+    -- to an underlying control, and showing it again restores its rows.
+    around withHeadlessEngine $
+        describe "scripts/ui/list.lua setVisible also hides its clipping viewport (#857)" $
+            it "a hidden list stops intercepting hits; showing it again restores its rows" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls hiddenListSetupLua
+                setup `shouldNotSatisfy` isLuaError
+
+                -- Visible: the list's own row wins over the control
+                -- positioned directly behind it.
+                evalDebug ls "return UI.findElementAt(150, 110) == _G.__hlHit1Id" ≫= (`shouldBe` "true")
+
+                -- Hidden: the viewport must no longer intercept the hit,
+                -- so it falls through to the underlying control.
+                _ ← evalDebug ls "require('scripts.ui.list').setVisible(_G.__hlListId, false)"
+                evalDebug ls "return UI.findElementAt(150, 110) == _G.__hlUnderId" ≫= (`shouldBe` "true")
+
+                -- Shown again: the row is back on top.
+                _ ← evalDebug ls "require('scripts.ui.list').setVisible(_G.__hlListId, true)"
+                evalDebug ls "return UI.findElementAt(150, 110) == _G.__hlHit1Id" ≫= (`shouldBe` "true")
+
     -- #747 review round 1 follow-up: the shared widget library gained
     -- (or, for checkbox/label/textbox/button, already had) an opt-in
     -- `parent` (panel.lua: `parentElement`, distinct from its existing
@@ -651,6 +677,32 @@ listSetupLua = T.concat
     , "  if e.name == 'test_list_hit_1' then _G.__listHit1Id = e.handle end; "
     , "  if e.name == 'test_list_hit_2' then _G.__listHit2Id = e.handle end; "
     , "  if e.name == 'test_list_hit_3' then _G.__listHit3Id = e.handle end; "
+    , "end"
+    ]
+
+-- | Like 'listSetupLua', but also places a plain clickable control
+--   ("hlUnder") on the same page, directly behind the list's first
+--   row, so hiding the list can be proven to actually fall through to
+--   it (#857 review round 6) rather than merely asserting the viewport
+--   itself returns something-or-other.
+hiddenListSetupLua ∷ Text
+hiddenListSetupLua = T.concat
+    [ "local page = UI.newPage('test_hidden_list_page', 'hud'); "
+    , "UI.showPage(page); "
+    , "local under = UI.newElement('hl_under', 200, 60, page); "
+    , "UI.addToPage(page, under, 100, 100); "
+    , "UI.setClickable(under, true); "
+    , "UI.setOnClick(under, 'underClick'); "
+    , "_G.__hlUnderId = under; "
+    , "local listMod = require('scripts.ui.list'); "
+    , "listMod.init(); "
+    , "local items = {}; "
+    , "for i = 1, 5 do items[i] = { text = 'item' .. i, value = i } end; "
+    , "_G.__hlListId = listMod.new({ name = 'hl_list', x = 100, y = 100, "
+    , "width = 200, itemHeight = 20, maxVisible = 3, items = items, "
+    , "page = page, font = 0 }); "
+    , "for _, e in ipairs(UI.getVisibleElements()) do "
+    , "  if e.name == 'hl_list_hit_1' then _G.__hlHit1Id = e.handle end; "
     , "end"
     ]
 

@@ -542,6 +542,13 @@ function list.setVisible(id, visible)
     local ls = lists[id]
     if not ls then return end
 
+    -- The clipping viewport (#747) is itself a real, sized element, so
+    -- it must follow the list's own visibility toggle: left visible
+    -- while every slot underneath it is hidden, it would still be a
+    -- valid hover/tooltip/hit target (an empty box with nothing behind
+    -- it reachable), blocking whatever's actually behind a hidden list.
+    UI.setVisible(ls.viewportId, visible)
+
     for _, slot in ipairs(ls.slotElements) do
         UI.setVisible(slot.hitId, visible)
         UI.setVisible(slot.textId, visible)
