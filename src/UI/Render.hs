@@ -2,6 +2,7 @@
 module UI.Render
   ( renderUIPages
   , uiLayerToLayerId
+  , clipGlyphInstance
   ) where
 
 import UPrelude
@@ -23,7 +24,7 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatch(..))
 import UI.Types
-import UI.Clipping (ClipRect, effectiveClip, clipQuadUV)
+import UI.Clipping (ClipRect, effectiveClip, clipQuadUV, boxTileRects, BoxTile(..))
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
 import World.Grid (uiLayerThreshold)
 
@@ -269,74 +270,43 @@ clipGlyphInstance clip gi =
                     , instanceUVRect   = uv
                     }
 
+-- | The texture for one of the nine 3x3 box tiles.
+tileTexture ∷ BoxTextureSet → BoxTile → TextureHandle
+tileTexture texSet tile = case tile of
+    TileNW     → btsNW texSet
+    TileN      → btsN texSet
+    TileNE     → btsNE texSet
+    TileW      → btsW texSet
+    TileCenter → btsCenter texSet
+    TileE      → btsE texSet
+    TileSW     → btsSW texSet
+    TileS      → btsS texSet
+    TileSE     → btsSE texSet
+
 makeBoxBatches ∷ BindlessTextureSystem → BoxTextureSet
                → Float → Float → Float → Float → Float
                → (Float, Float, Float, Float) → LayerId → Maybe ClipRect
                → V.Vector RenderBatch
 makeBoxBatches bindless texSet x y w h tileSize color layerId clip =
-    let ts = tileSize
-        
-        -- When the element is smaller than 2*tileSize, let the tiles
-        -- overlap naturally from the origin. The middle section becomes 0
-        -- (or negative, clamped to 0) and corners/edges simply overlap.
-        -- This preserves the element's position — no offset correction.
-        midW = max 0 (w - ts * 2)
-        midH = max 0 (h - ts * 2)
-        
-        -- No offset — always start at the element's actual position.
-        -- Tiles that are larger than the element will extend beyond its
-        -- bounds, which looks intentional for stylised buttons.
-        nwX = x
-        nwY = y
-        nX  = x + ts
-        nY  = y
-        neX = x + ts + midW
-        neY = y
-        
-        wX  = x
-        wY  = y + ts
-        cX  = x + ts
-        cY  = y + ts
-        eX  = x + ts + midW
-        eY  = y + ts
-        
-        swX = x
-        swY = y + ts + midH
-        sX  = x + ts
-        sY  = y + ts + midH
-        seX = x + ts + midW
-        seY = y + ts + midH
-        
-        -- #747: each of the nine tiles is clipped independently against
-        -- the same effective clip — a tile fully outside it is dropped
-        -- ('Nothing'), one straddling the boundary shows only its
-        -- visible slice (rect + UV both adjusted by 'clipQuadUV').
-        makeBatch tex px py pw ph =
-            case clipQuadUV clip (px, py, pw, ph) (0, 0, 1, 1) of
-                Nothing → Nothing
-                Just ((cx, cy, cw, ch), uv) →
-                    let atlasId = lookupTextureSlot bindless tex
-                        vertices = makeQuadVertices cx cy cw ch color atlasId uv
-                    in Just RenderBatch
-                        { rbTexture  = tex
-                        , rbLayer    = layerId
-                        , rbVertices = vertices
-                        , rbObjects  = V.empty
-                        , rbDirty    = True
-                        , rbAvgZ     = 0.0
-                        }
-
-    in V.fromList ∘ catMaybes $
-        [ makeBatch (btsNW texSet) nwX nwY ts ts
-        , makeBatch (btsN texSet)  nX  nY  midW ts
-        , makeBatch (btsNE texSet) neX neY ts ts
-        , makeBatch (btsW texSet)  wX  wY  ts midH
-        , makeBatch (btsCenter texSet) cX cY midW midH
-        , makeBatch (btsE texSet)  eX  eY  ts midH
-        , makeBatch (btsSW texSet) swX swY ts ts
-        , makeBatch (btsS texSet)  sX  sY  midW ts
-        , makeBatch (btsSE texSet) seX seY ts ts
-        ]
+    -- #747: 'UI.Clipping.boxTileRects' is the actual per-tile geometry
+    -- (already clipped — a tile fully outside the effective clip is
+    -- omitted, one straddling the boundary keeps only its visible
+    -- rect + UV slice); this is now pure glue turning each surviving
+    -- tile into a RenderBatch.
+    V.fromList $ map toBatch (boxTileRects x y w h tileSize clip)
+  where
+    toBatch (tile, (cx, cy, cw, ch), uv) =
+        let tex = tileTexture texSet tile
+            atlasId = lookupTextureSlot bindless tex
+            vertices = makeQuadVertices cx cy cw ch color atlasId uv
+        in RenderBatch
+            { rbTexture  = tex
+            , rbLayer    = layerId
+            , rbVertices = vertices
+            , rbObjects  = V.empty
+            , rbDirty    = True
+            , rbAvgZ     = 0.0
+            }
 
 -- | Generate quad vertices for a UI element. The UV rect is a
 --   parameter (rather than always the full 0..1 texture) so a

@@ -28,6 +28,7 @@ local eventLog       = require("scripts.event_log")
 local combatLog      = require("scripts.combat_log")
 local injuryLog      = require("scripts.injury_log_panel")
 local unitLog        = require("scripts.unit_log")
+local contextMenu    = require("scripts.ui.context_menu")
 
 local mainMenu        = require("scripts.main_menu")
 local settingsMenu    = require("scripts.settings_menu")
@@ -306,6 +307,11 @@ function uiManager.onFramebufferResize(width, height)
         injuryLog.onFramebufferResize(width, height)
         unitLog.onFramebufferResize(width, height)
     end
+    -- #747: an open context menu/submenu is a singleton popup with no
+    -- moduleReady gate of its own (lazily inits via ensureReady in
+    -- cm.show) — a no-op when nothing is open, so it's always safe to
+    -- forward.
+    contextMenu.onFramebufferResize(width, height)
     if uiManager.moduleReady.pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     if uiManager.moduleReady.buildToolRemoteWarning then
         buildToolRemoteWarning.onFramebufferResize(width, height)

@@ -29,10 +29,13 @@ module UI.Clipping
   , effectiveClip
   , pointInClip
   , clipQuadUV
+  , BoxTile(..)
+  , boxTileRects
   ) where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
 import UI.Types
 
 -- | An axis-aligned rectangle: (x, y, width, height) in the same
@@ -137,3 +140,59 @@ clipQuadUV (Just clip) screenRect@(sx, sy, sw, sh) (u0, v0, u1, v1)
                    v0' = v0 + fracTop    * (v1 - v0)
                    v1' = v0 + fracBottom * (v1 - v0)
                in Just (clipped, (u0', v0', u1', v1'))
+
+-- | Which of the nine 3x3 box tiles a rect covers — used to look up
+--   its matching texture in a 'UI.Types.BoxTextureSet'.
+data BoxTile
+    = TileNW | TileN | TileNE
+    | TileW  | TileCenter | TileE
+    | TileSW | TileS | TileSE
+    deriving (Eq, Show)
+
+-- | Compute the nine 3x3 box tile rects for a box at the given
+--   position/size/tile-size, each already clipped against an optional
+--   ancestor clip (via 'clipQuadUV') and paired with its UV sub-rect.
+--   A tile fully outside the clip is omitted entirely — this is the
+--   actual per-tile geometry "UI.Render.makeBoxBatches" draws, pulled
+--   out as a pure function (no 'Engine.Graphics.Vulkan.Texture.Types.
+--   BindlessTextureSystem'/'Engine.Core.Monad.EngineM' involved) so
+--   the real box-clipping wiring — not just the underlying
+--   'clipQuadUV' helper in isolation — is directly Hspec-testable; see
+--   @Test.Headless.UI.Clipping@.
+boxTileRects ∷ Float → Float → Float → Float → Float → Maybe ClipRect
+             → [(BoxTile, ClipRect, (Float, Float, Float, Float))]
+boxTileRects x y w h tileSize clip =
+    let ts = tileSize
+        -- Mirrors UI.Render.makeBoxBatches exactly: tiles overlap from
+        -- the origin when the box is smaller than 2*tileSize.
+        midW = max 0 (w - ts * 2)
+        midH = max 0 (h - ts * 2)
+
+        nwX = x;          nwY = y
+        nX  = x + ts;     nY  = y
+        neX = x + ts + midW; neY = y
+
+        wX  = x;          wY  = y + ts
+        cX  = x + ts;     cY  = y + ts
+        eX  = x + ts + midW; eY  = y + ts
+
+        swX = x;          swY = y + ts + midH
+        sX  = x + ts;     sY  = y + ts + midH
+        seX = x + ts + midW; seY = y + ts + midH
+
+        tiles =
+            [ (TileNW,     nwX, nwY, ts,   ts)
+            , (TileN,      nX,  nY,  midW, ts)
+            , (TileNE,     neX, neY, ts,   ts)
+            , (TileW,      wX,  wY,  ts,   midH)
+            , (TileCenter, cX,  cY,  midW, midH)
+            , (TileE,      eX,  eY,  ts,   midH)
+            , (TileSW,     swX, swY, ts,   ts)
+            , (TileS,      sX,  sY,  midW, ts)
+            , (TileSE,     seX, seY, ts,   ts)
+            ]
+
+        clipOne (tile, tx, ty, tw, th) = case clipQuadUV clip (tx, ty, tw, th) (0, 0, 1, 1) of
+            Nothing → Nothing
+            Just (rect, uv) → Just (tile, rect, uv)
+    in mapMaybe clipOne tiles

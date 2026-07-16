@@ -12,6 +12,15 @@ module Test.Headless.UI.PopupPlacement (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.Text as T
+import Data.IORef (newIORef, writeIORef)
+import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Thread (ThreadControl(..))
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness (withHeadlessEngine)
 import UI.PopupPlacement
 
 -- | A 1280x720 framebuffer — a typical desktop resolution, used as the
@@ -170,3 +179,208 @@ spec = do
                 plX pScaled `shouldBe` plX pBase * 2
                 plY pScaled `shouldBe` plY pBase * 2
                 plFlipped pScaled `shouldBe` plFlipped pBase
+
+    -- #747 review round 1 (concern 2): a real, driven-through-Lua
+    -- regression proving an OPEN scripts/ui/context_menu.lua menu
+    -- (root + a reopened submenu) rebuilds — new backdrop size, fresh
+    -- placement — against a genuine framebuffer resize, rather than
+    -- keeping stale geometry and an old-size backdrop.
+    around withHeadlessEngine $
+        describe "scripts/ui/context_menu.lua resize regression (#747)" $
+            it "an open menu with an open submenu rebuilds against the new framebuffer size on resize" $ \env → do
+                writeIORef (framebufferSizeRef env) (1280, 720)
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls contextMenuSetupLua
+                setup `shouldNotSatisfy` isLuaError
+
+                evalDebug ls "return UI.getElementInfo(_G.__cmBackdropId).width" ≫= (`shouldBe` "1280.0")
+                evalDebug ls "return UI.getElementInfo(_G.__cmBackdropId).height" ≫= (`shouldBe` "720.0")
+
+                -- Hover the row with a submenu open it (the real
+                -- openSubMenu path — cm.onHoverEnter is the public
+                -- entry point, openSubMenu itself is a local).
+                openSub ← evalDebug ls
+                    "require('scripts.ui.context_menu').onHoverEnter(_G.__cmRow1Id)"
+                openSub `shouldNotSatisfy` isLuaError
+                hasSubBefore ← evalDebug ls
+                    "for _, e in ipairs(UI.getVisibleElements()) do \
+                    \  if e.name == 'context_menu_sub_box' then return true end \
+                    \end; return false"
+                hasSubBefore `shouldBe` "true"
+
+                -- Simulate a real resize: the input thread updates
+                -- framebufferSizeRef BEFORE broadcasting to Lua
+                -- (Engine.Input.Thread.Dispatch), so the test does the
+                -- same ordering.
+                writeIORef (framebufferSizeRef env) (400, 300)
+                resizeResult ← evalDebug ls
+                    "require('scripts.ui.context_menu').onFramebufferResize(400, 300)"
+                resizeResult `shouldNotSatisfy` isLuaError
+
+                -- The backdrop was fully torn down and rebuilt at the
+                -- new size (the OLD backdrop handle is gone).
+                evalDebug ls "return UI.getElementInfo(_G.__cmBackdropId) == nil" ≫= (`shouldBe` "true")
+                newBackdropSize ← evalDebug ls
+                    "local w, h; \
+                    \for _, e in ipairs(UI.getVisibleElements()) do \
+                    \  if e.name == 'context_menu_backdrop' then w, h = e.width, e.height end \
+                    \end; return w, h"
+                newBackdropSize `shouldBe` "400.0\t300.0"
+
+                -- The submenu reopened automatically after the rebuild.
+                hasSubAfter ← evalDebug ls
+                    "for _, e in ipairs(UI.getVisibleElements()) do \
+                    \  if e.name == 'context_menu_sub_box' then return true end \
+                    \end; return false"
+                hasSubAfter `shouldBe` "true"
+
+                -- The root panel is still on-screen (never stale/out
+                -- of the new, smaller framebuffer).
+                rootOnScreen ← evalDebug ls
+                    "local ok = true; \
+                    \for _, e in ipairs(UI.getVisibleElements()) do \
+                    \  if e.name == 'context_menu_root_box' then \
+                    \    ok = e.x >= 0 and e.y >= 0 and e.x + e.width <= 400 and e.y + e.height <= 300 \
+                    \  end \
+                    \end; return ok"
+                rootOnScreen `shouldBe` "true"
+
+    -- #747 review round 1 (concern 3): a real, driven-through-Lua
+    -- widget test for scripts/ui/dropdown.lua — the pure placePopup/
+    -- fitVisibleRows math being correct doesn't prove dropdown.lua's
+    -- CALL-SITE WIRING (which numbers it feeds in, whether it stores
+    -- and reuses the result for its own click-outside bounds) is
+    -- correct. Exercises oversized-row reduction, scrolling, final hit
+    -- bounds matching the rendered position, and re-placement across a
+    -- resize (close + reopen — dropdown.lua has no live-while-open
+    -- resize hook, unlike context_menu.lua's singleton popup; every
+    -- screen that owns a dropdown already tears down and rebuilds its
+    -- whole UI on resize, e.g. settingsMenu.onFramebufferResize, so an
+    -- open option list never survives a live resize in production).
+    around withHeadlessEngine $
+        describe "scripts/ui/dropdown.lua placement adoption (#747)" $
+            it "reduces rows to fit, scrolls, matches its own hit bounds, and re-places on resize" $ \env → do
+                writeIORef (framebufferSizeRef env) (800, 200)
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls dropdownSetupLua
+                setup `shouldNotSatisfy` isLuaError
+
+                -- 20 options, maxVisibleOptions=8, but only ~100px is
+                -- available (100px above the display box beats 60px
+                -- below) at optionHeight=36 -> floor(100/36) = 2 rows.
+                evalDebug ls "require('scripts.ui.dropdown').openList(_G.__ddId); return 'ok'" ≫= (`shouldBe` "\"ok\"")
+                rowsPresent ← evalDebug ls
+                    "local n = 0; \
+                    \for _, e in ipairs(UI.getVisibleElements()) do \
+                    \  if e.name:match('^test_dd_opt_hit_') then n = n + 1 end \
+                    \end; return n"
+                rowsPresent `shouldBe` "2"
+
+                -- Flipped ABOVE the display box (100+40=140 down to
+                -- 200 has no room for 2*36=72px) and NOT flipped
+                -- horizontally, at the exact placePopup-resolved rect.
+                listInfo ← evalDebug ls
+                    "local i = UI.getElementInfo(_G.__findByName('test_dd_list')); \
+                    \return i.x, i.y, i.width, i.height"
+                listInfo `shouldBe` "50.0\t28.0\t100.0\t72.0"
+
+                -- Scrolling: row 1's TEXT label shows option 1 before,
+                -- option 2 after.
+                evalDebug ls "return UI.getElementInfo(_G.__findByName('test_dd_opt_1')).text"
+                    ≫= (`shouldBe` "\"Option 1\"")
+                scrollResult ← evalDebug ls
+                    "require('scripts.ui.dropdown').onScrollChanged(_G.__ddId, 1); return 'ok'"
+                scrollResult `shouldBe` "\"ok\""
+                evalDebug ls "return UI.getElementInfo(_G.__findByName('test_dd_opt_1')).text"
+                    ≫= (`shouldBe` "\"Option 2\"")
+
+                -- Final hit bounds: a point at the HAND-COMPUTED centre
+                -- of row 1's clickable hit-sprite (derived independently
+                -- from the placePopup rect above: listX=50, listY=28,
+                -- row 1 spans y∈[28,64), x∈[50,150)) resolves to that
+                -- same row's hit handle — proving the resolved
+                -- placement, not just an internal field, is what a real
+                -- click would land on.
+                hitMatches ← evalDebug ls
+                    "return UI.findElementAt(100, 46) == _G.__findByName('test_dd_opt_hit_1')"
+                hitMatches `shouldBe` "true"
+
+                -- Resize: close, grow the framebuffer so all 8 rows now
+                -- fit below, reopen — re-placement re-derives from the
+                -- NEW framebuffer rather than reusing stale geometry.
+                _ ← evalDebug ls "require('scripts.ui.dropdown').closeList(_G.__ddId)"
+                writeIORef (framebufferSizeRef env) (800, 720)
+                evalDebug ls "require('scripts.ui.dropdown').openList(_G.__ddId); return 'ok'" ≫= (`shouldBe` "\"ok\"")
+
+                rowsAfterResize ← evalDebug ls
+                    "local n = 0; \
+                    \for _, e in ipairs(UI.getVisibleElements()) do \
+                    \  if e.name:match('^test_dd_opt_hit_') then n = n + 1 end \
+                    \end; return n"
+                rowsAfterResize `shouldBe` "8"
+
+                listInfoAfter ← evalDebug ls
+                    "local i = UI.getElementInfo(_G.__findByName('test_dd_list')); \
+                    \return i.x, i.y, i.width, i.height"
+                listInfoAfter `shouldBe` "50.0\t140.0\t100.0\t288.0"
+
+-- * Lua-facing helpers (mirrors Test.Headless.UI.Clipping/Slider)
+
+newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
+newBareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                (assetPoolRef env) (nextObjectIdRef env)
+                                (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls
+
+evalDebug ∷ LuaBackendState → Text → IO Text
+evalDebug ls = executeDebugLua (lbsLuaState ls)
+
+isLuaError ∷ Text → Bool
+isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t
+
+-- | Stubs scripts.hud with just the font field context_menu.lua reads
+--   (package.loaded lookup, not a require — no need to load the real,
+--   much heavier hud module), shows a 2-item root menu with one
+--   submenu at (100,100), and resolves the backdrop + first root row
+--   (the one with a submenu) by name into globals.
+contextMenuSetupLua ∷ Text
+contextMenuSetupLua = T.concat
+    [ "package.loaded['scripts.hud'] = { menuFont = 1 }; "
+    , "local cm = require('scripts.ui.context_menu'); "
+    , "cm.show({ "
+    , "  { label = 'Equip', submenu = { { label = 'Right hand', callback = function() end } } }, "
+    , "  { label = 'Drop', callback = function() end }, "
+    , "}, 100, 100); "
+    , "for _, e in ipairs(UI.getVisibleElements()) do "
+    , "  if e.name == 'context_menu_backdrop' then _G.__cmBackdropId = e.handle end; "
+    , "  if e.name == 'context_menu_root_row_1' then _G.__cmRow1Id = e.handle end; "
+    , "end"
+    ]
+
+-- | Defines a reusable _G.__findByName(pattern) helper (element
+--   handles change across dropdown.lua's closeList/openList, so tests
+--   must re-resolve by name rather than caching a stale handle), then
+--   creates a 20-option dropdown at (50,100) with uiscale pinned to 1
+--   (so every pixel dimension in the test is exact, not dependent on
+--   engine.getUIScale()'s default) and font=0 (the "unset" sentinel —
+--   text still creates fine headless with no font loaded).
+dropdownSetupLua ∷ Text
+dropdownSetupLua = T.concat
+    [ "function _G.__findByName(name) "
+    , "  for _, e in ipairs(UI.getVisibleElements()) do "
+    , "    if e.name == name then return e.handle end "
+    , "  end "
+    , "  return nil "
+    , "end; "
+    , "local dd = require('scripts.ui.dropdown'); "
+    , "dd.init(); "
+    , "local page = UI.newPage('test_dropdown_page', 'hud'); "
+    , "UI.showPage(page); "
+    , "local options = {}; "
+    , "for i = 1, 20 do options[i] = { text = 'Option ' .. i, value = i } end; "
+    , "_G.__ddId = dd.new({ name = 'test_dd', x = 50, y = 100, page = page, "
+    , "font = 0, uiscale = 1, options = options, maxVisibleOptions = 8 })"
+    ]

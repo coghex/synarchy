@@ -18,10 +18,12 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Data.IORef (newIORef)
+import Engine.Graphics.Font.Data (GlyphInstance(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import UI.Clipping
 import UI.InputOwnership (routePointer, routeScroll, PointerKind(..), InputRoute(..))
 import UI.Manager
+import UI.Render (clipGlyphInstance)
 import UI.Types
 
 -- * Pure fixtures (mirrors Test.Headless.UI.ElementInputPolicy)
@@ -162,6 +164,83 @@ spec = do
         it "an ancestor clip fully containing the quad leaves it unchanged" $
             clipQuadUV (Just (0, 0, 200, 200)) (10, 10, 50, 50) (0, 0, 1, 1)
                 `shouldBe` Just ((10, 10, 50, 50), (0, 0, 1, 1))
+
+    -- #747 review round 1 (concern 3): the underlying clipQuadUV
+    -- helper being correct doesn't prove UI.Render's per-element WIRING
+    -- (box tile math, glyph-instance field extraction) is correct — so
+    -- these drive the actual pure functions UI.Render.makeBoxBatches /
+    -- the text-clipping path call, not just clipQuadUV in isolation.
+    -- Sprite rendering has no comparable wiring risk: renderElementData's
+    -- RenderSprite branch is a single direct clipQuadUV call with no
+    -- intermediate geometry, already fully covered above.
+    describe "boxTileRects — the real per-tile box render geometry (UI.Render.makeBoxBatches)" $ do
+        it "unclipped: all nine 3x3 tiles are present with the expected rects" $
+            let tiles = boxTileRects 0 0 40 40 10 Nothing
+                lookupTile t = [r | (t', r, _) ← tiles, t' ≡ t]
+            in do
+                length tiles `shouldBe` 9
+                lookupTile TileNW     `shouldBe` [(0, 0, 10, 10)]
+                lookupTile TileN      `shouldBe` [(10, 0, 20, 10)]
+                lookupTile TileNE     `shouldBe` [(30, 0, 10, 10)]
+                lookupTile TileW      `shouldBe` [(0, 10, 10, 20)]
+                lookupTile TileCenter `shouldBe` [(10, 10, 20, 20)]
+                lookupTile TileE      `shouldBe` [(30, 10, 10, 20)]
+                lookupTile TileSW     `shouldBe` [(0, 30, 10, 10)]
+                lookupTile TileS      `shouldBe` [(10, 30, 20, 10)]
+                lookupTile TileSE     `shouldBe` [(30, 30, 10, 10)]
+
+        it "a clip covering only the left part of the box drops the right-hand tiles and clips the straddling ones" $
+            let tiles = boxTileRects 0 0 40 40 10 (Just (0, 0, 25, 40))
+                tileNames = [t | (t, _, _) ← tiles]
+                lookupTile t = [r | (t', r, _) ← tiles, t' ≡ t]
+                lookupUV t = [uv | (t', _, uv) ← tiles, t' ≡ t]
+            in do
+                -- NE/E/SE sit entirely at x∈[30,40) — fully outside x<25.
+                tileNames `shouldNotSatisfy` elem TileNE
+                tileNames `shouldNotSatisfy` elem TileE
+                tileNames `shouldNotSatisfy` elem TileSE
+                length tiles `shouldBe` 6
+                -- Untouched tiles (fully inside x<25) keep their full rect.
+                lookupTile TileNW `shouldBe` [(0, 0, 10, 10)]
+                lookupTile TileW  `shouldBe` [(0, 10, 10, 20)]
+                lookupTile TileSW `shouldBe` [(0, 30, 10, 10)]
+                -- Straddling tiles (N/Center/S, originally x∈[10,30)) are
+                -- clipped to x∈[10,25) — width 15/20, and the UV right
+                -- edge shrinks proportionally to 0.75.
+                lookupTile TileN      `shouldBe` [(10, 0, 15, 10)]
+                lookupTile TileCenter `shouldBe` [(10, 10, 15, 20)]
+                lookupTile TileS      `shouldBe` [(10, 30, 15, 10)]
+                lookupUV TileN `shouldBe` [(0, 0, 0.75, 1)]
+
+        it "a clip disjoint from the box entirely drops all nine tiles" $
+            boxTileRects 0 0 40 40 10 (Just (1000, 1000, 10, 10)) `shouldBe` []
+
+    describe "clipGlyphInstance — the real per-glyph text render geometry (UI.Render)" $ do
+        let glyph = GlyphInstance
+                { instancePosition = (0, 0)
+                , instanceSize     = (20, 10)
+                , instanceUVRect   = (0, 0, 1, 1)
+                , instanceColor    = (1, 1, 1, 1)
+                }
+
+        it "passes a glyph through unchanged with no clip in effect" $
+            clipGlyphInstance Nothing glyph `shouldBe` Just glyph
+
+        it "leaves a glyph unchanged when the clip fully contains it" $
+            clipGlyphInstance (Just (0, 0, 100, 100)) glyph `shouldBe` Just glyph
+
+        it "clips a partially-overlapping glyph and shrinks its UV rect to match" $
+            case clipGlyphInstance (Just (0, 0, 10, 10)) glyph of
+                Just gi → do
+                    instancePosition gi `shouldBe` (0, 0)
+                    instanceSize gi `shouldBe` (10, 10)
+                    instanceUVRect gi `shouldBe` (0, 0, 0.5, 1)
+                    -- Color is untouched by clipping.
+                    instanceColor gi `shouldBe` (1, 1, 1, 1)
+                Nothing → expectationFailure "expected a clipped glyph, got Nothing"
+
+        it "drops a glyph that falls entirely outside the clip" $
+            clipGlyphInstance (Just (1000, 1000, 10, 10)) glyph `shouldBe` Nothing
 
     describe "hover clipping (findElementAt — backs tooltip hover detection)" $ do
         it "does not return a row clipped out of view" $

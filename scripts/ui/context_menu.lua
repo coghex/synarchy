@@ -78,6 +78,15 @@ cm.font          = nil
 cm.page          = nil
 cm.backdropId    = nil
 
+-- #747: the ORIGINAL show() call's items + anchor point (not the
+-- clamped/placed position), kept so onFramebufferResize can rebuild
+-- the whole menu from scratch against the new framebuffer size —
+-- otherwise an open menu's geometry and its full-screen backdrop both
+-- go stale across a resize.
+cm.lastItems     = nil
+cm.lastAnchorX   = nil
+cm.lastAnchorY   = nil
+
 -- Root panel state. nil when the menu isn't open.
 cm.rootPanel     = nil   -- { boxId, rows, x, y, m, items }
 
@@ -349,6 +358,9 @@ function cm.hide()
     cm.subParentIndex = nil
     cm.rootHovered    = nil
     cm.subHovered     = nil
+    cm.lastItems      = nil
+    cm.lastAnchorX    = nil
+    cm.lastAnchorY    = nil
 end
 
 function cm.show(items, x, y)
@@ -359,6 +371,10 @@ function cm.show(items, x, y)
     if not items or #items == 0 then return end
 
     if cm.page then cm.hide() end
+
+    cm.lastItems   = items
+    cm.lastAnchorX = x
+    cm.lastAnchorY = y
 
     cm.page = UI.newPage("context_menu", "modal")
 
@@ -425,6 +441,28 @@ local function openSubMenu(parentIndex)
 
     cm.subPanel = buildPanel(items, subX, subYPlaced, "context_menu_sub")
     cm.subParentIndex = parentIndex
+end
+
+-- #747: rebuild the whole open menu (root + reopened submenu, if any)
+-- against the new framebuffer size. Without this, an open menu kept
+-- its stale placement AND its full-screen backdrop stayed sized to
+-- the old framebuffer after a resize — placePopup/buildPanel are only
+-- ever evaluated at open time, not on every frame, so a real resize
+-- callback is required to pick up the change. Mirrors the existing
+-- rebuild-in-place convention (e.g. combatLog.onFramebufferResize).
+function cm.onFramebufferResize(width, height)
+    if not cm.page then return end
+    local items = cm.lastItems
+    local anchorX = cm.lastAnchorX
+    local anchorY = cm.lastAnchorY
+    if not items then return end
+    local reopenParentIndex = cm.subParentIndex
+
+    cm.show(items, anchorX, anchorY)
+
+    if reopenParentIndex then
+        openSubMenu(reopenParentIndex)
+    end
 end
 
 -----------------------------------------------------------
