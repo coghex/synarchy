@@ -199,13 +199,21 @@ not replace" for the full writeup and the responsible future child.
 `CursorSnapshot` and `LoadPhase` (`:274`, `:285`) are the types behind
 `wsCursorSnapshotRef`/`wsLoadPhaseRef` above, not separate root owners.
 
-## 4. `World.Save.Types` (`src/World/Save/Types.hs`) — the current envelope (v82)
+## 4. `World.Save.Types` (`src/World/Save/Types.hs`) — the tagged save envelope (#759, save-overhaul B1)
 
-This section is the ground truth of what v82 actually writes to disk
-today. Per the issue-review correction, it is recorded as-is (not an
-idealized target) — the two rows marked **(new-format target differs)**
-are the only classifications in this document that diverge from what
-v82's field currently does.
+This section was originally the ground truth of what the pre-#759 flat
+`[header][SaveData]` format wrote to disk. #759 replaced that framing
+with a tagged, checksummed component container
+(`World.Save.Envelope`/`.Codec`/`.Types`) — `SaveData`/`WorldPageSave`/
+`SaveMetadata` are unchanged Haskell shapes, but they now ride as
+component PAYLOADS inside that envelope (`SaveData` as the transitional
+"session" component, `SaveMetadata` again, standalone, as the
+"metadata" component) rather than being the whole file. `SaveHeader`
+below describes the envelope's fixed 16-byte framing header, not a raw
+`[header][SaveData]` pair. The two rows marked **(new-format target
+differs)** are the only classifications in this document that diverge
+from what the field's CURRENT code does (a #756-era note, unrelated to
+the #759 framing change).
 
 Fields with no non-trivial restoration dependency or validation rule
 beyond type-correct deserialization say so plainly (contract §2:
@@ -214,12 +222,19 @@ inventing one.
 
 ### SaveHeader
 
-`SaveHeader` (`:291`) — global:
+`SaveHeader` (`src/World/Save/Types.hs`) — global. Describes the tagged
+envelope's fixed 16-byte header; the real codec
+(`World.Save.Envelope.Codec`) manipulates these three values as raw
+big-endian scalars under its own explicit byte-layout control, not this
+record — it exists here purely so this contract's audit
+(`tools/persistence_inventory_audit.py`) keeps a stable root-owner
+record to classify:
 
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
-| `shMagic` | Persist exactly | — (read first, before anything else) | must equal `saveMagic` (`0x53595241`) or the file is rejected as not a save at all | none yet |
-| `shVersion` | Persist exactly | — (read second) | must equal `currentSaveVersion` or load fails clearly with "expected vN, got vM" (contract §5) | format-mismatch error path (manual) |
+| `shMagic` | Persist exactly | — (read first, before anything else) | must equal the envelope magic (`0x53595241`, same "SYRA" value the pre-#759 format used) or the file is rejected as not a save at all | `save envelope` (`Test.Headless.World.Save.Envelope`) |
+| `shEnvelopeVersion` | Persist exactly | — (read second) | must equal `World.Save.Envelope.currentEnvelopeVersion` or load fails clearly, naming the unsupported version (contract §5) — independent of the "session" component's own `currentSaveVersion` | `save envelope` (`Test.Headless.World.Save.Envelope`) |
+| `shManifestLength` | Persist exactly | — (read third) | bounded by the documented `elMaxManifestBytes` limit and the actual remaining file length before the manifest is decoded | `save envelope` (`Test.Headless.World.Save.Envelope`) |
 
 ### SaveMetadata
 

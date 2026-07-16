@@ -15,13 +15,12 @@ module World.Generate.Config
     , normalizeWorldGenConfig
     , timelineParamsOf
     , loadWorldGenConfig
-    , saveWorldGenYaml
     , defaultWorldGenConfig
     , applyConfigToParams
     ) where
 
 import UPrelude
-import World.Generate.Config.IO (loadWorldGenConfig, saveWorldGenYaml)
+import World.Generate.Config.IO (loadWorldGenConfig)
 import World.Generate.Config.Normalize
     ( minimumWorldSize
     , normalizeWorldSize

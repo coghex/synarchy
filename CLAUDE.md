@@ -1405,7 +1405,52 @@ between a real capture failure and a legitimate Lua-less engine-only save (exerc
 `Test.Headless.World.Identity`'s save/load-mapping test, which drives `WorldSave` directly
 with an empty blob map).
 
-Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) plus a human-readable `world_gen.yaml` alongside.
+**Save envelope (#759, save-overhaul B1):** the on-disk `world.synworld`
+file is a tagged, checksummed COMPONENT ENVELOPE, not a raw positional
+`[header][SaveData]` blob. `World.Save.Envelope.Codec` is the generic,
+pure codec (`encodeEnvelope`/`decodeEnvelope`) — magic + a framing
+version + a length-prefixed, checksummed manifest of component
+descriptors (id, schema version, required/optional, offset, length,
+its own checksum), then each component's payload bytes laid out
+back-to-back in canonical (component-id-ascending) order. Integrity
+uses FNV-1a 64-bit (`World.Save.Envelope.Types.fnv1a64`) over the
+manifest and over each component's payload — corruption detection
+only, explicitly not authentication. Decoding validates the COMPLETE
+structure (magic, framing version, every documented allocation limit,
+duplicate ids, the required/optional contract, payload bounds,
+per-component checksums, forbidden trailing bytes) before any
+component's payload is interpreted; a component the writer marks
+optional can still be a hard requirement for THIS reader (an unknown
+component the writer marked required is rejected outright; a known
+component missing from the file is rejected even if the writer never
+marked anything required at all). `World.Save.Envelope` wires this
+codec to two components: `"metadata"` (just `SaveMetadata` — so
+`listSaves`/`engine.listSaves()` never decodes a save's gameplay
+payload at all) and `"session"` (the complete, unchanged `SaveData`,
+the same positional `Generic Serialize` shape v88 always used — a
+TRANSITIONAL component B2 will later split into independently-owned
+Haskell components). The envelope's own framing version
+(`World.Save.Envelope.currentEnvelopeVersion`) is independent of the
+session component's schema version (still `currentSaveVersion`,
+`World.Save.Types`) — bump the former only if the FRAMING contract
+itself changes incompatibly, the latter exactly as before whenever
+`SaveData`/`WorldPageSave` gains, loses, or reorders a field. A
+pre-#759 flat file is rejected outright (its first 16 bytes never
+parse as a valid envelope header) with no heuristic positional
+decoding attempted — v82-and-earlier saves are a clean break, not a
+migration target. `world_gen.yaml` is GONE: `world.synworld` is the
+sole authoritative file for a save generation now that generation
+params live in the "session" component like every other gameplay
+field. Pure coverage: `Test.Headless.World.Save.Envelope` (the "save
+envelope" describe block) — round trips, canonical ordering +
+determinism, the required/optional contract, every structural
+corruption/limit rejection path (with the phase + offending component
+identified), a real `SaveData`/`SaveMetadata` round trip, the
+metadata-without-gameplay-decoding property, component-version
+rejection, the pre-#759 clean break, and a frozen tracked-bytes
+fixture decoded independently of any encoder call in that same test.
+
+Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) — the sole authoritative file for a save generation; there is no companion `world_gen.yaml` (removed by #759 — generation params live in the envelope's "session" component).
 
 ```bash
 # From headless / debug console

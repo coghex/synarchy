@@ -256,7 +256,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- instant after release can never change
                                 -- what gets written.
                                 releaseCaptureLock' env
-                                result ← writeSaveFiles saveName encoded sd
+                                result ← writeSaveFiles saveName encoded
                                 case result of
                                   Right () →
                                     do
