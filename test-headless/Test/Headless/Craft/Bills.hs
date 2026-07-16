@@ -2,9 +2,12 @@
 -- | Craft-bill backend tests (#329): the pure queue/claim/progress
 --   transitions in Craft.Bills that the craft.* bill verbs wrap, plus
 --   the save-format roundtrip (bills persist in WorldPageSave, v70;
---   'cbWorking' appended in v80 for #590's job-dependent power draw).
---   The engine-integrated path (Lua verbs → craft AI → executeAt) is
---   gated by tools/craft_bill_probe.py.
+--   'cbWorking' appended in v80 for #590's job-dependent power draw;
+--   'cbMode'/'cbTarget'/'cbOutputItem' appended in v88 for #795's
+--   persisted until-stock bill mode). The engine-integrated path (Lua
+--   verbs → craft AI → executeAt), incl. the live ground-stock
+--   re-evaluation that gates an until-stock bill's claim/completion,
+--   is gated by tools/craft_bill_probe.py.
 module Test.Headless.Craft.Bills (spec) where
 
 import UPrelude
@@ -313,6 +316,68 @@ spec = do
                 (b4, r) = completeBillCycle bid b3
             r `shouldBe` Just 0
             lookupBill bid b4 `shouldBe` Nothing
+
+    describe "until-stock (#795)" $ do
+        it "addUntilStockBill starts pending with the right mode/target/output" $ do
+            let (bills, bid) =
+                    addUntilStockBill station1 "smelt_steel_anthracite" 12
+                                      "steel_bar" emptyCraftBills
+            cbMode ⊚ lookupBill bid bills `shouldBe` Just UntilStock
+            cbTarget ⊚ lookupBill bid bills `shouldBe` Just 12
+            cbOutputItem ⊚ lookupBill bid bills `shouldBe` Just "steel_bar"
+            cbRemaining ⊚ lookupBill bid bills `shouldBe` Just (-1)
+            cbClaimant ⊚ lookupBill bid bills `shouldBe` Just Nothing
+            cbProgress ⊚ lookupBill bid bills `shouldBe` Just 0
+
+        it "a negative target clamps to 0" $ do
+            let (bills, bid) =
+                    addUntilStockBill station1 "r" (-5) "steel_bar"
+                                      emptyCraftBills
+            cbTarget ⊚ lookupBill bid bills `shouldBe` Just 0
+
+        it "an ordinary addBill is unaffected: fixed/repeat mode, no target/output" $ do
+            let (b1, i1) = addBill station1 "a" 3 emptyCraftBills
+                (b2, i2) = addBill station1 "b" 0 b1
+            cbMode ⊚ lookupBill i1 b2 `shouldBe` Just FixedCount
+            cbTarget ⊚ lookupBill i1 b2 `shouldBe` Just 0
+            cbOutputItem ⊚ lookupBill i1 b2 `shouldBe` Just ""
+            cbMode ⊚ lookupBill i2 b2 `shouldBe` Just RepeatForever
+            cbTarget ⊚ lookupBill i2 b2 `shouldBe` Just 0
+            cbOutputItem ⊚ lookupBill i2 b2 `shouldBe` Just ""
+
+        it "completeBillCycle never removes an until-stock bill \
+           \(mirrors repeat-forever)" $ do
+            let (bills, bid) =
+                    addUntilStockBill station1 "r" 12 "steel_bar"
+                                      emptyCraftBills
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, r1) = completeBillCycle bid b2
+                (b4, r2) = completeBillCycle bid b3
+            r1 `shouldBe` Just (-1)
+            r2 `shouldBe` Just (-1)
+            cbRemaining ⊚ lookupBill bid b4 `shouldBe` Just (-1)
+            cbMode ⊚ lookupBill bid b4 `shouldBe` Just UntilStock
+            cbClaimant ⊚ lookupBill bid b4 `shouldBe` Just (Just worker1)
+
+        it "the #796 pause boundary applies to until-stock bills too" $ do
+            let (bills, bid) =
+                    addUntilStockBill station1 "r" 12 "steel_bar"
+                                      emptyCraftBills
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, r) = completeBillCycle bid b3
+            r `shouldBe` Just (-1)
+            cbClaimant ⊚ lookupBill bid b4 `shouldBe` Just Nothing
+            cbPaused ⊚ lookupBill bid b4 `shouldBe` Just True
+
+        it "roundtrips through the save encoding (mode/target/output included)" $ do
+            let (b0, bid) =
+                    addUntilStockBill station1 "r" 12 "steel_bar"
+                                      emptyCraftBills
+                (b1, _) = claimBill 12.5 30 everyoneAlive bid worker1 b0
+            S.decode (S.encode b1) `shouldBe` Right b1
 
     describe "reorder (#330)" $ do
         it "moving a bill up swaps cbSeq with its predecessor" $ do

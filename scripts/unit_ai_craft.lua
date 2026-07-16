@@ -28,6 +28,7 @@ local grantWorkXP     = core.grantWorkXP
 local fetch = require("scripts.unit_ai_fetch")
 local inventoryCountOf     = fetch.inventoryCountOf
 local groundCountOf        = fetch.groundCountOf
+local untilStockSatisfied  = fetch.untilStockSatisfied
 local findTechnomule       = fetch.findTechnomule
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
@@ -208,9 +209,8 @@ local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
     return true
 end
 
--- Nearest workable bill within craft_scan_range, or nil. Workable =
--- station alive + Built on the active world, nobody else's fresh
--- claim, knowledge gate cleared, and demands sourceable.
+-- Nearest workable bill within craft_scan_range, or nil (station alive + Built,
+-- unclaimed, stock target not met (#795), knowledge cleared, demands sourceable).
 local function findCraftBill(uid, fromX, fromY, params)
     local bills = craft.getBills()
     if not bills or #bills == 0 then return nil end
@@ -218,8 +218,8 @@ local function findCraftBill(uid, fromX, fromY, params)
     local best, bestD = nil, params.craft_scan_range
     for _, bill in ipairs(bills) do
         if not billPausedForUs(bill, uid)
-           and not billClaimedByOther(bill, uid, now,
-                                      params.craft_claim_timeout) then
+           and not billClaimedByOther(bill, uid, now, params.craft_claim_timeout)
+           and not untilStockSatisfied(bill) then
             local binfo = building.getInfo(bill.station)
             if binfo and building.getActivity(bill.station) == "built" then
                 local recipe = craft.get(bill.recipe)
@@ -306,6 +306,7 @@ local function craftExecute(uid, s, params)
         local cand = s.craftCandidate
         if not cand then return end
         s.craftCandidate = nil
+        if untilStockSatisfied(cand.bill) then return end -- #795: stock rose
         if not craft.claimBill(cand.bill.id, uid,
                                params.craft_claim_timeout) then
             return
@@ -467,13 +468,12 @@ local function craftExecute(uid, s, params)
             end
             grantWorkXP(uid, job.skill, params.craft_xp_per_craft or 0)
             local remaining = craft.completeBillCycle(job.billId)
-            if remaining and remaining ~= 0 and not bill.paused then
+            if remaining and remaining ~= 0
+               and not (bill.paused or untilStockSatisfied(bill)) then
                 job.phase = "fetch"      -- next cycle: source again
             else
-                -- Bill done and gone, OR (#796) paused right up to this
-                -- completion — either way completeBillCycle already
-                -- cleared the claim engine-side; just drop our state.
-                releaseCraftJob(s, uid)
+                -- #795: an until-stock claim survives a satisfied cycle; release.
+                releaseCraftJob(s, uid, untilStockSatisfied(bill) and not bill.paused)
             end
         end
         return

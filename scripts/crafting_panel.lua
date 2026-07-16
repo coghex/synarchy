@@ -15,21 +15,20 @@
 -- registered in ui/view_teardown.lua so a view transition can't leave
 -- it open-but-invisible.
 --
--- Bill modes: fixed count and repeat-forever call craft.addBill
--- directly (blank/zero/negative count = repeat forever, its own
--- convention). "Until" mode is computed client-side at Add time: it
--- reads the CURRENT ground stock of the recipe's first output
--- (item.listGround(), summed by defName — the same "dropped at the
--- station" pile the craft AI's fetch ladder sources from, #329), takes
--- the ITEM deficit (target - current), and converts it to CRAFT
--- CYCLES via ceil(deficit / outputsPerCycle) — a bill's count is
--- cycles, not items, and several recipes yield more than one of the
--- output per cycle (e.g. smelting: 4 bars/cycle), so passing the raw
--- item deficit as the count would over-produce. This is a snapshot,
--- not a continuously-reappraised target — the engine has no persisted
--- "stock target" concept, and this needed no new one to satisfy "make
--- until I have N" for the common case of topping up a pile once.
--- Recipe rows also show a ground-stock readiness dot using the same
+-- Bill modes: fixed count and repeat-forever call craft.addBill with a
+-- count (blank/zero/negative = repeat forever, its own convention).
+-- "Until" mode (#795) is a real PERSISTED standing order:
+-- craft.addBill(bid, recipeId, nil, target) tells the engine to craft
+-- this recipe while the live ground stock of its first output stays
+-- below `target` (Craft.Bills.addUntilStockBill) — the panel sends the
+-- raw target count, not a converted cycle count, and never snapshots
+-- current stock at Add time. The engine derives the output item from
+-- the recipe and re-evaluates the live count itself (unit_ai_craft.lua
+-- findCraftBill / craftExecute); the queue reflects the SAME
+-- ground-only, unbounded scope (groundStockTally()) that the readiness
+-- dot already used, so a bill added while already at/above target just
+-- starts condition-satisfied and resumes on its own if stock later
+-- drops. Recipe rows show a ground-stock readiness dot using that same
 -- tally, with the same "ground only, not the full carried/technomule/
 -- cargo fetch ladder" scope note.
 --
@@ -40,7 +39,9 @@
 -- cycle's end, then the bill goes idle rather than starting another
 -- one; a claimant still fetching/walking (not yet working) aborts and
 -- releases immediately, and no fresh claimant can pick it up while
--- paused.
+-- paused. An until-stock bill can ALSO sit idle condition-satisfied
+-- (#795) — same "no fresh claimant" outcome, distinct cause — the
+-- queue distinguishes the two rather than showing one generic "idle".
 --
 -- Recipes and bills both paginate (Prev/Next) rather than hard-cap,
 -- so every recipe and every queued bill stays reachable regardless of
@@ -50,8 +51,7 @@
 -- Public API: setup(opts), show(bid), closeIfOpen(), isOpen(),
 --             handleKeyDown(key), recipesForStation(bid) [testable],
 --             formatRecipeSummary(def), parseCount(text),
---             groundStockTally(), recipeAvailability(def, tally),
---             untilNeeded(def, target, tally).
+--             groundStockTally(), recipeAvailability(def, tally).
 -- Engine hooks: init, update(dt), shutdown.
 
 local craftingPanel = package.loaded["scripts.crafting_panel"] or {}
@@ -110,6 +110,7 @@ local UNCLAIMED_COL = { 0.75, 0.75, 0.75, 1.0 }
 local READY_COL     = { 0.4, 0.9, 0.4, 1.0 }
 local MISSING_COL   = { 0.85, 0.35, 0.3, 1.0 }
 local PAUSED_COL    = { 0.9, 0.75, 0.35, 1.0 }
+local SATISFIED_COL = { 0.5, 0.75, 0.95, 1.0 }
 
 -----------------------------------------------------------
 -- State
@@ -241,25 +242,6 @@ function craftingPanel.recipeAvailability(def, tally)
     end
     table.sort(missing)
     return { ready = (#missing == 0), missing = missing }
-end
-
--- "Until" mode: craft CYCLES needed to bring `def`'s first output's
--- ground stock up to `target` (an ITEM count), against a
--- groundStockTally() snapshot. Divides the item deficit by the
--- recipe's per-cycle output count (several recipes yield more than
--- one item per craft, e.g. smelting: 4 bars/cycle — a bill's `count`
--- is cycles, not items) and rounds up so the queued cycles cover at
--- least the requested target. Returns (nil, currentStock) when the
--- target is already met (no bill needed) — otherwise
--- (cyclesNeeded, currentStock).
-function craftingPanel.untilNeeded(def, target, tally)
-    local outDef = def.outputs and def.outputs[1]
-    local have = outDef and (tally[outDef.item] or 0) or 0
-    local perCycle = (outDef and outDef.count and outDef.count > 0)
-        and outDef.count or 1
-    local deficit = math.floor(target) - have
-    if deficit <= 0 then return nil, have end
-    return math.ceil(deficit / perCycle), have
 end
 
 local function truncate(text, maxChars)
@@ -499,9 +481,10 @@ renderRecipes = function()
             page = h.page, uiscale = uiscale,
             x = cbX - math.floor(34 * uiscale),
             y = rowY + math.floor(NAME_FONT * uiscale),
-            tooltip = "Checked: treat the count as a target GROUND-STOCK "
-                .. "level for this recipe's first output — queues "
-                .. "max(0, target - current ground stock) crafts. "
+            tooltip = "Checked: a PERSISTENT target ground-stock level "
+                .. "for this recipe's first output — the bill crafts "
+                .. "while stock stays below the target, stops once "
+                .. "met, and resumes on its own if stock later drops. "
                 .. "Unchecked: the count is a fixed number of crafts "
                 .. "(blank/0 = repeat forever).",
         })
@@ -540,28 +523,23 @@ renderRecipes = function()
             onClick = function()
                 local text = textbox.getValue(capturedTb)
                 local wantUntil = checkbox.isChecked(capturedCb)
-                local count
+                local billId, err
                 if wantUntil then
                     local target = tonumber(text)
                     if not target or target < 1 then
                         setStatus("Enter a target amount for 'until'", true)
                         return
                     end
-                    local neededCycles, have = craftingPanel.untilNeeded(
-                        def, target, craftingPanel.groundStockTally())
-                    if not neededCycles then
-                        s.recipeInputs[recipeId] = { count = "", until_ = false }
-                        setStatus(string.format(
-                            "Already have %d on the ground -- no bill added",
-                            have), false)
-                        renderRecipes()
-                        return
-                    end
-                    count = neededCycles
+                    -- #795: the engine owns the standing order — send
+                    -- the raw target, not a client-computed cycle
+                    -- count. It starts condition-satisfied (and just
+                    -- sits idle) if stock is already at/above target.
+                    billId, err = craft.addBill(s.bid, recipeId, nil,
+                                                math.floor(target))
                 else
-                    count = craftingPanel.parseCount(text)
+                    local count = craftingPanel.parseCount(text)
+                    billId, err = craft.addBill(s.bid, recipeId, count)
                 end
-                local billId, err = craft.addBill(s.bid, recipeId, count)
                 if billId then
                     s.recipeInputs[recipeId] = { count = "", until_ = false }
                     setStatus("", false)
@@ -633,6 +611,11 @@ renderQueue = function()
     local remW    = math.floor((upX - x) * 0.16)
     local progW   = math.floor((upX - x) * 0.18)
 
+    -- #795: the SAME ground-only, unbounded tally the recipe column's
+    -- readiness dot uses (one authoritative scope for the until-stock
+    -- target both columns show).
+    local tally = craftingPanel.groundStockTally()
+
     local startIdx = (s.queuePage - 1) * perPage + 1
     local endIdx = math.min(#bills, startIdx + perPage - 1)
     local row = 0
@@ -642,19 +625,38 @@ renderQueue = function()
         local rowY = y + (row - 1) * (rowH + rowGap)
         local def = craft.get(bill.recipe)
         local recipeName = truncate(def and def.name or bill.recipe, MAX_NAME_CHARS)
-        local remaining = (bill.remaining < 0) and "inf" or tostring(bill.remaining)
+        local isUntil = bill.mode == "until"
+        local current = isUntil and (tally[bill.outputItem] or 0) or nil
+        local satisfied = isUntil and current >= (bill.target or 0)
+        local remaining
+        if isUntil then
+            remaining = string.format("%d/%d", current, bill.target or 0)
+        elseif bill.remaining < 0 then
+            remaining = "inf"
+        else
+            remaining = tostring(bill.remaining)
+        end
         local pct = string.format("%d%%", math.floor((bill.progress or 0) * 100 + 0.5))
         local who = claimantName(bill.claimant)
-        local rowNameCol = bill.paused and PAUSED_COL or NAME_COL
+        local rowNameCol = bill.paused and PAUSED_COL
+            or (satisfied and SATISFIED_COL or NAME_COL)
+        local rowTooltip
+        if bill.paused then
+            rowTooltip = bill.working
+                and "Paused -- finishes the current cycle, then stops"
+                or "Paused -- stopped, won't draw a worker"
+        elseif satisfied then
+            rowTooltip = string.format(
+                "Target reached (%d/%d) -- idle until stock drops below target",
+                current, bill.target or 0)
+        end
 
         local nameId = label.new({
             name = "crafting_panel_q_name_" .. i, text = recipeName,
             font = h.menuFont, fontSize = NAME_FONT, color = rowNameCol,
             page = h.page, uiscale = uiscale,
             x = x, y = rowY + math.floor(NAME_FONT * uiscale),
-            tooltip = bill.paused and (bill.working
-                and "Paused -- finishes the current cycle, then stops"
-                or "Paused -- stopped, won't draw a worker") or nil,
+            tooltip = rowTooltip,
         })
         table.insert(s.queueElements, { kind = "label", id = nameId })
 
@@ -674,11 +676,14 @@ renderQueue = function()
         })
         table.insert(s.queueElements, { kind = "label", id = progId })
 
+        local claimText = who and truncate(who, 12) or (satisfied and "sated" or "--")
+        local claimCol = who and CLAIMED_COL
+            or (satisfied and SATISFIED_COL or UNCLAIMED_COL)
         local claimId = label.new({
             name = "crafting_panel_q_claim_" .. i,
-            text = truncate(who or "--", 12),
+            text = claimText,
             font = h.menuFont, fontSize = NAME_FONT,
-            color = who and CLAIMED_COL or UNCLAIMED_COL,
+            color = claimCol,
             page = h.page, uiscale = uiscale,
             x = x + nameW + remW + progW,
             y = rowY + math.floor(NAME_FONT * uiscale),

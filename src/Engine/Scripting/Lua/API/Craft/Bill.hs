@@ -35,24 +35,35 @@ import World.State.Types (WorldState(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingManager(..))
 
--- | craft.addBill(bid, recipeId [, count]) → billId | nil, err.
---   Queue a standing order at a station: run @recipeId@ @count@ times
---   (omitted or < 1 = repeat forever). Validated here so a malformed
---   bill can never enter the queue: the recipe must exist and not be
---   repair-tagged, the station must exist on the active page, and its
---   def must offer the recipe's station operation. The station does
---   NOT need to be Built yet — queueing bills on an under-construction
---   station is fine; the craft AI only works Built ones.
+-- | craft.addBill(bid, recipeId [, count [, untilTarget]]) → billId |
+--   nil, err. Queue a standing order at a station. @untilTarget@, when
+--   given as a positive integer, requests an UNTIL-STOCK bill (#795):
+--   @count@ is ignored and the bill instead crafts @recipeId@ while the
+--   live ground stock of the recipe's first output stays below
+--   @untilTarget@ (Craft.Bills.addUntilStockBill) — see
+--   scripts/unit_ai_craft.lua for the claim-time/cycle-boundary stock
+--   re-evaluation this mode relies on. Without @untilTarget@, @count@
+--   keeps its original meaning: omitted or < 1 = repeat forever.
+--   Validated here so a malformed bill can never enter the queue: the
+--   recipe must exist and not be repair-tagged, the station must exist
+--   on the active page, its def must offer the recipe's station
+--   operation, and (until-stock only) the recipe must have at least
+--   one output to target. The station does NOT need to be Built yet —
+--   queueing bills on an under-construction station is fine; the craft
+--   AI only works Built ones.
 craftAddBillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftAddBillFn env = do
-    bidArg   ← Lua.tointeger 1
-    ridArg   ← Lua.tostring 2
-    countArg ← Lua.tointeger 3
+    bidArg    ← Lua.tointeger 1
+    ridArg    ← Lua.tostring 2
+    countArg  ← Lua.tointeger 3
+    targetArg ← Lua.tointeger 4
     case (bidArg, ridArg) of
         (Just b, Just ridBS) → do
-            let bid   = BuildingId (fromIntegral b)
-                rid   = TE.decodeUtf8Lenient ridBS
-                count = maybe (-1) fromIntegral countArg
+            let bid     = BuildingId (fromIntegral b)
+                rid     = TE.decodeUtf8Lenient ridBS
+                count   = maybe (-1) fromIntegral countArg
+                mTarget = targetArg ≫= \t →
+                    if t > 0 then Just (fromIntegral t ∷ Int) else Nothing
             result ← Lua.liftIO $ do
                 mPage ← activeWorldPage env
                 rm    ← readIORef (recipeManagerRef env)
@@ -73,13 +84,24 @@ craftAddBillFn env = do
                         unless (rdStation recipe `elem` bdOperations def) $
                             Left ("station " <> biDefName inst
                                   <> " does not offer " <> rdStation recipe)
-                        Right ws
+                        Right (ws, recipe)
                 case gate of
                     Left err → return (Left err)
-                    Right ws → do
-                        billId ← atomicModifyIORef' (wsCraftBillsRef ws) $
-                            addBill bid rid count
-                        return (Right billId)
+                    Right (ws, recipe) → case mTarget of
+                        Just target → case rdOutputs recipe of
+                            [] → return
+                                (Left (rid <> " has no outputs — cannot run \
+                                             \an until-stock bill"))
+                            (out:_) → do
+                                billId ← atomicModifyIORef'
+                                    (wsCraftBillsRef ws) $
+                                    addUntilStockBill bid rid target
+                                                       (riItem out)
+                                return (Right billId)
+                        Nothing → do
+                            billId ← atomicModifyIORef' (wsCraftBillsRef ws) $
+                                addBill bid rid count
+                            return (Right billId)
             case result of
                 Right (BillId n) → do
                     Lua.pushinteger (fromIntegral n)
@@ -91,7 +113,7 @@ craftAddBillFn env = do
         _ → do
             Lua.pushnil
             Lua.pushstring "craft.addBill: expected (buildingId, recipeId\
-                           \ [, count])"
+                           \ [, count [, untilTarget]])"
             return 2
   where
     note e = maybe (Left e) Right
@@ -306,21 +328,28 @@ craftGetBillsFn env = do
     return 1
 
 -- | Push one bill as a Lua table: { id, station, recipe, remaining,
---   progress, seq, paused, working, claimant?, claimedAt? }. remaining
---   -1 = repeat forever; seq is the manual-reorder sort key
---   (billsForStation / #330's reorderBill); working (#590) is true only
---   while the claimant is actively pouring work, not merely holding the
---   claim (Craft.Bills.cbWorking).
+--   progress, seq, paused, working, mode, target?, outputItem?,
+--   claimant?, claimedAt? }. remaining -1 = repeat forever OR
+--   until-stock (see mode to tell them apart); seq is the
+--   manual-reorder sort key (billsForStation / #330's reorderBill);
+--   working (#590) is true only while the claimant is actively pouring
+--   work, not merely holding the claim (Craft.Bills.cbWorking). mode is
+--   "fixed" | "repeat" | "until" (Craft.Bills.BillMode); target and
+--   outputItem (#795) are present only for "until" — the persisted
+--   stock target and the item def name it counts against, which the
+--   craft AI and the #330 panel both re-derive live stock from via
+--   item.listGround() (one shared scope: ground stock, unbounded, no
+--   fetch-ladder rungs) so the two stay in lockstep.
 pushBill ∷ CraftBill → Lua.LuaE Lua.Exception ()
 pushBill bill = do
     Lua.newtable
     let putI k v = Lua.pushinteger (fromIntegral v) >> Lua.setfield (-2) k
         putN k v = Lua.pushnumber (Lua.Number (realToFrac v))
                    >> Lua.setfield (-2) k
+        putS k v = Lua.pushstring (TE.encodeUtf8 v) >> Lua.setfield (-2) k
     putI "id"        (unBillId (cbId bill))
     putI "station"   (unBuildingId (cbStation bill))
-    Lua.pushstring (TE.encodeUtf8 (cbRecipe bill))
-    Lua.setfield (-2) "recipe"
+    putS "recipe"    (cbRecipe bill)
     Lua.pushinteger (fromIntegral (cbRemaining bill))
     Lua.setfield (-2) "remaining"
     putN "progress"  (cbProgress bill)
@@ -329,6 +358,17 @@ pushBill bill = do
     Lua.setfield (-2) "paused"
     Lua.pushboolean (cbWorking bill)
     Lua.setfield (-2) "working"
+    putS "mode" (billModeName (cbMode bill))
+    when (cbMode bill ≡ UntilStock) $ do
+        putI "target" (cbTarget bill)
+        putS "outputItem" (cbOutputItem bill)
     forM_ (cbClaimant bill) $ \(UnitId u) → do
         putI "claimant" u
         putN "claimedAt" (cbClaimedAt bill)
+
+-- | The Lua-facing spelling of 'BillMode' (#795) — round-trips with
+--   the panel/AI's "fixed" | "repeat" | "until" vocabulary.
+billModeName ∷ BillMode → Text
+billModeName FixedCount    = "fixed"
+billModeName RepeatForever = "repeat"
+billModeName UntilStock    = "until"
