@@ -1301,8 +1301,16 @@ throws right there, catching a bug hiding in an unevaluated thunk (the snapshot/
 record fields are only forced to WHNF, not deeply — Strict/`HashMap.Strict` forces the
 outer shape and each value at ONE level, never recursively) as a capture failure while the
 barrier still blocks everyone, instead of letting it surface later during the write after
-owners have already resumed. A validation OR encode failure fails the transaction and
-writes nothing — no partial `SaveData` is ever serialized. Pure coverage:
+owners have already resumed. `World.Save.Serialize.writeSaveFiles` (the actual disk I/O,
+run after the release) wraps its own directory-creation/`BS.writeFile`/YAML-write in `try`
+and converts any exception to `Left` (review round 2 follow-up): this runs on the world
+thread AFTER the capture lock has already released, so an uncaught exception there would
+otherwise escape all the way to `World.Thread`'s top-level crash handler instead of
+reaching `failSave` — crashing the whole world thread AND leaving the barrier stuck open
+(`saveInProgress` permanently `True`) rather than surfacing a `SaveFailed` outcome. A
+validation, encode, OR write failure fails the transaction and writes nothing beyond
+whatever the failed write itself left behind — no partial `SaveData` is ever serialized as
+a reported success. Pure coverage:
 `Test.Headless.Save.Snapshot` (construction, all ~10 referential-integrity validators,
 camera representation, adapter field-mapping, and a "full-encode forcing" pair proving
 `encodeSaveData` forces a deferred exploding thunk buried in a page's edit list that
@@ -1312,10 +1320,14 @@ the transaction, ignores a stray ack during that phase, `finishSave`/`failSave` 
 correctly after it). Real multi-thread coverage:
 **`python3 tools/save_barrier_probe.py`** — extended for #758 to also prove a mutation
 issued the instant the barrier releases (i.e. once the save file has already appeared)
-never reaches the save that already captured it, and that a later save captures that
-mutation as its own, distinct boundary, alongside the pre-existing #757 checks (owners
-fully acknowledged before capture, a pre-boundary World→Sim→World fluid writeback surviving
-the save, and the loaded session staying paused). `NoPersistablePages`/`ActivePageMissing`/
+never reaches the save that already captured it, that a later save captures that mutation
+as its own, distinct boundary, and (review round 2 follow-up) that a genuine disk-level
+write failure (the save's own directory path pre-occupied by a plain file) surfaces as a
+real `SaveFailed` via `engine.getSaveStatus()` — never crashing the world thread or wedging
+the barrier open — with an immediate follow-up save proving it's accepted right after,
+alongside the pre-existing #757 checks (owners fully acknowledged before capture, a
+pre-boundary World→Sim→World fluid writeback surviving the save, and the loaded session
+staying paused). `NoPersistablePages`/`ActivePageMissing`/
 etc. (`SnapshotError`) deliberately do NOT include a craft-bill-station or power-node
 dangling-reference check — a demolished station's bills "lingering, visible + cancellable"
 is documented, tolerated gameplay behaviour (see the craft-bills section above), not

@@ -6,7 +6,10 @@ a mutation completed before capture appears in the saved snapshot
 immediately after the barrier releases does NOT alter that
 already-captured save (only reachable now that #758 releases the
 barrier before encode+disk I/O rather than after); and a later save
-captures that later mutation as its own, distinct boundary."""
+captures that later mutation as its own, distinct boundary. Also
+proves (#758 review round 2 follow-up) that a genuine disk-level write
+failure surfaces as a real SaveFailed outcome rather than crashing the
+world thread or wedging the barrier open forever."""
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time, uuid
 from probelib import boot, quit_engine, send
@@ -104,6 +107,42 @@ def main():
         # the other.
         if send(a.port, f'return engine.saveWorld("barrier","{SAVE2}")').strip() != "true": raise RuntimeError("second save rejected")
         wait(lambda: os.path.isfile(os.path.join(path2, "world.synworld")), "second save file")
+
+        # #758 review round 2 follow-up: a genuine disk-level write failure
+        # (the save's own directory PATH already occupied by a plain file,
+        # so createDirectoryIfMissing inside writeSaveFiles must fail) must
+        # surface as a real SaveFailed outcome via engine.getSaveStatus(),
+        # not crash the world thread or leave the barrier stuck open
+        # forever (saveInProgress permanently True, refusing every later
+        # save) -- the exact risk an uncaught IO exception in writeSaveFiles
+        # would create, since it runs AFTER the barrier's capture lock has
+        # already released.
+        WFAIL = SAVE + "_writefail"
+        wfail_path = os.path.join("saves", WFAIL)
+        if os.path.isdir(wfail_path): shutil.rmtree(wfail_path)
+        elif os.path.exists(wfail_path): os.remove(wfail_path)
+        with open(wfail_path, "w") as f: f.write("occupying this path with a plain file")
+        try:
+            if send(a.port, f'return engine.saveWorld("barrier","{WFAIL}")').strip() != "true":
+                raise RuntimeError("write-failure save rejected before it ever reached disk I/O")
+            def failed_status():
+                raw = send(a.port, "return engine.getSaveStatus()")
+                st = json.loads(raw) if raw != "nil" else None
+                return st if st and st.get("phase") == "SaveFailed" else None
+            fs = wait(failed_status, "disk write failure to surface as SaveFailed", 15)
+            if "SaveAborted" not in fs.get("outcome", ""):
+                raise RuntimeError(f"expected a SaveAborted outcome, got {fs!r}")
+        finally:
+            os.remove(wfail_path)
+        # The world thread must still be alive and the barrier must have
+        # unblocked itself (saveInProgress back to False): an ordinary save
+        # issued right after must still be accepted and actually complete.
+        WFAIL_FOLLOWUP = SAVE + "_writefail_followup"
+        followup_path = os.path.join("saves", WFAIL_FOLLOWUP)
+        if send(a.port, f'return engine.saveWorld("barrier","{WFAIL_FOLLOWUP}")').strip() != "true":
+            raise RuntimeError("save rejected right after a prior write failure -- barrier stuck open?")
+        wait(lambda: os.path.isfile(os.path.join(followup_path, "world.synworld")), "follow-up save file")
+        shutil.rmtree(followup_path, ignore_errors=True)
     finally:
         quit_engine(a.port, p)
         try: p.wait(timeout=15)
@@ -161,6 +200,8 @@ def main():
     finally:
         quit_engine(a.port, p); shutil.rmtree(path2, ignore_errors=True)
     print("PASS: save owners acknowledged, post-release mutation isolated, "
-          "later save captured its own boundary, and loaded session stayed paused")
+          "later save captured its own boundary, a disk write failure "
+          "surfaced as SaveFailed without wedging the barrier, and loaded "
+          "session stayed paused")
 
 if __name__ == "__main__": main()
