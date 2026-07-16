@@ -50,7 +50,11 @@ machinery, then checks:
      replenishes; a NEW bill queued while stock already covers its
      target is never claimed at all. Two bills racing toward the same
      target on two different crafters settle to a BOUNDED overshoot
-     (never unbounded runaway production) and both end up idle.
+     (never unbounded runaway production) and both end up idle. A
+     white-box check drives craftUtility/craftExecute directly to
+     reproduce the exact scan-then-claim race deterministically: stock
+     rising to target IN BETWEEN the scan that picked a candidate and
+     the later claim attempt must still refuse the claim.
 
      Not covered here: a real save/quit/restart/load round-trip for an
      until-stock bill — this probe's fixture is an ARENA world, which
@@ -704,6 +708,58 @@ def main():
         poll(port, 8, lambda: False)
         passed = check(passed, ground_stock(port, "bronze_bar") == final_stock,
                        "production has genuinely stopped (stable across a wait)")
+
+        # 6d. White-box claim-boundary race (review round 1): stock can
+        # rise BETWEEN the tick that scans/picks a candidate
+        # (craftUtility) and the later tick that actually claims it
+        # (craftExecute) -- e.g. another crafter's cycle lands in that
+        # window. Drive the two AI entry points directly (module state
+        # stashed on the loaded module table, same idiom as ai_off/
+        # ai_on -- plain locals don't survive across debug-console
+        # lines) so the race is reproduced deterministically rather
+        # than relying on real AI tick timing.
+        ai_off(port)
+        uid8 = spawn_acolyte(port, 3, 8)
+        send(port, "item.spawnGround('steel_bar', 3.3, 8); return 'ok'")
+        base4 = ground_stock(port, "bronze_bar")
+        target4 = base4 + 2
+        bill_u5, msg = add_until_bill(port, bid_f, "bill_probe_until", target4)
+        passed = check(passed, bill_u5 is not None,
+                       "claim-boundary-race bill queued", msg)
+
+        scanned = send(port,
+            "local ai=require('scripts.unit_ai_craft'); ai.__probe_s={}; "
+            "local p=require('scripts.unit_ai_tunables').acolyte; "
+            f"ai.craftUtility({uid8}, ai.__probe_s, p); "
+            "return ai.__probe_s.craftCandidate and 'has-candidate' "
+            "or 'no-candidate'").strip('"')
+        passed = check(passed, scanned == "has-candidate",
+                       "scan (craftUtility) picks the not-yet-satisfied bill",
+                       scanned)
+
+        # Stock rises to the target IN BETWEEN the scan and the claim --
+        # exactly the window the review flagged.
+        send(port, "item.spawnGround('bronze_bar', 6.2, 2.2); "
+                   "item.spawnGround('bronze_bar', 6.3, 2.3); return 'ok'")
+        passed = check(passed, ground_stock(port, "bronze_bar") == target4,
+                       "stock now meets the target, after the scan",
+                       f"stock={ground_stock(port, 'bronze_bar')}")
+
+        claimed = send(port,
+            "local ai=require('scripts.unit_ai_craft'); "
+            "local p=require('scripts.unit_ai_tunables').acolyte; "
+            f"ai.craftExecute({uid8}, ai.__probe_s, p); "
+            "return ai.__probe_s.craftJob and 'claimed' or 'not-claimed'"
+            ).strip('"')
+        passed = check(passed, claimed == "not-claimed",
+                       "claim (craftExecute) refuses the now-stale candidate",
+                       claimed)
+        after = jget(port, f"return craft.getBill({bill_u5})")
+        passed = check(passed,
+                       isinstance(after, dict) and after.get("claimant") is None,
+                       "the bill itself was never actually claimed engine-side",
+                       after)
+        send(port, f"craft.cancelBill({bill_u5}); return 'ok'")
 
         print("\n" + ("ALL CRAFT BILL CHECKS PASSED" if passed
                       else "SOME FAILED"))

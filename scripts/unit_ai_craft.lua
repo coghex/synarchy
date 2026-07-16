@@ -209,9 +209,8 @@ local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
     return true
 end
 
--- Nearest workable bill within craft_scan_range, or nil. Workable =
--- station alive + Built, nobody else's fresh claim, stock target not
--- already met (#795), knowledge gate cleared, and demands sourceable.
+-- Nearest workable bill within craft_scan_range, or nil (station alive + Built,
+-- unclaimed, stock target not met (#795), knowledge cleared, demands sourceable).
 local function findCraftBill(uid, fromX, fromY, params)
     local bills = craft.getBills()
     if not bills or #bills == 0 then return nil end
@@ -307,6 +306,7 @@ local function craftExecute(uid, s, params)
         local cand = s.craftCandidate
         if not cand then return end
         s.craftCandidate = nil
+        if untilStockSatisfied(cand.bill) then return end -- #795: stock rose
         if not craft.claimBill(cand.bill.id, uid,
                                params.craft_claim_timeout) then
             return
