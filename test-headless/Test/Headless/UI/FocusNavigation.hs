@@ -168,6 +168,36 @@ spec = do
 
     around withHeadlessEngine $
         describe "wire integration (Engine.Input.Thread) — #745" $ do
+            it "clicking an eligible control also moves keyboard control focus to it (review round 1)" $ \env → do
+                resetAll env
+                let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                    (a, m2) = focusableAt "a" 0 hudH m1
+                    (b, m3) = focusableAt "b" 30 hudH m2
+                writeIORef (uiManagerRef env) m3
+                click env (5, 5)
+                mgrAfterA ← readIORef (uiManagerRef env)
+                getControlFocus mgrAfterA `shouldBe` Just a
+                -- Clicking a DIFFERENT eligible control moves focus to
+                -- it, not just the first Tab default.
+                click env (35, 5)
+                mgrAfterB ← readIORef (uiManagerRef env)
+                getControlFocus mgrAfterB `shouldBe` Just b
+                -- Clicking empty space clears it (mirrors how the same
+                -- click already clears the pre-existing text focus).
+                click env (900, 900)
+                mgrAfterMiss ← readIORef (uiManagerRef env)
+                getControlFocus mgrAfterMiss `shouldBe` Nothing
+
+            it "clicking a text field clears control focus rather than leaving it stale" $ \env → do
+                resetAll env
+                let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                    (a, m2) = focusableAt "a" 0 hudH m1
+                    (_field, m3) = textFieldAt "field" 30 hudH m2
+                writeIORef (uiManagerRef env) (setControlFocus a m3)
+                click env (35, 5)
+                mgr ← readIORef (uiManagerRef env)
+                getControlFocus mgr `shouldBe` Nothing
+
             it "Tab with no focus focuses the first eligible control; Shift+Tab focuses the last" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
@@ -382,6 +412,14 @@ push env = mapM_ (Q.writeQueue (inputQueue env))
 pressKey ∷ EngineEnv → GLFW.Key → GLFW.ModifierKeys → IO ()
 pressKey env key mods = do
     push env [InputKeyEvent key GLFW.KeyState'Pressed mods]
+    inputTick env
+
+click ∷ EngineEnv → (Double, Double) → IO ()
+click env pos = do
+    push env
+        [ InputMouseEvent GLFW.MouseButton'1 pos GLFW.MouseButtonState'Pressed
+        , InputMouseEvent GLFW.MouseButton'1 pos GLFW.MouseButtonState'Released
+        ]
     inputTick env
 
 shiftMods ∷ GLFW.ModifierKeys

@@ -30,7 +30,10 @@ import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer
                           , isPointerSurfaceBlocked)
 import UI.Manager.Query (isElementDragActivation)
 import UI.ControlActivation (PendingActivation(..), ActivationOutcome(..)
-                             , activationOutcomeName, beginActivation, resolveActivation)
+                             , activationOutcomeName, beginActivation)
+import Engine.Input.Thread.Mouse.Activation (resolvePendingActivation)
+import UI.FocusNavigation (isEligibleControl)
+import UI.Manager (setControlFocus, clearControlFocus)
 
 -- | F4 (#730 review round 2): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
@@ -231,8 +234,21 @@ dispatchMouseEvent env inpSt btn pos state = do
                   -- page's owned control. With no modal boundary the
                   -- scope is every visible page, so behaviour here is
                   -- unchanged from the pre-#742 global search.
-                  GLFW.MouseButton'1 →
-                    case routePointer PointerLeftClick mousePos uiMgr' of
+                  GLFW.MouseButton'1 → do
+                    let leftRoute = routePointer PointerLeftClick mousePos uiMgr'
+                    -- #745 review round 1: a left click also moves
+                    -- keyboard CONTROL focus — landing on an eligible
+                    -- non-text control focuses it, anything else
+                    -- (a text field, a blocked/consumed route, a
+                    -- miss) clears it, mirroring how this same click
+                    -- already clears the pre-existing TEXT focus
+                    -- (LuaUIFocusLost) on those same non-focusing
+                    -- routes below.
+                    atomicModifyIORef' (uiManagerRef env) $ \m →
+                        (case leftRoute of
+                            RouteElement eh _ | isEligibleControl eh m → setControlFocus eh m
+                            _ → clearControlFocus m, ())
+                    case leftRoute of
                         RouteElement elemHandle callback → do
                             -- #745: a drag-activation control (slider
                             -- knob, scrollbar thumb) fires immediately,
@@ -393,34 +409,11 @@ dispatchMouseEvent env inpSt btn pos state = do
         Q.writeQueue lq (LuaMouseUpEvent btn x y downRoute)
 
         -- #745: resolve any pending discrete-control activation for
-        -- this button BEFORE recording its F4 outcome below — the
-        -- resolution decides whether LuaUIClickEvent/LuaUIRightClickEvent
-        -- ever fires at all (deferred from press to exactly this
-        -- validated release), and its Activate/Cancel becomes the
-        -- recorded aoOutcome ("accepted"/"rejected") for a deferred
-        -- route. A button with no pending activation (a drag-activation
-        -- control, the middle-button camera-drag route, or no UI route
-        -- at all) leaves this 'Nothing' and the existing "accepted"
-        -- recording below is untouched — 100% unchanged from before
-        -- #745 for those routes.
-        mActivationOutcome ← case Map.lookup btn (inpPendingActivation inpSt) of
-            Nothing → return Nothing
-            Just pending → do
-                outcome ←
-                    if viewportDegenerate winW winH fbW fbH
-                        then return (Cancel "degenerate viewport")
-                        else do
-                            let scaleX = fromIntegral fbW / fromIntegral winW
-                                scaleY = fromIntegral fbH / fromIntegral winH
-                                releasePos = (realToFrac x * scaleX, realToFrac y * scaleY)
-                            mgr' ← readIORef (uiManagerRef env)
-                            return (resolveActivation releasePos mgr' pending)
-                case outcome of
-                    Activate h cb → Q.writeQueue lq $ case paKind pending of
-                        PointerLeftClick  → LuaUIClickEvent h cb x y
-                        PointerRightClick → LuaUIRightClickEvent h cb x y
-                    Cancel _ → return ()
-                return (Just outcome)
+        -- this button BEFORE recording its F4 outcome below (see
+        -- 'Engine.Input.Thread.Mouse.Activation') — its Activate/
+        -- Cancel becomes the recorded aoOutcome below.
+        mActivationOutcome ← resolvePendingActivation env x y winW winH fbW fbH
+            (Map.lookup btn (inpPendingActivation inpSt))
 
         -- F4 (#730 review rounds 2 & 3): resolve a deferred
         -- ClickUI/middle-button-camera-drag press's ONE outcome

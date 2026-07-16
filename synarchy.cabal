@@ -231,6 +231,7 @@ library
                      Engine.Input.Thread.Keyboard
                      Engine.Input.Thread.Char
                      Engine.Input.Thread.Mouse
+                     Engine.Input.Thread.Mouse.Activation
                      Engine.Input.Thread.Scroll
                      Engine.Scripting.Types
                      Engine.Scripting.Lua.Debug

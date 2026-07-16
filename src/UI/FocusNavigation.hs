@@ -23,6 +23,7 @@ module UI.FocusNavigation
   , nextFocus
   , prevFocus
   , validateControlFocus
+  , isEligibleControl
   ) where
 
 import UPrelude
@@ -101,3 +102,11 @@ validateControlFocus mgr current = do
     h  ← current
     el ← Map.lookup h (upmElements mgr)
     if eligibleControl mgr el then Just h else Nothing
+
+-- | Handle-based lookup of 'eligibleControl' — an unknown/deleted
+--   handle is never eligible. Lets a pointer click (which only has a
+--   handle, not a 'UIElement' in hand) decide whether landing on this
+--   control should also move keyboard control focus to it — see
+--   'Engine.Input.Thread.Mouse'.
+isEligibleControl ∷ ElementHandle → UIPageManager → Bool
+isEligibleControl h mgr = maybe False (eligibleControl mgr) (Map.lookup h (upmElements mgr))
