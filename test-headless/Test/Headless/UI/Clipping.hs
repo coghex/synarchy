@@ -151,6 +151,70 @@ spec = do
                 (_leafH, m5) = hitChildAt innerH "leaf" (0, 0) (50, 50) "leafClick" hudH m4
             in routePointer PointerLeftClick (220, 220) m5 `shouldBe` RouteMiss
 
+    -- Review round 5 (#857): a child merely TOUCHING a clip edge overlaps
+    -- it in a zero-width/zero-height sliver — real area zero, so
+    -- clipQuadUV draws nothing there. Hit-testing must agree: a point on
+    -- that sliver must miss on every input path (click/hover/scroll),
+    -- for every edge, while a child with genuine (however thin) positive
+    -- overlap must still hit within its visible slice.
+    describe "effectiveClip — a child flush against a clip edge (zero-area overlap) is not hittable" $ do
+        it "flush against the RIGHT edge misses a click exactly on the seam" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                -- child abs rect (100,10,20,20); clip ends at x=100
+                (_childH, m3) = hitChildAt containerH "row" (100, 10) (20, 20) "rowClick" hudH m2
+            in routePointer PointerLeftClick (100, 20) m3 `shouldBe` RouteMiss
+
+        it "flush against the LEFT edge misses a click exactly on the seam" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                -- child abs rect (-20,10,20,20); its right edge sits at x=0
+                (_childH, m3) = hitChildAt containerH "row" (-20, 10) (20, 20) "rowClick" hudH m2
+            in routePointer PointerLeftClick (0, 20) m3 `shouldBe` RouteMiss
+
+        it "flush against the TOP edge misses a click exactly on the seam" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                -- child abs rect (10,-20,20,20); its bottom edge sits at y=0
+                (_childH, m3) = hitChildAt containerH "row" (10, -20) (20, 20) "rowClick" hudH m2
+            in routePointer PointerLeftClick (20, 0) m3 `shouldBe` RouteMiss
+
+        it "flush against the BOTTOM edge misses a click exactly on the seam" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                -- child abs rect (10,100,20,20); clip ends at y=100
+                (_childH, m3) = hitChildAt containerH "row" (10, 100) (20, 20) "rowClick" hudH m2
+            in routePointer PointerLeftClick (20, 100) m3 `shouldBe` RouteMiss
+
+        it "a genuine (positive-area) overlap at the same edge still hits within its visible slice" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                -- child abs rect (90,10,20,20): overlaps clip in a real
+                -- [90,100)x[10,30) sliver, not just a seam
+                (childH, m3) = hitChildAt containerH "row" (90, 10) (20, 20) "rowClick" hudH m2
+            in do
+                routePointer PointerLeftClick (95, 20) m3 `shouldBe` RouteElement childH "rowClick"
+                routePointer PointerLeftClick (100, 20) m3 `shouldBe` RouteElement childH "rowClick"
+                routePointer PointerLeftClick (105, 20) m3 `shouldBe` RouteMiss
+
+        it "flush against a clip edge is not hover-hittable (findElementAt)" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                (_rowH, m3) = childAt containerH "row" (100, 10) (20, 20) hudH m2
+            -- The point sits on the clip's own edge, which coincides with
+            -- the (unclipped-to-itself) container's own boundary, so the
+            -- container itself is a legitimate hover target here; what
+            -- the bug would have wrongly surfaced is the fully-clipped
+            -- ROW, which must not be the result.
+            in findElementAt (100, 20) m3 `shouldBe` Just containerH
+
+        it "a scroll-capturing child flush against a clip edge does not capture wheel input" $
+            let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                (containerH, m2) = containerAt "box" (0, 0) (100, 100) True hudH m1
+                (eh, m3) = childAt containerH "panelBg" (100, 10) (20, 20) hudH m2
+                m4 = setElementCapturesScroll eh True m3
+            in routeScroll (100, 20) m4 `shouldBe` Nothing
+
     describe "effectiveClip — movement/resize take effect immediately (no caching)" $ do
         it "moving the clipping ancestor immediately changes what's clipped" $
             let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager

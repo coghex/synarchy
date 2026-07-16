@@ -28,7 +28,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn, elemIndex)
 import UI.Types
-import UI.Clipping (effectiveClip, pointInClip)
+import UI.Clipping (effectiveClip, pointInClip, intersectRect, hasArea)
 import UI.Manager.Page (getVisiblePages)
 
 -- * Queries
@@ -119,6 +119,16 @@ getElementChildren handle mgr =
 --   hit-test entry point below goes through via 'hitsAtPointBy', so a
 --   clipped-out row can never register a click/hover/tooltip/scroll
 --   hit even though its own bounds still overlap the point.
+--
+--   When a clip is in effect, membership is decided against the
+--   POSITIVE-AREA intersection of the element's own bounds and the
+--   clip (via 'intersectRect'/'hasArea') rather than two independent
+--   inclusive-both-edges checks — the same test 'UI.Clipping.clipQuadUV'
+--   already applies before drawing anything. An element flush against
+--   a clip edge overlaps it in a zero-width/zero-height sliver only;
+--   treating each rect's own edge as independently inclusive would let
+--   a point on that sliver hit even though the renderer draws nothing
+--   there (review round 5, #857).
 isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
 isPointInElement (px, py) element mgr =
     if not (ueVisible element) then False
@@ -126,9 +136,13 @@ isPointInElement (px, py) element mgr =
         Nothing → False
         Just (ex, ey) →
             let (w, h) = ueSize element
-            in px ≥ ex ∧ px ≤ (ex + w) ∧
-               py ≥ ey ∧ py ≤ (ey + h) ∧
-               pointInClip (effectiveClip (ueHandle element) mgr) (px, py)
+                elemRect = (ex, ey, w, h)
+            in case effectiveClip (ueHandle element) mgr of
+                Nothing →
+                    px ≥ ex ∧ px ≤ (ex + w) ∧ py ≥ ey ∧ py ≤ (ey + h)
+                Just clip →
+                    let region = intersectRect elemRect clip
+                    in hasArea region ∧ pointInClip (Just region) (px, py)
 
 -- | Walk every visible element in paint order, yielding the elements
 --   that contain the point together with their paint key (page band +
