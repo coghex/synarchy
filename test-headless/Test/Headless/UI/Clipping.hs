@@ -372,6 +372,85 @@ spec = do
                 evalDebug ls "return UI.findElementAt(150, 130)" ≫= (`shouldBe` "null")
                 evalDebug ls "return UI.findElementAt(150, 150)" ≫= (`shouldBe` "null")
 
+    -- #747 review round 1 follow-up: the shared widget library gained
+    -- (or, for checkbox/label/textbox/button, already had) an opt-in
+    -- `parent` (panel.lua: `parentElement`, distinct from its existing
+    -- panel-of-panel `parent`) so a caller CAN reparent a widget under
+    -- a clipping viewport instead of the page root. Proves the real
+    -- widgets actually attach as children (effective clip matches the
+    -- container, not just "no crash"), and specifically regression-
+    -- tests the two latent absolute-vs-relative-position bugs this
+    -- uncovered: slider's drag-to-value mapping and randbox's
+    -- click-outside bounds both used to assume their own stored
+    -- x/y were framebuffer-absolute, which stops being true once
+    -- parented — both now query the live (parent-aware) element
+    -- position instead.
+    around withHeadlessEngine $
+        describe "widget library parent support (#747)" $ do
+            it "dropdown/slider/randbox/sprite/panel all become real children of a clipping container" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls widgetParentSetupLua
+                setup `shouldNotSatisfy` isLuaError
+
+                let expectClip ∷ Text → IO ()
+                    expectClip name = evalDebug ls
+                        (T.concat ["local c = UI.getEffectiveClip(_G.", name, "); return c.x, c.y, c.w, c.h"])
+                            ≫= (`shouldBe` "50.0\t50.0\t300.0\t200.0")
+                expectClip "__wpDdHandle"
+                expectClip "__wpSliderHandle"
+                expectClip "__wpRbHandle"
+                expectClip "__wpSpriteHandle"
+                expectClip "__wpPanelHandle"
+
+            it "slider drag-to-value mapping stays correct once parented (uses the live absolute track position)" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls widgetParentSetupLua
+                setup `shouldNotSatisfy` isLuaError
+
+                -- Container at (50,50); slider at relative (10,60) ⇒
+                -- absolute (60,110); capWidth defaults to 8 ⇒ the
+                -- track's absolute left edge is 50+10+8=68, trackWidth
+                -- = 200 - 8*2 = 184. A pre-#747-style bug would use
+                -- sl.trackX = 10+8=18 (the RELATIVE offset, missing the
+                -- container's own 50,50) and badly mis-map every click.
+                startDrag ← evalDebug ls
+                    "local sl = require('scripts.ui.slider'); \
+                    \sl.onTrackClick(_G.__wpSliderHandle); return 'ok'"
+                startDrag `shouldBe` "\"ok\""
+
+                atTrackStart ← evalDebug ls
+                    "require('scripts.ui.slider').onDragMove(68, 110); \
+                    \return require('scripts.ui.slider').getValue(_G.__wpSliderId)"
+                atTrackStart `shouldBe` "0"
+
+                atTrackEnd ← evalDebug ls
+                    "require('scripts.ui.slider').onDragMove(68 + 184, 110); \
+                    \return require('scripts.ui.slider').getValue(_G.__wpSliderId)"
+                atTrackEnd `shouldBe` "100"
+
+            it "randbox click-outside still uses the live absolute position once parented" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls widgetParentSetupLua
+                setup `shouldNotSatisfy` isLuaError
+
+                _ ← evalDebug ls "require('scripts.ui.randbox').focus(_G.__wpRbId)"
+                isFocused ← evalDebug ls "return require('scripts.ui.randbox').isFocused(_G.__wpRbId)"
+                isFocused `shouldBe` "true"
+
+                -- Container at (50,50); randbox at relative (10,100) ⇒
+                -- absolute (60,150). A click well inside that absolute
+                -- box must NOT unfocus it; a pre-#747-style bug (using
+                -- the raw relative rb.x/rb.y as if absolute) would
+                -- wrongly treat this genuinely-inside click as outside.
+                _ ← evalDebug ls "require('scripts.ui.randbox').onClickOutside(70, 160)"
+                stillFocused ← evalDebug ls "return require('scripts.ui.randbox').isFocused(_G.__wpRbId)"
+                stillFocused `shouldBe` "true"
+
+                -- A click genuinely far away still unfocuses it.
+                _ ← evalDebug ls "require('scripts.ui.randbox').onClickOutside(900, 900)"
+                nowUnfocused ← evalDebug ls "return require('scripts.ui.randbox').isFocused(_G.__wpRbId)"
+                nowUnfocused `shouldBe` "false"
+
 -- * Wire-integration helpers (mirrors Test.Headless.UI.ElementInputPolicy)
 
 -- | A real Lua backend with the FULL Lua API registered and nothing
@@ -419,4 +498,44 @@ listSetupLua = T.concat
     , "  if e.name == 'test_list_hit_2' then _G.__listHit2Id = e.handle end; "
     , "  if e.name == 'test_list_hit_3' then _G.__listHit3Id = e.handle end; "
     , "end"
+    ]
+
+-- | Builds a 300x200 clipping container at (50,50) — deliberately
+--   NOT at the origin, so a widget that wrongly treats its own stored
+--   (relative) x/y as framebuffer-absolute would be caught rather than
+--   coincidentally passing — then creates one instance of each widget
+--   that gained #747 parent support, parented to that container.
+widgetParentSetupLua ∷ Text
+widgetParentSetupLua = T.concat
+    [ "local page = UI.newPage('test_wp_page', 'hud'); "
+    , "UI.showPage(page); "
+    , "local container = UI.newElement('wp_container', 300, 200, page); "
+    , "UI.addToPage(page, container, 50, 50); "
+    , "UI.setClipChildren(container, true); "
+    , "_G.__wpContainer = container; "
+
+    , "local dd = require('scripts.ui.dropdown'); dd.init(); "
+    , "_G.__wpDdId = dd.new({ name = 'wp_dd', x = 10, y = 10, page = page, "
+    , "font = 0, parent = container, options = { { text = 'A', value = 'a' } } }); "
+    , "_G.__wpDdHandle = dd.getElementHandle(_G.__wpDdId); "
+
+    , "local sl = require('scripts.ui.slider'); sl.init(); "
+    , "_G.__wpSliderId = sl.new({ name = 'wp_slider', x = 10, y = 60, page = page, "
+    , "parent = container, min = 0, max = 100, default = 50 }); "
+    , "_G.__wpSliderHandle = sl.getElementHandle(_G.__wpSliderId); "
+
+    , "local rb = require('scripts.ui.randbox'); rb.init(); "
+    , "_G.__wpRbId = rb.new({ name = 'wp_rb', x = 10, y = 100, page = page, "
+    , "font = 0, parent = container, default = 'seed' }); "
+    , "_G.__wpRbHandle = rb.getElementHandle(_G.__wpRbId); "
+
+    , "local sp = require('scripts.ui.sprite'); "
+    , "_G.__wpSpriteId = sp.new({ name = 'wp_sprite', x = 10, y = 140, page = page, "
+    , "parent = container, texture = 0, width = 20, height = 20 }); "
+    , "_G.__wpSpriteHandle = sp.getElementHandle(_G.__wpSpriteId); "
+
+    , "local pn = require('scripts.ui.panel'); "
+    , "_G.__wpPanelId = pn.new({ name = 'wp_panel', x = 10, y = 160, page = page, "
+    , "parentElement = container, width = 50, height = 30, textureSet = 0 }); "
+    , "_G.__wpPanelHandle = pn.getBoxHandle(_G.__wpPanelId)"
     ]

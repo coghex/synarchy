@@ -321,8 +321,19 @@ function dropdown.new(params)
     UI.setClickable(dd.displayBoxId, true)
     UI.setOnClick(dd.displayBoxId, DISPLAY_CALLBACK)
     
-    UI.addToPage(dd.page, dd.displayBoxId, dd.x, dd.y)
-    UI.addToPage(dd.page, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
+    -- #747: dd.parent was stored (params.parent) but never actually
+    -- wired into attachment — the display box + arrow always went
+    -- straight to the page. Only the CLOSED display box/arrow are
+    -- eligible for parenting; the open option list stays root-mounted
+    -- via UI.addToPage regardless (floating content that must escape
+    -- the trigger's own clip — see UI.Clipping).
+    if dd.parent then
+        UI.addChild(dd.parent, dd.displayBoxId, dd.x, dd.y)
+        UI.addChild(dd.parent, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
+    else
+        UI.addToPage(dd.page, dd.displayBoxId, dd.x, dd.y)
+        UI.addToPage(dd.page, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
+    end
     
     if params.zIndex then
         UI.setZIndex(dd.displayBoxId, params.zIndex)
@@ -536,6 +547,15 @@ function dropdown.openList(id)
     dd.hoveredOptionIndex = nil
     UI.setSpriteTexture(dd.arrowSpriteId, texArrowClicked)
 
+    -- #747: dd.x/dd.y are only correct FRAMEBUFFER coordinates (what
+    -- UI.placePopup/UI.fitVisibleRows require) when the dropdown is
+    -- unparented — query the display box's live absolute position
+    -- (parent-aware) so opening still places correctly once dd.parent
+    -- is used.
+    local displayInfo = UI.getElementInfo(dd.displayBoxId)
+    local anchorX = displayInfo and displayInfo.x or dd.x
+    local anchorY = displayInfo and displayInfo.y or dd.y
+
     local totalOptions = #dd.options
     local idealCount = math.min(totalOptions, dd.maxVisibleOptions)
     -- #747: reduce the visible row count only when NEITHER opening
@@ -543,8 +563,8 @@ function dropdown.openList(id)
     -- option list still ends up fully on-screen instead of overflowing
     -- the framebuffer.
     local fbW, fbH = engine.getFramebufferSize()
-    local availBelow = fbH - (dd.y + dd.height)
-    local availAbove = dd.y
+    local availBelow = fbH - (anchorY + dd.height)
+    local availAbove = anchorY
     local visibleCount = UI.fitVisibleRows(idealCount, dd.optionHeight, math.max(availBelow, availAbove))
     dd.needsScroll = totalOptions > visibleCount
 
@@ -554,9 +574,11 @@ function dropdown.openList(id)
     -- #747: one shared framebuffer-coordinate placement contract —
     -- prefer opening below the display box, flip above when there
     -- isn't room, and always end up fully on-screen. contentW includes
-    -- the scrollbar strip so it stays reachable too.
+    -- the scrollbar strip so it stays reachable too. The option list
+    -- itself is always root-mounted (below), regardless of dd.parent —
+    -- floating content escapes the trigger's own clip ancestry.
     local listX, listY = UI.placePopup(
-        dd.x, dd.y, dd.displayWidth, dd.height,
+        anchorX, anchorY, dd.displayWidth, dd.height,
         dd.displayWidth + scrollWidth, listHeight,
         "below")
     dd.listX = listX
@@ -991,6 +1013,15 @@ function dropdown.onClickOutside(mouseX, mouseY)
         -- dismissed by clicking elsewhere on that same page) may still
         -- treat this as an ordinary "clicked elsewhere".
         if UI.isPageInScope(dd.page) then
+            -- #747: dd.x/dd.y are only correct in the same (absolute)
+            -- space mouseX/mouseY arrive in when the dropdown is
+            -- unparented — query the display box's live absolute
+            -- position (parent-aware) so this stays correct once
+            -- dd.parent is used too.
+            local displayInfo = UI.getElementInfo(dd.displayBoxId)
+            local dispX = displayInfo and displayInfo.x or dd.x
+            local dispY = displayInfo and displayInfo.y or dd.y
+
             if dd.open then
                 -- #747: the list may have flipped above the display box
                 -- (or been clamped) rather than always sitting directly
@@ -1002,8 +1033,8 @@ function dropdown.onClickOutside(mouseX, mouseY)
                 if dd.scrollbarId then
                     scrollWidth = scrollbar.getTrackWidth(dd.scrollbarId)
                 end
-                local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
-                    and mouseY >= dd.y and mouseY <= dd.y + dd.height
+                local inDisplay = mouseX >= dispX and mouseX <= dispX + dd.displayWidth
+                    and mouseY >= dispY and mouseY <= dispY + dd.height
                 local inList = dd.listX ~= nil
                     and mouseX >= dd.listX and mouseX <= dd.listX + dd.displayWidth + scrollWidth
                     and mouseY >= dd.listY and mouseY <= dd.listY + dd.listHeight
@@ -1012,8 +1043,8 @@ function dropdown.onClickOutside(mouseX, mouseY)
                 end
             end
             if dd.focused then
-                local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
-                    and mouseY >= dd.y and mouseY <= dd.y + dd.height
+                local inDisplay = mouseX >= dispX and mouseX <= dispX + dd.displayWidth
+                    and mouseY >= dispY and mouseY <= dispY + dd.height
                 if not inDisplay then
                     dropdown.submitInput(id)
                 end

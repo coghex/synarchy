@@ -102,6 +102,11 @@ function panel.new(params)
         name = params.name or ("panel_" .. id),
         page = params.page,
         parentPanel = params.parent,
+        -- #747: a raw ElementHandle to attach to (e.g. a clipping
+        -- viewport that isn't itself a panel) — distinct from
+        -- `parent`, which names another PANEL's id looked up in the
+        -- `panels` table below. Only one of the two should be given.
+        parentElement = params.parentElement,
         x = params.x or 0,
         y = params.y or 0,
         width = params.width or 400,
@@ -133,7 +138,9 @@ function panel.new(params)
         p.page
     )
     
-    if p.parentPanel then
+    if p.parentElement then
+        UI.addChild(p.parentElement, p.boxId, p.x, p.y)
+    elseif p.parentPanel then
         local parentPanelData = panels[p.parentPanel]
         if parentPanelData then
             UI.addChild(parentPanelData.boxId, p.boxId, p.x, p.y)
