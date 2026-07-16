@@ -344,17 +344,34 @@ against a non-`ueDragActivation` control only records a
 matching release re-runs the SAME `routePointer` decision the press
 used, and only activates (fires `LuaUIClickEvent`/`LuaUIRightClickEvent`
 with the freshly re-resolved callback) when it still resolves to the
-same element — one re-check that uniformly covers hidden/deleted/
-disabled/detached/a-modal-now-on-top/dragged-outside-and-released-
-outside, all as `UI.ControlActivation.Cancel`. F4's `aoOutcome` reports
-this truthfully (`"accepted"`/`"rejected"`, the existing vocabulary —
-see `Engine.ActionOutcome`), orthogonal to the pre-existing movement-
-based `"input.click"`/`"input.drag"` `aoKind` classification. Slider
-knobs, the slider track, and scrollbar thumbs opt out via
-`UI.setDragActivation` (`ueDragActivation`) — they still fire
-immediately on press and start a drag, unchanged from before B1; scroll
-arrows and every other discrete control get the new contract for free
-via `UI.setOnClick`, no per-widget Lua change needed.
+same element — a re-check that covers hidden/deleted/disabled/
+detached/a-modal-now-on-top/dragged-outside-and-released-outside as
+`UI.ControlActivation.Cancel` whenever any of those are STILL true at
+release. F4's `aoOutcome` reports this truthfully (`"accepted"`/
+`"rejected"`, the existing vocabulary — see `Engine.ActionOutcome`),
+orthogonal to the pre-existing movement-based `"input.click"`/
+`"input.drag"` `aoKind` classification. Slider knobs, the slider
+track, and scrollbar thumbs opt out via `UI.setDragActivation`
+(`ueDragActivation`) — they still fire immediately on press and start
+a drag, unchanged from before B1; scroll arrows and every other
+discrete control get the new contract for free via `UI.setOnClick`, no
+per-widget Lua change needed.
+
+A live re-check alone misses an interruption that's REVERTED before
+release (hidden then re-shown, disabled then re-enabled, detached then
+re-attached, or its page hidden then re-shown) — by release time
+routing looks identical to press time again, so the re-check alone
+would wrongly restore activation. Review round 9 closed that gap:
+`UI.Types.ueActivationEpoch` is bumped by every route-affecting
+per-element mutation (`UI.setVisible`, `UI.setClickable`, detach via
+`UI.removeElement`/`removeFromPage`, (re)attach via
+`UI.addToPage`/`addChild`) and, in bulk, by `UI.hidePage`/`showPage`
+for every element on that page. `PendingActivation` captures the
+epoch at press time; `resolveActivation` cancels unconditionally when
+it no longer matches at release, regardless of what the live
+`routePointer` re-check would otherwise say — per the #745 issue text,
+"returning inside before release may restore pending activation" is
+scoped to drag POSITION only, never to a route-affecting state change.
 
 Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
 second, independent focus system alongside the pre-existing TEXT-input

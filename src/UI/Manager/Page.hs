@@ -15,7 +15,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn)
 import UI.Types
-import UI.Manager.Core (deleteElementTree)
+import UI.Manager.Core (deleteElementTree, bumpPageActivationEpoch)
 
 -- * Page Operations
 
@@ -53,20 +53,28 @@ deletePage handle mgr =
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgrWithoutElements)
                 }
 
+-- | #745 review round 9: also bumps 'ueActivationEpoch' for every
+--   element on this page — a pending pointer activation on a control
+--   whose page flickers hidden-then-shown ("changing menus" per the
+--   #745 issue text) must not restore; see 'bumpPageActivationEpoch'.
 showPage ∷ PageHandle → UIPageManager → UIPageManager
 showPage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
+            bumpPageActivationEpoch handle $
             mgr { upmPages = Map.insert handle (page { upVisible = True }) (upmPages mgr)
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
+-- | #745 review round 9: also bumps 'ueActivationEpoch' for every
+--   element on this page — see 'showPage'.
 hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
+            bumpPageActivationEpoch handle $
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
                 -- Keyboard focus must not survive on a hidden page —

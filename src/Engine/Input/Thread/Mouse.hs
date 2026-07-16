@@ -272,7 +272,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                                     Q.writeQueue lq
                                         (LuaUIPressBeginEvent elemHandle callback)
                                     writeIORef pendingActivationRef $ Just $
-                                        beginActivation PointerLeftClick elemHandle
+                                        beginActivation PointerLeftClick elemHandle uiMgr'
                             logDebug logger CatUI $
                                 "UI element left-clicked: " <> callback
                             writeIORef pendingUIClickRef
@@ -321,7 +321,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                                     Q.writeQueue lq
                                         (LuaUIPressBeginEvent elemHandle callback)
                                     writeIORef pendingActivationRef $ Just $
-                                        beginActivation PointerRightClick elemHandle
+                                        beginActivation PointerRightClick elemHandle uiMgr'
                             logDebug logger CatUI $
                                 "UI element right-clicked: " <> callback
                             writeIORef pendingUIClickRef

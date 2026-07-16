@@ -62,19 +62,19 @@ spec = do
         it "activates when the release lands inside the still-eligible element" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
             resolveActivation (15, 15) m2 pending `shouldBe` Activate eh "btnClick"
 
         it "cancels when the release lands outside the element (drag away and release outside)" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
             resolveActivation (500, 500) m2 pending `shouldSatisfy` isCancel
 
         it "activates again once the release returns inside — only the FINAL position matters" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
             -- Intermediate movement (simulated here just by never
             -- consulting it) has no bearing — releasing back inside
             -- resolves exactly like a never-moved press.
@@ -83,35 +83,35 @@ spec = do
         it "cancels when the element was hidden between press and release" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
                 m3 = setElementVisible eh False m2
             resolveActivation (15, 15) m3 pending `shouldSatisfy` isCancel
 
         it "cancels when the element was deleted between press and release" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
                 m3 = deleteElement eh m2
             resolveActivation (15, 15) m3 pending `shouldSatisfy` isCancel
 
         it "cancels when the element was disabled (UI.setClickable false) between press and release" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
                 m3 = setElementClickable eh False m2
             resolveActivation (15, 15) m3 pending `shouldSatisfy` isCancel
 
         it "cancels when the element was detached from its page between press and release" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
                 m3 = removeFromPage hudH eh m2
             resolveActivation (15, 15) m3 pending `shouldSatisfy` isCancel
 
         it "cancels when a modal now covers the same point (page replaced by a modal mid-press)" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
                 (modalH, m3) = page "modal" LayerModal m2
                 (_modalEh, m4) = clickableAt "modalBg" (0, 0) (400, 400) "modalClick" modalH m3
             resolveActivation (15, 15) m4 pending `shouldSatisfy` isCancel
@@ -119,7 +119,7 @@ spec = do
         it "activates the freshly re-resolved callback when it was reassigned mid-press" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
                 m3 = setElementOnClick eh "btnClickV2" m2
             resolveActivation (15, 15) m3 pending `shouldBe` Activate eh "btnClickV2"
 
@@ -129,7 +129,7 @@ spec = do
                 m3 = addElementToPage hudH eh (fst pt) (snd pt) m2'
                 m4 = setElementClickable eh True m3
                 m5 = setElementOnRightClick eh "rightClick" m4
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m5
             -- No left-click callback registered — a left release over
             -- this element cannot activate it.
             resolveActivation (15, 15) m5 pending `shouldSatisfy` isCancel
@@ -137,7 +137,7 @@ spec = do
         it "diagnostics: activationOutcomeName maps Activate/Cancel to the existing accepted/rejected vocabulary" $ do
             let (hudH, m1) = basePage
                 (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
-                pending = beginActivation PointerLeftClick eh
+                pending = beginActivation PointerLeftClick eh m2
             activationOutcomeName (resolveActivation (15, 15) m2 pending) `shouldBe` "accepted"
             activationOutcomeName (resolveActivation (999, 999) m2 pending) `shouldBe` "rejected"
 
@@ -284,6 +284,84 @@ spec = do
                 msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
                 afterState ← readIORef (inputStateRef env)
                 inpPendingActivation afterState `shouldBe` mempty
+
+            it "restored-before-release: hiding then re-showing the SAME control mid-press still cancels (#745 review round 9)" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                mgr ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setElementVisible eh True (setElementVisible eh False mgr))
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "rejected"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
+            it "restored-before-release: disabling then re-enabling (UI.setClickable) mid-press still cancels" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                mgr ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setElementClickable eh True (setElementClickable eh False mgr))
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "rejected"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
+            it "restored-before-release: detaching then re-attaching to the SAME page/position mid-press still cancels" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                mgr ← readIORef (uiManagerRef env)
+                let (px, py) = pt
+                writeIORef (uiManagerRef env)
+                    (addElementToPage hudH eh px py (removeFromPage hudH eh mgr))
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "rejected"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
+            it "restored-before-release: hiding then re-showing the control's own PAGE mid-press still cancels (menu/modal interruption)" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (_eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                mgr ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (showPage hudH (hidePage hudH mgr))
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "rejected"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
 
     around withHeadlessEngine $
         describe "Lua-facing UI API for drag-activation (#745)" $ do
