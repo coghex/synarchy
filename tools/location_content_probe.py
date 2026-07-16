@@ -20,6 +20,14 @@ location's chunk loads, end to end:
      to the damaged variant art (the #91 variant round-trip).
   3. An unknown content `kind` and an unknown content `id` both log a
      warning and are skipped rather than crashing the engine.
+  4. Location discovery (#780): stamping a ruin's geometry and spawning
+     its contents do NOT discover it; a hostile unit standing on it
+     doesn't either; a player-faction unit within the def's discovery
+     margin does, flipping `world.listPlacedLocations()`'s `discovered`
+     field and emitting exactly one `location_discovery` player event;
+     re-checking without the unit moving emits no duplicate; the
+     discovered state survives save -> quit -> fresh restart -> load
+     alongside the geometry/contents from check 2.
 
 Headless skips the GUI data-loading step, so defs are registered by
 hand here (items/units/buildings/loot_tables/locations), same as
@@ -212,6 +220,38 @@ def spawn_counts(port: int) -> dict:
     }
 
 
+def discovered_flags(port: int, page: str) -> dict[tuple[int, int], bool]:
+    """(cx, cy) -> discovered, for every placed location on `page` (#780)."""
+    return {(e["cx"], e["cy"]): bool(e.get("discovered")) for e in placed(port, page)}
+
+
+def event_log(port: int) -> list[dict]:
+    raw = send(port, "return engine.getEventLog()").strip()
+    if not raw or raw in ("nil", "null", "{}", "[]"):
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def discovery_events(port: int, label: str) -> list[dict]:
+    """Every logged `location_discovery` event naming `label` (#780)."""
+    text = f"Discovered: {label}"
+    return [e for e in event_log(port)
+            if e.get("category") == "location_discovery" and e.get("text") == text]
+
+
+def spawn_unit(port: int, def_name: str, gx: int, gy: int, faction: str, page: str) -> int:
+    """unit.spawn(...) returns the new unit's numeric id, or -1 on failure."""
+    r = send(port, f"return unit.spawn('{def_name}', {gx}, {gy}, nil, '{faction}', '{page}')")
+    try:
+        return int(float(r.strip('"')))
+    except ValueError:
+        return -1
+
+
 def registered_item_names(port: int) -> set[str]:
     """The live item registry (item.listDefs()) — #800 replaces the stale
     hardcoded loot_names allowlist with this as the authoritative source,
@@ -336,6 +376,77 @@ def main() -> int:
             else:
                 failures.append(f"ruin floor texture is not the damaged variant: {tex}")
 
+            # ---- Discovery (#780): stamping + content-spawning above did
+            #      NOT discover the ruin; a hostile unit standing on it
+            #      doesn't either; a player-faction unit within the
+            #      6-tile discovery margin does, exactly once, flipping
+            #      world.listPlacedLocations()'s `discovered` field. ----
+            ruin0 = ruins[0]
+            r0key = (ruin0["cx"], ruin0["cy"])
+            ruin_label = "Small Ruin"  # data/locations/ruin_small.yaml label
+
+            disc0 = discovered_flags(args.port, "wa")
+            if disc0.get(r0key) is False:
+                print("PASS: stamping + content-spawning did not discover the ruin")
+            else:
+                failures.append(
+                    f"expected discovered:false after stamping, got {disc0.get(r0key)!r}")
+
+            hostile_uid = spawn_unit(args.port, "acolyte", ruin0["gx"], ruin0["gy"],
+                                      "hostile", "wa")
+            time.sleep(0.5)
+            disc_hostile = discovered_flags(args.port, "wa")
+            if hostile_uid >= 0 and disc_hostile.get(r0key) is False:
+                print("PASS: a hostile unit standing on the ruin did not discover it")
+            else:
+                failures.append(
+                    f"hostile presence discovery check failed: uid={hostile_uid} "
+                    f"discovered={disc_hostile.get(r0key)!r}")
+
+            player_uid = spawn_unit(args.port, "acolyte", ruin0["gx"], ruin0["gy"],
+                                     "player", "wa")
+            discovered_ok = False
+            for _ in range(20):
+                if discovered_flags(args.port, "wa").get(r0key):
+                    discovered_ok = True
+                    break
+                time.sleep(0.25)
+            if player_uid >= 0 and discovered_ok:
+                print(f"PASS: a player-faction unit ({player_uid}) within the discovery "
+                      f"margin flips world.listPlacedLocations() to discovered:true")
+            else:
+                failures.append(
+                    f"player presence did not discover the ruin: uid={player_uid}")
+
+            evs = discovery_events(args.port, ruin_label)
+            if len(evs) == 1 and evs[0].get("uid") == player_uid:
+                print(f"PASS: exactly one location_discovery event, attributed to "
+                      f"unit {player_uid}")
+            else:
+                failures.append(
+                    f"expected exactly one attributed discovery event, got {evs}")
+
+            # Leaving (teleport away, well outside the margin) and
+            # returning must not emit a second event.
+            send(args.port,
+                 f"unit.setPos({player_uid}, {ruin0['gx'] + 12}, {ruin0['gy']}); return 'ok'")
+            time.sleep(0.5)
+            send(args.port,
+                 f"unit.setPos({player_uid}, {ruin0['gx']}, {ruin0['gy']}); return 'ok'")
+            time.sleep(0.5)
+            evs_again = discovery_events(args.port, ruin_label)
+            if len(evs_again) == 1:
+                print("PASS: leaving and returning emits no duplicate discovery event")
+            else:
+                failures.append(
+                    f"expected still exactly one event after leave+return, got {evs_again}")
+
+            # The two synthetic units above are now part of 'wa' — refresh
+            # counts1 so phase 2's "reload does not respawn contents"
+            # comparison accounts for them too (they persist like any
+            # other unit, unrelated to the ruin's one-time content flag).
+            counts1 = spawn_counts(args.port)
+
             send(args.port, "engine.saveWorld('wa', 'loc_content_probe'); return 'saved'")
             time.sleep(1.0)
     finally:
@@ -364,6 +475,23 @@ def main() -> int:
             else:
                 failures.append(
                     f"contents respawned on reload: before={counts1} after={counts2}")
+
+            # #780: discovered state survives save -> quit -> restart ->
+            # load; the event itself does NOT (player events are
+            # per-session, never saved), so a fresh process reloading an
+            # already-discovered location must emit zero events for it.
+            disc_reload = discovered_flags(args.port, "main_world")
+            if disc_reload.get(r0key) is True:
+                print("PASS: discovered state survived save -> quit -> restart -> load")
+            else:
+                failures.append(
+                    f"discovered state lost on reload: {disc_reload.get(r0key)!r}")
+            evs_reload = discovery_events(args.port, ruin_label)
+            if not evs_reload:
+                print("PASS: reloading an already-discovered location re-emits no event")
+            else:
+                failures.append(
+                    f"reload incorrectly re-emitted discovery event(s): {evs_reload}")
 
             # #91: the damaged geometry replays identically from the edit
             # log (same breach pattern — the builder did NOT re-run and
