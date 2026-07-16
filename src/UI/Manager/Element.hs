@@ -68,6 +68,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueDragActivation = False
           , ueSteppable   = False
           , ueTabIndex    = Nothing
+          , ueClipChildren = False
           , ueTextBuffer  = Nothing
           , ueTooltip     = Nothing
           }

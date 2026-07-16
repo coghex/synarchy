@@ -50,6 +50,7 @@ module UI.Manager
   , setElementDragActivation
   , setElementSteppable
   , setElementTabIndex
+  , setElementClipChildren
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -76,6 +77,7 @@ module UI.Manager
   , isElementPointerBlocking
   , isElementScrollCapturing
   , isElementDragActivation
+  , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder
   , paintTraversalOrder

@@ -9,6 +9,7 @@ module UI.Manager.Property
   , setElementDragActivation
   , setElementSteppable
   , setElementTabIndex
+  , setElementClipChildren
   , setElementZIndex
   , setElementOnClick
   , setElementOnRightClick
@@ -75,6 +76,12 @@ setElementSteppable handle steppable = modifyElement handle `flip`
 setElementTabIndex ∷ ElementHandle → Int → UIPageManager → UIPageManager
 setElementTabIndex handle idx = modifyElement handle `flip`
     (\elem → elem { ueTabIndex = Just idx })
+
+-- | #747: explicit opt-in that this element clips its DESCENDANTS to
+--   its own current bounds — see 'ueClipChildren'.
+setElementClipChildren ∷ ElementHandle → Bool → UIPageManager → UIPageManager
+setElementClipChildren handle clips = modifyElement handle `flip`
+    (\elem → elem { ueClipChildren = clips })
 
 setElementOnClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
 setElementOnClick handle callbackName = modifyElement handle `flip`

@@ -29,6 +29,12 @@ locations:
     # by before a unit is considered "near" the ruin.
     bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }
     discovery_margin: 6
+    # Paired zoom-map annotation textures (#781): 'undiscovered' shows
+    # while wgpLocationDiscovered hasn't recorded this placement yet,
+    # 'discovered' once a player-faction unit has approached it (#780).
+    map_icons:
+      undiscovered: "assets/textures/icons/location/ruin_hidden.png"
+      discovered: "assets/textures/icons/location/ruin_discovered.png"
     # World-gen overlay (#89) placement controls. Per-type, not global:
     # at most `max_count` instances, each at least `min_spacing` chunks
     # from another ruin (jittered, deterministic from the seed). Both are

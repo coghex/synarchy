@@ -124,7 +124,21 @@ saveMagic = 0x53595241
 --       river carve. Positional Generic Serialize drops the trailing
 --       field, incompatible with v61 (#385).
 currentSaveVersion ∷ Int
-currentSaveVersion = 89  -- v89: WorldGenParams gains trailing
+currentSaveVersion = 90  -- v90 (#759, save-overhaul B1): no layout change
+                         -- to SaveData/WorldPageSave themselves — this
+                         -- bump marks the transition to the tagged,
+                         -- checksummed envelope format
+                         -- ("World.Save.Envelope"). 'SaveData' now rides
+                         -- as the "session" component's payload inside
+                         -- that envelope rather than being the whole
+                         -- file; 'currentSaveVersion' is that
+                         -- component's own schema version (unchanged
+                         -- meaning — still bump it whenever this
+                         -- record's or 'WorldPageSave''s layout
+                         -- changes), kept deliberately separate from
+                         -- the envelope's own framing version
+                         -- ('World.Save.Envelope.currentEnvelopeVersion').
+                         -- v89: WorldGenParams gains trailing
                          -- 'wgpLocationDiscovered' (#780) — a per-chunk
                          -- one-time discovery flag (player-faction unit
                          -- has entered a placed location's discovery-
@@ -329,13 +343,26 @@ currentSaveVersion = 89  -- v89: WorldGenParams gains trailing
                          -- (v35: mdChunkProgress; v34: sdSpoilPiles
                          -- + WeAddTile; v33: smPercent.)
 
--- | File prefix: magic + version. Decoded before the SaveData body.
---   Old (v1) saves have no header — magic check fails, loader rejects
---   with "Save file invalid or incompatible".
+-- | The shape of the tagged save envelope's fixed 16-byte header
+--   (issue #759, save-overhaul B1): magic, the envelope FRAMING
+--   version (separate from any carried component's own schema
+--   version — see 'World.Save.Envelope.currentEnvelopeVersion'), and
+--   the manifest's length in bytes. Retained here — rather than in
+--   "World.Save.Envelope.Types" — purely so the persistence-inventory
+--   audit (`tools/persistence_inventory_audit.py`) keeps a stable
+--   root-owner record to classify; the real codec
+--   ("World.Save.Envelope.Codec") manipulates these three values as
+--   raw scalars under its own explicit byte-layout control, not this
+--   record, and never constructs one. A pre-#759 flat file (v89 and
+--   earlier) has no manifest at all — its first 16 bytes decode as a
+--   header whose 'shEnvelopeVersion' can never coincide with a real
+--   envelope version, so it is rejected the same way any other
+--   version mismatch is, with no heuristic positional decoding.
 data SaveHeader = SaveHeader
-    { shMagic   ∷ !Word32
-    , shVersion ∷ !Int
-    } deriving (Show, Eq, Serialize, Generic)
+    { shMagic           ∷ !Word32
+    , shEnvelopeVersion ∷ !Word32
+    , shManifestLength  ∷ !Word64
+    } deriving (Show, Eq, Generic)
 
 -- | Human-readable metadata for save listing
 data SaveMetadata = SaveMetadata

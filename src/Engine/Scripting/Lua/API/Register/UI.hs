@@ -69,6 +69,9 @@ registerUIAPI env = do
   registerLuaFunction "setDragActivation"  (uiSetDragActivationFn env)
   registerLuaFunction "setSteppable"       (uiSetSteppableFn env)
   registerLuaFunction "setTabIndex"        (uiSetTabIndexFn env)
+  registerLuaFunction "setClipChildren"    (uiSetClipChildrenFn env)
+  registerLuaFunction "isClipChildren"     (uiIsClipChildrenFn env)
+  registerLuaFunction "getEffectiveClip"   (uiGetEffectiveClipFn env)
   registerLuaFunction "setZIndex"    (uiSetZIndexFn env)
   registerLuaFunction "setColor"     (uiSetColorFn env)
   registerLuaFunction "setText"      (uiSetTextFn env)
@@ -88,5 +91,8 @@ registerUIAPI env = do
   registerLuaFunction "unlockTooltip"     (uiUnlockTooltipFn env)
   registerLuaFunction "toggleTooltipLock" (uiToggleTooltipLockFn env)
   registerLuaFunction "isTooltipLocked"   (uiIsTooltipLockedFn env)
+
+  registerLuaFunction "placePopup"      (uiPlacePopupFn env)
+  registerLuaFunction "fitVisibleRows"  (uiFitVisibleRowsFn env)
 
   Lua.setglobal (Lua.Name "UI")

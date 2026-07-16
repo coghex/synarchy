@@ -286,6 +286,7 @@ library
                      Engine.Scripting.Lua.API.UI.TextInput
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
+                     Engine.Scripting.Lua.API.UI.Placement
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.Yaml
                      Engine.Scripting.Lua.API.Units.Spawn
@@ -368,6 +369,8 @@ library
                      UI.InputOwnership
                      UI.ControlActivation
                      UI.FocusNavigation
+                     UI.Clipping
+                     UI.PopupPlacement
                      UI.Manager
                      UI.Manager.Core
                      UI.Manager.Page
@@ -586,6 +589,7 @@ library
                      World.Render.Zoom.Textures
                      World.Render.Zoom.Quads
                      World.Render.Zoom.Cursor
+                     World.Render.Zoom.Icons
                      World.Render.Zoom.Background
                      World.Generate
                      World.Generate.Arena
@@ -706,6 +710,9 @@ library
                      World.Save.Types
                      World.Save.Snapshot
                      World.Save.Snapshot.Adapter
+                     World.Save.Envelope.Types
+                     World.Save.Envelope.Codec
+                     World.Save.Envelope
                      World.Save.Serialize
                      World.Scale
                      World.Slope
@@ -968,6 +975,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
+                   Test.Headless.World.Save.Envelope
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.Identity
@@ -1009,6 +1017,8 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.FocusNavigation
+                   Test.Headless.UI.Clipping
+                   Test.Headless.UI.PopupPlacement
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.ClickCorrelation
@@ -1032,6 +1042,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
                    Test.Headless.Location.Discovery
+                   Test.Headless.Location.MapIcons
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
     build-depends: base >=4.20 && <5

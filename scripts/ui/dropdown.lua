@@ -321,8 +321,19 @@ function dropdown.new(params)
     UI.setClickable(dd.displayBoxId, true)
     UI.setOnClick(dd.displayBoxId, DISPLAY_CALLBACK)
     
-    UI.addToPage(dd.page, dd.displayBoxId, dd.x, dd.y)
-    UI.addToPage(dd.page, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
+    -- #747: dd.parent was stored (params.parent) but never actually
+    -- wired into attachment — the display box + arrow always went
+    -- straight to the page. Only the CLOSED display box/arrow are
+    -- eligible for parenting; the open option list stays root-mounted
+    -- via UI.addToPage regardless (floating content that must escape
+    -- the trigger's own clip — see UI.Clipping).
+    if dd.parent then
+        UI.addChild(dd.parent, dd.displayBoxId, dd.x, dd.y)
+        UI.addChild(dd.parent, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
+    else
+        UI.addToPage(dd.page, dd.displayBoxId, dd.x, dd.y)
+        UI.addToPage(dd.page, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
+    end
     
     if params.zIndex then
         UI.setZIndex(dd.displayBoxId, params.zIndex)
@@ -520,6 +531,28 @@ end
 -- Option List Management
 -----------------------------------------------------------
 
+-- #747 review round 2: the scrollbar's own clamped track height —
+-- single source of truth shared by the placement/click-outside height
+-- calc (dropdownScrollbarHeight below) and the scrollbar.new call
+-- itself, so the two can never drift apart.
+local function dropdownScrollTrackHeight(dd, listHeight)
+    local capHeight = math.floor(4 * dd.uiscale)
+    local trackHeight = listHeight - (dd.arrowSize * 2) - (capHeight * 2)
+    local minTrackHeight = math.floor(20 * dd.uiscale)
+    if trackHeight < minTrackHeight then
+        trackHeight = minTrackHeight
+    end
+    return trackHeight
+end
+
+-- The scrollbar's real total on-screen height (two buttons + two caps
+-- + the clamped track) — can exceed listHeight once the track hits its
+-- minimum floor on a heavily row-reduced list.
+local function dropdownScrollbarHeight(dd, listHeight)
+    local capHeight = math.floor(4 * dd.uiscale)
+    return dd.arrowSize * 2 + capHeight * 2 + dropdownScrollTrackHeight(dd, listHeight)
+end
+
 function dropdown.openList(id)
     local dd = dropdowns[id]
     if not dd then return end
@@ -535,15 +568,59 @@ function dropdown.openList(id)
     dd.scrollOffset = 0
     dd.hoveredOptionIndex = nil
     UI.setSpriteTexture(dd.arrowSpriteId, texArrowClicked)
-    
+
+    -- #747: dd.x/dd.y are only correct FRAMEBUFFER coordinates (what
+    -- UI.placePopup/UI.fitVisibleRows require) when the dropdown is
+    -- unparented — query the display box's live absolute position
+    -- (parent-aware) so opening still places correctly once dd.parent
+    -- is used.
+    local displayInfo = UI.getElementInfo(dd.displayBoxId)
+    local anchorX = displayInfo and displayInfo.x or dd.x
+    local anchorY = displayInfo and displayInfo.y or dd.y
+
     local totalOptions = #dd.options
-    local visibleCount = math.min(totalOptions, dd.maxVisibleOptions)
-    dd.needsScroll = totalOptions > dd.maxVisibleOptions
-    
+    local idealCount = math.min(totalOptions, dd.maxVisibleOptions)
+    -- #747: reduce the visible row count only when NEITHER opening
+    -- below nor above has room for the ideal count, so an oversized
+    -- option list still ends up fully on-screen instead of overflowing
+    -- the framebuffer.
+    local fbW, fbH = engine.getFramebufferSize()
+    local availBelow = fbH - (anchorY + dd.height)
+    local availAbove = anchorY
+    local visibleCount = UI.fitVisibleRows(idealCount, dd.optionHeight, math.max(availBelow, availAbove))
+    dd.needsScroll = totalOptions > visibleCount
+
     local listHeight = visibleCount * dd.optionHeight
-    local listX = dd.x
-    local listY = dd.y + dd.height
-    
+    local scrollWidth = dd.needsScroll and dd.arrowSize or 0
+
+    -- #747 review round 2: the scrollbar (created below, mirrored here)
+    -- has its own minimum track floor (scrollbarMinTrackHeight) — on an
+    -- aggressively row-reduced list, the scrollbar's real total height
+    -- can EXCEED listHeight. The full interactive popup height must
+    -- cover whichever is taller, or a click on the scrollbar's own
+    -- lower controls would fall outside the placed/stored bounds and
+    -- onClickOutside would wrongly treat it as "outside" and close the
+    -- list before the click reaches the scrollbar.
+    local popupHeight = listHeight
+    if dd.needsScroll then
+        popupHeight = math.max(listHeight, dropdownScrollbarHeight(dd, listHeight))
+    end
+
+    -- #747: one shared framebuffer-coordinate placement contract —
+    -- prefer opening below the display box, flip above when there
+    -- isn't room, and always end up fully on-screen. contentW/contentH
+    -- include the scrollbar strip so it stays reachable too. The
+    -- option list itself is always root-mounted (below), regardless of
+    -- dd.parent — floating content escapes the trigger's own clip
+    -- ancestry.
+    local listX, listY = UI.placePopup(
+        anchorX, anchorY, dd.displayWidth, dd.height,
+        dd.displayWidth + scrollWidth, popupHeight,
+        "below")
+    dd.listX = listX
+    dd.listY = listY
+    dd.listHeight = popupHeight
+
     dd.listBoxId = UI.newBox(
         dd.name .. "_list",
         dd.displayWidth,
@@ -624,15 +701,12 @@ function dropdown.openList(id)
     
     -- Create scrollbar if needed
     if dd.needsScroll then
-        local scrollTrackHeight = listHeight - (dd.arrowSize * 2) - (math.floor(4 * dd.uiscale) * 2)
-        if scrollTrackHeight < math.floor(20 * dd.uiscale) then
-            scrollTrackHeight = math.floor(20 * dd.uiscale)
-        end
-        
+        local scrollTrackHeight = dropdownScrollTrackHeight(dd, listHeight)
+
         dd.scrollbarId = scrollbar.new({
             name = dd.name .. "_scrollbar",
             page = dd.page,
-            x = dd.x + dd.displayWidth,
+            x = listX + dd.displayWidth,
             y = listY,
             buttonSize = dd.arrowSize,
             trackHeight = scrollTrackHeight,
@@ -673,7 +747,10 @@ function dropdown.closeList(id)
         dd.listBoxId = nil
     end
     dd.optionElements = {}
-    
+    dd.listX = nil
+    dd.listY = nil
+    dd.listHeight = nil
+
     engine.logDebug("Dropdown list closed: " .. dd.name)
 end
 
@@ -969,22 +1046,38 @@ function dropdown.onClickOutside(mouseX, mouseY)
         -- dismissed by clicking elsewhere on that same page) may still
         -- treat this as an ordinary "clicked elsewhere".
         if UI.isPageInScope(dd.page) then
+            -- #747: dd.x/dd.y are only correct in the same (absolute)
+            -- space mouseX/mouseY arrive in when the dropdown is
+            -- unparented — query the display box's live absolute
+            -- position (parent-aware) so this stays correct once
+            -- dd.parent is used too.
+            local displayInfo = UI.getElementInfo(dd.displayBoxId)
+            local dispX = displayInfo and displayInfo.x or dd.x
+            local dispY = displayInfo and displayInfo.y or dd.y
+
             if dd.open then
+                -- #747: the list may have flipped above the display box
+                -- (or been clamped) rather than always sitting directly
+                -- below it, so "outside" is the union of the display
+                -- box's own rect and the list's ACTUAL placed rect
+                -- (dd.listX/listY, stored by openList), not an assumed
+                -- vertical stack starting at dd.y.
                 local scrollWidth = 0
                 if dd.scrollbarId then
                     scrollWidth = scrollbar.getTrackWidth(dd.scrollbarId)
                 end
-                local visibleCount = math.min(#dd.options, dd.maxVisibleOptions)
-                local totalHeight = dd.height + (visibleCount * dd.optionHeight)
-                local totalWidth = dd.displayWidth + scrollWidth
-                if mouseX < dd.x or mouseX > dd.x + totalWidth
-                    or mouseY < dd.y or mouseY > dd.y + totalHeight then
+                local inDisplay = mouseX >= dispX and mouseX <= dispX + dd.displayWidth
+                    and mouseY >= dispY and mouseY <= dispY + dd.height
+                local inList = dd.listX ~= nil
+                    and mouseX >= dd.listX and mouseX <= dd.listX + dd.displayWidth + scrollWidth
+                    and mouseY >= dd.listY and mouseY <= dd.listY + dd.listHeight
+                if not inDisplay and not inList then
                     dropdown.closeList(id)
                 end
             end
             if dd.focused then
-                local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
-                    and mouseY >= dd.y and mouseY <= dd.y + dd.height
+                local inDisplay = mouseX >= dispX and mouseX <= dispX + dd.displayWidth
+                    and mouseY >= dispY and mouseY <= dispY + dd.height
                 if not inDisplay then
                     dropdown.submitInput(id)
                 end

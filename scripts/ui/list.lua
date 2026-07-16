@@ -118,7 +118,20 @@ function list.new(params)
         needsScroll = #items > maxVisible,
         -- Element handles
         slotElements = {},  -- { hitId, textId, highlightId, slot }
+        viewportId = nil,
     }
+
+    -- #747: a shared, opt-in clipping viewport that every visible slot
+    -- is parented under (relative offsets) instead of being placed
+    -- directly on the page at absolute coordinates. Virtualization
+    -- (only `visibleCount` slots ever exist) still does the heavy
+    -- lifting, but this closes the gap where a rounding/resize edge
+    -- case could otherwise leave a row visible or clickable outside
+    -- the list's own bounds. The scrollbar stays a page-level sibling
+    -- (outside the clip) since it's chrome, not list content.
+    ls.viewportId = UI.newElement(ls.name .. "_viewport", listWidth, listHeight, ls.page)
+    UI.addToPage(ls.page, ls.viewportId, ls.x, ls.y)
+    UI.setClipChildren(ls.viewportId, true)
 
     -- Create visible item slots
     ls.slotElements = {}
@@ -142,7 +155,7 @@ function list.new(params)
             highlightColor[3], highlightColor[4],
             ls.page
         )
-        UI.addToPage(ls.page, hlId, ls.x, ls.y + slotY)
+        UI.addChild(ls.viewportId, hlId, 0, slotY)
         UI.setZIndex(hlId, ls.zIndex)
         UI.setVisible(hlId, false)
 
@@ -163,17 +176,18 @@ function list.new(params)
         )
         -- Resolve horizontal position based on textAlign. For "center"
         -- and "right" we need each item's pixel width to position
-        -- correctly; "left" is just a constant offset.
-        local textX = ls.x + textPadding
+        -- correctly; "left" is just a constant offset. Relative to the
+        -- viewport (0,0 = the list's own top-left), not the page.
+        local textX = textPadding
         if textAlign == "center" or textAlign == "right" then
             local tw = engine.getTextWidth(ls.font, itemText, fontSize)
             if textAlign == "center" then
-                textX = ls.x + math.floor((listWidth - tw) / 2)
+                textX = math.floor((listWidth - tw) / 2)
             else
-                textX = ls.x + listWidth - tw - textPadding
+                textX = listWidth - tw - textPadding
             end
         end
-        UI.addToPage(ls.page, txtId, textX, ls.y + textY)
+        UI.addChild(ls.viewportId, txtId, textX, textY)
         UI.setZIndex(txtId, ls.zIndex + 2)
 
         -- Invisible hit-box sprite for click detection
@@ -185,7 +199,7 @@ function list.new(params)
             0.0, 0.0, 0.0, 0.0,
             ls.page
         )
-        UI.addToPage(ls.page, hitId, ls.x, ls.y + slotY)
+        UI.addChild(ls.viewportId, hitId, 0, slotY)
         UI.setClickable(hitId, true)
         UI.setOnClick(hitId, LIST_ITEM_CALLBACK)
         -- #743: explicit scroll-capture so hovering a row and scrolling
@@ -254,6 +268,7 @@ function list.destroy(id)
         if slot.textId then UI.deleteElement(slot.textId) end
         if slot.highlightId then UI.deleteElement(slot.highlightId) end
     end
+    if ls.viewportId then UI.deleteElement(ls.viewportId) end
 
     lists[id] = nil
     engine.logDebug("List destroyed: " .. (ls.name or "?"))
@@ -527,6 +542,13 @@ function list.setVisible(id, visible)
     local ls = lists[id]
     if not ls then return end
 
+    -- The clipping viewport (#747) is itself a real, sized element, so
+    -- it must follow the list's own visibility toggle: left visible
+    -- while every slot underneath it is hidden, it would still be a
+    -- valid hover/tooltip/hit target (an empty box with nothing behind
+    -- it reachable), blocking whatever's actually behind a hidden list.
+    UI.setVisible(ls.viewportId, visible)
+
     for _, slot in ipairs(ls.slotElements) do
         UI.setVisible(slot.hitId, visible)
         UI.setVisible(slot.textId, visible)
@@ -547,14 +569,11 @@ function list.setPosition(id, x, y)
     ls.x = x
     ls.y = y
 
-    for _, slot in ipairs(ls.slotElements) do
-        local slotY = (slot.slot - 1) * ls.itemHeight
-        local textY = slotY + (ls.itemHeight + ls.fontSize) / 2
-
-        UI.setPosition(slot.highlightId, x, y + slotY)
-        UI.setPosition(slot.textId, x + ls.textPadding, y + textY)
-        UI.setPosition(slot.hitId, x, y + slotY)
-    end
+    -- #747: every slot is a CHILD of the clipping viewport at a fixed
+    -- relative offset (set once at creation), so moving the list is
+    -- just moving the one viewport element — its descendants follow
+    -- automatically, textAlign offset included.
+    UI.setPosition(ls.viewportId, x, y)
 
     if ls.scrollbarId then
         scrollbar.setPosition(ls.scrollbarId, x + ls.width, y)

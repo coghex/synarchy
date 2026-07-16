@@ -201,6 +201,7 @@ function randbox.new(params)
         fontSize = fontSize,
         textPadding = textPadding,
         page = params.page,
+        parent = params.parent,
         font = params.font,
         randType = params.randType or randbox.Type.HEX_SEED,
         randParams = params.randParams or nil,
@@ -311,9 +312,15 @@ function randbox.new(params)
     UI.setZIndex(rb.btnHighlightId, 1)
     UI.setVisible(rb.btnHighlightId, false)
 
-    -- Position elements
-    UI.addToPage(rb.page, rb.boxId, rb.x, rb.y)
-    UI.addToPage(rb.page, rb.btnSpriteId, rb.x + rb.inputWidth, rb.y)
+    -- Position elements. #747: opt-in parenting (e.g. a clipping
+    -- viewport) instead of always attaching directly to the page.
+    if rb.parent then
+        UI.addChild(rb.parent, rb.boxId, rb.x, rb.y)
+        UI.addChild(rb.parent, rb.btnSpriteId, rb.x + rb.inputWidth, rb.y)
+    else
+        UI.addToPage(rb.page, rb.boxId, rb.x, rb.y)
+        UI.addToPage(rb.page, rb.btnSpriteId, rb.x + rb.inputWidth, rb.y)
+    end
 
     if rb.zIndex > 0 then
         UI.setZIndex(rb.boxId, rb.zIndex)
@@ -772,11 +779,19 @@ function randbox.onClickOutside(mouseX, mouseY)
         -- page the modal boundary has excluded must not react to a
         -- click the boundary already consumed.
         if rb.focused and UI.isPageInScope(rb.page) then
-            local inBox = mouseX >= rb.x and mouseX <= rb.x + rb.inputWidth
-                and mouseY >= rb.y and mouseY <= rb.y + rb.height
-            local inBtn = mouseX >= rb.x + rb.inputWidth
-                and mouseX <= rb.x + rb.width
-                and mouseY >= rb.y and mouseY <= rb.y + rb.height
+            -- #747: rb.x/rb.y are only correct in the same (absolute)
+            -- space mouseX/mouseY arrive in when the randbox is
+            -- unparented — query the box's live absolute position
+            -- (parent-aware) so this stays correct once rb.parent is
+            -- used too.
+            local info = rb.boxId and UI.getElementInfo(rb.boxId)
+            local absX = info and info.x or rb.x
+            local absY = info and info.y or rb.y
+            local inBox = mouseX >= absX and mouseX <= absX + rb.inputWidth
+                and mouseY >= absY and mouseY <= absY + rb.height
+            local inBtn = mouseX >= absX + rb.inputWidth
+                and mouseX <= absX + rb.width
+                and mouseY >= absY and mouseY <= absY + rb.height
             if not inBox and not inBtn then
                 randbox.unfocus(id)
             end

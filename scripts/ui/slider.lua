@@ -59,14 +59,30 @@ local function knobCenterX(sl)
     return sl.trackX + ratio * sl.trackWidth
 end
 
--- Compute value from a pixel X position (clamped and snapped)
-local function valueFromX(sl, px)
-    local ratio = (px - sl.trackX) / sl.trackWidth
+-- Compute value from a pixel X position (clamped and snapped). absTrackX
+-- must be the track's ABSOLUTE (framebuffer) X — sl.trackX is only ever
+-- correct in that space when the slider is unparented (page-root), so
+-- #747 drag handling queries the live element position instead (see
+-- onDragMove) rather than trusting the stored field once parenting is
+-- possible.
+local function valueFromX(sl, px, absTrackX)
+    local ratio = (px - absTrackX) / sl.trackWidth
     ratio = math.max(0, math.min(1, ratio))
     local raw = sl.min + ratio * (sl.max - sl.min)
     -- Snap to step (integer)
     local stepped = math.floor(raw + 0.5)
     return math.max(sl.min, math.min(sl.max, stepped))
+end
+
+-- #747: attach a newly-created root sprite either as a child of
+-- sl.parent (opt-in, e.g. a clipping viewport) or, as before, directly
+-- to the page.
+local function attach(sl, elemHandle, x, y)
+    if sl.parent then
+        UI.addChild(sl.parent, elemHandle, x, y)
+    else
+        UI.addToPage(sl.page, elemHandle, x, y)
+    end
 end
 
 -- Reposition all sprites based on sl.x, sl.y and current value
@@ -122,6 +138,7 @@ function slider.new(params)
         -- trackX = absolute X where the track starts (for value mapping)
         trackX     = (params.x or 0) + capWidth,
         page       = params.page,
+        parent     = params.parent,
         min        = params.min or 0,
         max        = params.max or 100,
         value      = params.default or params.min or 0,
@@ -147,7 +164,7 @@ function slider.new(params)
         1.0, 1.0, 1.0, 1.0,
         sl.page
     )
-    UI.addToPage(sl.page, sl.leftCapId, sl.x, sl.y)
+    attach(sl, sl.leftCapId, sl.x, sl.y)
 
     -- Track (clickable)
     sl.trackSpriteId = UI.newSprite(
@@ -157,7 +174,7 @@ function slider.new(params)
         1.0, 1.0, 1.0, 1.0,
         sl.page
     )
-    UI.addToPage(sl.page, sl.trackSpriteId, sl.x + capWidth, sl.y)
+    attach(sl, sl.trackSpriteId, sl.x + capWidth, sl.y)
     UI.setClickable(sl.trackSpriteId, true)
     UI.setOnClick(sl.trackSpriteId, TRACK_CALLBACK)
     -- #745: a track click jumps the value AND immediately starts a
@@ -173,8 +190,7 @@ function slider.new(params)
         1.0, 1.0, 1.0, 1.0,
         sl.page
     )
-    UI.addToPage(sl.page, sl.rightCapId,
-        sl.x + capWidth + trackWidth, sl.y)
+    attach(sl, sl.rightCapId, sl.x + capWidth + trackWidth, sl.y)
 
     -- Knob (clickable, drawn on top)
     sl.knobSpriteId = UI.newSprite(
@@ -185,7 +201,7 @@ function slider.new(params)
         sl.page
     )
     local cx = knobCenterX(sl)
-    UI.addToPage(sl.page, sl.knobSpriteId, cx - knobWidth / 2, sl.y)
+    attach(sl, sl.knobSpriteId, cx - knobWidth / 2, sl.y)
     UI.setClickable(sl.knobSpriteId, true)
     UI.setOnClick(sl.knobSpriteId, KNOB_CALLBACK)
     -- #745: the knob starts a drag on press (onKnobClick below) —
@@ -430,7 +446,12 @@ function slider.onDragMove(mx, my)
         return
     end
 
-    local newValue = valueFromX(sl, mx - dragOffsetX)
+    -- #747: mx is an absolute framebuffer coordinate; sl.trackX is only
+    -- correct in that space for an unparented slider, so query the
+    -- track sprite's live absolute position (parent-aware) instead.
+    local trackInfo = UI.getElementInfo(sl.trackSpriteId)
+    local absTrackX = trackInfo and trackInfo.x or sl.trackX
+    local newValue = valueFromX(sl, mx - dragOffsetX, absTrackX)
     if newValue ~= sl.value then
         sl.value = newValue
         layoutSprites(sl)

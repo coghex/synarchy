@@ -385,6 +385,83 @@ reaches gameplay exactly as before. `upmControlFocus` is validated
 (every existing consumer — `ui.dumpWidgets`, the F3 oracle — keeps its
 meaning); control focus is reported through the new, separate
 `controlFocused` field instead of overloading it.
+C1 (#747, Phase C child of #741) adds two independent contracts on top
+of Phase A's ownership/policy layer: opt-in rectangular clipping and
+shared viewport-aware floating placement.
+
+**Clipping** (`UI.Clipping`, pure — no Vulkan/window/Lua engine, see
+`Test.Headless.UI.Clipping`): a container opts in via
+`UI.setClipChildren(el, true)` (`UI.Types.ueClipChildren`, default
+`False`) to clip its DESCENDANTS to its own current absolute bounds —
+overflow:hidden semantics; the container's own bounds are never
+restricted by its own flag. `UI.Clipping.effectiveClip` is the ONE
+shared helper both `UI.Render` (rendering) and
+`UI.Manager.Query.isPointInElement` (hit-testing — reached from every
+click/hover/scroll/tooltip entry point via `hitsAtPointBy`) consult, so
+paint and hit-test can never drift apart — the same discipline
+`uiLayerBand` already enforces for z-order. The effective clip is the
+intersection of every `ueClipChildren`-opted ancestor's own bounds
+(nested clips intersect; no clipping ancestor ⇒ `Nothing`, unclipped);
+it's recomputed fresh on every call from live `uePosition`/`ueSize`, so
+a move/resize takes effect immediately with nothing cached to go
+stale. Rendering clips for real: `UI.Clipping.clipQuadUV` intersects an
+element's screen rect against the effective clip and proportionally
+adjusts its UV rect, so a box tile, sprite, or glyph straddling the
+clip boundary draws only its visible slice (its overflow-expanded
+visual rect for boxes) rather than being culled all-or-nothing; a
+quad with no overlap at all is dropped. `UI.getEffectiveClip(el)` (a
+`{x,y,w,h}` table or `nil`) and `UI.isClipChildren(el)` expose the
+state to Lua and to `ui.dumpWidgets`-style introspection
+(`pointerBlocking`/`scrollCapturing`-style fields added to
+`UI.getElementInfo`'s table: `clipsChildren`, `effectiveClip`).
+Floating root-mounted content (dropdown option lists, context menus —
+already added via `UI.addToPage`, never as a real child of their
+trigger) is naturally unaffected by a trigger's clip, since clipping
+only walks REAL ancestors. Adopted on `scripts/ui/list.lua` (the
+reusable list widget, transitively covering `scripts/save_browser.lua`
+and `scripts/plant_panel.lua`): every visible slot is now a child of a
+per-list clipping viewport element instead of a page-root element at
+absolute coordinates, so `list.setPosition` collapses to moving the
+one viewport (descendants follow automatically, textAlign offset
+included) and a resize/rounding edge case can't leave a row visible or
+clickable outside the list's own bounds even if virtualization ever
+has a gap. `scripts/ui/panel.lua` gained an opt-in `clipChildren`
+constructor param (`UI.setClipChildren` on the panel's own box) for any
+panel-based screen that nests content via `panel.place`/`placeRow`/
+`placeColumn`. Adoption for the settings tabs / create-world content /
+event-combat-injury-unit log panels remains a follow-up: those build
+their scrollable regions as page-root elements positioned by
+hand-computed layout rather than real parent/child nesting, so turning
+on the clip contract there needs a real reparenting migration per
+panel, not a one-line flag flip.
+
+**Floating placement** (`UI.PopupPlacement`, also pure, see
+`Test.Headless.UI.PopupPlacement`): one framebuffer-coordinate
+placement algorithm — `UI.placePopup(anchorX, anchorY, anchorW,
+anchorH, contentW, contentH, direction)` returns `x, y, flipped` —
+replacing two divergent implementations. `direction` is
+`"below"`/`"above"`/`"right"`/`"left"` (preferred side, tries the
+opposite side if the preferred one doesn't fit, then a final two-axis
+clamp regardless of which side won) or `"anchored"` (no directional
+preference — place exactly at the anchor point, then clamp; the
+context-menu-root shape). `contentW`/`contentH` must be the FULL
+interactive size including any scrollbar strip, so the scrollbar stays
+reachable too. `UI.fitVisibleRows(preferredCount, rowHeight,
+availableHeight)` backs oversized-list row reduction (never below 1).
+`scripts/ui/dropdown.lua`'s `openList` now calls both: it fits the
+option-list row count against whichever of above/below has more room,
+then places with `"below"` (flips to `"above"` automatically) — the
+resolved `dd.listX`/`dd.listY`/`dd.listHeight` are stored and reused by
+`onClickOutside`'s bounds check instead of assuming a fixed
+below-the-display-box stack, so it stays correct even when flipped.
+`scripts/ui/context_menu.lua`'s `buildPanel` (root panel) now places
+via `"anchored"`; `openSubMenu` places via `"right"` with the root
+panel's rect (widened by `SUBMENU_GAP` on both sides so the generic
+left-fallback reproduces the same gap) as the anchor — Y stays
+row-aligned and only clamped, never flipped, since the preferred axis
+there is horizontal. Tooltip placement (`UI.Tooltip.Layout`/`Render`)
+deliberately stays on its own separate cursor-relative clamp,
+untouched by this change.
 
 ## Project Layout
 
@@ -1459,7 +1536,52 @@ between a real capture failure and a legitimate Lua-less engine-only save (exerc
 `Test.Headless.World.Identity`'s save/load-mapping test, which drives `WorldSave` directly
 with an empty blob map).
 
-Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) plus a human-readable `world_gen.yaml` alongside.
+**Save envelope (#759, save-overhaul B1):** the on-disk `world.synworld`
+file is a tagged, checksummed COMPONENT ENVELOPE, not a raw positional
+`[header][SaveData]` blob. `World.Save.Envelope.Codec` is the generic,
+pure codec (`encodeEnvelope`/`decodeEnvelope`) — magic + a framing
+version + a length-prefixed, checksummed manifest of component
+descriptors (id, schema version, required/optional, offset, length,
+its own checksum), then each component's payload bytes laid out
+back-to-back in canonical (component-id-ascending) order. Integrity
+uses FNV-1a 64-bit (`World.Save.Envelope.Types.fnv1a64`) over the
+manifest and over each component's payload — corruption detection
+only, explicitly not authentication. Decoding validates the COMPLETE
+structure (magic, framing version, every documented allocation limit,
+duplicate ids, the required/optional contract, payload bounds,
+per-component checksums, forbidden trailing bytes) before any
+component's payload is interpreted; a component the writer marks
+optional can still be a hard requirement for THIS reader (an unknown
+component the writer marked required is rejected outright; a known
+component missing from the file is rejected even if the writer never
+marked anything required at all). `World.Save.Envelope` wires this
+codec to two components: `"metadata"` (just `SaveMetadata` — so
+`listSaves`/`engine.listSaves()` never decodes a save's gameplay
+payload at all) and `"session"` (the complete, unchanged `SaveData`,
+the same positional `Generic Serialize` shape v88 always used — a
+TRANSITIONAL component B2 will later split into independently-owned
+Haskell components). The envelope's own framing version
+(`World.Save.Envelope.currentEnvelopeVersion`) is independent of the
+session component's schema version (still `currentSaveVersion`,
+`World.Save.Types`) — bump the former only if the FRAMING contract
+itself changes incompatibly, the latter exactly as before whenever
+`SaveData`/`WorldPageSave` gains, loses, or reorders a field. A
+pre-#759 flat file is rejected outright (its first 16 bytes never
+parse as a valid envelope header) with no heuristic positional
+decoding attempted — v82-and-earlier saves are a clean break, not a
+migration target. `world_gen.yaml` is GONE: `world.synworld` is the
+sole authoritative file for a save generation now that generation
+params live in the "session" component like every other gameplay
+field. Pure coverage: `Test.Headless.World.Save.Envelope` (the "save
+envelope" describe block) — round trips, canonical ordering +
+determinism, the required/optional contract, every structural
+corruption/limit rejection path (with the phase + offending component
+identified), a real `SaveData`/`SaveMetadata` round trip, the
+metadata-without-gameplay-decoding property, component-version
+rejection, the pre-#759 clean break, and a frozen tracked-bytes
+fixture decoded independently of any encoder call in that same test.
+
+Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) — the sole authoritative file for a save generation; there is no companion `world_gen.yaml` (removed by #759 — generation params live in the envelope's "session" component).
 
 ```bash
 # From headless / debug console

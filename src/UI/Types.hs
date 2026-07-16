@@ -151,6 +151,19 @@ data UIElement = UIElement
     --   'UI.FocusNavigation.focusableElements'. 'Nothing' (the
     --   default) uses this element's own paint-traversal position, so
     --   most controls never need to set this at all.
+  , ueClipChildren ∷ Bool
+    -- ^ #747: opt-in rectangular clipping of this element's
+    --   DESCENDANTS to its own current absolute bounds (position +
+    --   size) — overflow:hidden semantics. Does NOT clip the element
+    --   itself, only its children/grandchildren/etc. The EFFECTIVE
+    --   clip a descendant is subject to is the intersection of every
+    --   'ueClipChildren'-opted ancestor's own bounds, computed live by
+    --   'UI.Clipping.effectiveClip' so a move/resize takes effect
+    --   immediately with nothing to keep in sync. Defaults to 'False'
+    --   — an ordinary element does not clip its children, matching
+    --   pre-#747 behavior exactly. See "UI.Clipping" for the single
+    --   shared helper 'UI.Render' and 'UI.Manager.Query.hitsAtPointBy'
+    --   both consult so paint and hit-test can't drift apart.
   , ueTextBuffer  ∷ Maybe TextBuffer
   , ueTooltip     ∷ Maybe TooltipContent
     -- ^ Optional hover tooltip. When set and the cursor lingers over
