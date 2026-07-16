@@ -27,7 +27,11 @@ import Engine.Scripting.Lua.API.WorldQuery.Lookup (worldStateByPage)
 --       id,        -- the LocationDef id (#88) placed there
 --       bounds,    -- { min_x, min_y, max_x, max_y } — absolute,
 --                  --   inclusive tile bounds (#777), anchored at (gx,gy)
---       discovery_margin }  -- the def's discovery margin (#777)
+--       discovery_margin,  -- the def's discovery margin (#777)
+--       discovered }  -- has a player-faction unit entered the
+--                     --   discovery-margin halo yet (#780)? Always
+--                     --   present, independent of whether `id` has a
+--                     --   registered def.
 --   `bounds` / `discovery_margin` are OMITTED when `id` has no matching
 --   registered def (e.g. its YAML hasn't been (re)loaded this session),
 --   so the query stays total rather than crashing or fabricating
@@ -72,6 +76,9 @@ worldListPlacedLocationsFn env = do
                 Lua.setfield (-2) "gy"
                 Lua.pushstring (TE.encodeUtf8 lid)
                 Lua.setfield (-2) "id"
+                Lua.pushboolean (HS.member (ChunkCoord cx cy)
+                                    (wgpLocationDiscovered params))
+                Lua.setfield (-2) "discovered"
                 pushDefBounds defs lid gx gy
                 Lua.rawseti (-2) i
             return 1

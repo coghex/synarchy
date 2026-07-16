@@ -10,6 +10,7 @@ import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
 import World.Thread.ItemTemp (tickItemTemperatures)
 import World.Thread.Power (tickPowerNetworks)
+import World.Thread.Discovery (tickLocationDiscovery)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
@@ -69,6 +70,16 @@ tickWorldTime env dt = do
                     -- charges wired batteries over the same simulated
                     -- day/night cycle.
                     tickPowerNetworks env pageId worldState dtGame
+
+    -- Location discovery (#780): every LOADED page, not just the
+    -- visible one(s) — a player-controlled unit can be simulated on a
+    -- hidden page and must still trigger discovery there — and
+    -- independent of the pause flag above, since a freshly loaded
+    -- (auto-paused) save with a unit already standing in a location's
+    -- margin must discover it on the very next tick rather than
+    -- waiting for an unpause.
+    forM_ (wmWorlds manager) $ \(pageId, worldState) →
+        tickLocationDiscovery env pageId worldState
 
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of

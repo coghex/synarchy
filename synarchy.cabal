@@ -479,6 +479,7 @@ library
                      Location.Overlay.Types
                      Location.Overlay
                      Location.Placement
+                     Location.Discovery
                      Engine.Asset.YamlLocations
                      Engine.Scripting.Lua.API.Locations
                      LootTable.Types
@@ -530,6 +531,7 @@ library
                      World.Thread.Time
                      World.Thread.ItemTemp
                      World.Thread.Power
+                     World.Thread.Discovery
                      World.Thread.ChunkLoading
                      World.Thread.Command
                      World.Thread.Command.Basic
@@ -971,6 +973,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.Spoil
+                   Test.Headless.World.LocationDiscovery
                    Test.Headless.Combat.Damage
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
@@ -1023,6 +1026,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scene.BatchMerge
                    Test.Headless.Render.PanMargin
                    Test.Headless.Location.Bounds
+                   Test.Headless.Location.Discovery
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
     build-depends: base >=4.20 && <5

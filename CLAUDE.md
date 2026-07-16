@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Build:** `cabal build all` (does NOT build test suites — use `cabal build synarchy-test-headless` explicitly)
 - **Run:** `cabal run synarchy`
 - **Run tests:** see **Testing Tiers** below — pick the cheapest tier that covers the change; don't run the gates as an iteration loop
-- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/haskell_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). Not an iteration loop — run it once before pushing.
+- **Pre-push gate:** `make ci` runs the exact checks CI runs (`.github/workflows/ci.yml`) — warning-clean (`-Werror`) build of the library/exe + both test suites, the headless hspec suite, `test_audit.py`, `tools/lua_module_budget.py`, `tools/haskell_module_budget.py`, `tools/persistence_inventory_audit.py` (+ its own `tools/test_persistence_inventory_audit.py`), and `world_check.py --quick` — so a green `make ci` predicts a green CI. It uses the default prod profile and your warm `dist-newstyle`, and restores any existing `cabal.project.local` on exit (see `tools/ci-local.sh`). It is not an iteration loop and agents must not run it automatically before opening a PR; run it only when the user explicitly requests a full local CI/pre-push validation.
 - **Debug output:** Set `ENGINE_DEBUG=Vulkan,Graphics,etc...` environment variable
 
 ## Testing Tiers
@@ -20,15 +20,16 @@ stays in seconds and the expensive gates run once, at the end.
    `cabal test synarchy-test-headless --test-options='--match "<describe name>"'`.
    For worldgen-output sanity: `python3 tools/world_check.py --quick`
    (6 tagged seeds × 1 dump, <1 min).
-2. **Before reporting done (~3 min total).**
-   `cabal test synarchy-test-headless` (~1 min — one engine, worlds
-   memoized across specs) · `python3 tools/world_check.py` (21 seeds,
-   ~2 min) · `python3 tools/test_audit.py` (instant) ·
-   `python3 tools/lua_module_budget.py` (instant — #538/#541/#545
-   line-budget guard for split Lua modules such as unit AI,
-   unit-resource physiology, and the debug overlay) ·
-   `python3 tools/haskell_module_budget.py` (instant — #787's Haskell
-   equivalent, guarding the input-thread facade + dispatch split).
+2. **Before reporting done — select only relevant checks.** Start with a
+   targeted headless describe (`--match`) that exercises the changed behavior
+   and add the focused probe named by the affected subsystem when one exists.
+   Run `world_check.py --quick` only for worldgen-output changes; run the
+   persistence inventory audit only when its root owners/registry or inventory
+   docs change; run a module-budget guard only when changing one of its capped
+   modules; and run `test_audit.py` only when changing `world_audit.py` or
+   `world_check.py`. Do not run the whole headless suite, the 21-seed world
+   check, or `make ci` by default. CI remains the full-suite authority; use
+   `make ci` locally only on an explicit user request.
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (adds the
    w128 volcano exposure case, +~25 s), then re-capture baselines
@@ -58,13 +59,15 @@ edit baseline JSON by hand — regenerate with `world_baseline.py`.
 
 CI (`.github/workflows/ci.yml`, #436) runs on every PR and push to
 master, on Linux: full build with `-Werror` (the #435 warning-clean
-state is enforced, dependency warnings excluded), both test-suite
-builds, the headless suite, `test_audit.py`, `tools/lua_module_budget.py`
+state is enforced, dependency warnings excluded), the headless suite,
+`test_audit.py`, `tools/lua_module_budget.py`
 (#538/#541/#545 — fails if a Lua module split to stay reviewable grows
 back past its agreed line budget), `tools/haskell_module_budget.py`
 (#787 — the same guard for the Haskell input-thread facade split), and
-`world_check --quick` — all blocking. Worldgen output proved bit-identical between
-macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
+`world_check --quick` — all blocking when selected. The graphical test-suite
+build and `world_check --quick` are path-selective on PRs (the full headless
+suite is always blocking); both always run on pushes to master. Worldgen output
+proved bit-identical between macOS/aarch64 (where baselines are captured) and Linux/x86_64, so the
 tracked baselines are platform-agnostic; a worldgen-output PR that
 skips its tier-3 rebaseline fails CI.
 
@@ -1075,6 +1078,71 @@ harvestFlora yield here" (the query/action contract). Tagged calls
 chop-claim check keys on `regrowthRemaining` + `tags`, NOT
 `harvestable` — a designated tree must stay choppable as a sprout or
 standing dead. Per-instance gated state lives in `getFloraGrowthAt`.
+
+### Testing location discovery headless (#780)
+
+Placed locations gain a persisted per-page "discovered" flag —
+undiscovered until a player-faction unit enters the definition's
+`discovery_margin` halo around its authoritative bounds (#777). A
+location becomes discovered the instant a player-faction unit's tile
+falls inside `Location.Bounds.expandBounds discovery_margin bounds`
+(seam-aware, inclusive of the boundary); "player-faction" is the
+current player-control contract — `uiFactionId == "player"` (portal-
+spawned units use this tag), so hostile/wildlife/neutral/debug
+factions never discover a location just by standing in it. The pure
+transition detector is `Location.Discovery.findDiscoveries`; the
+engine-owned tick that mutates state and emits the player event is
+`World.Thread.Discovery.tickLocationDiscovery`, run every world-thread
+tick for **every loaded page** (not just the visible one — a
+player-controlled unit can be simulated on a hidden page) and
+independent of the pause flag, so a freshly loaded (auto-paused) save
+with a unit already standing in the margin discovers it immediately.
+Discovery is a one-way, idempotent transition (`undiscovered →
+discovered`); stamping a location's geometry (#424) or spawning its
+contents (#90) never discovers it, and discovering it never touches
+those flags — all three booleans persist independently in
+`WorldGenParams` (`wgpLocationStamped` / `wgpLocationContentsSpawned` /
+`wgpLocationDiscovered`).
+
+A successful first transition emits one player event
+(category `location_discovery`) via the normal
+`engine.emitEventForUnit`-style surface — `"Discovered: <label>"`,
+carrying the discovering unit's id — so it shows up through
+`engine.getEventLog()` like any other event. Repeated entry (leaving
+and returning, or simply still standing there next tick) never emits a
+duplicate. Because the tick runs on every loaded page rather than only
+the active one, every discovery event also names its source page
+(`peSourcePage` / the query's `page` field) — but only carries the
+location's anchor tile as clickable coords
+(`Engine.PlayerEvent.Emit.emitEventFullOnPage`) when the discovery
+happened on the page that's CURRENTLY active; a hidden-page discovery
+omits coords entirely so its popup can never silently pan the visible
+page's camera to a different page's tile.
+
+```bash
+# Per placed location: cx, cy, gx, gy, id, discovered, and (when the
+# id has a registered def) bounds + discovery_margin.
+echo 'return world.listPlacedLocations()' | nc -w 5 localhost 9008
+```
+
+Turnkey harness: **`python3 tools/location_content_probe.py`** (extended
+for #780; manual-only/scenario-heavy, see `ci_probes.py --status` — it
+needs real worldgen and boots the engine four times) — on top of its
+existing ruin content-spawn coverage, asserts stamping + content-
+spawning do not discover a ruin, a hostile unit standing on it doesn't
+either, a player-faction unit within the margin does (flipping
+`world.listPlacedLocations()`'s `discovered` field and emitting exactly
+one attributed `location_discovery` event), leaving and returning emits
+no duplicate, and the discovered flag (but not the one-time event, since
+player events are per-session and never saved) survives a save → quit →
+fresh restart → load. The Hspec gate is the `Location discovery` group
+(`cabal test synarchy-test-headless --test-options='--match "Location
+discovery"'`): `Location.Discovery.findDiscoveries` against bounds/
+margin/faction/page/seam-wrap/idempotency scenarios (pure, no engine),
+`WorldGenParams`'s discovery-state save round-trip and independence from
+the stamped/contents-spawned flags, and (needing a bare
+`initializeEngineHeadless` env, no world/unit thread) `tickLocationDiscovery`
+itself mutating state and emitting the real player event.
 
 ### Logging: event / combat / injury
 

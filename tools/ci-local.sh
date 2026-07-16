@@ -38,17 +38,17 @@ fi
 # Identical to the CI "Configure" step: -Werror for the local package only.
 printf 'package synarchy\n  ghc-options: -Werror\n' > "$LOCAL"
 
-echo "==> [1/8] build (library + executable, -Werror)"
+echo "==> [1/9] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/8] build test suites"
+echo "==> [2/9] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/8] headless hspec suite"
+echo "==> [3/9] headless hspec suite"
 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/8] test audit"
+echo "==> [4/9] test audit"
 python3 tools/test_audit.py
 
 echo "==> [5/9] lua module line budget"
