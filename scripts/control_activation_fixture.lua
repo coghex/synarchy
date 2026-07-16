@@ -27,6 +27,33 @@ function M.onCheckboxClick(elemHandle)
     return checkbox.handleClickByElement(elemHandle)
 end
 
+-- #745 review round 7: the round 6 coverage above only reached
+-- checkbox/slider — extend to toggle/tabbar/list/dropdown's own real
+-- registered callback names too, so keyboard activation is proven
+-- against every widget family's actual production handler, not just
+-- two of them plus raw fixture-only stand-ins (M.onFixtureXClick
+-- below).
+local toggle = require("scripts.ui.toggle")
+local tabbar = require("scripts.ui.tabbar")
+local uiList = require("scripts.ui.list")
+local dropdown = require("scripts.ui.dropdown")
+
+function M.onToggleClick(elemHandle)
+    return toggle.handleClickByElement(elemHandle)
+end
+
+function M.onTabClick(elemHandle)
+    return tabbar.handleCallback("onTabClick", elemHandle)
+end
+
+function M.onListItemClick(elemHandle)
+    return uiList.handleCallback("onListItemClick", elemHandle)
+end
+
+function M.onDropdownClick(elemHandle)
+    return dropdown.handleCallback("onDropdownClick", elemHandle)
+end
+
 function M.resetState()
     M.state = {
         checkboxClicks = 0,

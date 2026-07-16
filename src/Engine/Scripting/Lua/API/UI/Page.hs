@@ -14,29 +14,9 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
-import Engine.Scripting.Lua.Types (LuaMsg(..))
-import qualified Engine.Core.Queue as Q
+import Engine.Scripting.Lua.API.UI.Focus (applyAndNotifyControlFocus)
 import UI.Types
 import UI.Manager
-
--- | Apply a manager mutation that may proactively clear
---   'upmControlFocus' as a side effect (hidePage/deletePage) and
---   report the transition via 'LuaUIControlFocusChanged' when it
---   actually changes — #745 review rounds 4/6: a pure mutation the
---   calling script may have no idea also moved the keyboard focus it
---   owns (mirrored in 'Engine.Scripting.Lua.API.UI.Hierarchy' for
---   delete/detach).
-applyAndNotifyControlFocus ∷ EngineEnv → (UIPageManager → UIPageManager) → IO ()
-applyAndNotifyControlFocus env f = do
-    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \mgr →
-        let mgr' = f mgr
-        in ( mgr'
-           , if getControlFocus mgr' ≡ getControlFocus mgr
-             then Nothing else Just (getControlFocus mgr')
-           )
-    case mChanged of
-        Just newFocus → Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
-        Nothing → pure ()
 
 -- | UI.newPage(name, layer) -> pageHandle
 uiNewPageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

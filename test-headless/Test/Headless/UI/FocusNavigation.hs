@@ -584,7 +584,187 @@ spec = do
                 afterValue ← evalDebugFixture ls "return require('scripts.ui.slider').getValue(_G.__slId)"
                 afterValue `shouldBe` "51"
 
+            it "Enter activates a REAL toggle.new() group's own onToggleClick handler, actually changing toggle.getSelectedIndex (#745 review round 7)" $ \env → do
+                resetAll env
+                (ls, stateRef) ← newFixtureLuaBackend env
+                _ ← evalDebugFixture ls
+                    "local tg = require('scripts.ui.toggle'); tg.init(); \
+                    \local tex = engine.loadTexture('assets/textures/ui/highlight.png'); \
+                    \local pg = UI.newPage('t_tg', 'hud'); UI.showPage(pg); \
+                    \local id = tg.new({name='test_tg', x=0, y=0, page=pg, items={ \
+                    \  {name='a', texDefault=tex, texSelected=tex}, \
+                    \  {name='b', texDefault=tex, texSelected=tex} \
+                    \}}); \
+                    \local handles = tg.getElementHandles(id); \
+                    \_G.__tgId = id; _G.__tgHandle2 = handles[2]; \
+                    \return true"
+                beforeIdx ← evalDebugFixture ls
+                    "return require('scripts.ui.toggle').getSelectedIndex(_G.__tgId)"
+                beforeIdx `shouldBe` "1"
+                handle2Text ← evalDebugFixture ls "return _G.__tgHandle2"
+                let handle2 = ElementHandle (read (T.unpack handle2Text))
+                mgr' ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setControlFocus handle2 mgr')
+                pressKey env GLFW.Key'Enter noMods
+                processLuaMsgs env ls stateRef
+                afterIdx ← evalDebugFixture ls
+                    "return require('scripts.ui.toggle').getSelectedIndex(_G.__tgId)"
+                afterIdx `shouldBe` "2"
+
+            it "Enter activates a REAL tabbar.new() instance's own onTabClick handler, actually changing tabbar.getSelectedIndex (#745 review round 7)" $ \env → do
+                resetAll env
+                (ls, stateRef) ← newFixtureLuaBackend env
+                _ ← evalDebugFixture ls
+                    "local tb = require('scripts.ui.tabbar'); tb.init(); \
+                    \local pg = UI.newPage('t_tb', 'hud'); UI.showPage(pg); \
+                    \local id = tb.new({name='test_tb', x=0, y=0, page=pg, font=1, tabs={ \
+                    \  {name='Tab1'}, {name='Tab2'} \
+                    \}}); \
+                    \local h2 = nil; \
+                    \for _, d in ipairs(tb.dump()) do if d.name == 'Tab2' then h2 = d.handle end end; \
+                    \_G.__tbId = id; _G.__tbHandle2 = h2; \
+                    \return true"
+                beforeIdx ← evalDebugFixture ls
+                    "return require('scripts.ui.tabbar').getSelectedIndex(_G.__tbId)"
+                beforeIdx `shouldBe` "1"
+                handle2Text ← evalDebugFixture ls "return _G.__tbHandle2"
+                let handle2 = ElementHandle (read (T.unpack handle2Text))
+                mgr' ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setControlFocus handle2 mgr')
+                pressKey env GLFW.Key'Enter noMods
+                processLuaMsgs env ls stateRef
+                afterIdx ← evalDebugFixture ls
+                    "return require('scripts.ui.tabbar').getSelectedIndex(_G.__tbId)"
+                afterIdx `shouldBe` "2"
+
+            it "Enter activates a REAL list.new() instance's own onListItemClick handler, actually changing list.getSelectedIndex (#745 review round 7)" $ \env → do
+                resetAll env
+                (ls, stateRef) ← newFixtureLuaBackend env
+                _ ← evalDebugFixture ls
+                    "local lst = require('scripts.ui.list'); lst.init(); \
+                    \local pg = UI.newPage('t_ls', 'hud'); UI.showPage(pg); \
+                    \local id = lst.new({name='test_ls', x=0, y=0, page=pg, font=1, items={ \
+                    \  {text='Item1', value='v1'}, {text='Item2', value='v2'} \
+                    \}}); \
+                    \local h2 = nil; \
+                    \for _, d in ipairs(lst.dump()) do if d.label == 'Item2' then h2 = d.handle end end; \
+                    \_G.__lsId = id; _G.__lsHandle2 = h2; \
+                    \return true"
+                beforeIdx ← evalDebugFixture ls
+                    "return require('scripts.ui.list').getSelectedIndex(_G.__lsId) == nil"
+                beforeIdx `shouldBe` "true"
+                handle2Text ← evalDebugFixture ls "return _G.__lsHandle2"
+                let handle2 = ElementHandle (read (T.unpack handle2Text))
+                mgr' ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setControlFocus handle2 mgr')
+                pressKey env GLFW.Key'Enter noMods
+                processLuaMsgs env ls stateRef
+                afterIdx ← evalDebugFixture ls
+                    "return require('scripts.ui.list').getSelectedIndex(_G.__lsId)"
+                afterIdx `shouldBe` "2"
+
+            it "Enter activates a REAL dropdown.new() instance's own onDropdownClick (arrow) handler, actually opening it via dropdown.isOpen (#745 review round 7)" $ \env → do
+                resetAll env
+                (ls, stateRef) ← newFixtureLuaBackend env
+                _ ← evalDebugFixture ls
+                    "local dd = require('scripts.ui.dropdown'); dd.init(); \
+                    \local pg = UI.newPage('t_dd', 'hud'); UI.showPage(pg); \
+                    \local id = dd.new({name='test_dd', x=0, y=0, page=pg, font=1, \
+                    \  options={{value='a', text='Alpha'}, {value='b', text='Beta'}}, default='a'}); \
+                    \_G.__ddId = id; _G.__ddArrow = dd.getArrowHandle(id); \
+                    \return true"
+                beforeOpen ← evalDebugFixture ls
+                    "return require('scripts.ui.dropdown').isOpen(_G.__ddId)"
+                beforeOpen `shouldBe` "false"
+                arrowText ← evalDebugFixture ls "return _G.__ddArrow"
+                let arrowHandle = ElementHandle (read (T.unpack arrowText))
+                mgr' ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (setControlFocus arrowHandle mgr')
+                pressKey env GLFW.Key'Enter noMods
+                processLuaMsgs env ls stateRef
+                afterOpen ← evalDebugFixture ls
+                    "return require('scripts.ui.dropdown').isOpen(_G.__ddId)"
+                afterOpen `shouldBe` "true"
+
+    around withHeadlessEngine $
+        describe "Lua-facing delete/detach control-focus notifications (#745 review round 7)" $ do
+            it "UI.deletePage(p) clears control focus on a control it owns and notifies exactly once" $ \env →
+                assertDeleteClearsAndNotifiesControlFocus env
+                    "UI.deletePage(_G.__delPg); return true"
+
+            it "UI.deleteElement(el) clears control focus on the deleted element and notifies exactly once" $ \env →
+                assertDeleteClearsAndNotifiesControlFocus env
+                    "UI.deleteElement(_G.__delEl); return true"
+
+            it "UI.removeElement(el) clears control focus on the detached element and notifies exactly once" $ \env →
+                assertDeleteClearsAndNotifiesControlFocus env
+                    "UI.removeElement(_G.__delEl); return true"
+
+            it "UI.removeFromPage(p, el) clears control focus on the detached element and notifies exactly once" $ \env →
+                assertDeleteClearsAndNotifiesControlFocus env
+                    "UI.removeFromPage(_G.__delPg, _G.__delEl); return true"
+
+    around withHeadlessEngine $
+        describe "scripts/ui/focus_indicator.lua visual lifecycle (#745 review round 7)" $ do
+            it "creates a 4-strip border ring on focus and destroys it on focus loss, never fully covering the control (round 6 regression: a single opaque sprite painted over the control's own content)" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local fi = require('scripts.ui.focus_indicator'); fi.init(); \
+                    \local pg = UI.newPage('t_fi', 'hud'); UI.showPage(pg); \
+                    \local el = UI.newElement('target', 40, 20, pg); \
+                    \UI.addToPage(pg, el, 0, 0); \
+                    \_G.__fiEl = el; \
+                    \return true"
+                beforeRings ← evalDebug ls
+                    "return require('scripts.ui.focus_indicator').getRingIds() == nil"
+                beforeRings `shouldBe` "true"
+                _ ← evalDebug ls
+                    "require('scripts.ui.focus_indicator').onUIControlFocusChanged(_G.__fiEl); return true"
+                ringCount ← evalDebug ls
+                    "local r = require('scripts.ui.focus_indicator').getRingIds(); return #r"
+                ringCount `shouldBe` "4"
+                allThin ← evalDebug ls
+                    "local fi = require('scripts.ui.focus_indicator'); local allThin = true; \
+                    \for _, id in ipairs(fi.getRingIds()) do \
+                    \  local info = UI.getElementInfo(id); \
+                    \  if info.width > 2 and info.height > 2 then allThin = false end \
+                    \end; \
+                    \return allThin"
+                allThin `shouldBe` "true"
+                _ ← evalDebug ls
+                    "require('scripts.ui.focus_indicator').onUIControlFocusChanged(nil); return true"
+                afterRings ← evalDebug ls
+                    "return require('scripts.ui.focus_indicator').getRingIds() == nil"
+                afterRings `shouldBe` "true"
+
 -- * Wire-integration helpers (mirrors Test.Headless.UI.ElementInputPolicy)
+
+-- | Shared body for the four delete/detach control-focus notification
+--   tests above (#745 review round 7) — only the one deletion-action
+--   Lua statement differs per binding under test; the setup (a page +
+--   a focused control, both stashed in globals) and the before/after/
+--   notification assertions are identical.
+assertDeleteClearsAndNotifiesControlFocus ∷ EngineEnv → Text → IO ()
+assertDeleteClearsAndNotifiesControlFocus env deleteLua = do
+    resetAll env
+    ls ← newBareLuaBackend env
+    _ ← evalDebug ls
+        "local pg = UI.newPage('t_del', 'hud'); \
+        \local el = UI.newElement('e_del', 10, 10, pg); \
+        \UI.addToPage(pg, el, 0, 0); \
+        \UI.setClickable(el, true); UI.setOnClick(el, 'x'); \
+        \UI.setControlFocus(el); \
+        \_G.__delPg = pg; _G.__delEl = el; \
+        \return true"
+    before ← evalDebug ls "return UI.getControlFocus() ~= nil"
+    before `shouldBe` "true"
+    _ ← drainLuaMsgs env
+    _ ← evalDebug ls deleteLua
+    after ← evalDebug ls "return UI.getControlFocus() == nil"
+    after `shouldBe` "true"
+    msgs ← drainLuaMsgs env
+    msgs `shouldSatisfy` elem (LuaUIControlFocusChanged Nothing)
 
 resetAll ∷ EngineEnv → IO ()
 resetAll env = do

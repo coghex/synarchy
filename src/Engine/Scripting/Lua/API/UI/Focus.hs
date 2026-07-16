@@ -10,12 +10,15 @@ module Engine.Scripting.Lua.API.UI.Focus
   , uiClearControlFocusFn
   , uiGetControlFocusFn
   , uiHasControlFocusFn
+  , applyAndNotifyControlFocus
   ) where
 
 import UPrelude
 import qualified HsLua as Lua
 import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.Types (LuaMsg(..))
+import qualified Engine.Core.Queue as Q
 import UI.Types
 import UI.Manager
 
@@ -63,21 +66,46 @@ uiHasFocusFn env = do
 --   read it (e.g. to render a focus indicator) and, for tests/tools,
 --   set it directly.
 
+-- | Apply a manager mutation that may change 'upmControlFocus' and
+--   report the transition via 'LuaUIControlFocusChanged' when it
+--   actually changes — #745 review round 7: the single shared
+--   implementation for every control-focus-mutating Lua binding
+--   ('uiSetControlFocusFn'/'uiClearControlFocusFn' here,
+--   'Engine.Scripting.Lua.API.UI.Page.uiHidePageFn'/'uiDeletePageFn',
+--   'Engine.Scripting.Lua.API.UI.Hierarchy.uiRemoveElementFn'/
+--   'uiDeleteElementFn'/'uiRemoveFromPageFn'). A direct
+--   'UI.setControlFocus'/'UI.clearControlFocus' call is just as much a
+--   "the calling script may not be the only consumer of this state" as
+--   a proactive clear buried inside hidePage/delete/detach — an
+--   event-driven visual consumer (the focus-ring indicator) needs the
+--   same notification either way, so this one helper backs all of it
+--   rather than three independent copies drifting apart.
+applyAndNotifyControlFocus ∷ EngineEnv → (UIPageManager → UIPageManager) → IO ()
+applyAndNotifyControlFocus env f = do
+    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        let mgr' = f mgr
+        in ( mgr'
+           , if getControlFocus mgr' ≡ getControlFocus mgr
+             then Nothing else Just (getControlFocus mgr')
+           )
+    case mChanged of
+        Just newFocus → Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+        Nothing → pure ()
+
 -- | UI.setControlFocus(elementHandle)
 uiSetControlFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiSetControlFocusFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (setControlFocus (ElementHandle $ fromIntegral e) mgr, ())
+        Just e  → Lua.liftIO $ applyAndNotifyControlFocus env $
+            setControlFocus (ElementHandle $ fromIntegral e)
         Nothing → pure ()
     return 0
 
 -- | UI.clearControlFocus()
 uiClearControlFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiClearControlFocusFn env = do
-    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-        (clearControlFocus mgr, ())
+    Lua.liftIO $ applyAndNotifyControlFocus env clearControlFocus
     return 0
 
 -- | UI.getControlFocus() -> elementHandle or nil
