@@ -259,6 +259,27 @@ spec = do
                 -- a → b → a (wrap)
                 getControlFocus mgr `shouldBe` Just a
 
+            it "Tab on a singleton focusable set wraps to the SAME handle and consumes the key, but emits no redundant notification (review round 8)" $ \env → do
+                resetAll env
+                let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
+                    (a, m2) = focusableAt "a" 0 hudH m1
+                writeIORef (uiManagerRef env) (setControlFocus a m2)
+                _ ← drainLuaMsgs env
+                pressKey env GLFW.Key'Tab noMods
+                mgr ← readIORef (uiManagerRef env)
+                getControlFocus mgr `shouldBe` Just a
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isControlFocusChanged)
+                -- The key is still consumed (not leaked to gameplay),
+                -- even though focus didn't actually transition.
+                msgs `shouldSatisfy` all (not ∘ isKeyDownEvent)
+                -- Shift+Tab wraps the same way.
+                pressKey env GLFW.Key'Tab shiftMods
+                mgrAfterShift ← readIORef (uiManagerRef env)
+                getControlFocus mgrAfterShift `shouldBe` Just a
+                msgsShift ← drainLuaMsgs env
+                msgsShift `shouldSatisfy` all (not ∘ isControlFocusChanged)
+
             it "Escape clears control focus" $ \env → do
                 resetAll env
                 let (hudH, m1) = page "hud" LayerHUD emptyUIPageManager
@@ -705,6 +726,70 @@ spec = do
                     "UI.removeFromPage(_G.__delPg, _G.__delEl); return true"
 
     around withHeadlessEngine $
+        describe "UI.setControlFocus / UI.clearControlFocus direct-API notifications (#745 review round 8)" $ do
+            it "UI.setControlFocus(el) moves control focus and notifies exactly once through the real Lua API" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local pg = UI.newPage('t_scf', 'hud'); UI.showPage(pg); \
+                    \local el = UI.newElement('e_scf', 10, 10, pg); \
+                    \UI.addToPage(pg, el, 0, 0); \
+                    \_G.__scfEl = el; \
+                    \return true"
+                before ← evalDebug ls "return UI.getControlFocus() == nil"
+                before `shouldBe` "true"
+                _ ← drainLuaMsgs env
+                _ ← evalDebug ls "UI.setControlFocus(_G.__scfEl); return true"
+                after ← evalDebug ls "return UI.getControlFocus() == _G.__scfEl"
+                after `shouldBe` "true"
+                msgs ← drainLuaMsgs env
+                length (filter isControlFocusChanged msgs) `shouldBe` 1
+
+            it "UI.clearControlFocus() clears control focus and notifies exactly once through the real Lua API" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local pg = UI.newPage('t_ccf', 'hud'); UI.showPage(pg); \
+                    \local el = UI.newElement('e_ccf', 10, 10, pg); \
+                    \UI.addToPage(pg, el, 0, 0); \
+                    \UI.setControlFocus(el); \
+                    \_G.__ccfEl = el; \
+                    \return true"
+                before ← evalDebug ls "return UI.getControlFocus() == _G.__ccfEl"
+                before `shouldBe` "true"
+                _ ← drainLuaMsgs env
+                _ ← evalDebug ls "UI.clearControlFocus(); return true"
+                after ← evalDebug ls "return UI.getControlFocus() == nil"
+                after `shouldBe` "true"
+                msgs ← drainLuaMsgs env
+                length (filter (≡ LuaUIControlFocusChanged Nothing) msgs) `shouldBe` 1
+
+            it "repeated no-op UI.setControlFocus/UI.clearControlFocus calls on an already-current state emit no duplicate event" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local pg = UI.newPage('t_noop', 'hud'); UI.showPage(pg); \
+                    \local el = UI.newElement('e_noop', 10, 10, pg); \
+                    \UI.addToPage(pg, el, 0, 0); \
+                    \_G.__noopEl = el; \
+                    \return true"
+                -- First call is a real transition (notifies once);
+                -- repeating it while already focused must not.
+                _ ← drainLuaMsgs env
+                _ ← evalDebug ls "UI.setControlFocus(_G.__noopEl); return true"
+                msgsFirst ← drainLuaMsgs env
+                length (filter isControlFocusChanged msgsFirst) `shouldBe` 1
+                _ ← evalDebug ls "UI.setControlFocus(_G.__noopEl); return true"
+                msgsRepeat ← drainLuaMsgs env
+                msgsRepeat `shouldSatisfy` all (not ∘ isControlFocusChanged)
+                -- Clearing when already unfocused is likewise a no-op.
+                _ ← evalDebug ls "UI.clearControlFocus(); return true"
+                _ ← drainLuaMsgs env
+                _ ← evalDebug ls "UI.clearControlFocus(); return true"
+                msgsClearRepeat ← drainLuaMsgs env
+                msgsClearRepeat `shouldSatisfy` all (not ∘ isControlFocusChanged)
+
+    around withHeadlessEngine $
         describe "scripts/ui/focus_indicator.lua visual lifecycle (#745 review round 7)" $ do
             it "creates a 4-strip border ring on focus and destroys it on focus loss, never fully covering the control (round 6 regression: a single opaque sprite painted over the control's own content)" $ \env → do
                 resetAll env
@@ -764,7 +849,9 @@ assertDeleteClearsAndNotifiesControlFocus env deleteLua = do
     after ← evalDebug ls "return UI.getControlFocus() == nil"
     after `shouldBe` "true"
     msgs ← drainLuaMsgs env
-    msgs `shouldSatisfy` elem (LuaUIControlFocusChanged Nothing)
+    -- #745 review round 8: exactly one transition, not merely present —
+    -- a duplicate/repeat notification would pass a bare 'elem' check.
+    length (filter (≡ LuaUIControlFocusChanged Nothing) msgs) `shouldBe` 1
 
 resetAll ∷ EngineEnv → IO ()
 resetAll env = do

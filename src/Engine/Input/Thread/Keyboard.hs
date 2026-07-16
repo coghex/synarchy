@@ -249,12 +249,20 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
             -- snapshot) — otherwise a concurrent Lua-thread mutation
             -- between that snapshot and this write could invalidate
             -- the chosen target before it's installed.
-            newFocus ← atomicModifyIORef' (uiManagerRef env) $ \m →
-                case step m (getControlFocus m) of
-                    Nothing     → (m, Nothing)
-                    Just target → (setControlFocus target m, Just target)
+            (priorFocus, newFocus) ← atomicModifyIORef' (uiManagerRef env) $ \m →
+                let prior = getControlFocus m
+                in case step m prior of
+                    Nothing     → (m, (prior, Nothing))
+                    Just target → (setControlFocus target m, (prior, Just target))
             when (isJust newFocus) $ do
-                Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+                -- #745 review round 8: a singleton focus list wraps
+                -- Tab back to the SAME handle it started on — that's
+                -- still a successful traversal (consume the key,
+                -- don't leak it to gameplay), but not an actual
+                -- transition, so only notify Lua when the handle
+                -- really changed.
+                when (newFocus ≢ priorFocus) $
+                    Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
                 markMatched "controlFocusTab"
                 writeIORef controlFocusConsumedRef True
 
