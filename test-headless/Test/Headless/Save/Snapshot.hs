@@ -307,6 +307,25 @@ spec = do
                 wpsTimeScale wps `shouldBe` 1
                 wpsToolMode wps `shouldBe` DefaultTool
 
+        it "writes the snapshot's CANONICAL building/unit allocators, never a \
+           \page-local BuildingSnapshot/UnitSnapshot's own (possibly stale) \
+           \bsnNextId/usnNextId (review round 1 regression: a page-local \
+           \counter below the validated session-wide allocator must not \
+           \silently persist a lower, id-reuse-permitting value)" $ do
+            let staleBuildings = BuildingSnapshot
+                    { bsnInstances = HM.empty, bsnNextId = 1 }
+                staleUnits = UnitSnapshot
+                    { usnInstances = HM.empty, usnNextId = 1 }
+                page = (minimalPage page1)
+                    { pgsBuildings = staleBuildings, pgsUnits = staleUnits }
+                snapStale = buildSessionSnapshot
+                    minimalGlobals { sgNextBuildingId = 42, sgNextUnitId = 42 }
+                    [page]
+                sdStale = snapshotToSaveData req snapStale
+                [wps] = sdWorlds sdStale
+            bsnNextId (wpsBuildings wps) `shouldBe` 42
+            usnNextId (wpsUnits wps) `shouldBe` 42
+
         it "uses the live camera's position only for its owner page, and \
            \duplicates its zoom/facing onto every page (matching v88's \
            \existing single-Camera2D behaviour)" $ do

@@ -76,7 +76,9 @@ snapshotToSaveData req snap = SaveData
     , sdNextItemInstanceId = snapNextItemId snap
     , sdActivePage         = snapActivePage snap
     , sdVisiblePages       = snapVisiblePages snap
-    , sdWorlds             = map (pageToWorldPageSave (snapLiveCamera snap))
+    , sdWorlds             = map (pageToWorldPageSave (snapLiveCamera snap)
+                                     (snapNextBuildingId snap)
+                                     (snapNextUnitId snap))
                                  (HM.elems (snapPages snap))
     }
   where
@@ -89,8 +91,20 @@ snapshotToSaveData req snap = SaveData
 --   behaviour exactly (there is no per-page zoom/facing to fall back
 --   to) — but now an explicit adapter decision instead of an implicit
 --   side effect of the old capture code's shared @cam@ variable.
-pageToWorldPageSave ∷ LiveCameraSnapshot → PageSnapshot → WorldPageSave
-pageToWorldPageSave cam page = WorldPageSave
+--
+--   @nextBid@/@nextUid@ are the snapshot's own CANONICAL, validated
+--   allocators (review round 1): 'pgsBuildings'/'pgsUnits' carry their
+--   own embedded 'bsnNextId'/'usnNextId' (an artifact of reusing
+--   'BuildingSnapshot'/'UnitSnapshot' as-is), but the adapter must
+--   never trust those over the snapshot's own fields — passing them
+--   through unchanged would let a page-local counter that happens to
+--   differ from (in particular, sit BELOW) the validated session-wide
+--   allocator silently defeat 'buildingAllocatorErrors'/
+--   'unitAllocatorErrors' by persisting a lower allocator than what
+--   was actually validated, permitting id reuse after load.
+pageToWorldPageSave ∷ LiveCameraSnapshot → Word32 → Word32 → PageSnapshot
+                    → WorldPageSave
+pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     { wpsPageId       = pgsPageId page
     , wpsGenParams    = pgsGenParams page
     , wpsCameraX      = cx
@@ -116,8 +130,8 @@ pageToWorldPageSave cam page = WorldPageSave
     , wpsConstructDesignations = pgsConstructDesignations page
     , wpsGroundItems  = pgsGroundItems page
     , wpsSpoilPiles   = pgsSpoilPiles page
-    , wpsBuildings    = pgsBuildings page
-    , wpsUnits        = pgsUnits page
+    , wpsBuildings    = (pgsBuildings page) { bsnNextId = nextBid }
+    , wpsUnits        = (pgsUnits page) { usnNextId = nextUid }
     , wpsUnitSimStates = pgsUnitSimStates page
     , wpsFloraHarvests = pgsFloraHarvests page
     , wpsChopDesignations = pgsChopDesignations page
