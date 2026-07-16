@@ -163,7 +163,7 @@ not replace" for the full writeup and the responsible future child.
 | `wsGenParamsRef` | Persist exactly | — | `wpsGenParams`; deliberately meaningful seed data (contract §1) | `tools/multiworld_save_probe.py` |
 | `wsTimeRef` | Persist exactly | — | `wpsTimeHour`/`wpsTimeMinute` | `tools/save_pause_probe.py` |
 | `wsDateRef` | Persist exactly | — | `wpsDateYear`/`wpsDateMonth`/`wpsDateDay` | `tools/flora_growth_probe.py` |
-| `wsTimeScaleRef` | **Exclude (new format)** | — | v82 currently persists via `wpsTimeScale`; contract §1/§5 retarget this to Exclude — the pre-save speed is not part of the contract. Not a runtime change in this issue. | `tools/save_pause_probe.py` (must be updated by whichever child implements this) |
+| `wsTimeScaleRef` | Exclude | — | **Implemented by #757/#758**: `World.Save.Snapshot.PageSnapshot` has no time-scale field at all; the temporary adapter fabricates `wpsTimeScale = 1` for every page, unconditionally. | `tools/save_pause_probe.py` |
 | `wsZoomCacheRef` | Rebuild | loaded chunk data | render cache | none yet |
 | `wsQuadCacheRef` | Rebuild | loaded chunk data | render cache | none yet |
 | `wsQuadCacheGenRef` | Rebuild | — | cache generation counter | none yet |
@@ -254,9 +254,9 @@ prior fields (no cross-page ordering requirement):
 | `wpsDateYear` | Persist exactly | — | none beyond type-correctness | `tools/flora_growth_probe.py` |
 | `wpsDateMonth` | Persist exactly | — | none beyond type-correctness (not range-checked against the world's calendar at load) | `tools/flora_growth_probe.py` |
 | `wpsDateDay` | Persist exactly | — | none beyond type-correctness (not range-checked against the world's calendar at load) | `tools/flora_growth_probe.py` |
-| `wpsTimeScale` | **Exclude (new-format target differs)** | n/a (excluded) | n/a | v82 persists it; the contract retargets it to Exclude (contract §1, "the pre-save speed is not persisted") — a future runtime child's change, not this issue's. `tools/save_pause_probe.py` currently depends on the v82 behavior and must be updated alongside that change. |
+| `wpsTimeScale` | Exclude (legacy field fabricated by the adapter) | n/a | n/a | **Implemented by #757, cleanly modeled by #758** (contract §1, "the pre-save speed is not persisted"): the field is still WRITTEN — v88's positional format can't drop it — but `World.Save.Snapshot.Adapter.snapshotToSaveData` always fabricates `1`, never a captured value (#757 already hardcoded this at the old inline call site; #758 gives it an explicit, tested home). `tools/save_pause_probe.py` was updated by #757 to match. |
 | `wpsMapMode` | Persist exactly | — | none beyond type-correctness | none yet |
-| `wpsToolMode` | **Reset to default (new-format target differs)** | n/a (reset, not restored) | always `DefaultTool` regardless of the stored value | v82 writes the field, but load already ignores it and resets to `DefaultTool` per #103 — a currently-dead field being formally reclassified, not a behavior change; a future format could drop it entirely. None yet as a dedicated test. |
+| `wpsToolMode` | Reset to default (legacy field fabricated by the adapter) | n/a (reset, not restored) | always `DefaultTool` regardless of the stored value | v82 writes the field, but load already ignores it and resets to `DefaultTool` per #103 — a currently-dead field. **#758**: `World.Save.Snapshot.PageSnapshot` has no tool-mode field at all; the adapter fabricates `DefaultTool` for every page, so the "no captured value, only a fixed default" contract is now explicit at the type level, not just at load time. |
 | `wpsEdits` | Persist exactly | `wpsGenParams` (edits replay onto regenerated terrain) | replayed edits must reproduce the pre-save surface exactly for every edited tile | `tools/multiworld_save_probe.py`, `tools/world_check.py` (determinism) |
 | `wpsMineDesignations` | Persist exactly | referenced tile coordinates must be within the page | a claimant referencing a unit that failed to restore is not currently detected/cleared | none yet |
 | `wpsConstructDesignations` | Persist exactly | referenced tile coordinates must be within the page | same claimant caveat as `wpsMineDesignations` | `tools/construction_probe.py` |
@@ -397,7 +397,7 @@ name against the classifications below.
 | `unit_resources` | `scripts/unit_resources.lua:68` | global (per-id cache) | Reset to default | — | no serializer; `alerts.resetOnLoad()` must clear the per-unit alert-debounce cache on every load, including a load with no blob at all — deliberately never persisted so a reused unit id (post `umNextId` rewind) can't inherit stale suppression state | none yet |
 | `building_spawn` | `scripts/building_spawn.lua:274` | global (per-id state keyed inside the blob) | Persist exactly (opaque blob) | live building ids must already be restored (`bmInstances`) | same reconcile requirement as `unit_ai`; NOTE the roster-countdown itself is NOT here — it lives on `BuildingInstance` and is covered under `wpsBuildings` in §4 | none yet |
 | `pause` (`paused` field) | `scripts/pause.lua:127` | global | Exclude (already dead) | — | the blob's `paused` value is read but ignored at load; `enginePausedRef`/`sdEnginePaused` is authoritative (see §1) | `tools/save_pause_probe.py` |
-| `pause` (`prevTimeScale` field) | `scripts/pause.lua:127` | global | **Exclude (new-format target differs)** | — | currently persisted and restored; contract §1 ("the pre-save speed is not persisted") retargets this to Exclude. Not a runtime change in this issue — flagged for whichever child implements it (same child as `wpsTimeScale`, see §4). | `tools/save_pause_probe.py` (must be updated alongside) |
+| `pause` (`prevTimeScale` field) | `scripts/pause.lua:127` | global | Exclude | — | **Implemented by #757** (contract §1, "the pre-save speed is not persisted"): `pause.lua`'s own `serializeAll` blob no longer writes `prevTimeScale` at all, and `onSaveLoaded`/deserialize always reset it to `1.0` regardless of what an older save's blob contains. | `tools/save_pause_probe.py` |
 
 ## 8. Camera / world-view / UI / tool / selection state
 
@@ -451,16 +451,21 @@ definition a persisted instance refers to fails loading per contract §4.
 ## Summary: what's actually new here vs. what v82 already does
 
 Every classification above matches v82's current behavior **except**
-four, none of them implemented by this issue:
+four, none of them implemented by this issue (#756):
 
-1. `wsTimeScaleRef` / `wpsTimeScale` — v82 persists it; target is
+1. `wsTimeScaleRef` / `wpsTimeScale` — v82 persisted it; target was
    Exclude (contract §1, "the pre-save speed is not persisted").
-2. `pause.lua`'s `prevTimeScale` — v82 persists and restores it; target
-   is Exclude (same rule).
+   **Implemented by #757/#758**: see the row above and CLAUDE.md's
+   "Session snapshot (#758, save-overhaul A3)" note.
+2. `pause.lua`'s `prevTimeScale` — v82 persisted and restored it;
+   target was Exclude (same rule). **Implemented by #757.**
 3. `wsToolModeRef` / `wpsToolMode` — v82 writes the field, but the field
    is already dead at load (overridden to `DefaultTool` by #103); this
-   is a reclassification of already-dead behavior, not a functional
-   change.
+   was a reclassification of already-dead behavior, not a functional
+   change at the time. **#758** additionally removed the field from
+   `World.Save.Snapshot.PageSnapshot` entirely, so the adapter's
+   `DefaultTool` fabrication is now the only source of the legacy
+   field's value.
 4. `wmWorlds`/`wmVisible` (i.e. the load path as a whole) — v82's
    `handleWorldLoadSaveCommand` deliberately MERGES a loaded save into
    whatever's already live, preserving unrelated pages (#191/#218);

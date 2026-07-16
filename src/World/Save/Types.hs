@@ -529,7 +529,7 @@ activeWorldPage sd =
 data BuildingSnapshot = BuildingSnapshot
     { bsnInstances ∷ !(HM.HashMap BuildingId BuildingInstanceSnapshot)
     , bsnNextId    ∷ !Word32
-    } deriving (Show, Serialize, Generic)
+    } deriving (Show, Eq, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingInstance`. Drops `biTexture`
 --   (runtime asset handle, meaningless across sessions — re-resolved
@@ -546,7 +546,7 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
     , bisBuildProgress ∷ !Float
     , bisMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstance])
     , bisStorage           ∷ ![ItemInstance]
-    } deriving (Show, Serialize, Generic)
+    } deriving (Show, Eq, Serialize, Generic)
 
 -- | Build a snapshot from a live BuildingManager, restricted to the world
 --   being saved (@page@). The manager is global across worlds, so an
@@ -633,7 +633,7 @@ fromBuildingInstanceSnapshot page def s = BuildingInstance
 data UnitSnapshot = UnitSnapshot
     { usnInstances ∷ !(HM.HashMap UnitId UnitInstanceSnapshot)
     , usnNextId    ∷ !Word32
-    } deriving (Show, Serialize, Generic)
+    } deriving (Show, Eq, Serialize, Generic)
 
 -- | Persistable snapshot of `UnitInstance`. Drops `uiTexture` +
 --   `uiDirSprites` (runtime asset handles, re-resolved from the def at
@@ -685,7 +685,7 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
     , uisName        ∷ !Text
       -- ^ v57: persistent per-unit display name (#264). "" for unnamed
       --   units. Appended last — Serialize roundtrip is positional.
-    } deriving (Show, Serialize, Generic)
+    } deriving (Show, Eq, Serialize, Generic)
 
 -- | Build a snapshot from a live UnitManager, restricted to the world
 --   being saved (@page@). The manager is global across worlds, so an

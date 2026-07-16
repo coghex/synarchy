@@ -699,6 +699,8 @@ library
                      World.Region.Types
                      World.State.Types
                      World.Save.Types
+                     World.Save.Snapshot
+                     World.Save.Snapshot.Adapter
                      World.Save.Serialize
                      World.Scale
                      World.Slope
@@ -962,6 +964,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.Save.Barrier
+                   Test.Headless.Save.Snapshot
                    Test.Headless.World.Identity
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.SelectTileZ
