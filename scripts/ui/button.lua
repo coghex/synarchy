@@ -214,6 +214,23 @@ end
 -- Hover Handling
 -----------------------------------------------------------
 
+-- #745 review round 4: keyboard control focus (below) — declared here
+-- so refreshVisualState can be shared by hover/mouse-up/focus-change
+-- handling, keeping the focus indicator DURABLE (an unrelated
+-- onHoverLeave/onMouseUp on the SAME button must not clobber it).
+local focusedId = nil
+
+-- The button's correct visual for its CURRENT state, independent of
+-- which specific event just fired: "clicked" always wins (an in-flight
+-- press), otherwise "hovered" whenever the button holds keyboard
+-- control focus (real mouse hover uses the identical placeholder
+-- texture — see button.onUIControlFocusChanged), else "normal".
+local function refreshVisualState(id)
+    local btn = buttons[id]
+    if not btn or btn.state == "clicked" then return end
+    button.setState(id, id == focusedId and "hovered" or "normal")
+end
+
 function button.onHoverEnter(elemHandle)
     local id = button.findByElementHandle(elemHandle)
     if id then
@@ -227,7 +244,7 @@ end
 function button.onHoverLeave(elemHandle)
     local id = button.findByElementHandle(elemHandle)
     if id then
-        button.setState(id, "normal")
+        refreshVisualState(id)
     end
 end
 
@@ -240,7 +257,7 @@ function button.onMouseUp()
         if btn.state == "clicked" then
             -- If mouse is still over the button, go to hovered; otherwise normal
             -- For simplicity, go to normal — the next hover poll will fix it
-            button.setState(id, "normal")
+            refreshVisualState(id)
         end
     end
 end
@@ -249,21 +266,16 @@ end
 -- Keyboard Control Focus (#745)
 -----------------------------------------------------------
 
-local focusedId = nil
-
 -- Reference implementation proving LuaUIControlFocusChanged drives
--- real visible state (#745 review round 3) — reuses the existing
+-- real visible state (#745 review round 3/4) — reuses the existing
 -- hovered texture as a functional placeholder for a dedicated focus
 -- ring (no such asset exists yet; a distinct texture is a follow-up
 -- art pass, same convention as this epic's other placeholder assets).
 function button.onUIControlFocusChanged(elemHandle)
-    if focusedId and buttons[focusedId] and buttons[focusedId].state ~= "clicked" then
-        button.setState(focusedId, "normal")
-    end
+    local previousFocusedId = focusedId
     focusedId = button.findByElementHandle(elemHandle)
-    if focusedId and buttons[focusedId].state ~= "clicked" then
-        button.setState(focusedId, "hovered")
-    end
+    if previousFocusedId then refreshVisualState(previousFocusedId) end
+    if focusedId then refreshVisualState(focusedId) end
 end
 
 -----------------------------------------------------------

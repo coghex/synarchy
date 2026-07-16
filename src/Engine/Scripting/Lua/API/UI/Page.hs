@@ -14,6 +14,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.Types (LuaMsg(..))
+import qualified Engine.Core.Queue as Q
 import UI.Types
 import UI.Manager
 
@@ -57,13 +59,27 @@ uiShowPageFn env = do
         Nothing → pure ()
     return 0
 
--- | UI.hidePage(pageHandle)
+-- | UI.hidePage(pageHandle) — #745 review round 4: hidePage proactively
+--   clears upmControlFocus (see UI.Manager.Page) for a control focused
+--   on the hidden page, same as it already does for text focus. That's
+--   a pure mutation with no notification of its own, and unlike a
+--   direct UI.clearControlFocus() call the calling script may have no
+--   idea it happened — report it here so a Lua focus-ring consumer
+--   (button.lua) doesn't keep pointing at a page that's gone.
 uiHidePageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiHidePageFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
-        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (hidePage (PageHandle $ fromIntegral n) mgr, ())
+        Just n → Lua.liftIO $ do
+            mChanged ← atomicModifyIORef' (uiManagerRef env) $ \mgr →
+                let mgr' = hidePage (PageHandle $ fromIntegral n) mgr
+                in ( mgr'
+                   , if getControlFocus mgr' ≡ getControlFocus mgr
+                     then Nothing else Just (getControlFocus mgr')
+                   )
+            case mChanged of
+                Just newFocus → Q.writeQueue (luaQueue env) (LuaUIControlFocusChanged newFocus)
+                Nothing → pure ()
         Nothing → pure ()
     return 0
 

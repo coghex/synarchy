@@ -225,9 +225,15 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         -- priority automatically. Validated the same way text focus
         -- already is (belt-and-suspenders repair against a
         -- hidden/deleted/disabled/detached/out-of-scope control).
-        mgr0 ← readIORef (uiManagerRef env)
-        let (mgr1, controlFocus) = validateControlFocusIn mgr0
-        writeIORef (uiManagerRef env) mgr1
+        -- #745 review round 4: one atomic transition, not a separate
+        -- readIORef/writeIORef pair — the Lua thread mutates this same
+        -- uiManagerRef concurrently (element create/delete/visibility
+        -- etc.), and a plain write-back here would silently DISCARD
+        -- any such concurrent mutation landed between the read and the
+        -- write, not just ones touching control focus.
+        (mgr0, mgr1, controlFocus) ← atomicModifyIORef' (uiManagerRef env) $ \old →
+            let (validated, cf) = validateControlFocusIn old
+            in (validated, (old, validated, cf))
         -- #745 review round 2: report a repair-triggered clear too —
         -- not just the explicit Tab/Escape transitions below — so a
         -- Lua focus-ring consumer never sees a stale handle linger

@@ -435,6 +435,43 @@ spec = do
                 msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
 
     around withHeadlessEngine $
+        describe "Lua-facing UI.hidePage control-focus notification (#745 review round 4)" $ do
+            it "UI.hidePage(p) clears control focus on a control it owns and reports the transition, through the real Lua API" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local pg = UI.newPage('t1', 'hud'); \
+                    \local el = UI.newElement('e1', 10, 10, pg); \
+                    \UI.addToPage(pg, el, 0, 0); \
+                    \UI.setClickable(el, true); \
+                    \UI.setOnClick(el, 'x'); \
+                    \UI.setControlFocus(el); \
+                    \_G.__pg1 = pg; _G.__el1b = el; \
+                    \return true"
+                before ← evalDebug ls "return UI.getControlFocus() == _G.__el1b"
+                before `shouldBe` "true"
+                _ ← evalDebug ls "UI.hidePage(_G.__pg1); return true"
+                after ← evalDebug ls "return UI.getControlFocus() == nil"
+                after `shouldBe` "true"
+
+            it "the notification itself reaches the engine-to-Lua queue as LuaUIControlFocusChanged Nothing" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local pg = UI.newPage('t2', 'hud'); \
+                    \local el = UI.newElement('e2', 10, 10, pg); \
+                    \UI.addToPage(pg, el, 0, 0); \
+                    \UI.setClickable(el, true); \
+                    \UI.setOnClick(el, 'x'); \
+                    \UI.setControlFocus(el); \
+                    \_G.__pg2 = pg; \
+                    \return true"
+                _ ← drainLuaMsgs env
+                _ ← evalDebug ls "UI.hidePage(_G.__pg2); return true"
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` elem (LuaUIControlFocusChanged Nothing)
+
+    around withHeadlessEngine $
         describe "keyboard activation across real Lua widget families (#745, review testability correction)" $ do
             it "Enter/Space activation reaches real loaded Lua callbacks across distinct widget-family names" $ \env → do
                 resetAll env
