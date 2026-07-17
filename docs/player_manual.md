@@ -21,19 +21,27 @@ world (or **Regenerate** to roll a different one).
 
 You arrive looking at an empty world with a toolbar in the bottom-left
 corner. Your colonists don't exist yet. Open the build tool, pick the
-**Acolyte Portal**, and click somewhere sensible — flat ground, near
-fresh water. The portal appears at once and your colony walks out of
-it: five acolytes, then a technomule, a pack robot hauling your
-starting supplies. If the spot you clicked is far from anywhere already
-mapped, the game pauses first to make sure — confirm **Establish Here**
-to proceed, or **Choose Another Site** to pick somewhere else.
+**Acolyte Portal**, and hover a spot to place it — the ghost outline is
+translucent white on open ground and turns red over a spot that
+overlaps a mapped ruin or other location, which can't be built on.
+Click a valid spot and the portal appears at once, and your colony
+walks out of it: five acolytes, then a technomule, a pack robot hauling
+your starting supplies. If the spot you clicked is far from anywhere
+already mapped, the game pauses first to make sure — confirm
+**Establish Here** to proceed, or **Choose Another Site** to pick
+somewhere else.
 
 ## Getting around
 
 - **Pan** with W/A/S/D or the arrow keys.
 - **Rotate** a quarter-turn with Q and E.
 - **Zoom** with the mouse wheel. Zooming all the way out fades to a map
-  of the whole world; zoom back in to return to the ground.
+  of the whole world; zoom back in to return to the ground. Ruins and
+  other points of interest the world generated show up on this map as
+  icons the moment their ground is loaded — but as a dimmed, unlabeled
+  "undiscovered" icon until an acolyte actually walks near enough to
+  spot the place, at which point the icon updates to show it's been
+  found.
 - **Hold Shift and scroll** to step the view up or down one height
   level — for peering into pits or up cliffs. **Home** returns the
   camera to automatic height-following.

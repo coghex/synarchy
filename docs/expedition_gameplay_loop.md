@@ -193,6 +193,29 @@ The current renderer already intends to provide white/red valid-state tinting;
 the first implementation issue should verify that behavior end to end and fix
 it if it is not visible rather than introducing a second ghost-color path.
 
+## Implementation status
+
+The embark-to-discovery slice of this loop — steps 1-3 below, scoped to a
+single reliable ruin type with no combat encounter or reward yet — is
+implemented, under the parent locations epic #159:
+
+- location spatial bounds — #777
+- portal placement exclusion + white/red ghost feedback — #778
+- remote-start confirmation (`Establish Here` / `Choose Another Site`) — #779
+- persistent unit-driven discovery + player event — #780
+- paired discovered/undiscovered zoom-map icons — #781
+- end-to-end embark-to-discovery integration probe — #782
+
+The terminology above matches what shipped: "remote-start threshold" is the
+`building.remoteCheck` distance gate, "discovery" is the expanded-bounds
+approach margin firing a `location_discovery` player event, and the
+undiscovered/discovered icon pair is what `World.Render.Zoom.Icons` renders
+from each location's persisted discovery flag.
+
+Steps 4 onward (a combat encounter, a transformational reward, retrieval and
+return, survival tuning, the first-session objective panel, and the full
+end-to-end slice gate) remain future work.
+
 ## Implementation order
 
 ### 1. Make one ruin reliable
