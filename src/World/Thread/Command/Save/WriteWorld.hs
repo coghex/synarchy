@@ -25,9 +25,9 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
-import World.Save.Serialize (encodeSaveData, writeSaveFiles)
+import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
-import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import Unit.Types (UnitManager(..), unitsOnPage)
 import Building.Types (BuildingManager(bmNextId))
 import Unit.Sim.Types (UnitThreadState(..))
@@ -218,23 +218,23 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                     { srmSlotName  = saveName
                                     , srmTimestamp = timestampTxt
                                     }
-                                sd  = snapshotToSaveData req snap
+                                meta = snapshotSaveMetadata req snap
                             -- Force the FULL encoding now, while the capture
-                            -- lock is STILL held (#758 requirement 7): cereal
-                            -- cannot produce a ByteString without visiting
-                            -- every field, so this either succeeds completely
-                            -- right here or throws right here — never
-                            -- partway through the disk write below, after
-                            -- other owners have already resumed. Anything
-                            -- 'World.Save.Snapshot'/'.Adapter' left as an
-                            -- unevaluated thunk (their record fields are only
-                            -- forced to WHNF, not deeply) gets touched here.
+                            -- lock is STILL held (#758 requirement 7): every
+                            -- component's cereal encode must visit every
+                            -- field, so this either succeeds completely right
+                            -- here or throws right here — never partway
+                            -- through the disk write below, after other owners
+                            -- have already resumed. Anything
+                            -- 'World.Save.Snapshot' left as an unevaluated
+                            -- thunk (its record fields are only forced to
+                            -- WHNF, not deeply) gets touched here.
                             -- A thrown exception is a capture failure, not a
                             -- disk failure: fail the transaction directly
                             -- and skip the release entirely — failSave's own
                             -- phase transition already unblocks
                             -- 'captureLocked' for every other owner.
-                            encodedOrErr ← try (evaluate (encodeSaveData sd))
+                            encodedOrErr ← try (evaluate (encodeSessionSnapshot meta snap))
                             case encodedOrErr of
                               Left (e ∷ SomeException) → do
                                 let msg = "session snapshot failed to encode: "

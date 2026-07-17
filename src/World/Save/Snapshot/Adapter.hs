@@ -21,6 +21,7 @@
 module World.Save.Snapshot.Adapter
     ( SaveRequestMeta(..)
     , snapshotToSaveData
+    , snapshotSaveMetadata
     ) where
 
 import UPrelude
@@ -56,17 +57,29 @@ resolvedActivePage snap = case HM.lookup (snapActivePage snap) pages of
 
 -- | Encode an already-captured, already-validated snapshot into the
 --   legacy 'SaveData' shape. Pure — no IO, no live-state re-read.
+-- | The listing 'SaveMetadata' the @"metadata"@ component carries.
+--   Derived from the active page's authoritative gen params + identity
+--   (so it can never disagree with the gameplay components on load —
+--   requirement 12) plus the caller-supplied slot name + timestamp
+--   (request metadata, never gameplay state — requirement 11). Shared by
+--   the save-encode path ("World.Save.Envelope.encodeSessionSnapshot")
+--   and the load bridge below, so both agree on exactly what the
+--   metadata component says.
+snapshotSaveMetadata ∷ SaveRequestMeta → SessionSnapshot → SaveMetadata
+snapshotSaveMetadata req snap = SaveMetadata
+    { smName       = srmSlotName req
+    , smSeed       = maybe 0 (wgpSeed ∘ pgsGenParams) mActive
+    , smWorldSize  = maybe 0 (wgpWorldSize ∘ pgsGenParams) mActive
+    , smPlateCount = maybe 0 (wgpPlateCount ∘ pgsGenParams) mActive
+    , smTimestamp  = srmTimestamp req
+    , smWorldName  = mActive ⌦ (\p → wiName ⊚ pgsIdentity p)
+    , smWorldGloss = mActive ⌦ (\p → pgsIdentity p ⌦ wiGloss)
+    }
+  where mActive = resolvedActivePage snap
+
 snapshotToSaveData ∷ SaveRequestMeta → SessionSnapshot → SaveData
 snapshotToSaveData req snap = SaveData
-    { sdMetadata = SaveMetadata
-        { smName       = srmSlotName req
-        , smSeed       = maybe 0 (wgpSeed ∘ pgsGenParams) mActive
-        , smWorldSize  = maybe 0 (wgpWorldSize ∘ pgsGenParams) mActive
-        , smPlateCount = maybe 0 (wgpPlateCount ∘ pgsGenParams) mActive
-        , smTimestamp  = srmTimestamp req
-        , smWorldName  = mActive ⌦ (\p → wiName ⊚ pgsIdentity p)
-        , smWorldGloss = mActive ⌦ (\p → pgsIdentity p ⌦ wiGloss)
-        }
+    { sdMetadata = snapshotSaveMetadata req snap
     , sdGameTime           = snapGameTime snap
       -- Always True: a captured snapshot is understood to load paused
       -- (contract requirement 4), never the toggle's live value.
@@ -81,8 +94,6 @@ snapshotToSaveData req snap = SaveData
                                      (snapNextUnitId snap))
                                  (HM.elems (snapPages snap))
     }
-  where
-    mActive = resolvedActivePage snap
 
 -- | One page's legacy 'WorldPageSave'. Camera position uses the live
 --   camera's values for whichever page it's attributed to and this

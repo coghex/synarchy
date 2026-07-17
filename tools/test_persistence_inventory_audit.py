@@ -2698,11 +2698,104 @@ def test_audit_against_the_real_repo():
     """End-to-end smoke test against the actual checked-out inventory and
     source files -- this is what CI/make ci actually runs via main()."""
     from persistence_inventory_audit import _load_repo_state  # type: ignore
-    record_sources, scripts_text_by_file, inventory_text = _load_repo_state()
-    violations = audit(record_sources, scripts_text_by_file, inventory_text)
+    record_sources, scripts_text_by_file, inventory_text, registry_source = \
+        _load_repo_state()
+    violations = audit(record_sources, scripts_text_by_file, inventory_text,
+                       registry_source=registry_source)
     expect(not violations,
-           f"the real repo's inventory has no unclassified root-owner fields "
-           f"or Lua save modules, got {violations}")
+           f"the real repo's inventory has no unclassified root-owner fields, "
+           f"Lua save modules, or unregistered persistent save components, "
+           f"got {violations}")
+
+
+# ----- #760 component-registration checks --------------------------------
+
+# A synthetic registry source: only "registered-comp" is a real
+# ComponentId literal here.
+SYNTHETIC_COMPONENT_REGISTRY = """\
+registeredComponentId :: ComponentId
+registeredComponentId = ComponentId "registered-comp"
+"""
+
+# The inventory classifies a component persistent AND documents its
+# (registered) ComponentId -- the well-formed case.
+SYNTHETIC_INVENTORY_COMPONENT_OK = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+"""
+
+# The inventory classifies a component persistent but its ComponentId is
+# NOT registered in the Haskell source -- must fail.
+SYNTHETIC_INVENTORY_COMPONENT_UNREGISTERED = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+| `GhostDTO` | `ghost-comp` | Persist exactly |
+"""
+
+# The would-be unregistered owner is instead classified Reset/Exclude --
+# a rebuilt/reset/excluded owner requires no registration, so no failure.
+SYNTHETIC_INVENTORY_COMPONENT_RESET_OK = """\
+# Fake inventory
+
+### Save components
+
+| Component DTO | ComponentId | Classification |
+|---|---|---|
+| `RegisteredDTO` | `registered-comp` | Persist exactly |
+| `GhostDTO` | `ghost-comp` | Reset to default |
+"""
+
+
+def test_component_check_accepts_registered_persistent_owner():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    v = find_component_registration_violations(
+        SYNTHETIC_INVENTORY_COMPONENT_OK, SYNTHETIC_COMPONENT_REGISTRY)
+    expect(v == [],
+           f"a persistent component whose ComponentId IS registered passes, "
+           f"got {v}")
+
+
+def test_component_check_flags_unregistered_persistent_owner():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    v = find_component_registration_violations(
+        SYNTHETIC_INVENTORY_COMPONENT_UNREGISTERED, SYNTHETIC_COMPONENT_REGISTRY)
+    expect(any("ghost-comp" in x for x in v),
+           f"a persistent Haskell save-component owner WITHOUT a registered "
+           f"ComponentId fails the audit, got {v}")
+
+
+def test_component_check_reset_owner_needs_no_registration():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    v = find_component_registration_violations(
+        SYNTHETIC_INVENTORY_COMPONENT_RESET_OK, SYNTHETIC_COMPONENT_REGISTRY)
+    expect(v == [],
+           f"an owner classified reset/rebuilt/excluded requires no component "
+           f"registration and does NOT fail, got {v}")
+
+
+def test_component_check_flags_registered_component_missing_a_row():
+    from persistence_inventory_audit import (  # type: ignore
+        find_component_registration_violations)
+    # registry has "registered-comp" but the inventory documents no row
+    # for it at all -- a new component owner landed without a decision.
+    v = find_component_registration_violations(
+        "# empty inventory\n", SYNTHETIC_COMPONENT_REGISTRY)
+    expect(any("registered-comp" in x for x in v),
+           f"a registered component with no persistent inventory row fails "
+           f"the audit, got {v}")
 
 
 # ----- Runner --------------------------------------------------------------
@@ -2856,6 +2949,10 @@ def main() -> int:
         test_audit_detects_intentionally_unclassified_field,
         test_audit_detects_intentionally_unclassified_lua_module,
         test_audit_against_the_real_repo,
+        test_component_check_accepts_registered_persistent_owner,
+        test_component_check_flags_unregistered_persistent_owner,
+        test_component_check_reset_owner_needs_no_registration,
+        test_component_check_flags_registered_component_missing_a_row,
     ]
 
     for t in tests:

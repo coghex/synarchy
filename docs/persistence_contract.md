@@ -126,14 +126,21 @@ persistence-inventory audit](#the-persistence-inventory-audit)), a
   per-page IORef hangs off `WorldState`; every page hangs off
   `WorldManager`.
 - `SaveData`, `WorldPageSave`, `SaveMetadata`, `SaveHeader`
-  (`src/World/Save/Types.hs`) — the ground truth of what a save
-  persists. Since #759 (save-overhaul B1), `SaveData`/`WorldPageSave`
-  ride as the "session" component's payload inside the tagged
-  `World.Save.Envelope` container rather than being the whole file
-  themselves, and `SaveHeader` describes that container's fixed
-  16-byte framing header (magic + envelope version + manifest length)
-  rather than a raw `[header][SaveData]` pair — but all four remain
-  the root-owner records this contract's audit tracks.
+  (`src/World/Save/Types.hs`) — historically the ground truth of what a
+  save persists. #759 (save-overhaul B1) made `SaveData`/`WorldPageSave`
+  ride as a single transitional "session" component inside the tagged
+  `World.Save.Envelope` container; #760 (save-overhaul B2) then RETIRED
+  that monolithic component and split gameplay state into independently
+  versioned, Haskell-owned components (`World.Save.Component.*`, see
+  `persistence_state_inventory.md` §10). `SaveData`/`WorldPageSave` are
+  therefore no longer any wire contract — they survive only as a
+  transitional IN-MEMORY bridge into the world-thread load path
+  (`snapshotToSaveData`). `SaveMetadata` still rides standalone as the
+  "metadata" component, and `SaveHeader` still describes the container's
+  fixed 16-byte framing header (magic + envelope version + manifest
+  length). All four remain root-owner records this contract's audit
+  tracks; §10's component owners are audited additionally, against the
+  live component registry.
 - Registered Lua persistence modules (`scripts/lib/save_modules.lua`'s
   `saveModules.register` call sites).
 
@@ -220,11 +227,18 @@ dropping the in-progress stamp.
 
 ## 5. Format-version policy
 
-- `currentSaveVersion` (`src/World/Save/Types.hs`, bumped frequently —
-  don't trust any number written down here) identifies the "session"
-  component's own schema; B1 (#759) landed the new tagged envelope
-  (`World.Save.Envelope`) with an independent framing version
-  (`World.Save.Envelope.currentEnvelopeVersion`).
+- B1 (#759) landed the new tagged envelope (`World.Save.Envelope`) with
+  an independent framing version
+  (`World.Save.Envelope.currentEnvelopeVersion`, which B1 assigned and
+  B2 leaves unchanged — the framing contract did not change). Since B2
+  (#760) each GAMEPLAY component carries its OWN independent schema
+  version (`World.Save.Component.Types`), so ordinary component
+  evolution no longer bumps any global save version. `currentSaveVersion`
+  (`src/World/Save/Types.hs`, bumped frequently — don't trust any number
+  written down here) now versions only the transitional `SaveData`/
+  `WorldPageSave` load bridge, which is not a wire contract; the
+  historical global-version meanings (e.g. v83 = #785, v84 = #811) are
+  preserved and never reassigned.
 - **No pre-B1→new-format migration is implemented.** Existing local
   saves and obsolete old-format test fixtures may simply be deleted.
 - The **first completed new-format save becomes the compatibility

@@ -205,10 +205,13 @@ This section was originally the ground truth of what the pre-#759 flat
 `[header][SaveData]` format wrote to disk. #759 replaced that framing
 with a tagged, checksummed component container
 (`World.Save.Envelope`/`.Codec`/`.Types`) — `SaveData`/`WorldPageSave`/
-`SaveMetadata` are unchanged Haskell shapes, but they now ride as
-component PAYLOADS inside that envelope (`SaveData` as the transitional
-"session" component, `SaveMetadata` again, standalone, as the
-"metadata" component) rather than being the whole file. `SaveHeader`
+`SaveMetadata` are unchanged Haskell shapes. Under #759 (B1) `SaveData`
+rode as a single transitional `"session"` component; #760 (B2, see §10)
+retired that component and split gameplay state into independently
+versioned components, so `SaveData`/`WorldPageSave` are now only a
+transitional IN-MEMORY bridge into the world-thread load path
+(`snapshotToSaveData`), NOT any wire contract. `SaveMetadata` still
+rides, standalone, as the `"metadata"` component. `SaveHeader`
 below describes the envelope's fixed 16-byte framing header, not a raw
 `[header][SaveData]` pair. The two rows marked **(new-format target
 differs)** are the only classifications in this document that diverge
@@ -460,6 +463,52 @@ definition a persisted instance refers to fails loading per contract §4.
 | `LootTableRegistry.ltrDefs` | `src/LootTable/Types.hs:34` | global | Rebuild | `src/Engine/Asset/YamlLootTables.hs` | none beyond type-correctness | none yet |
 | `MaterialRegistry` | `src/World/Material.hs:233` | global | Rebuild | built-in, boot-time (fixed 256-slot table) | none beyond type-correctness | `tools/world_check.py` |
 | `FloraCatalog` (`fcSpecies`, `fcWorldGen`, `fcNextId`) | `src/World/Flora/Types.hs:244` | global | Rebuild | `src/Engine/Asset/YamlFlora.hs` | this type derives `Serialize`/`Generic` unlike its sibling content registries, but nothing in `SaveData` embeds it; species are referenced by numeric id from world state instead. Flagged here, not changed — no code changes in this issue. | `tools/flora_growth_probe.py` |
+
+---
+
+## 10. `World.Save.Component.*` (`src/World/Save/Component*`) — the B2 save-component wire contract (#760)
+
+#760 (save-overhaul B2) replaced #759's single transitional `"session"`
+component (which wrapped the whole positional `SaveData`) with a set of
+independently versioned, Haskell-owned persistence components riding
+inside the same B1 envelope. `SaveData`/`WorldPageSave` are no longer
+any wire contract — they survive only as a transitional IN-MEMORY bridge
+into the still-unchanged world-thread load path (`snapshotToSaveData`),
+which is why they remain classified under §4 above. The canonical
+in-memory form is `World.Save.Snapshot.SessionSnapshot`; each component
+below converts to/from a slice of it, is version-dispatched on decode,
+self-validates, declares its dependencies, and names its owner. The
+authoritative registry is `World.Save.Component.saveComponentRegistry`
+(plus the envelope-owned `metadata` component); each `ComponentId` is
+defined in `World.Save.Component.Types`.
+
+Every component below is `Persist exactly` — the whole point of the
+split is that each owns a distinct slice of persisted gameplay state.
+The audit (`tools/persistence_inventory_audit.py`) cross-checks BOTH
+directions: every persistent component here must have a registered
+`ComponentId`, and every registered `ComponentId` must have a
+persistent-classified row here — so a new component owner cannot land
+without a classification decision, and a persistent owner cannot be
+documented without actually being wired into the registry (contract §2,
+requirement 5). An owner classified rebuilt/reset/excluded needs no
+registration.
+
+### Save components
+
+| Component DTO | ComponentId | Classification | Owner / boundary reason |
+|---|---|---|---|
+| `SaveMetadata` (metadata component) | `metadata` | Persist exactly | Envelope — listing metadata, readable without decoding gameplay |
+| `CoreSessionDTO` | `core-session` | Persist exactly | the session — game time, active/visible page refs, live camera, GLOBAL item/building/unit allocators |
+| `TexPaletteDTO` | `texture-palette` | Persist exactly | renderer structure/edit layer — palette ids can't be rebuilt from content defs |
+| `LuaStateDTO` | `lua-state` | Persist exactly | Lua save-module registry — transitional opaque blob map (B3 replaces its contract) |
+| `WorldPagesDTO` | `world-pages` | Persist exactly | the world page — page-set authority: identity, gen params, dates/clocks, map mode, per-page camera |
+| `WorldEditsDTO` | `world-edits` | Persist exactly | world edit layer — per-page terrain + structure edit log |
+| `WorldActivityDTO` | `world-activity` | Persist exactly | mutable-world-activity layer — designations, flora harvests, crop plots, ground items, spoil |
+| `BuildingsDTO` | `buildings` | Persist exactly | `BuildingManager` — per-page building snapshot |
+| `UnitsDTO` | `units` | Persist exactly | `UnitManager` — per-page unit snapshot (stats/skills/equipment/inventory/wounds) |
+| `UnitSimDTO` | `unit-sim` | Persist exactly | `UnitThreadState` — per-page unit sim state (paths/targets/poses/deadlines) |
+| `CraftBillsDTO` | `craft-bills` | Persist exactly | `Craft.Bills` — per-page craft-bill queue |
+| `PowerNodesDTO` | `power-nodes` | Persist exactly | `Power.Types` — per-page power-node registry + stored charge |
 
 ---
 

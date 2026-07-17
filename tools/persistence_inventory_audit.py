@@ -372,6 +372,25 @@ LONG_BRACKET_OPEN_RE = re.compile(r"\[(=*)\[")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 OWNER_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 
+# The B2 save-component wire contract (#760): the on-disk save is now a
+# set of independently-versioned Haskell components riding inside the B1
+# envelope, NOT the positional SaveData/WorldPageSave aggregate. The
+# authoritative list of registered component ids is discovered from the
+# Haskell source below (every `ComponentId "..."` literal defined there),
+# and the inventory's `### Save components` section must classify each.
+# A component owner classified as persistent MUST be registered; an owner
+# classified rebuilt/reset/excluded needs no registration (requirement 5).
+SAVE_COMPONENTS_HEADING = "Save components"
+# Files whose `ComponentId "..."` literals define the registered set.
+COMPONENT_REGISTRY_FILES = ("src/World/Save/Component/Types.hs",)
+COMPONENT_ID_LITERAL_RE = re.compile(r'ComponentId\s+"([^"]+)"')
+# Classifications that mean "this state is written to the save" and so
+# require a registered component to own it.
+PERSISTENT_CLASSIFICATIONS = (
+    "Persist exactly",
+    "Persist as identity/reference",
+)
+
 
 def _strip_haskell_comments(source: str) -> str:
     """Blank out Haskell comments, preserving line structure.
@@ -1093,9 +1112,94 @@ def parse_classified_names(inventory_text: str) -> dict[str, dict[str, str]]:
     return by_owner
 
 
+def parse_component_owner_rows(
+        inventory_text: str) -> list[tuple[str, str | None, str]]:
+    """Every row under the `### Save components` heading as
+    (owner name, declared ComponentId or None, classification cell text).
+
+    The section's table is `| Component | ComponentId | Classification |
+    ... |`; the ComponentId + Classification columns are found by their
+    own header labels (so extra trailing columns are tolerated).
+    """
+    rows: list[tuple[str, str | None, str]] = []
+    in_section = False
+    comp_idx: int | None = None
+    class_idx: int | None = None
+    for line in inventory_text.splitlines():
+        heading = OWNER_HEADING_RE.match(line)
+        if heading:
+            in_section = heading.group(1) == SAVE_COMPONENTS_HEADING
+            comp_idx = None
+            class_idx = None
+            continue
+        if not in_section or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if class_idx is None and comp_idx is None:
+            comp_idx = (cells.index("ComponentId")
+                        if "ComponentId" in cells else _NO_CLASSIFICATION_COLUMN)
+            class_idx = (cells.index("Classification")
+                         if "Classification" in cells else _NO_CLASSIFICATION_COLUMN)
+            continue
+        if class_idx == _NO_CLASSIFICATION_COLUMN:
+            continue
+        names = BACKTICK_RE.findall(cells[0]) if cells else []
+        if not names:
+            continue  # separator row
+        cid: str | None = None
+        if comp_idx is not None and comp_idx >= 0 and comp_idx < len(cells):
+            cid_matches = BACKTICK_RE.findall(cells[comp_idx])
+            cid = cid_matches[0] if cid_matches else None
+        classification = (cells[class_idx]
+                          if class_idx < len(cells) else "")
+        rows.append((names[0], cid, classification))
+    return rows
+
+
+def find_component_registration_violations(
+        inventory_text: str, registry_source: str) -> list[str]:
+    """The #760 registry linkage check: every save-component owner the
+    inventory classifies as PERSISTENT must map to a registered
+    `ComponentId` in the Haskell source, while an owner classified
+    rebuilt/reset/excluded requires no registration; and conversely every
+    registered component must have a persistent-classified inventory row
+    (so a new component owner can't land without an explicit decision).
+    """
+    registered = set(COMPONENT_ID_LITERAL_RE.findall(registry_source))
+    violations: list[str] = []
+    documented: set[str] = set()
+    for name, cid, classification in parse_component_owner_rows(inventory_text):
+        core = _classification_core(classification)
+        if core not in PERSISTENT_CLASSIFICATIONS:
+            continue  # rebuilt/reset/excluded owners need no registration
+        if cid is None:
+            violations.append(
+                f"save component {name!r} is classified persistent "
+                f"({classification!r}) but its row declares no ComponentId "
+                f"under the '### {SAVE_COMPONENTS_HEADING}' heading in "
+                f"{INVENTORY_PATH.name}")
+            continue
+        documented.add(cid)
+        if cid not in registered:
+            violations.append(
+                f"save component {name!r} is classified persistent "
+                f"({classification!r}) but its ComponentId {cid!r} is not "
+                f"registered in the Haskell save-component registry "
+                f"({', '.join(COMPONENT_REGISTRY_FILES)})")
+    for cid in sorted(registered):
+        if cid not in documented:
+            violations.append(
+                f"registered save component {cid!r} has no persistent-"
+                f"classified row under the '### {SAVE_COMPONENTS_HEADING}' "
+                f"heading in {INVENTORY_PATH.name} -- add a classification "
+                f"decision for it (see docs/persistence_contract.md)")
+    return violations
+
+
 def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
           inventory_text: str,
-          root_records: list[tuple[str, str, str]] | None = None) -> list[str]:
+          root_records: list[tuple[str, str, str]] | None = None,
+          registry_source: str | None = None) -> list[str]:
     """Pure audit core. Returns a list of human-readable violations."""
     if root_records is None:
         root_records = ROOT_RECORDS
@@ -1170,10 +1274,14 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             f".register(...) call made through an arbitrarily-named "
             f"alias; use one of the two sanctioned patterns instead")
 
+    if registry_source is not None:
+        violations.extend(
+            find_component_registration_violations(inventory_text, registry_source))
+
     return violations
 
 
-def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str]:
+def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, str]:
     record_sources: dict[str, str] = {}
     for _, relpath, _ in ROOT_RECORDS:
         if relpath not in record_sources:
@@ -1183,12 +1291,16 @@ def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str]:
         rel = str(path.relative_to(REPO_ROOT))
         scripts_text_by_file[rel] = path.read_text(encoding="utf-8")
     inventory_text = INVENTORY_PATH.read_text(encoding="utf-8")
-    return record_sources, scripts_text_by_file, inventory_text
+    registry_source = "\n".join(
+        (REPO_ROOT / f).read_text(encoding="utf-8") for f in COMPONENT_REGISTRY_FILES)
+    return record_sources, scripts_text_by_file, inventory_text, registry_source
 
 
 def main() -> int:
-    record_sources, scripts_text_by_file, inventory_text = _load_repo_state()
-    violations = audit(record_sources, scripts_text_by_file, inventory_text)
+    record_sources, scripts_text_by_file, inventory_text, registry_source = \
+        _load_repo_state()
+    violations = audit(record_sources, scripts_text_by_file, inventory_text,
+                       registry_source=registry_source)
     if violations:
         print(f"{len(violations)} persistence-inventory violation(s):")
         for v in violations:

@@ -1646,7 +1646,51 @@ metadata-without-gameplay-decoding property, component-version
 rejection, the pre-#759 clean break, and a frozen tracked-bytes
 fixture decoded independently of any encoder call in that same test.
 
-Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here). Saves live under `saves/<name>/world.synworld` (binary) — the sole authoritative file for a save generation; there is no companion `world_gen.yaml` (removed by #759 — generation params live in the envelope's "session" component).
+**Save components (#760, save-overhaul B2):** B1's single transitional
+`"session"` component (which wrapped the whole positional `SaveData`) is
+GONE. Gameplay state now rides as a set of independently versioned,
+Haskell-owned components inside the SAME B1 envelope
+(`World.Save.Component.*`): `core-session` (game time, active/visible
+pages, live camera, the GLOBAL item/building/unit allocators),
+`texture-palette`, `lua-state` (the transitional opaque Lua blob map,
+until B3), `world-pages` (the page-set AUTHORITY: identity, gen params,
+dates/clocks, map mode, per-page camera), `world-edits`,
+`world-activity` (designations/flora/crops/ground/spoil), `buildings`,
+`units`, `unit-sim`, `craft-bills`, `power-nodes` — plus the unchanged
+`metadata` component. The canonical in-memory form is
+`World.Save.Snapshot.SessionSnapshot`; each component converts to/from a
+slice of it, is version-dispatched on decode, self-validates, and
+declares its dependencies + owner in the ONE authoritative registry
+(`World.Save.Component.saveComponentRegistry`; ids in
+`World.Save.Component.Types`). The envelope framing version
+(`currentEnvelopeVersion`) is unchanged — component evolution uses
+per-component schema versions, NOT a global save-version bump.
+Assembly (`World.Save.Component.assembleSnapshot`) decodes + self-
+validates every component without touching live state, checks page-set
+consistency across components against `world-pages`, reassembles the
+`SessionSnapshot`, then runs the whole-session invariants
+(`validateSessionSnapshot` — active/visible page, orphan sim owner,
+allocator bounds) plus a manifest-metadata agreement check — any single
+failure yields NO partial snapshot. Save encoding is now
+`World.Save.Envelope.encodeSessionSnapshot` (the WHNF-forcing point the
+#758 barrier relies on, replacing the old `encodeSaveData`); load is
+`decodeSessionEnvelope` → reconstruct the `SessionSnapshot` from
+components → bridge it into the still-unchanged world-thread load path
+via `snapshotToSaveData`. `SaveData`/`WorldPageSave` are therefore no
+longer any wire contract — only that transitional in-memory load bridge.
+The audit (`tools/persistence_inventory_audit.py`) now cross-checks that
+every persistent component owner in `persistence_state_inventory.md` §10
+is registered and vice-versa. Pure coverage:
+`Test.Headless.World.Save.Components` (the "save components" describe) —
+registry well-formedness + dependency ordering/cycle rejection,
+per-component round trips + version dispatch + malformed-payload +
+component-local invariants, page-scoping mismatch, the production
+encode↔decode round trip reconstructing the exact snapshot, every
+assembly cross-validation (metadata mismatch, orphan sim, allocator
+collision, missing active page, one-bad-component-no-partial), and a
+frozen multi-component tracked-bytes fixture.
+
+Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here; since #760 it versions only the transitional `SaveData`/`WorldPageSave` load bridge, not any wire contract — gameplay components carry their own schema versions). Saves live under `saves/<name>/world.synworld` (binary) — the sole authoritative file for a save generation; there is no companion `world_gen.yaml` (removed by #759 — generation params now live in the `world-pages` component).
 
 ```bash
 # From headless / debug console

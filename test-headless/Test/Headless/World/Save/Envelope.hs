@@ -1,20 +1,15 @@
 {-# LANGUAGE UnicodeSyntax, OverloadedStrings, ScopedTypeVariables #-}
--- | The "save envelope" gate (issue #759, save-overhaul B1): the
---   tagged, checksummed component container that replaced the flat
---   positional save format. No engine, no IO — every test here is pure,
---   the same pattern 'Test.Headless.Save.Snapshot' uses for the layer
---   below this one.
+-- | The generic "save envelope" codec gate (issue #759, save-overhaul
+--   B1): the tagged, checksummed component container that replaced the
+--   flat positional save format. No engine, no IO — every test here is
+--   pure and drives "World.Save.Envelope.Codec" directly with small
+--   SYNTHETIC component specs, exercising every structural / limit /
+--   corruption rejection path, canonical ordering, and round-tripping,
+--   none of which needs a real gameplay payload.
 --
---   Two layers are exercised:
---
---   - "World.Save.Envelope.Codec" directly, with small SYNTHETIC
---     component specs — every structural/limit/corruption rejection
---     path, canonical ordering, and round-tripping, none of which needs
---     a real 'SaveData'.
---   - "World.Save.Envelope" (the production wiring), with a real,
---     minimal 'SaveData'/'SaveMetadata' pair — metadata-only
---     inspection, the transitional session component, component-version
---     rejection, and the pre-#759 clean break.
+--   The PRODUCTION wiring (the real multi-component save envelope,
+--   #760's component split) is gated separately by
+--   'Test.Headless.World.Save.Components'.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "save envelope"'@.
@@ -27,31 +22,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
-import Numeric (readHex)
 
 import World.Save.Envelope.Types
 import World.Save.Envelope.Codec
-import World.Save.Envelope
-    ( currentEnvelopeVersion, metadataComponentId, sessionComponentId
-    , metadataComponentVersion, sessionComponentVersion
-    , encodeSaveEnvelope, decodeSaveEnvelope, decodeSaveEnvelopeMetadata
-    )
-import World.Save.Types
-    ( SaveData(..), SaveMetadata(..), WorldPageSave(..)
-    , BuildingSnapshot(..), UnitSnapshot(..) )
-import World.Generate.Types (defaultWorldGenParams)
-import World.Page.Types (WorldPageId(..))
-import World.Render.Zoom.Types (ZoomMapMode(..))
-import World.Tool.Types (ToolMode(..))
-import Engine.Graphics.Camera (CameraFacing(..))
-import Structure.Palette (emptyTexPalette)
-import Item.Ground (emptyGroundItems)
-import World.Spoil.Types (emptySpoilPiles)
-import World.Flora.Harvest (emptyFloraHarvests)
-import World.Flora.CropPlot (emptyCropPlots)
-import World.Edit.Types (emptyWorldEdits)
-import Craft.Bills (emptyCraftBills)
-import Power.Types (emptyPowerNodes)
 
 -- ---------------------------------------------------------------------
 -- Test helpers
@@ -73,82 +46,9 @@ flipByteAt idx bs =
         <> BS.singleton (BS.index bs idx `xor` 0xFF)
         <> BS.drop (idx + 1) bs
 
-hexDecode ∷ String → BS.ByteString
-hexDecode = BS.pack . go
-  where
-    go (a:b:rest) = case readHex [a,b] of
-        ((v,_):_) → v : go rest
-        []        → error ("hexDecode: not a hex byte: " <> [a,b])
-    go _          = []
-
 isManifestTooLarge ∷ Either EnvelopeError a → Bool
 isManifestTooLarge (Left (ManifestTooLarge _)) = True
 isManifestTooLarge _                           = False
-
--- ---------------------------------------------------------------------
--- A minimal, otherwise-valid SaveData -- mirrors
--- Test.Headless.Save.Snapshot's minimalPage/minimalGlobals pattern, one
--- level up (a full legacy SaveData rather than a SessionSnapshot),
--- since the "session" component carries exactly this shape unchanged.
--- ---------------------------------------------------------------------
-
-minimalSaveMetadata ∷ SaveMetadata
-minimalSaveMetadata = SaveMetadata
-    { smName       = "envelope_test_save"
-    , smSeed       = 42
-    , smWorldSize  = 64
-    , smPlateCount = 3
-    , smTimestamp  = "2026-07-16T00:00:00.000000Z"
-    , smWorldName  = Just "Test World"
-    , smWorldGloss = Just "a fixture world"
-    }
-
-minimalWorldPageSave ∷ WorldPageSave
-minimalWorldPageSave = WorldPageSave
-    { wpsPageId       = WorldPageId "main_world"
-    , wpsGenParams    = defaultWorldGenParams
-    , wpsCameraX      = 0
-    , wpsCameraY      = 0
-    , wpsCameraZoom   = 1
-    , wpsCameraFacing = FaceSouth
-    , wpsTimeHour     = 12
-    , wpsTimeMinute   = 0
-    , wpsDateYear     = 1
-    , wpsDateMonth    = 1
-    , wpsDateDay      = 1
-    , wpsTimeScale    = 1
-    , wpsMapMode      = ZMDefault
-    , wpsToolMode     = DefaultTool
-    , wpsEdits        = emptyWorldEdits
-    , wpsMineDesignations      = HM.empty
-    , wpsConstructDesignations = HM.empty
-    , wpsGroundItems  = emptyGroundItems
-    , wpsSpoilPiles   = emptySpoilPiles
-    , wpsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1 }
-    , wpsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1 }
-    , wpsUnitSimStates = HM.empty
-    , wpsFloraHarvests = emptyFloraHarvests
-    , wpsChopDesignations = HM.empty
-    , wpsCraftBills   = emptyCraftBills
-    , wpsPowerNodes   = emptyPowerNodes
-    , wpsTillDesignations = HM.empty
-    , wpsCropPlots    = emptyCropPlots
-    , wpsPlantDesignations = HM.empty
-    , wpsIdentity     = Nothing
-    }
-
-minimalSaveData ∷ SaveData
-minimalSaveData = SaveData
-    { sdMetadata           = minimalSaveMetadata
-    , sdGameTime           = 0
-    , sdEnginePaused       = True
-    , sdLuaModules         = HM.empty
-    , sdTexPalette         = emptyTexPalette
-    , sdNextItemInstanceId = 1
-    , sdActivePage         = WorldPageId "main_world"
-    , sdVisiblePages       = [WorldPageId "main_world"]
-    , sdWorlds             = [minimalWorldPageSave]
-    }
 
 spec ∷ Spec
 spec = do
@@ -220,7 +120,6 @@ spec = do
                         , (ComponentId "mystery", 1, False, BS.pack [9,9])
                         ]
                 bytes = unsafeEncode defaultEnvelopeLimits 1 specs
-                -- "mystery" is deliberately absent from the known set.
                 known = HS.fromList [ComponentId "req"]
             case decodeEnvelope defaultEnvelopeLimits 1 known
                     (HS.singleton (ComponentId "req")) bytes of
@@ -281,8 +180,6 @@ spec = do
         it "rejects a corrupted manifest (checksum mismatch)" $ do
             let bytes = unsafeEncode defaultEnvelopeLimits 1
                     [(ComponentId "a", 1, True, BS.pack [1,2,3])]
-                -- byte 16 is the first byte of the manifest, right after
-                -- the fixed 16-byte header.
                 flipped = flipByteAt 16 bytes
             decodeEnvelope defaultEnvelopeLimits 1
                     (HS.fromList [ComponentId "a"]) HS.empty flipped
@@ -395,114 +292,6 @@ spec = do
             decodeEnvelope tight 1 known HS.empty bytes
                 `shouldBe` Left (TotalPayloadTooLarge 20)
 
-    describe "production wiring (World.Save.Envelope)" $ do
-        it "round-trips a real SaveData through \
-           \encodeSaveEnvelope/decodeSaveEnvelope" $
-            case encodeSaveEnvelope defaultEnvelopeLimits minimalSaveData of
-                Left err → expectationFailure (T.unpack err)
-                Right bytes → case decodeSaveEnvelope bytes of
-                    Left err → expectationFailure (T.unpack err)
-                    Right sd → do
-                        sdMetadata sd `shouldBe` sdMetadata minimalSaveData
-                        sdGameTime sd `shouldBe` sdGameTime minimalSaveData
-                        sdActivePage sd `shouldBe` sdActivePage minimalSaveData
-                        sdVisiblePages sd `shouldBe` sdVisiblePages minimalSaveData
-                        map wpsPageId (sdWorlds sd)
-                            `shouldBe` map wpsPageId (sdWorlds minimalSaveData)
-
-        it "inspects save metadata WITHOUT decoding the (much larger) \
-           \gameplay component -- proven by giving the session component \
-           \a structurally/checksum-valid but semantically undecodable \
-           \payload: decodeSaveEnvelopeMetadata still succeeds, while \
-           \decodeSaveEnvelope (which DOES interpret it) fails" $ do
-            let metaBytes = S.encode minimalSaveMetadata
-                specs = [ (metadataComponentId, metadataComponentVersion, True
-                          , metaBytes)
-                        , (sessionComponentId, sessionComponentVersion, True
-                          , BS.pack [9,9,9])
-                        ]
-                bytes = unsafeEncode defaultEnvelopeLimits currentEnvelopeVersion
-                            specs
-            decodeSaveEnvelopeMetadata bytes `shouldBe` Right minimalSaveMetadata
-            case decodeSaveEnvelope bytes of
-                Left _  → pure ()
-                Right _ → expectationFailure
-                    "expected decodeSaveEnvelope to fail on an undecodable \
-                    \session payload"
-
-        it "rejects an unsupported session component schema version" $ do
-            let metaBytes = S.encode minimalSaveMetadata
-                specs = [ (metadataComponentId, metadataComponentVersion, True
-                          , metaBytes)
-                        , (sessionComponentId, 999999, True
-                          , S.encode minimalSaveData)
-                        ]
-                bytes = unsafeEncode defaultEnvelopeLimits currentEnvelopeVersion
-                            specs
-            case decodeSaveEnvelope bytes of
-                Left msg → msg `shouldSatisfy`
-                    T.isInfixOf "expected session component"
-                Right _  → expectationFailure
-                    "expected a session-component version mismatch rejection"
-
-        it "rejects an unsupported metadata component schema version -- \
-           \even though its bytes still happen to decode as the current \
-           \SaveMetadata shape" $ do
-            let specs = [ (metadataComponentId, 999999, True
-                          , S.encode minimalSaveMetadata)
-                        , (sessionComponentId, sessionComponentVersion, True
-                          , S.encode minimalSaveData)
-                        ]
-                bytes = unsafeEncode defaultEnvelopeLimits currentEnvelopeVersion
-                            specs
-            case decodeSaveEnvelopeMetadata bytes of
-                Left msg → msg `shouldSatisfy`
-                    T.isInfixOf "expected metadata component"
-                Right _  → expectationFailure
-                    "expected a metadata-component version mismatch rejection"
-            case decodeSaveEnvelope bytes of
-                Left msg → msg `shouldSatisfy`
-                    T.isInfixOf "expected metadata component"
-                Right _  → expectationFailure
-                    "expected decodeSaveEnvelope to also reject an \
-                    \unsupported metadata component version"
-
-        it "rejects a pre-#759 flat-format file with a clear \
-           \incompatibility diagnostic (the v82-and-earlier clean \
-           \break) -- no heuristic positional decoding is attempted" $ do
-            -- Pre-#759 saves were [magic][8-byte cereal Int
-            -- version][SaveData body], no manifest at all. cereal's
-            -- 'Serialize Int' encodes as a big-endian Int64 (confirmed
-            -- against the installed cereal-0.5.8.3 source), so the
-            -- SECOND 4-byte field of any such file -- read as this
-            -- envelope's Word32 version field -- is always the Int64's
-            -- HIGH 4 bytes, zero for every real historical save version
-            -- (all small positive numbers). That alone is enough to
-            -- reject it.
-            let legacyBytes = encodeW32 envelopeMagic
-                             <> S.encode (91 ∷ Int)
-                             <> BS.replicate 64 0
-            case decodeSaveEnvelope legacyBytes of
-                Left msg → msg `shouldSatisfy`
-                    T.isInfixOf "UnsupportedEnvelopeVersion"
-                Right _  → expectationFailure
-                    "expected the legacy flat-format file to be rejected"
-
-        it "decodes a frozen, tracked byte fixture -- not merely an \
-           \encoder's output from within this same test -- proving \
-           \metadata inspection and complete decode both work from \
-           \real stored bytes" $ do
-            let bytes = hexDecode trackedEnvelopeFixtureHex
-            decodeSaveEnvelopeMetadata bytes
-                `shouldBe` Right minimalSaveMetadata
-            case decodeSaveEnvelope bytes of
-                Left err → expectationFailure (T.unpack err)
-                Right sd → do
-                    sdMetadata sd `shouldBe` minimalSaveMetadata
-                    sdActivePage sd `shouldBe` sdActivePage minimalSaveData
-                    map wpsPageId (sdWorlds sd)
-                        `shouldBe` map wpsPageId (sdWorlds minimalSaveData)
-
 -- | Build raw envelope bytes directly from a manifest + payload-section
 --   bytes, bypassing 'encodeEnvelope''s own validation entirely. The
 --   only way to construct a deliberately INVALID envelope (duplicate
@@ -514,56 +303,3 @@ rawEnvelope ver manifest payloadSection =
                <> encodeW64 (fromIntegral (BS.length manifestBytes))
     in header <> manifestBytes <> encodeW64 (fnv1a64 manifestBytes)
            <> payloadSection
-
--- | Frozen bytes of a real envelope encoding 'minimalSaveMetadata' /
---   'minimalSaveData' -- captured once via 'encodeSaveEnvelope' and
---   hex-dumped, NOT produced by calling the encoder in the decode test
---   above. Regenerate by printing
---   @either (const "") (concatMap (\\b -> ...) . BS.unpack)
---     (encodeSaveEnvelope defaultEnvelopeLimits minimalSaveData)@
---   (or any hex dump of that 'Right' value) if 'minimalSaveData' or the
---   envelope format ever change.
-trackedEnvelopeFixtureHex ∷ String
-trackedEnvelopeFixtureHex =
-    "535952410000000100000000000000610000000000000002000000000000\
-    \00086d657461646174610000000101000000000000000000000000000000\
-    \80b6ce951fb0e97917000000000000000773657373696f6e0000005a0100\
-    \0000000000008000000000000003e3e5f920542dab08fab95b839d58d4e5\
-    \290000000000000012656e76656c6f70655f746573745f73617665000000\
-    \000000002a00000000000000400000000000000003000000000000001b32\
-    \3032362d30372d31365430303a30303a30302e3030303030305a01000000\
-    \000000000a5465737420576f726c6401000000000000000f612066697874\
-    \75726520776f726c640000000000000012656e76656c6f70655f74657374\
-    \5f73617665000000000000002a0000000000000040000000000000000300\
-    \0000000000001b323032362d30372d31365430303a30303a30302e303030\
-    \3030305a01000000000000000a5465737420576f726c6401000000000000\
-    \000f61206669787475726520776f726c6400000000000000000100000000\
-    \000000000000000000000000000000000000000000000000000000010000\
-    \00000000000a6d61696e5f776f726c640000000000000001000000000000\
-    \000a6d61696e5f776f726c640000000000000001000000000000000a6d61\
-    \696e5f776f726c64000000000000002a0000000000000080000000000000\
-    \000a0000000000000000000000000000001e000000000000000c00000000\
-    \00000018000000000000003c3ecccccd3f000000000000000000001c0000\
-    \000000000000000000000000000000000080000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000010000\
-    \000000000000000000000000000000000000000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000000032\
-    \3f8000003e99999a3f3333333fc000003f8000003f0000003f8333330000\
-    \000000000000000000000000002000000000000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000000000\
-    \0000000000000000000000000000000000003f800000000000003f800000\
-    \3f3333333fa0000000000000000000060000000000000016000000000000\
-    \000c3f8000003f8000003f80000000000000000000010000000000000002\
-    \000000000000000100000000000000030000000000000001000000000000\
-    \000300000000000000010000000000000003000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000003f80\
-    \000000000000000000000c00000000000000000000000000000001000000\
-    \000000000100000000000000013f80000000000000000000000000000000\
-    \000000000000000000000000000000000000000000000000000000000000\
-    \000000000000000000000000000000000000010000000000000000000000\
-    \010000000000000000000000000000000000000000000000000000000000\
-    \000000000000010000000000000000000000010000000000000000000000\
-    \0000000000000000000000000000"
