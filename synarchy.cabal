@@ -714,6 +714,7 @@ library
                      World.Save.Envelope.Codec
                      World.Save.Envelope
                      World.Save.Component.Types
+                     World.Save.Component.WorldGen
                      World.Save.Component.Session
                      World.Save.Component.Page
                      World.Save.Component.Entities

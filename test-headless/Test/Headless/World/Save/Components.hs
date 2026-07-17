@@ -38,12 +38,21 @@ import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Palette (emptyTexPalette)
-import Item.Ground (emptyGroundItems)
-import Item.Types (ItemInstance)
+import Item.Ground (emptyGroundItems, GroundItems(..), GroundItem(..))
+import Item.Types (ItemInstance(..))
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Flora.CropPlot (emptyCropPlots)
-import World.Edit.Types (emptyWorldEdits)
+import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
+import World.Chunk.Types (ChunkCoord(..))
+import World.Mine.Types (MineDesignation(..))
+import World.Time.Types (CalendarConfig(..))
+import World.Weather.Types
+    ( ClimateState(..), ClimateGrid(..), ClimateCoord(..), RegionClimate(..)
+    , SeasonalClimate(..), OceanGrid(..), OceanCell(..), OceanCurrent(..)
+    , AtmoGrid(..), PressureSystem(..), PressureType(..), SurfaceType(..)
+    , SurfaceBudget(..), initClimateState
+    , defaultRegionClimate, emptyOceanGrid, emptyAtmoGrid )
 import Craft.Bills
     ( emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..) )
 import Power.Types
@@ -208,6 +217,75 @@ richNodes = PowerNodes
         , pnStoredWh = 1234.5 }
     , pnsNextId = 3 }
 
+-- | A first-aid kit holding a bandage holding (absurdly) another kit —
+--   exercises 'ItemInstanceDTO''s RECURSIVE 'iiContents' conversion, plus
+--   the leaf scalar/Maybe fields, with distinctive values throughout so a
+--   dropped or mis-mapped field would show.
+richItem ∷ ItemInstance
+richItem = ItemInstance
+    { iiDefName = "first_aid_kit", iiCurrentFill = 0, iiQuality = 82
+    , iiCondition = 74.5, iiWeight = 1.25, iiSharpness = 0
+    , iiInstanceId = 900, iiTemp = Just 21.5
+    , iiContents =
+        [ ItemInstance
+            { iiDefName = "bandage", iiCurrentFill = 3, iiQuality = 100
+            , iiCondition = 100, iiWeight = 0.05, iiSharpness = 0
+            , iiInstanceId = 901, iiTemp = Nothing
+            , iiContents =
+                [ ItemInstance
+                    { iiDefName = "mini_kit", iiCurrentFill = 0, iiQuality = 50
+                    , iiCondition = 33, iiWeight = 0.2, iiSharpness = 12.5
+                    , iiInstanceId = 902, iiTemp = Just (-4.0), iiContents = [] } ] } ] }
+
+-- | 'WorldGenParams' with distinctive values planted across the newly
+--   FROZEN nested worldgen records (a non-default calendar; a climate
+--   state carrying a populated region, ocean cell, named current,
+--   pressure system, and surface budget) so a mis-mapped field in ANY
+--   of the recursive climate/config DTO conversions is observable.
+--   'canon' reaches the manual-Serialize fixpoint (see its note) — the
+--   volcano ctx is rebuilt from seed/size/plates, which these edits leave
+--   untouched, so the planted climate/calendar values survive it.
+richClimate ∷ ClimateState
+richClimate = (initClimateState 64)
+    { csGlobalCO2  = 1.3, csGlobalTemp = 14.5, csSolarConst = 0.98
+    , csClimate = ClimateGrid
+        (HM.singleton (ClimateCoord 1 2)
+            defaultRegionClimate { rcHumidity = 0.42
+                                 , rcAirTemp  = SeasonalClimate 20 5 }) 4
+    , csOcean = emptyOceanGrid
+        { ogCells = HM.singleton (ClimateCoord 0 1)
+            (OceanCell (SeasonalClimate 18 12) 34.5 200 1.1 0.3 0.2 0.05)
+        , ogCurrents = [OceanCurrent "Gyre" [ClimateCoord 0 0] True 0.6] }
+    , csAtmo = emptyAtmoGrid
+        { agSystems = [PressureSystem (ClimateCoord 2 2) HighPressure 3 0.4] }
+    , csSurface = HM.singleton (ClimateCoord 1 1)
+        (SurfaceBudget SurfDesert 0.35 (-0.2) 0.1 0.0) }
+
+richGenParams ∷ WorldGenParams
+richGenParams = canon defaultWorldGenParams
+    { wgpSeed        = 777
+    , wgpCalender    = CalendarConfig 40 10 20 50
+    , wgpClimateState = richClimate }
+
+-- | A page carrying data for the components 'richPage' leaves empty —
+--   craft bills, power nodes, ground items, a mine designation, and a
+--   world edit — so the full-envelope round trip below observes EVERY
+--   registered component's assembly fold (a dropped 'rcApply' for any of
+--   them would lose this data).
+fullPage ∷ WorldPageId → PageSnapshot
+fullPage pid = (richPage pid)
+    { pgsCraftBills  = richBills
+    , pgsPowerNodes  = richNodes
+    , pgsGroundItems = GroundItems 2 (HM.singleton 1 (GroundItem richItem 3.5 4.5))
+    , pgsMineDesignations = HM.singleton (1, 2) (MineDesignation 0 (1,1,1,1) 0.5)
+    , pgsEdits       = HM.singleton (ChunkCoord 0 0) [WeDeleteTile 1 2] }
+
+fullSnapshot ∷ SessionSnapshot
+fullSnapshot = case captureSessionSnapshot
+        minimalGlobals { sgNextItemId = 1000 } [fullPage page1] of
+    Right s   → s
+    Left errs → error ("fullSnapshot invalid: " <> show errs)
+
 -- A valid, captured multi-page snapshot + its metadata.
 richSnapshot ∷ SessionSnapshot
 richSnapshot = case captureSessionSnapshot
@@ -345,6 +423,68 @@ spec = do
 
         it "NodeRegistryDTO round-trips a non-empty power-node registry" $
             fromNodeRegistryDTO (toNodeRegistryDTO richNodes) `shouldBe` richNodes
+
+    describe "frozen worldgen + item DTOs (boundary rule, review round 6)" $ do
+        -- The nested worldgen config/state records and the recursive
+        -- ItemInstance are no longer embedded live: each has a frozen DTO
+        -- with an explicit conversion. These prove those conversions are
+        -- lossless (identity) on non-trivial values, so a live-record field
+        -- change surfaces as a compile error in a conversion rather than as
+        -- silent v1 byte drift.
+        it "ItemInstanceDTO round-trips a recursive (kit-in-kit) item" $
+            fromItemInstanceDTO (toItemInstanceDTO richItem) `shouldBe` richItem
+
+        it "GroundItemDTO round-trips a ground item carrying a recursive item" $
+            let g = GroundItem richItem 3.5 4.5
+            in fromGroundItemDTO (toGroundItemDTO g) `shouldBe` g
+
+        it "WorldGenParamsDTO round-trips a populated worldgen config/climate \
+           \tree (frozen nested records, no live embedding)" $
+            fromWorldGenParamsDTO (toWorldGenParamsDTO richGenParams)
+                `shouldBe` richGenParams
+
+        it "a planted nested climate/calendar value survives the DTO round \
+           \trip (recursion is lossless, not merely structural)" $ do
+            let gp' = fromWorldGenParamsDTO (toWorldGenParamsDTO richGenParams)
+            ccDaysPerMonth (wgpCalender gp') `shouldBe` 40
+            csGlobalTemp (wgpClimateState gp') `shouldBe` 14.5
+            (rcHumidity <$> HM.lookup (ClimateCoord 1 2)
+                (cgRegions (csClimate (wgpClimateState gp'))))
+                `shouldBe` Just 0.42
+
+    describe "registry is authoritative for assembly (blocker 2, round 6)" $ do
+        -- assembleSnapshot is registry-driven: every registered component
+        -- carries a mandatory rcApply that assembly folds. A full session
+        -- populating EVERY component's data must reconstruct EXACTLY, so a
+        -- component that were registered but not assembled would drop its
+        -- data here.
+        it "round-trips a session populating EVERY component's data, \
+           \reconstructing the EXACT snapshot" $ do
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t") fullSnapshot
+                bytes = encodeSessionSnapshot meta fullSnapshot
+            case decodeSessionEnvelope bytes of
+                Left err → expectationFailure (T.unpack err)
+                Right (m, snap) → do
+                    m    `shouldBe` meta
+                    snap `shouldBe` fullSnapshot
+
+        it "the registry's ids ARE the reader's known component set (no \
+           \registered component is unknown to the reader, and vice versa)" $
+            HS.fromList (map rcId saveComponentRegistry)
+                `shouldBe` componentKnownIds
+
+        it "every registered component carries an assembly step \
+           \(rcApply is total over the registry, folding onto a snapshot)" $ do
+            -- Decode the full envelope, then confirm each registered
+            -- component's rcApply runs without error against the decoded
+            -- payloads — the structural guarantee that registration and
+            -- assembly cannot diverge (rcApply is a mandatory field).
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t") fullSnapshot
+                bytes = encodeSessionSnapshot meta fullSnapshot
+            case decodeSessionEnvelope bytes of
+                Left err → expectationFailure (T.unpack err)
+                Right _  → length saveComponentRegistry `shouldBe`
+                               HS.size componentKnownIds
 
     describe "page-scoping (requirement 8)" $ do
         it "rejects a page-scoped slice set missing a page the authority \
@@ -535,7 +675,8 @@ elemIndex' x = go 0
 stubComponent ∷ ComponentId → [ComponentId] → RegisteredComponent
 stubComponent cid deps = RegisteredComponent
     { rcId = cid, rcVersion = 1, rcInputVers = [1], rcRequired = True
-    , rcDeps = deps, rcEncode = const BS.empty, rcCheck = \_ _ → [] }
+    , rcDeps = deps, rcEncode = const BS.empty
+    , rcDecodeErrors = const [], rcApply = \_ s → Right s }
 
 -- | The component ids actually present in an encoded envelope's
 --   manifest — a genuine structural read, so a stray @"session"@

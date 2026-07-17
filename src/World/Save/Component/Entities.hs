@@ -113,6 +113,21 @@ orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
 -- | Per-page building slice. Carries ONLY the instance map — the
 --   building-id allocator (@bsnNextId@) is deliberately absent, since it
 --   is a global counter owned once by @"core-session"@ (requirement 9).
+--
+--   'BuildingInstanceSnapshot' is embedded DIRECTLY, NOT wrapped in a
+--   component-owned DTO — a deliberate exception to the frozen-DTO
+--   boundary rule (stated in "World.Save.Component.Types"), taken under
+--   that rule's LEAF clause (b). It is not a live runtime manager record:
+--   it is ITSELF an already-frozen "World.Save.Types" positional
+--   persistence snapshot with its own established change-control
+--   discipline — @'World.Save.Types.currentSaveVersion'@, whose version-
+--   history comment block requires a bump for any field it (or the
+--   'ItemInstance'/etc. it transitively carries) gains, drops, or
+--   reorders. Reusing it is therefore safe by that DIFFERENT, pre-B2
+--   mechanism, not a gap; mirroring it in a second DTO would duplicate a
+--   freeze boundary that already exists, with no added safety. (A future
+--   step that dissolves 'BuildingInstanceSnapshot' into a genuinely live
+--   manager record would then bring it under the FREEZE clause here.)
 data PageBuildingsDTO = PageBuildingsDTO
     { pbPageId    ∷ !WorldPageId
     , pbInstances ∷ !(HM.HashMap BuildingId BuildingInstanceSnapshot)
@@ -122,9 +137,12 @@ newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- Depends on @"core-session"@ too: assembly refills each page's
+-- @bsnNextId@ from the GLOBAL building-id allocator that @"core-session"@
+-- installs, so it must fold first (requirement 9).
 buildingsCodec ∷ ComponentCodec BuildingsDTO
 buildingsCodec = serializeCodec
-    buildingsComponentId 1 True [worldPagesComponentId]
+    buildingsComponentId 1 True [worldPagesComponentId, coreSessionComponentId]
     (\snap → BuildingsDTO
         [ PageBuildingsDTO (pgsPageId p) (bsnInstances (pgsBuildings p))
         | p ← orderedPages snap ])
@@ -149,7 +167,11 @@ applyBuildings ver nextId (BuildingsDTO slices) =
 
 -- | Per-page unit slice. Carries ONLY the instance map — the unit-id
 --   allocator (@usnNextId@) is absent for the same global-allocator
---   reason as @bsnNextId@ above.
+--   reason as @bsnNextId@ above. 'UnitInstanceSnapshot' is embedded
+--   directly for the SAME reason 'BuildingInstanceSnapshot' is (see
+--   'PageBuildingsDTO'): it is an already-frozen "World.Save.Types"
+--   positional snapshot governed by @'World.Save.Types.currentSaveVersion'@,
+--   the boundary rule's leaf clause (b), not a live manager record.
 data PageUnitsDTO = PageUnitsDTO
     { puPageId    ∷ !WorldPageId
     , puInstances ∷ !(HM.HashMap UnitId UnitInstanceSnapshot)
@@ -159,9 +181,11 @@ newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
+-- Depends on @"core-session"@ too, for the global unit-id allocator
+-- (@usnNextId@), same reasoning as @"buildings"@ above.
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = serializeCodec
-    unitsComponentId 1 True [worldPagesComponentId]
+    unitsComponentId 1 True [worldPagesComponentId, coreSessionComponentId]
     (\snap → UnitsDTO
         [ PageUnitsDTO (pgsPageId p) (usnInstances (pgsUnits p))
         | p ← orderedPages snap ])

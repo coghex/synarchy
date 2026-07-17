@@ -39,14 +39,16 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
-import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..))
+import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Envelope.Codec (DecodedEnvelope(..))
 import World.Save.Types (SaveMetadata(..))
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..), PageSnapshot(..)
     , validateSessionSnapshot )
 import World.Generate.Types (WorldGenParams(..))
-import World.Page.Types (WorldIdentity(..))
+import World.Page.Types (WorldIdentity(..), WorldPageId(..))
+import Structure.Palette (emptyTexPalette)
+import Engine.Graphics.Camera (CameraFacing(..))
 import World.Save.Component.Types
 import World.Save.Component.Session
 import World.Save.Component.Page
@@ -56,20 +58,52 @@ import World.Save.Component.Entities
 --   order. The @"metadata"@ component is NOT here — it is owned by
 --   "World.Save.Envelope" (it carries listing metadata, not gameplay
 --   state, and must be readable without decoding any of these).
+-- | Each entry pairs a component's concrete codec with its ASSEMBLY FOLD
+--   (the snapshot contribution). 'registerComponent' makes the fold a
+--   mandatory part of registration, so this ONE list is authoritative for
+--   BOTH encoding and reassembly — a component here is necessarily applied
+--   on load, never merely written-and-ignored (the blocker this closes).
+--   The folds:
+--
+--   - global components ('core-session'/'texture-palette'/'lua-state')
+--     write the session-wide scalars/camera/palette/Lua blobs;
+--   - 'world-pages' installs the base 'PageSnapshot' map every page-scoped
+--     component then writes onto;
+--   - each page-scoped component overwrites its own slice of every page
+--     via its @apply…@ helper, reporting a page-set mismatch as an
+--     assembly error.
+--
+--   'buildings'/'units' read the GLOBAL id allocator out of the snapshot
+--   ('snapNextBuildingId'/'snapNextUnitId'), which 'core-session' installs
+--   — so they declare 'core-session' as a dependency (see their codecs),
+--   and 'dependencyOrder' guarantees 'core-session' folds first.
 saveComponentRegistry ∷ [RegisteredComponent]
 saveComponentRegistry =
     [ registerComponent coreSessionCodec
+        (\_ d snap → Right (applyCoreSession d snap))
     , registerComponent texPaletteCodec
+        (\_ d snap → Right (coreSessionTexPalette d snap))
     , registerComponent luaStateCodec
+        (\_ d snap → Right (coreSessionLua d snap))
     , registerComponent worldPagesCodec
+        (\_ d snap → Right snap { snapPages = basePageSnapshots d })
     , registerComponent worldEditsCodec
+        (\ver d snap → onPages snap (applyWorldEdits ver d))
     , registerComponent worldActivityCodec
+        (\ver d snap → onPages snap (applyWorldActivity ver d))
     , registerComponent buildingsCodec
+        (\ver d snap → onPages snap (applyBuildings ver (snapNextBuildingId snap) d))
     , registerComponent unitsCodec
+        (\ver d snap → onPages snap (applyUnits ver (snapNextUnitId snap) d))
     , registerComponent unitSimCodec
+        (\ver d snap → onPages snap (applyUnitSim ver d))
     , registerComponent craftBillsCodec
+        (\ver d snap → onPages snap (applyCraftBills ver d))
     , registerComponent powerNodesCodec
+        (\ver d snap → onPages snap (applyPowerNodes ver d))
     ]
+  where
+    onPages snap f = (\pages → snap { snapPages = pages }) ⊚ f (snapPages snap)
 
 -- | The ids this reader knows how to interpret (gameplay only — the
 --   envelope layer adds @"metadata"@).
@@ -141,106 +175,72 @@ dependencyOrder comps = go [] comps
 --   envelope plus the already-decoded manifest 'SaveMetadata'
 --   (requirement 6/12). All-or-nothing: any decode / migrate / validate
 --   / cross-component failure returns EVERY failure and no snapshot.
+--
+--   Every step is REGISTRY-DRIVEN (requirement 6): there is no separate
+--   hard-coded list of components to apply that could drift from
+--   'saveComponentRegistry'. Phase 1 asks each registered component for
+--   its decode/self-validate errors ('rcDecodeErrors'); phase 2 folds
+--   each component's contribution onto a skeleton via its mandatory
+--   'rcApply', in dependency order so @"world-pages"@ installs the base
+--   page map before any page-scoped component writes onto it, and
+--   @"core-session"@ installs the global id allocators before
+--   @"buildings"@/@"units"@ read them. Because 'rcApply' is required to
+--   register, a component cannot be written+required yet silently skipped
+--   on load.
 assembleSnapshot
     ∷ SaveMetadata → DecodedEnvelope → Either [ComponentError] SessionSnapshot
 assembleSnapshot meta de = do
-    -- 1. Decode + component-local-validate each component (no live state).
-    let eCore     = decodeComponentValue coreSessionCodec de
-        eTex      = decodeComponentValue texPaletteCodec de
-        eLua      = decodeComponentValue luaStateCodec de
-        ePages    = decodeComponentValue worldPagesCodec de
-        eEdits    = decodeComponentValue worldEditsCodec de
-        eActivity = decodeComponentValue worldActivityCodec de
-        eBuild    = decodeComponentValue buildingsCodec de
-        eUnits    = decodeComponentValue unitsCodec de
-        eSim      = decodeComponentValue unitSimCodec de
-        eCraft    = decodeComponentValue craftBillsCodec de
-        ePower    = decodeComponentValue powerNodesCodec de
-        decodeErrs = concat
-            [ lefts' eCore, lefts' eTex, lefts' eLua, lefts' ePages
-            , lefts' eEdits, lefts' eActivity, lefts' eBuild, lefts' eUnits
-            , lefts' eSim, lefts' eCraft, lefts' ePower ]
+    -- Dependency order (a genuine registry cycle is already rejected by
+    -- registryStaticErrors' hspec assertion; guarded here defensively).
+    ordered ← case dependencyOrder saveComponentRegistry of
+        Left cyc → Left [ ComponentError (headOr coreSessionComponentId cyc) 0
+                            AssemblePhase
+                            ("dependency cycle: "
+                             <> T.intercalate " -> " (map cidText cyc)) ]
+        Right o  → Right o
+    -- 1. Decode + component-local-validate EVERY component (no live state),
+    --    collecting all failures (all-or-nothing).
+    let decodeErrs = concatMap (`rcDecodeErrors` de) saveComponentRegistry
     if not (null decodeErrs) then Left decodeErrs else do
-        core     ← eCore
-        tex      ← eTex
-        lua      ← eLua
-        pagesDTO ← ePages
-        edits    ← eEdits
-        activity ← eActivity
-        build    ← eBuild
-        units    ← eUnits
-        sim      ← eSim
-        craft    ← eCraft
-        power    ← ePower
-        -- 2. Assemble page snapshots (page-set consistency, requirement 8).
-        let base = basePageSnapshots pagesDTO
-            -- The building/unit id allocators are global, owned once by
-            -- @"core-session"@ (requirement 9); the per-page building/
-            -- unit slices carry no allocator copy, so refill each page's
-            -- reconstructed snapshot from these single counters.
-            bNextId = csNextBuildingId core
-            uNextId = csNextUnitId core
-            -- Each page-scoped component's REAL encoded version, read
-            -- from the decoded manifest descriptor (requirement 6: a
-            -- page-set-mismatch error names the true version, not a
-            -- placeholder). The descriptor is always present here — the
-            -- component decoded successfully just above — so the
-            -- fallback to the codec's current version is unreachable.
-            verOf ∷ ComponentCodec a → Word32
-            verOf cc = maybe (ccVersion cc) cdVersion
-                             (findDescriptor (ccId cc) (deManifest de))
-            editsVer    = verOf worldEditsCodec
-            activityVer = verOf worldActivityCodec
-            buildVer    = verOf buildingsCodec
-            unitsVer    = verOf unitsCodec
-            simVer      = verOf unitSimCodec
-            craftVer    = verOf craftBillsCodec
-            powerVer    = verOf powerNodesCodec
-            applyErrs = concat
-                [ leftsOf (applyWorldEdits editsVer edits base)
-                , leftsOf (applyWorldActivity activityVer activity base)
-                , leftsOf (applyBuildings buildVer bNextId build base)
-                , leftsOf (applyUnits unitsVer uNextId units base)
-                , leftsOf (applyUnitSim simVer sim base)
-                , leftsOf (applyCraftBills craftVer craft base)
-                , leftsOf (applyPowerNodes powerVer power base)
-                ]
+        -- 2. Fold each component's contribution onto the skeleton, in
+        --    dependency order. Page-set-mismatch errors are independent per
+        --    component (they all check against the SAME base @"world-pages"@
+        --    installs first), so accumulate them all rather than
+        --    short-circuiting. Foundational folds (world-pages/core-session/
+        --    tex/lua) never error, so a failed page component leaves the
+        --    base intact for the next component's own check.
+        let (applyErrs, snap) = L.foldl' step ([], skeleton) ordered
+            step (es, s) rc = case rcApply rc de s of
+                Left e   → (es <> e, s)
+                Right s' → (es, s')
         if not (null applyErrs) then Left applyErrs else do
-            pages ←   applyWorldEdits editsVer edits base
-                  >>= applyWorldActivity activityVer activity
-                  >>= applyBuildings buildVer bNextId build
-                  >>= applyUnits unitsVer uNextId units
-                  >>= applyUnitSim simVer sim
-                  >>= applyCraftBills craftVer craft
-                  >>= applyPowerNodes powerVer power
-            -- 3. Build the full immutable snapshot from the globals + pages.
-            let cam  = csLiveCamera core
-                snap = SessionSnapshot
-                    { snapGameTime       = csGameTime core
-                    , snapTexPalette     = tpdPalette tex
-                    , snapNextItemId     = csNextItemId core
-                    , snapNextBuildingId = csNextBuildingId core
-                    , snapNextUnitId     = csNextUnitId core
-                    , snapLuaModules     = lsdModules lua
-                    , snapActivePage     = csActivePage core
-                    , snapVisiblePages   = csVisiblePages core
-                    , snapLiveCamera     = LiveCameraSnapshot
-                        { lcsOwnerPage = lcdOwner cam
-                        , lcsX = lcdX cam, lcsY = lcdY cam
-                        , lcsZoom = lcdZoom cam, lcsFacing = lcdFacing cam }
-                    , snapPages          = pages
-                    }
-            -- 4. Cross-component invariants (requirement 6/9/12).
+            -- 3. Cross-component invariants (requirement 6/9/12).
             let crossErrs = map snapErr (validateSessionSnapshot snap)
                             ++ metadataErrors meta snap
             if null crossErrs then Right snap else Left crossErrs
-
-lefts' ∷ Either [ComponentError] a → [ComponentError]
-lefts' (Left es) = es
-lefts' (Right _) = []
-
-leftsOf ∷ Either [ComponentError] a → [ComponentError]
-leftsOf = lefts'
+  where
+    cidText (ComponentId t) = t
+    headOr d []      = d
+    headOr _ (x : _) = x
+    -- An empty starting snapshot. EVERY field is overwritten by a REQUIRED
+    -- component's fold (globals by @"core-session"@, palette/Lua by their
+    -- own components, pages by @"world-pages"@), all of which are present
+    -- and decoded by the time the fold runs, so none of these placeholders
+    -- survives into a successfully assembled snapshot.
+    skeleton = SessionSnapshot
+        { snapGameTime       = 0
+        , snapTexPalette     = emptyTexPalette
+        , snapNextItemId     = 0
+        , snapNextBuildingId = 0
+        , snapNextUnitId     = 0
+        , snapLuaModules     = HM.empty
+        , snapActivePage     = WorldPageId ""
+        , snapVisiblePages   = []
+        , snapLiveCamera     = LiveCameraSnapshot
+            { lcsOwnerPage = Nothing, lcsX = 0, lcsY = 0
+            , lcsZoom = 1, lcsFacing = FaceSouth }
+        , snapPages          = HM.empty
+        }
 
 -- | Lift a whole-session snapshot invariant failure into a component
 --   error attributed to @"core-session"@ (the component owning the

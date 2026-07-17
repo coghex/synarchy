@@ -32,7 +32,9 @@
 --   ('to…'/'from…'), exactly the discipline "World.Save.Component.Entities"
 --   applies to the unit-sim / craft-bill / power-node records:
 --
---   - 'WorldGenParams'      → 'WorldGenParamsDTO'
+--   - 'WorldGenParams'      → 'WorldGenParamsDTO' (with its nested live
+--                             config/state records frozen recursively —
+--                             see "World.Save.Component.WorldGen")
 --   - 'WorldIdentity'       → 'WorldIdentityDTO'
 --   - 'WorldEdit'           → 'WorldEditDTO' (its own frozen tag order,
 --                             decoupled from the live sum's constructor
@@ -45,29 +47,27 @@
 --   - 'TillDesignation'     → 'TillDesignationDTO'
 --   - 'PlantDesignation'    → 'PlantDesignationDTO'
 --   - 'CropPlot'            → 'CropPlotDTO'
---   - 'GroundItem'/'GroundItems' → 'GroundItemDTO'/'GroundItemsDTO'
+--   - 'GroundItem'/'GroundItems' → 'GroundItemDTO'/'GroundItemsDTO', its
+--                             nested 'ItemInstance' frozen recursively via
+--                             'ItemInstanceDTO'
 --   - 'SpoilPile'           → 'SpoilPileDTO'
 --
+--   'WorldGenParamsDTO' and its full nested worldgen config/state tree
+--   live in "World.Save.Component.WorldGen" (imported + re-exported here);
+--   'ItemInstanceDTO' is defined below beside 'GroundItemDTO'.
+--
 --   A field/constructor added, dropped, or reordered on any of those
---   live records surfaces here as a compile error in its @from…@
---   conversion, never as silent byte drift in a shipped v1 save. As in
---   Entities, genuine LEAF content references are reused as-is rather
---   than mirrored, because they are themselves append-only, save-version-
---   governed content, and mirroring them would be both absurd and no
---   safer than reusing them: the payload-free append-only enums
---   ('ZoomMapMode', 'ConstructStatus'), the durable coordinate/id/content
---   references ('ChunkCoord', 'FluidType', 'MaterialId', 'FloraId',
---   'ItemInstance'), a bare 'Float' regrowth timer ('FloraHarvests', which
---   has no record at all to freeze), and — inside 'WorldGenParamsDTO' —
---   the deeply nested worldgen CONFIG sub-records ('CalendarConfig',
---   'SunConfig', 'MoonConfig', 'GeoTimeline', 'OceanMap', 'OceanDistMap',
---   'ClimateParams', 'ClimateState', 'OreLevers', 'TimelineParams',
---   'LocationOverlay', 'TectonicPlate'), which are the worldgen layer's
---   own independently save-governed content (the same boundary Entities
---   draws at the already-frozen 'BuildingInstanceSnapshot'/
---   'UnitInstanceSnapshot' persistence types). The DTO field order is
---   chosen so the derived cereal layout is byte-identical to the previous
---   direct embedding — the frozen tracked fixture stays valid.
+--   live records surfaces here (or in "…WorldGen") as a compile error in
+--   its @from…@ conversion, never as silent byte drift in a shipped v1
+--   save. Per the component frozen-DTO boundary rule (stated in
+--   "World.Save.Component.Types"), genuine LEAF references are reused
+--   as-is rather than mirrored: the payload-free append-only enums
+--   ('ZoomMapMode', 'ConstructStatus'), and the durable coordinate/id/
+--   content references ('ChunkCoord', 'FluidType', 'MaterialId',
+--   'FloraId'), plus a bare 'Float' regrowth timer ('FloraHarvests',
+--   which has no record at all to freeze). The DTO field order is chosen
+--   so the derived cereal layout is byte-identical to the previous direct
+--   embedding — the frozen tracked fixture stays valid.
 module World.Save.Component.Page
     ( worldPagesCodec
     , worldEditsCodec
@@ -90,11 +90,16 @@ module World.Save.Component.Page
     , TillDesignationDTO(..)
     , PlantDesignationDTO(..)
     , CropPlotDTO(..)
+    , ItemInstanceDTO(..)
     , GroundItemDTO(..)
     , GroundItemsDTO(..)
     , SpoilPileDTO(..)
     , toWorldGenParamsDTO
     , fromWorldGenParamsDTO
+    , toItemInstanceDTO
+    , fromItemInstanceDTO
+    , toGroundItemDTO
+    , fromGroundItemDTO
     , basePageSnapshots
     , applyWorldEdits
     , applyWorldActivity
@@ -102,22 +107,14 @@ module World.Save.Component.Page
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
 import Power.Types (emptyPowerNodes)
-import World.Generate.Types (WorldGenParams(..), withVolcanoCtx)
-import World.Magma.Types (emptyVolcanoCtx)
-import World.Plate.Types (TectonicPlate)
-import World.Time.Types (CalendarConfig, SunConfig, MoonConfig)
-import World.Geology.Timeline.Types (GeoTimeline, TimelineParams)
-import World.Ocean.Types (OceanMap, OceanDistMap)
-import World.Weather.Types (ClimateParams, ClimateState)
-import World.Geology.Ore.Types (OreLevers)
-import Location.Overlay.Types (LocationOverlay)
+import World.Save.Component.WorldGen
+    (WorldGenParamsDTO(..), toWorldGenParamsDTO, fromWorldGenParamsDTO)
 import World.Chunk.Types (ChunkCoord)
 import World.Page.Types (WorldPageId, WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode)
@@ -136,7 +133,7 @@ import World.Spoil.Types (SpoilPile(..), SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
 import World.Flora.CropPlot (CropPlot(..), CropPlots, emptyCropPlots)
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
-import Item.Types (ItemInstance)
+import Item.Types (ItemInstance(..))
 import World.Save.Types
     ( BuildingSnapshot(..), UnitSnapshot(..) )
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
@@ -150,100 +147,6 @@ tshow ∷ Show a ⇒ a → Text
 tshow = T.pack . show
 
 -- Frozen leaf DTOs (requirement 4) -----------------------------------
-
--- | Frozen mirror of 'WorldGenParams' (a mutable runtime record that
---   gains fields as worldgen features land — the #89/#90/#424/#780
---   location flags are the recent examples). Field order matches
---   'WorldGenParams''s MANUAL 'Serialize' instance exactly (every field
---   except the transient @wgpVolcanoCtx@, which that instance also
---   skips and rebuilds on load), so the derived cereal layout here is
---   byte-identical to embedding the record directly. Nested worldgen
---   config sub-records are reused as leaves (see the module haddock).
-data WorldGenParamsDTO = WorldGenParamsDTO
-    { gpSeed                   ∷ !Word64
-    , gpWorldSize              ∷ !Int
-    , gpPlateCount             ∷ !Int
-    , gpPlates                 ∷ ![TectonicPlate]
-    , gpCalender               ∷ !CalendarConfig
-    , gpSunConfig              ∷ !SunConfig
-    , gpMoonConfig             ∷ !MoonConfig
-    , gpGeoTimeline            ∷ !GeoTimeline
-    , gpOceanMap               ∷ !OceanMap
-    , gpOceanDist              ∷ !OceanDistMap
-    , gpClimateParams          ∷ !ClimateParams
-    , gpClimateState           ∷ !ClimateState
-    , gpErosionIntensity       ∷ !Float
-    , gpVolcanicActivity       ∷ !Float
-    , gpLavaPoolDepth          ∷ !Int
-    , gpLavaPoolRadius         ∷ !Int
-    , gpWaterfallQuantum       ∷ !Int
-    , gpOreLevers              ∷ !OreLevers
-    , gpTimelineParams         ∷ !TimelineParams
-    , gpLocationOverlay        ∷ !LocationOverlay
-    , gpLocationContentsSpawned ∷ !(HS.HashSet ChunkCoord)
-    , gpLocationStamped        ∷ !(HS.HashSet ChunkCoord)
-    , gpLocationDiscovered     ∷ !(HS.HashSet ChunkCoord)
-    } deriving (Show, Eq, Generic, Serialize)
-
-toWorldGenParamsDTO ∷ WorldGenParams → WorldGenParamsDTO
-toWorldGenParamsDTO p = WorldGenParamsDTO
-    { gpSeed                    = wgpSeed p
-    , gpWorldSize               = wgpWorldSize p
-    , gpPlateCount              = wgpPlateCount p
-    , gpPlates                  = wgpPlates p
-    , gpCalender                = wgpCalender p
-    , gpSunConfig               = wgpSunConfig p
-    , gpMoonConfig              = wgpMoonConfig p
-    , gpGeoTimeline             = wgpGeoTimeline p
-    , gpOceanMap                = wgpOceanMap p
-    , gpOceanDist               = wgpOceanDist p
-    , gpClimateParams           = wgpClimateParams p
-    , gpClimateState            = wgpClimateState p
-    , gpErosionIntensity        = wgpErosionIntensity p
-    , gpVolcanicActivity        = wgpVolcanicActivity p
-    , gpLavaPoolDepth           = wgpLavaPoolDepth p
-    , gpLavaPoolRadius          = wgpLavaPoolRadius p
-    , gpWaterfallQuantum        = wgpWaterfallQuantum p
-    , gpOreLevers               = wgpOreLevers p
-    , gpTimelineParams          = wgpTimelineParams p
-    , gpLocationOverlay         = wgpLocationOverlay p
-    , gpLocationContentsSpawned = wgpLocationContentsSpawned p
-    , gpLocationStamped         = wgpLocationStamped p
-    , gpLocationDiscovered      = wgpLocationDiscovered p
-    }
-
--- | Rebuild the live record from the DTO, restoring the transient
---   @wgpVolcanoCtx@ via 'withVolcanoCtx' exactly the way the manual
---   'Serialize' instance's @get@ does (from seed / world-size / plates /
---   timeline). Adding a field to 'WorldGenParams' breaks THIS
---   construction — the conscious reconciliation requirement 4 asks for.
-fromWorldGenParamsDTO ∷ WorldGenParamsDTO → WorldGenParams
-fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
-    { wgpSeed                    = gpSeed d
-    , wgpWorldSize               = gpWorldSize d
-    , wgpPlateCount              = gpPlateCount d
-    , wgpPlates                  = gpPlates d
-    , wgpCalender                = gpCalender d
-    , wgpSunConfig               = gpSunConfig d
-    , wgpMoonConfig              = gpMoonConfig d
-    , wgpGeoTimeline             = gpGeoTimeline d
-    , wgpOceanMap                = gpOceanMap d
-    , wgpOceanDist               = gpOceanDist d
-    , wgpClimateParams           = gpClimateParams d
-    , wgpClimateState            = gpClimateState d
-    , wgpErosionIntensity        = gpErosionIntensity d
-    , wgpVolcanicActivity        = gpVolcanicActivity d
-    , wgpLavaPoolDepth           = gpLavaPoolDepth d
-    , wgpLavaPoolRadius          = gpLavaPoolRadius d
-    , wgpWaterfallQuantum        = gpWaterfallQuantum d
-    , wgpOreLevers               = gpOreLevers d
-    , wgpTimelineParams          = gpTimelineParams d
-    , wgpLocationOverlay         = gpLocationOverlay d
-    , wgpLocationContentsSpawned = gpLocationContentsSpawned d
-    , wgpLocationStamped         = gpLocationStamped d
-    , wgpLocationDiscovered      = gpLocationDiscovered d
-    , wgpVolcanoCtx              = emptyVolcanoCtx
-    }
 
 -- | Frozen mirror of 'WorldIdentity'.
 data WorldIdentityDTO = WorldIdentityDTO
@@ -424,20 +327,69 @@ toCropPlotDTO c = CropPlotDTO (cpSpecies c) (cpPlantedDay c) (cpHealth c)
 fromCropPlotDTO ∷ CropPlotDTO → CropPlot
 fromCropPlotDTO d = CropPlot (cpiSpecies d) (cpiPlantedDay d) (cpiHealth d)
 
--- | Frozen mirror of 'GroundItem'. 'ItemInstance' is reused as a leaf
---   content reference (the same one 'BuildingInstanceSnapshot'/
---   'UnitInstanceSnapshot' already carry).
+-- | Frozen mirror of 'ItemInstance' (a mutable runtime record whose
+--   fields — fill / quality / condition / sharpness / temperature — are
+--   live gameplay state, appended to across saves v36/v42/v56/v68). Per
+--   the component frozen-DTO boundary rule ("World.Save.Component.Types"),
+--   this live record is frozen with an explicit field-by-field conversion
+--   rather than embedded — and it is frozen RECURSIVELY: 'iiContents' is
+--   itself a @['ItemInstance']@ (a first-aid kit holds items, a kit can
+--   hold a kit), so 'itdContents' recurses through 'ItemInstanceDTO' too;
+--   a shallow wrapper re-embedding the live nested list would still drift.
+--   Every other field is a leaf scalar/'Maybe' scalar. Field order mirrors
+--   'ItemInstance''s positional 'Generic Serialize' layout exactly, so the
+--   bytes are unchanged from embedding the live type directly.
+data ItemInstanceDTO = ItemInstanceDTO
+    { itdDefName     ∷ !Text
+    , itdCurrentFill ∷ !Float
+    , itdQuality     ∷ !Float
+    , itdCondition   ∷ !Float
+    , itdWeight      ∷ !Float
+    , itdSharpness   ∷ !Float
+    , itdContents    ∷ ![ItemInstanceDTO]
+    , itdInstanceId  ∷ !Word64
+    , itdTemp        ∷ !(Maybe Float)
+    } deriving (Show, Eq, Generic, Serialize)
+
+toItemInstanceDTO ∷ ItemInstance → ItemInstanceDTO
+toItemInstanceDTO i = ItemInstanceDTO
+    { itdDefName     = iiDefName i
+    , itdCurrentFill = iiCurrentFill i
+    , itdQuality     = iiQuality i
+    , itdCondition   = iiCondition i
+    , itdWeight      = iiWeight i
+    , itdSharpness   = iiSharpness i
+    , itdContents    = map toItemInstanceDTO (iiContents i)
+    , itdInstanceId  = iiInstanceId i
+    , itdTemp        = iiTemp i
+    }
+
+fromItemInstanceDTO ∷ ItemInstanceDTO → ItemInstance
+fromItemInstanceDTO d = ItemInstance
+    { iiDefName     = itdDefName d
+    , iiCurrentFill = itdCurrentFill d
+    , iiQuality     = itdQuality d
+    , iiCondition   = itdCondition d
+    , iiWeight      = itdWeight d
+    , iiSharpness   = itdSharpness d
+    , iiContents    = map fromItemInstanceDTO (itdContents d)
+    , iiInstanceId  = itdInstanceId d
+    , iiTemp        = itdTemp d
+    }
+
+-- | Frozen mirror of 'GroundItem'. Its 'ItemInstance' recurses through
+--   'ItemInstanceDTO' above.
 data GroundItemDTO = GroundItemDTO
-    { giiInst ∷ !ItemInstance
+    { giiInst ∷ !ItemInstanceDTO
     , giiX    ∷ !Float
     , giiY    ∷ !Float
     } deriving (Show, Eq, Generic, Serialize)
 
 toGroundItemDTO ∷ GroundItem → GroundItemDTO
-toGroundItemDTO g = GroundItemDTO (giInst g) (giX g) (giY g)
+toGroundItemDTO g = GroundItemDTO (toItemInstanceDTO (giInst g)) (giX g) (giY g)
 
 fromGroundItemDTO ∷ GroundItemDTO → GroundItem
-fromGroundItemDTO d = GroundItem (giiInst d) (giiX d) (giiY d)
+fromGroundItemDTO d = GroundItem (fromItemInstanceDTO (giiInst d)) (giiX d) (giiY d)
 
 -- | Frozen mirror of the 'GroundItems' registry (its id counter + map).
 data GroundItemsDTO = GroundItemsDTO

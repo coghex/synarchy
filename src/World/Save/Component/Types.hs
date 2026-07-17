@@ -20,6 +20,51 @@
 --   canonical type @a@ a codec decodes INTO is the migration target
 --   ("World.Save.Snapshot"'s slices), kept separate from the versioned
 --   DTO so ordinary snapshot evolution never touches saved bytes.
+--
+--   === Frozen-DTO boundary rule (governs every component, present or future)
+--
+--   A component's DTO must never embed a LIVE gameplay record directly,
+--   because adding / dropping / reordering a field on that live record
+--   would silently change a shipped component's bytes. For any type
+--   reachable from a component's DTO, decide FREEZE vs. LEAF as follows —
+--   and recurse the decision into a frozen type's own fields, so the
+--   boundary is transitive (a shallow wrapper that re-embeds a live nested
+--   type does NOT satisfy this rule):
+--
+--   FREEZE it (mirror it with a component-owned DTO + an explicit
+--   field-by-field @to…@/@from…@ conversion) iff EITHER
+--
+--     (1) it has its own live-manager identity — it is mutated in place
+--         elsewhere in the engine as gameplay-runtime state, imported from
+--         a non-Save module whose purpose is holding live mutable state; OR
+--     (2) it could plausibly gain / lose / reorder fields for reasons
+--         unrelated to save compatibility.
+--
+--   REUSE it as a LEAF (no wrapper) iff EITHER
+--
+--     (a) it is a content-reference id / coordinate / append-only enum
+--         with no independent mutable identity — e.g. 'MaterialId',
+--         @FloraId@, @ChunkCoord@, @ClimateCoord@, @Pose@, @Direction@,
+--         @ZoomMapMode@; OR
+--     (b) it is ITSELF already an independently-versioned / governed
+--         persistence type with its own established freeze boundary and
+--         change-control discipline. Two concrete kinds qualify: the
+--         "World.Save.Types" positional snapshots
+--         (@BuildingInstanceSnapshot@ / @UnitInstanceSnapshot@ /
+--         @BuildingSnapshot@ / @UnitSnapshot@), whose change already
+--         requires a @currentSaveVersion@ bump per that module's version-
+--         history contract; and a live type that carries its OWN in-source
+--         documented positional-save-schema discipline (per-field
+--         save-version annotations + an explicit stable-field-order
+--         contract), e.g. @GeoTimeline@. Reusing these is safe by a
+--         DIFFERENT, already-established mechanism — not a gap.
+--
+--   Do not gold-plate: stop at leaves. The concrete components apply this
+--   rule in "World.Save.Component.WorldGen" (the worldgen-params tree),
+--   "World.Save.Component.Page" (world edits / designations / ground
+--   items), and "World.Save.Component.Entities" (unit-sim / craft-bills /
+--   power-nodes, plus the deliberate leaf reuse of the two positional
+--   entity snapshots).
 module World.Save.Component.Types
     ( ComponentPhase(..)
     , ComponentError(..)
@@ -105,34 +150,69 @@ data ComponentCodec a = ComponentCodec
     }
 
 -- | The type-erased registry entry. Erasing @a@ lets one heterogeneous
---   list drive the uniform passes (encode from a snapshot; decode +
---   self-validate each present component into an error list) without
---   the concrete decoded values — the TYPED assembly in
---   "World.Save.Component" pulls those out itself via the concrete
---   codecs, so a registered component and its assembled contribution
---   can never drift (they share the exact same 'ccDecode'/'ccValidate').
+--   list drive every uniform pass — encode from a snapshot, decode +
+--   self-validate each present component ('rcDecodeErrors'), AND fold each
+--   component's decoded contribution back onto the in-progress snapshot
+--   during assembly ('rcApply'). Because 'rcApply' is a MANDATORY field,
+--   a component cannot be added to 'World.Save.Component.saveComponentRegistry'
+--   without also providing its assembly step: a registered-but-unassembled
+--   component (written to disk + required by the reader, yet silently
+--   ignored on load) is therefore structurally impossible. Every field is
+--   built from the same concrete 'ComponentCodec', so a component's
+--   encode / decode / validate / assemble contributions can never drift
+--   apart (they share the exact same 'ccDecode'/'ccValidate').
 data RegisteredComponent = RegisteredComponent
-    { rcId        ∷ !ComponentId
-    , rcVersion   ∷ !Word32
-    , rcInputVers ∷ ![Word32]
-    , rcRequired  ∷ !Bool
-    , rcDeps      ∷ ![ComponentId]
-    , rcEncode    ∷ SessionSnapshot → BS.ByteString
-    , rcCheck     ∷ Word32 → BS.ByteString → [ComponentError]
+    { rcId           ∷ !ComponentId
+    , rcVersion      ∷ !Word32
+    , rcInputVers    ∷ ![Word32]
+    , rcRequired     ∷ !Bool
+    , rcDeps         ∷ ![ComponentId]
+    , rcEncode       ∷ SessionSnapshot → BS.ByteString
+    , rcDecodeErrors ∷ DecodedEnvelope → [ComponentError]
+      -- ^ Decode + component-local-validate this component from a
+      --   structurally-valid envelope, returning EVERY failure (empty ⇒
+      --   the component is well-formed). Drives assembly's all-or-nothing
+      --   decode pass without needing the concrete decoded value.
+    , rcApply        ∷ DecodedEnvelope → SessionSnapshot
+                       → Either [ComponentError] SessionSnapshot
+      -- ^ Decode this component (again, from the already-validated
+      --   envelope) and FOLD its contribution onto the in-progress
+      --   snapshot. This is what makes the registry authoritative for
+      --   assembly (requirement 6): 'World.Save.Component.assembleSnapshot'
+      --   iterates the registry calling this, rather than hard-coding a
+      --   separate, drift-prone apply sequence.
     }
 
-registerComponent ∷ ComponentCodec a → RegisteredComponent
-registerComponent cc = RegisteredComponent
-    { rcId        = ccId cc
-    , rcVersion   = ccVersion cc
-    , rcInputVers = ccInputVers cc
-    , rcRequired  = ccRequired cc
-    , rcDeps      = ccDeps cc
-    , rcEncode    = ccEncode cc
-    , rcCheck     = \ver bytes → case ccDecode cc ver bytes of
-        Left e  → [e]
-        Right a → ccValidate cc a
+-- | Register a component: build every 'RegisteredComponent' field from its
+--   concrete 'ComponentCodec' plus its assembly fold. The fold receives
+--   the component's ACTUAL encoded version, its decoded+validated value,
+--   and the in-progress snapshot, and returns the snapshot with this
+--   component's contribution folded in (or the assembly errors it found —
+--   e.g. a page-set mismatch). Requiring the fold here is the structural
+--   guarantee that registration and assembly cannot diverge.
+registerComponent
+    ∷ ComponentCodec a
+    → (Word32 → a → SessionSnapshot → Either [ComponentError] SessionSnapshot)
+    → RegisteredComponent
+registerComponent cc fold = RegisteredComponent
+    { rcId           = ccId cc
+    , rcVersion      = ccVersion cc
+    , rcInputVers    = ccInputVers cc
+    , rcRequired     = ccRequired cc
+    , rcDeps         = ccDeps cc
+    , rcEncode       = ccEncode cc
+    , rcDecodeErrors = \de → either id (const []) (decodeComponentValue cc de)
+    , rcApply        = \de snap → do
+        a ← decodeComponentValue cc de
+        fold (encodedVersionOf cc de) a snap
     }
+
+-- | The component's ACTUAL encoded version, read from the decoded
+--   manifest descriptor (present whenever the component decoded), falling
+--   back to the codec's current version if somehow absent.
+encodedVersionOf ∷ ComponentCodec a → DecodedEnvelope → Word32
+encodedVersionOf cc de =
+    maybe (ccVersion cc) cdVersion (findDescriptor (ccId cc) (deManifest de))
 
 -- | Build a codec whose CURRENT version cereal-decodes straight into a
 --   versioned DTO @d@, then migrates that DTO into the canonical type
