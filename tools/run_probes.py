@@ -150,6 +150,8 @@ PROBES = [
      "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
     ("preview", "preview_probe.py",
      "--preview boot skeleton: CLI dispatch (grouped-no-item/unrecognized exit before boot) + boot profile/target over the debug console (#632)"),
+    ("remote_warning_page_guard", "remote_warning_page_guard_probe.py",
+     "remote-warning establishHere() revalidation guard against an active-world switch (#844)"),
     ("repair_item", "repair_item_probe.py",
      "unit.repairItem primitive (#300)"),
     ("repair", "repair_probe.py",
