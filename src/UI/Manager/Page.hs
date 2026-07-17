@@ -15,7 +15,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn)
 import UI.Types
-import UI.Manager.Core (deleteElementTree, bumpRouteEpoch)
+import UI.Manager.Core (deleteElementTree, bumpPageEpoch)
 
 -- * Page Operations
 
@@ -53,29 +53,31 @@ deletePage handle mgr =
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgrWithoutElements)
                 }
 
--- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
+-- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — a
 --   pending pointer activation on ANY control (not just one this page
 --   owns — a SEPARATE modal/menu page appearing over it counts too)
 --   must not restore across a page flickering hidden-then-shown
---   ("changing menus" per the #745 issue text); see 'bumpRouteEpoch'.
+--   ("changing menus" per the #745 issue text); see 'bumpPageEpoch'.
+--   Deliberately GLOBAL, unlike element-level property mutators —
+--   page visibility is a genuinely route-affecting event everywhere.
 showPage ∷ PageHandle → UIPageManager → UIPageManager
 showPage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
-            bumpRouteEpoch $
+            bumpPageEpoch $
             mgr { upmPages = Map.insert handle (page { upVisible = True }) (upmPages mgr)
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
--- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — see
+-- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — see
 --   'showPage'.
 hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
-            bumpRouteEpoch $
+            bumpPageEpoch $
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
                 -- Keyboard focus must not survive on a hidden page —

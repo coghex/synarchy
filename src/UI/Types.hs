@@ -142,6 +142,30 @@ data UIElement = UIElement
     --   before #745, because the press itself starts a drag (a slider
     --   knob, a scrollbar thumb). Defaults to 'False': an ordinary
     --   discrete control activates on a validated release instead.
+  , ueRouteEpoch ∷ Int
+    -- ^ #745 review round 12: bumped ONLY by a route-affecting
+    --   mutation to THIS specific element — 'UI.setVisible',
+    --   'UI.setClickable', or detach ('UI.removeElement'/
+    --   'removeFromPage') — never by (re)attach ('UI.addToPage'/
+    --   'addChild', which never bumps anything at all, see round 11)
+    --   and never by an unrelated element's own mutation.
+    --   'UI.ControlActivation.resolveActivation' walks the pressed
+    --   element's ANCESTOR chain (via 'ueParent') at press time and
+    --   again at release, comparing each ancestor's (including the
+    --   pressed element's own) epoch — deliberately scoped to that
+    --   ONE chain rather than global (round 10's global
+    --   @upmRouteEpoch@) so an unrelated sibling/child's passive
+    --   visual churn (a hover-highlight sprite toggled by
+    --   'scripts/ui/toggle.lua'\'s @onHoverEnter@/@onHoverLeave@ or
+    --   'scripts/ui/list.lua'\'s @setHoveredSlot@ — neither is an
+    --   ancestor of the control being hovered) can never poison an
+    --   unrelated pending activation, while hiding/disabling/
+    --   detaching the pressed element OR any of its real ancestors
+    --   still does. Page-level interruptions (own page hidden/shown,
+    --   a SEPARATE modal/menu page appearing then disappearing) are a
+    --   distinct, deliberately GLOBAL concern — see
+    --   'UIPageManager.upmPageEpoch'. Defaults to @0@; the exact
+    --   numeric value carries no meaning beyond "changed since press".
   , ueSteppable ∷ Bool
     -- ^ #745: this control responds to arrow-key stepping while it
     --   holds keyboard control focus (a slider — see
@@ -397,42 +421,36 @@ data UIPageManager = UIPageManager
     --   Enter/Space activation) — independent of 'upmGlobalFocus',
     --   which is text-input focus only. See 'UI.FocusNavigation'.
   , upmTooltip     ∷ TooltipState
-  , upmRouteEpoch  ∷ Int
-    -- ^ #745 review round 10: bumped by every route-affecting mutation
-    --   ANYWHERE in the manager — 'UI.setVisible', 'UI.setClickable',
-    --   detach ('removeElement'/'removeFromPage'), and 'hidePage'/
-    --   'showPage'. A 'UI.ControlActivation.PendingActivation' captures
-    --   this value at press time; 'resolveActivation' cancels
-    --   unconditionally when it no longer matches at release, even if
-    --   the pressed element's own CURRENT state (checked separately
-    --   via a fresh 'UI.InputOwnership.routePointer' call) once again
-    --   resolves the same as it did at press time. Deliberately GLOBAL
-    --   rather than per-element/per-page (an earlier, narrower attempt
-    --   only bumped the mutated element or the shown/hidden page's own
-    --   elements) — a SEPARATE modal/menu page appearing then
-    --   disappearing over the pressed control, or an ANCESTOR of the
-    --   pressed element being hidden then re-shown, both need to
-    --   invalidate a pending activation they never directly touch.
-    --   This is what makes an interruption "cancel safely" per the
-    --   #745 issue text even when it's fully reverted by release time
-    --   (hide→show, disable→enable, detach→re-add, elsewhere-in-the-
-    --   tree hide→show) — #745's explicit "returning inside before
-    --   release may restore pending activation" carve-out is scoped to
-    --   drag POSITION only, never to a route-affecting state change
-    --   anywhere.
+  , upmPageEpoch   ∷ Int
+    -- ^ #745 review round 12: bumped by 'hidePage'/'showPage' for ANY
+    --   page — deliberately GLOBAL, unlike 'UIElement.ueRouteEpoch'.
+    --   Page-level visibility is a genuinely route-affecting event
+    --   REGARDLESS of which page it is: a page appearing changes
+    --   'UI.InputOwnership' hit-test/modal-boundary order everywhere,
+    --   not just for controls it owns. 'UI.ControlActivation.
+    --   PendingActivation' captures this at press time alongside the
+    --   pressed element's ancestor-chain epoch snapshot (see
+    --   'UIElement.ueRouteEpoch'); 'resolveActivation' cancels if
+    --   EITHER no longer matches at release. This is what catches the
+    --   pressed control's OWN page hiding/showing, and a SEPARATE
+    --   modal/menu page appearing then disappearing over the point,
+    --   even when fully reverted by release time — #745's "returning
+    --   inside before release may restore pending activation"
+    --   carve-out is scoped to drag POSITION only.
     --
-    --   #745 review round 11: (re)attach ('addElementToPage'/
-    --   'addChildElement') deliberately does NOT bump this — only the
-    --   DETACH side does. A detach→re-attach sequence is still caught
-    --   because the detach's own bump already poisons the epoch before
-    --   any re-attach happens; bumping on attach too broke a real
-    --   production flow, since attaching a BRAND-NEW element (never
-    --   detached this gesture) also invalidated every unrelated
-    --   pending activation — exactly what 'scripts/ui/focus_indicator.
-    --   lua' does on every focus change (creates and @UI.addChild@s
-    --   fresh ring sprites), a purely visual side effect of the SAME
-    --   click, not an interruption of it. Defaults to @0@; the exact
-    --   numeric value carries no meaning beyond "changed since press".
+    --   History: round 10 first tried ONE global epoch covering every
+    --   route-affecting mutation (element AND page); round 11 excluded
+    --   (re)attach from bumping it (see 'ueRouteEpoch'); round 12 split
+    --   it into this page-only global epoch plus the per-element/
+    --   ancestor-chain-scoped 'ueRouteEpoch', because the round 10/11
+    --   global epoch still poisoned an unrelated pending activation
+    --   whenever a PASSIVE hover decoration elsewhere (e.g.
+    --   'scripts/ui/toggle.lua'\'s @onHoverEnter@/@onHoverLeave@,
+    --   'scripts/ui/list.lua'\'s @setHoveredSlot@ — neither toggles a
+    --   page, and neither element is an ancestor of the control being
+    --   hovered) changed visibility during an ordinary press-drag-out-
+    --   return-inside gesture. Defaults to @0@; the exact numeric
+    --   value carries no meaning beyond "changed since press".
   } deriving (Show)
 
 emptyUIPageManager ∷ UIPageManager
@@ -448,5 +466,5 @@ emptyUIPageManager = UIPageManager
   , upmGlobalFocus = Nothing
   , upmControlFocus = Nothing
   , upmTooltip     = emptyTooltipState
-  , upmRouteEpoch  = 0
+  , upmPageEpoch   = 0
   }

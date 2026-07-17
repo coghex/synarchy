@@ -15,6 +15,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import Test.Hspec
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef', newIORef)
 import qualified Data.Sequence as Seq
+import qualified Data.Text as T
 import Data.Foldable (toList)
 import Engine.ActionOutcome (ActionOutcome(..))
 import Engine.Core.State (EngineEnv(..))
@@ -436,6 +437,49 @@ spec = do
                 _ ← evalDebug ls
                     "require('scripts.ui.focus_indicator').onUIControlFocusChanged(_G.__frEl); return true"
                 push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                length (filter isUIClickEvent msgs) `shouldBe` 1
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "accepted"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
+            it "real hover churn (scripts/ui/toggle.lua onHoverEnter/onHoverLeave) on a passive sibling highlight between press and release does NOT cancel the SAME click's own activation (#745 review round 12 regression)" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local tg = require('scripts.ui.toggle'); tg.init(); \
+                    \local tex = engine.loadTexture('assets/textures/ui/highlight.png'); \
+                    \local pg = UI.newPage('t_hv', 'hud'); UI.showPage(pg); \
+                    \local id = tg.new({name='test_hv', x=0, y=0, page=pg, items={ \
+                    \  {name='a', texDefault=tex, texSelected=tex}, \
+                    \  {name='b', texDefault=tex, texSelected=tex} \
+                    \}}); \
+                    \local handles = tg.getElementHandles(id); \
+                    \_G.__hvId = id; _G.__hvHandle1 = handles[1]; \
+                    \return true"
+                xText ← evalDebug ls "return UI.getElementInfo(_G.__hvHandle1).x"
+                yText ← evalDebug ls "return UI.getElementInfo(_G.__hvHandle1).y"
+                let x = read (T.unpack xText) ∷ Double
+                    y = read (T.unpack yText) ∷ Double
+                    pos = (x + 2, y + 2)
+                push env [InputMouseEvent GLFW.MouseButton'1 pos GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                -- Drive the REAL production hover handlers exactly as
+                -- ui_manager_widgets.lua's onHoverLeave/onHoverEnter
+                -- dispatch would mid-gesture (cursor briefly leaving
+                -- and returning to the SAME control while the button
+                -- is still held) — this toggles the highlight's own
+                -- 'ueVisible' flag, a CHILD of the pressed sprite
+                -- (UI.addChild(parentSpriteId, hlId, 0, 0) in
+                -- makeHighlight), never an ancestor of it.
+                _ ← evalDebug ls
+                    "require('scripts.ui.toggle').onHoverLeave(_G.__hvHandle1); return true"
+                _ ← evalDebug ls
+                    "require('scripts.ui.toggle').onHoverEnter(_G.__hvHandle1); return true"
+                push env [InputMouseEvent GLFW.MouseButton'1 pos GLFW.MouseButtonState'Released]
                 inputTick env
                 msgs ← drainLuaMsgs env
                 length (filter isUIClickEvent msgs) `shouldBe` 1

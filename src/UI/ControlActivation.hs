@@ -25,23 +25,38 @@
 --   callback → 'RouteBlocked'), detached (removed from every page's
 --   tree → not hit), a modal now covering the point (the modal's own
 --   element wins the hit test instead), and a plain drag-outside-and-
---   release-outside (the point simply misses). A SECOND, independent
---   check ('paEpoch'/'UI.Types.upmRouteEpoch', #745 review round 10)
---   catches an interruption when it's REVERTED before release — hidden
---   then re-shown, disabled then re-enabled, detached then re-attached,
---   a SEPARATE modal/menu page appearing then disappearing over the
---   point, or an ANCESTOR of the pressed element hidden then re-shown
---   — all of which the live re-check alone would miss, since by
---   release time routing looks identical to press time again. The
---   epoch is deliberately GLOBAL (bumped by any route-affecting
---   mutation anywhere in the manager) rather than scoped to the
---   pressed element or its own page — a narrower, per-element/per-page
---   attempt (review round 9) still missed the separate-modal and
---   ancestor cases, since neither mutation ever touches the pressed
---   element or its page directly. Nothing about this module is Vulkan/
---   window/Lua-dependent, so the decision itself is fully
---   Hspec-testable in isolation — see @Test.Headless.UI.
---   ControlActivation@.
+--   release-outside (the point simply misses). Two SEPARATE,
+--   independent checks (#745 review round 12) catch an interruption
+--   when it's REVERTED before release, since by then routing looks
+--   identical to press time again:
+--
+--     * 'paPageEpoch'/'UI.Types.upmPageEpoch' — bumped by
+--       'UI.Manager.Page.hidePage'/'showPage' for ANY page, so the
+--       pressed control's OWN page hiding/showing, or a SEPARATE
+--       modal/menu page appearing then disappearing over the point,
+--       both cancel even when reverted by release. Deliberately
+--       GLOBAL: page-level visibility is route-affecting everywhere,
+--       not just for controls the page owns.
+--     * 'paChain'/'UI.Types.ueRouteEpoch' — a snapshot of the pressed
+--       element's own epoch AND every ANCESTOR's epoch (walking
+--       'UI.Types.ueParent' pointers), taken at press time and
+--       re-derived at release. Hiding/disabling/detaching the pressed
+--       element OR any real ancestor changes one of those epochs and
+--       so cancels, even when reverted — but an UNRELATED element's
+--       own mutation (a decorative hover-highlight sibling, say) is
+--       invisible to this chain and never poisons the activation.
+--       Deliberately scoped to the ONE chain, not global: a round
+--       10/11 attempt at a single manager-wide epoch covering every
+--       element mutation broke real production hover-highlight code
+--       (@scripts/ui/toggle.lua@'s @onHoverEnter@/@onHoverLeave@,
+--       @scripts/ui/list.lua@'s @setHoveredSlot@), which legitimately
+--       toggles a sibling/child decoration's visibility during an
+--       ordinary press-drag-out-return-inside gesture — none of which
+--       is an ancestor of the control being hovered.
+--
+--   Nothing about this module is Vulkan/window/Lua-dependent, so the
+--   decision itself is fully Hspec-testable in isolation — see
+--   @Test.Headless.UI.ControlActivation@.
 --
 --   Drag-activation controls (slider knobs, scrollbar thumbs) never
 --   enter this flow at all — see 'UI.Types.ueDragActivation' — they
@@ -56,6 +71,7 @@ module UI.ControlActivation
   ) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import UI.Types
 import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer)
 
@@ -67,12 +83,14 @@ import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer)
 --   always fires whichever callback the FRESH release-time routing
 --   resolves (a mid-press @UI.setOnClick@ reassignment fires the
 --   current callback, not a stale one).
---   #745 review round 10: 'paEpoch' additionally captures
---   'UI.Types.upmRouteEpoch' at press time — see 'resolveActivation'.
+--   #745 review round 12: 'paPageEpoch'/'paChain' additionally capture
+--   'UI.Types.upmPageEpoch' and the pressed element's ancestor-chain
+--   epochs at press time — see 'resolveActivation'.
 data PendingActivation = PendingActivation
-  { paElement ∷ ElementHandle
-  , paKind    ∷ PointerKind
-  , paEpoch   ∷ Int
+  { paElement   ∷ ElementHandle
+  , paKind      ∷ PointerKind
+  , paPageEpoch ∷ Int
+  , paChain     ∷ [(ElementHandle, Int)]
   } deriving (Eq, Show)
 
 -- | The release's verdict. 'Activate' carries the (possibly refreshed)
@@ -92,37 +110,60 @@ activationOutcomeName ∷ ActivationOutcome → Text
 activationOutcomeName (Activate _ _) = "accepted"
 activationOutcomeName (Cancel _)     = "rejected"
 
+-- | Walk from 'h' up through 'UI.Types.ueParent' pointers, collecting
+--   each ancestor's (including 'h' itself, first) handle and
+--   'UI.Types.ueRouteEpoch' — see 'resolveActivation'. Stops at the
+--   root (no parent) or a dangling/deleted handle (an empty tail, same
+--   as 'UI.Manager.Hierarchy.addChildElement's own cycle guard depth
+--   cap — this manager's parent chains are always kept acyclic and
+--   shallow, so the cap is only a defensive backstop here).
+ancestorChain ∷ ElementHandle → UIPageManager → [(ElementHandle, Int)]
+ancestorChain h0 mgr = go (64 ∷ Int) h0
+  where
+    go depth h
+        | depth ≤ 0 = []
+        | otherwise = case Map.lookup h (upmElements mgr) of
+            Nothing → []
+            Just el → (h, ueRouteEpoch el) : case ueParent el of
+                Just p  → go (depth - 1) p
+                Nothing → []
+
 -- | Begin tracking a press against a discrete control. Callers gate on
 --   'UI.Types.ueDragActivation' before reaching this — a drag-
 --   activation control's press fires immediately and never produces a
---   'PendingActivation' at all. Captures the manager's current
---   'UI.Types.upmRouteEpoch' (#745 review round 10) so
+--   'PendingActivation' at all. Captures 'UI.Types.upmPageEpoch' and
+--   the pressed element's 'ancestorChain' (#745 review round 12) so
 --   'resolveActivation' can detect an intervening route-affecting
---   mutation anywhere, even if it's reverted before release.
+--   mutation to the element, one of its ancestors, or any page, even
+--   if it's reverted before release.
 beginActivation ∷ PointerKind → ElementHandle → UIPageManager → PendingActivation
-beginActivation kind h mgr = PendingActivation h kind (upmRouteEpoch mgr)
+beginActivation kind h mgr =
+    PendingActivation h kind (upmPageEpoch mgr) (ancestorChain h mgr)
 
 -- | Resolve a pending activation against the CURRENT manager state at
 --   the matching release. Dragging outside and releasing outside
 --   cancels; returning inside before release restores activation,
 --   because only the FINAL release POSITION is ever consulted for
 --   that check — intermediate movement has no bearing on the
---   decision. A route-affecting STATE change ANYWHERE in the manager
---   (the pressed element hidden/disabled/detached, its page hidden/
---   shown, a separate modal/menu page appearing, an ancestor hidden)
---   is different: #745 review round 10 — the issue's "returning
---   inside before release may restore pending activation" carve-out
---   is scoped to position only, so any such interruption cancels
---   permanently via the 'paEpoch'/'UI.Types.upmRouteEpoch' check
---   below, even if fully reverted by release time (every one of those
---   mutations can leave routing looking exactly as it did at press,
---   but must still cancel). Each pending activation is consumed by
---   exactly one call to this function (the caller removes it from its
---   pending map either way), so a release activates at most one
---   control and callback once.
+--   decision. A route-affecting STATE change to the pressed element,
+--   one of its ancestors, or any page is different: #745 review round
+--   12 — the issue's "returning inside before release may restore
+--   pending activation" carve-out is scoped to position only, so
+--   either check below cancels permanently, even if fully reverted by
+--   release time (hide→show, disable→enable, detach→re-add, page
+--   hide→show all leave routing looking exactly as it did at press,
+--   but must still cancel). An UNRELATED element's own mutation
+--   (never an ancestor of 'paElement', never a page-level change)
+--   affects neither check and so never cancels — see the module
+--   header for why that distinction matters. Each pending activation
+--   is consumed by exactly one call to this function (the caller
+--   removes it from its pending map either way), so a release
+--   activates at most one control and callback once.
 resolveActivation ∷ (Float, Float) → UIPageManager → PendingActivation → ActivationOutcome
-resolveActivation releasePos mgr (PendingActivation h kind epoch)
-    | upmRouteEpoch mgr ≢ epoch =
+resolveActivation releasePos mgr (PendingActivation h kind pageEpoch chain)
+    | upmPageEpoch mgr ≢ pageEpoch =
+        Cancel "a page appeared or disappeared during the press"
+    | ancestorChain h mgr ≢ chain =
         Cancel "control was invalidated during the press"
     | otherwise =
         case routePointer kind releasePos mgr of

@@ -6,7 +6,8 @@ module UI.Manager.Core
   , removeElementReference
   , modifyElement
   , modifyPage
-  , bumpRouteEpoch
+  , bumpElementRouteEpoch
+  , bumpPageEpoch
   ) where
 
 import UPrelude
@@ -57,15 +58,24 @@ modifyPage ∷ PageHandle → UIPageManager → (UIPage → UIPage) → UIPageMa
 modifyPage handle mgr f =
     mgr { upmPages = Map.adjust f handle (upmPages mgr) }
 
--- | #745 review round 10: bump 'UI.Types.upmRouteEpoch' — called by
---   every route-affecting mutator
---   ('UI.Manager.Property.setElementVisible'/'setElementClickable',
---   'UI.Manager.Hierarchy.removeElement'/'removeFromPage'/
---   'addElementToPage'/'addChildElement', 'UI.Manager.Page.hidePage'/
---   'showPage') so a 'UI.ControlActivation.PendingActivation' captured
---   before the call can no longer match after it — deliberately
---   GLOBAL, not scoped to the mutated element/page: see
---   'UI.Types.upmRouteEpoch' for why a narrower scope misses a
---   separate modal/menu or an ancestor interruption.
-bumpRouteEpoch ∷ UIPageManager → UIPageManager
-bumpRouteEpoch mgr = mgr { upmRouteEpoch = upmRouteEpoch mgr + 1 }
+-- | #745 review round 12: bump ONE element's 'UI.Types.ueRouteEpoch'
+--   — called by 'UI.Manager.Property.setElementVisible'/
+--   'setElementClickable' and 'UI.Manager.Hierarchy.removeElement'/
+--   'removeFromPage' (detach only — see 'UI.Types.ueRouteEpoch' for
+--   why (re)attach must not bump anything). Deliberately scoped to
+--   THIS element only, not global: 'UI.ControlActivation.
+--   resolveActivation' walks the pressed element's ancestor chain and
+--   compares each ancestor's own epoch, so an unrelated element's
+--   mutation is invisible to a pending activation it was never on the
+--   route of.
+bumpElementRouteEpoch ∷ ElementHandle → UIPageManager → UIPageManager
+bumpElementRouteEpoch handle mgr =
+    modifyElement handle mgr $ \el → el { ueRouteEpoch = ueRouteEpoch el + 1 }
+
+-- | #745 review round 12: bump the manager-wide 'UI.Types.upmPageEpoch'
+--   — called by 'UI.Manager.Page.hidePage'/'showPage' for ANY page.
+--   Deliberately GLOBAL (unlike 'bumpElementRouteEpoch'): see
+--   'UI.Types.upmPageEpoch' for why page-level visibility needs to
+--   invalidate every pending activation regardless of which page.
+bumpPageEpoch ∷ UIPageManager → UIPageManager
+bumpPageEpoch mgr = mgr { upmPageEpoch = upmPageEpoch mgr + 1 }

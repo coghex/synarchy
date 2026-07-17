@@ -382,13 +382,36 @@ flow (round 11) — a click that moves keyboard control focus fires
 creates and `UI.addChild`s four fresh ring sprites onto the newly
 focused element as a purely visual side effect of the SAME click; that
 attach bumped the epoch mid-press and wrongly canceled the click's own
-activation. `upmRouteEpoch` now bumps only on the DETACH side
+activation. Round 11 fixed that by bumping only on the DETACH side
 (`UI.removeElement`/`removeFromPage`) plus `UI.setVisible`/
-`setClickable`/`hidePage`/`showPage` — never on `addToPage`/`addChild`.
-A detach→re-attach sequence is still caught, since the detach alone
-already poisons the epoch before any re-attach happens; attaching a
-BRAND-NEW element (never detached this gesture) no longer falsely
-invalidates unrelated pending activations.
+`setClickable`/`hidePage`/`showPage` — never on `addToPage`/`addChild`
+— since a detach→re-attach sequence is still caught by the detach's
+own bump alone.
+
+Round 11's epoch was STILL global (any `setVisible`/`setClickable`
+anywhere bumped one manager-wide counter), and that broke a second real
+flow (round 12): ordinary hover decorations. `scripts/ui/toggle.lua`'s
+`onHoverEnter`/`onHoverLeave` and `scripts/ui/list.lua`'s
+`setHoveredSlot` toggle a highlight sprite's visibility as the cursor
+moves over/off a control — completely routine during a press-drag-out-
+return-inside gesture — and that toggle, on an element that is a CHILD
+(not an ancestor) of the pressed control, wrongly canceled the same
+gesture's own activation. Round 12 split the mechanism in two:
+`UI.Types.upmPageEpoch` stays a single global counter, bumped only by
+`hidePage`/`showPage` for ANY page (page-level visibility genuinely
+affects routing everywhere, so this one stays global by design — it's
+what catches the pressed control's own page hiding/showing AND a
+SEPARATE modal/menu page appearing then disappearing over the point).
+`UI.Types.ueRouteEpoch` moved onto each `UIElement` itself, bumped only
+by `setVisible`/`setClickable`/detach on THAT element;
+`UI.ControlActivation.PendingActivation` captures a snapshot of the
+pressed element's own epoch AND every ANCESTOR's epoch (walking
+`ueParent` pointers, `UI.ControlActivation.ancestorChain`) at press
+time, and `resolveActivation` cancels if that chain no longer matches
+at release — so hiding/disabling/detaching the pressed element OR a
+real ancestor still cancels, but an unrelated sibling/child's own
+visibility churn (a hover highlight, a newly attached decoration) never
+touches the chain and can't poison an activation it was never part of.
 
 Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
 second, independent focus system alongside the pre-existing TEXT-input

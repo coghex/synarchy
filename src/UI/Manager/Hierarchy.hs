@@ -9,7 +9,7 @@ module UI.Manager.Hierarchy
 import UPrelude
 import qualified Data.Map.Strict as Map
 import UI.Types
-import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpRouteEpoch)
+import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpElementRouteEpoch)
 
 -- * Hierarchy
 
@@ -68,18 +68,20 @@ addChildElement parentHandle childHandle x y mgr =
             Just p  → walkUp (depth - 1) p
             Nothing → False
 
--- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
---   pending pointer activation must not survive detach→re-add on the
---   same handle; see 'bumpRouteEpoch'. This is the ONLY hierarchy-side
---   bump (round 11 removed the attach-side ones — see
---   'addElementToPage') since a detach always precedes any re-attach,
---   so this alone already poisons the epoch for that whole sequence.
+-- | #745 review round 12: also bumps this element's OWN
+--   'UI.Types.ueRouteEpoch' — a pending pointer activation on this
+--   handle, or on a descendant that has it as an ancestor, must not
+--   survive detach→re-add on the same handle; see
+--   'bumpElementRouteEpoch'. This is the ONLY hierarchy-side bump
+--   (round 11 removed the attach-side ones — see 'addElementToPage')
+--   since a detach always precedes any re-attach, so this alone
+--   already poisons the epoch for that whole sequence.
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing → mgr
         Just element →
-            let mgr0 = bumpRouteEpoch mgr
+            let mgr0 = bumpElementRouteEpoch handle mgr
                 mgr' = removeElementReference handle element mgr0
                 -- A detached element is unreachable for rendering and
                 -- hit-testing; it must not keep the keyboard either.
@@ -95,11 +97,11 @@ removeElement handle mgr =
 -- This detaches the element so its sprites disappear, but the handle
 -- remains valid for potential re-use or deferred GC.
 --
--- #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — see
--- 'removeElement'.
+-- #745 review round 12: also bumps this element's OWN
+-- 'UI.Types.ueRouteEpoch' — see 'removeElement'.
 removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
 removeFromPage pageHandle elemHandle mgr0 =
-    let mgr   = bumpRouteEpoch mgr0
+    let mgr   = bumpElementRouteEpoch elemHandle mgr0
         mgr'  = modifyPage pageHandle mgr $ \page →
             page { upRootElements = filter (/= elemHandle) (upRootElements page) }
         mgr'' = modifyElement elemHandle mgr' $ \elem →
