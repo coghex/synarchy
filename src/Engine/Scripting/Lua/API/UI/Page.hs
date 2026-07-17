@@ -14,6 +14,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.API.UI.Focus (applyAndNotifyControlFocus)
 import UI.Types
 import UI.Manager
 
@@ -37,13 +38,17 @@ uiNewPageFn env = do
 
     return 1
 
--- | UI.deletePage(pageHandle)
+-- | UI.deletePage(pageHandle) — #745 review round 6: deletePage
+--   recursively deletes every element it owns (deleteElementTree),
+--   which already clears upmControlFocus for whichever handle it
+--   matches; report it the same way uiHidePageFn/the Hierarchy
+--   delete/detach bindings do.
 uiDeletePageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiDeletePageFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
-        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (deletePage (PageHandle $ fromIntegral n) mgr, ())
+        Just n → Lua.liftIO $ applyAndNotifyControlFocus env $
+            deletePage (PageHandle $ fromIntegral n)
         Nothing → pure ()
     return 0
 
@@ -57,13 +62,19 @@ uiShowPageFn env = do
         Nothing → pure ()
     return 0
 
--- | UI.hidePage(pageHandle)
+-- | UI.hidePage(pageHandle) — #745 review round 4: hidePage proactively
+--   clears upmControlFocus (see UI.Manager.Page) for a control focused
+--   on the hidden page, same as it already does for text focus. That's
+--   a pure mutation with no notification of its own, and unlike a
+--   direct UI.clearControlFocus() call the calling script may have no
+--   idea it happened — report it here so a Lua focus-ring consumer
+--   (button.lua) doesn't keep pointing at a page that's gone.
 uiHidePageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiHidePageFn env = do
     handleArg ← Lua.tointeger 1
     case handleArg of
-        Just n → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (hidePage (PageHandle $ fromIntegral n) mgr, ())
+        Just n → Lua.liftIO $ applyAndNotifyControlFocus env $
+            hidePage (PageHandle $ fromIntegral n)
         Nothing → pure ()
     return 0
 

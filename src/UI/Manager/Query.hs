@@ -17,9 +17,11 @@ module UI.Manager.Query
   , elementCapturesScroll
   , isElementPointerBlocking
   , isElementScrollCapturing
+  , isElementDragActivation
   , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder
+  , paintTraversalOrder
   ) where
 
 import UPrelude
@@ -351,6 +353,14 @@ isElementPointerBlocking h mgr =
 isElementScrollCapturing ∷ ElementHandle → UIPageManager → Bool
 isElementScrollCapturing h mgr =
     maybe False elementCapturesScroll (Map.lookup h (upmElements mgr))
+
+-- | #745: handle-based lookup of 'ueDragActivation' — an unknown/
+--   deleted handle is never drag-activation (it degrades to the
+--   ordinary discrete/deferred contract, which simply never activates
+--   since the handle can't be found again at release either).
+isElementDragActivation ∷ ElementHandle → UIPageManager → Bool
+isElementDragActivation h mgr =
+    maybe False ueDragActivation (Map.lookup h (upmElements mgr))
 
 -- | Handle-based lookup of the raw 'ueClipChildren' opt-in (#747) — an
 --   unknown/deleted handle never clips. Distinct from

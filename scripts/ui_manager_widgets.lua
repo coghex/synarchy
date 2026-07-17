@@ -21,6 +21,7 @@ local randbox  = require("scripts.ui.randbox")
 local toggle   = require("scripts.ui.toggle")
 local uiList   = require("scripts.ui.list")
 local contextMenu = require("scripts.ui.context_menu")
+local focusIndicator = require("scripts.ui.focus_indicator")
 local hud      = require("scripts.hud")
 
 function M.handleNonTextBoxClick()
@@ -57,6 +58,37 @@ function uiManager.onMouseUp(button_num, x, y)
     slider.onMouseUp()
     scrollbar.onMouseUp()
     button.onMouseUp()
+end
+
+-- #745: a discrete (non-drag-activation) control was just pressed —
+-- visual-only pending state, the click callback itself is deferred to
+-- a validated release (or never fires at all, if the release cancels).
+-- Dispatches by callback name, mirroring onHoverEnter/onHoverLeave
+-- below. Widget families with no handler here simply show no pending
+-- visual yet (their release-activation is still correct — this is
+-- pending-state polish, tracked per family as it's added).
+function uiManager.onUIPressBegin(elemHandle, callbackName)
+    if callbackName == "onButtonClick" then
+        button.onPressBegin(elemHandle)
+    end
+end
+
+-- #745: arrow-key step on a steppable control (currently only
+-- sliders opt in via UI.setSteppable) that holds keyboard control
+-- focus.
+function uiManager.onUIStep(elemHandle, direction)
+    slider.onStep(elemHandle, direction)
+end
+
+-- #745 review round 3/6: keyboard control focus moved or cleared.
+-- elemHandle may be nil (cleared/nothing focused). focusIndicator is
+-- the GENERIC visual consumer covering every focusable control family
+-- uniformly (correct activation behavior never depended on this
+-- notification at all); button ALSO reacts for its own richer
+-- pressed/hover-aware state composition.
+function uiManager.onUIControlFocusChanged(elemHandle)
+    button.onUIControlFocusChanged(elemHandle)
+    focusIndicator.onUIControlFocusChanged(elemHandle)
 end
 
 function uiManager.onHoverEnter(elemHandle, callbackName)

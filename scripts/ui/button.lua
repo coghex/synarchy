@@ -183,14 +183,24 @@ function button.handleClickByElement(elemHandle)
     local id = button.findByElementHandle(elemHandle)
     if id then
         local btn = buttons[id]
-        -- Show clicked texture
-        button.setState(id, "clicked")
         if btn.onClick then
             btn.onClick(id, btn.name)
         end
         return true
     end
     return false
+end
+
+-- #745: fired at PRESS (LuaUIPressBeginEvent → onUIPressBegin), before
+-- the discrete-activation contract knows whether this gesture will
+-- actually activate — visual-only, no callback. handleClickByElement
+-- above now only fires at a VALIDATED RELEASE (or immediately, for a
+-- drag-activation control — buttons never opt into that).
+function button.onPressBegin(elemHandle)
+    local id = button.findByElementHandle(elemHandle)
+    if id then
+        button.setState(id, "clicked")
+    end
 end
 
 function button.handleCallback(callbackName, elemHandle)
@@ -203,6 +213,34 @@ end
 -----------------------------------------------------------
 -- Hover Handling
 -----------------------------------------------------------
+
+-- #745 review round 4: keyboard control focus (below) — declared here
+-- so refreshVisualState can be shared by hover/mouse-up/focus-change
+-- handling, keeping the focus indicator DURABLE (an unrelated
+-- onHoverLeave/onMouseUp on the SAME button must not clobber it).
+local focusedId = nil
+
+-- The button's resting visual once nothing is actively pressed:
+-- "hovered" whenever the button holds keyboard control focus (real
+-- mouse hover uses the identical placeholder texture — see
+-- button.onUIControlFocusChanged), else "normal". Unconditional — the
+-- caller decides whether "clicked" should keep winning instead (see
+-- refreshVisualState vs. onMouseUp below).
+local function applyRestingState(id)
+    button.setState(id, id == focusedId and "hovered" or "normal")
+end
+
+-- Like applyRestingState, but leaves an in-flight "clicked" press
+-- alone — for callers (hover leaving) that must never interrupt a
+-- press already in progress. #745 review round 5: onMouseUp below
+-- must NOT go through this guard — mouse-up is exactly what ENDS a
+-- click, so gating on "still clicked" there left every pressed button
+-- stuck clicked forever.
+local function refreshVisualState(id)
+    local btn = buttons[id]
+    if not btn or btn.state == "clicked" then return end
+    applyRestingState(id)
+end
 
 function button.onHoverEnter(elemHandle)
     local id = button.findByElementHandle(elemHandle)
@@ -217,7 +255,7 @@ end
 function button.onHoverLeave(elemHandle)
     local id = button.findByElementHandle(elemHandle)
     if id then
-        button.setState(id, "normal")
+        refreshVisualState(id)
     end
 end
 
@@ -228,11 +266,30 @@ end
 function button.onMouseUp()
     for id, btn in pairs(buttons) do
         if btn.state == "clicked" then
-            -- If mouse is still over the button, go to hovered; otherwise normal
-            -- For simplicity, go to normal — the next hover poll will fix it
-            button.setState(id, "normal")
+            -- Unconditionally ends the press — refreshVisualState's
+            -- clicked-guard would refuse to touch it (round 5 fix).
+            -- If mouse is still over the button, go to hovered;
+            -- otherwise normal — for simplicity always resolve via
+            -- applyRestingState; the next hover poll corrects it.
+            applyRestingState(id)
         end
     end
+end
+
+-----------------------------------------------------------
+-- Keyboard Control Focus (#745)
+-----------------------------------------------------------
+
+-- Reference implementation proving LuaUIControlFocusChanged drives
+-- real visible state (#745 review round 3/4) — reuses the existing
+-- hovered texture as a functional placeholder for a dedicated focus
+-- ring (no such asset exists yet; a distinct texture is a follow-up
+-- art pass, same convention as this epic's other placeholder assets).
+function button.onUIControlFocusChanged(elemHandle)
+    local previousFocusedId = focusedId
+    focusedId = button.findByElementHandle(elemHandle)
+    if previousFocusedId then refreshVisualState(previousFocusedId) end
+    if focusedId then refreshVisualState(focusedId) end
 end
 
 -----------------------------------------------------------

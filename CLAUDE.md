@@ -332,6 +332,124 @@ self-gate they used to carry as a compensating stopgap for exactly the
 empty-modal case, now that the engine decides it once, upstream,
 instead of the two enforcing the same rule with room to drift apart.
 
+B1 (#745) starts Phase B on top of Phase A: discrete-control pointer
+activation and keyboard control focus. Before B1 every discrete
+control (button, checkbox, toggle, tab, list row, dropdown, scroll
+arrow, hand-built menu control) fired its callback the instant a press
+routed to it (`Engine.Input.Thread.Mouse` queued `LuaUIClickEvent`
+immediately) — press-drag-away-to-cancel was impossible. Now a press
+against a non-`ueDragActivation` control only records a
+`UI.ControlActivation.PendingActivation` and fires
+`LuaUIPressBeginEvent` (pending-visual signal only, no callback); the
+matching release re-runs the SAME `routePointer` decision the press
+used, and only activates (fires `LuaUIClickEvent`/`LuaUIRightClickEvent`
+with the freshly re-resolved callback) when it still resolves to the
+same element — a re-check that covers hidden/deleted/disabled/
+detached/a-modal-now-on-top/dragged-outside-and-released-outside as
+`UI.ControlActivation.Cancel` whenever any of those are STILL true at
+release. F4's `aoOutcome` reports this truthfully (`"accepted"`/
+`"rejected"`, the existing vocabulary — see `Engine.ActionOutcome`),
+orthogonal to the pre-existing movement-based `"input.click"`/
+`"input.drag"` `aoKind` classification. Slider knobs, the slider
+track, and scrollbar thumbs opt out via `UI.setDragActivation`
+(`ueDragActivation`) — they still fire immediately on press and start
+a drag, unchanged from before B1; scroll arrows and every other
+discrete control get the new contract for free via `UI.setOnClick`, no
+per-widget Lua change needed.
+
+A live re-check alone misses an interruption that's REVERTED before
+release (hidden then re-shown, disabled then re-enabled, detached then
+re-attached, its page hidden then re-shown, a SEPARATE modal/menu page
+appearing then disappearing over the point, or an ANCESTOR hidden then
+re-shown) — by release time routing looks identical to press time
+again, so the re-check alone would wrongly restore activation. Review
+round 9 first closed this with a PER-ELEMENT/PER-PAGE epoch, but that
+still missed the separate-modal and ancestor cases (neither mutation
+touches the pressed element or its own page directly); round 10
+replaced it with a single GLOBAL `UI.Types.upmRouteEpoch`, bumped by
+every route-affecting mutation ANYWHERE in the manager. `PendingActivation`
+captures the epoch at press time; `resolveActivation` cancels
+unconditionally when it no longer matches at release, regardless of
+what the live `routePointer` re-check would otherwise say — per the
+#745 issue text, "returning inside before release may restore pending
+activation" is scoped to drag POSITION only, never to a route-affecting
+state change anywhere in the tree.
+
+Round 10's global epoch was itself too broad: bumping on (re)attach
+(`UI.addToPage`/`addChild`) as well as detach broke a real production
+flow (round 11) — a click that moves keyboard control focus fires
+`scripts/ui/focus_indicator.lua`'s `onUIControlFocusChanged`, which
+creates and `UI.addChild`s four fresh ring sprites onto the newly
+focused element as a purely visual side effect of the SAME click; that
+attach bumped the epoch mid-press and wrongly canceled the click's own
+activation. Round 11 fixed that by bumping only on the DETACH side
+(`UI.removeElement`/`removeFromPage`) plus `UI.setVisible`/
+`setClickable`/`hidePage`/`showPage` — never on `addToPage`/`addChild`
+— since a detach→re-attach sequence is still caught by the detach's
+own bump alone.
+
+Round 11's epoch was STILL global (any `setVisible`/`setClickable`
+anywhere bumped one manager-wide counter), and that broke a second real
+flow (round 12): ordinary hover decorations. `scripts/ui/toggle.lua`'s
+`onHoverEnter`/`onHoverLeave` and `scripts/ui/list.lua`'s
+`setHoveredSlot` toggle a highlight sprite's visibility as the cursor
+moves over/off a control — completely routine during a press-drag-out-
+return-inside gesture — and that toggle, on an element that is a CHILD
+(not an ancestor) of the pressed control, wrongly canceled the same
+gesture's own activation. Round 12 split the mechanism in two:
+`UI.Types.upmPageEpoch` stays a single global counter, bumped only by
+`hidePage`/`showPage` for ANY page (page-level visibility genuinely
+affects routing everywhere, so this one stays global by design — it's
+what catches the pressed control's own page hiding/showing AND a
+SEPARATE modal/menu page appearing then disappearing over the point).
+`UI.Types.ueRouteEpoch` moved onto each `UIElement` itself, bumped only
+by `setVisible`/`setClickable`/detach on THAT element;
+`UI.ControlActivation.PendingActivation` captures a snapshot of the
+pressed element's own epoch AND every ANCESTOR's epoch (walking
+`ueParent` pointers, `UI.ControlActivation.ancestorChain`) at press
+time, and `resolveActivation` cancels if that chain no longer matches
+at release — so hiding/disabling/detaching the pressed element OR a
+real ancestor still cancels, but an unrelated sibling/child's own
+visibility churn (a hover highlight, a newly attached decoration) never
+touches the chain and can't poison an activation it was never part of.
+
+Round 12's element/page epochs still bumped unconditionally, even when
+the requested value already matched the live state — round 13 guards
+`setElementVisible`/`setElementClickable`/`showPage`/`hidePage` to only
+bump when the value actually changes, so a defensive no-op re-assign
+(e.g. re-showing an already-visible page, re-asserting `UI.setVisible`
+to what it already is) can no longer poison a pending activation that
+was never really interrupted.
+
+Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
+second, independent focus system alongside the pre-existing TEXT-input
+focus (`upmGlobalFocus`) — a non-text clickable control (anything with
+`ueOnClick` and no `ueTextBuffer`) can hold it, distinct from a focused
+textbox. `Engine.Input.Thread.Keyboard`'s `(GameInputMode, Nothing)`
+branch (reached only when neither shell-text nor UI-text focus is
+active, so both retain their pre-existing priority automatically)
+drives it directly: Tab/Shift+Tab traverse `focusableElements`
+(`UI.InputOwnership.pagesInScope`-scoped, so a modal traps traversal
+exactly like it traps pointer routing, while `LayerDebug` stays
+reachable above it — same paint-traversal order `topHitBy` hit-tests
+with, `UI.Manager.Query.paintTraversalOrder`) with wraparound and a
+first-Tab/first-Shift+Tab entry default; Escape clears it; Enter/Space
+fire the focused control's `ueOnClick` callback through the IDENTICAL
+`LuaUIClickEvent` dispatch a real click uses ("their logical action" —
+so every widget family gets keyboard activation for free, no Lua
+change); arrow keys step a `ueSteppable` focused control (only a
+slider's knob sets this) via a new `LuaUIStepEvent`. Every key the
+control-focus layer actually consumes is withheld from `inpKeyStates`
+(camera-pan/gameplay polling) the same way a text-focused key already
+is, so e.g. arrow-stepping a focused slider doesn't also pan the
+camera; an unconsumed key (an arrow with no steppable control focused)
+reaches gameplay exactly as before. `upmControlFocus` is validated
+(repaired-or-cleared) on every keyboard dispatch, mirroring
+`UI.Manager.Focus.validateFocus`'s exact contract for text focus.
+`UI.getElementInfo`'s pre-existing `focused` field stays TEXT-focus-only
+(every existing consumer — `ui.dumpWidgets`, the F3 oracle — keeps its
+meaning); control focus is reported through the new, separate
+`controlFocused` field instead of overloading it.
 C1 (#747, Phase C child of #741) adds two independent contracts on top
 of Phase A's ownership/policy layer: opt-in rectangular clipping and
 shared viewport-aware floating placement.

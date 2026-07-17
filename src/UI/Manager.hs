@@ -30,6 +30,11 @@ module UI.Manager
   , getPageFocus
   , clearPageFocus
   , validateFocus
+    -- * Control Focus Operations (#745)
+  , setControlFocus
+  , clearControlFocus
+  , getControlFocus
+  , validateControlFocusIn
     -- * Text Buffer Operations
   , enableTextInput
   , getTextBuffer
@@ -42,6 +47,9 @@ module UI.Manager
   , setElementClickable
   , setElementBlocksPointer
   , setElementCapturesScroll
+  , setElementDragActivation
+  , setElementSteppable
+  , setElementTabIndex
   , setElementClipChildren
   , setElementZIndex
   , setElementOnClick
@@ -68,9 +76,11 @@ module UI.Manager
   , elementCapturesScroll
   , isElementPointerBlocking
   , isElementScrollCapturing
+  , isElementDragActivation
   , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder
+  , paintTraversalOrder
     -- * Tooltips
   , setElementTooltip
   , clearElementTooltip

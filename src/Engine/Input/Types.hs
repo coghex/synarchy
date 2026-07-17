@@ -3,7 +3,9 @@ module Engine.Input.Types where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Graphics.UI.GLFW as GLFW
+import UI.ControlActivation (PendingActivation)
 
 data InputState = InputState
     { inpKeyStates ∷ Map.Map GLFW.Key KeyState
@@ -23,6 +25,18 @@ data InputState = InputState
       --   synthetic text, and 'scripts/unit_drag_select.lua' uses for
       --   game-world box-selection. Removed on release regardless of
       --   outcome.
+    , inpPendingActivation ∷ Map.Map GLFW.MouseButton PendingActivation
+      -- ^ #745: present only for a DISCRETE (non-'ueDragActivation')
+      --   'UI.InputOwnership.RouteElement' press — the click callback
+      --   has NOT fired yet ('inpPendingUIClick' above still records
+      --   the F4 bookkeeping tuple exactly as before #745, but no
+      --   Lua event rides with it any more for this route). The
+      --   matching release resolves this via
+      --   'UI.ControlActivation.resolveActivation' and fires
+      --   'Engine.Scripting.Lua.Types.LuaUIClickEvent'/
+      --   'LuaUIRightClickEvent' only on 'UI.ControlActivation.Activate'.
+      --   Removed on release regardless of outcome, same lifecycle as
+      --   'inpPendingUIClick'.
     , inpCharBatch ∷ Maybe CharBatch
       -- ^ F4 (#730) Layer A: running tally of 'InputCharEvent's seen
       --   since the last flush, so a synthetic multi-character
@@ -36,6 +50,22 @@ data InputState = InputState
       --   event between characters (GLFW fires key-down, char,
       --   key-up per keystroke), so it naturally flushes once per
       --   real character.
+    , inpControlFocusConsumedKeys ∷ Set.Set GLFW.Key
+      -- ^ #745 review round 3: GLFW keys currently mid-hold that the
+      --   keyboard control-focus layer consumed at their initial
+      --   Pressed dispatch (Tab/Shift+Tab, Enter/Space, a steppable
+      --   arrow). 'GLFW.KeyState'Pressed'/'Repeating'/'Released' each
+      --   arrive as a SEPARATE 'Engine.Input.Thread.Keyboard.
+      --   dispatchKeyEvent' call with its own fresh local "consumed
+      --   this dispatch" tracking, so without this the layer's
+      --   suppression of the gameplay onKeyDown broadcast and
+      --   inpKeyStates withholding would only cover the initial press
+      --   — a HELD steppable arrow would leak Repeating events to
+      --   gameplay/camera-pan, and Released would broadcast an
+      --   unpaired LuaKeyUpEvent with no matching key-down. Inserted
+      --   on a freshly-consumed press, consulted (in addition to that
+      --   dispatch's own fresh consumption) on every dispatch for the
+      --   same key, and removed on release regardless of outcome.
     } deriving (Show, Eq)
 
 -- | One in-flight aggregate of 'InputCharEvent' outcomes — see
@@ -354,5 +384,7 @@ defaultInputState = InputState
     , inpMouseRoutes = Map.empty
     , inpWindowFocused = True
     , inpPendingUIClick = Map.empty
+    , inpPendingActivation = Map.empty
     , inpCharBatch = Nothing
+    , inpControlFocusConsumedKeys = Set.empty
     }

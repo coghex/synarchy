@@ -15,7 +15,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn)
 import UI.Types
-import UI.Manager.Core (deleteElementTree)
+import UI.Manager.Core (deleteElementTree, bumpPageEpoch)
 
 -- * Page Operations
 
@@ -53,20 +53,38 @@ deletePage handle mgr =
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgrWithoutElements)
                 }
 
+-- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — a
+--   pending pointer activation on ANY control (not just one this page
+--   owns — a SEPARATE modal/menu page appearing over it counts too)
+--   must not restore across a page flickering hidden-then-shown
+--   ("changing menus" per the #745 issue text); see 'bumpPageEpoch'.
+--   Deliberately GLOBAL, unlike element-level property mutators —
+--   page visibility is a genuinely route-affecting event everywhere.
+--
+--   #745 review round 13: only bumps when the page was actually
+--   hidden — a no-op re-show (already visible) must not poison an
+--   in-flight pending activation that was never really interrupted.
 showPage ∷ PageHandle → UIPageManager → UIPageManager
 showPage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
+            (if upVisible page then id else bumpPageEpoch) $
             mgr { upmPages = Map.insert handle (page { upVisible = True }) (upmPages mgr)
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
+-- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — see
+--   'showPage'.
+--
+--   #745 review round 13: only bumps when the page was actually
+--   visible — see 'showPage'.
 hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
+            (if upVisible page then bumpPageEpoch else id) $
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
                 -- Keyboard focus must not survive on a hidden page —
@@ -76,6 +94,19 @@ hidePage handle mgr =
                 -- own upFocusedElement memory is intentionally kept.
                 , upmGlobalFocus =
                     case upmGlobalFocus mgr of
+                        Just fh | Just el ← Map.lookup fh (upmElements mgr)
+                                , uePage el ≡ handle → Nothing
+                        other → other
+                -- #745 review round 3: keyboard CONTROL focus needs
+                -- the exact same hide-time hygiene as TEXT focus above
+                -- — otherwise a control focused before its page is
+                -- hidden sits stale in upmControlFocus (unnoticed
+                -- until the next keyboard dispatch's lazy validation)
+                -- and, if the page is shown again before any key
+                -- reaches that validation, reads as still-focused with
+                -- no intervening "clear" ever having been observed.
+                , upmControlFocus =
+                    case upmControlFocus mgr of
                         Just fh | Just el ← Map.lookup fh (upmElements mgr)
                                 , uePage el ≡ handle → Nothing
                         other → other

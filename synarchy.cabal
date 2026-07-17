@@ -231,6 +231,7 @@ library
                      Engine.Input.Thread.Keyboard
                      Engine.Input.Thread.Char
                      Engine.Input.Thread.Mouse
+                     Engine.Input.Thread.Mouse.Activation
                      Engine.Input.Thread.Scroll
                      Engine.Scripting.Types
                      Engine.Scripting.Lua.Debug
@@ -366,6 +367,8 @@ library
                      UI.Types
                      UI.Focus
                      UI.InputOwnership
+                     UI.ControlActivation
+                     UI.FocusNavigation
                      UI.Clipping
                      UI.PopupPlacement
                      UI.Manager
@@ -1012,6 +1015,8 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ElementInputPolicy
+                   Test.Headless.UI.ControlActivation
+                   Test.Headless.UI.FocusNavigation
                    Test.Headless.UI.Clipping
                    Test.Headless.UI.PopupPlacement
                    Test.Headless.UI.UnicodeTextEditing

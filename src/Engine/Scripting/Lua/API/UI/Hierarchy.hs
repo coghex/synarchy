@@ -18,6 +18,7 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.API.UI.Focus (applyAndNotifyControlFocus)
 import UI.Types
 import UI.Manager
 
@@ -62,8 +63,8 @@ uiRemoveElementFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiRemoveElementFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (removeElement (ElementHandle $ fromIntegral e) mgr, ())
+        Just e  → Lua.liftIO $ applyAndNotifyControlFocus env $
+            removeElement (ElementHandle $ fromIntegral e)
         Nothing → pure ()
     return 0
 
@@ -72,8 +73,8 @@ uiDeleteElementFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiDeleteElementFn env = do
     elemArg ← Lua.tointeger 1
     case elemArg of
-        Just e  → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (deleteElement (ElementHandle $ fromIntegral e) mgr, ())
+        Just e  → Lua.liftIO $ applyAndNotifyControlFocus env $
+            deleteElement (ElementHandle $ fromIntegral e)
         Nothing → pure ()
     return 0
 
@@ -84,8 +85,8 @@ uiRemoveFromPageFn env = do
     elemArg ← Lua.tointeger 2
 
     case (pageArg, elemArg) of
-        (Just p, Just e) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            (removeFromPage (PageHandle $ fromIntegral p) (ElementHandle $ fromIntegral e) mgr, ())
+        (Just p, Just e) → Lua.liftIO $ applyAndNotifyControlFocus env $
+            removeFromPage (PageHandle $ fromIntegral p) (ElementHandle $ fromIntegral e)
         _ → pure ()
 
     return 0

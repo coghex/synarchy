@@ -28,6 +28,12 @@ import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
 import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer
                           , isPointerSurfaceBlocked)
+import UI.Manager.Query (isElementDragActivation)
+import UI.ControlActivation (PendingActivation(..), ActivationOutcome(..)
+                             , activationOutcomeName, beginActivation)
+import Engine.Input.Thread.Mouse.Activation (resolvePendingActivation)
+import UI.FocusNavigation (isEligibleControl)
+import UI.Manager (setControlFocus, clearControlFocus, getControlFocus)
 
 -- | F4 (#730 review round 2): window-pixel movement between a
 --   ClickUI-routed press and its release beyond which the gesture
@@ -79,6 +85,12 @@ dispatchMouseEvent env inpSt btn pos state = do
     -- mirroring scripts/unit_drag_select.lua's own defer-to-release
     -- fix for game-world drags.
     pendingUIClickRef ← newIORef (Nothing ∷ Maybe (Text, Text, Double, Double))
+    -- #745: a DISCRETE (non-drag-activation) ClickUI press's activation
+    -- decision, deferred to the matching release — see
+    -- 'UI.ControlActivation'. 'Nothing' for a drag-activation control
+    -- (fires immediately, exactly as before #745) or any non-ClickUI
+    -- route.
+    pendingActivationRef ← newIORef (Nothing ∷ Maybe PendingActivation)
     let recordRouteOutcome ∷ Text → Maybe Text → IO ()
         recordRouteOutcome outcome handler = do
             gt ← readIORef (gameTimeRef env)
@@ -222,11 +234,45 @@ dispatchMouseEvent env inpSt btn pos state = do
                   -- page's owned control. With no modal boundary the
                   -- scope is every visible page, so behaviour here is
                   -- unchanged from the pre-#742 global search.
-                  GLFW.MouseButton'1 →
-                    case routePointer PointerLeftClick mousePos uiMgr' of
+                  GLFW.MouseButton'1 → do
+                    let leftRoute = routePointer PointerLeftClick mousePos uiMgr'
+                    -- #745 review rounds 1 & 2: a left click also moves
+                    -- keyboard CONTROL focus — landing on an eligible
+                    -- non-text control focuses it, anything else (a
+                    -- text field, a blocked/consumed route, a miss)
+                    -- clears it, mirroring how this same click already
+                    -- clears the pre-existing TEXT focus (LuaUIFocusLost)
+                    -- on those same non-focusing routes below. Reports
+                    -- an actual transition the same way Tab/Escape/
+                    -- validation-repair already do.
+                    mChanged ← atomicModifyIORef' (uiManagerRef env) $ \m →
+                        let target = case leftRoute of
+                                RouteElement eh _ | isEligibleControl eh m → Just eh
+                                _ → Nothing
+                        in ( maybe (clearControlFocus m) (`setControlFocus` m) target
+                           , if target ≡ getControlFocus m then Nothing else Just target )
+                    case mChanged of
+                        Just newFocus → Q.writeQueue lq (LuaUIControlFocusChanged newFocus)
+                        Nothing → return ()
+                    case leftRoute of
                         RouteElement elemHandle callback → do
-                            Q.writeQueue lq
-                                (LuaUIClickEvent elemHandle callback x y)
+                            -- #745: a drag-activation control (slider
+                            -- knob, scrollbar thumb) fires immediately,
+                            -- exactly as every control did before #745
+                            -- — its press IS the start of a drag. Every
+                            -- other (discrete) control defers: only a
+                            -- LuaUIPressBeginEvent fires now (pending
+                            -- visual only), and the matching release
+                            -- decides via 'resolveActivation' whether
+                            -- LuaUIClickEvent ever fires at all.
+                            if isElementDragActivation elemHandle uiMgr'
+                                then Q.writeQueue lq
+                                        (LuaUIClickEvent elemHandle callback x y)
+                                else do
+                                    Q.writeQueue lq
+                                        (LuaUIPressBeginEvent elemHandle callback)
+                                    writeIORef pendingActivationRef $ Just $
+                                        beginActivation PointerLeftClick elemHandle uiMgr'
                             logDebug logger CatUI $
                                 "UI element left-clicked: " <> callback
                             writeIORef pendingUIClickRef
@@ -264,8 +310,18 @@ dispatchMouseEvent env inpSt btn pos state = do
                   GLFW.MouseButton'2 →
                     case routePointer PointerRightClick mousePos uiMgr' of
                         RouteElement elemHandle callback → do
-                            Q.writeQueue lq
-                                (LuaUIRightClickEvent elemHandle callback x y)
+                            -- #745: see the left-click RouteElement
+                            -- branch above — the same drag-activation
+                            -- exemption and press/release deferral
+                            -- applies uniformly across buttons.
+                            if isElementDragActivation elemHandle uiMgr'
+                                then Q.writeQueue lq
+                                        (LuaUIRightClickEvent elemHandle callback x y)
+                                else do
+                                    Q.writeQueue lq
+                                        (LuaUIPressBeginEvent elemHandle callback)
+                                    writeIORef pendingActivationRef $ Just $
+                                        beginActivation PointerRightClick elemHandle uiMgr'
                             logDebug logger CatUI $
                                 "UI element right-clicked: " <> callback
                             writeIORef pendingUIClickRef
@@ -358,6 +414,13 @@ dispatchMouseEvent env inpSt btn pos state = do
         let downRoute = Map.findWithDefault ClickGame btn (inpMouseRoutes inpSt)
         Q.writeQueue lq (LuaMouseUpEvent btn x y downRoute)
 
+        -- #745: resolve any pending discrete-control activation for
+        -- this button BEFORE recording its F4 outcome below (see
+        -- 'Engine.Input.Thread.Mouse.Activation') — its Activate/
+        -- Cancel becomes the recorded aoOutcome below.
+        mActivationOutcome ← resolvePendingActivation env x y winW winH fbW fbH
+            (Map.lookup btn (inpPendingActivation inpSt))
+
         -- F4 (#730 review rounds 2 & 3): resolve a deferred
         -- ClickUI/middle-button-camera-drag press's ONE outcome
         -- now that the whole gesture is known — the original click
@@ -390,15 +453,26 @@ dispatchMouseEvent env inpSt btn pos state = do
                                 then ("input.drag", x, y)
                                 else (clickKind, px, py)
                         (whereX, whereY) = toFb (whereXWin, whereYWin)
+                        -- #745: a deferred discrete control's F4
+                        -- outcome truthfully reflects whether it
+                        -- actually activated; every other route (drag-
+                        -- activation control, camera-drag) has no
+                        -- 'mActivationOutcome' and keeps recording
+                        -- "accepted" exactly as before #745.
+                        outcomeName = maybe "accepted" activationOutcomeName mActivationOutcome
+                        cancelReason = case mActivationOutcome of
+                            Just (Cancel reason) → Just reason
+                            _                    → Nothing
                     pushActionOutcome (actionOutcomeRef env) ActionOutcome
-                        { aoTs = gt, aoKind = kind, aoOutcome = "accepted"
+                        { aoTs = gt, aoKind = kind, aoOutcome = outcomeName
                         , aoWhereX = Just whereX, aoWhereY = Just whereY
                         , aoTarget = Nothing
                         , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
-                        , aoReason = Nothing, aoHandler = Just callback
+                        , aoReason = cancelReason, aoHandler = Just callback
                         }
 
     mPendingUIClick ← readIORef pendingUIClickRef
+    mPendingActivation ← readIORef pendingActivationRef
     return $ case mRoute of
         Just route → inpSt
             { inpMousePos    = pos
@@ -409,11 +483,16 @@ dispatchMouseEvent env inpSt btn pos state = do
             , inpPendingUIClick = case mPendingUIClick of
                 Just pc → Map.insert btn pc (inpPendingUIClick inpSt)
                 Nothing → Map.delete btn (inpPendingUIClick inpSt)
+            , inpPendingActivation = case mPendingActivation of
+                Just pa → Map.insert btn pa (inpPendingActivation inpSt)
+                Nothing → Map.delete btn (inpPendingActivation inpSt)
             }
         Nothing → inpSt
             { inpMousePos  = pos
             , inpMouseBtns = Map.insert btn False (inpMouseBtns inpSt)
             -- Consumed above (if it was ever set) — a released
-            -- button carries no pending click into the next press.
+            -- button carries no pending click/activation into the
+            -- next press (#745).
             , inpPendingUIClick = Map.delete btn (inpPendingUIClick inpSt)
+            , inpPendingActivation = Map.delete btn (inpPendingActivation inpSt)
             }

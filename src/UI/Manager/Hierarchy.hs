@@ -9,10 +9,24 @@ module UI.Manager.Hierarchy
 import UPrelude
 import qualified Data.Map.Strict as Map
 import UI.Types
-import UI.Manager.Core (modifyElement, modifyPage, removeElementReference)
+import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpElementRouteEpoch)
 
 -- * Hierarchy
 
+-- | #745 review round 11: deliberately does NOT bump
+--   'UI.Types.upmRouteEpoch' — only 'removeElement'/'removeFromPage'
+--   (the DETACH side) do. A detach→re-attach sequence is already
+--   caught by the detach's own bump alone (the epoch only needs to
+--   change ONCE somewhere in the press-to-release window to poison a
+--   pending activation; the later re-attach doesn't need to bump too).
+--   Bumping here as well — round 10's original attempt — made
+--   attaching a BRAND-NEW element (never detached this gesture) also
+--   invalidate every unrelated pending activation, which broke a real
+--   production flow: clicking a control that moves keyboard control
+--   focus fires 'scripts/ui/focus_indicator.lua'\'s
+--   @onUIControlFocusChanged@, which creates and @UI.addChild@s four
+--   fresh ring sprites onto the newly focused element — a purely
+--   visual side effect of the SAME click, not an interruption of it.
 addElementToPage ∷ PageHandle → ElementHandle → Float → Float
                  → UIPageManager → UIPageManager
 addElementToPage pageHandle elemHandle x y mgr =
@@ -21,6 +35,8 @@ addElementToPage pageHandle elemHandle x y mgr =
     in modifyPage pageHandle mgr' $ \page →
             page { upRootElements = upRootElements page ⧺ [elemHandle] }
 
+-- | #745 review round 11: see 'addElementToPage' — deliberately does
+--   NOT bump 'UI.Types.upmRouteEpoch' either.
 addChildElement ∷ ElementHandle → ElementHandle → Float → Float
                 → UIPageManager → UIPageManager
 addChildElement parentHandle childHandle x y mgr =
@@ -52,28 +68,49 @@ addChildElement parentHandle childHandle x y mgr =
             Just p  → walkUp (depth - 1) p
             Nothing → False
 
+-- | #745 review round 12: also bumps this element's OWN
+--   'UI.Types.ueRouteEpoch' — a pending pointer activation on this
+--   handle, or on a descendant that has it as an ancestor, must not
+--   survive detach→re-add on the same handle; see
+--   'bumpElementRouteEpoch'. This is the ONLY hierarchy-side bump
+--   (round 11 removed the attach-side ones — see 'addElementToPage')
+--   since a detach always precedes any re-attach, so this alone
+--   already poisons the epoch for that whole sequence.
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing → mgr
         Just element →
-            let mgr' = removeElementReference handle element mgr
-            -- A detached element is unreachable for rendering and
-            -- hit-testing; it must not keep the keyboard either.
-            in if upmGlobalFocus mgr' ≡ Just handle
-               then mgr' { upmGlobalFocus = Nothing }
-               else mgr'
+            let mgr0 = bumpElementRouteEpoch handle mgr
+                mgr' = removeElementReference handle element mgr0
+                -- A detached element is unreachable for rendering and
+                -- hit-testing; it must not keep the keyboard either.
+                mgr'' = if upmGlobalFocus mgr' ≡ Just handle
+                        then mgr' { upmGlobalFocus = Nothing }
+                        else mgr'
+            -- #745 review round 3: same hygiene for CONTROL focus.
+            in if upmControlFocus mgr'' ≡ Just handle
+               then mgr'' { upmControlFocus = Nothing }
+               else mgr''
 
 -- | Remove an element from its page's root list (without deleting it).
 -- This detaches the element so its sprites disappear, but the handle
 -- remains valid for potential re-use or deferred GC.
+--
+-- #745 review round 12: also bumps this element's OWN
+-- 'UI.Types.ueRouteEpoch' — see 'removeElement'.
 removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
-removeFromPage pageHandle elemHandle mgr =
-    let mgr'  = modifyPage pageHandle mgr $ \page →
+removeFromPage pageHandle elemHandle mgr0 =
+    let mgr   = bumpElementRouteEpoch elemHandle mgr0
+        mgr'  = modifyPage pageHandle mgr $ \page →
             page { upRootElements = filter (/= elemHandle) (upRootElements page) }
         mgr'' = modifyElement elemHandle mgr' $ \elem →
             elem { ueParent = Nothing }
-    -- Same focus hygiene as removeElement: detached ⇒ no keyboard.
-    in if upmGlobalFocus mgr'' ≡ Just elemHandle
-       then mgr'' { upmGlobalFocus = Nothing }
-       else mgr''
+        -- Same focus hygiene as removeElement: detached ⇒ no keyboard.
+        mgr''' = if upmGlobalFocus mgr'' ≡ Just elemHandle
+                 then mgr'' { upmGlobalFocus = Nothing }
+                 else mgr''
+    -- #745 review round 3: same hygiene for CONTROL focus.
+    in if upmControlFocus mgr''' ≡ Just elemHandle
+       then mgr''' { upmControlFocus = Nothing }
+       else mgr'''

@@ -363,7 +363,27 @@ spec = do
                     aoTarget r `shouldBe` Nothing
                 _ → expectationFailure ("expected one record, got " ⧺ show recs)
 
-        it "a UI press dragged past the threshold before release drains one accepted input.drag record instead" $ \env → do
+        it "a UI press dragged past the threshold before release drains one input.drag record; still-inside release accepts (#745)" $ \env → do
+            resetAll env
+            _ ← focusedUIElement env
+            push env [InputMouseEvent GLFW.MouseButton'1 (150, 65) GLFW.MouseButtonState'Pressed]
+            -- Moves well past the 4px click/drag threshold but the
+            -- release still lands inside the field's (100,50)-(200,80)
+            -- rect, so #745's discrete-activation contract still
+            -- activates it — "input.drag" (movement-based H1
+            -- classification) and "accepted" (element-identity-based
+            -- #745 activation decision) are orthogonal signals.
+            push env [InputMouseEvent GLFW.MouseButton'1 (160, 70) GLFW.MouseButtonState'Released]
+            inputTick env
+            recs ← drainOutcomes env
+            case recs of
+                [r] → do
+                    aoKind r `shouldBe` "input.drag"
+                    aoOutcome r `shouldBe` "accepted"
+                    aoHandler r `shouldBe` Just "onFieldClick"
+                _ → expectationFailure ("expected exactly one record (never both click and drag), got " ⧺ show recs)
+
+        it "a UI press dragged outside the field and released outside never activates — rejected, not accepted (#745)" $ \env → do
             resetAll env
             _ ← focusedUIElement env
             push env [InputMouseEvent GLFW.MouseButton'1 (150, 65) GLFW.MouseButtonState'Pressed]
@@ -373,7 +393,8 @@ spec = do
             case recs of
                 [r] → do
                     aoKind r `shouldBe` "input.drag"
-                    aoOutcome r `shouldBe` "accepted"
+                    aoOutcome r `shouldBe` "rejected"
+                    aoReason r `shouldSatisfy` isJust
                     aoHandler r `shouldBe` Just "onFieldClick"
                 _ → expectationFailure ("expected exactly one record (never both click and drag), got " ⧺ show recs)
 

@@ -87,6 +87,12 @@ function registry.dumpWidgets()
             local info = widget.handle and UI.getElementInfo(widget.handle)
             widget.paintKey = (info and info.paintKey) or 0
             widget.paintOrder = (info and info.paintOrder) or 0
+            -- #745 review round 4: keyboard CONTROL focus, distinct
+            -- from the pre-existing text-only `focused` each widget
+            -- module's own dump() already sets — added centrally here
+            -- (like paintKey/paintOrder above) so every widget family
+            -- reports it without a per-family dump() change.
+            widget.controlFocused = (info and info.controlFocused) or false
             table.insert(out, widget)
             if widget.handle then known[widget.handle] = true end
         end
@@ -104,6 +110,7 @@ function registry.dumpWidgets()
                 visible = el.visible,
                 hovered = el.hovered,
                 focused = el.focused,
+                controlFocused = el.controlFocused,
                 screen = el.page,
                 handle = el.handle,
                 control = true,
