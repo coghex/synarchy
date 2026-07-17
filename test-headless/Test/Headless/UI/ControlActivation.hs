@@ -363,6 +363,55 @@ spec = do
                     [r] → aoOutcome r `shouldBe` "rejected"
                     _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
 
+            it "restored-before-release: a SEPARATE modal page appearing then disappearing over the point still cancels (#745 review round 10)" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (_eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                mgr ← readIORef (uiManagerRef env)
+                -- The modal page is created and shown, then hidden
+                -- again — the PRESSED control's own page/element is
+                -- never directly touched, only a different page.
+                let (modalH, m3) = page "modal" LayerModal mgr
+                    m4 = hidePage modalH m3
+                writeIORef (uiManagerRef env) m4
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "rejected"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
+            it "restored-before-release: hiding then re-showing an ANCESTOR (not the pressed control itself) still cancels" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (parentH, m2) = createElement "container" 200 200 hudH m1
+                    m3 = addElementToPage hudH parentH 0 0 m2
+                    (eh, m4) = createElement "btn" 100 100 hudH m3
+                    m5 = addChildElement parentH eh (fst pt) (snd pt) m4
+                    m6 = setElementClickable eh True m5
+                    m7 = setElementOnClick eh "btnClick" m6
+                writeIORef (uiManagerRef env) m7
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                mgr ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env)
+                    (setElementVisible parentH True (setElementVisible parentH False mgr))
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                msgs `shouldSatisfy` all (not ∘ isUIClickEvent)
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "rejected"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
     around withHeadlessEngine $
         describe "Lua-facing UI API for drag-activation (#745)" $ do
             it "UI.setDragActivation is callable through the real Lua UI API and leaves the element otherwise clickable (no dedicated getter — the pointer-behavior effect is covered by the wire tests above)" $ \env → do

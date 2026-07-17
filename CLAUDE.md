@@ -359,19 +359,23 @@ per-widget Lua change needed.
 
 A live re-check alone misses an interruption that's REVERTED before
 release (hidden then re-shown, disabled then re-enabled, detached then
-re-attached, or its page hidden then re-shown) — by release time
-routing looks identical to press time again, so the re-check alone
-would wrongly restore activation. Review round 9 closed that gap:
-`UI.Types.ueActivationEpoch` is bumped by every route-affecting
-per-element mutation (`UI.setVisible`, `UI.setClickable`, detach via
-`UI.removeElement`/`removeFromPage`, (re)attach via
-`UI.addToPage`/`addChild`) and, in bulk, by `UI.hidePage`/`showPage`
-for every element on that page. `PendingActivation` captures the
-epoch at press time; `resolveActivation` cancels unconditionally when
-it no longer matches at release, regardless of what the live
-`routePointer` re-check would otherwise say — per the #745 issue text,
-"returning inside before release may restore pending activation" is
-scoped to drag POSITION only, never to a route-affecting state change.
+re-attached, its page hidden then re-shown, a SEPARATE modal/menu page
+appearing then disappearing over the point, or an ANCESTOR hidden then
+re-shown) — by release time routing looks identical to press time
+again, so the re-check alone would wrongly restore activation. Review
+round 9 first closed this with a PER-ELEMENT/PER-PAGE epoch, but that
+still missed the separate-modal and ancestor cases (neither mutation
+touches the pressed element or its own page directly); round 10
+replaced it with a single GLOBAL `UI.Types.upmRouteEpoch`, bumped by
+every route-affecting mutation ANYWHERE in the manager (`UI.setVisible`,
+`UI.setClickable`, detach via `UI.removeElement`/`removeFromPage`,
+(re)attach via `UI.addToPage`/`addChild`, `UI.hidePage`/`showPage`).
+`PendingActivation` captures the epoch at press time;
+`resolveActivation` cancels unconditionally when it no longer matches
+at release, regardless of what the live `routePointer` re-check would
+otherwise say — per the #745 issue text, "returning inside before
+release may restore pending activation" is scoped to drag POSITION
+only, never to a route-affecting state change anywhere in the tree.
 
 Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
 second, independent focus system alongside the pre-existing TEXT-input

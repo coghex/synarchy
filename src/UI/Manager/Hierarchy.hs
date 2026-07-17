@@ -9,20 +9,20 @@ module UI.Manager.Hierarchy
 import UPrelude
 import qualified Data.Map.Strict as Map
 import UI.Types
-import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpActivationEpoch)
+import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpRouteEpoch)
 
 -- * Hierarchy
 
--- | #745 review round 9: also bumps 'ueActivationEpoch' — a pending
---   pointer activation captured before a detach must not survive a
---   re-attach that lands back on the same element; see
---   'bumpActivationEpoch'.
+-- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
+--   pending pointer activation captured before a detach must not
+--   survive a re-attach that lands back on the same element; see
+--   'bumpRouteEpoch'.
 addElementToPage ∷ PageHandle → ElementHandle → Float → Float
                  → UIPageManager → UIPageManager
 addElementToPage pageHandle elemHandle x y mgr =
     let mgr' = modifyElement elemHandle mgr $ \elem →
             elem { uePosition = (x, y), uePage = pageHandle, ueParent = Nothing }
-        mgr'' = bumpActivationEpoch elemHandle mgr'
+        mgr'' = bumpRouteEpoch mgr'
     in modifyPage pageHandle mgr'' $ \page →
             page { upRootElements = upRootElements page ⧺ [elemHandle] }
 
@@ -40,15 +40,15 @@ addChildElement parentHandle childHandle x y mgr =
             -- a Just parent, so the check here keeps the forest
             -- acyclic globally.
             | wouldCycle → mgr
-            -- #745 review round 9: also bumps 'ueActivationEpoch' on
-            -- childHandle — see 'bumpActivationEpoch'.
+            -- #745 review round 10: also bumps 'UI.Types.upmRouteEpoch'
+            -- — see 'bumpRouteEpoch'.
             | otherwise →
                 let mgr' = modifyElement childHandle mgr $ \child →
                         child { uePosition = (x, y)
                               , uePage     = uePage parent
                               , ueParent   = Just parentHandle
                               }
-                    mgr'' = bumpActivationEpoch childHandle mgr'
+                    mgr'' = bumpRouteEpoch mgr'
                 in modifyElement parentHandle mgr'' $ \p →
                         p { ueChildren = ueChildren p ⧺ [childHandle] }
   where
@@ -60,15 +60,15 @@ addChildElement parentHandle childHandle x y mgr =
             Just p  → walkUp (depth - 1) p
             Nothing → False
 
--- | #745 review round 9: also bumps 'ueActivationEpoch' — a pending
---   pointer activation must not survive detach→re-add on the same
---   handle; see 'bumpActivationEpoch'.
+-- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
+--   pending pointer activation must not survive detach→re-add on the
+--   same handle; see 'bumpRouteEpoch'.
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing → mgr
         Just element →
-            let mgr0 = bumpActivationEpoch handle mgr
+            let mgr0 = bumpRouteEpoch mgr
                 mgr' = removeElementReference handle element mgr0
                 -- A detached element is unreachable for rendering and
                 -- hit-testing; it must not keep the keyboard either.
@@ -84,11 +84,11 @@ removeElement handle mgr =
 -- This detaches the element so its sprites disappear, but the handle
 -- remains valid for potential re-use or deferred GC.
 --
--- #745 review round 9: also bumps 'ueActivationEpoch' — see
+-- #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — see
 -- 'removeElement'.
 removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
 removeFromPage pageHandle elemHandle mgr0 =
-    let mgr   = bumpActivationEpoch elemHandle mgr0
+    let mgr   = bumpRouteEpoch mgr0
         mgr'  = modifyPage pageHandle mgr $ \page →
             page { upRootElements = filter (/= elemHandle) (upRootElements page) }
         mgr'' = modifyElement elemHandle mgr' $ \elem →

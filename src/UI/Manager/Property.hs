@@ -27,7 +27,7 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
-import UI.Manager.Core (modifyElement, bumpActivationEpoch)
+import UI.Manager.Core (modifyElement, bumpRouteEpoch)
 
 -- * Property Setters
 
@@ -39,19 +39,19 @@ setElementSize ∷ ElementHandle → Float → Float → UIPageManager → UIPag
 setElementSize handle w h = modifyElement handle `flip`
     (\elem → elem { ueSize = (w, h) })
 
--- | #745 review round 9: also bumps 'ueActivationEpoch' — a pending
---   pointer activation on this element must not survive a visibility
---   flip even if it's reverted before release; see 'bumpActivationEpoch'.
+-- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
+--   pending pointer activation anywhere must not survive a visibility
+--   flip even if it's reverted before release; see 'bumpRouteEpoch'.
 setElementVisible ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementVisible handle visible mgr =
-    bumpActivationEpoch handle $
+    bumpRouteEpoch $
         modifyElement handle mgr (\elem → elem { ueVisible = visible })
 
--- | #745 review round 9: also bumps 'ueActivationEpoch' — see
+-- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — see
 --   'setElementVisible'.
 setElementClickable ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementClickable handle clickable mgr =
-    bumpActivationEpoch handle $
+    bumpRouteEpoch $
         modifyElement handle mgr (\elem → elem { ueClickable = clickable })
 
 -- | #743: explicit opt-in that this element blocks pointer input with

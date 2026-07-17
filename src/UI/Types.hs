@@ -142,25 +142,6 @@ data UIElement = UIElement
     --   before #745, because the press itself starts a drag (a slider
     --   knob, a scrollbar thumb). Defaults to 'False': an ordinary
     --   discrete control activates on a validated release instead.
-  , ueActivationEpoch ∷ Int
-    -- ^ #745 review round 9: bumped by every route-affecting mutation
-    --   to THIS element — 'UI.setVisible', 'UI.setClickable', detach
-    --   ('removeElement'/'removeFromPage'), (re)attach
-    --   ('addElementToPage'/'addChildElement') — and, in bulk, by
-    --   'hidePage'/'showPage' for every element on that page. A
-    --   'UI.ControlActivation.PendingActivation' captures this value
-    --   at press time; 'UI.ControlActivation.resolveActivation'
-    --   cancels unconditionally when it no longer matches at release,
-    --   even if the element's CURRENT state (checked separately via a
-    --   fresh 'UI.InputOwnership.routePointer' call) once again
-    --   resolves the same as it did at press time. This is what makes
-    --   an interruption "cancel safely" per the #745 issue text even
-    --   when it's later reverted (hide→show, disable→enable,
-    --   detach→re-add) — #745's explicit "returning inside before
-    --   release may restore pending activation" carve-out is scoped
-    --   to POSITION only (drag outside and back), never to a route-
-    --   affecting state change. Defaults to @0@; the exact numeric
-    --   value carries no meaning beyond "changed since press".
   , ueSteppable ∷ Bool
     -- ^ #745: this control responds to arrow-key stepping while it
     --   holds keyboard control focus (a slider — see
@@ -416,6 +397,31 @@ data UIPageManager = UIPageManager
     --   Enter/Space activation) — independent of 'upmGlobalFocus',
     --   which is text-input focus only. See 'UI.FocusNavigation'.
   , upmTooltip     ∷ TooltipState
+  , upmRouteEpoch  ∷ Int
+    -- ^ #745 review round 10: bumped by every route-affecting
+    --   mutation ANYWHERE in the manager — 'UI.setVisible',
+    --   'UI.setClickable', detach ('removeElement'/'removeFromPage'),
+    --   (re)attach ('addElementToPage'/'addChildElement'), and
+    --   'hidePage'/'showPage'. A 'UI.ControlActivation.PendingActivation'
+    --   captures this value at press time; 'resolveActivation' cancels
+    --   unconditionally when it no longer matches at release, even if
+    --   the pressed element's own CURRENT state (checked separately
+    --   via a fresh 'UI.InputOwnership.routePointer' call) once again
+    --   resolves the same as it did at press time. Deliberately GLOBAL
+    --   rather than per-element/per-page (an earlier, narrower attempt
+    --   only bumped the mutated element or the shown/hidden page's own
+    --   elements) — a SEPARATE modal/menu page appearing then
+    --   disappearing over the pressed control, or an ANCESTOR of the
+    --   pressed element being hidden then re-shown, both need to
+    --   invalidate a pending activation they never directly touch.
+    --   This is what makes an interruption "cancel safely" per the
+    --   #745 issue text even when it's fully reverted by release time
+    --   (hide→show, disable→enable, detach→re-add, elsewhere-in-the-
+    --   tree hide→show) — #745's explicit "returning inside before
+    --   release may restore pending activation" carve-out is scoped to
+    --   drag POSITION only, never to a route-affecting state change
+    --   anywhere. Defaults to @0@; the exact numeric value carries no
+    --   meaning beyond "changed since press".
   } deriving (Show)
 
 emptyUIPageManager ∷ UIPageManager
@@ -431,4 +437,5 @@ emptyUIPageManager = UIPageManager
   , upmGlobalFocus = Nothing
   , upmControlFocus = Nothing
   , upmTooltip     = emptyTooltipState
+  , upmRouteEpoch  = 0
   }

@@ -77,7 +77,6 @@ module UI.Manager
   , isElementPointerBlocking
   , isElementScrollCapturing
   , isElementDragActivation
-  , elementActivationEpoch
   , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder

@@ -15,7 +15,7 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn)
 import UI.Types
-import UI.Manager.Core (deleteElementTree, bumpPageActivationEpoch)
+import UI.Manager.Core (deleteElementTree, bumpRouteEpoch)
 
 -- * Page Operations
 
@@ -53,28 +53,29 @@ deletePage handle mgr =
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgrWithoutElements)
                 }
 
--- | #745 review round 9: also bumps 'ueActivationEpoch' for every
---   element on this page — a pending pointer activation on a control
---   whose page flickers hidden-then-shown ("changing menus" per the
---   #745 issue text) must not restore; see 'bumpPageActivationEpoch'.
+-- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
+--   pending pointer activation on ANY control (not just one this page
+--   owns — a SEPARATE modal/menu page appearing over it counts too)
+--   must not restore across a page flickering hidden-then-shown
+--   ("changing menus" per the #745 issue text); see 'bumpRouteEpoch'.
 showPage ∷ PageHandle → UIPageManager → UIPageManager
 showPage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
-            bumpPageActivationEpoch handle $
+            bumpRouteEpoch $
             mgr { upmPages = Map.insert handle (page { upVisible = True }) (upmPages mgr)
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
--- | #745 review round 9: also bumps 'ueActivationEpoch' for every
---   element on this page — see 'showPage'.
+-- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — see
+--   'showPage'.
 hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
-            bumpPageActivationEpoch handle $
+            bumpRouteEpoch $
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
                 -- Keyboard focus must not survive on a hidden page —

@@ -18,7 +18,6 @@ module UI.Manager.Query
   , isElementPointerBlocking
   , isElementScrollCapturing
   , isElementDragActivation
-  , elementActivationEpoch
   , isElementClipChildren
   , elementPaintKey
   , elementPaintOrder
@@ -362,17 +361,6 @@ isElementScrollCapturing h mgr =
 isElementDragActivation ∷ ElementHandle → UIPageManager → Bool
 isElementDragActivation h mgr =
     maybe False ueDragActivation (Map.lookup h (upmElements mgr))
-
--- | #745 review round 9: handle-based lookup of 'ueActivationEpoch' —
---   see 'UI.ControlActivation.PendingActivation'/'resolveActivation'.
---   An unknown/deleted handle reports @-1@, a value 'PendingActivation'
---   captured at press time (always ≥ 0) can never equal, so a
---   since-deleted element's pending activation cancels via this check
---   too (belt-and-suspenders alongside 'routePointer' already missing
---   it outright).
-elementActivationEpoch ∷ ElementHandle → UIPageManager → Int
-elementActivationEpoch h mgr =
-    maybe (-1) ueActivationEpoch (Map.lookup h (upmElements mgr))
 
 -- | Handle-based lookup of the raw 'ueClipChildren' opt-in (#747) — an
 --   unknown/deleted handle never clips. Distinct from

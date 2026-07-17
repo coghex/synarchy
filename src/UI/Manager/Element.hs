@@ -66,7 +66,6 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueBlocksPointer = False
           , ueCapturesScroll = False
           , ueDragActivation = False
-          , ueActivationEpoch = 0
           , ueSteppable   = False
           , ueTabIndex    = Nothing
           , ueClipChildren = False

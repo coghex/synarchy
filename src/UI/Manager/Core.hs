@@ -6,8 +6,7 @@ module UI.Manager.Core
   , removeElementReference
   , modifyElement
   , modifyPage
-  , bumpActivationEpoch
-  , bumpPageActivationEpoch
+  , bumpRouteEpoch
   ) where
 
 import UPrelude
@@ -58,27 +57,15 @@ modifyPage ∷ PageHandle → UIPageManager → (UIPage → UIPage) → UIPageMa
 modifyPage handle mgr f =
     mgr { upmPages = Map.adjust f handle (upmPages mgr) }
 
--- | #745 review round 9: bump a single element's 'ueActivationEpoch'
---   — called by every route-affecting per-element mutator
+-- | #745 review round 10: bump 'UI.Types.upmRouteEpoch' — called by
+--   every route-affecting mutator
 --   ('UI.Manager.Property.setElementVisible'/'setElementClickable',
 --   'UI.Manager.Hierarchy.removeElement'/'removeFromPage'/
---   'addElementToPage'/'addChildElement') so a
---   'UI.ControlActivation.PendingActivation' captured before the call
---   can no longer match after it.
-bumpActivationEpoch ∷ ElementHandle → UIPageManager → UIPageManager
-bumpActivationEpoch handle mgr =
-    modifyElement handle mgr $ \el → el { ueActivationEpoch = ueActivationEpoch el + 1 }
-
--- | #745 review round 9: bump 'ueActivationEpoch' for every element
---   belonging to one page — 'UI.Manager.Page.hidePage'/'showPage'
---   call this so a pending activation on any control that page owns
---   cancels safely even if the page comes back before release ("a
---   modal appearing on top" / "changing menus" per the #745 issue
---   text, not just per-element hide/disable/detach).
-bumpPageActivationEpoch ∷ PageHandle → UIPageManager → UIPageManager
-bumpPageActivationEpoch pageHandle mgr =
-    mgr { upmElements = Map.map bump (upmElements mgr) }
-  where
-    bump el
-        | uePage el ≡ pageHandle = el { ueActivationEpoch = ueActivationEpoch el + 1 }
-        | otherwise = el
+--   'addElementToPage'/'addChildElement', 'UI.Manager.Page.hidePage'/
+--   'showPage') so a 'UI.ControlActivation.PendingActivation' captured
+--   before the call can no longer match after it — deliberately
+--   GLOBAL, not scoped to the mutated element/page: see
+--   'UI.Types.upmRouteEpoch' for why a narrower scope misses a
+--   separate modal/menu or an ancestor interruption.
+bumpRouteEpoch ∷ UIPageManager → UIPageManager
+bumpRouteEpoch mgr = mgr { upmRouteEpoch = upmRouteEpoch mgr + 1 }
