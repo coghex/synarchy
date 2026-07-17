@@ -137,6 +137,8 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                            "obstacle-course description implies (#722 defined promotion "
                            "broadness from the actual registered invocation; #754 made "
                            "the unsupported promotion; #772 demoted it)"),
+    "remote_warning_page_guard": (TARGETED, "narrow #844 remote-warning establishHere() "
+                                            "cross-page revalidation regression"),
     "resource_root": (TARGETED, "narrow #636 resource-root launch-contract regression "
                                 "(also runs its own small worldgen dump)"),
     "text_encoding": (TARGETED, "narrow #618 Lua text API decodeUtf8Lenient regression, "
