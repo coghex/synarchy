@@ -133,12 +133,14 @@ buildingsCodec = serializeCodec
 -- | Reconstruct each page's 'BuildingSnapshot' from its instance slice,
 --   filling @bsnNextId@ from the ONE global building-id allocator
 --   (@snapNextBuildingId@, threaded in from @"core-session"@) rather than
---   from a per-page copy the wire no longer carries.
+--   from a per-page copy the wire no longer carries. @ver@ is the
+--   component's real encoded version (for accurate page-mismatch errors,
+--   requirement 6); @nextId@ is the global building-id allocator.
 applyBuildings
-    ∷ Word32 → BuildingsDTO → HM.HashMap WorldPageId PageSnapshot
+    ∷ Word32 → Word32 → BuildingsDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
-applyBuildings nextId (BuildingsDTO slices) =
-    applyPageSlices buildingsComponentId pbPageId
+applyBuildings ver nextId (BuildingsDTO slices) =
+    applyPageSlices buildingsComponentId ver pbPageId
         (\s p → p { pgsBuildings = BuildingSnapshot
                         { bsnInstances = pbInstances s, bsnNextId = nextId } })
         slices
@@ -166,10 +168,10 @@ unitsCodec = serializeCodec
     (\_ d → Right d) (const [])
 
 applyUnits
-    ∷ Word32 → UnitsDTO → HM.HashMap WorldPageId PageSnapshot
+    ∷ Word32 → Word32 → UnitsDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
-applyUnits nextId (UnitsDTO slices) =
-    applyPageSlices unitsComponentId puPageId
+applyUnits ver nextId (UnitsDTO slices) =
+    applyPageSlices unitsComponentId ver puPageId
         (\s p → p { pgsUnits = UnitSnapshot
                         { usnInstances = puInstances s, usnNextId = nextId } })
         slices
@@ -304,10 +306,10 @@ unitSimCodec = serializeCodec
     (\_ d → Right d) (const [])
 
 applyUnitSim
-    ∷ UnitSimDTO → HM.HashMap WorldPageId PageSnapshot
+    ∷ Word32 → UnitSimDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
-applyUnitSim (UnitSimDTO slices) =
-    applyPageSlices unitSimComponentId psPageId
+applyUnitSim ver (UnitSimDTO slices) =
+    applyPageSlices unitSimComponentId ver psPageId
         (\s p → p { pgsUnitSimStates = HM.map fromUnitSimStateDTO (psSim s) })
         slices
 
@@ -399,10 +401,10 @@ craftBillsCodec = serializeCodec
     (\_ d → Right d) (const [])
 
 applyCraftBills
-    ∷ CraftBillsDTO → HM.HashMap WorldPageId PageSnapshot
+    ∷ Word32 → CraftBillsDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
-applyCraftBills (CraftBillsDTO slices) =
-    applyPageSlices craftBillsComponentId pcbPageId
+applyCraftBills ver (CraftBillsDTO slices) =
+    applyPageSlices craftBillsComponentId ver pcbPageId
         (\s p → p { pgsCraftBills = fromBillQueueDTO (pcbBills s) }) slices
 
 -- power-nodes -------------------------------------------------------
@@ -472,8 +474,8 @@ powerNodesCodec = serializeCodec
     (\_ d → Right d) (const [])
 
 applyPowerNodes
-    ∷ PowerNodesDTO → HM.HashMap WorldPageId PageSnapshot
+    ∷ Word32 → PowerNodesDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
-applyPowerNodes (PowerNodesDTO slices) =
-    applyPageSlices powerNodesComponentId ppnPageId
+applyPowerNodes ver (PowerNodesDTO slices) =
+    applyPageSlices powerNodesComponentId ver ppnPageId
         (\s p → p { pgsPowerNodes = fromNodeRegistryDTO (ppnNodes s) }) slices

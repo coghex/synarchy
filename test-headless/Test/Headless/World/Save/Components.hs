@@ -225,7 +225,7 @@ encodeRich = encodeSessionSnapshot richMeta richSnapshot
 
 pageCore ∷ WorldPageId → PageCoreDTO
 pageCore pid = PageCoreDTO
-    { pcPageId = pid, pcGenParams = defaultGP
+    { pcPageId = pid, pcGenParams = toWorldGenParamsDTO defaultGP
     , pcCameraX = 0, pcCameraY = 0, pcTimeHour = 0, pcTimeMinute = 0
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
     , pcIdentity = Nothing }
@@ -324,7 +324,8 @@ spec = do
            \requirement 10)" $
             case ccDecode worldPagesCodec 1 (ccEncode worldPagesCodec richSnapshot) of
                 Right (WorldPagesDTO ps) →
-                    [ wgpSeed (pcGenParams p) | p ← ps, pcPageId p ≡ page1 ]
+                    [ wgpSeed (fromWorldGenParamsDTO (pcGenParams p))
+                    | p ← ps, pcPageId p ≡ page1 ]
                         `shouldBe` [123456]
                 Left e → expectationFailure (T.unpack (renderComponentError e))
 
@@ -351,7 +352,7 @@ spec = do
             let base = basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2])
                 bad  = BuildingsDTO
                     [ PageBuildingsDTO page1 HM.empty ]  -- page2 missing
-            applyBuildings 1 bad base `shouldSatisfy` isLeft
+            applyBuildings 1 1 bad base `shouldSatisfy` isLeft
 
         it "rejects a page-scoped slice for a page the authority does NOT \
            \declare" $ do
@@ -359,20 +360,31 @@ spec = do
                 bad  = BuildingsDTO
                     [ PageBuildingsDTO page1 HM.empty
                     , PageBuildingsDTO page2 HM.empty ]
-            applyBuildings 1 bad base `shouldSatisfy` isLeft
+            applyBuildings 1 1 bad base `shouldSatisfy` isLeft
+
+        it "reports the component's real encoded version (NOT a placeholder \
+           \0) on a page-set mismatch (requirement 6)" $ do
+            let base = basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2])
+                bad  = BuildingsDTO [ PageBuildingsDTO page1 HM.empty ]  -- page2 missing
+            case applyBuildings 1 10 bad base of
+                Left es → do
+                    map ceVersion es `shouldSatisfy` all (≡ 1)
+                    map ceVersion es `shouldSatisfy` notElem 0
+                    map cePhase es `shouldSatisfy` all (≡ AssemblePhase)
+                Right _ → expectationFailure "expected a page-mismatch error"
 
         it "accepts a slice set matching the authority exactly" $ do
             let base = basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2])
                 ok   = BuildingsDTO
                     [ PageBuildingsDTO page1 HM.empty
                     , PageBuildingsDTO page2 HM.empty ]
-            applyBuildings 1 ok base `shouldSatisfy` (not . isLeft)
+            applyBuildings 1 1 ok base `shouldSatisfy` (not . isLeft)
 
         it "reconstructs the building allocator from the global counter, \
            \not a per-page copy (requirement 9)" $ do
             let base = basePageSnapshots (WorldPagesDTO [pageCore page1])
                 ok   = BuildingsDTO [ PageBuildingsDTO page1 HM.empty ]
-            case applyBuildings 42 ok base of
+            case applyBuildings 1 42 ok base of
                 Right m  → (bsnNextId . pgsBuildings <$> HM.lookup page1 m)
                              `shouldBe` Just 42
                 Left e   → expectationFailure (show e)

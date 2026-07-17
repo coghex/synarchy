@@ -39,7 +39,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
-import World.Save.Envelope.Types (ComponentId(..))
+import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..))
 import World.Save.Envelope.Codec (DecodedEnvelope(..))
 import World.Save.Types (SaveMetadata(..))
 import World.Save.Snapshot
@@ -180,23 +180,39 @@ assembleSnapshot meta de = do
             -- reconstructed snapshot from these single counters.
             bNextId = csNextBuildingId core
             uNextId = csNextUnitId core
+            -- Each page-scoped component's REAL encoded version, read
+            -- from the decoded manifest descriptor (requirement 6: a
+            -- page-set-mismatch error names the true version, not a
+            -- placeholder). The descriptor is always present here — the
+            -- component decoded successfully just above — so the
+            -- fallback to the codec's current version is unreachable.
+            verOf ∷ ComponentCodec a → Word32
+            verOf cc = maybe (ccVersion cc) cdVersion
+                             (findDescriptor (ccId cc) (deManifest de))
+            editsVer    = verOf worldEditsCodec
+            activityVer = verOf worldActivityCodec
+            buildVer    = verOf buildingsCodec
+            unitsVer    = verOf unitsCodec
+            simVer      = verOf unitSimCodec
+            craftVer    = verOf craftBillsCodec
+            powerVer    = verOf powerNodesCodec
             applyErrs = concat
-                [ leftsOf (applyWorldEdits edits base)
-                , leftsOf (applyWorldActivity activity base)
-                , leftsOf (applyBuildings bNextId build base)
-                , leftsOf (applyUnits uNextId units base)
-                , leftsOf (applyUnitSim sim base)
-                , leftsOf (applyCraftBills craft base)
-                , leftsOf (applyPowerNodes power base)
+                [ leftsOf (applyWorldEdits editsVer edits base)
+                , leftsOf (applyWorldActivity activityVer activity base)
+                , leftsOf (applyBuildings buildVer bNextId build base)
+                , leftsOf (applyUnits unitsVer uNextId units base)
+                , leftsOf (applyUnitSim simVer sim base)
+                , leftsOf (applyCraftBills craftVer craft base)
+                , leftsOf (applyPowerNodes powerVer power base)
                 ]
         if not (null applyErrs) then Left applyErrs else do
-            pages ←   applyWorldEdits edits base
-                  >>= applyWorldActivity activity
-                  >>= applyBuildings bNextId build
-                  >>= applyUnits uNextId units
-                  >>= applyUnitSim sim
-                  >>= applyCraftBills craft
-                  >>= applyPowerNodes power
+            pages ←   applyWorldEdits editsVer edits base
+                  >>= applyWorldActivity activityVer activity
+                  >>= applyBuildings buildVer bNextId build
+                  >>= applyUnits unitsVer uNextId units
+                  >>= applyUnitSim simVer sim
+                  >>= applyCraftBills craftVer craft
+                  >>= applyPowerNodes powerVer power
             -- 3. Build the full immutable snapshot from the globals + pages.
             let cam  = csLiveCamera core
                 snap = SessionSnapshot

@@ -203,14 +203,19 @@ findDescriptor cid manifest =
 --   unknown page, or a page with no slice, fails as an 'AssemblePhase'
 --   error naming @cid@. On success each page's snapshot is updated
 --   through @writeSlice@.
+--
+--   @ver@ is the component's ACTUAL encoded version (the descriptor's
+--   'cdVersion', threaded in by the caller) so a page-set-mismatch error
+--   reports the true version, not a placeholder (requirement 6).
 applyPageSlices
     ∷ ComponentId
+    → Word32
     → (slice → WorldPageId)
     → (slice → PageSnapshot → PageSnapshot)
     → [slice]
     → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
-applyPageSlices cid pageIdOf writeSlice slices base =
+applyPageSlices cid ver pageIdOf writeSlice slices base =
     let sliceIds = HS.fromList (map pageIdOf slices)
         baseIds  = HM.keysSet base
         extra    = HS.toList (HS.difference sliceIds baseIds)
@@ -229,7 +234,7 @@ applyPageSlices cid pageIdOf writeSlice slices base =
          else Right (L.foldl' (\m s → HM.adjust (writeSlice s) (pageIdOf s) m)
                               base slices)
   where
-    mkErr = ComponentError cid 0 AssemblePhase
+    mkErr = ComponentError cid ver AssemblePhase
     showPid p = T.pack (show p)
 
 -- Stable component identifiers -------------------------------------
