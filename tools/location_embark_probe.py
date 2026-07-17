@@ -299,34 +299,79 @@ def find_safe_local_start(port: int, seeds, screen_x: int, screen_y: int,
     return None
 
 
-def select_unit_via_click(port: int, uid: int, cx0: int, cy0: int) -> bool:
-    """Select the roster acolyte.
+def _hit_test_in_rect_has(port: int, uid: int, x1: int, y1: int,
+                           x2: int, y2: int) -> bool:
+    raw = send(port, f"return unit.hitTestInRect({x1}, {y1}, {x2}, {y2})")
+    ids = re.findall(r"\d+", raw)
+    return str(uid) in ids
 
-    The original design here drove selection through a real
-    `input.click` located by scanning for the pixel where
-    `unit.hitTestAt` reports `uid` (mirroring how `world.pickTile`
-    already locates every OTHER real click in this probe). That proved
-    to hit a genuine, previously-unexercised engine limitation: no
-    registered probe had ever called `unit.hitTestAt` over the debug
-    console before, and it turns out to return no hit ANYWHERE on
-    screen in `--offscreen` mode, even for a freshly spawned, motionless
-    unit sitting directly under a camera centred on its own tile (a
-    zero-hit full-screen sweep at multiple zoom/z-slice combinations
-    ruled out timing, movement, and z-slice mismatches as the cause).
-    Root-causing and fixing that engine-side bug is out of scope here —
-    it sits in #644's pre-existing input-injection/hit-test plumbing,
-    not the #777-#781 location contracts this issue is scoped to
-    correct — so selection falls back to `unit.select`, the exact
-    engine call `scripts/init_mouse.lua`'s real left-click handler
-    itself makes once ITS OWN (in-process, non-debug-console)
-    `unit.hitTestAt` call resolves an id. The move ORDER immediately
-    after this — the actual behavior under test (#782's non-duplicative
-    focus is discovery via a real order, not the preceding selection
-    click) — still goes through a genuine `input.click(..., 'right')`,
-    exactly as scripts/init_mouse.lua routes it to `unitAi.commandMove`.
-    """
-    ok = send(port, f"return unit.select({uid})").strip('"')
-    return ok == "true"
+
+def locate_unit_pixel(port: int, uid: int, w: int, h: int,
+                       max_steps: int = 14) -> tuple[int, int] | None:
+    """Bisect `unit.hitTestInRect` down to the small screen-pixel box
+    containing `uid`'s sprite quad, returning its centre pixel (or None
+    if the unit isn't found on screen at all).
+
+    A single `unit.hitTestAt(cx0, cy0)` at the raw screen centre — the
+    approach a first attempt here took, mirroring how every other real
+    click in this probe locates its target via `world.pickTile` — looks
+    for a hit at ONE fixed pixel; it only lands on a moving/off-centre
+    unit's actual (much smaller) sprite quad by coincidence.
+    `camera.goToTile`/`world.pickTile` converge screen centre onto a
+    whole TILE, not onto a specific unit's own fractional sub-tile
+    position within it, so requiring an exact-centre hit is what made
+    `unit.hitTestAt` alone look broken. `unit.hitTestInRect`, queried
+    over successively smaller rects, reliably narrows onto the unit's
+    real screen position instead (verified against a real `input.click`
+    at the converged point actually landing in `unit.getSelected()`)."""
+    x1, y1, x2, y2 = 0, 0, w, h
+    if not _hit_test_in_rect_has(port, uid, x1, y1, x2, y2):
+        return None
+    for _ in range(max_steps):
+        if x2 - x1 <= 2 and y2 - y1 <= 2:
+            break
+        mx, my = (x1 + x2) // 2, (y1 + y2) // 2
+        quadrants = [(x1, y1, mx, my), (mx, y1, x2, my),
+                     (x1, my, mx, y2), (mx, my, x2, y2)]
+        for qx1, qy1, qx2, qy2 in quadrants:
+            if _hit_test_in_rect_has(port, uid, qx1, qy1, qx2, qy2):
+                x1, y1, x2, y2 = qx1, qy1, qx2, qy2
+                break
+        else:
+            # The unit moved out from under the shrinking search box
+            # between hitTestInRect calls (it's a live, simulating
+            # unit) — the last confirmed box is still a usable, if
+            # coarser, click target.
+            break
+    return (x1 + x2) // 2, (y1 + y2) // 2
+
+
+def select_unit_via_click(port: int, uid: int, w: int, h: int,
+                           attempts: int = 5) -> bool:
+    """Select the roster acolyte via a REAL `input.click`, located by
+    `locate_unit_pixel` and confirmed via `unit.getSelected()` — the
+    same player-facing left-click path `scripts/init_mouse.lua` routes
+    to `unit.select` internally.
+
+    Retries the WHOLE bisection from a fresh full-screen box on a
+    failed attempt: `uid` is a live, ambient-wandering roster acolyte,
+    so a single bisection run can lose track of it mid-search (drifting
+    out from under the shrinking box between successive
+    `hitTestInRect` round trips) and converge on a stale pixel a real
+    click then misses — the same risk `ensure_mobile` above already
+    accepts and retries around for the unit's spawn-formation walk."""
+    for _ in range(attempts):
+        pixel = locate_unit_pixel(port, uid, w, h)
+        if not pixel:
+            continue
+        px, py = pixel
+        send(port, f"return input.moveMouse({px}, {py})")
+        send(port, f"return input.click({px}, {py}, 'left')")
+        time.sleep(0.2)
+        selected = send(port, "return unit.getSelected()")
+        if str(uid) in re.findall(r"\d+", selected):
+            return True
+    return False
 
 
 def wait_for_hud_settle(port: int, seconds: float = 3.0) -> None:
@@ -439,13 +484,21 @@ def session_ghost_and_remote(port: int, w: int, h: int, shots: str,
     time.sleep(0.3)
     check("target ruin starts undiscovered", not t.get("discovered"))
     shot_hidden_target = os.path.join(shots, "icon_hidden_target.png")
-    check("hidden-icon (target) screenshot answers", screenshot(port, shot_hidden_target))
+    if check("hidden-icon (target) screenshot answers",
+             screenshot(port, shot_hidden_target)):
+        st = png_stats(shot_hidden_target)
+        check("hidden-icon (target) frame is not blank",
+              bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
     center_on(port, c["gx"], c["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
     check("control ruin starts undiscovered", not c.get("discovered"))
     shot_hidden_control = os.path.join(shots, "icon_hidden_control.png")
-    check("hidden-icon (control) screenshot answers", screenshot(port, shot_hidden_control))
+    if check("hidden-icon (control) screenshot answers",
+             screenshot(port, shot_hidden_control)):
+        st = png_stats(shot_hidden_control)
+        check("hidden-icon (control) frame is not blank",
+              bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
 
     # -- step 4: arm portal placement. --
     arm_portal_placement(port)
@@ -646,7 +699,7 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     # -- step 15 (cont'd): select + order via REAL input, not
     # unitAi.commandMove/unit.setPos. --
     check("select the roster acolyte via a real click",
-          select_unit_via_click(port, roster_uid, cx0, cy0))
+          select_unit_via_click(port, roster_uid, w, h))
     move_resolved = order_move_to(port, t["gx"], t["gy"], cx0, cy0)
     check("real right-click move order resolves the target ruin's anchor tile",
           move_resolved == (t["gx"], t["gy"]), f"got {move_resolved}")
@@ -698,19 +751,32 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     check("the un-approached control ruin stays undiscovered",
           bool(control_now) and not control_now.get("discovered"))
 
-    # -- checkpoint: one discovered + one undiscovered icon, same
-    # camera/zoom convention as session (a)'s hidden-icon shots. Zoom is
-    # saved/restored around it so step 19's move-order clicks below
-    # resolve hover/click tiles under the same conditions as ordinary
-    # gameplay rather than the coarse icon-inspection zoom level. --
+    # -- checkpoint: one discovered + one undiscovered icon, using the
+    # IDENTICAL camera centre + zoom formula session (a) used for its
+    # pre-portal `icon_hidden_target.png`/`icon_hidden_control.png`
+    # shots (same tempdir, same file names) — a terrain-stable baseline
+    # per ruin, so the comparisons below isolate the ICON change alone
+    # rather than "these are two different ruins on different terrain".
+    # Zoom is saved/restored around this so step 19's move-order clicks
+    # below resolve hover/click tiles under the same conditions as
+    # ordinary gameplay rather than the coarse icon-inspection zoom
+    # level. --
     play_zoom = send(port, "return camera.getZoom()")
     fade_end = zoom_fade_end(port)
     full_zoom = fade_end * 1.5
+    shot_hidden_target = os.path.join(shots, "icon_hidden_target.png")
     center_on(port, t["gx"], t["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
     shot_discovered = os.path.join(shots, "icon_discovered.png")
-    check("discovered-icon screenshot answers", screenshot(port, shot_discovered))
+    if check("discovered-icon screenshot answers",
+             screenshot(port, shot_discovered)):
+        st = png_stats(shot_discovered)
+        check("discovered-icon frame is not blank",
+              bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
+        check("target ruin's icon visibly changed from its own pre-portal "
+              "hidden-icon baseline (same camera centre/zoom) once discovered",
+              png_differs(shot_hidden_target, shot_discovered, min_fraction=0.0002))
     center_on(port, c["gx"], c["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
@@ -784,14 +850,26 @@ def session_reload_check(port: int, w: int, h: int, shots: str,
         check("control ruin remains undiscovered after save -> quit -> "
               "restart -> load", not c.get("discovered"))
 
-    # -- step 21 checkpoint: restored icons after save/load. --
+    # -- step 21 checkpoint: restored icons after save/load, checked
+    # against the SAME terrain-stable per-ruin baselines session (a)
+    # captured pre-portal (identical camera centre/zoom, same tempdir) —
+    # not just against each other. --
     fade_end = zoom_fade_end(port)
     full_zoom = fade_end * 1.5
+    shot_hidden_target = os.path.join(shots, "icon_hidden_target.png")
+    shot_hidden_control = os.path.join(shots, "icon_hidden_control.png")
     center_on(port, target["gx"], target["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
     shot_t = os.path.join(shots, "icon_reloaded_target.png")
-    check("reloaded target-icon screenshot answers", screenshot(port, shot_t))
+    if check("reloaded target-icon screenshot answers", screenshot(port, shot_t)):
+        st = png_stats(shot_t)
+        check("reloaded target-icon frame is not blank",
+              bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
+        check("reloaded target ruin's icon still differs from its own "
+              "pre-portal hidden-icon baseline (discovered state survived "
+              "save -> quit -> restart -> load)",
+              png_differs(shot_hidden_target, shot_t, min_fraction=0.0002))
     center_on(port, control["gx"], control["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
@@ -799,6 +877,10 @@ def session_reload_check(port: int, w: int, h: int, shots: str,
     if check("reloaded control-icon screenshot answers", screenshot(port, shot_c)):
         check("the reloaded discovered and undiscovered icons render differently",
               png_differs(shot_t, shot_c, min_fraction=0.0002))
+        check("reloaded control ruin's icon still matches its own pre-portal "
+              "hidden-icon baseline (undiscovered state survived "
+              "save -> quit -> restart -> load)",
+              not png_differs(shot_hidden_control, shot_c, min_fraction=0.0002))
 
 
 def main() -> int:
