@@ -172,6 +172,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[str, str]] = {
                            "screenshot diffing (#807) — no GPU on the CI runner"),
     "portal_ghost": (NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
                                 "rendered tint via real screenshots — no GPU on the CI runner (#778)"),
+    "location_embark": (NEEDS_GPU, "offscreen boot: real embark-to-discovery session "
+                                   "through zoom-map icons, portal ghost/remote-modal "
+                                   "flow, and real-input-driven unit movement — no GPU "
+                                   "on the CI runner (#782)"),
     # --- slow/worldgen-heavy: needs a real generated world, not the flat
     # arena — too slow for a blocking per-PR gate. ---
     "action_outcome": (SLOW_WORLDGEN, "needs a real generated world to scan for a mixed tillable/fluid box and a real tree for the chop partial path (#646)"),

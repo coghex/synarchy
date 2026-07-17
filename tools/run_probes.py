@@ -116,6 +116,9 @@ PROBES = [
      "item temperature model (#344)"),
     ("location_content", "location_content_probe.py",
      "location content spawning + ruin probe (#90, #91)"),
+    ("location_embark", "location_embark_probe.py",
+     "offscreen embark-to-discovery integration: zoom-map icons, portal ghost/"
+     "remote-modal flow, real-order-driven discovery, save/reload (#782; needs a GPU)"),
     ("location_overlay", "location_overlay_probe.py",
      "world-gen location-overlay placement (#89)"),
     ("location_stamp_idempotent", "location_stamp_idempotent_probe.py",
