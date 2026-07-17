@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Global, once-per-session components (issue #760, save-overhaul B2).
 --   These carry the genuinely session-wide 'SessionSnapshot' fields —
 --   the ones that are NOT scoped to any single world page:
@@ -111,7 +111,8 @@ applyCoreSession d snap = snap
 -- texture-palette ---------------------------------------------------
 
 newtype TexPaletteDTO = TexPaletteDTO { tpdPalette ∷ TexPalette }
-    deriving (Show, Eq, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
 
 texPaletteCodec ∷ ComponentCodec TexPaletteDTO
 texPaletteCodec = serializeCodec
@@ -124,7 +125,8 @@ coreSessionTexPalette d snap = snap { snapTexPalette = tpdPalette d }
 -- lua-state ---------------------------------------------------------
 
 newtype LuaStateDTO = LuaStateDTO { lsdModules ∷ HM.HashMap Text Text }
-    deriving (Show, Eq, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
 
 luaStateCodec ∷ ComponentCodec LuaStateDTO
 luaStateCodec = serializeCodec

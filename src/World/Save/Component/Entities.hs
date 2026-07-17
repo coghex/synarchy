@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Entity + entity-adjacent page-scoped components (issue #760,
 --   save-overhaul B2). All page-scoped, all validated against the
 --   @"world-pages"@ authority (requirement 8):
@@ -77,7 +77,8 @@ data PageBuildingsDTO = PageBuildingsDTO
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
-    deriving (Show, Eq, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
 
 buildingsCodec ∷ ComponentCodec BuildingsDTO
 buildingsCodec = serializeCodec
@@ -101,7 +102,8 @@ data PageUnitsDTO = PageUnitsDTO
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
-    deriving (Show, Eq, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
 
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = serializeCodec
@@ -125,7 +127,8 @@ data PageSimDTO = PageSimDTO
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitSimDTO = UnitSimDTO { usdPages ∷ [PageSimDTO] }
-    deriving (Show, Eq, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
 
 unitSimCodec ∷ ComponentCodec UnitSimDTO
 unitSimCodec = serializeCodec
@@ -149,7 +152,8 @@ data PageCraftBillsDTO = PageCraftBillsDTO
     } deriving (Show, Generic, Serialize)
 
 newtype CraftBillsDTO = CraftBillsDTO { cbdPages ∷ [PageCraftBillsDTO] }
-    deriving (Show, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
 
 craftBillsCodec ∷ ComponentCodec CraftBillsDTO
 craftBillsCodec = serializeCodec
@@ -173,7 +177,8 @@ data PagePowerNodesDTO = PagePowerNodesDTO
     } deriving (Show, Generic, Serialize)
 
 newtype PowerNodesDTO = PowerNodesDTO { pndPages ∷ [PagePowerNodesDTO] }
-    deriving (Show, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
 
 powerNodesCodec ∷ ComponentCodec PowerNodesDTO
 powerNodesCodec = serializeCodec

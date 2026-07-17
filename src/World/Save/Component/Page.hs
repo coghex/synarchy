@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass, DerivingStrategies #-}
 -- | Page-scoped world components (issue #760, save-overhaul B2). Each
 --   carries a slice PER world page, keyed by 'WorldPageId', and every
 --   one is validated against the authoritative page set the
@@ -87,7 +87,8 @@ data PageCoreDTO = PageCoreDTO
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTO = WorldPagesDTO { wpdPages ∷ [PageCoreDTO] }
-    deriving (Show, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
 
 worldPagesCodec ∷ ComponentCodec WorldPagesDTO
 worldPagesCodec = serializeCodec
@@ -168,7 +169,8 @@ data PageEditsDTO = PageEditsDTO
     } deriving (Show, Generic, Serialize)
 
 newtype WorldEditsDTO = WorldEditsDTO { wedPages ∷ [PageEditsDTO] }
-    deriving (Show, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
 
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
 worldEditsCodec = serializeCodec
@@ -200,7 +202,8 @@ data PageActivityDTO = PageActivityDTO
     } deriving (Show, Generic, Serialize)
 
 newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
-    deriving (Show, Generic, Serialize)
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
 
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = serializeCodec
