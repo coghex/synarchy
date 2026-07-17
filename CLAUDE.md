@@ -367,15 +367,28 @@ round 9 first closed this with a PER-ELEMENT/PER-PAGE epoch, but that
 still missed the separate-modal and ancestor cases (neither mutation
 touches the pressed element or its own page directly); round 10
 replaced it with a single GLOBAL `UI.Types.upmRouteEpoch`, bumped by
-every route-affecting mutation ANYWHERE in the manager (`UI.setVisible`,
-`UI.setClickable`, detach via `UI.removeElement`/`removeFromPage`,
-(re)attach via `UI.addToPage`/`addChild`, `UI.hidePage`/`showPage`).
-`PendingActivation` captures the epoch at press time;
-`resolveActivation` cancels unconditionally when it no longer matches
-at release, regardless of what the live `routePointer` re-check would
-otherwise say — per the #745 issue text, "returning inside before
-release may restore pending activation" is scoped to drag POSITION
-only, never to a route-affecting state change anywhere in the tree.
+every route-affecting mutation ANYWHERE in the manager. `PendingActivation`
+captures the epoch at press time; `resolveActivation` cancels
+unconditionally when it no longer matches at release, regardless of
+what the live `routePointer` re-check would otherwise say — per the
+#745 issue text, "returning inside before release may restore pending
+activation" is scoped to drag POSITION only, never to a route-affecting
+state change anywhere in the tree.
+
+Round 10's global epoch was itself too broad: bumping on (re)attach
+(`UI.addToPage`/`addChild`) as well as detach broke a real production
+flow (round 11) — a click that moves keyboard control focus fires
+`scripts/ui/focus_indicator.lua`'s `onUIControlFocusChanged`, which
+creates and `UI.addChild`s four fresh ring sprites onto the newly
+focused element as a purely visual side effect of the SAME click; that
+attach bumped the epoch mid-press and wrongly canceled the click's own
+activation. `upmRouteEpoch` now bumps only on the DETACH side
+(`UI.removeElement`/`removeFromPage`) plus `UI.setVisible`/
+`setClickable`/`hidePage`/`showPage` — never on `addToPage`/`addChild`.
+A detach→re-attach sequence is still caught, since the detach alone
+already poisons the epoch before any re-attach happens; attaching a
+BRAND-NEW element (never detached this gesture) no longer falsely
+invalidates unrelated pending activations.
 
 Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
 second, independent focus system alongside the pre-existing TEXT-input

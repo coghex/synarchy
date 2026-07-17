@@ -398,12 +398,11 @@ data UIPageManager = UIPageManager
     --   which is text-input focus only. See 'UI.FocusNavigation'.
   , upmTooltip     ∷ TooltipState
   , upmRouteEpoch  ∷ Int
-    -- ^ #745 review round 10: bumped by every route-affecting
-    --   mutation ANYWHERE in the manager — 'UI.setVisible',
-    --   'UI.setClickable', detach ('removeElement'/'removeFromPage'),
-    --   (re)attach ('addElementToPage'/'addChildElement'), and
-    --   'hidePage'/'showPage'. A 'UI.ControlActivation.PendingActivation'
-    --   captures this value at press time; 'resolveActivation' cancels
+    -- ^ #745 review round 10: bumped by every route-affecting mutation
+    --   ANYWHERE in the manager — 'UI.setVisible', 'UI.setClickable',
+    --   detach ('removeElement'/'removeFromPage'), and 'hidePage'/
+    --   'showPage'. A 'UI.ControlActivation.PendingActivation' captures
+    --   this value at press time; 'resolveActivation' cancels
     --   unconditionally when it no longer matches at release, even if
     --   the pressed element's own CURRENT state (checked separately
     --   via a fresh 'UI.InputOwnership.routePointer' call) once again
@@ -420,8 +419,20 @@ data UIPageManager = UIPageManager
     --   tree hide→show) — #745's explicit "returning inside before
     --   release may restore pending activation" carve-out is scoped to
     --   drag POSITION only, never to a route-affecting state change
-    --   anywhere. Defaults to @0@; the exact numeric value carries no
-    --   meaning beyond "changed since press".
+    --   anywhere.
+    --
+    --   #745 review round 11: (re)attach ('addElementToPage'/
+    --   'addChildElement') deliberately does NOT bump this — only the
+    --   DETACH side does. A detach→re-attach sequence is still caught
+    --   because the detach's own bump already poisons the epoch before
+    --   any re-attach happens; bumping on attach too broke a real
+    --   production flow, since attaching a BRAND-NEW element (never
+    --   detached this gesture) also invalidated every unrelated
+    --   pending activation — exactly what 'scripts/ui/focus_indicator.
+    --   lua' does on every focus change (creates and @UI.addChild@s
+    --   fresh ring sprites), a purely visual side effect of the SAME
+    --   click, not an interruption of it. Defaults to @0@; the exact
+    --   numeric value carries no meaning beyond "changed since press".
   } deriving (Show)
 
 emptyUIPageManager ∷ UIPageManager

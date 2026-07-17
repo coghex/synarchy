@@ -412,6 +412,38 @@ spec = do
                     [r] → aoOutcome r `shouldBe` "rejected"
                     _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
 
+            it "real focus-ring churn (scripts/ui/focus_indicator.lua) between press and release does NOT cancel the SAME click's own activation (#745 review round 11 regression)" $ \env → do
+                resetAll env
+                ls ← newBareLuaBackend env
+                _ ← evalDebug ls
+                    "local fi = require('scripts.ui.focus_indicator'); fi.init(); \
+                    \local pg = UI.newPage('t_fr', 'hud'); UI.showPage(pg); \
+                    \local el = UI.newElement('btn', 100, 100, pg); \
+                    \UI.addToPage(pg, el, 10, 10); \
+                    \UI.setClickable(el, true); \
+                    \UI.setOnClick(el, 'btnClick'); \
+                    \_G.__frEl = el; \
+                    \return true"
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                -- Drive the REAL production focus-ring handler exactly
+                -- as ui_manager.lua would when it receives the engine's
+                -- LuaUIControlFocusChanged notification mid-press — it
+                -- creates and UI.addChild's four fresh ring sprites
+                -- onto the newly control-focused element (the same
+                -- one this press is pending on).
+                _ ← evalDebug ls
+                    "require('scripts.ui.focus_indicator').onUIControlFocusChanged(_G.__frEl); return true"
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                length (filter isUIClickEvent msgs) `shouldBe` 1
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "accepted"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
     around withHeadlessEngine $
         describe "Lua-facing UI API for drag-activation (#745)" $ do
             it "UI.setDragActivation is callable through the real Lua UI API and leaves the element otherwise clickable (no dedicated getter — the pointer-behavior effect is covered by the wire tests above)" $ \env → do

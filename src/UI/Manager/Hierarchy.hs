@@ -13,19 +13,30 @@ import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpR
 
 -- * Hierarchy
 
--- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
---   pending pointer activation captured before a detach must not
---   survive a re-attach that lands back on the same element; see
---   'bumpRouteEpoch'.
+-- | #745 review round 11: deliberately does NOT bump
+--   'UI.Types.upmRouteEpoch' — only 'removeElement'/'removeFromPage'
+--   (the DETACH side) do. A detach→re-attach sequence is already
+--   caught by the detach's own bump alone (the epoch only needs to
+--   change ONCE somewhere in the press-to-release window to poison a
+--   pending activation; the later re-attach doesn't need to bump too).
+--   Bumping here as well — round 10's original attempt — made
+--   attaching a BRAND-NEW element (never detached this gesture) also
+--   invalidate every unrelated pending activation, which broke a real
+--   production flow: clicking a control that moves keyboard control
+--   focus fires 'scripts/ui/focus_indicator.lua'\'s
+--   @onUIControlFocusChanged@, which creates and @UI.addChild@s four
+--   fresh ring sprites onto the newly focused element — a purely
+--   visual side effect of the SAME click, not an interruption of it.
 addElementToPage ∷ PageHandle → ElementHandle → Float → Float
                  → UIPageManager → UIPageManager
 addElementToPage pageHandle elemHandle x y mgr =
     let mgr' = modifyElement elemHandle mgr $ \elem →
             elem { uePosition = (x, y), uePage = pageHandle, ueParent = Nothing }
-        mgr'' = bumpRouteEpoch mgr'
-    in modifyPage pageHandle mgr'' $ \page →
+    in modifyPage pageHandle mgr' $ \page →
             page { upRootElements = upRootElements page ⧺ [elemHandle] }
 
+-- | #745 review round 11: see 'addElementToPage' — deliberately does
+--   NOT bump 'UI.Types.upmRouteEpoch' either.
 addChildElement ∷ ElementHandle → ElementHandle → Float → Float
                 → UIPageManager → UIPageManager
 addChildElement parentHandle childHandle x y mgr =
@@ -40,16 +51,13 @@ addChildElement parentHandle childHandle x y mgr =
             -- a Just parent, so the check here keeps the forest
             -- acyclic globally.
             | wouldCycle → mgr
-            -- #745 review round 10: also bumps 'UI.Types.upmRouteEpoch'
-            -- — see 'bumpRouteEpoch'.
             | otherwise →
                 let mgr' = modifyElement childHandle mgr $ \child →
                         child { uePosition = (x, y)
                               , uePage     = uePage parent
                               , ueParent   = Just parentHandle
                               }
-                    mgr'' = bumpRouteEpoch mgr'
-                in modifyElement parentHandle mgr'' $ \p →
+                in modifyElement parentHandle mgr' $ \p →
                         p { ueChildren = ueChildren p ⧺ [childHandle] }
   where
     wouldCycle = walkUp (64 ∷ Int) parentHandle
@@ -62,7 +70,10 @@ addChildElement parentHandle childHandle x y mgr =
 
 -- | #745 review round 10: also bumps 'UI.Types.upmRouteEpoch' — a
 --   pending pointer activation must not survive detach→re-add on the
---   same handle; see 'bumpRouteEpoch'.
+--   same handle; see 'bumpRouteEpoch'. This is the ONLY hierarchy-side
+--   bump (round 11 removed the attach-side ones — see
+--   'addElementToPage') since a detach always precedes any re-attach,
+--   so this alone already poisons the epoch for that whole sequence.
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
