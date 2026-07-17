@@ -405,6 +405,42 @@ spec = do
                     meta `shouldBe` richMeta
                     snap `shouldBe` richSnapshot
 
+    -- | B2's acceptance criteria: "preserve a fixture for the
+    --   transitional payload only if it is deliberately supported by an
+    --   explicit migration; otherwise document and test its intentional
+    --   incompatibility." B2 does not add a migration (out of scope,
+    --   also see the module's B1->B2 note above @knownComponentIds@ in
+    --   "World.Save.Envelope") -- a real save written by B1-era
+    --   'master' (a single required @"session"@ component, no gameplay
+    --   components at all) is INTENTIONALLY no longer loadable once B2
+    --   lands. Both entry points reject it identically, with the SAME
+    --   structural reason (an unknown REQUIRED component): full-session
+    --   decode ('decodeSessionEnvelope') AND metadata-only inspection
+    --   ('decodeSaveEnvelopeMetadata', what 'World.Save.Serialize.listSaves'
+    --   calls) both run the envelope's structural validation first, so
+    --   a B1-era save also can't be listed under B2 -- there is no
+    --   partial "still shows up in the save browser" case to preserve.
+    describe "B1 -> B2 intentional incompatibility (no migration, by design)" $
+        it "rejects a real B1-shaped envelope (metadata + a required, \
+           \now-unknown 'session' component) as an unknown required \
+           \component, both for full decode and metadata-only listing" $ do
+            let b1Specs =
+                    [ (metadataComponentId, metadataComponentVersion, True
+                      , S.encode richMeta)
+                    , (ComponentId "session", 90, True, BS.pack [1,2,3]) ]
+                bytes = case encodeEnvelope defaultEnvelopeLimits
+                            currentEnvelopeVersion b1Specs of
+                    Right b → b
+                    Left e  → error ("test setup: " <> show e)
+            case decodeSaveEnvelopeMetadata bytes of
+                Right _  → expectationFailure
+                    "a B1-era save must not be listable under B2 either"
+                Left msg → msg `shouldSatisfy` T.isInfixOf "session"
+            case decodeSessionEnvelope bytes of
+                Right _   → expectationFailure
+                    "a B1-era save must not silently decode under B2"
+                Left msg  → msg `shouldSatisfy` T.isInfixOf "session"
+
 -- Helpers -----------------------------------------------------------
 
 isLeftC ∷ Either ComponentError a → Bool

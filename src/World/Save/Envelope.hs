@@ -23,6 +23,23 @@
 --   likewise untouched by this change — it now only versions the
 --   transitional 'SaveData'/'WorldPageSave' bridge shape used by the
 --   load path, no longer any wire contract.
+--
+--   INTENTIONAL INCOMPATIBILITY: a save written by B1-era code (a
+--   single required @"session"@ component, no gameplay components) can
+--   no longer be loaded once this module lands — @"session"@ is
+--   dropped from 'knownComponentIds', so 'decodeSessionEnvelope' fails
+--   it as an unknown required component (requirement 13: retire the
+--   transitional payload; #760's acceptance explicitly permits this in
+--   place of a migration, provided it is documented and tested — see
+--   "Test.Headless.World.Save.Components"'s \"B1 -> B2 intentional
+--   incompatibility\" case). A real migration from the transitional
+--   shape is out of scope for B2; #760's Related section assigns
+--   long-lived compatibility fixtures/migrations to a future C4.
+--   Metadata-only reads ('decodeSaveEnvelopeMetadata', i.e.
+--   'World.Save.Serialize.listSaves') validate the SAME envelope
+--   structure before ever touching the metadata payload, so a B1-era
+--   save also can't be listed under B2 — it disappears from the save
+--   browser entirely rather than appearing but failing to load.
 module World.Save.Envelope
     ( currentEnvelopeVersion
     , metadataComponentId
