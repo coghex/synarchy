@@ -174,11 +174,17 @@ assembleSnapshot meta de = do
         power    ← ePower
         -- 2. Assemble page snapshots (page-set consistency, requirement 8).
         let base = basePageSnapshots pagesDTO
+            -- The building/unit id allocators are global, owned once by
+            -- @"core-session"@ (requirement 9); the per-page building/
+            -- unit slices carry no allocator copy, so refill each page's
+            -- reconstructed snapshot from these single counters.
+            bNextId = csNextBuildingId core
+            uNextId = csNextUnitId core
             applyErrs = concat
                 [ leftsOf (applyWorldEdits edits base)
                 , leftsOf (applyWorldActivity activity base)
-                , leftsOf (applyBuildings build base)
-                , leftsOf (applyUnits units base)
+                , leftsOf (applyBuildings bNextId build base)
+                , leftsOf (applyUnits uNextId units base)
                 , leftsOf (applyUnitSim sim base)
                 , leftsOf (applyCraftBills craft base)
                 , leftsOf (applyPowerNodes power base)
@@ -186,8 +192,8 @@ assembleSnapshot meta de = do
         if not (null applyErrs) then Left applyErrs else do
             pages ←   applyWorldEdits edits base
                   >>= applyWorldActivity activity
-                  >>= applyBuildings build
-                  >>= applyUnits units
+                  >>= applyBuildings bNextId build
+                  >>= applyUnits uNextId units
                   >>= applyUnitSim sim
                   >>= applyCraftBills craft
                   >>= applyPowerNodes power
