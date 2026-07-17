@@ -381,9 +381,41 @@ OWNER_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 # A component owner classified as persistent MUST be registered; an owner
 # classified rebuilt/reset/excluded needs no registration (requirement 5).
 SAVE_COMPONENTS_HEADING = "Save components"
-# Files whose `ComponentId "..."` literals define the registered set.
-COMPONENT_REGISTRY_FILES = ("src/World/Save/Component/Types.hs",)
-COMPONENT_ID_LITERAL_RE = re.compile(r'ComponentId\s+"([^"]+)"')
+# A `ComponentId "..."` literal DEFINED anywhere (e.g. in Types.hs) does
+# NOT mean the component is registered -- the authoritative registry is
+# the `saveComponentRegistry` list (Component.hs) plus whatever the
+# envelope wires in directly (metadata). The registered set is therefore
+# DERIVED by tracing that membership, not by grepping id literals (#760
+# round-4 review: an id could be defined + documented but never
+# registered and still pass a literal-grep audit).
+# The Haskell `saveComponentRegistry` list of `registerComponent <codec>`.
+COMPONENT_REGISTRY_LIST_FILE = "src/World/Save/Component.hs"
+# Where the codecs named in that list are defined (each built via
+# `<codec> = serializeCodec <componentIdIdent> ...`).
+COMPONENT_CODEC_FILES = (
+    "src/World/Save/Component/Session.hs",
+    "src/World/Save/Component/Page.hs",
+    "src/World/Save/Component/Entities.hs",
+)
+# Where `<componentIdIdent> = ComponentId "<literal>"` bindings live.
+COMPONENT_ID_TYPES_FILE = "src/World/Save/Component/Types.hs"
+# Where the envelope wires in any non-gameplay-registry component
+# (currently just `metadata`) as a direct component spec tuple.
+COMPONENT_ENVELOPE_FILE = "src/World/Save/Envelope.hs"
+
+# `<ident> = ComponentId "<literal>"` -- maps an id identifier to its
+# on-disk string literal.
+COMPONENT_ID_BINDING_RE = re.compile(r'(\w+)\s*=\s*ComponentId\s+"([^"]+)"')
+# The `saveComponentRegistry = [ ... ]` list body (the `= [` distinguishes
+# the definition from the `∷ [RegisteredComponent]` type signature; the
+# list contains no nested `]`).
+SAVE_REGISTRY_BLOCK_RE = re.compile(r"saveComponentRegistry\s*=\s*\[(.*?)\]", re.S)
+# `registerComponent <codecName>` entries inside that list body.
+REGISTER_COMPONENT_RE = re.compile(r"registerComponent\s+(\w+)")
+# A component spec tuple `(<idIdent>, <ver>, True|False, ...)` -- how the
+# envelope registers the metadata component alongside the gameplay set.
+ENVELOPE_SPEC_ID_RE = re.compile(
+    r"\(\s*(\w+)\s*,\s*\w+\s*,\s*(?:True|False)\s*,")
 # Classifications that mean "this state is written to the save" and so
 # require a registered component to own it.
 PERSISTENT_CLASSIFICATIONS = (
@@ -1156,16 +1188,69 @@ def parse_component_owner_rows(
     return rows
 
 
-def find_component_registration_violations(
-        inventory_text: str, registry_source: str) -> list[str]:
-    """The #760 registry linkage check: every save-component owner the
-    inventory classifies as PERSISTENT must map to a registered
-    `ComponentId` in the Haskell source, while an owner classified
-    rebuilt/reset/excluded requires no registration; and conversely every
-    registered component must have a persistent-classified inventory row
-    (so a new component owner can't land without an explicit decision).
+def derive_registered_component_ids(
+        registry_list_source: str,
+        codec_source: str,
+        id_types_source: str,
+        envelope_source: str = "") -> set[str]:
+    """Derive the set of ACTUALLY-registered component id string literals
+    from real registry membership, NOT from every `ComponentId "..."`
+    literal that happens to be defined (#760 round-4 review).
+
+    The trace:
+      1. `saveComponentRegistry = [ registerComponent <codec> ... ]`
+         names the registered codecs (Component.hs).
+      2. each `<codec> = serializeCodec <idIdent> ...` (or a
+         `ComponentCodec { ccId = <idIdent> ...}`) names its component
+         id identifier (Session/Page/Entities.hs).
+      3. `<idIdent> = ComponentId "<literal>"` resolves it to the on-disk
+         literal (Types.hs).
+    The envelope additionally registers components as direct spec tuples
+    (`(<idIdent>, <ver>, True, ...)`, currently just metadata) that live
+    OUTSIDE the gameplay registry list; those are legitimately registered
+    too, so they are traced from the envelope source.
+
+    A component id literal that is DEFINED (in Types.hs) but reached by
+    NONE of these paths is intentionally excluded -- that is exactly the
+    "defined + documented but never wired into decode/assembly" gap the
+    audit must catch.
     """
-    registered = set(COMPONENT_ID_LITERAL_RE.findall(registry_source))
+    id_by_ident = dict(COMPONENT_ID_BINDING_RE.findall(id_types_source))
+    registered: set[str] = set()
+    block_m = SAVE_REGISTRY_BLOCK_RE.search(registry_list_source)
+    if block_m:
+        for codec in REGISTER_COMPONENT_RE.findall(block_m.group(1)):
+            m = re.search(
+                rf"{re.escape(codec)}\s*=\s*serializeCodec\s+(\w+)",
+                codec_source)
+            if m is None:
+                # Fall back to a hand-built `ComponentCodec { ccId = ... }`.
+                m = re.search(
+                    rf"{re.escape(codec)}\s*=\s*ComponentCodec\b.*?"
+                    rf"ccId\s*=\s*(\w+)",
+                    codec_source, re.S)
+            if m is None:
+                continue
+            lit = id_by_ident.get(m.group(1))
+            if lit is not None:
+                registered.add(lit)
+    for ident in ENVELOPE_SPEC_ID_RE.findall(envelope_source):
+        lit = id_by_ident.get(ident)
+        if lit is not None:
+            registered.add(lit)
+    return registered
+
+
+def find_component_registration_violations(
+        inventory_text: str, registered: set[str]) -> list[str]:
+    """The #760 registry linkage check: every save-component owner the
+    inventory classifies as PERSISTENT must map to an ACTUALLY-registered
+    `ComponentId` (see `derive_registered_component_ids`), while an owner
+    classified rebuilt/reset/excluded requires no registration; and
+    conversely every registered component must have a persistent-classified
+    inventory row (so a new component owner can't land without an explicit
+    decision).
+    """
     violations: list[str] = []
     documented: set[str] = set()
     for name, cid, classification in parse_component_owner_rows(inventory_text):
@@ -1185,7 +1270,8 @@ def find_component_registration_violations(
                 f"save component {name!r} is classified persistent "
                 f"({classification!r}) but its ComponentId {cid!r} is not "
                 f"registered in the Haskell save-component registry "
-                f"({', '.join(COMPONENT_REGISTRY_FILES)})")
+                f"(saveComponentRegistry in {COMPONENT_REGISTRY_LIST_FILE}, "
+                f"or the envelope's own component set)")
     for cid in sorted(registered):
         if cid not in documented:
             violations.append(
@@ -1199,7 +1285,7 @@ def find_component_registration_violations(
 def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
           inventory_text: str,
           root_records: list[tuple[str, str, str]] | None = None,
-          registry_source: str | None = None) -> list[str]:
+          registered_ids: set[str] | None = None) -> list[str]:
     """Pure audit core. Returns a list of human-readable violations."""
     if root_records is None:
         root_records = ROOT_RECORDS
@@ -1274,14 +1360,14 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             f".register(...) call made through an arbitrarily-named "
             f"alias; use one of the two sanctioned patterns instead")
 
-    if registry_source is not None:
+    if registered_ids is not None:
         violations.extend(
-            find_component_registration_violations(inventory_text, registry_source))
+            find_component_registration_violations(inventory_text, registered_ids))
 
     return violations
 
 
-def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, str]:
+def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, set[str]]:
     record_sources: dict[str, str] = {}
     for _, relpath, _ in ROOT_RECORDS:
         if relpath not in record_sources:
@@ -1291,16 +1377,24 @@ def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, str]:
         rel = str(path.relative_to(REPO_ROOT))
         scripts_text_by_file[rel] = path.read_text(encoding="utf-8")
     inventory_text = INVENTORY_PATH.read_text(encoding="utf-8")
-    registry_source = "\n".join(
-        (REPO_ROOT / f).read_text(encoding="utf-8") for f in COMPONENT_REGISTRY_FILES)
-    return record_sources, scripts_text_by_file, inventory_text, registry_source
+    registry_list_source = (REPO_ROOT / COMPONENT_REGISTRY_LIST_FILE).read_text(
+        encoding="utf-8")
+    codec_source = "\n".join(
+        (REPO_ROOT / f).read_text(encoding="utf-8") for f in COMPONENT_CODEC_FILES)
+    id_types_source = (REPO_ROOT / COMPONENT_ID_TYPES_FILE).read_text(
+        encoding="utf-8")
+    envelope_source = (REPO_ROOT / COMPONENT_ENVELOPE_FILE).read_text(
+        encoding="utf-8")
+    registered_ids = derive_registered_component_ids(
+        registry_list_source, codec_source, id_types_source, envelope_source)
+    return record_sources, scripts_text_by_file, inventory_text, registered_ids
 
 
 def main() -> int:
-    record_sources, scripts_text_by_file, inventory_text, registry_source = \
+    record_sources, scripts_text_by_file, inventory_text, registered_ids = \
         _load_repo_state()
     violations = audit(record_sources, scripts_text_by_file, inventory_text,
-                       registry_source=registry_source)
+                       registered_ids=registered_ids)
     if violations:
         print(f"{len(violations)} persistence-inventory violation(s):")
         for v in violations:
