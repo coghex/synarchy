@@ -413,6 +413,14 @@ real ancestor still cancels, but an unrelated sibling/child's own
 visibility churn (a hover highlight, a newly attached decoration) never
 touches the chain and can't poison an activation it was never part of.
 
+Round 12's element/page epochs still bumped unconditionally, even when
+the requested value already matched the live state — round 13 guards
+`setElementVisible`/`setElementClickable`/`showPage`/`hidePage` to only
+bump when the value actually changes, so a defensive no-op re-assign
+(e.g. re-showing an already-visible page, re-asserting `UI.setVisible`
+to what it already is) can no longer poison a pending activation that
+was never really interrupted.
+
 Keyboard CONTROL focus (`UI.FocusNavigation`, `upmControlFocus`) is a
 second, independent focus system alongside the pre-existing TEXT-input
 focus (`upmGlobalFocus`) — a non-text clickable control (anything with

@@ -60,24 +60,31 @@ deletePage handle mgr =
 --   ("changing menus" per the #745 issue text); see 'bumpPageEpoch'.
 --   Deliberately GLOBAL, unlike element-level property mutators —
 --   page visibility is a genuinely route-affecting event everywhere.
+--
+--   #745 review round 13: only bumps when the page was actually
+--   hidden — a no-op re-show (already visible) must not poison an
+--   in-flight pending activation that was never really interrupted.
 showPage ∷ PageHandle → UIPageManager → UIPageManager
 showPage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
-            bumpPageEpoch $
+            (if upVisible page then id else bumpPageEpoch) $
             mgr { upmPages = Map.insert handle (page { upVisible = True }) (upmPages mgr)
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
 -- | #745 review round 12: also bumps 'UI.Types.upmPageEpoch' — see
 --   'showPage'.
+--
+--   #745 review round 13: only bumps when the page was actually
+--   visible — see 'showPage'.
 hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
-            bumpPageEpoch $
+            (if upVisible page then bumpPageEpoch else id) $
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
                 -- Keyboard focus must not survive on a hidden page —

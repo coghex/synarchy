@@ -488,6 +488,52 @@ spec = do
                     [r] → aoOutcome r `shouldBe` "accepted"
                     _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
 
+            it "no-op UI.setVisible/UI.setClickable on the pressed element itself between press and release does NOT cancel its own activation (#745 review round 13 regression)" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                -- Re-asserting the ALREADY-current value — a defensive
+                -- re-assign some widget code does routinely — must not
+                -- bump the epoch: nothing about the control's route
+                -- eligibility actually changed.
+                mgr ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env)
+                    (setElementClickable eh True (setElementVisible eh True mgr))
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                length (filter isUIClickEvent msgs) `shouldBe` 1
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "accepted"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
+            it "no-op UI.showPage on the pressed control's ALREADY-visible page between press and release does NOT cancel its own activation (#745 review round 13 regression)" $ \env → do
+                resetAll env
+                let (hudH, m1) = basePage
+                    (_eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                writeIORef (uiManagerRef env) m2
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainLuaMsgs env
+                -- The page is already visible (basePage shows it) —
+                -- re-showing it is a no-op and must not bump the page
+                -- epoch either.
+                mgr ← readIORef (uiManagerRef env)
+                writeIORef (uiManagerRef env) (showPage hudH mgr)
+                push env [InputMouseEvent GLFW.MouseButton'1 (15, 15) GLFW.MouseButtonState'Released]
+                inputTick env
+                msgs ← drainLuaMsgs env
+                length (filter isUIClickEvent msgs) `shouldBe` 1
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → aoOutcome r `shouldBe` "accepted"
+                    _ → expectationFailure ("expected one outcome record, got " ⧺ show recs)
+
     around withHeadlessEngine $
         describe "Lua-facing UI API for drag-activation (#745)" $ do
             it "UI.setDragActivation is callable through the real Lua UI API and leaves the element otherwise clickable (no dedicated getter — the pointer-behavior effect is covered by the wire tests above)" $ \env → do

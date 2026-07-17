@@ -44,17 +44,30 @@ setElementSize handle w h = modifyElement handle `flip`
 --   element, or on any of its descendants (checked via their ancestor
 --   chain), must not survive a visibility flip even if it's reverted
 --   before release; see 'bumpElementRouteEpoch'.
+--
+--   #745 review round 13: only bumps when 'visible' actually differs
+--   from the element's CURRENT 'ueVisible' — a no-op call (setting a
+--   value to what it already is, e.g. a widget's own defensive
+--   re-assert) must not poison an in-flight pending activation that
+--   was never really interrupted.
 setElementVisible ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementVisible handle visible mgr =
-    bumpElementRouteEpoch handle $
-        modifyElement handle mgr (\elem → elem { ueVisible = visible })
+    let mgr' = modifyElement handle mgr (\elem → elem { ueVisible = visible })
+    in case Map.lookup handle (upmElements mgr) of
+        Just el | ueVisible el ≡ visible → mgr'
+        _ → bumpElementRouteEpoch handle mgr'
 
 -- | #745 review round 12: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — see 'setElementVisible'.
+--
+--   #745 review round 13: only bumps on an actual change — see
+--   'setElementVisible'.
 setElementClickable ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementClickable handle clickable mgr =
-    bumpElementRouteEpoch handle $
-        modifyElement handle mgr (\elem → elem { ueClickable = clickable })
+    let mgr' = modifyElement handle mgr (\elem → elem { ueClickable = clickable })
+    in case Map.lookup handle (upmElements mgr) of
+        Just el | ueClickable el ≡ clickable → mgr'
+        _ → bumpElementRouteEpoch handle mgr'
 
 -- | #743: explicit opt-in that this element blocks pointer input with
 --   no click callback of its own — see 'ueBlocksPointer'.
