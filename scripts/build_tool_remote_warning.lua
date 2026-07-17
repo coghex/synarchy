@@ -41,11 +41,15 @@ buildToolRemoteWarning.fbH = 0
 buildToolRemoteWarning.ownedLabels = {}
 buildToolRemoteWarning.ownedBoxes  = {}
 
--- { defName, gx, gy } for the tile the warning was opened against, or
--- nil when closed. distance/thresholdTiles are cached purely for
--- onFramebufferResize's rebuild — establishHere always re-derives the
--- live distance via a fresh canPlaceAt/remoteCheck-adjacent revalidate,
--- never trusts these for the actual decision.
+-- { defName, gx, gy, worldId } for the tile the warning was opened
+-- against, or nil when closed. distance/thresholdTiles are cached
+-- purely for onFramebufferResize's rebuild — establishHere always
+-- re-derives the live distance via a fresh canPlaceAt/remoteCheck-
+-- adjacent revalidate, never trusts these for the actual decision.
+-- worldId (#844) is the active world page captured at open() time —
+-- establishHere() must reject rather than revalidate against a
+-- DIFFERENT page's terrain/locations if the active world changed while
+-- the modal was open.
 buildToolRemoteWarning.pending = nil
 
 buildToolRemoteWarning.clickHandlers = {}
@@ -248,6 +252,7 @@ function buildToolRemoteWarning.open(defName, gx, gy, distance, thresholdTiles)
     buildToolRemoteWarning.pending = {
         defName = defName, gx = gx, gy = gy,
         distance = distance, thresholdTiles = thresholdTiles,
+        worldId = world.getActiveWorldId(),
     }
     createUI(distance, thresholdTiles)
     UI.showPage(buildToolRemoteWarning.page)
@@ -294,7 +299,21 @@ function buildToolRemoteWarning.establishHere()
     }
     -- Re-validate the SAVED tile now, not the state from when the
     -- warning opened — terrain/occupancy/location overlap/active-world
-    -- state may have changed while the modal was up.
+    -- state may have changed while the modal was up. building.canPlaceAt
+    -- and commitStartingPlacement's building.spawn both resolve the
+    -- CURRENTLY active world page implicitly, so if the active page
+    -- changed while the modal was open, validating against it would
+    -- silently spawn against the wrong page's terrain/locations instead
+    -- of rejecting the stale confirmation — checked first, before
+    -- canPlaceAt runs at all.
+    if world.getActiveWorldId() ~= pending.worldId then
+        debug.recordOutcome{
+            kind = "buildTool.remoteWarning", outcome = "revalidationRejected",
+            where = { x = pending.gx, y = pending.gy },
+            reason = "active world changed",
+        }
+        return
+    end
     local valid, invalidReason =
         building.canPlaceAt(pending.defName, pending.gx, pending.gy)
     if valid then
