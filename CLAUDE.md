@@ -1566,8 +1566,11 @@ record fields are only forced to WHNF, not deeply — Strict/`HashMap.Strict` fo
 outer shape and each value at ONE level, never recursively) as a capture failure while the
 barrier still blocks everyone, instead of letting it surface later during the write after
 owners have already resumed. `World.Save.Serialize.writeSaveFiles` (the actual disk I/O,
-run after the release) wraps its own directory-creation/`BS.writeFile`/YAML-write in `try`
-and converts any exception to `Left` (review round 2 follow-up): this runs on the world
+run after the release) delegates to `World.Save.Storage.publishGeneration` (issue #762,
+persistence-overhaul C1 — see "Atomic save storage" below), whose every phase is wrapped
+in `try` and converts any exception to a `Left PublishFailure` naming the phase (review
+round 2 follow-up, generalized by #762 from a single directory-creation/`BS.writeFile`
+wrap into the full write-validate-publish-rotate transaction): this runs on the world
 thread AFTER the capture lock has already released, so an uncaught exception there would
 otherwise escape all the way to `World.Thread`'s top-level crash handler instead of
 reaching `failSave` — crashing the whole world thread AND leaving the barrier stuck open
@@ -1690,7 +1693,93 @@ assembly cross-validation (metadata mismatch, orphan sim, allocator
 collision, missing active page, one-bad-component-no-partial), and a
 frozen multi-component tracked-bytes fixture.
 
-Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here; since #760 it versions only the transitional `SaveData`/`WorldPageSave` load bridge, not any wire contract — gameplay components carry their own schema versions). Saves live under `saves/<name>/world.synworld` (binary) — the sole authoritative file for a save generation; there is no companion `world_gen.yaml` (removed by #759 — generation params now live in the `world-pages` component).
+Save format version: see `currentSaveVersion` in `src/World/Save/Types.hs` (bumped frequently — don't trust any number written down here; since #760 it versions only the transitional `SaveData`/`WorldPageSave` load bridge, not any wire contract — gameplay components carry their own schema versions). Saves live under `saves/<name>/` — `world.synworld` (binary) is the SOLE authoritative file a load/list reads, but is never written to directly (see "Atomic save storage" below); a slot may also carry a `world.synworld.prev` recovery copy, invisible to listing/loading except as an automatic fallback. There is no companion `world_gen.yaml` (removed by #759 — generation params now live in the `world-pages` component); a stale one left over from an older save is removed the next time that slot publishes successfully (#762).
+
+**Atomic save storage (#762, persistence-overhaul C1):** `World.Save.Storage`
+owns the ONLY code path that ever touches a save slot's files on disk — a
+crash, power loss, disk-full condition, or write failure can no longer
+truncate or corrupt the sole copy of a generation the way a direct
+`BS.writeFile` (the pre-#762 `writeSaveFilesUnsafe`) could. It receives
+only already-encoded envelope bytes, the `SaveMetadata` they should decode
+back to, a slot directory, and a slot name for diagnostics — no live
+gameplay state, no snapshot-capture participation (it runs after the #758
+barrier has already released). `publishGeneration` is a classic
+write-validate-publish-rotate transaction: write the candidate to a
+uniquely-named temp file in the SAME slot directory
+(`System.IO.openBinaryTempFile`, so concurrent publishers can't collide on
+a predictable name and the eventual publish rename stays on one
+filesystem); flush + durably `fsync` it
+(`System.Posix.Unistd.fileSynchronise`); re-read it FROM DISK (never trust
+the in-memory encode alone) and fully decode + deep-force it, applying the
+same validation bar the load path enforces (structure, checksums, every
+component, `checkWorldCount`, PLUS confirming the re-read metadata matches
+the intended slot/timestamp); only once validated, atomically
+`renameFile` the current authoritative generation (if any) into the single
+retained `world.synworld.prev` slot, then atomically `renameFile` the
+candidate into `world.synworld`; `fsync` the containing directory so both
+renames' directory-entry changes are durable; THEN report success — never
+before. Every phase (`World.Save.Storage.StoragePhase`) is wrapped in `try`
+and reported as a `PublishFailure` naming the phase, slot, and path
+(directory-create, candidate-create/write/flush/re-read/validate, rotate-
+previous, publish-rename, directory-sync), so a failure text like `engine.
+getSaveStatus()`'s `SaveAborted` outcome always identifies exactly where a
+save failed. A best-effort cleanup sweep (leftover temp files, a stale
+`world_gen.yaml`) runs only AFTER the durability boundary, so a cleanup
+failure is a non-fatal warning, never an overall save failure. Durability
+means: candidate data + both renames' directory entries have been handed
+to `fsync` successfully. On Linux this is a real crash/power-loss
+guarantee; on macOS, plain POSIX `fsync` does NOT guarantee the drive's
+own write cache reached physical media (only the much slower
+`F_FULLFSYNC` does) — this module deliberately uses ordinary `fsync` on
+both platforms rather than pay that cost on every save, the same
+trade-off most non-database desktop applications make. Windows is out of
+scope (see Platform Notes).
+
+Load-source selection (`selectLoadGeneration`, used by both
+`World.Save.Serialize.loadWorld` and `listSaves`) classifies WHY a
+candidate failed to decode
+(`World.Save.Envelope.GenerationFailure`/`isRecoverableEnvelopeError`):
+absent, truncated, bad framing, or a checksum failure — the shape routine
+storage corruption from an interrupted publish actually takes — is
+`GenerationCorrupt` and falls back to a fully valid `world.synworld.prev`;
+a structurally coherent but unsupported/incompatible file (unknown
+component version, failed content/assembly validation) is
+`GenerationIncompatible` and is reported directly, NEVER triggering a
+fallback — silently rolling back to an older generation would hide a real
+compatibility problem instead of reporting it. A load never combines
+components across generations (exactly one generation's `SaveData` is
+ever returned) and is read-only (a recovered load never rewrites or
+promotes `world.synworld.prev`); a later explicit save is what publishes
+a fresh authoritative generation. `loadWorld`/`listSaves` log a recovered
+selection loudly (`logWarn`); `engine.listSaves()` additionally exposes a
+`recovered` boolean on a listing recovered this way (no save/load UI
+change required to consume it). A pre-#759 legacy flat file
+(`saves/<name>.synworld`, no slot directory) is untouched by any of this
+— it has no previous-generation/temp-file concept and either decodes
+cleanly or is rejected outright, exactly as before #762.
+
+Pure/integration coverage: `Test.Headless.World.Save.Storage` (the "atomic
+save storage" describe) — first/second/third publish retention, candidate
+re-read+validation (corrupt bytes, a metadata/request mismatch) never
+touching an existing authoritative generation, every forceable failure
+phase (directory pre-occupied by a plain file, a read-only slot directory,
+a rotate/publish-rename target blocked by an existing directory) reporting
+the correct `StoragePhase` without destroying anything, stale-temp/stale-
+`world_gen.yaml` cleanup never touching an unrelated file, and
+`selectLoadGeneration` across every constructed on-disk state (missing/
+truncated/bad-framing/checksum-corrupt authoritative, a stray leftover
+temp file, an incompatible-but-checksummed authoritative that must NOT
+fall back, neither generation valid) proving a recovered load is read-only
+and never selects a partial candidate. Real multi-thread/real-restart
+coverage: **`python3 tools/save_storage_probe.py`** — against an ISOLATED
+temporary resource root (never a real player's `saves/`) — two real saves
+to one slot (publish, then retain-as-previous), restart-and-select across
+the same constructed on-disk states via the resumed session's live camera
+position (an unambiguous, real, in-session observation of which
+generation actually loaded), `engine.listSaves()`'s `recovered` flag, and
+a real disk-level write failure (the #758-established pre-occupied-path
+trick) reporting its `StoragePhase` through `engine.getSaveStatus()` with
+the barrier recovering for an immediate follow-up save.
 
 ```bash
 # From headless / debug console

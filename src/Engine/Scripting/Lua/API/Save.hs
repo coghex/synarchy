@@ -17,7 +17,8 @@ import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.PlayerEvent.Emit (emitEvent)
-import World.Save.Serialize (listSaves, loadWorld, sanitizeSaveName)
+import World.Save.Serialize
+    (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , missingDefReferences, renderMissingDefRef
                         , missingItemDefReferences, renderMissingItemDefRef
@@ -43,12 +44,18 @@ import Engine.Save.Barrier
 --   (the directory under saves/). A save whose active page carries a
 --   player-facing identity (#707) additionally exposes `worldName` and,
 --   when one was stored, `worldGloss`; unnamed saves omit both fields.
+--   `recovered` is `true` (otherwise omitted) when the listed metadata
+--   came from the slot's PREVIOUS generation because its authoritative
+--   generation had recoverable storage corruption (issue #762 requirement
+--   8) — a machine-readable status; no save/load UI change consumes it.
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveListFn env = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
     saves ← Lua.liftIO $ listSaves logger
     Lua.newtable
-    forM_ (zip [1..] saves) $ \(i, (name, meta)) → do
+    forM_ (zip [1..] saves) $ \(i, listing) → do
+        let name = slName listing
+            meta = slMetadata listing
         Lua.newtable
         Lua.pushstring (TE.encodeUtf8 name)
         Lua.setfield (-2) "name"
@@ -64,6 +71,9 @@ saveListFn env = do
         forM_ (smWorldGloss meta) $ \wg → do
             Lua.pushstring (TE.encodeUtf8 wg)
             Lua.setfield (-2) "worldGloss"
+        when (slRecovered listing) $ do
+            Lua.pushboolean True
+            Lua.setfield (-2) "recovered"
         Lua.rawseti (-2) i
     return 1
 
@@ -233,10 +243,10 @@ loadSaveFn env = do
     case nameArg of
         Just nameBS → do
             let saveName = TE.decodeUtf8Lenient nameBS
-            result ← Lua.liftIO $ loadWorld saveName
+            logger ← Lua.liftIO $ readIORef (loggerRef env)
+            result ← Lua.liftIO $ loadWorld logger saveName
             case result of
                 Right saveData → do
-                    logger ← Lua.liftIO $ readIORef (loggerRef env)
                     -- #760 req. 9 (round 8 extends this to every gameplay
                     -- content reference, not just building/unit defs):
                     -- validate every saved content-definition reference
@@ -300,10 +310,8 @@ loadSaveFn env = do
                         Lua.pushboolean False
                       else loadValidatedSave env logger saveData
                 Left err → do
-                    Lua.liftIO $ do
-                        logger ← readIORef (loggerRef env)
-                        logWarn logger CatWorld $
-                            "loadSave failed for '" <> saveName <> "': " <> err
+                    Lua.liftIO $ logWarn logger CatWorld $
+                        "loadSave failed for '" <> saveName <> "': " <> err
                     Lua.pushboolean False
             return 1
         Nothing → do

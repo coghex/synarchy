@@ -256,11 +256,15 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                                 -- instant after release can never change
                                 -- what gets written.
                                 releaseCaptureLock' env
-                                result ← writeSaveFiles saveName encoded
+                                result ← writeSaveFiles saveName meta encoded
                                 case result of
-                                  Right () →
+                                  Right warnings →
                                     do
                                         completeTransaction env
+                                        forM_ warnings $ \w →
+                                            logWarn logger CatWorld $
+                                                "World saved with a cleanup \
+                                                \warning: " <> w
                                         logInfo logger CatWorld $
                                             "World saved successfully: " <> saveName
                                         emitEvent env "save_load" "World.Save" $

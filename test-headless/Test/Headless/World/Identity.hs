@@ -153,7 +153,8 @@ spec = do
 
             -- Decode the file directly: identities and metadata are in
             -- the save exactly as stored.
-            sdA ← loadWorld slotA ⌦ either
+            logger ← readIORef (loggerRef env)
+            sdA ← loadWorld logger slotA ⌦ either
                 (\e → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure
@@ -185,7 +186,7 @@ spec = do
                 (WorldSave (WorldPageId "main_world") slotB
                            "2026-07-10T00:00:01.000000Z" HM.empty)
             waitForFile ("saves/" <> slotB <> "/world.synworld")
-            sdB ← loadWorld slotB ⌦ either
+            sdB ← loadWorld logger slotB ⌦ either
                 (\e → expectationFailure (T.unpack e)
                         ≫ error "unreachable")
                 pure
