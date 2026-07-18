@@ -2,13 +2,19 @@
 -- | The immutable, validated in-memory capture of an entire game
 --   session at one coordinated "Engine.Save.Barrier" boundary (#758,
 --   save-overhaul A3). This is deliberately NOT 'World.Save.Types'
---   ('SaveData'/'WorldPageSave') — those are the positional cereal WIRE
---   SCHEMA, append-only and version-bumped on every layout change.
---   'SessionSnapshot' has no 'Serialize' instance and no append-only
---   constraint: it is built once, validated once, and handed to a
---   serializer (currently 'World.Save.Snapshot.Adapter', a temporary
---   bridge to the unchanged v88 'SaveData' format) — never itself
---   written to disk.
+--   ('SaveData'/'WorldPageSave') — those are the positional cereal
+--   shape B1/B2's legacy in-memory load bridge still uses internally,
+--   append-only and version-bumped on every layout change to THAT
+--   bridge shape, not to the wire format. 'SessionSnapshot' has no
+--   'Serialize' instance and no append-only constraint: it is built
+--   once, validated once, and (on save) handed straight to
+--   "World.Save.Envelope"'s component encoders (issue #760,
+--   save-overhaul B2) — never itself written to disk, and no longer
+--   routed through 'World.Save.Snapshot.Adapter' on the way out.
+--   'World.Save.Snapshot.Adapter' still exists as the reverse,
+--   LOAD-side bridge: decoding an envelope reconstructs a
+--   'SessionSnapshot' first, then the adapter converts that into the
+--   legacy shape the world-thread load path consumes.
 --
 --   Everything here is pure. The caller (currently
 --   'World.Thread.Command.Save.WriteWorld') still owns every

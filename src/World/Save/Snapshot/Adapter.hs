@@ -1,10 +1,16 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
--- | The TEMPORARY serializer-facing bridge from 'SessionSnapshot' to
---   the unchanged v88 'SaveData'/'WorldPageSave' format (#758,
---   requirement 12). This issue does not establish a new on-disk
---   format or bump 'World.Save.Types.currentSaveVersion' — B1 owns
---   that; this adapter's whole job is to let the NEW capture/
---   validation path keep writing the OLD wire schema unchanged.
+-- | The bridge from 'SessionSnapshot' to the legacy positional
+--   'SaveData'/'WorldPageSave' shape (#758, requirement 12). Originally
+--   (#759, B1) this was also the ON-DISK wire format; since #760 (B2)
+--   the disk format is the tagged component envelope
+--   ("World.Save.Envelope", "World.Save.Component") and this module is
+--   ONLY the in-memory LOAD-side bridge — 'World.Save.Serialize's
+--   decode path reconstructs a 'SessionSnapshot' from the envelope's
+--   components, then calls 'snapshotToSaveData' here to hand the
+--   world-thread load path ('World.Thread.Command.Save.LoadPage' etc.)
+--   the legacy shape it still consumes. Nothing here encodes to disk
+--   any more; 'World.Save.Types.currentSaveVersion' now only versions
+--   this in-memory bridge shape, not a wire contract.
 --
 --   The adapter never reads live engine state — its only inputs are
 --   the already-captured, already-validated 'SessionSnapshot' plus
@@ -16,8 +22,7 @@
 --   FABRICATE a v88-only field from a load-policy default, or
 --   duplicate a genuinely global snapshot value into every legacy
 --   per-page slot — never a re-read of live state, only a
---   transformation of already-captured values. B1 replaces this whole
---   module without touching 'World.Save.Snapshot' at all.
+--   transformation of already-captured values.
 module World.Save.Snapshot.Adapter
     ( SaveRequestMeta(..)
     , snapshotToSaveData

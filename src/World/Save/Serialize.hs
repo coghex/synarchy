@@ -67,7 +67,10 @@ binaryFileName = "world" <> saveExtension
 --   disk. Creates saves/{name}/world.synworld — the SOLE authoritative
 --   file for a save generation (issue #759 requirement 5): there is no
 --   longer a @world_gen.yaml@ companion; generation params live in the
---   envelope's "session" component like every other gameplay field.
+--   @"world-pages"@ Haskell-owned component (issue #760, save-overhaul
+--   B2 — see "World.Save.Component.Page") alongside every other
+--   gameplay field, not the retired transitional @"session"@ component
+--   B1 originally introduced.
 --
 --   Every pure computation already ran to produce @encoded@ — the only
 --   work left here is genuine, unpredictable-until-attempted I/O
