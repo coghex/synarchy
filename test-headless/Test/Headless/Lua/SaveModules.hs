@@ -166,6 +166,31 @@ spec = do
             , "  'a code-shaped string must decode as inert data')"
             ]
 
+        it "rejects overlong encodings, surrogate halves, and out-of-range \
+           \codepoints, both at encode time and on the raw decode path" $
+            runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local overlong = '\\xC0\\xAF'"  -- overlong 2-byte '/'
+            , "assert(codec.encode(overlong) == nil, 'overlong encoding rejected')"
+            , "local surrogate = '\\xED\\xA0\\x80'"  -- U+D800 half
+            , "assert(codec.encode(surrogate) == nil, 'surrogate half rejected')"
+            , "local outOfRange = '\\xF4\\x90\\x80\\x80'"  -- > U+10FFFF
+            , "assert(codec.encode(outOfRange) == nil, 'out-of-range codepoint rejected')"
+            , "-- Hand-crafted payload, bypassing encode() entirely: decode"
+            , "-- must independently reject invalid UTF-8 on the read path."
+            , "local d1, e1 = codec.decode('S2:\\xC0\\xAF')"
+            , "assert(d1 == nil and e1 ~= nil, 'decode rejects invalid UTF-8 too')"
+            ]
+
+        it "rejects a hand-crafted number payload that parses to a \
+           \non-finite value on decode, not just at encode" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local d1, e1 = codec.decode('N5:1e999')"
+            , "assert(d1 == nil and e1 ~= nil, 'decode rejects +inf-producing digits')"
+            , "local d2, e2 = codec.decode('N6:-1e999')"
+            , "assert(d2 == nil and e2 ~= nil, 'decode rejects -inf-producing digits')"
+            ]
+
         it "enforces the max-entries limit on a single table" $ runsOk $ lns
             [ "local codec = require('scripts.lib.data_codec')"
             , "local big = {}"
@@ -340,4 +365,35 @@ spec = do
             , "  { id = 'opt_present', version = 1, payload = require('scripts.lib.data_codec').encode({}) }"
             , "})"
             , "assert(not prep.ok, 'a present-but-invalid optional component must still fail')"
+            ]
+
+        it "actually CALLS a declared references() function during \
+           \prepareLoad (requirement 11/12) rather than storing it unused \
+           \-- a crash inside references() is reported as a load failure" $
+            runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local called = false"
+            , "saveModules.register('refs_ok', { version=1, required=true, deps={},"
+            , "  snapshot=function() return { x = 1 } end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() end,"
+            , "  references=function(d) called = true; return {{kind='unit', id=d.x}} end })"
+            , "saveModules.register('refs_crash', { version=1, required=true, deps={},"
+            , "  snapshot=function() return {} end,"
+            , "  decode=function(v,d) return d end,"
+            , "  validate=function() return nil end,"
+            , "  apply=function() end,"
+            , "  references=function() error('synthetic references() crash') end })"
+            , "-- One prepareLoad call covering both: refs_crash's failure must"
+            , "-- abort the WHOLE load, but refs_ok's own references() must"
+            , "-- still have run (the loop accumulates every component's"
+            , "-- errors rather than short-circuiting on the first one)."
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'refs_ok', version = 1, payload = codec.encode({x = 1}) },"
+            , "  { id = 'refs_crash', version = 1, payload = codec.encode({}) },"
+            , "})"
+            , "assert(not prep.ok, 'a crashing references() must fail the whole load')"
+            , "assert(called, 'references() must actually be invoked during prepareLoad')"
             ]

@@ -1655,8 +1655,10 @@ GONE. Gameplay state now rides as a set of independently versioned,
 Haskell-owned components inside the SAME B1 envelope
 (`World.Save.Component.*`): `core-session` (game time, active/visible
 pages, live camera, the GLOBAL item/building/unit allocators),
-`texture-palette`, `lua-state` (the transitional opaque Lua blob map,
-until B3), `world-pages` (the page-set AUTHORITY: identity, gen params,
+`texture-palette`, `lua-state` (the transitional opaque Lua blob map —
+superseded by #761/B3's dynamic per-module `"lua.<module>"` components
+below; `lua-state` no longer exists in the codebase), `world-pages`
+(the page-set AUTHORITY: identity, gen params,
 dates/clocks, map mode, per-page camera), `world-edits`,
 `world-activity` (designations/flora/crops/ground/spoil), `buildings`,
 `units`, `unit-sim`, `craft-bills`, `power-nodes` — plus the unchanged

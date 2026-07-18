@@ -46,26 +46,37 @@ local function isFiniteNumber(v)
     return v == v and v ~= math.huge and v ~= -math.huge
 end
 
--- A conservative UTF-8 validator: walks byte-by-byte checking the
--- leading-byte / continuation-byte shape of each codepoint. Doesn't
--- reject every conceivable ill-formed sequence (overlong encodings,
--- surrogate halves) but catches truncated sequences and invalid
--- leading/continuation bytes, which is what a corrupted or
--- accidentally-binary Lua string would actually produce.
+-- A strict UTF-8 validator (RFC 3629): walks byte-by-byte checking not
+-- just the leading-byte / continuation-byte COUNT but the exact
+-- allowed range of the first continuation byte per leading byte, which
+-- is what rules out overlong encodings (e.g. a 2-byte encoding of a
+-- codepoint that fits in 1 byte), UTF-16 surrogate halves (U+D800..
+-- U+DFFF, never valid UTF-8 scalar values), and codepoints beyond the
+-- Unicode range (> U+10FFFF). A truncated sequence or an invalid
+-- leading/continuation byte is rejected the same as before.
 local function isValidUtf8(s)
     local i, n = 1, #s
     while i <= n do
         local b = s:byte(i)
-        local extra
+        local extra, lo2, hi2
         if b < 0x80 then extra = 0
-        elseif b >= 0xC2 and b <= 0xDF then extra = 1
-        elseif b >= 0xE0 and b <= 0xEF then extra = 2
-        elseif b >= 0xF0 and b <= 0xF4 then extra = 3
+        elseif b >= 0xC2 and b <= 0xDF then extra = 1; lo2 = 0x80; hi2 = 0xBF
+        elseif b == 0xE0 then extra = 2; lo2 = 0xA0; hi2 = 0xBF  -- no overlong
+        elseif b >= 0xE1 and b <= 0xEC then extra = 2; lo2 = 0x80; hi2 = 0xBF
+        elseif b == 0xED then extra = 2; lo2 = 0x80; hi2 = 0x9F  -- no surrogates
+        elseif b >= 0xEE and b <= 0xEF then extra = 2; lo2 = 0x80; hi2 = 0xBF
+        elseif b == 0xF0 then extra = 3; lo2 = 0x90; hi2 = 0xBF  -- no overlong
+        elseif b >= 0xF1 and b <= 0xF3 then extra = 3; lo2 = 0x80; hi2 = 0xBF
+        elseif b == 0xF4 then extra = 3; lo2 = 0x80; hi2 = 0x8F  -- cap at U+10FFFF
         else return false end
         if i + extra > n then return false end
-        for j = 1, extra do
-            local cb = s:byte(i + j)
-            if cb == nil or cb < 0x80 or cb > 0xBF then return false end
+        if extra > 0 then
+            local b2 = s:byte(i + 1)
+            if b2 == nil or b2 < lo2 or b2 > hi2 then return false end
+            for j = 2, extra do
+                local cb = s:byte(i + j)
+                if cb == nil or cb < 0x80 or cb > 0xBF then return false end
+            end
         end
         i = i + extra + 1
     end
@@ -235,6 +246,9 @@ local function decodeValue(s, pos, depth, path)
         if num == nil then
             error("data_codec: malformed number at " .. path)
         end
+        if not isFiniteNumber(num) then
+            error("data_codec: non-finite number not supported at " .. path)
+        end
         return num, rest + len
     elseif tag == "S" then
         local len, rest = readPrefix(s, pos + 1, path)
@@ -244,6 +258,9 @@ local function decodeValue(s, pos, depth, path)
         local str = s:sub(rest, rest + len - 1)
         if #str ~= len then
             error("data_codec: truncated string at " .. path)
+        end
+        if not isValidUtf8(str) then
+            error("data_codec: invalid UTF-8 string at " .. path)
         end
         return str, rest + len
     elseif tag == "A" then

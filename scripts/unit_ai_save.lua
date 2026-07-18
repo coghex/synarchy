@@ -45,20 +45,38 @@ local function validateUnitAiData(data)
 end
 
 -- Every reference this component carries (requirement 12) -- unit/
--- building ids reachable from a per-unit aiState entry. Traversed here
--- for documentation/diagnostics; a dangling entry is NOT rejected by
--- this validator (per the #761 issue-review clarification: a target
--- that legitimately died before the save boundary must stay
--- representable) -- it is cleared at reconcile time instead, by
--- unit_ai.lua's scrubStaleRefs/onSaveLoaded.
+-- building/craft-bill/item ids reachable from a per-unit aiState entry,
+-- including the ones nested inside claim/job tables (unit_ai_medic.lua's
+-- treatClaim/treatPending, unit_ai_deliver.lua's deliveryClaim/
+-- deliveryPendingTarget, unit_ai_craft.lua's craftJob, unit_ai_repair.lua's
+-- repairJob). Traversed here for documentation/diagnostics (actually
+-- CALLED by saveModules.prepareLoad, requirement 11/12 -- not merely
+-- declared and left dead); a dangling entry is NOT rejected by this
+-- validator (per the #761 issue-review clarification: a target that
+-- legitimately died before the save boundary must stay representable)
+-- -- it is cleared at reconcile time instead, by unit_ai.lua's
+-- scrubStaleRefs/onSaveLoaded.
+-- NB: any NEW nested claim/job field that stores a unit/building/bill/
+-- item id MUST be added here too, mirroring scrubStaleRefs.
 local function unitAiReferences(data)
     local refs = {}
+    local function addRef(kind, id)
+        if id ~= nil then refs[#refs + 1] = { kind = kind, id = id } end
+    end
     for _, s in pairs(data) do
-        for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do
-            if s[f] ~= nil then refs[#refs + 1] = { kind = "unit", id = s[f] } end
+        for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do addRef("unit", s[f]) end
+        for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do addRef("building", s[f]) end
+        if s.treatClaim then addRef("unit", s.treatClaim.patient) end
+        if s.treatPending then addRef("unit", s.treatPending.uid) end
+        if s.deliveryClaim then addRef("building", s.deliveryClaim.bid) end
+        if s.deliveryPendingTarget then addRef("building", s.deliveryPendingTarget.bid) end
+        if s.craftJob then
+            addRef("craft_bill", s.craftJob.billId)
+            addRef("building", s.craftJob.bid)
         end
-        for _, f in ipairs(M.AI_BUILDING_REF_FIELDS) do
-            if s[f] ~= nil then refs[#refs + 1] = { kind = "building", id = s[f] } end
+        if s.repairJob then
+            addRef("item_instance", s.repairJob.instanceId)
+            addRef("building", s.repairJob.bid)
         end
     end
     return refs

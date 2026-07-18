@@ -384,7 +384,25 @@ local function prepareLoadImpl(componentsList)
                             errors[#errors + 1] = "'" .. id .. "': " .. tostring(e)
                         end
                     else
-                        prepared[id] = decoded
+                        -- Requirement 11/12: a declared reference schema is
+                        -- actually TRAVERSED here, not merely stored and left
+                        -- dead -- a crash in references() itself (a real bug
+                        -- in the traversal, e.g. indexing a nil claim table)
+                        -- is a validate-phase failure. The traversal result
+                        -- is not cross-checked against anything here: a
+                        -- dangling entry is tolerated by design (#761
+                        -- issue-review clarification) and cleared at
+                        -- apply/reconcile time instead.
+                        local refsOk, refsErr = true, nil
+                        if reg.references then
+                            refsOk, refsErr = pcall(reg.references, decoded)
+                        end
+                        if not refsOk then
+                            errors[#errors + 1] = "'" .. id
+                                .. "': references() crashed: " .. tostring(refsErr)
+                        else
+                            prepared[id] = decoded
+                        end
                     end
                 end
             end

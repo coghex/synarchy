@@ -388,21 +388,37 @@ loadValidatedSave env logger saveData = do
                     -- state (sdEnginePaused) when it finishes the load, so
                     -- this is just a freeze for the load window (#195).
                     Lua.liftIO $ writeIORef (enginePausedRef env) True
-                    applyLuaLoad logger
-                    let pageId = WorldPageId "main_world"
-                    -- Synchronously flip the current head world's
-                    -- phaseRef so a follow-up world.waitForInit
-                    -- doesn't read stale LoadDone from the previous
-                    -- gen and return immediately. The real handler
-                    -- creates its own WorldState and prepends it to
-                    -- wmWorlds; once that lands, waitForInit polls
-                    -- the new head and follows it through to
-                    -- LoadDone. This write is shadowed by the new
-                    -- WorldState as soon as the handler runs.
-                    Lua.liftIO $ markHeadWorldLoading env
-                    Lua.liftIO $ Q.writeQueue (worldQueue env)
-                        (WorldLoadSave pageId saveData)
-                    Lua.pushboolean True
+                    applied ← applyLuaLoad logger
+                    case applied of
+                      -- applyAll() is only reachable after prepareLoad
+                      -- already validated every component, so this is a
+                      -- genuine apply()/reset-hook bug, not a data
+                      -- problem -- but it must still abort the load
+                      -- rather than proceed to queue the Haskell-side
+                      -- restore on top of a Lua state that only
+                      -- partially applied (requirement 6: no required
+                      -- failure may be warning-only or partial).
+                      Left err → do
+                        Lua.liftIO $ logWarn logger CatWorld $
+                            "loadSave rejected for '"
+                            <> smName (sdMetadata saveData)
+                            <> "': applying Lua state failed: " <> err
+                        Lua.pushboolean False
+                      Right () → do
+                        let pageId = WorldPageId "main_world"
+                        -- Synchronously flip the current head world's
+                        -- phaseRef so a follow-up world.waitForInit
+                        -- doesn't read stale LoadDone from the previous
+                        -- gen and return immediately. The real handler
+                        -- creates its own WorldState and prepends it to
+                        -- wmWorlds; once that lands, waitForInit polls
+                        -- the new head and follows it through to
+                        -- LoadDone. This write is shadowed by the new
+                        -- WorldState as soon as the handler runs.
+                        Lua.liftIO $ markHeadWorldLoading env
+                        Lua.liftIO $ Q.writeQueue (worldQueue env)
+                            (WorldLoadSave pageId saveData)
+                        Lua.pushboolean True
 
 -- | Set the head world's loading phase to "in progress" so
 --   'world.waitForInit' will block correctly even though the actual
@@ -671,8 +687,14 @@ prepareLuaLoad logger components = do
 -- | Call @saveModules.applyAll()@ (issue #761): apply the load prepared
 --   by the most recent successful 'prepareLuaLoad', then run every
 --   registered reset hook. Only reachable after 'prepareLuaLoad'
---   returned 'Right' — logs (does not throw) on an unexpected crash so
---   a Lua-side bug here can't take down the whole load path the way an
---   uncaught Lua exception would.
-applyLuaLoad ∷ LoggerState → Lua.LuaE Lua.Exception ()
-applyLuaLoad logger = void (callSaveModules0 logger "applyAll")
+--   returned 'Right', so a failure here is a genuine apply()/reset-hook
+--   bug rather than a data problem — but it must still be REPORTED
+--   (never warning-only, requirement 6): the caller
+--   ('Engine.Scripting.Lua.API.Save.loadValidatedSave') aborts the
+--   whole load rather than queuing the Haskell-side restore on top of a
+--   Lua state that only partially applied.
+applyLuaLoad ∷ LoggerState → Lua.LuaE Lua.Exception (Either Text ())
+applyLuaLoad logger = do
+    ok ← callSaveModules0 logger "applyAll"
+    return $ if ok then Right ()
+             else Left "save_modules.applyAll() failed (see engine log)"
