@@ -255,27 +255,52 @@ listSaves logger = do
             Right () → do
                 let authPath = dir </> Storage.authoritativeFileName
                     prevPath = dir </> Storage.previousGenerationFileName
-                authExists ← doesFileExist authPath
-                if not authExists
-                    then tryPreviousListing name prevPath
-                            "authoritative save file is missing"
-                    else do
-                        bytes ← BS.readFile authPath
-                        -- Envelope-aware: skip files whose magic/version/
-                        -- manifest/checksums don't validate. A pre-#759
-                        -- flat file fails the envelope version check and
-                        -- is skipped with a logged warning so the user has
-                        -- a chance of noticing.
-                        case decodeSaveEnvelopeMetadataClassified bytes of
-                            Right meta → return [mkListing name meta False]
-                            Left (GenerationIncompatible err) → do
-                                logWarn logger CatWorld $
-                                    "listSaves: skipping " <> name <> ": " <> err
-                                return []
-                            Left (GenerationCorrupt err) →
-                                tryPreviousListing name prevPath err
+                -- requirement 12: the slot-directory check above says
+                -- nothing about the GENERATION FILES inside it —
+                -- 'publishGeneration' never leaves a symlink at either
+                -- (an atomic rename replaces a destination symlink's own
+                -- entry rather than writing through it), so finding one
+                -- here can only come from outside the transaction. Same
+                -- fallback-eligible treatment 'decodeGenerationFile'
+                -- (the load-selection path) already gives this exact case.
+                authLinkSafe ← Storage.rejectSymlinkedPath authPath
+                case authLinkSafe of
+                    Left reason → tryPreviousListing name prevPath reason
+                    Right () → do
+                        authExists ← doesFileExist authPath
+                        if not authExists
+                            then tryPreviousListing name prevPath
+                                    "authoritative save file is missing"
+                            else do
+                                bytes ← BS.readFile authPath
+                                -- Envelope-aware: skip files whose magic/
+                                -- version/manifest/checksums don't
+                                -- validate. A pre-#759 flat file fails
+                                -- the envelope version check and is
+                                -- skipped with a logged warning so the
+                                -- user has a chance of noticing.
+                                case decodeSaveEnvelopeMetadataClassified bytes of
+                                    Right meta → return [mkListing name meta False]
+                                    Left (GenerationIncompatible err) → do
+                                        logWarn logger CatWorld $
+                                            "listSaves: skipping " <> name <> ": " <> err
+                                        return []
+                                    Left (GenerationCorrupt err) →
+                                        tryPreviousListing name prevPath err
 
     tryPreviousListing name prevPath authErr = do
+        prevLinkSafe ← Storage.rejectSymlinkedPath prevPath
+        case prevLinkSafe of
+            Left reason → do
+                logWarn logger CatWorld $
+                    "listSaves: skipping " <> name
+                        <> ": authoritative generation unreadable ("
+                        <> authErr <> ") and previous generation is also \
+                           \unusable (" <> reason <> ")"
+                return []
+            Right () → tryPreviousListingUnsafe name prevPath authErr
+
+    tryPreviousListingUnsafe name prevPath authErr = do
         prevExists ← doesFileExist prevPath
         if not prevExists
             then do

@@ -757,3 +757,41 @@ spec = do
                 createFileLink decoy (savesDirectory </> "leaked2.synworld")
                 result ← loadWorld logger "leaked2"
                 result `shouldSatisfy` isLeft
+
+        it "falls back to the previous generation when listing, if the \
+           \AUTHORITATIVE FILE ITSELF (not the slot directory) is a \
+           \symlink -- listSaves has its own read path, separate from \
+           \selectLoadGeneration, and must apply the identical check" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let slot = savesDirectory </> "leaked"
+                _ ← publishOK slot "leaked" 1 "leaked" "t1"
+                _ ← publishOK slot "leaked" 2 "leaked" "t2"
+                let decoy = "decoy-listing-target"
+                BS.writeFile decoy "not a real save"
+                removeFile (authPath slot)
+                createFileLink decoy (authPath slot)
+                saves ← listSaves logger `finally` removeFile decoy
+                case filter ((≡ "leaked") . slName) saves of
+                    [entry] → do
+                        slRecovered entry `shouldBe` True
+                        smSeed (slMetadata entry) `shouldBe` 1
+                    other → expectationFailure
+                        ("expected exactly one 'leaked' listing, got "
+                            <> show other)
+
+        it "never lists a slot when BOTH its authoritative and previous \
+           \generation files are themselves symlinks" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let slot = savesDirectory </> "leaked"
+                _ ← publishOK slot "leaked" 1 "leaked" "t1"
+                _ ← publishOK slot "leaked" 2 "leaked" "t2"
+                let decoy = "decoy-listing-target2"
+                BS.writeFile decoy "not a real save"
+                removeFile (authPath slot)
+                removeFile (prevPath slot)
+                createFileLink decoy (authPath slot)
+                createFileLink decoy (prevPath slot)
+                saves ← listSaves logger `finally` removeFile decoy
+                map slName saves `shouldNotContain` ["leaked"]

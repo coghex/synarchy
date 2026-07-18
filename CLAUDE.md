@@ -1718,7 +1718,18 @@ deliberately checks only ONE level up, not every ancestor to the
 filesystem root: `pathIsSymbolicLink` inspects just a path's own final
 component (ordinary POSIX `lstat` semantics), so it can never misfire on
 an unrelated OS-level symlink further up the resource root's own path
-(e.g. macOS's `/tmp` → `/private/tmp`).
+(e.g. macOS's `/tmp` → `/private/tmp`). `rejectSymlinkedSlotDir` is built
+from a single exported primitive, `rejectSymlinkedPath` (reject one exact
+path that is itself a symlink) — the SAME primitive `decodeGenerationFile`
+uses to check `world.synworld`/`world.synworld.prev` THEMSELVES (a slot
+directory being safe says nothing about a FILE inside it also being a
+symlink — a scenario `publishGeneration` itself never produces, since an
+atomic rename replaces a destination symlink's own entry rather than
+writing through it, but which requirement 12 still asks to be rejected if
+found), and `listSaves` uses AGAIN for the exact same reason, since its
+directory-listing read path (`loadDirEntry`/`tryPreviousListing`) is
+entirely separate from `selectLoadGeneration`/`decodeGenerationFile` and
+does not automatically inherit that check.
 
 `publishGeneration` is a write-validate-publish-rotate transaction: write
 the candidate to a uniquely-named temp file in the SAME slot directory
@@ -1845,8 +1856,11 @@ but-checksummed authoritative that must NOT fall back, neither generation
 valid) proving a recovered load is read-only and never selects a partial
 candidate, and `listSaves`/`loadWorld` refusing to list or read through a
 slot (directory-format OR a legacy flat file) reached via a symlinked
-slot directory, a symlinked `saves/` itself, or a symlinked legacy file.
-Real multi-thread/real-restart
+slot directory, a symlinked `saves/` itself, a symlinked legacy file, OR
+a symlinked authoritative/previous generation FILE (incl. listing
+falling back to the previous generation exactly like load selection
+does, and skipping the slot outright when both generation files are
+symlinks). Real multi-thread/real-restart
 coverage: **`python3 tools/save_storage_probe.py`** — against an ISOLATED
 temporary resource root (never a real player's `saves/`) — two real saves
 to one slot (publish, then retain-as-previous), restart-and-select across

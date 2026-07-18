@@ -112,6 +112,7 @@ module World.Save.Storage
     ( authoritativeFileName
     , previousGenerationFileName
     , rejectSymlinkedSlotDir
+    , rejectSymlinkedPath
     , StoragePhase(..)
     , PublishFailure(..)
     , renderPublishFailure
@@ -231,17 +232,30 @@ isOwnedArtifactName name =
 --   operation to report properly.
 rejectSymlinkedSlotDir ∷ FilePath → IO (Either Text ())
 rejectSymlinkedSlotDir dir = do
-    slotSafe ← checkNotSymlink dir
+    slotSafe ← rejectSymlinkedPath dir
     case slotSafe of
         Left err → pure (Left err)
-        Right () → checkNotSymlink (takeDirectory dir)
-  where
-    checkNotSymlink path = do
-        result ← try (pathIsSymbolicLink path)
-        pure $ case (result ∷ Either IOException Bool) of
-            Right True → Left ("path is a symlink, refusing to operate \
-                                \through it: " <> T.pack path)
-            _          → Right ()
+        Right () → rejectSymlinkedPath (takeDirectory dir)
+
+-- | Refuse a single path that is itself a symlink. The one primitive
+--   check every containment guard in this module (and
+--   'World.Save.Serialize'\'s listing, which has its own read path
+--   separate from 'selectLoadGeneration'/'decodeGenerationFile' and must
+--   apply the identical check before trusting a generation file's bytes)
+--   is built from, so a symlink is recognised the SAME way everywhere —
+--   'rejectSymlinkedSlotDir' calls this for a slot directory and its
+--   parent; 'decodeGenerationFile' below calls it for one generation
+--   file. A nonexistent path is not a symlink (nothing to reject); a
+--   filesystem error other than "does not exist" while checking is
+--   treated the same as "not a symlink" and left for the caller's own
+--   next operation to report properly.
+rejectSymlinkedPath ∷ FilePath → IO (Either Text ())
+rejectSymlinkedPath path = do
+    result ← try (pathIsSymbolicLink path)
+    pure $ case (result ∷ Either IOException Bool) of
+        Right True → Left ("path is a symlink, refusing to operate \
+                            \through it: " <> T.pack path)
+        _          → Right ()
 
 -- Publication ------------------------------------------------------------
 
@@ -670,12 +684,10 @@ decodeGenerationFile path = do
     -- generation still gets its own independent version of this exact
     -- check before it is ever trusted, so a symlink at BOTH paths still
     -- correctly reports a hard failure rather than reading through either.
-    isLinkResult ← try (pathIsSymbolicLink path)
-    case (isLinkResult ∷ Either IOException Bool) of
-        Right True →
-            pure (Left (GenerationCorrupt
-                ("path is a symlink, refusing to read it: " <> T.pack path)))
-        _ → do
+    linkSafe ← rejectSymlinkedPath path
+    case linkSafe of
+        Left reason → pure (Left (GenerationCorrupt reason))
+        Right () → do
             readResult ← try (BS.readFile path)
             case readResult of
                 Left (e ∷ IOException) →
