@@ -358,15 +358,13 @@ spec = do
                 contents ← BS.readFile dir
                 contents `shouldBe` "occupying this path with a plain file"
 
-        it "reports a candidate-create failure when the slot directory \
-           \is not writable" $
+        it "reports a candidate-create failure when opening the unique \
+           \candidate fails" $
             withTempSlotDir $ \dir → do
                 let (meta, bytes) = buildEncoded 1 "slot" "t1"
                 createDirectoryIfMissing True dir
-                perms ← getPermissions dir
-                setPermissions dir (perms { writable = False })
-                r ← publishGeneration dir "slot" meta bytes
-                    `finally` setPermissions dir (perms { writable = True })
+                let failCreate _ _ = ioError (userError "injected create failure")
+                r ← publishGenerationWithCandidateCreator failCreate dir "slot" meta bytes
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateCreate
                     Right _ → expectationFailure "expected a candidate-create failure"

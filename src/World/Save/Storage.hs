@@ -117,6 +117,7 @@ module World.Save.Storage
     , PublishFailure(..)
     , renderPublishFailure
     , publishGeneration
+    , publishGenerationWithCandidateCreator
     , GenerationSource(..)
     , LoadSelection(..)
     , selectLoadGeneration
@@ -311,7 +312,21 @@ publishGeneration
     → SaveMetadata      -- ^ metadata this candidate must decode back to
     → BS.ByteString      -- ^ complete, already-encoded envelope bytes
     → IO (Either PublishFailure [Text])
-publishGeneration dir slotName expectedMeta encoded = do
+publishGeneration = publishGenerationWithCandidateCreator openBinaryTempFile
+
+-- | The storage transaction with the candidate-file creation operation
+-- supplied by the caller. Production uses 'publishGeneration'; this
+-- narrow seam lets the headless gate exercise the candidate-create
+-- failure classification deterministically, including in CI containers
+-- that run as root and therefore bypass ordinary directory mode bits.
+publishGenerationWithCandidateCreator
+    ∷ (FilePath → String → IO (FilePath, Handle))
+    → FilePath        -- ^ slot directory
+    → Text             -- ^ slot name (diagnostics only)
+    → SaveMetadata      -- ^ metadata this candidate must decode back to
+    → BS.ByteString      -- ^ complete, already-encoded envelope bytes
+    → IO (Either PublishFailure [Text])
+publishGenerationWithCandidateCreator createCandidate dir slotName expectedMeta encoded = do
     safety ← rejectSymlinkedSlotDir dir
     case safety of
         Left reason →
@@ -322,7 +337,7 @@ publishGeneration dir slotName expectedMeta encoded = do
                 Left (e ∷ IOException) →
                     pure (Left (failure PhaseDirectoryCreate (Just dir) (showT e)))
                 Right () → do
-                    created ← try (openBinaryTempFile dir candidateTemplate)
+                    created ← try (createCandidate dir candidateTemplate)
                     case created of
                         Left (e ∷ IOException) →
                             pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
