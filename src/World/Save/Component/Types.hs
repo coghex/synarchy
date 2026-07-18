@@ -46,25 +46,31 @@
 --         with no independent mutable identity — e.g. 'MaterialId',
 --         @FloraId@, @ChunkCoord@, @ClimateCoord@, @Pose@, @Direction@,
 --         @ZoomMapMode@; OR
---     (b) it is ITSELF already an independently-versioned / governed
---         persistence type with its own established freeze boundary and
---         change-control discipline. Two concrete kinds qualify: the
---         "World.Save.Types" positional snapshots
---         (@BuildingInstanceSnapshot@ / @UnitInstanceSnapshot@ /
---         @BuildingSnapshot@ / @UnitSnapshot@), whose change already
---         requires a @currentSaveVersion@ bump per that module's version-
---         history contract; and a live type that carries its OWN in-source
+--     (b) it is ITSELF a live type that carries its OWN in-source
 --         documented positional-save-schema discipline (per-field
 --         save-version annotations + an explicit stable-field-order
---         contract), e.g. @GeoTimeline@. Reusing these is safe by a
---         DIFFERENT, already-established mechanism — not a gap.
+--         contract), e.g. @GeoTimeline@ — safe by a DIFFERENT,
+--         already-established mechanism, not a gap.
+--
+--   NOTE (review round 6): the "World.Save.Types" positional entity
+--   snapshots (@BuildingInstanceSnapshot@ / @UnitInstanceSnapshot@) do
+--   NOT qualify as leaves, even though @currentSaveVersion@ governs them
+--   in the legacy bridge. They directly carry mutable @ItemInstance@
+--   values (and, on units, live @StatModifier@ / @Wound@ / @Scar@
+--   records), so a v1 @"buildings"@/@"units"@ component payload could
+--   drift from an unrelated change to any of those WITHOUT the
+--   component's own version dispatch noticing — riding on the older
+--   global-version mechanism is not good enough for the new component
+--   contract. They are therefore FROZEN
+--   ('World.Save.Component.Entities.BuildingInstanceDTO' /
+--   'UnitInstanceDTO'), like every other reachable live record.
 --
 --   Do not gold-plate: stop at leaves. The concrete components apply this
 --   rule in "World.Save.Component.WorldGen" (the worldgen-params tree),
 --   "World.Save.Component.Page" (world edits / designations / ground
 --   items), and "World.Save.Component.Entities" (unit-sim / craft-bills /
---   power-nodes, plus the deliberate leaf reuse of the two positional
---   entity snapshots).
+--   power-nodes, plus the frozen building/unit instance DTOs and their
+--   nested item / stat-modifier / wound / scar records — review round 6).
 module World.Save.Component.Types
     ( ComponentPhase(..)
     , ComponentError(..)

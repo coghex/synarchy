@@ -26,22 +26,39 @@
 --     tolerated-dangling-reference reasoning as craft bills.
 --
 --   Requirement 4 — the on-disk contract is FROZEN, distinct from every
---   mutable runtime record:
+--   mutable runtime record. EVERY evolving live gameplay record reachable
+--   from a component DTO is mirrored by a component-owned DTO with an
+--   explicit, reviewable field-by-field conversion ('to…'/'from…'); none
+--   is embedded directly. A field added, dropped, or reordered on any
+--   live record changes only its conversion function — surfacing as a
+--   compile error to reconcile — never as silent byte drift in a shipped
+--   v1 component:
 --
---   - The three actively-evolving runtime STATE records
+--   - The runtime STATE records
 --     ('UnitSimState', 'CraftBill'/'CraftBills', 'PowerNode'/'PowerNodes')
---     are NOT embedded directly. Each has a component-owned mirror DTO
---     ('UnitSimStateDTO', 'CraftBillDTO'/'BillQueueDTO',
---     'PowerNodeDTO'/'NodeRegistryDTO') with an explicit, reviewable
---     field-by-field conversion ('to…'/'from…'). A field added, dropped,
---     or reordered on any of those live records changes only its
---     conversion function — never a shipped v1 component's bytes. Leaf
---     enums ('Pose'/'UnitActivity'/'Direction'/'BillMode'/'PowerRole')
---     and durable id newtypes ('BillId'/'PowerNodeId'/'BuildingId'/
---     'UnitId') are reused as-is: they are append-only, save-version-
---     governed content references, exactly as the legacy
---     'BuildingInstanceSnapshot'/'UnitInstanceSnapshot' DTOs already
---     reuse them.
+--     have mirror DTOs 'UnitSimStateDTO', 'CraftBillDTO'/'BillQueueDTO',
+--     'PowerNodeDTO'/'NodeRegistryDTO'.
+--   - The per-page ENTITY snapshots are frozen too (review round 6): the
+--     @"buildings"@/@"units"@ components carry 'BuildingInstanceDTO' /
+--     'UnitInstanceDTO', NOT the "World.Save.Types" positional
+--     'BuildingInstanceSnapshot'/'UnitInstanceSnapshot'. Those snapshots
+--     themselves directly carry mutable 'ItemInstance' values (materials
+--     delivered / storage / inventory / equipped / accessories) and, on
+--     units, the live 'StatModifier'/'Wound'/'Scar' records — so a v1
+--     @"buildings"@/@"units"@ payload could still drift from an unrelated
+--     change to any of those without the component's OWN version dispatch
+--     noticing. The transitive freeze closes that: the 'ItemInstance'
+--     fields reuse "World.Save.Component.Page"'s shared 'ItemInstanceDTO';
+--     'StatModifier'/'Wound'/'Scar' get 'StatModifierDTO'/'WoundDTO'/
+--     'ScarDTO' here. Leaf enums ('Pose'/'UnitActivity'/'Direction'/
+--     'BillMode'/'PowerRole') and durable id newtypes ('BillId'/
+--     'PowerNodeId'/'BuildingId'/'UnitId') are reused as-is — append-only
+--     content references with no independent mutable identity (boundary
+--     rule leaf clause (a), see "World.Save.Component.Types"). The frozen
+--     DTOs mirror the originals' exact field order and leaf types, so the
+--     derived cereal layout is byte-identical to the earlier direct
+--     embedding and the components stay schema v1 (verified by the frozen
+--     tracked fixture in "Test.Headless.World.Save.Components").
 --   - The @"buildings"@/@"units"@ components carry ONLY the per-page
 --     instance maps — NOT the per-page @bsnNextId@/@usnNextId@ counters.
 --     The building- and unit-id allocators are global, owned once by the
@@ -58,8 +75,17 @@ module World.Save.Component.Entities
     , powerNodesCodec
     , PageBuildingsDTO(..)
     , BuildingsDTO(..)
+    , BuildingInstanceDTO(..)
+    , toBuildingInstanceDTO
+    , fromBuildingInstanceDTO
     , PageUnitsDTO(..)
     , UnitsDTO(..)
+    , UnitInstanceDTO(..)
+    , StatModifierDTO(..)
+    , WoundDTO(..)
+    , ScarDTO(..)
+    , toUnitInstanceDTO
+    , fromUnitInstanceDTO
     , PageSimDTO(..)
     , UnitSimDTO(..)
     , UnitSimStateDTO(..)
@@ -96,12 +122,14 @@ import Craft.Bills
     ( CraftBills(..), CraftBill(..), BillId, BillMode )
 import Power.Types
     ( PowerNodes(..), PowerNode(..), PowerNodeId, PowerRole )
-import Unit.Types (UnitId)
+import Unit.Types (UnitId, StatModifier(..), Wound(..), Scar(..))
 import Unit.Sim.Types
     ( UnitSimState(..), MoveTarget(..), Pose, UnitActivity, Direction )
 import World.Save.Types
-    ( BuildingSnapshot(..), BuildingInstanceSnapshot
-    , UnitSnapshot(..), UnitInstanceSnapshot )
+    ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
+    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
+import World.Save.Component.Page
+    ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO )
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 import World.Save.Component.Types
 
@@ -110,27 +138,71 @@ orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
 
 -- buildings ---------------------------------------------------------
 
+-- | Frozen mirror of 'BuildingInstanceSnapshot' (review round 6). That
+--   positional "World.Save.Types" snapshot directly carries mutable
+--   'ItemInstance' values ('bisMaterialsDelivered'/'bisStorage'), so
+--   embedding it would let an unrelated 'ItemInstance' change drift a v1
+--   @"buildings"@ payload without the component's own version dispatch
+--   noticing — the exact gap the frozen-DTO boundary rule
+--   ("World.Save.Component.Types") forbids. The two item fields reuse the
+--   shared 'ItemInstanceDTO' (frozen recursively there); every other
+--   field is a leaf scalar/'Text'. Field order mirrors
+--   'BuildingInstanceSnapshot' exactly, so the derived cereal bytes are
+--   unchanged from the earlier direct embedding (component stays v1).
+data BuildingInstanceDTO = BuildingInstanceDTO
+    { bidDefName            ∷ !Text
+    , bidAnchorX            ∷ !Int
+    , bidAnchorY            ∷ !Int
+    , bidGridZ              ∷ !Int
+    , bidSpawnedAt          ∷ !Double
+    , bidTileW              ∷ !Int
+    , bidTileH              ∷ !Int
+    , bidSpawnRemaining     ∷ !Int
+    , bidBuildProgress      ∷ !Float
+    , bidMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstanceDTO])
+    , bidStorage            ∷ ![ItemInstanceDTO]
+    } deriving (Show, Eq, Generic, Serialize)
+
+toBuildingInstanceDTO ∷ BuildingInstanceSnapshot → BuildingInstanceDTO
+toBuildingInstanceDTO b = BuildingInstanceDTO
+    { bidDefName            = bisDefName b
+    , bidAnchorX            = bisAnchorX b
+    , bidAnchorY            = bisAnchorY b
+    , bidGridZ              = bisGridZ b
+    , bidSpawnedAt          = bisSpawnedAt b
+    , bidTileW              = bisTileW b
+    , bidTileH              = bisTileH b
+    , bidSpawnRemaining     = bisSpawnRemaining b
+    , bidBuildProgress      = bisBuildProgress b
+    , bidMaterialsDelivered =
+        HM.map (map toItemInstanceDTO) (bisMaterialsDelivered b)
+    , bidStorage            = map toItemInstanceDTO (bisStorage b)
+    }
+
+fromBuildingInstanceDTO ∷ BuildingInstanceDTO → BuildingInstanceSnapshot
+fromBuildingInstanceDTO d = BuildingInstanceSnapshot
+    { bisDefName            = bidDefName d
+    , bisAnchorX            = bidAnchorX d
+    , bisAnchorY            = bidAnchorY d
+    , bisGridZ              = bidGridZ d
+    , bisSpawnedAt          = bidSpawnedAt d
+    , bisTileW              = bidTileW d
+    , bisTileH              = bidTileH d
+    , bisSpawnRemaining     = bidSpawnRemaining d
+    , bisBuildProgress      = bidBuildProgress d
+    , bisMaterialsDelivered =
+        HM.map (map fromItemInstanceDTO) (bidMaterialsDelivered d)
+    , bisStorage            = map fromItemInstanceDTO (bidStorage d)
+    }
+
 -- | Per-page building slice. Carries ONLY the instance map — the
 --   building-id allocator (@bsnNextId@) is deliberately absent, since it
 --   is a global counter owned once by @"core-session"@ (requirement 9).
---
---   'BuildingInstanceSnapshot' is embedded DIRECTLY, NOT wrapped in a
---   component-owned DTO — a deliberate exception to the frozen-DTO
---   boundary rule (stated in "World.Save.Component.Types"), taken under
---   that rule's LEAF clause (b). It is not a live runtime manager record:
---   it is ITSELF an already-frozen "World.Save.Types" positional
---   persistence snapshot with its own established change-control
---   discipline — @'World.Save.Types.currentSaveVersion'@, whose version-
---   history comment block requires a bump for any field it (or the
---   'ItemInstance'/etc. it transitively carries) gains, drops, or
---   reorders. Reusing it is therefore safe by that DIFFERENT, pre-B2
---   mechanism, not a gap; mirroring it in a second DTO would duplicate a
---   freeze boundary that already exists, with no added safety. (A future
---   step that dissolves 'BuildingInstanceSnapshot' into a genuinely live
---   manager record would then bring it under the FREEZE clause here.)
+--   Each instance is the frozen 'BuildingInstanceDTO', not the live-item-
+--   carrying "World.Save.Types" snapshot (see 'BuildingInstanceDTO').
 data PageBuildingsDTO = PageBuildingsDTO
     { pbPageId    ∷ !WorldPageId
-    , pbInstances ∷ !(HM.HashMap BuildingId BuildingInstanceSnapshot)
+    , pbInstances ∷ !(HM.HashMap BuildingId BuildingInstanceDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
@@ -144,7 +216,8 @@ buildingsCodec ∷ ComponentCodec BuildingsDTO
 buildingsCodec = serializeCodec
     buildingsComponentId 1 True [worldPagesComponentId, coreSessionComponentId]
     (\snap → BuildingsDTO
-        [ PageBuildingsDTO (pgsPageId p) (bsnInstances (pgsBuildings p))
+        [ PageBuildingsDTO (pgsPageId p)
+              (HM.map toBuildingInstanceDTO (bsnInstances (pgsBuildings p)))
         | p ← orderedPages snap ])
     (\_ d → Right d) (const [])
 
@@ -160,21 +233,210 @@ applyBuildings
 applyBuildings ver nextId (BuildingsDTO slices) =
     applyPageSlices buildingsComponentId ver pbPageId
         (\s p → p { pgsBuildings = BuildingSnapshot
-                        { bsnInstances = pbInstances s, bsnNextId = nextId } })
+                        { bsnInstances =
+                            HM.map fromBuildingInstanceDTO (pbInstances s)
+                        , bsnNextId = nextId } })
         slices
 
 -- units -------------------------------------------------------------
 
+-- | Frozen mirror of 'StatModifier' (a live "Unit.Types" record mutated
+--   in place by the stat system; its own append-only comment warns fields
+--   go at the end). Every field is a leaf scalar/'Text'/'Maybe'.
+data StatModifierDTO = StatModifierDTO
+    { smdDelta   ∷ !Float
+    , smdSource  ∷ !Text
+    , smdExpiry  ∷ !(Maybe Double)
+    , smdPercent ∷ !Float
+    } deriving (Show, Eq, Generic, Serialize)
+
+toStatModifierDTO ∷ StatModifier → StatModifierDTO
+toStatModifierDTO m = StatModifierDTO
+    { smdDelta = smDelta m, smdSource = smSource m
+    , smdExpiry = smExpiry m, smdPercent = smPercent m }
+
+fromStatModifierDTO ∷ StatModifierDTO → StatModifier
+fromStatModifierDTO d = StatModifier
+    { smDelta = smdDelta d, smSource = smdSource d
+    , smExpiry = smdExpiry d, smPercent = smdPercent d }
+
+-- | Frozen mirror of 'Wound' (a live "Unit.Types" record the combat/wound
+--   tick mutates and grows fields on across saves). Every field is a leaf
+--   scalar/'Text'/'Bool'; field order mirrors 'Wound' exactly.
+data WoundDTO = WoundDTO
+    { wdPart          ∷ !Text
+    , wdKind          ∷ !Text
+    , wdSeverity      ∷ !Float
+    , wdAt            ∷ !Double
+    , wdBandage       ∷ !Float
+    , wdClot          ∷ !Float
+    , wdHeal          ∷ !Float
+    , wdDressing      ∷ !Text
+    , wdInfection     ∷ !Float
+    , wdClean         ∷ !Bool
+    , wdInfectionType ∷ !Text
+    , wdNecrosis      ∷ !Float
+    } deriving (Show, Eq, Generic, Serialize)
+
+toWoundDTO ∷ Wound → WoundDTO
+toWoundDTO w = WoundDTO
+    { wdPart          = woundPart w
+    , wdKind          = woundKind w
+    , wdSeverity      = woundSeverity w
+    , wdAt            = woundAt w
+    , wdBandage       = woundBandage w
+    , wdClot          = woundClot w
+    , wdHeal          = woundHeal w
+    , wdDressing      = woundDressing w
+    , wdInfection     = woundInfection w
+    , wdClean         = woundClean w
+    , wdInfectionType = woundInfectionType w
+    , wdNecrosis      = woundNecrosis w
+    }
+
+fromWoundDTO ∷ WoundDTO → Wound
+fromWoundDTO d = Wound
+    { woundPart          = wdPart d
+    , woundKind          = wdKind d
+    , woundSeverity      = wdSeverity d
+    , woundAt            = wdAt d
+    , woundBandage       = wdBandage d
+    , woundClot          = wdClot d
+    , woundHeal          = wdHeal d
+    , woundDressing      = wdDressing d
+    , woundInfection     = wdInfection d
+    , woundClean         = wdClean d
+    , woundInfectionType = wdInfectionType d
+    , woundNecrosis      = wdNecrosis d
+    }
+
+-- | Frozen mirror of 'Scar' (a live "Unit.Types" record). Leaf fields.
+data ScarDTO = ScarDTO
+    { scdPart     ∷ !Text
+    , scdKind     ∷ !Text
+    , scdSeverity ∷ !Float
+    , scdAt       ∷ !Double
+    } deriving (Show, Eq, Generic, Serialize)
+
+toScarDTO ∷ Scar → ScarDTO
+toScarDTO s = ScarDTO
+    { scdPart = scarPart s, scdKind = scarKind s
+    , scdSeverity = scarSeverity s, scdAt = scarAt s }
+
+fromScarDTO ∷ ScarDTO → Scar
+fromScarDTO d = Scar
+    { scarPart = scdPart d, scarKind = scdKind d
+    , scarSeverity = scdSeverity d, scarAt = scdAt d }
+
+-- | Frozen mirror of 'UnitInstanceSnapshot' (review round 6). Like
+--   'BuildingInstanceDTO', that positional "World.Save.Types" snapshot
+--   directly carries mutable 'ItemInstance' values
+--   ('uisInventory'/'uisEquipped'/'uisAccessories') AND the live
+--   'StatModifier'/'Wound'/'Scar' records ('uisModifiers'/'uisWounds'/
+--   'uisScars'), any of which could drift a v1 @"units"@ payload without
+--   the component's own version dispatch noticing. Each is frozen: items
+--   via the shared 'ItemInstanceDTO', the three unit records via
+--   'StatModifierDTO'/'WoundDTO'/'ScarDTO' above. 'Direction' is an
+--   append-only leaf enum, reused as-is. Field order + leaf types mirror
+--   'UnitInstanceSnapshot' exactly, so the derived cereal bytes are
+--   unchanged from the earlier direct embedding (component stays v1).
+data UnitInstanceDTO = UnitInstanceDTO
+    { uidDefName        ∷ !Text
+    , uidBaseWidth      ∷ !Float
+    , uidGridX          ∷ !Float
+    , uidGridY          ∷ !Float
+    , uidGridZ          ∷ !Int
+    , uidFacing         ∷ !Direction
+    , uidCurrentAnim    ∷ !Text
+    , uidAnimStart      ∷ !Double
+    , uidAnimReverse    ∷ !Bool
+    , uidActivity       ∷ !Text
+    , uidPose           ∷ !Text
+    , uidAnimStride     ∷ !Int
+    , uidStats          ∷ !(HM.HashMap Text Float)
+    , uidModifiers      ∷ !(HM.HashMap Text [StatModifierDTO])
+    , uidSkills         ∷ !(HM.HashMap Text Float)
+    , uidKnowledge      ∷ !(HM.HashMap Text Float)
+    , uidInventory      ∷ ![ItemInstanceDTO]
+    , uidEquipped       ∷ !(HM.HashMap Text ItemInstanceDTO)
+    , uidAccessories    ∷ ![ItemInstanceDTO]
+    , uidFactionId      ∷ !Text
+    , uidWounds         ∷ ![WoundDTO]
+    , uidScars          ∷ ![ScarDTO]
+    , uidImmuneResponse ∷ !Float
+    , uidImmunities     ∷ !(HM.HashMap Text Float)
+    , uidBlood          ∷ !Float
+    , uidName           ∷ !Text
+    } deriving (Show, Eq, Generic, Serialize)
+
+toUnitInstanceDTO ∷ UnitInstanceSnapshot → UnitInstanceDTO
+toUnitInstanceDTO u = UnitInstanceDTO
+    { uidDefName        = uisDefName u
+    , uidBaseWidth      = uisBaseWidth u
+    , uidGridX          = uisGridX u
+    , uidGridY          = uisGridY u
+    , uidGridZ          = uisGridZ u
+    , uidFacing         = uisFacing u
+    , uidCurrentAnim    = uisCurrentAnim u
+    , uidAnimStart      = uisAnimStart u
+    , uidAnimReverse    = uisAnimReverse u
+    , uidActivity       = uisActivity u
+    , uidPose           = uisPose u
+    , uidAnimStride     = uisAnimStride u
+    , uidStats          = uisStats u
+    , uidModifiers      = HM.map (map toStatModifierDTO) (uisModifiers u)
+    , uidSkills         = uisSkills u
+    , uidKnowledge      = uisKnowledge u
+    , uidInventory      = map toItemInstanceDTO (uisInventory u)
+    , uidEquipped       = HM.map toItemInstanceDTO (uisEquipped u)
+    , uidAccessories    = map toItemInstanceDTO (uisAccessories u)
+    , uidFactionId      = uisFactionId u
+    , uidWounds         = map toWoundDTO (uisWounds u)
+    , uidScars          = map toScarDTO (uisScars u)
+    , uidImmuneResponse = uisImmuneResponse u
+    , uidImmunities     = uisImmunities u
+    , uidBlood          = uisBlood u
+    , uidName           = uisName u
+    }
+
+fromUnitInstanceDTO ∷ UnitInstanceDTO → UnitInstanceSnapshot
+fromUnitInstanceDTO d = UnitInstanceSnapshot
+    { uisDefName        = uidDefName d
+    , uisBaseWidth      = uidBaseWidth d
+    , uisGridX          = uidGridX d
+    , uisGridY          = uidGridY d
+    , uisGridZ          = uidGridZ d
+    , uisFacing         = uidFacing d
+    , uisCurrentAnim    = uidCurrentAnim d
+    , uisAnimStart      = uidAnimStart d
+    , uisAnimReverse    = uidAnimReverse d
+    , uisActivity       = uidActivity d
+    , uisPose           = uidPose d
+    , uisAnimStride     = uidAnimStride d
+    , uisStats          = uidStats d
+    , uisModifiers      = HM.map (map fromStatModifierDTO) (uidModifiers d)
+    , uisSkills         = uidSkills d
+    , uisKnowledge      = uidKnowledge d
+    , uisInventory      = map fromItemInstanceDTO (uidInventory d)
+    , uisEquipped       = HM.map fromItemInstanceDTO (uidEquipped d)
+    , uisAccessories    = map fromItemInstanceDTO (uidAccessories d)
+    , uisFactionId      = uidFactionId d
+    , uisWounds         = map fromWoundDTO (uidWounds d)
+    , uisScars          = map fromScarDTO (uidScars d)
+    , uisImmuneResponse = uidImmuneResponse d
+    , uisImmunities     = uidImmunities d
+    , uisBlood          = uidBlood d
+    , uisName           = uidName d
+    }
+
 -- | Per-page unit slice. Carries ONLY the instance map — the unit-id
 --   allocator (@usnNextId@) is absent for the same global-allocator
---   reason as @bsnNextId@ above. 'UnitInstanceSnapshot' is embedded
---   directly for the SAME reason 'BuildingInstanceSnapshot' is (see
---   'PageBuildingsDTO'): it is an already-frozen "World.Save.Types"
---   positional snapshot governed by @'World.Save.Types.currentSaveVersion'@,
---   the boundary rule's leaf clause (b), not a live manager record.
+--   reason as @bsnNextId@ above. Each instance is the frozen
+--   'UnitInstanceDTO', not the live-record-carrying "World.Save.Types"
+--   snapshot (see 'UnitInstanceDTO').
 data PageUnitsDTO = PageUnitsDTO
     { puPageId    ∷ !WorldPageId
-    , puInstances ∷ !(HM.HashMap UnitId UnitInstanceSnapshot)
+    , puInstances ∷ !(HM.HashMap UnitId UnitInstanceDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
@@ -187,7 +449,8 @@ unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = serializeCodec
     unitsComponentId 1 True [worldPagesComponentId, coreSessionComponentId]
     (\snap → UnitsDTO
-        [ PageUnitsDTO (pgsPageId p) (usnInstances (pgsUnits p))
+        [ PageUnitsDTO (pgsPageId p)
+              (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
         | p ← orderedPages snap ])
     (\_ d → Right d) (const [])
 
@@ -197,7 +460,9 @@ applyUnits
 applyUnits ver nextId (UnitsDTO slices) =
     applyPageSlices unitsComponentId ver puPageId
         (\s p → p { pgsUnits = UnitSnapshot
-                        { usnInstances = puInstances s, usnNextId = nextId } })
+                        { usnInstances =
+                            HM.map fromUnitInstanceDTO (puInstances s)
+                        , usnNextId = nextId } })
         slices
 
 -- unit-sim ----------------------------------------------------------
