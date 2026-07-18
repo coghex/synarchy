@@ -447,3 +447,84 @@ spec = do
             , "assert(payload:find('forge') == nil,"
             , "  'no trace of the live recipe content may reach the encoded payload')"
             ]
+
+        it "rejects a load whose craftJob/repairJob reference a recipe or \
+           \item def no longer registered (issue #761 round-4 review), \
+           \during prepareLoad -- before any live state is touched -- and \
+           \accepts one whose references all still resolve" $ runsOk $ lns
+            [ "unit = { exists = function(_uid) return true end }"
+            , "craft = { get = function(id)"
+            , "  if id == 'known_recipe' then return { id = 'known_recipe' } end"
+            , "  return nil end }"
+            , "repair = { get = function(id)"
+            , "  if id == 'known_repair' then return { id = 'known_repair' } end"
+            , "  return nil end }"
+            , "item = { listDefs = function()"
+            , "  return { { name = 'wood' }, { name = 'stone' } } end }"
+            , "local unitAiSave = require('scripts.unit_ai_save')"
+            , "unitAiSave.register({}, {})"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local function prepareWith(state)"
+            , "  return saveModules.prepareLoad({"
+            , "    { id = 'unit_ai', version = 1, payload = codec.encode(state) },"
+            , "  })"
+            , "end"
+            , "local removedRecipe = prepareWith({ [1] = { craftJob = {"
+            , "  recipeId = 'removed_recipe', need = { wood = 2 } } } })"
+            , "assert(not removedRecipe.ok,"
+            , "  'a craftJob referencing a removed recipe must reject the load')"
+            , "local removedItem = prepareWith({ [1] = { craftJob = {"
+            , "  recipeId = 'known_recipe', fromGround = { unobtainium = 3 } } } })"
+            , "assert(not removedItem.ok,"
+            , "  'a craftJob fetch map referencing a removed item must reject the load')"
+            , "local removedRepairRefs = prepareWith({ [1] = { repairJob = {"
+            , "  recipeId = 'removed_recipe', defName = 'ghost_axe',"
+            , "  consumable = 'ghost_wood' } } })"
+            , "assert(not removedRepairRefs.ok,"
+            , "  'a repairJob referencing removed content defs must reject the load')"
+            , "local allPresent = prepareWith({ [1] = {"
+            , "  craftJob = { recipeId = 'known_recipe', need = { wood = 2 },"
+            , "               fromGround = { stone = 1 } },"
+            , "} })"
+            , "assert(allPresent.ok,"
+            , "  'a craftJob whose recipe/items all still exist must not be rejected: '"
+            , "  .. table.concat(allPresent.errors or {}, '; '))"
+            , "local repairPresent = prepareWith({ [2] = {"
+            , "  repairJob = { recipeId = 'known_repair', defName = 'wood',"
+            , "                consumable = 'stone' },"
+            , "} })"
+            , "assert(repairPresent.ok,"
+            , "  'a repairJob whose recipe/items all still exist must not be rejected: '"
+            , "  .. table.concat(repairPresent.errors or {}, '; '))"
+            ]
+
+    describe "component version bounds (issue #761 round-4 review)" $ do
+        it "rejects a version or inputVersions entry that is non-finite or \
+           \outside Word32's representable range -- such a value passed \
+           \Lua's own \"positive integer\" check (floor(math.huge) is \
+           \math.huge) but HsLua's tointeger can't convert it, which used \
+           \to make the whole component record silently vanish instead of \
+           \failing the registration" $ runsOk $ lns
+            [ "local saveModules = require('scripts.lib.save_modules')"
+            , "local function tryRegister(version, inputVersions)"
+            , "  return pcall(saveModules.register, 'bad_version', {"
+            , "    version = version, inputVersions = inputVersions,"
+            , "    required = true, scope = 'global', deps = {},"
+            , "    snapshot = function() return {} end,"
+            , "    decode = function(_v, d) return d end,"
+            , "    validate = function() return nil end,"
+            , "    apply = function() end,"
+            , "  })"
+            , "end"
+            , "local ok1 = tryRegister(math.huge, { math.huge })"
+            , "assert(not ok1, 'math.huge must not be accepted as a version')"
+            , "local ok2 = tryRegister(-math.huge, { -math.huge })"
+            , "assert(not ok2, '-math.huge must not be accepted as a version')"
+            , "local ok3 = tryRegister(4294967296, { 4294967296 })"
+            , "assert(not ok3, 'a version above Word32 max must not be accepted')"
+            , "local ok4 = tryRegister(0/0, { 0/0 })"
+            , "assert(not ok4, 'NaN must not be accepted as a version')"
+            , "local ok5 = tryRegister(1, { 1 })"
+            , "assert(ok5, 'an ordinary positive integer version must still register')"
+            ]

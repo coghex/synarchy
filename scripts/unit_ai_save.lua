@@ -40,23 +40,82 @@ local TRANSIENT_CANDIDATE_FIELDS = {
     "constructCandidate", "repairCandidate", "craftCandidate",
 }
 
+local function buildItemDefSet()
+    local set = {}
+    for _, d in ipairs(item.listDefs() or {}) do
+        set[d.name] = true
+    end
+    return set
+end
+
+-- craftJob/repairJob (issue #761 round-4 review) durably persist
+-- content-definition ids (a recipe id, item def names for the crafted
+-- item's shortfall-sourcing maps, and the item being repaired + its
+-- repair consumable) rather than a copy of the definition itself --
+-- correct per requirement 14, but that means a load with a since-
+-- removed recipe/item must be REJECTED here, at prepare time, rather
+-- than reaching apply()/the AI's next tick with a dangling reference
+-- (the same "reject before any mutation" contract the def-reference
+-- check in Engine.Scripting.Lua.API.Save already enforces for
+-- building/unit defs). `itemDefs` is built once per validate() call,
+-- not per job, since scanning item.listDefs() is a linear walk.
+local function validateJobContentRefs(uid, s, itemDefs, errs)
+    local function checkItem(name, what)
+        if name ~= nil and not itemDefs[name] then
+            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid) .. " " .. what
+                .. " references unknown item def '" .. tostring(name) .. "'"
+        end
+    end
+    local function checkItemKeys(t, what)
+        if type(t) == "table" then
+            for name in pairs(t) do checkItem(name, what) end
+        end
+    end
+    if s.craftJob then
+        if craft.get(s.craftJob.recipeId) == nil then
+            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
+                .. " craftJob references unknown recipe '"
+                .. tostring(s.craftJob.recipeId) .. "'"
+        end
+        checkItemKeys(s.craftJob.need, "craftJob.need")
+        checkItemKeys(s.craftJob.fromGround, "craftJob.fromGround")
+        checkItemKeys(s.craftJob.fromMule, "craftJob.fromMule")
+        checkItemKeys(s.craftJob.fromCargo, "craftJob.fromCargo")
+    end
+    if s.repairJob then
+        if repair.get(s.repairJob.recipeId) == nil then
+            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
+                .. " repairJob references unknown recipe '"
+                .. tostring(s.repairJob.recipeId) .. "'"
+        end
+        checkItem(s.repairJob.defName, "repairJob.defName")
+        checkItem(s.repairJob.consumable, "repairJob.consumable")
+    end
+end
+
 -- Component-local validator (issue #761): `data` must be a table keyed
 -- by positive-integer unit ids, each mapping to a state table. Deep
 -- per-field validation of aiState's own shape is deliberately not
 -- attempted here (it's a large, free-form utility-AI scratch table) --
 -- this catches real corruption (wrong top-level shape) without gold-
--- plating a full schema for every possible field.
+-- plating a full schema for every possible field, EXCEPT for the
+-- craftJob/repairJob content-definition ids above, which get a real
+-- existence check since a dangling one there reaches live execution.
 local function validateUnitAiData(data)
     if type(data) ~= "table" then
         return { "unit_ai: payload must be a table" }
     end
     local errs = {}
+    local itemDefs = nil
     for uid, s in pairs(data) do
         if type(uid) ~= "number" or uid ~= math.floor(uid) or uid < 1 then
             errs[#errs + 1] = "unit_ai: invalid unit id key " .. tostring(uid)
         elseif type(s) ~= "table" then
             errs[#errs + 1] = "unit_ai: state for unit " .. tostring(uid)
                 .. " is not a table"
+        elseif s.craftJob or s.repairJob then
+            itemDefs = itemDefs or buildItemDefSet()
+            validateJobContentRefs(uid, s, itemDefs, errs)
         end
     end
     if #errs > 0 then return errs end

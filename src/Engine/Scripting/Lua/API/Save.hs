@@ -56,8 +56,17 @@ saveListFn env = do
     -- issue #761: the current Lua registry's ids widen the envelope's
     -- known-component set so a save carrying a required "lua.<module>"
     -- component never becomes unlistable merely because Haskell's own
-    -- static component set doesn't recognise it.
-    descriptors ← describeLuaComponents logger
+    -- static component set doesn't recognise it. listSaves is a
+    -- read-only, best-effort listing operation (unlike save/load), so a
+    -- malformed live descriptor here degrades to an empty (more
+    -- restrictive, never less) known-name set rather than failing the
+    -- whole listing outright.
+    descriptorsOrErr ← describeLuaComponents logger
+    descriptors ← case descriptorsOrErr of
+        Right ds → return ds
+        Left err → do
+            Lua.liftIO $ logWarn logger CatLua $ "listSaves: " <> err
+            return []
     let luaKnownNames = HS.fromList [ name | (name, _, _) ← descriptors ]
     saves ← Lua.liftIO $ listSaves logger luaKnownNames
     Lua.newtable
@@ -268,103 +277,115 @@ loadSaveFn env = do
         Just nameBS → do
             let saveName = TE.decodeUtf8Lenient nameBS
             logger ← Lua.liftIO $ readIORef (loggerRef env)
-            -- issue #761: the CURRENT Lua registry's ids/requiredness —
-            -- gathered fresh, before the envelope is even decoded, so
-            -- 'loadWorld' can build the right known/required id sets
-            -- for the structural envelope check (a foreign/removed Lua
-            -- module id is exactly as incompatible as a foreign Haskell
-            -- component id, same as the existing precedent).
-            descriptors ← describeLuaComponents logger
-            let luaKnownNames    = HS.fromList [ n | (n, _, _)   ← descriptors ]
-                luaRequiredNames = HS.fromList [ n | (n, _, req) ← descriptors, req ]
-            result ← Lua.liftIO $
-                loadWorld logger saveName luaKnownNames luaRequiredNames
-            case result of
-                Right (saveData, luaComponents) → do
-                    -- #760 req. 9 (round 8 extends this to every gameplay
-                    -- content reference, not just building/unit defs):
-                    -- validate every saved content-definition reference
-                    -- against the currently-registered defs BEFORE
-                    -- publishing ANY live state (Lua modules, pause,
-                    -- world-thread restore). A missing gameplay DEFINITION
-                    -- rejects the COMPLETE load with a clear error naming
-                    -- what's missing — rather than the world-thread restore
-                    -- silently pruning those entities (the old
-                    -- fromBuildingSnapshot/fromUnitSnapshot filter + log). This
-                    -- runs earliest, in the Lua thread, so an all-or-nothing
-                    -- rejection touches nothing: engine.loadSave just returns
-                    -- false. (Missing visual ASSETS stay a soft #756 fallback,
-                    -- not gated here — only definitions. FloraId/location-
-                    -- overlay ids, MaterialId references, and equipment
-                    -- slot-id keys all remain a documented, pre-existing,
-                    -- out-of-#760-scope gap per
-                    -- docs/persistence_state_inventory.md §9 — not addressed
-                    -- here.)
-                    bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
-                    um ← Lua.liftIO $ readIORef (unitManagerRef env)
-                    im ← Lua.liftIO $ readIORef (itemManagerRef env)
-                    rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
-                    let buildingDefs = HM.keysSet (bmDefs bm)
-                        pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
-                        missing = missingDefReferences
-                            buildingDefs (HM.keysSet (umDefs um))
-                            [ (wpsPageId w, wpsBuildings w, wpsUnits w)
-                            | w ← sdWorlds saveData ]
-                        missingItems =
-                            missingItemDefReferences (HM.keysSet (imDefs im)) pages
-                        missingRecipes =
-                            missingRecipeReferences (HM.keysSet (rmDefs rm)) pages
-                        missingBillOutputItems =
-                            missingBillOutputItemReferences
-                                (HM.keysSet (imDefs im)) pages
-                        missingConstruct =
-                            missingConstructDefReferences buildingDefs pages
-                        allMissing = length missing + length missingItems
-                            + length missingRecipes
-                            + length missingBillOutputItems
-                            + length missingConstruct
-                        allMessages =
-                            map renderMissingDefRef missing
-                            ⧺ map renderMissingItemDefRef missingItems
-                            ⧺ map renderMissingRecipeRef missingRecipes
-                            ⧺ map renderMissingBillOutputItemRef
-                                  missingBillOutputItems
-                            ⧺ map renderMissingConstructDefRef missingConstruct
-                    if allMissing > 0
-                      then do
-                        Lua.liftIO $ logWarn logger CatWorld $
-                            "loadSave rejected for '" <> saveName <> "': "
-                            <> T.pack (show allMissing)
-                            <> " saved entit" <> (if allMissing ≡ 1
-                                                    then "y references a"
-                                                    else "ies reference")
-                            <> " gameplay definition no longer registered — "
-                            <> "aborting the entire load (nothing changed): "
-                            <> T.intercalate "; " allMessages
-                        Lua.pushboolean False
-                      else do
-                        -- issue #761 requirement 11: decode + migrate +
-                        -- component-locally-validate EVERY registered Lua
-                        -- component before touching any live Lua state.
-                        -- Any failure aborts the whole load (nothing has
-                        -- changed yet), exactly like the def-reference
-                        -- check above.
-                        prepared ← prepareLuaLoad logger luaComponents
-                        case prepared of
-                          Left err → do
-                            Lua.liftIO $ logWarn logger CatWorld $
-                                "loadSave rejected for '" <> saveName
-                                <> "': " <> err
-                            Lua.pushboolean False
-                          Right () → loadValidatedSave env logger saveData
+            descriptorsOrErr ← describeLuaComponents logger
+            case descriptorsOrErr of
                 Left err → do
                     Lua.liftIO $ logWarn logger CatWorld $
-                        "loadSave failed for '" <> saveName <> "': " <> err
+                        "loadSave rejected for '" <> saveName <> "': " <> err
                     Lua.pushboolean False
+                Right descriptors →
+                    loadSaveWithDescriptors env logger saveName descriptors
             return 1
         Nothing → do
             Lua.pushboolean False
             return 1
+
+-- | Continue 'loadSaveFn' once the current Lua registry's component
+--   descriptors are known (issue #761 round-4 review): split out so a
+--   malformed descriptor list can reject the load in 'loadSaveFn' BEFORE
+--   this ever runs, rather than proceeding with an incomplete
+--   known/required id set.
+loadSaveWithDescriptors
+    ∷ EngineEnv → LoggerState → Text → [(Text, Word32, Bool)]
+    → Lua.LuaE Lua.Exception ()
+loadSaveWithDescriptors env logger saveName descriptors = do
+    let luaKnownNames    = HS.fromList [ n | (n, _, _)   ← descriptors ]
+        luaRequiredNames = HS.fromList [ n | (n, _, req) ← descriptors, req ]
+    result ← Lua.liftIO $
+        loadWorld logger saveName luaKnownNames luaRequiredNames
+    case result of
+        Right (saveData, luaComponents) → do
+            -- #760 req. 9 (round 8 extends this to every gameplay
+            -- content reference, not just building/unit defs):
+            -- validate every saved content-definition reference
+            -- against the currently-registered defs BEFORE
+            -- publishing ANY live state (Lua modules, pause,
+            -- world-thread restore). A missing gameplay DEFINITION
+            -- rejects the COMPLETE load with a clear error naming
+            -- what's missing — rather than the world-thread restore
+            -- silently pruning those entities (the old
+            -- fromBuildingSnapshot/fromUnitSnapshot filter + log). This
+            -- runs earliest, in the Lua thread, so an all-or-nothing
+            -- rejection touches nothing: engine.loadSave just returns
+            -- false. (Missing visual ASSETS stay a soft #756 fallback,
+            -- not gated here — only definitions. FloraId/location-
+            -- overlay ids, MaterialId references, and equipment
+            -- slot-id keys all remain a documented, pre-existing,
+            -- out-of-#760-scope gap per
+            -- docs/persistence_state_inventory.md §9 — not addressed
+            -- here.)
+            bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
+            um ← Lua.liftIO $ readIORef (unitManagerRef env)
+            im ← Lua.liftIO $ readIORef (itemManagerRef env)
+            rm ← Lua.liftIO $ readIORef (recipeManagerRef env)
+            let buildingDefs = HM.keysSet (bmDefs bm)
+                pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
+                missing = missingDefReferences
+                    buildingDefs (HM.keysSet (umDefs um))
+                    [ (wpsPageId w, wpsBuildings w, wpsUnits w)
+                    | w ← sdWorlds saveData ]
+                missingItems =
+                    missingItemDefReferences (HM.keysSet (imDefs im)) pages
+                missingRecipes =
+                    missingRecipeReferences (HM.keysSet (rmDefs rm)) pages
+                missingBillOutputItems =
+                    missingBillOutputItemReferences
+                        (HM.keysSet (imDefs im)) pages
+                missingConstruct =
+                    missingConstructDefReferences buildingDefs pages
+                allMissing = length missing + length missingItems
+                    + length missingRecipes
+                    + length missingBillOutputItems
+                    + length missingConstruct
+                allMessages =
+                    map renderMissingDefRef missing
+                    ⧺ map renderMissingItemDefRef missingItems
+                    ⧺ map renderMissingRecipeRef missingRecipes
+                    ⧺ map renderMissingBillOutputItemRef
+                          missingBillOutputItems
+                    ⧺ map renderMissingConstructDefRef missingConstruct
+            if allMissing > 0
+              then do
+                Lua.liftIO $ logWarn logger CatWorld $
+                    "loadSave rejected for '" <> saveName <> "': "
+                    <> T.pack (show allMissing)
+                    <> " saved entit" <> (if allMissing ≡ 1
+                                            then "y references a"
+                                            else "ies reference")
+                    <> " gameplay definition no longer registered — "
+                    <> "aborting the entire load (nothing changed): "
+                    <> T.intercalate "; " allMessages
+                Lua.pushboolean False
+              else do
+                -- issue #761 requirement 11: decode + migrate +
+                -- component-locally-validate EVERY registered Lua
+                -- component before touching any live Lua state.
+                -- Any failure aborts the whole load (nothing has
+                -- changed yet), exactly like the def-reference
+                -- check above.
+                prepared ← prepareLuaLoad logger luaComponents
+                case prepared of
+                  Left err → do
+                    Lua.liftIO $ logWarn logger CatWorld $
+                        "loadSave rejected for '" <> saveName
+                        <> "': " <> err
+                    Lua.pushboolean False
+                  Right () → loadValidatedSave env logger saveData
+        Left err → do
+            Lua.liftIO $ logWarn logger CatWorld $
+                "loadSave failed for '" <> saveName <> "': " <> err
+            Lua.pushboolean False
+
 
 -- | Publish a decoded, def-validated save: pause, apply the prepared Lua
 --   state, then queue the engine-side (chunks/buildings/units/sim)
@@ -519,21 +540,31 @@ callSaveModules0 logger fnName = do
 -- | Read every element of the Lua array at the top of the stack (NOT
 --   popped) via @readElem@, which must read whatever is at the NEW
 --   stack top (the current element, already pushed) and leave the
---   stack depth unchanged relative to its own entry. A malformed
---   element ('Nothing') is skipped rather than aborting the whole read.
+--   stack depth unchanged relative to its own entry. FAILS CLOSED
+--   (issue #761 round-4 review): a malformed element ('Nothing') aborts
+--   the whole read with 'Left' rather than being silently skipped —
+--   the two callers this backs (component descriptors, snapshot
+--   payloads) can each carry a REQUIRED component's own record, and a
+--   value HsLua can't convert (e.g. a Lua @version@ outside Word32's
+--   range) must not be able to make that component quietly vanish from
+--   a save/load instead of failing it outright.
 readLuaArrayAt
-    ∷ Lua.LuaE Lua.Exception (Maybe a) → Lua.LuaE Lua.Exception [a]
+    ∷ Lua.LuaE Lua.Exception (Maybe a)
+    → Lua.LuaE Lua.Exception (Either Text [a])
 readLuaArrayAt readElem = do
     n ← Lua.rawlen (-1)
     go 1 (fromIntegral n) []
   where
     go i n acc
-        | i > (n ∷ Int) = return (reverse acc)
+        | i > (n ∷ Int) = return (Right (reverse acc))
         | otherwise = do
             _ ← Lua.rawgeti (-1) (fromIntegral i)
             mv ← readElem
             Lua.pop 1
-            go (i + 1) n (maybe acc (: acc) mv)
+            case mv of
+                Nothing → return (Left ("malformed array element at index "
+                    <> T.pack (show i)))
+                Just v  → go (i + 1) n (v : acc)
 
 -- | Read {id=string, version=number, required=boolean} from the table
 --   at the top of the stack.
@@ -557,19 +588,25 @@ readComponentDescriptorField = do
 -- | Call @saveModules.describeAll()@ (issue #761): every currently-
 --   registered persistent Lua component's (name, version, required),
 --   used to build the envelope's dynamic known/required id sets before
---   both encode and decode. Returns empty on any error (require
---   failing, describeAll missing/crashing) and logs via the engine
---   logger.
+--   both encode and decode. Returns 'Left' on any error (require
+--   failing, describeAll missing/crashing, or a malformed descriptor —
+--   round-4 review "fail closed" — the caller decides whether that's
+--   fatal for its own operation).
 describeLuaComponents
-    ∷ LoggerState → Lua.LuaE Lua.Exception [(Text, Word32, Bool)]
+    ∷ LoggerState
+    → Lua.LuaE Lua.Exception (Either Text [(Text, Word32, Bool)])
 describeLuaComponents logger = do
     ok ← callSaveModules1 logger "describeAll" 0 (return ())
     if not ok
-      then return []
+      then return (Left "save_modules.describeAll() could not be called \
+                         \(see engine log)")
       else do
-        xs ← readLuaArrayAt readComponentDescriptorField
+        result ← readLuaArrayAt readComponentDescriptorField
         Lua.pop 1  -- describeAll() result array
-        return xs
+        return $ case result of
+            Right xs → Right xs
+            Left err → Left ("save_modules.describeAll() returned a "
+                <> "malformed component descriptor: " <> err)
 
 -- | Read {id=string, version=number, required=boolean, payload=string}
 --   from the table at the top of the stack.
@@ -616,9 +653,18 @@ collectLuaComponents logger = do
             if isOk
               then do
                 _ ← Lua.getfield (-1) "components"
-                xs ← readLuaArrayAt readSnapshotComponentField
+                arrResult ← readLuaArrayAt readSnapshotComponentField
                 Lua.pop 1  -- components array
-                return (Right xs)
+                return $ case arrResult of
+                    Right xs → Right xs
+                    -- round-4 review "fail closed": a component record
+                    -- HsLua can't fully read (e.g. an out-of-range
+                    -- version) must abort the save, not vanish from
+                    -- the list — dropping it here is indistinguishable
+                    -- from that REQUIRED component never having
+                    -- existed at all.
+                    Left err → Left ("save_modules.snapshotAll() returned "
+                        <> "a malformed component record: " <> err)
               else do
                 _ ← Lua.getfield (-1) "error"
                 merr ← Lua.tostring (-1)
@@ -675,8 +721,15 @@ prepareLuaLoad logger components = do
               then return (Right ())
               else do
                 _ ← Lua.getfield (-1) "errors"
-                errs ← readLuaArrayAt readErrorStringField
+                -- Purely a diagnostic message list here — the load is
+                -- already known to be failing (isOk == False)
+                -- regardless of whether every entry parses, so a
+                -- malformed entry degrades to an empty list (falling
+                -- into the "no error detail" message below) rather
+                -- than needing its own fail-closed handling.
+                arrResult ← readLuaArrayAt readErrorStringField
                 Lua.pop 1
+                let errs = either (const []) id arrResult
                 return (Left (if null errs
                                 then "save_modules.prepareLoad() failed \
                                      \(no error detail)"

@@ -81,7 +81,24 @@ saveModules._pendingApply  = nil
 
 local VALID_ID_PATTERN = "^[a-z][a-z0-9_]*$"
 
+-- Every version travels to Haskell as a Word32 (issue #761 round-4
+-- review): `math.huge` passes Lua's own `n == math.floor(n)` check
+-- (floor(inf) is inf) and is `>= 1`, so it slipped past the original
+-- "positive integer" check below undetected -- then HsLua's
+-- `tointeger` silently fails to convert it, and the whole component
+-- record was DROPPED from the array read (see
+-- Engine.Scripting.Lua.API.Save's readLuaArrayAt), which could make a
+-- REQUIRED component vanish from a save instead of failing it. Reject
+-- any version outside Word32's representable range here, at
+-- registration, before it can ever reach that bridge.
+local WORD32_MAX = 4294967295
+
 local function isFn(f) return type(f) == "function" end
+
+local function isValidComponentVersion(v)
+    return type(v) == "number" and v == math.floor(v)
+        and v >= 1 and v <= WORD32_MAX
+end
 
 local function sortedIds(t)
     local ids = {}
@@ -176,9 +193,10 @@ function saveModules.register(id, spec)
     end
 
     local version = spec.version
-    if type(version) ~= "number" or version ~= math.floor(version) or version < 1 then
+    if not isValidComponentVersion(version) then
         error("saveModules.register: '" .. id
-            .. "' version must be a positive integer")
+            .. "' version must be a positive integer representable as a "
+            .. "32-bit unsigned value (1.." .. WORD32_MAX .. ")")
     end
 
     local inputVersions = spec.inputVersions or { version }
@@ -188,9 +206,11 @@ function saveModules.register(id, spec)
     end
     local hasCurrentVersion = false
     for _, v in ipairs(inputVersions) do
-        if type(v) ~= "number" or v ~= math.floor(v) or v < 1 then
+        if not isValidComponentVersion(v) then
             error("saveModules.register: '" .. id
-                .. "' inputVersions must all be positive integers")
+                .. "' inputVersions must all be positive integers "
+                .. "representable as a 32-bit unsigned value (1.."
+                .. WORD32_MAX .. ")")
         end
         if v == version then hasCurrentVersion = true end
     end
