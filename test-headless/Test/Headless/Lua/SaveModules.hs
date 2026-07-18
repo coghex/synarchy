@@ -61,7 +61,7 @@ lns = T.intercalate "\n"
 --   registration every "valid" test builds on.
 validSpecLua ∷ Text → Text
 validSpecLua ident = lns
-    [ "{ version = 1, inputVersions = {1}, required = true, deps = {},"
+    [ "{ version = 1, inputVersions = {1}, required = true, scope = 'global', deps = {},"
     , "  snapshot = function() return { x = 1 } end,"
     , "  decode = function(v, d) return d end,"
     , "  validate = function(d) return nil end,"
@@ -182,6 +182,18 @@ spec = do
             , "assert(d1 == nil and e1 ~= nil, 'decode rejects invalid UTF-8 too')"
             ]
 
+        it "rejects a hand-crafted map payload with a fractional numeric \
+           \key, or a duplicate key, even though encode() would never \
+           \produce either" $ runsOk $ lns
+            [ "local codec = require('scripts.lib.data_codec')"
+            , "local d1, e1 = codec.decode('M1:N3:1.5T')"
+            , "assert(d1 == nil and e1 ~= nil, 'fractional numeric key rejected')"
+            , "local d2, e2 = codec.decode('M2:N1:1T:N1:1F')"
+            , "assert(d2 == nil and e2 ~= nil, 'duplicate map key rejected')"
+            , "local m = codec.decode(codec.encode({[5] = 'five', [10] = 'ten'}))"
+            , "assert(m[5] == 'five' and m[10] == 'ten', 'ordinary integer keys still decode')"
+            ]
+
         it "rejects a hand-crafted number payload that parses to a \
            \non-finite value on decode, not just at encode" $ runsOk $ lns
             [ "local codec = require('scripts.lib.data_codec')"
@@ -205,7 +217,7 @@ spec = do
             [ "local saveModules = require('scripts.lib.save_modules')"
             , "saveModules.register('t_valid_required', " <> validSpecLua "t_valid_required" <> ")"
             , "saveModules.register('t_valid_optional', {"
-            , "  version = 1, inputVersions = {1}, required = false,"
+            , "  version = 1, inputVersions = {1}, required = false, scope = 'global',"
             , "  snapshot = function() return { x = 1 } end,"
             , "  decode = function(v, d) return d end,"
             , "  validate = function(d) return nil end,"
@@ -278,11 +290,11 @@ spec = do
         it "orders dependent components after their dependencies, and \
            \rejects a dependency cycle" $ runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"
-            , "saveModules.register('dep_child', { version=1, required=true,"
+            , "saveModules.register('dep_child', { version=1, required=true, scope='global',"
             , "  deps = {'dep_parent'},"
             , "  snapshot=function() return {} end, decode=function(v,d) return d end,"
             , "  validate=function() return nil end, apply=function() end })"
-            , "saveModules.register('dep_parent', { version=1, required=true, deps={},"
+            , "saveModules.register('dep_parent', { version=1, required=true, scope='global', deps={},"
             , "  snapshot=function() return {} end, decode=function(v,d) return d end,"
             , "  validate=function() return nil end, apply=function() end })"
             , "local order = saveModules.dependencyOrder()"
@@ -292,10 +304,10 @@ spec = do
             , "  if id == 'dep_child' then posChild = i end"
             , "end"
             , "assert(posParent < posChild, 'dependency must precede its dependent')"
-            , "saveModules.register('cyc_a', { version=1, required=true, deps={'cyc_b'},"
+            , "saveModules.register('cyc_a', { version=1, required=true, scope='global', deps={'cyc_b'},"
             , "  snapshot=function() return {} end, decode=function(v,d) return d end,"
             , "  validate=function() return nil end, apply=function() end })"
-            , "saveModules.register('cyc_b', { version=1, required=true, deps={'cyc_a'},"
+            , "saveModules.register('cyc_b', { version=1, required=true, scope='global', deps={'cyc_a'},"
             , "  snapshot=function() return {} end, decode=function(v,d) return d end,"
             , "  validate=function() return nil end, apply=function() end })"
             , "local errs = saveModules.registryStaticErrors()"
@@ -328,7 +340,7 @@ spec = do
         it "aborts the whole save when a required component's snapshot \
            \fails (requirement 6)" $ runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"
-            , "saveModules.register('boom_required', { version=1, required=true, deps={},"
+            , "saveModules.register('boom_required', { version=1, required=true, scope='global', deps={},"
             , "  snapshot = function() error('synthetic snapshot failure') end,"
             , "  decode=function(v,d) return d end, validate=function() return nil end,"
             , "  apply=function() end })"
@@ -339,7 +351,7 @@ spec = do
         it "blocks new registration while a save snapshot is in progress \
            \(requirement 3)" $ runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"
-            , "saveModules.register('mid_capture', { version=1, required=true, deps={},"
+            , "saveModules.register('mid_capture', { version=1, required=true, scope='global', deps={},"
             , "  snapshot = function()"
             , "    local ok = pcall(saveModules.register, 'sneaky', " <> validSpecLua "sneaky" <> ")"
             , "    assert(not ok, 'registration during an active capture must fail')"
@@ -355,7 +367,7 @@ spec = do
            \required component's hard failure, and never uses \
            \optionality to hide a validation error" $ runsOk $ lns
             [ "local saveModules = require('scripts.lib.save_modules')"
-            , "saveModules.register('opt_present', { version=1, required=false, deps={},"
+            , "saveModules.register('opt_present', { version=1, required=false, scope='global', deps={},"
             , "  snapshot=function() return {} end,"
             , "  decode=function(v,d) return d end,"
             , "  validate=function(d) return {'synthetic validation error'} end,"
@@ -374,13 +386,13 @@ spec = do
             [ "local saveModules = require('scripts.lib.save_modules')"
             , "local codec = require('scripts.lib.data_codec')"
             , "local called = false"
-            , "saveModules.register('refs_ok', { version=1, required=true, deps={},"
+            , "saveModules.register('refs_ok', { version=1, required=true, scope='global', deps={},"
             , "  snapshot=function() return { x = 1 } end,"
             , "  decode=function(v,d) return d end,"
             , "  validate=function() return nil end,"
             , "  apply=function() end,"
             , "  references=function(d) called = true; return {{kind='unit', id=d.x}} end })"
-            , "saveModules.register('refs_crash', { version=1, required=true, deps={},"
+            , "saveModules.register('refs_crash', { version=1, required=true, scope='global', deps={},"
             , "  snapshot=function() return {} end,"
             , "  decode=function(v,d) return d end,"
             , "  validate=function() return nil end,"

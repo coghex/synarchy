@@ -219,6 +219,17 @@ function saveModules.register(id, spec)
             .. "' references must be a function when supplied")
     end
 
+    -- Requirement 2: every registration DECLARES its scope explicitly
+    -- (global / per-page / per-entity / other documented) -- no silent
+    -- default. Deliberately not restricted to a fixed enum (the
+    -- requirement's own wording allows "or other documented scope"),
+    -- but it must be a genuine, non-empty declaration.
+    if type(spec.scope) ~= "string" or spec.scope == "" then
+        error("saveModules.register: '" .. id
+            .. "' must declare a non-empty scope string (e.g. 'global', "
+            .. "'per-page', 'per-entity')")
+    end
+
     local deps = spec.deps or {}
     if type(deps) ~= "table" then
         error("saveModules.register: '" .. id .. "' deps must be an array of ids")
@@ -229,7 +240,7 @@ function saveModules.register(id, spec)
         version        = version,
         inputVersions  = inputVersions,
         required       = spec.required,
-        scope          = spec.scope or "global",
+        scope          = spec.scope,
         deps           = deps,
         snapshot       = spec.snapshot,
         decode         = spec.decode,

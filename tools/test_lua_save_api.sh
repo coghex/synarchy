@@ -308,6 +308,13 @@ assert_eq "activeLastLineCount is a function" "true" \
 
 echo "[22] a REQUIRED Lua save component's snapshot failure aborts the \
 whole save (issue #761 requirement 6)"
+# Step [8] already loaded '${TEST_SAVE_NAME}', which lands under
+# 'main_world' regardless of its original page name (documented
+# convention) -- the original 'test' page id is gone by this point, so
+# every saveWorld call below MUST target 'main_world', not 'test'
+# (targeting the now-nonexistent 'test' would make saveWorld return
+# false for "world not found" regardless of the injected failure,
+# silently never exercising this case at all).
 # Temporarily break unit_ai's registered snapshot function so
 # saveModules.snapshotAll() reports {ok=false}. engine.saveWorld must
 # then return false and never queue a WorldSave command -- no partial
@@ -318,7 +325,7 @@ lua "local sm = require('scripts.lib.save_modules'); \
      _G.__smoke_orig_snapshot = sm.registry.unit_ai.snapshot; \
      sm.registry.unit_ai.snapshot = function() error('smoke-injected failure') end" > /dev/null
 assert_eq "save fails when a required component's snapshot throws" \
-    "false" "engine.saveWorld('test', '${TEST_SAVE_NAME}_broken')"
+    "false" "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_broken')"
 assert_eq "no save directory was created for the aborted save" \
     "false" \
     "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}_broken' then return true end end return false end)()"
@@ -327,7 +334,7 @@ lua "local sm = require('scripts.lib.save_modules'); \
      _G.__smoke_orig_snapshot = nil" > /dev/null
 sleep 0.3
 assert_eq "a normal save still succeeds once restored" "true" \
-    "engine.saveWorld('test', '${TEST_SAVE_NAME}_recovered')"
+    "engine.saveWorld('main_world', '${TEST_SAVE_NAME}_recovered')"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""

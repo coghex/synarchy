@@ -45,23 +45,38 @@ local function validateUnitAiData(data)
 end
 
 -- Every reference this component carries (requirement 12) -- unit/
--- building/craft-bill/item ids reachable from a per-unit aiState entry,
--- including the ones nested inside claim/job tables (unit_ai_medic.lua's
--- treatClaim/treatPending, unit_ai_deliver.lua's deliveryClaim/
--- deliveryPendingTarget, unit_ai_craft.lua's craftJob, unit_ai_repair.lua's
--- repairJob). Traversed here for documentation/diagnostics (actually
--- CALLED by saveModules.prepareLoad, requirement 11/12 -- not merely
--- declared and left dead); a dangling entry is NOT rejected by this
--- validator (per the #761 issue-review clarification: a target that
--- legitimately died before the save boundary must stay representable)
--- -- it is cleared at reconcile time instead, by unit_ai.lua's
--- scrubStaleRefs/onSaveLoaded.
--- NB: any NEW nested claim/job field that stores a unit/building/bill/
--- item id MUST be added here too, mirroring scrubStaleRefs.
+-- building/craft-bill/item/ground-item ids reachable from a per-unit
+-- aiState entry, including ones nested inside claim/job/candidate
+-- tables and collection-held ones inside loot lists:
+--   unit_ai_medic.lua's treatClaim/treatPending
+--   unit_ai_deliver.lua's deliveryClaim/deliveryPendingTarget
+--   unit_ai_craft.lua's craftJob/craftCandidate
+--   unit_ai_repair.lua's repairJob/repairCandidate
+--   unit_ai_pickup.lua's pickupOrder
+--   unit_ai_needs.lua's forageTarget/forageLoot
+--   unit_ai_farm.lua's harvestLoot
+-- Traversed here for documentation/diagnostics (actually CALLED by
+-- saveModules.prepareLoad, requirement 11/12 -- not merely declared
+-- and left dead); a dangling entry is NOT rejected by this validator
+-- (per the #761 issue-review clarification: a target that legitimately
+-- died before the save boundary must stay representable) -- a job/
+-- claim one is cleared at reconcile time instead, by unit_ai.lua's
+-- scrubStaleRefs/onSaveLoaded (a candidate/loot one self-heals on the
+-- next tick, since those are recomputed/re-validated fresh rather than
+-- trusted across a load the way a committed claim is).
+-- NB: any NEW nested claim/job/candidate field, or new loot-style list,
+-- that stores a unit/building/bill/item/ground-item id MUST be added
+-- here too (mirroring scrubStaleRefs for the claim/job fields it also
+-- reconciles).
 local function unitAiReferences(data)
     local refs = {}
     local function addRef(kind, id)
         if id ~= nil then refs[#refs + 1] = { kind = kind, id = id } end
+    end
+    local function addRefList(kind, ids)
+        if ids ~= nil then
+            for _, id in ipairs(ids) do addRef(kind, id) end
+        end
     end
     for _, s in pairs(data) do
         for _, f in ipairs(M.AI_UNIT_REF_FIELDS) do addRef("unit", s[f]) end
@@ -74,10 +89,23 @@ local function unitAiReferences(data)
             addRef("craft_bill", s.craftJob.billId)
             addRef("building", s.craftJob.bid)
         end
+        if s.craftCandidate and s.craftCandidate.bill then
+            addRef("craft_bill", s.craftCandidate.bill.id)
+            addRef("building", s.craftCandidate.bill.station)
+        end
         if s.repairJob then
             addRef("item_instance", s.repairJob.instanceId)
             addRef("building", s.repairJob.bid)
         end
+        if s.repairCandidate then
+            addRef("item_instance", s.repairCandidate.instanceId)
+        end
+        if s.pickupOrder then addRef("ground_item", s.pickupOrder.gid) end
+        if s.forageTarget and s.forageTarget.kind == "ground" then
+            addRef("ground_item", s.forageTarget.gid)
+        end
+        addRefList("ground_item", s.forageLoot)
+        addRefList("ground_item", s.harvestLoot)
     end
     return refs
 end

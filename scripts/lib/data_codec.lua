@@ -284,8 +284,18 @@ local function decodeValue(s, pos, depth, path)
         for _ = 1, count do
             local k, v
             k, p = decodeValue(s, p, depth + 1, path .. "(key)")
-            if type(k) ~= "string" and type(k) ~= "number" then
+            -- Mirror the encode-side key contract exactly (keyLess/
+            -- isIntegerKey): only strings and WHOLE-NUMBER numeric keys
+            -- are valid -- a hand-crafted/corrupted payload must not be
+            -- able to smuggle a fractional numeric key (or any other
+            -- type) past decode just because encode() would never have
+            -- produced one.
+            if type(k) ~= "string" and not isIntegerKey(k) then
                 error("data_codec: malformed map key at " .. path)
+            end
+            if out[k] ~= nil then
+                error("data_codec: duplicate map key at " .. path
+                    .. "[" .. tostring(k) .. "]")
             end
             v, p = decodeValue(s, p, depth + 1, path .. "[" .. tostring(k) .. "]")
             out[k] = v
